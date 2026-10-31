@@ -27,8 +27,6 @@
 #     it through, High and below are only counted; an entry of .trivyignore.yaml covers a match by its id or a related
 #     id with the same purl (qualifiers and escapes aside), never another version; an expired entry fails the gate;
 #     a report that is not grype's exits 2;
-#   - platform-guard.sh passes the throwaway checkout and fails, naming file:line, a script that reads GITHUB_OUTPUT or
-#     calls gh itself;
 #   - verify-release.sh with a fake cosign that answers from fixtures, on a tree laid out as svp-gitops: without
 #     requireProvenance in the policy's values at the commit charts.yaml pins or in the overlays only the signature and
 #     the vuln attestation are asked for; with it on (in the values at that commit, in the overlay of an environment,
@@ -53,16 +51,13 @@
 #     empty) with the step failing when GHCR does not give it;
 #   - changed-services.sh builds all six images of this repository (never web, which svp-frontend builds) for a change of
 #     platform.sh, as for common.sh and rescan.sh, and none for a change under web/ (a file added, then deleted) or of
-#     this test, of promote-test.sh, of platform-guard.sh, of sourcemaps-image.sh and its test (another
+#     this test, of promote-test.sh, of sourcemaps-image.sh and its test (another
 #     source's CI pushes that image), of a scenario file under deploy/ci/verify/, of the
 #     scripts of other workflows and of svp-gitops's check (record-stg.sh, gitops-check.sh with values-check.sh and
-#     verify-release.sh, dora.sh and the tests of
+#     verify-release.sh and the tests of
 #     these and of release-set.sh, promote-prd.sh), of the policy's values or of docs/; all six for a change of
 #     release-set.sh and promote-prd.sh (job promote-prd of images.yml), and of the GRYPE_IMAGE line of the Makefile,
 #     none for another line of it;
-#   - platform-guard.sh reads the scenario files under deploy/ci/verify/ too; given another repository's tree as ROOT
-#     (svp-frontend's) it reads every file there but .github/ and .backend/, and a ROOT that is no directory or no git
-#     tree exits 2;
 #   - rescan.sh run attests only the releases of the source of the run's repository, as that source's signing
 #     workflow: a run of svp-frontend without --source web, a run of backend with --source web, and a run of svp-frontend from
 #     another workflow fail, naming both sources (or the identity), before the host or cosign is asked anything; the
@@ -1259,57 +1254,10 @@ check "scan-gate.sh, svp-frontend's tree without .trivyignore.yaml: names the fi
   "$webtree has no file .trivyignore.yaml: SVP_CODE_ROOT must be the checkout whose code is built"
 mv "$work/web-trivyignore.yaml" "$webtree/.trivyignore.yaml"
 
-# --- platform-guard.sh, in the throwaway checkout: clean as it is (the adapter and its two tests are left out, and a
-# symbolic link to a directory is skipped); a script not yet committed that writes GITHUB_OUTPUT itself and a tracked
-# one that calls gh pr fail it, each named by file:line.
-ln -s ../k8s "$tree/deploy/ci/linked-dir"
-check "platform-guard.sh: clean, a link to a directory skipped" on local "$tree/deploy/ci/platform-guard.sh"
-printf '#!/usr/bin/env bash\necho "a=b" >>"$GITHUB_OUTPUT"\n' >"$tree/deploy/ci/new-step.sh"
-echo 'gh pr view 1' >>"$tree/deploy/ci/rescan.sh"
-# A scenario file of the verification runs reading the run's branch from GitHub itself.
-printf '# shellcheck shell=bash\nrev=$GITHUB_REF_NAME\n' >"$tree/deploy/ci/verify/new-scenario.sh"
-rc=0
-on local "$tree/deploy/ci/platform-guard.sh" >"$work/guard.out" 2>&1 || rc=$?
-same "platform-guard.sh: a match exits 1" 1 "$rc"
-check "platform-guard.sh: names the untracked script's line" has "$work/guard.out" "deploy/ci/new-step.sh:2:"
-check "platform-guard.sh: names the tracked script's line" has "$work/guard.out" \
-  "deploy/ci/rescan.sh:$(wc -l <"$tree/deploy/ci/rescan.sh" | tr -d ' '):gh pr view 1"
-check "platform-guard.sh: reads the scenario files under deploy/ci/verify/" has "$work/guard.out" \
-  "deploy/ci/verify/new-scenario.sh:2:"
-rm "$tree/deploy/ci/new-step.sh" "$tree/deploy/ci/linked-dir" "$tree/deploy/ci/verify/new-scenario.sh"
-g checkout -q -- deploy/ci/rescan.sh
-check "platform-guard.sh: its own root as ROOT is the check without one" on local "$tree/deploy/ci/platform-guard.sh" \
-  "$tree/deploy/ci/../.."
-
-# --- platform-guard.sh ROOT, on svp-frontend's tree: clean as it is; every file it holds is read, wherever it sits, but
-# .github/ (the platform's workflows) and .backend/ (the pinned checkout of this repository, even when not ignored).
-check "platform-guard.sh ROOT: svp-frontend's tree is clean" on local "$tree/deploy/ci/platform-guard.sh" "$webtree"
-mkdir -p "$webtree/e2e" "$webtree/.github/workflows" "$webtree/.backend/deploy/ci"
-printf '#!/usr/bin/env bash\nsha=$GITHUB_SHA\n' >"$webtree/e2e/run.sh"
-gw add e2e/run.sh && gw commit -qm "e2e runner"
-printf 'release:\n\tgh workflow run images.yml\n' >"$webtree/Makefile"
-echo 'sha: ${{ github.sha }} $GITHUB_SHA' >"$webtree/.github/workflows/ci.yml"
-echo 'echo a=b >>"$GITHUB_OUTPUT"' >"$webtree/.backend/deploy/ci/step.sh"
-rc=0
-on local "$tree/deploy/ci/platform-guard.sh" "$webtree" >"$work/guard.out" 2>&1 || rc=$?
-same "platform-guard.sh ROOT: a match in svp-frontend's tree exits 1" 1 "$rc"
-check "platform-guard.sh ROOT: names the tracked script's line" has "$work/guard.out" 'e2e/run.sh:2:sha=$GITHUB_SHA'
-check "platform-guard.sh ROOT: names the untracked Makefile's line" has "$work/guard.out" "Makefile:2:"
-check "platform-guard.sh ROOT: .github/ is not read" lacks "$work/guard.out" ".github/"
-check "platform-guard.sh ROOT: .backend/ is not read" lacks "$work/guard.out" ".backend/"
-rm -rf "$webtree/Makefile" "$webtree/.github" "$webtree/.backend"
-rm "$webtree/e2e/run.sh" && gw commit -qam "no e2e runner"
-rc=0
-on local "$tree/deploy/ci/platform-guard.sh" "$work/no-such-dir" >"$work/guard.out" 2>&1 || rc=$?
-same "platform-guard.sh ROOT: a missing directory exits 2" 2 "$rc"
-rc=0
-on local "$tree/deploy/ci/platform-guard.sh" "$work/bin" >"$work/guard.out" 2>&1 || rc=$?
-same "platform-guard.sh ROOT: a directory outside git exits 2" 2 "$rc"
-
 # --- changed-services.sh: platform.sh is part of the image pipeline (common.sh sources it), so a change of it builds
-# all six, as do release-set.sh and promote-prd.sh (job promote-prd); this test, platform-guard.sh,
-# provenance-predicate-test.sh, the scripts of the verification runs and of the other workflows, the policy's values
-# and docs/ are read by no image job.
+# all six, as do release-set.sh and promote-prd.sh (job promote-prd); this test, provenance-predicate-test.sh,
+# the scripts of the verification runs and of the other workflows, the policy's values and docs/ are read by no
+# image job.
 changed_by() {
   echo "# changed" >>"$tree/$1"
   g commit -qam "change $1"
@@ -1325,7 +1273,6 @@ same "changed-services: the removal of web/ builds nothing" "" \
   "$(on local "$tree/deploy/ci/changed-services.sh" HEAD~1 HEAD 2>/dev/null)"
 same "changed-services: a change of platform-test.sh builds nothing" "" "$(changed_by deploy/ci/platform-test.sh)"
 same "changed-services: a change of promote-test.sh builds nothing" "" "$(changed_by deploy/ci/promote-test.sh)"
-same "changed-services: a change of platform-guard.sh builds nothing" "" "$(changed_by deploy/ci/platform-guard.sh)"
 same "changed-services: a change of provenance-predicate-test.sh builds nothing" "" \
   "$(changed_by deploy/ci/provenance-predicate-test.sh)"
 same "changed-services: a change under deploy/ci/verify/ builds nothing" "" "$(changed_by deploy/ci/verify/gitops.sh)"
@@ -1337,8 +1284,8 @@ for f in sourcemaps-image.sh sourcemaps-image-test.sh; do
   same "changed-services: a change of $f builds nothing" "" "$(changed_by "deploy/ci/$f")"
 done
 same "changed-services: a change of rescan.sh builds all six" "$all" "$(changed_by deploy/ci/rescan.sh)"
-for f in record-stg.sh gitops-check.sh gitops-check-test.sh values-check.sh verify-release.sh dora.sh dora-test.sh \
-  release-set-test.sh promote-prd-test.sh; do
+for f in record-stg.sh gitops-check.sh gitops-check-test.sh values-check.sh verify-release.sh release-set-test.sh \
+  promote-prd-test.sh; do
   same "changed-services: a change of $f builds nothing" "" "$(changed_by "deploy/ci/$f")"
 done
 same "changed-services: a change of release-set.sh builds all six" "$all" "$(changed_by deploy/ci/release-set.sh)"

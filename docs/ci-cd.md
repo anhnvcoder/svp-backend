@@ -5,21 +5,22 @@ và đọc kết quả ở đâu. Luồng kể bằng khái niệm chung của m
 tên workflow và job của GitHub ghi kèm. Bảng tương ứng với GitLab ở
 [ADR-0023](adr/0023-ci-platform-neutral.md) (mục "Bảng ánh xạ CI: GitHub Actions ↔ GitLab CI"), không chép lại ở đây.
 
-Repo có bốn workflow, mỗi file nối các bước, logic nằm ở `Makefile` và `deploy/ci/*.sh` (chạy được cả trên máy):
+Repo có ba workflow, mỗi file nối các bước, logic nằm ở `Makefile` và `deploy/ci/*.sh` (chạy được cả trên máy):
 
 | Workflow | Việc | Quyết định |
 | --- | --- | --- |
 | `.github/workflows/ci.yml` | Kiểm code của mọi PR và mọi push `main`: Go (gồm govulncheck), code sinh, contract, luật version của hợp đồng REST, cấu hình, bí mật, misconfig, stack đầu-cuối (gồm DAST) | [ADR-0015](adr/0015-cicd-devsecops-stage5.md) §1, §2; [ADR-0020](adr/0020-reliability-stage6.md) §15 (job `stack`); [ADR-0030](adr/0030-devsecops-supplement.md) §1, §3; [ADR-0033](adr/0033-svp-web-repo.md) §1 (job `api-contract`) |
 | `.github/workflows/images.yml` | Image của sáu service Go (image web ở CI của [`svp-frontend`](https://github.com/anhnvcoder/svp-frontend)): build, quét (trivy trên image, grype trên SBOM), push GHCR, ký, attestation, PR promote stg và prd sang repo `svp-gitops`, quét lại hằng ngày; phát hành hợp đồng REST của gateway có chữ ký | ADR-0015 §3–§9; ADR-0030 §6 (grype); [ADR-0025](adr/0025-gitops-config-repo.md) §2, §6 (promote bằng GitHub App); [ADR-0033](adr/0033-svp-web-repo.md) §1, §2, §4 (job `contract`, nguồn phát hành) |
 | `.github/workflows/verify.yml` | Kiểm chứng trên runner những gì máy 16 GB không chạy nổi (stack có observability, cluster k3d nặng); bản ghi triển khai stg | [ADR-0021](adr/0021-deferred-verification-stage6b.md); [ADR-0024](adr/0024-multi-environment.md) §8 (bản ghi stg) |
-| `.github/workflows/dora.yml` | DORA metrics của stg từ bản ghi triển khai, hằng tuần và chạy tay | [ADR-0028](adr/0028-dora-metrics.md) |
 
 Cấu hình triển khai (values, overlay, digest của mỗi môi trường, Argo CD) nằm ở repo public riêng
 [`svp-gitops`](https://github.com/anhnvcoder/svp-gitops) ([ADR-0025](adr/0025-gitops-config-repo.md)); repo đó có một workflow
 `check.yml` với check tổng `gitops-ok`, chạy `deploy/ci/gitops-check.sh` của repo này ở một commit ghim ([mục 1.5](#15-repo-cấu-hình-svp-gitops)).
 
-Mọi chỗ script đọc ngữ cảnh CI hay gọi API của GitHub (output, summary, mask, link lượt chạy, PR, dispatch) đi qua adapter
-`deploy/ci/platform.sh` (ADR-0023), nên chuyển sang CI khác là viết thêm một nhánh ở đó, không sửa từng script.
+Script có sẵn đọc ngữ cảnh CI hay gọi API của GitHub (output, summary, mask, link lượt chạy, PR, dispatch) qua adapter
+`deploy/ci/platform.sh` (ADR-0023). Adapter đã đóng băng ([ADR-0037](adr/0037-mainpath-standard-tools.md) §2): không thêm hàm `ci_*`, script
+mới đọc biến GitHub và gọi `gh` trực tiếp, hàm bị xoá khi không còn script nào gọi nó. DORA không còn workflow ở đây: là bài lab `dora/` của
+[`svp-labs`](https://github.com/anhnvcoder/svp-labs) (§1 của ADR-0037).
 
 Ngoài ba file đó, tab Actions còn có workflow "CodeQL" do GitHub dựng và giữ: CodeQL **default setup** bật bằng cài đặt repo,
 không có file trong repo, chỉ báo ([ADR-0030](adr/0030-devsecops-supplement.md) §4; bật, tắt, đọc kết quả ở [mục 7](#7-codeql-default-setup)).
@@ -103,7 +104,6 @@ flowchart LR
 flowchart LR
     daily["images.yml<br/>01:17 UTC mỗi ngày"] --> rescan["rescan: quét lại mọi digest<br/>đang phát hành, thay attestation vuln"]
     weekly["verify.yml<br/>00:37 UTC thứ Bảy"] --> both["compose (compose-obs) và<br/>k3d (dev-k3d) song song, mọi bước"]
-    dweekly["dora.yml<br/>09:17 UTC thứ Bảy"] --> dora["DORA của stg từ bản ghi<br/>triển khai, tóm tắt + artifact dora"]
 ```
 
 - Rescan giữ attestation `vuln` không quá 72 giờ tuổi, ngưỡng Kyverno chấp nhận; CRITICAL mới thì job đỏ và GitHub gửi mail.
@@ -126,7 +126,6 @@ flowchart LR
     who -->|"-f rescan=true, -f values_ref=ref"| r["images.yml: quét lại"]
     who -->|"-f drill=true"| d["images.yml: ba image diễn tập"]
     who -->|"-f promote_prd=true, -f record=id"| p["images.yml: PR promote prd ở svp-gitops"]
-    who -->|"gh workflow run dora.yml, -f days=N"| m["dora.yml: DORA của stg"]
     who -->|"-f scenario=compose-obs, dev-k3d, gitops, web-canary, k6-cloud-mini, chaos hay velero, -f targets=..., -f web_ref=..."| v["verify.yml: một kịch bản"]
 ```
 
@@ -138,7 +137,6 @@ flowchart LR
   Provenance trên bản phát hành thật đã có (bảy bản của `6ca2d8a`).
 - `-f promote_prd=true [-f record=<id>]` (chỉ `main`, một mình): job `promote-prd` mở PR `bot/promote-prd` trong `svp-gitops`
   chép cả bộ của một bản ghi stg (mặc định mới nhất, bản cũ hơn là rollback prd), không auto-merge; người học duyệt (Code Owner).
-- `dora.yml`: `gh workflow run dora.yml --ref main [-f days=<1..3650>]`.
 - `verify.yml` nhận `--ref main` hay nhánh `feat/stage6b-*`, ref khác dừng ở bước đầu; `targets` rỗng là mọi bước, bước dựng
   (`up`, `k8s-up`, `k8s-gitops-up`) luôn chạy. `web_ref` (chỉ `compose-obs`, `dev-k3d`, `web-canary`, `gitops`; rỗng là commit của bản web
   stg) là `main`, một nhánh khác hay một SHA đủ 40 hex của `svp-frontend`, giá trị khác dừng ở bước đầu như ref: mã web (e2e, Lighthouse,
@@ -196,7 +194,7 @@ Trigger: `pull_request`, `push` vào `main`, `workflow_dispatch`. Không trigger
 | `generate` | `make generate-check`: code sinh đã commit khớp | Mọi lượt | Không bao giờ | Có |
 | `buf` | `buf breaking` so với base | Mọi lượt | Không skip; push tạo nhánh mới thì bước in "buf breaking skipped" (không có gì để so) và xanh | Có |
 | `api-contract` | `make api-contract-check BASE=<base>` (base như `buf`): file `services/gateway/openapi.yaml` đổi thì `info.version` phải tăng đúng mức theo oasdiff (`OASDIFF_IMAGE`, không mạng), rồi `deploy/ci/contract-test.sh` (luật version với oasdiff thật, phát hành với registry và cosign giả) | Mọi lượt | Không skip; push tạo nhánh mới hay base không có spec thì một dòng summary và xanh | Có |
-| `config` | `make gitops-clone` (bản clone ẩn danh `main` của `svp-gitops`, `SVP_GITOPS_DIR`), quy tắc hai tệp bỏ qua của trivy, `platform-guard.sh`, `platform-test.sh`, test của promote stg, promote prd, bản ghi stg, DORA (`promote-test.sh`, `promote-prd-test.sh`, `release-set-test.sh`, `dora-test.sh`, trên repo nháp cục bộ), `provenance-predicate-test.sh` (predicate build provenance và bước attest của `sign-image.sh` với docker, cosign giả), `verify-collect-test.sh`, rule Prometheus, Collector, compose, `make helm-check` (chart của working tree với `base/` của bản clone, gồm ExternalSecret, SecretStore của mỗi env qua kubeconform theo CRD của chart External Secrets ghim, và digest bên thứ ba), `sources-test.sh` (bảng nguồn phát hành hỏng bị cả template `svp-policy` lẫn `lib.sh` từ chối), `gitops-check-test.sh` (ca âm của check `svp-gitops`), k6, manifest cloud | Mọi lượt | Không bao giờ | Có |
+| `config` | `make gitops-clone` (bản clone ẩn danh `main` của `svp-gitops`, `SVP_GITOPS_DIR`), quy tắc hai tệp bỏ qua của trivy, `platform-test.sh`, test của promote stg, promote prd, bản ghi stg (`promote-test.sh`, `promote-prd-test.sh`, `release-set-test.sh`, trên repo nháp cục bộ), `provenance-predicate-test.sh` (predicate build provenance và bước attest của `sign-image.sh` với docker, cosign giả), `verify-collect-test.sh`, rule Prometheus, Collector, compose, `make helm-check` (chart của working tree với `base/` của bản clone, gồm ExternalSecret, SecretStore của mỗi env qua kubeconform theo CRD của chart External Secrets ghim, và digest bên thứ ba), `sources-test.sh` (bảng nguồn phát hành hỏng bị cả template `svp-policy` lẫn `lib.sh` từ chối), `gitops-check-test.sh` (ca âm của check `svp-gitops`), k6, manifest cloud | Mọi lượt | Không bao giờ | Có |
 | `gitleaks` | Quét bí mật toàn lịch sử, `--redact` | Mọi lượt | Không bao giờ | Có |
 | `trivy-config` | Quét misconfig, chỉ báo (phát hiện không làm job đỏ; trừ các mục có hạn của `deploy/ci/trivy-config-ignore.yaml`) | Mọi lượt | Không bao giờ | Có (chỉ khi lệnh lỗi, không khi có phát hiện) |
 | `stack` | Stack compose đầu-cuối, web là bản phát hành stg theo digest: `make gitops-clone`, `make web-clone` (commit của web stg), smoke, e2e Chromium và WebKit của bản clone `svp-frontend` (`make web-e2e`), k6 `ci`, Lighthouse, rồi `make dast` cuối cùng (Schemathesis theo `services/gateway/openapi.yaml`, bước `continue-on-error`, hạn 15 phút; artifact `dast` chỉ `report.json`, `summary.json` đã dò bí mật) | Mọi lượt | Không bao giờ | Không |
@@ -242,16 +240,8 @@ có mã web `make web-clone` ở `web_ref` hay commit của web stg; Node, pnpm,
 "Scenario" (`verify-run.sh`), rồi các bước `if: always()` dừng sampler, lọc và tải artifact `verify-<kịch bản>`, gỡ stack hay
 cluster (không áp dụng cho `record-stg`). Một lượt dispatch chạy đúng một job kịch bản, hai job kia skip (cộng `record-stg` sau
 `gitops` trên `main`); lượt lịch chạy `compose`, `k3d` và `gitops` (cộng `record-stg`). Lượt lịch dài nhất 330 phút, xong trước
-06:17 UTC, trước `dora.yml`. Trình tự của từng kịch bản ở `deploy/ci/verify/<kịch bản>.sh`. Bước
+06:17 UTC. Trình tự của từng kịch bản ở `deploy/ci/verify/<kịch bản>.sh`. Bước
 kịch bản chạy lại `make gitops-clone` trước bước dựng và đặt `SVP_GITOPS_DIR`, `SVP_WEB_DIR` cho mọi target (`verify-run.sh`).
-
-### `dora.yml`
-
-Trigger: `schedule` thứ Bảy 09:17 UTC và `workflow_dispatch` (input `days`, 1–3650, mặc định 30). Không check nào đòi workflow này.
-
-| Job | Làm gì | Chạy khi | Skip khi |
-| --- | --- | --- | --- |
-| `dora` | `contents: read`, `actions: read`, không secret: `make gitops-clone`, `make web-clone WEB_REF=main` chỉ khi có bản ghi được tính chứa bản web do `svp-frontend` build (`dora.sh --clones`), `deploy/ci/dora.sh` tính năm chỉ số của stg lab từ bản ghi stg `success` của `svp-gitops` (không phải merge), lịch sử git hai repo và front matter postmortem; bảng vào summary, JSON vào artifact `dora` (30 ngày); thiếu dữ liệu in "chưa đủ dữ liệu" kèm lý do, prd "chưa có dữ liệu prd" | Mọi lượt | Không bao giờ |
 
 ## 3. Vì sao thiết kế như vậy
 

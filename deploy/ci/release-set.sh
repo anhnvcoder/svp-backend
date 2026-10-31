@@ -53,7 +53,7 @@
 #     are judged by the table at the payload's own charts revision (release_sources REV, a commit of this clone), the
 #     one the policy of stg applied while it ran the set, instead of the working tree's: a record from before a service
 #     moved to another source stays a record of what stg ran once the old source no longer publishes it (the history
-#     dora.sh reads).
+#     of the records of stg).
 #
 # Needs bash, git, jq; snapshot needs kubectl and the cluster; records a token that reads svp-gitops (GH_TOKEN on
 # GitHub) or a machine's gh login, and reads the runs of the code repository (public). Writes nothing but FILE and

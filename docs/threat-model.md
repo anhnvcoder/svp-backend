@@ -671,7 +671,7 @@ Dùng làm checklist: tới giai đoạn nào thì mở mục đó, mỗi biện
 - **Giai đoạn 6b (2026-10-24):** bề mặt mới là workflow kiểm chứng trên runner công khai (SC-11) và Argo CD đọc repo không xác thực (SC-12); Chaos Mesh, Velero chạy trên k3d của runner (OPS-4, BAK-2). [ADR-0021](adr/0021-deferred-verification-stage6b.md) chỉnh ADR-0011 §8 (điều kiện của `RateLimitFallbackActive`, thêm `RateLimitFallbackElevated`), ADR-0014 §12 (repo qua HTTPS ẩn danh thay deploy key), ADR-0015 §1 (workflow thứ ba `verify.yml`), §2, §6 (tệp bỏ qua có hạn cho misconfig của `trivy-config`; cổng CRITICAL cho `web/pnpm-lock.yaml`), ADR-0019 §9 (source map của image CI kéo về giai đoạn 6b, `images.yml` xuất artifact) và cách chạy phần đo thật của ADR-0020 §2, §6, §7 trên runner; danh sách đủ ở mục Hệ quả của ADR-0021.
 - **Giai đoạn 6b, phần 1 (2026-10-25):** không bề mặt mới ngoài lịch hằng tuần của `verify.yml` (SC-11: code của `main`, không
   input, cùng quyền và bộ lọc). CI trung lập nền tảng ([ADR-0023](adr/0023-ci-platform-neutral.md)) gom mọi chỗ đọc ngữ cảnh CI
-  hay gọi API của GitHub vào `deploy/ci/platform.sh` (job `config` chặn script khác làm việc đó), nên quyền của từng job vẫn là
+  hay gọi API của GitHub vào `deploy/ci/platform.sh` (từ [ADR-0037](adr/0037-mainpath-standard-tools.md) §2 adapter đóng băng và không còn job chặn script khác làm việc đó), nên quyền của từng job vẫn là
   thứ quyết định script làm được gì; `deploy/ci/promote.sh` chạy trên máy không gọi API và không push lên origin mạng.
 - **Giai đoạn 6b, phần 3 (2026-10-28):** không bề mặt mới ngoài những gì 2026-10-24 đã dự kiến (SC-11 job `gitops`, SC-12, OPS-4,
   BAK-2). Đáng xem lại: (1) HTTPRoute `s3` chuyển mọi đường dẫn nên API quản trị `/rustfs/admin/v3` của RustFS cũng tới được qua
@@ -709,7 +709,7 @@ Dùng làm checklist: tới giai đoạn nào thì mở mục đó, mỗi biện
   một khoá dài hạn (ADR-0015 §9 từng loại App vì lý do đó; nay cần vì ghi chéo repo) và tách quyền ở lab một người là mô phỏng
   (mục 6). [ADR-0025](adr/0025-gitops-config-repo.md) chỉnh ADR-0014 §12, ADR-0015 §9–§11, ADR-0021 §6, ADR-0023, ADR-0024 §8.
   Đáng xem lại: (1) cài đặt squash của `svp-gitops` còn mặc định của GitHub, nên PR revert không chắc giữ dòng `This reverts commit`
-  trong commit trên `main` (DORA nhận ra rollback nhờ dòng đó, [ADR-0028](adr/0028-dora-metrics.md) §5): đổi trước PR revert đầu
+  trong commit trên `main` (dòng đó là dữ liệu cho bài lab `dora/` của `svp-labs`, nhận ra rollback, [ADR-0037](adr/0037-mainpath-standard-tools.md) §1): đổi trước PR revert đầu
   tiên; (2) `CHECKER_COMMIT` còn ghim checker trước khi tách, chưa có bước so bản ghi prd: bump sau merge kèm `GH_TOKEN` cho bước
   check; (3) GitLab không có tương đương miễn phí cho Code Owner (Premium, ADR-0024 §8).
 - **Giai đoạn 6b, phần 4b, phần chuẩn bị ở repo code (2026-10-30):** bề mặt mới là hợp đồng API phát hành có chữ ký cho repo khác

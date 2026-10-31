@@ -20,9 +20,8 @@
 #   4. Argo CD (argocd/bootstrap.json: chart, version and values file base/argo-cd.yaml) in namespace argocd with Pod
 #      Security "restricted", AppProject svp and the emptied AppProject default (argocd/project.yaml) and root
 #      Application svp-root (chart argocd/apps at that same commit, told the architecture of the nodes, the
-#      environment, stg: this cluster runs as staging, and, when that commit has the platform layer platforms/, the
-#      platform, k3d). No repository Secret: both repositories are public and Argo CD
-#      reads them over HTTPS without credentials, so this path holds no key or token; a repository that turned private
+#      environment, stg: this cluster runs as staging, and the platform, k3d). No repository Secret: both
+#      repositories are public and Argo CD reads them over HTTPS without credentials, so this path holds no key or token; a repository that turned private
 #      again would need a read-only credential here;
 #   5. a bounded wait until every Application is Synced and Healthy with its last sync Succeeded, with GlitchTip's DSN
 #      put into Secret svp/sentry once GlitchTip is up (deploy/k8s/glitchtip-init.sh), so the services report errors
@@ -195,15 +194,15 @@ at() { git -C "$gitops" show "$sha:$1"; }
 env=stg
 # Only staging runs on EKS so far: a prd cluster would get the overlay, digests and secret store of staging here.
 [ "$kube_context" != svp-prd ] || fail "context svp-prd: this script builds staging only; prd on EKS has a path of its own"
-# The platform it hands too (value platform), when the revision has the platform layer platforms/: k3d, the platform of
-# this cluster. A revision from before that layer knows no platform, and its root gets none.
-# On EKS, eks, which only a revision with the layer knows.
-platform=
+# The platform it hands too (value platform): k3d, the platform of this cluster; on EKS, eks. A revision without the
+# platform layer platforms/ is refused.
+git -C "$gitops" cat-file -e "$sha:platforms" 2>/dev/null ||
+  fail "${sha:0:12} of svp-gitops has no platforms/: the platform layer platforms/ is required; nothing was created"
 if cloud_context; then
   git -C "$gitops" cat-file -e "$sha:platforms/eks" 2>/dev/null ||
     fail "${sha:0:12} of svp-gitops has no platforms/eks, so Argo CD could not build $env on EKS from it; nothing was created"
   platform=eks
-elif git -C "$gitops" cat-file -e "$sha:platforms" 2>/dev/null; then
+else
   platform=k3d
 fi
 for f in argocd/apps/Chart.yaml argocd/apps/components.json argocd/project.yaml argocd/bootstrap.json \
@@ -217,7 +216,7 @@ chart_rev=$(at "envs/$env/charts.yaml" | sed -n 's/^revision: *//p')
   fail "envs/$env/charts.yaml at ${sha:0:12} of svp-gitops: revision is '$chart_rev', not a full commit of this repository"
 git -C "$repo_root" cat-file -e "$chart_rev^{commit}" 2>/dev/null ||
   fail "envs/$env/charts.yaml at ${sha:0:12} of svp-gitops pins commit ${chart_rev:0:12} of this repository, which this clone does not hold: git fetch origin, and run again"
-echo "env: $env${platform:+ on platform $platform} (overlays and release images of envs/$env, charts of this repository at ${chart_rev:0:12})"
+echo "env: $env on platform $platform (overlays and release images of envs/$env, charts of this repository at ${chart_rev:0:12})"
 
 # Every service is checked before the script stops, so one run names every release that is missing. release_image
 # (deploy/k8s/lib.sh) reads the image file from git and asks GHCR; deploy/ci/values-check.sh --gitops then checks each
@@ -247,7 +246,7 @@ ok "release images at ${sha:0:12} of svp-gitops: GHCR serves all seven anonymous
 # The Applications to wait for: the root and one per component of components.json at the revision, the copy the root
 # renders, that runs on the platform (no platforms in components.json: every platform).
 want_apps=$(at argocd/apps/components.json | jq -r --arg p "$platform" \
-  '.components[] | select($p == "" or (has("platforms") | not) or (.platforms | index($p)) != null) | .name') &&
+  '.components[] | select((has("platforms") | not) or (.platforms | index($p)) != null) | .name') &&
   [ -n "$want_apps" ] ||
   fail "read the component names of argocd/apps/components.json at ${sha:0:12} of svp-gitops"
 want_apps=$(printf 'svp-root\n%s\n' "$want_apps")
@@ -286,12 +285,12 @@ esac
 # every Application it makes for its values files (value targetRevision of chart argocd/apps), so the releases checked
 # above are the ones deployed, whatever reaches the branch meanwhile; it follows the branch only once the cluster is
 # built (follow_branch, at the end). argocd_root_app (lib.sh) writes the revision and the environment as strings
-# whatever they look like; the nodes' architecture and the platform (a revision with platforms/ only) join them in the
+# whatever they look like; the nodes' architecture and the platform join them in the
 # root's values, strings too, and on EKS the map cluster as CLUSTER_VALUES holds it.
 root_app=$(argocd_root_app "$gitops_url" "$sha" "$env" "$chart_repo_url" |
   jq -c --arg arch "$node_arch" --arg platform "$platform" --argjson cluster "${cluster_json:-null}" \
     '.spec.source.helm.valuesObject.nodeArch = $arch
-    | if $platform != "" then .spec.source.helm.valuesObject.platform = $platform else . end
+    | .spec.source.helm.valuesObject.platform = $platform
     | if $cluster != null then .spec.source.helm.valuesObject.cluster = $cluster else . end') ||
   fail "write Application svp-root"
 
@@ -367,7 +366,7 @@ if cloud_context; then
     ${overlay_args[@]+"${overlay_args[@]}"}) ||
     fail "render the namespaces of chart svp-cluster at ${chart_rev:0:12} with the values of its Application"
 else
-  if [ -n "$platform" ] && git -C "$gitops" cat-file -e "$sha:platforms/$platform/svp-cluster.yaml" 2>/dev/null; then
+  if git -C "$gitops" cat-file -e "$sha:platforms/$platform/svp-cluster.yaml" 2>/dev/null; then
     at "platforms/$platform/svp-cluster.yaml" >"$work/platform-svp-cluster.yaml" ||
       fail "read platforms/$platform/svp-cluster.yaml at ${sha:0:12} of svp-gitops"
     overlay_args=(--values "$work/platform-svp-cluster.yaml")
@@ -420,7 +419,7 @@ ok "AppProject svp, AppProject default emptied"
 
 # The root, as written before the namespaces (root_app).
 kc apply --server-side --field-manager=svp-gitops -f - <<<"$root_app" >/dev/null || fail "apply Application svp-root"
-ok "Application svp-root reads ${sha:0:12} of $gitops_url (HTTPS, no credentials), charts of ${chart_rev:0:12}, nodeArch $node_arch, env $env${platform:+, platform $platform}${cluster_json:+, cluster of CLUSTER_VALUES}"
+ok "Application svp-root reads ${sha:0:12} of $gitops_url (HTTPS, no credentials), charts of ${chart_rev:0:12}, nodeArch $node_arch, env $env, platform $platform${cluster_json:+, cluster of CLUSTER_VALUES}"
 
 # app_report: reads the Applications of namespace argocd and prints one line per name of $want_apps:
 #   ready NAME             Synced, Healthy and its last sync Succeeded: the criterion of the health check for
