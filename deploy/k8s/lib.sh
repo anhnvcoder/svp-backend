@@ -441,10 +441,9 @@ web_dockerfile() { echo "$1/Dockerfile"; }
 # SVP_WEB_DIR to that folder for what this shell runs next. WEB_REF is a branch (as origin/<branch>) or a full commit
 # SHA; unset, it is the commit of the web release staging runs (image.tag of envs/stg/images/web.yaml in the
 # clone of svp-gitops, gitops_dir), so the tests run the code of the image that runs there. That release must be
-# <imagePrefix>web of a release source of the working tree's table (release_source_of): the sources that publish web
-# are the web client's repository under its name now and under the name it had before (a retired source), and every
-# tag of theirs is a commit of svp-frontend; a release under no such prefix has no commit there, and WEB_REF must then
-# be given. Refuses a clone there with uncommitted changes, or a folder that is no clone of svp-frontend. Touches
+# <imagePrefix>web of a release source of the working tree's table (release_source_of): the source that publishes web
+# is the web client's repository, and every tag of it is a commit of svp-frontend; a release under no such prefix has
+# no commit there, and WEB_REF must then be given. Refuses a clone there with uncommitted changes, or a folder that is no clone of svp-frontend. Touches
 # nothing outside .web/ of this checkout.
 web_clone() {
   local dir=$web_ci_clone ref=${WEB_REF:-} target sha gitops file repo tag=
@@ -1046,20 +1045,27 @@ ghcr_prefix=ghcr.io/anhnvcoder/svp-backend
 # its repository URL, the prefix its images live under on GHCR (ending in /), the services it publishes there (a
 # service is in two sources only while it moves from one to the other), the drill images it may push there, the
 # keyless identity of its images.yml on main (issuer, subject), the ref its build provenance names, and the GitHub App
-# that promotes its releases (promoter). A source without promoter is retired: the repository it names no longer
-# builds (renamed, its successor another source), its releases already signed are still admitted, but nothing builds,
-# promotes or rescans for it. They are written once, in this file of chart svp-policy, whose policy admits exactly
-# these images with these identities; the scripts read the same file, so what they check is what admission checks.
+# that promotes its releases (promoter). They are written once, in this file of chart svp-policy, whose policy admits
+# exactly these images with these identities; the scripts read the same file, so what they check is what admission
+# checks. Every source of the working tree's table has a promoter (deploy/ci/sources-test.sh). A table of an older
+# commit may hold a retired source, one without promoter: a repository renamed, its successor another source, whose
+# releases signed under the old name stayed admitted while an environment ran them, but nothing built, promoted or
+# rescanned for it.
 release_sources_file=deploy/helm/svp-policy/files/sources.json
 
 # _release_sources_check WHERE: reads a table of release sources on stdin and prints it as compact JSON when it holds
 # what the template of chart svp-policy accepts: at least one source; every field a non-empty string without a quote,
 # backslash or white space (they go into CEL string literals), promoter the one field a source may leave out (a
-# retired source) but never give empty or of another type; a name of a lowercase letter then letters and digits;
+# retired source of a table of an older commit) but never give empty or of another type; a name of a lowercase letter
+# then letters and digits;
 # repository, issuer and subject https:// URLs, provenanceRef a refs/... ref, imagePrefix ending in /; no two sources
 # with one name, no two with one promoter; services a non-empty list and drillImages a list of image names; no service
 # in more than two sources; no prefix the start of another's (an image under both could not be told apart). Fails
 # naming WHERE and the first problem otherwise.
+# A source without promoter is still read because release_sources REV reads the table at the revision an environment
+# of svp-gitops pins (envs/<env>/charts.yaml), and a commit from before the retired sources were dropped may still be
+# pinned there, or be copied to prd from a stg record. Drop that, here and in the template, once no environment pins
+# such a commit and no stg record a promote to prd may copy names one.
 # The jq program of _release_sources_check, kept out of $(...), which bash 3.2 misreads with these quotes inside.
 _release_sources_jq='
     def plain: type == "string" and test("^[^\u0027\"\\\\\\s]+$");

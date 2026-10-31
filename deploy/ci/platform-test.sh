@@ -72,13 +72,12 @@
 #     and ci_commit are that checkout's (and a checkout with no origin on github.com is refused, an origin's
 #     credential never shown); plan.sh of svp-frontend's run builds the services of its release source at every run, with
 #     no base, refuses a service or a drill its source does not have and a tree whose HEAD is not the run's commit, and
-#     in this checkout refuses a run of svp-frontend that forgot SVP_CODE_ROOT, a run of a fork and a run of a retired
-#     source (no promoter: this repository under its name before the rename); in this checkout plan.sh
+#     in this checkout refuses a run of svp-frontend that forgot SVP_CODE_ROOT, a run of a fork and a run of this
+#     repository under its name before the rename (no source names it); in this checkout plan.sh
 #     builds the six for services all and refuses services web, and build-image.sh refuses web before it builds
 #     anything; scan-gate.sh reads that tree's .trivyignore.yaml and stops, naming it, when the tree has none;
-#   - common.sh reads a retired source as any other (its identity, the source of a repository under its prefix);
 #   - web_clone of deploy/k8s/lib.sh without WEB_REF checks out the commit of the web release stg runs when it is a
-#     release of web or of the retired oldweb, and refuses one under another prefix before anything is cloned.
+#     release of web, and refuses one under another prefix before anything is cloned.
 # Runs on macOS and Linux: no network, no Docker, no cluster.
 #
 # Usage, from anywhere: deploy/ci/platform-test.sh
@@ -983,13 +982,13 @@ lacks "$work/output" "images=" && ok "plan.sh in this checkout: a run of svp-fro
 plan_own "a run of a fork" 1 GITHUB_REPOSITORY=someone/svp-backend GITHUB_SHA="$base"
 check "plan.sh in this checkout: a run of a fork: no release source" has "$work/plan.err" \
   "this run is of https://github.com/someone/svp-backend, which is the repository of 0 release sources"
-# A run of this repository under the name it had before the rename is a run of a retired source (no promoter): its
-# successor, backend, builds; such a run builds, pushes and signs nothing.
-plan_own "a run of a retired source" 1 GITHUB_REPOSITORY=anhnvcoder/short-video-platform GITHUB_SHA="$base"
-check "plan.sh in this checkout: a run of a retired source: names it" has "$work/plan.err" \
-  "this run is of https://github.com/anhnvcoder/short-video-platform, the repository of release source oldbackend, which is retired (no promoter in deploy/helm/svp-policy/files/sources.json): nothing of it is built, pushed or signed"
-lacks "$work/output" "images=" && ok "plan.sh in this checkout: a run of a retired source: no output" ||
-  fail "plan.sh in this checkout: a run of a retired source: no output"
+# A run of this repository under the name it had before the rename names no release source of the table: backend
+# builds; such a run builds, pushes and signs nothing.
+plan_own "a run under the name before the rename" 1 GITHUB_REPOSITORY=anhnvcoder/short-video-platform GITHUB_SHA="$base"
+check "plan.sh in this checkout: a run under the name before the rename: no release source" has "$work/plan.err" \
+  "this run is of https://github.com/anhnvcoder/short-video-platform, which is the repository of 0 release sources"
+lacks "$work/output" "images=" && ok "plan.sh in this checkout: a run under the name before the rename: no output" ||
+  fail "plan.sh in this checkout: a run under the name before the rename: no output"
 # web is no service of release source backend (svp-frontend publishes it), and this repository holds no source of it:
 # a dispatch builds the six, never web, and build-image.sh refuses web before anything is built.
 plan_own "a dispatch with services all" 0 "${backend_run[@]}" GITHUB_SHA="$base" EVENT_NAME=workflow_dispatch \
@@ -1604,7 +1603,7 @@ overlay stg false
 image=ghcr.io/anhnvcoder/svp-frontend/gateway
 release "the gateway under the web source's prefix" 1 --env stg
 check "verify-release.sh: a service the source does not publish: names what is admitted" has "$work/vr.out" \
-  "ghcr.io/anhnvcoder/svp-frontend/gateway is not a release of gateway that the policy of stg admits (at ${off_rev:0:12}: ghcr.io/anhnvcoder/svp-backend/gateway or ghcr.io/anhnvcoder/short-video-platform/gateway)"
+  "ghcr.io/anhnvcoder/svp-frontend/gateway is not a release of gateway that the policy of stg admits (at ${off_rev:0:12}: ghcr.io/anhnvcoder/svp-backend/gateway)"
 check "verify-release.sh: a service the source does not publish: cosign never asked" test ! -s "$work/cosign.log"
 charts stg "$legacy_rev"
 image=$legacy_image
@@ -1629,15 +1628,6 @@ charts prd "$off_rev"
 image=$backend_image
 rm "$cfg/envs/stg/svp-policy.yaml" "$cfg/envs/prd/svp-policy.yaml"
 
-# The retired sources (no promoter) are read as every other: their identity, and the source of a repository under
-# their prefix.
-# shellcheck disable=SC2016 # expanded by the inner shell
-got=$(on local bash -c '. "$1/deploy/ci/common.sh" && sign_identity oldweb && echo "$sign_subject" &&
-  source_of_repository ghcr.io/anhnvcoder/short-video-platform/gateway &&
-  release_source_of web ghcr.io/anhnvcoder/svp-web/web | jq -r .name && release_repositories web' _ "$vr")
-same "common.sh: the retired sources are read as the others" \
-  "https://github.com/anhnvcoder/svp-web/.github/workflows/images.yml@refs/heads/main"$'\n'"oldbackend"$'\n'"oldweb"$'\n'"ghcr.io/anhnvcoder/svp-frontend/web or ghcr.io/anhnvcoder/svp-web/web" \
-  "$got"
 # The functions of common.sh that name no source keep to source backend; a repository's source is read by its prefix;
 # oci_labels names the repository of its source and the commit of code_root (SVP_CODE_ROOT, this checkout without).
 # shellcheck disable=SC2016 # expanded by the inner shell
@@ -1789,8 +1779,7 @@ check "gitops_supplychain: drill-no-provenance not on GHCR: the step fails namin
   "without what GHCR did not give (above): drill-no-provenance;"
 
 # --- web_clone of deploy/k8s/lib.sh without WEB_REF: the commit of the web release stg runs, when that release is
-# <imagePrefix>web of a source of the table: web, and oldweb (the same repository before its rename, so its tags are
-# commits of it too). A release under another prefix is refused before anything is cloned. In a copy of the throwaway
+# <imagePrefix>web of a source of the table: web. A release under another prefix is refused before anything is cloned. In a copy of the throwaway
 # checkout; the clone of svp-frontend comes from a repository on disk (url.insteadOf of a git config of its own).
 wc=$work/webclone
 cp -R "$tree" "$wc"
@@ -1822,12 +1811,9 @@ web_clone_case() {
 web_clone_case "stg runs a release of source web" 0 ghcr.io/anhnvcoder/svp-frontend/web
 check "web_clone: a release of web: its commit checked out" has "$work/wc.out" \
   "svp-frontend at ${fe_head:0:12} (${fe_head:0:12}) in .web/svp-frontend"
-web_clone_case "stg runs a release of the retired source oldweb" 0 ghcr.io/anhnvcoder/svp-web/web
-check "web_clone: a release of oldweb: its commit checked out" has "$work/wc.out" \
-  "svp-frontend at ${fe_head:0:12} (${fe_head:0:12}) in .web/svp-frontend"
 web_clone_case "stg runs web under a prefix no source publishes it under" 1 ghcr.io/anhnvcoder/svp-backend/web
 check "web_clone: under another prefix: names the admitted repositories" has "$work/wc.out" \
-  "staging runs web from ghcr.io/anhnvcoder/svp-backend/web (envs/stg/images/web.yaml), not a release of a source that publishes web (ghcr.io/anhnvcoder/svp-frontend/web or ghcr.io/anhnvcoder/svp-web/web): set WEB_REF"
+  "staging runs web from ghcr.io/anhnvcoder/svp-backend/web (envs/stg/images/web.yaml), not a release of a source that publishes web (ghcr.io/anhnvcoder/svp-frontend/web): set WEB_REF"
 [ ! -e "$wc/.web" ] && ok "web_clone: under another prefix: nothing cloned" ||
   fail "web_clone: under another prefix: nothing cloned"
 

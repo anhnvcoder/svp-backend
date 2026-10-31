@@ -487,8 +487,9 @@ gh api -H 'Accept: application/vnd.github.raw' repos/anhnvcoder/svp-gitops/conte
 **Làm gì:** không làm gì. Lượt `images.yml` trên `main` của `svp-frontend` ký xong thì job `promote` (environment `promote`) chạy
 `promote.sh --source web` của backend ở `BACKEND_COMMIT`: dựng nhánh `bot/promote-stg-web` của `svp-gitops`, chỉ ghi
 `envs/stg/images/web.yaml`, mở PR, bật auto-merge; PR tự merge khi `gitops-ok` xanh (`envs/stg/` không Code Owner). Lần đầu, `web.yaml`
-trên `main` còn là image của backend: log job in dòng `takeover: …` thay vì đỏ (ADR-0033 §4). Lần đầu sau đổi tên, `web.yaml` là bản
-của nguồn nghỉ hưu `oldweb` (prefix `ghcr.io/anhnvcoder/svp-web/`): dòng `takeover … (source oldweb, retired)` (ADR-0036 §3).
+trên `main` còn là image của backend: log job in dòng `takeover: …` thay vì đỏ (ADR-0033 §4). Lần đầu sau đổi tên (2026-10-31), `web.yaml`
+là bản của nguồn nghỉ hưu `oldweb` (prefix `ghcr.io/anhnvcoder/svp-web/`) và log có dòng `takeover … (source oldweb, retired)` (ADR-0036 §3);
+nguồn đó đã gỡ ngày 2026-11-01, nay file dưới prefix không thuộc nguồn nào thì promote đỏ.
 
 **Kiểm:**
 

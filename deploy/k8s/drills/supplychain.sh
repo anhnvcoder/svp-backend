@@ -63,8 +63,7 @@
 #   m  the release sources apart, for every ordered pair of sources A and B of the table:
 #      - names: an image under A's prefix whose name only B publishes (a service or drill image of B, not of A), by a
 #        digest: refused by the prefix rule (the first check), whatever the digest, without any registry asked (no
-#        glob of the policy matches it); SKIP when every name of B is also A's (a source and the retired source it
-#        took over from publish the same services: web and oldweb);
+#        glob of the policy matches it); SKIP when every name of B is also A's;
 #      - identities, A→B: a release of B that a pod of svp runs, under a temporary copy of the policy (same chart, its
 #        table with the issuer and subject of A and B swapped, only pods of svp labelled svp-drill=supplychain-swap):
 #        refused by the signature rule naming source B, since Kyverno verifies an image with the attestor of the
@@ -72,10 +71,9 @@
 #        B's identity there, the pod would pass. One copy per pair of sources serves both directions and is deleted
 #        after them. Not A's release with its digest under B's prefix: GHCR has no manifest of another repository's
 #        digest, and Kyverno fetches a matched image before any check, so that answer is a registry error. SKIP while
-#        no release of B runs in svp: before that source's first release reaches the cluster, or, for a retired source
-#        (no promoter), once its successor's releases have replaced all of its own;
+#        no release of B runs in svp (before that source's first release reaches the cluster);
 #      - a release of each source other than backend that a pod of svp runs: admitted (case a is backend's); SKIP
-#        while none runs, for the same two reasons.
+#        while none runs (before that source's first release reaches the cluster).
 # The policy admits the images of every release source of its chart (files/sources.json), each under its own prefix
 # and verified with its own identity. Case a and f send an image of source backend (this repository) that a pod of svp
 # runs, e an image of that prefix by tag; the images of b, c and l may be any service or drill image of a source under
@@ -795,15 +793,6 @@ running_release() {
   jq -r --arg p "$1" '[.items[].spec.containers[].image | select(startswith($p) and test("@sha256:[0-9a-f]{64}$"))]
     | first // empty' <<<"$pods_json"
 }
-# not_running NAME: why no pod of svp runs a release of source NAME, for a SKIP line. A retired source (no promoter)
-# is built no more: its releases run only until those of the source that took over its services replace them.
-not_running() {
-  if jq -e --arg s "$1" '.sources[] | select(.name == $s) | has("promoter")' <<<"$sources" >/dev/null; then
-    echo "no release of source $1 runs in svp (its first release has not reached this cluster)"
-  else
-    echo "no release of source $1 runs in svp (a retired source: its successor's releases have replaced its own)"
-  fi
-}
 # A digest the names part sends: the prefix rule refuses by the name alone, before any registry is asked.
 name_digest=sha256:$(printf '0%.0s' $(seq 64))
 for a in $(jq -r '.sources[].name' <<<"$sources"); do
@@ -860,7 +849,7 @@ for ((i = 0; i < n_sources; i++)); do
         refused m "image without a keyless signature by the workflow of its source: $ry (source $y," \
           "identities, $x→$y: $ry, a release of source $y, under a copy of the policy whose attestor $y has $x's identity"
       else
-        result m SKIP "identities, $x→$y: $(not_running "$y")"
+        result m SKIP "identities, $x→$y: no release of source $y runs in svp (its first release has not reached this cluster)"
       fi
     done
     if [[ -n $ra || -n $rb ]]; then
@@ -876,7 +865,7 @@ for s in $(jq -r '.sources[] | select(.name != "backend") | .name' <<<"$sources"
     dry_run drill-supplychain-m svp "$own"
     admitted m "$own, a release of source $s, verified with $s's identity"
   else
-    result m SKIP "admitted, source $s: $(not_running "$s")"
+    result m SKIP "admitted, source $s: no pod of svp runs a release of it (its first release has not reached this cluster)"
   fi
 done
 

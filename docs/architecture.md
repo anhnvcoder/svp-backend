@@ -679,9 +679,9 @@ flowchart LR
   `backend` sáu service Go dưới `ghcr.io/anhnvcoder/svp-backend/`, `web` chỉ `ghcr.io/anhnvcoder/svp-frontend/web`); Kyverno chọn attestor
   theo prefix, check của `svp-gitops` giới hạn file mỗi bot được đổi (tác giả PR).
 - **Đổi tên repo** (2026-10-31, [ADR-0036](adr/0036-repo-rename.md)): `short-video-platform` → `svp-backend`, `svp-web` → `svp-frontend`;
-  identity ký và prefix image mang tên repo nên đổi theo. Bảng nguồn của bản chuyển giữ hai **nguồn nghỉ hưu** `oldbackend`, `oldweb`
+  identity ký và prefix image mang tên repo nên đổi theo. Bảng nguồn của bản chuyển có giữ hai **nguồn nghỉ hưu** `oldbackend`, `oldweb`
   (URL, prefix, identity cũ, không `promoter`): được nhận, không ai build, promote hay rescan; PR bot của nguồn mới tiếp quản file image
-  của chúng; gỡ khi mọi env chạy bản dưới prefix mới. Lịch sử dưới tên cũ (`run_url` của bản ghi stg, DORA) đọc lâu dài qua danh sách tên
+  của chúng; đã gỡ ngày 2026-11-01 khi mọi env chạy bản dưới prefix mới: bản trước đổi tên nay bị policy từ chối. Lịch sử dưới tên cũ (`run_url` của bản ghi stg, DORA) đọc lâu dài qua danh sách tên
   cũ một chỗ trong `deploy/ci/platform.sh`. Danh sách build của backend (`built_services`, sáu) tách khỏi danh sách
   bảy bản triển khai (`svp_services`) mà promote prd, bản ghi stg, rescan đọc.
 - **Script CI dùng chung:** `svp-frontend` checkout `deploy/ci/` của backend ở commit ghim `.backend-commit` (chỗ ghim duy nhất, Renovate

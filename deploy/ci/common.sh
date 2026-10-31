@@ -42,17 +42,6 @@ require_code_files() {
   done
 }
 
-# active_source NAME: prints release source NAME of this checkout's table (release_source of lib.sh) as compact JSON;
-# fails, naming it, when it is retired (no promoter): its repository was renamed and its successor source publishes its
-# services, so nothing is promoted or rescanned for it any more.
-active_source() {
-  local src
-  src=$(release_source "$1") || exit 1
-  jq -e 'has("promoter")' <<<"$src" >/dev/null ||
-    fail "release source $1 is retired (no promoter in $release_sources_file): nothing is promoted or rescanned for it; the source that publishes its services now takes its releases over"
-  echo "$src"
-}
-
 # current_repo_urls: copies stdin to stdout with every https://github.com/<old name> of a renamed repository
 # (ci_repo_renames of platform.sh) in a comment line ("#" first) replaced by the URL of its current name, so the
 # comments a promote writes into svp-gitops name each repository as it is called now.
@@ -69,10 +58,8 @@ current_repo_urls() {
 # build_source_name and build_prefix (its imagePrefix, ending in /). That source is the one whose repository is the
 # repository of this run (ci_repo_url of platform.sh: the job's own on CI, the repository of code_root on a machine),
 # read from the table of this checkout, so a run of a repository the table does not name builds, pushes and signs
-# nothing; neither does a run of a retired source (one without promoter: its repository was renamed, so only a checkout
-# whose origin still has the old name gets here, and its successor source is the one that builds). With IMAGE, also
-# fails unless IMAGE is one of the services or drillImages of that source: its image can only go under that source's
-# prefix, where the policy admits it with that source's identity.
+# nothing. With IMAGE, also fails unless IMAGE is one of the services or drillImages of that source: its image can only
+# go under that source's prefix, where the policy admits it with that source's identity.
 use_build_source() {
   local url table found
   url=$(ci_repo_url) || fail "read the repository of this run"
@@ -83,8 +70,6 @@ use_build_source() {
   build_source=$(jq -c '.[0]' <<<"$found")
   build_source_name=$(jq -r .name <<<"$build_source")
   build_prefix=$(jq -r .imagePrefix <<<"$build_source")
-  jq -e 'has("promoter")' <<<"$build_source" >/dev/null ||
-    fail "this run is of $url, the repository of release source $build_source_name, which is retired (no promoter in $release_sources_file): nothing of it is built, pushed or signed; its successor source builds"
   if [ -n "${1:-}" ]; then
     jq -e --arg i "$1" '.services + .drillImages | index($i)' <<<"$build_source" >/dev/null ||
       fail "$1 is not an image of release source $build_source_name ($(jq -r '.services + .drillImages | join(" ")' <<<"$build_source")): nothing is built, pushed or signed under $build_prefix"

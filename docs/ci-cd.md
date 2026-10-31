@@ -86,8 +86,9 @@ flowchart LR
   `envs/stg/charts.yaml`.
 - `promote` chỉ ghi file image của bản phát hành do repo này build (nguồn `backend` của bảng nguồn phát hành,
   [ADR-0033](adr/0033-svp-web-repo.md) §2, §4): file ở `main` của `svp-gitops` đã ghi bản của nguồn đang hoạt động khác (web của
-  `svp-frontend`) thì để nguyên, một dòng trong log, không đỏ; file ghi bản của nguồn nghỉ hưu có service đó (`oldbackend`, `oldweb`, bảng
-  nguồn trong lúc đổi tên repo, [ADR-0036](adr/0036-repo-rename.md) §3) thì lượt tiếp quản, dòng `takeover`.
+  `svp-frontend`) thì để nguyên, một dòng trong log, không đỏ; file ghi bản dưới prefix không thuộc nguồn nào (cả prefix trước đổi tên
+  repo: hai nguồn nghỉ hưu `oldbackend`, `oldweb` gỡ khỏi bảng ngày 2026-11-01, [ADR-0036](adr/0036-repo-rename.md) §4 bước 8) thì lượt đỏ,
+  không đoán.
 - Cùng lượt, job `contract` phát hành hợp đồng REST của gateway (`services/gateway/openapi.yaml`) thành OCI artifact
   `ghcr.io/anhnvcoder/svp-backend/api/gateway:<info.version>` ký keyless; version đã phát hành với đúng file đó thì bỏ qua,
   khác nội dung thì đỏ, không ghi đè ([ADR-0033](adr/0033-svp-web-repo.md) §1).
@@ -107,8 +108,7 @@ flowchart LR
 
 - Rescan giữ attestation `vuln` không quá 72 giờ tuổi, ngưỡng Kyverno chấp nhận; CRITICAL mới thì job đỏ và GitHub gửi mail.
   Mỗi repo chỉ attest bản của nguồn phát hành của mình: rescan của repo này bỏ qua file ghi bản của nguồn khác (một dòng), CI của
-  nguồn đó rescan nó ([ADR-0033](adr/0033-svp-web-repo.md) §4); bản của nguồn nghỉ hưu không ai rescan, tự hết hạn
-  ([ADR-0036](adr/0036-repo-rename.md) §5).
+  nguồn đó rescan nó ([ADR-0033](adr/0033-svp-web-repo.md) §4); file dưới prefix không thuộc nguồn nào vẫn vào tập nên lượt đỏ.
   Rescan chỉ dùng trivy: grype chỉ quét lúc build, nên lỗ hổng chỉ grype thấy (ví dụ của `node` trong image web của `svp-frontend`) công bố sau khi
   phát hành chỉ bị bắt ở lần build kế.
 - CodeQL default setup có lịch hằng tuần riêng do GitHub đặt (`schedule: weekly` trong cấu hình), không nằm trong YAML nào.
@@ -169,8 +169,9 @@ flowchart LR
   `svp-gitops`; từ đổi tên repo, [ADR-0036](adr/0036-repo-rename.md) §3, check không checkout repo web nữa mà tự clone ẩn danh repo của
   mỗi nguồn khác `backend` theo URL của bảng): mỗi file image phải là bản của một nguồn có service đó theo bảng ở `revision` của env; bản của `backend` giữ luật "không
   mới hơn chart", bản của nguồn khác thì tag là commit trên `main` của repo nguồn. PR của bot một nguồn (`<promoter>[bot]`, đọc từ
-  sự kiện PR) chỉ được đổi file image stg của service thuộc nguồn đó, image trước là của chính nguồn đó, của `backend` hay của một nguồn
-  nghỉ hưu có service đó (bot `backend` thêm `charts.yaml` và file image prd); bot khác
+  sự kiện PR) chỉ được đổi file image stg của service thuộc nguồn đó, image trước là của chính nguồn đó hay của `backend` (tiếp quản từ
+  nguồn nghỉ hưu của lượt đổi tên, [ADR-0036](adr/0036-repo-rename.md) §3, bỏ cùng lúc gỡ hai nguồn đó) (bot `backend` thêm `charts.yaml`
+  và file image prd); bot khác
   không đổi gì dưới `envs/`; PR của người không bị giới hạn ở bước này.
 - `CHECKER_COMMIT` (commit của repo này mà check chạy) đổi bằng PR ở `svp-gitops`; PR thêm hay sửa `check.yml` tự chạy bản sửa của
   chính nó (đặc tính của `pull_request`), nên `.github/` có Code Owner.

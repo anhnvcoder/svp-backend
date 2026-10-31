@@ -210,11 +210,10 @@ push_case "a run of another workflow" https://github.com/anhnvcoder/svp-frontend
   "only from $web_subject" -- amd64 "$good"
 push_case "a run of a repository that is no release source" "$web_subject" 1 "repository of 0 release sources" \
   FAKE_CI_REPO=https://github.com/someone/svp-frontend -- amd64 "$good"
-# A run of the web client's repository under its former name is one of the retired source oldweb: it pushes nothing.
-push_case "a run of the retired source's repository" \
+# A run of the web client's repository under its former name names no release source of the table: it pushes nothing.
+push_case "a run of the web client's repository under its former name" \
   https://github.com/anhnvcoder/svp-web/.github/workflows/images.yml@refs/heads/main 1 \
-  "the repository of release source oldweb, which is retired" FAKE_CI_REPO=https://github.com/anhnvcoder/svp-web -- \
-  amd64 "$good"
+  "repository of 0 release sources" FAKE_CI_REPO=https://github.com/anhnvcoder/svp-web -- amd64 "$good"
 [ ! -f "$tagfile" ] && ok "a run that may not push pushed nothing" || fail "a run that may not push pushed"
 
 # --- The signing workflow.
