@@ -597,6 +597,9 @@ Lượt thật theo trình tự của mục 9 (bằng chứng: `results.tsv` và
   `svp-web`).
 - **PR-2** (cắt `web/`, nhánh `feat/stage6b-svp-web-cut`): kiểm trên máy (`make check`, test của `deploy/ci/`); CI và các kịch bản
   `verify.yml` trên nhánh: chưa chạy.
+- **Nguồn web cũ đã gỡ** (2026-11-01): bước 8 của mục 9 làm trong bảng chuyển của [ADR-0036](0036-repo-rename.md) (`short-video-platform/web`
+  bị phép 1 từ chối từ commit merge của PR đổi tên); nguồn `oldweb` (web dưới tên `svp-web`) gỡ khỏi bảng cùng `oldbackend` ở bước 8 của
+  ADR-0036 §4, bảng còn `backend` và `web` (`svp-frontend`).
 
 ## Hệ quả
 

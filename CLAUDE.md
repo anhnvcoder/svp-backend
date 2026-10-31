@@ -384,16 +384,16 @@ liệt kê target):
   namespace khác không qua webhook). **Nguồn phát hành** ([ADR-0033](docs/adr/0033-svp-web-repo.md) §2) khai một chỗ ở
   `deploy/helm/svp-policy/files/sources.json` (không ở `values.yaml`, không overlay nào đổi được; đi stg trước prd theo `revision` của
   chart): mỗi nguồn `name`, `repository`, `imagePrefix` (kết thúc `/`), `services`, `drillImages`, `issuer`, `subject`,
-  `provenanceRef`, `promoter` (tuỳ chọn). Hiện bốn nguồn ([ADR-0036](docs/adr/0036-repo-rename.md) §3; repo đổi tên ngày 2026-10-31):
-  `backend` (repo này `anhnvcoder/svp-backend`, prefix `ghcr.io/anhnvcoder/svp-backend/`, sáu service Go, ba image diễn tập
-  `drill-vulnerable`, `drill-unsigned`, `drill-no-provenance`, App `svp-gitops-promoter`), `web` (`anhnvcoder/svp-frontend`, prefix
-  `ghcr.io/anhnvcoder/svp-frontend/`, chỉ `web`, App `svp-web-promoter`) và hai **nguồn nghỉ hưu** `oldbackend` (URL, prefix, identity cũ
-  của repo này dưới tên `short-video-platform`, sáu service Go, không `web`, không image diễn tập) và `oldweb` (URL, prefix, identity cũ
-  `svp-web` của `web`). Nguồn không `promoter` là nguồn nghỉ hưu: policy, `verify-release.sh`, check `svp-gitops` nhận bản của nó như mọi
-  nguồn (chữ ký, `vuln`, provenance theo identity cũ), nhưng không lượt CI nào là của nó (`use_build_source` từ chối), `promote.sh`,
-  `rescan.sh` `--source <nguồn nghỉ hưu>` bị từ chối nêu tên nguồn (`active_source` của `deploy/ci/common.sh`), rescan bỏ file của nó khỏi
-  tập bằng một dòng; attestation không được làm mới nên bản của nó tự hết hạn. `promoter` không trùng giữa các nguồn có nó. Hai nguồn nghỉ
-  hưu gỡ khi mọi file `envs/*/images/` của `svp-gitops` đã dưới hai prefix mới (ADR-0036 §4 bước 8). Repo này chỉ build, ký, promote sáu image của nó
+  `provenanceRef`, `promoter` (tuỳ chọn). Hiện hai nguồn: `backend` (repo này `anhnvcoder/svp-backend`, prefix
+  `ghcr.io/anhnvcoder/svp-backend/`, sáu service Go, ba image diễn tập `drill-vulnerable`, `drill-unsigned`, `drill-no-provenance`, App
+  `svp-gitops-promoter`) và `web` (`anhnvcoder/svp-frontend`, prefix `ghcr.io/anhnvcoder/svp-frontend/`, chỉ `web`, App `svp-web-promoter`);
+  mọi nguồn của bảng working tree có `promoter` (`deploy/ci/sources-test.sh`). Hai **nguồn nghỉ hưu** của lượt đổi tên repo
+  ([ADR-0036](docs/adr/0036-repo-rename.md) §3; `oldbackend` dưới tên `short-video-platform`, `oldweb` dưới tên `svp-web`, không `promoter`)
+  đã gỡ khỏi bảng ngày 2026-11-01 (§4 bước 8), khi mọi file `envs/*/images/` của `svp-gitops` đã dưới hai prefix mới: bản trước đổi tên
+  bị phép 1 từ chối (prefix không thuộc nguồn nào), không bot nào tiếp quản file của nguồn nghỉ hưu nữa. `promoter` vẫn tuỳ chọn ở hai nơi
+  viết luật (template, `_release_sources_jq` của `lib.sh`) vì script đọc bảng ở `revision` mà env ghim (`envs/prd/charts.yaml` còn ở
+  commit merge của PR đổi tên, bảng bốn nguồn); bỏ khi không env nào, không bản ghi stg nào mà promote prd còn chép, trỏ commit có nguồn
+  không `promoter`. `promoter` không trùng giữa các nguồn có nó. Repo này chỉ build, ký, promote sáu image của nó
   (`built_services` của `deploy/k8s/lib.sh`); `svp_services` vẫn là bảy bản triển khai (gồm `web`), mà rescan, promote prd, bản ghi
   stg, check `svp-gitops`, `k8s/gitops.sh`, DORA đọc. Stg chạy web của repo `svp-frontend` từ 2026-10-30, prd từ 2026-10-31 (PR #22, #29 của `svp-gitops`). Policy: một glob mỗi tên được phát hành
   (`<imagePrefix><tên>@*`, `<imagePrefix><tên>:*`; không glob cả prefix: Kyverno kéo từ registry mọi image khớp glob trước mọi phép,
@@ -406,7 +406,7 @@ liệt kê target):
   của commit đó), `sign_identity`, `provenance_source`, `release_source_in` của `deploy/ci/common.sh`. Luật bảng viết hai nơi (template,
   `_release_sources_check` của `lib.sh`): `deploy/ci/sources-test.sh` (job `config`) đưa từng bảng hỏng qua cả hai, phải bị cả hai
   từ chối đúng message, bảng của working tree qua cả hai. Kyverno thật chọn attestor
-  theo prefix: lượt `verify.yml` `gitops` trên `main` 41112757906 (trước đổi tên, stg chạy web của nguồn `web` khi đó, nay `oldweb`): ca (m)
+  theo prefix: lượt `verify.yml` `gitops` trên `main` 41112757906 (trước đổi tên, stg chạy web của nguồn `web` khi đó, dưới tên `svp-web`): ca (m)
   hai chiều identity bị từ chối đúng message nêu nguồn, bản web đang chạy được nhận. **Build provenance**
   ([ADR-0027](docs/adr/0027-slsa-build-provenance.md) §4): giá trị `imageVerification.requireProvenance` của chart (mặc định `false`,
   render giống hệt trước; repository và ref mà provenance phải nêu là `repository`, `provenanceRef` của nguồn trong `sources.json`)
@@ -481,8 +481,8 @@ liệt kê target):
   `k8s-images`, wrapper `web-*`, `drill-k8s-web-canary`); không thì web chạy bản phát hành stg. `make web-clone` (cho CI): clone ẩn
   danh đủ lịch sử vào `.web/svp-frontend` (gitignore), có rồi thì
   fetch, checkout `WEB_REF` (nhánh hay SHA đủ 40 hex; không đặt thì commit `tag` của `envs/stg/images/web.yaml` trong bản clone
-  `svp-gitops`, chỉ khi web của stg là `<imagePrefix>web` của một nguồn phát hành `web` theo bảng nguồn, tức `web` hay nguồn nghỉ hưu
-  `oldweb`, cả hai là commit của `svp-frontend`; không thì dừng và đòi `WEB_REF`); bản clone có thay
+  `svp-gitops`, chỉ khi web của stg là `<imagePrefix>web` của một nguồn phát hành `web` theo bảng nguồn, tức `web`, tag là commit của
+  `svp-frontend`; không thì dừng và đòi `WEB_REF`); bản clone có thay
   đổi chưa commit thì từ chối; job đặt `SVP_WEB_DIR` tới đó.
 - `make k8s-gitops-up [GITOPS_REV=main]`, `make measure-gitops REV=<commit của svp-gitops>`: đường GitOps (ADR-0014 §12, ADR-0015
   §9, [ADR-0025](docs/adr/0025-gitops-config-repo.md) §8), tạo cluster `svp` **mới** đóng vai stg
@@ -606,7 +606,7 @@ liệt kê target):
   `vuln` hai nền tảng không CRITICAL trong tuổi tối đa và không có provenance, không tìm thấy hay thiếu một điều thì FAIL kèm lệnh dispatch
   `gh workflow run images.yml --ref main -f drill=true` (người học chạy, trong 72 giờ trước lượt diễn tập); (m)
   nguồn phát hành tách nhau, mỗi cặp nguồn A, B của bảng: image dưới prefix của A mang tên chỉ B phát hành bị từ chối đúng message của
-  phép 1, không hỏi registry (không khớp glob nào; không có tên như vậy thì SKIP, như cặp `backend`, `oldbackend` cùng tên service); bản
+  phép 1, không hỏi registry (không khớp glob nào; không có tên như vậy thì SKIP); bản
   phát hành của B mà pod `svp` chạy, gửi dưới bản sao tạm của policy đổi chéo issuer, subject của A và B (chỉ pod nhãn
   `svp-drill=supplychain-swap`, một bản sao mỗi cặp cho cả hai chiều, xoá ngay sau), bị từ chối đúng message phép chữ ký nêu nguồn B
   (chọn nhầm attestor của A thì gặp identity của B và lọt qua; không đặt digest của A dưới prefix của B: GHCR không có manifest đó,
@@ -771,11 +771,9 @@ liệt kê target):
     giờ lùi theo luật tổ tiên, image mới hơn `revision` bị từ chối), push `--force-with-lease`, mở hay cập nhật PR và bật
     auto-merge (squash, `--match-head-commit`); đọc lại PR sau push, PR đã merge hay đóng giữa chừng thì job đỏ. Mỗi nguồn phát
     hành chỉ ghi file image của bản phát hành của mình ([ADR-0033](docs/adr/0033-svp-web-repo.md) §4): file ở `main` của
-    `svp-gitops` ghi bản của một nguồn **đang hoạt động** khác (web của `svp-frontend`) thì để nguyên, một dòng, không đỏ; file ghi bản
-    của một **nguồn nghỉ hưu** có service đó (`oldbackend`, `oldweb`) thì lượt của nguồn đang phát hành service đó tiếp quản, ở chế độ
-    backend (vẫn kiểm image không mới hơn `revision`) và ở `--source <tên>`: dòng `takeover … (source oldbackend, retired)`, câu đầu comment
-    của nguồn mới ([ADR-0036](docs/adr/0036-repo-rename.md) §3); repository không dưới prefix nào của bảng nguồn thì đỏ; `--source` của
-    nguồn nghỉ hưu bị từ chối. Comment đầu `charts.yaml` nêu URL repo hiện tại (`current_repo_urls`, cả `promote-prd.sh`). `promote.sh --source <tên>` là chế độ cho CI của nguồn khác (chạy
+    `svp-gitops` ghi bản của một nguồn khác (web của `svp-frontend`) thì để nguyên, một dòng, không đỏ; repository không dưới prefix nào
+    của bảng nguồn (cả prefix trước đổi tên, nguồn nghỉ hưu đã gỡ, [ADR-0036](docs/adr/0036-repo-rename.md) §4 bước 8) thì đỏ; `--source`
+    không có trong bảng thì đỏ. Comment đầu `charts.yaml` nêu URL repo hiện tại (`current_repo_urls`, cả `promote-prd.sh`). `promote.sh --source <tên>` là chế độ cho CI của nguồn khác (chạy
     từ checkout ghim của repo này): nhánh `bot/promote-stg-<tên>`, bot của `promoter` của nguồn, commit là của `main` repo nguồn,
     không đọc hay ghi `charts.yaml`; lần tiếp quản (file ở `main` còn là bản của `backend`) in dòng `takeover` thay vì đỏ; file đổi
     nguồn thì câu đầu comment của nó thành câu của nguồn mới (`promote.sh --header`, cả `promote-prd.sh`). PR chỉ đổi
@@ -786,9 +784,10 @@ liệt kê target):
     `-f rescan=true [-f values_ref=<ref>]` quét lại mọi digest phát hành (lịch hằng ngày làm việc này): job `rescan` chạy
     `make gitops-clone` rồi `rescan.sh run`, tập digest là `envs/*/images/` của `svp-gitops` ở `main`, ở PR `bot/promote-stg` đang mở và
     ở `values_ref` (ref của `svp-gitops`, hay SHA đủ 40 hex của commit repo này trước khi tách, còn `deploy/k8s/values/services/`; trước
-    đổi tên dùng cho ca (l) của `drill-k8s-supplychain`, nay không đường nào cần: bản cũ dưới đó thuộc nguồn nghỉ hưu); đọc PR bot lỗi thì vẫn quét `main` và `values_ref` rồi mới đỏ. Rescan theo nguồn: lượt của
+    đổi tên dùng cho ca (l) của `drill-k8s-supplychain`, nay không đường nào cần: mọi bản dưới đó ở prefix trước đổi tên, không thuộc nguồn
+    nào, nên lượt đỏ); đọc PR bot lỗi thì vẫn quét `main` và `values_ref` rồi mới đỏ. Rescan theo nguồn: lượt của
     repo này chỉ quét và attest bản của nguồn `backend` (bảng nguồn của checkout); file ghi bản của nguồn khác bị bỏ khỏi tập, một dòng
-    stderr (nguồn nghỉ hưu: không ai rescan, bản tự hết hạn; nguồn đang hoạt động: CI của nguồn đó rescan nó, `rescan.sh run|list --source <tên>`, nhánh bot `bot/promote-stg-<tên>`), file dưới prefix không
+    stderr (CI của nguồn đó rescan nó, `rescan.sh run|list --source <tên>`, nhánh bot `bot/promote-stg-<tên>`), file dưới prefix không
     thuộc nguồn nào vẫn vào tập nên lượt đỏ; không repo nào attest bản của repo khác. `rescan.sh run` đòi `--source` (mặc định
     `backend`) bằng nguồn của repo của lượt (`use_build_source`) và `ci_builder_id` bằng `subject` của nguồn đó, kiểm trước khi đọc gì
     (`cosign attest --replace` thay attestation `vuln` bất kể ai ký bản cũ: CI của `svp-frontend` quên `--source web` sẽ thay attestation của
@@ -944,14 +943,14 @@ liệt kê target):
     §3, ở `gitops-check.sh` của repo này, chỉ có hiệu lực khi `CHECKER_COMMIT` được nâng lên commit có nó): mỗi
     `envs/<env>/images/<svc>.yaml` là `<imagePrefix><svc>` của một nguồn có `<svc>` trong bảng nguồn ở `revision` của env (commit
     trước bảng: một nguồn `backend`, luật như cũ); nguồn `backend` giữ luật tổ tiên, nguồn khác: tag là commit trên `main` của repo
-    nguồn, cả `oldbackend` (check tự clone ẩn danh `--filter=blob:none` theo `repository` của bảng; URL cũ đi theo chuyển hướng của
-    GitHub), không so với `revision`. `check.yml` không đặt `SVP_SOURCE_DIR_*` và không checkout repo web: bảng ở revision cũ có `web` là
-    URL tên cũ, bảng mới có `web` là `svp-frontend` và `oldweb` là URL tên cũ, mà `source_clone` so origin của bản clone với `repository`
+    nguồn, cả `oldbackend` của bảng bốn nguồn ở commit merge của PR đổi tên mà prd còn ghim (check tự clone ẩn danh `--filter=blob:none`
+    theo `repository` của bảng; URL cũ đi theo chuyển hướng của GitHub), không so với `revision`. `check.yml` không đặt `SVP_SOURCE_DIR_*` và không checkout repo web: bảng ở revision trước đổi tên có `web` là
+    URL tên cũ, bảng bốn nguồn mà prd còn ghim có `web` là `svp-frontend` và `oldweb` là URL tên cũ, bảng hiện tại chỉ `svp-frontend`, mà `source_clone` so origin của bản clone với `repository`
     nguyên văn, nên một bản clone không khớp cả hai; đặt `SVP_SOURCE_DIR_<TÊN>` tay trên máy thì vẫn so nguyên văn. Bước 1c, **tác giả PR** (`ci_change_request_author` của `platform.sh`: `pull_request.user.login`
     của sự kiện, không đọc tên nhánh; không đọc được thì đỏ; người gửi sự kiện `sender.login`, `ci_change_request_sender`,
     `SVP_CHANGE_REQUEST_SENDER` ở chế độ `local`: là bot khác tác giả thì đỏ, nên bot không push được lên PR của bot khác): bot `<promoter>[bot]` của nguồn N chỉ đổi `envs/stg/images/<svc>.yaml`
-    với `<svc>` thuộc N, image sau thuộc N, image trước thuộc N, `backend` hay một nguồn nghỉ hưu có `<svc>` (tiếp quản một chiều, dòng `ok`
-    nêu nguồn nghỉ hưu); không bot nào là bot của nguồn nghỉ hưu; bot của `backend` đổi thêm
+    với `<svc>` thuộc N, image sau thuộc N, image trước thuộc N hay `backend` (tiếp quản một chiều; tiếp quản từ nguồn nghỉ hưu đã bỏ
+    cùng lúc gỡ hai nguồn đó); nguồn không `promoter` của bảng ở revision cũ không có bot; bot của `backend` đổi thêm
     `envs/{stg,prd}/charts.yaml`, `envs/prd/images/<svc>.yaml`; không bot nào xoá file dưới `envs/`, bot của một nguồn không đổi gì ngoài `envs/`;
     bot `[bot]` khác (Renovate) không đổi gì dưới `envs/`; PR của người không bị giới hạn; không base hay không phải PR thì một dòng
     `skip` (trên máy `SVP_CHANGE_REQUEST_AUTHOR` đóng vai tác giả). Ba ruleset (`.github/rulesets/`): `main` (PR, `gitops-ok` bắt buộc, cấm xoá và force push, không ai

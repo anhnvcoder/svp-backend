@@ -22,8 +22,9 @@
 #     is pulled and its _next/ taken, no run of any workflow listed; a tag GHCR does not serve is skipped on a branch
 #     and fails on main; a layer with a link, with a file outside _next/, or with other bytes than its digest fails;
 #     web-amd64 names the release's own repository. These cases read the table of release sources of before the
-#     repositories were renamed; then, with the working tree's table, web of the retired oldweb takes its maps from
-#     the image under svp-web's prefix and web of the web source from the one under svp-frontend's.
+#     repositories were renamed; then, with the working tree's table, web under svp-web's prefix (a release of a
+#     retired source, dropped from the table) fails before GHCR is asked for its maps, and web of the web source takes
+#     its maps from the image under svp-frontend's prefix.
 # Runs on macOS and Linux: no network, no Docker, no cluster.
 #
 # Usage, from anywhere: deploy/ci/gitops-sourcemaps-test.sh
@@ -354,14 +355,17 @@ has "svp-web, a layer of other bytes: says so" "$(reason svp-web-bytes)" "with o
 has "svp-web: web-amd64 names its own repository" "$(cat "$work/svp-web-reads.out")" \
   "web-amd64 ghcr.io/anhnvcoder/svp-web/web@$child"
 
-# --- The table of the working tree: web of the retired source oldweb (svp-web, as stg runs it until the web source's
-# first release) still has its maps under its own prefix, where its CI pushed them; web of the web source under
-# svp-frontend's.
+# --- The table of the working tree: web under the prefix of svp-web is a release of no source of it (the retired
+# source oldweb was dropped), so no maps are looked for; web of the web source has them under svp-frontend's.
 cp "$here/../helm/svp-policy/files/sources.json" "$repo/deploy/helm/svp-policy/files/sources.json"
 rc=$(run_fetch oldweb feat/stage6b-test FAKE_MAPS="$work/good")
-same "the working tree's table, web of oldweb: ok, exit 0" "ok 0" "$(status oldweb) $rc"
-has "the working tree's table, web of oldweb: the image of its maps under the prefix of svp-web" \
-  "$(cat "$work/oldweb.calls")" "ghcr_get anhnvcoder/svp-web/web-sourcemaps manifests/amd64-${child#sha256:}"
+same "the working tree's table, web under svp-web's prefix: fail, exit 1" "fail 1" "$(status oldweb) $rc"
+has "the working tree's table, web under svp-web's prefix: the reason names it" "$(reason oldweb)" \
+  "is 'ghcr.io/anhnvcoder/svp-web/web', not a release of web (ghcr.io/anhnvcoder/svp-frontend/web)"
+case $(cat "$work/oldweb.calls" 2>/dev/null) in
+*web-sourcemaps*) fail "the working tree's table, web under svp-web's prefix: GHCR asked for its maps" ;;
+*) ok "the working tree's table, web under svp-web's prefix: GHCR not asked for its maps" ;;
+esac
 c checkout -q -f main
 web_file 0123456789ab "$index" ghcr.io/anhnvcoder/svp-frontend/web >"$config/envs/stg/images/web.yaml"
 c commit -q -am "web of svp-frontend"

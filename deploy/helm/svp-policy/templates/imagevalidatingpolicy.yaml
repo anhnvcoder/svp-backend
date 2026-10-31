@@ -3,11 +3,8 @@ Kyverno v1.19.1 ImageValidatingPolicy. Every release source of files/sources.jso
 signs images: name, repository, imagePrefix, services, drillImages, issuer, subject, provenanceRef, and promoter, the
 GitHub App that promotes its releases) has its own image prefix and its own attestor, and each image is checked
 against the source whose prefix it is under, never another's: an identity of one source cannot sign an image under
-another's prefix. A source without promoter is retired: a repository that no longer builds (it was renamed, and its
-successor is another source), whose releases already signed are still admitted while an environment or a rollback may
-run them, but which nothing builds, promotes or rescans any more. The checks run in order and stop at
-the first that fails, each with its own message naming the images it refused and, from check 2 on, the source each
-belongs to:
+another's prefix. The checks run in order and stop at the first that fails, each with its own message naming the
+images it refused and, from check 2 on, the source each belongs to:
   1. every image of the pod is <imagePrefix><name>@sha256:<64 hex>, <name> one of the services or drill images of the
      source with that prefix. Kyverno verifies only the images that matchImageReferences selects and lets every other
      one through, so this check alone refuses an image of the local registry, of Docker Hub, or under a prefix with a
@@ -77,7 +74,13 @@ render wrong (a value breaking out of a CEL string, two sources one image could 
 {{- if not (kindIs "map" $s) }}
 {{- fail "files/sources.json: every entry of sources is an object" }}
 {{- end }}
-{{- /* promoter is the one optional key: a source without it is retired. When given it is checked as the others. */}}
+{{- /* promoter is the one optional key, checked as the others when given. A source without it was a retired one: a
+repository renamed, whose releases signed under its old name stayed admitted while an environment ran them. This table
+has none (deploy/ci/sources-test.sh fails when a source of it lacks promoter), but the scripts still read the tables of
+older commits that have such sources (an environment's charts.yaml may pin one), with the same rules as here, which
+deploy/ci/sources-test.sh keeps equal to deploy/k8s/lib.sh. Drop the optional promoter here and there once no
+environment of svp-gitops pins a commit whose table has a source without it, and no stg record that a promote to prd
+may still copy names one. */}}
 {{- $keys := list "name" "repository" "imagePrefix" "issuer" "subject" "provenanceRef" }}
 {{- if hasKey $s "promoter" }}
 {{- $keys = append $keys "promoter" }}

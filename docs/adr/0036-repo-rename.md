@@ -1,7 +1,7 @@
 # 0036. Đổi tên repo `short-video-platform` → `svp-backend`, `svp-web` → `svp-frontend`: image chuyển sang prefix mới mang tên repo; bảng nguồn của lượt chuyển giữ hai nguồn cũ ở dạng nghỉ hưu (được nhận, không ai phát hành) để stg, prd đi qua bằng PR bot như mọi bản phát hành, rồi gỡ khi prd chạy bộ bản mới
 
-- Trạng thái: Chấp nhận (2026-10-31); chưa hiện thực: PR đổi tên ở backend, `svp-gitops`, `svp-frontend` chưa merge (mục Hiện thực ở,
-  Kết quả)
+- Trạng thái: Chấp nhận (2026-10-31); hiện thực: PR đổi tên ở backend merge `b5f22c2` (PR #59), stg và prd chạy bảy bản dưới prefix mới
+  (mục Kết quả); PR gỡ hai nguồn nghỉ hưu (mục 4, bước 8) hiện thực 2026-11-01, chưa merge
 - Ngày: 2026-10-31
 
 ## Bối cảnh
@@ -265,8 +265,22 @@ Không tạo repo nào tên `short-video-platform` hay `svp-web` dưới `anhnvc
 
 ## Kết quả
 
-Chưa có. Ghi khi lượt phát hành đầu dưới tên mới tới stg (mục 4, bước 4, 5), bản ghi stg (bước 6), prd (bước 7) và PR gỡ (bước 8): id lượt
-chạy, PR, commit.
+- **Bước 1–5:** PR đổi tên ở backend merge thành T = `b5f22c2` (PR #59); PR #8 của `svp-frontend` merge, `images.yml` của `svp-frontend` trên
+  `1241c27` xanh, PR bot #37 của `svp-gitops` (`svp-web-promoter[bot]`) tiếp quản `web.yaml` từ `oldweb` và tự merge; package
+  `svp-frontend/web`, `svp-frontend/web-sourcemaps` kéo ẩn danh được. Image diễn tập dưới prefix mới: `images.yml -f drill=true`
+  [41216998088](https://github.com/anhnvcoder/svp-backend/actions/runs/41216998088).
+- **Bước 6:** `verify.yml` kịch bản `gitops` trên `main` [41217007864](https://github.com/anhnvcoder/svp-backend/actions/runs/41217007864)
+  `success`, job `record-stg` tạo bản ghi stg Deployment `7462402099`.
+- **Bước 7:** `images.yml -f promote_prd=true` [41228211916](https://github.com/anhnvcoder/svp-backend/actions/runs/41228211916) mở PR #40
+  của `svp-gitops`, merge `17dd1f7`: prd chạy bảy bản dưới `svp-backend/`, `svp-frontend/`, `charts.revision` vẫn là T (bảng bốn nguồn).
+  `dora.yml` [41228214837](https://github.com/anhnvcoder/svp-backend/actions/runs/41228214837) `success`.
+- **Bước 8, gỡ (2026-11-01):** trước khi gỡ, mọi file `envs/stg/images/`, `envs/prd/images/` ở `main` của `svp-gitops` (`0700f0e`) đều dưới hai
+  prefix mới (stg ở `88975db`, prd ở T). `sources.json` còn `backend`, `web`; bỏ tiếp quản từ nguồn nghỉ hưu (luật tác giả PR, `promote.sh`)
+  và phần riêng cho nguồn nghỉ hưu ở `rescan.sh`, `supplychain.sh`, `common.sh` (`active_source`, từ chối lượt của nguồn nghỉ hưu). Hệ quả:
+  từ chart của commit gỡ, rollback về bản trước đổi tên bị phép 1 từ chối (prefix không thuộc nguồn nào), `promote.sh` đỏ khi `main` của
+  `svp-gitops` còn file dưới prefix cũ, rescan liệt kê file đó nên lượt đỏ, bản ghi stg trước đổi tên không còn promote prd được. Giữ: đọc
+  bảng có nguồn không `promoter` (prd còn ở T tới lần promote prd sau; `sources-test.sh` đòi mọi nguồn của bảng working tree có `promoter`)
+  và phần đọc lịch sử của mục 8 (`dora.sh`, `_ci_renamed_repos`). PR gỡ chưa merge; `CHECKER_COMMIT` (mục 9): chưa nâng.
 
 ## Hiện thực ở
 
@@ -296,9 +310,13 @@ PR đổi tên ở backend (chưa merge):
   (comment), `README.md`.
 - `svp-frontend`: `.backend-commit`, `api/contract.json`, `scripts/backend.sh`, `.github/workflows/`, `renovate.json`, tài liệu.
 
-PR gỡ (mục 4, bước 8; chưa làm): `sources.json` còn `backend`, `web`; bỏ nhánh tiếp quản từ nguồn nghỉ hưu ở `gitops-check.sh`,
-`promote.sh` và phần riêng cho nguồn nghỉ hưu ở `rescan.sh`, `supplychain.sh`; giữ `_release_sources_jq`, template đọc được nguồn không
-`promoter` và phần lịch sử của mục 8.
+PR gỡ (mục 4, bước 8; chưa merge): `deploy/helm/svp-policy/files/sources.json` còn `backend`, `web`; bỏ nhánh tiếp quản từ nguồn nghỉ hưu ở
+`deploy/ci/gitops-check.sh` (`author_rule`), `deploy/ci/promote.sh`, phần riêng cho nguồn nghỉ hưu ở `deploy/ci/rescan.sh`,
+`deploy/k8s/drills/supplychain.sh` (ca m) và `deploy/ci/common.sh` (`active_source`, nhánh nghỉ hưu của `use_build_source`); giữ
+`_release_sources_jq` của `deploy/k8s/lib.sh` và template của `svp-policy` đọc được nguồn không `promoter` (comment ghi lúc bỏ được) và phần
+lịch sử của mục 8; test: `deploy/ci/sources-test.sh` (mọi nguồn của bảng working tree có `promoter`), `gitops-check-test.sh`,
+`release-set-test.sh` (bảng T viết tay làm fixture lịch sử), `promote-test.sh`, `promote-prd-test.sh`, `platform-test.sh`,
+`gitops-sourcemaps-test.sh`, `sourcemaps-image-test.sh`.
 
 ## Nguồn
 

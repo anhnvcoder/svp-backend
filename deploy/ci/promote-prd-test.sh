@@ -13,9 +13,9 @@
 #     and naming one fails; a record whose commit is not on main of svp-gitops fails;
 #   - main already running the record's set: no push, no pull request;
 #   - a record from before the repositories were renamed, whose web is a release of the retired source oldweb
-#     (svp-web): prd's web.yaml gets its repository and the first sentence of its comment that of svp-web; the record of
-#     the web source's web puts svp-frontend's back; a record whose run is named under the code repository's former
-#     name counts; the comment of charts.yaml names the code repository by its current name;
+#     (svp-web), dropped from the table since: it does not count, so the rollback to it fails and pushes nothing; a
+#     record whose run is named under the code repository's former name counts; the comment of charts.yaml names the
+#     code repository by its current name;
 #   - a machine refuses an address of svp-gitops off its disk, and with PROMOTE_DRY_RUN=1 prints the push instead.
 # Every run is a machine's (env -i: no variable of a CI job running this test). Runs on macOS and Linux: no network.
 #
@@ -254,28 +254,16 @@ same "main runs it: the branch did not move" "$before" "$(remote rev-parse refs/
 lacks "$work/promote.out" "pr create" && ok "main runs it: no pull request" || fail "main runs it: no pull request"
 remote update-ref refs/heads/main "$r2"
 
-# --- 4b. A record from before the rename, whose web is a release of the retired source oldweb (svp-web), then back
-# to one of the web source's.
+# --- 4b. A record from before the rename, whose web is a release of the retired source oldweb (svp-web), dropped from
+# the table since: the record no longer counts, so a rollback to it is refused and nothing is pushed.
+before=$(remote rev-parse refs/heads/bot/promote-prd)
 promote -- 7
-same "web of svp-web: exit 0" 0 "$rc"
-head=$(remote rev-parse refs/heads/bot/promote-prd)
-same "web of svp-web: its release" "ghcr.io/anhnvcoder/svp-web/web $tag $(digest W-web)" "$(prd_at "$head" web)"
-same "web of svp-web: the first comment sentence is svp-web's" \
-  "# The release image of web in prd, nothing else: the release on GHCR that CI of https://github.com/anhnvcoder/svp-web
-# built, scanned and signed (.github/workflows/images.yml there)." \
-  "$(remote show "$head:envs/prd/images/web.yaml" | grep '^#')"
-same "web of svp-web: the gateway's comment untouched" "# The release image of gateway in prd." \
-  "$(remote show "$head:envs/prd/images/gateway.yaml" | head -n 1)"
-expect "web of svp-web: says the source changed" "$work/promote.out" "(release source web → oldweb)"
-remote update-ref refs/heads/main "$head"
-promote -- 12
-head=$(remote rev-parse refs/heads/bot/promote-prd)
-same "back to the web source's web: its release" "$(repo_of web) $tag $(digest A-web)" "$(prd_at "$head" web)"
-same "back to the web source's web: its sentence" \
-  "# The release image of web in prd, nothing else: the release on GHCR that CI of
-# https://github.com/anhnvcoder/svp-frontend built, scanned and signed (.github/workflows/images.yml there)." \
-  "$(remote show "$head:envs/prd/images/web.yaml" | grep '^#')"
-remote update-ref refs/heads/main "$r2"
+same "web of svp-web: refused (exit 1)" 1 "$rc"
+expect "web of svp-web: its payload names no release of a source" "$work/promote.err" \
+  "skip  record #7: its payload: it does not name one release on GHCR (repository of a release source of the service"
+expect "web of svp-web: not among the records that count" "$work/promote.err" \
+  "FAIL  record #7 is not among the records of stg that count"
+same "web of svp-web: the branch did not move" "$before" "$(remote rev-parse refs/heads/bot/promote-prd)"
 
 # --- 5. An address off the disk.
 promote PROMOTE_GITOPS_URL=https://github.com/anhnvcoder/svp-gitops.git --

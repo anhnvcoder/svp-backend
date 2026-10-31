@@ -16,13 +16,15 @@
 #     over 128 KiB, the most Linux takes in one argument): recorded all the same;
 #   - snapshot writes its file and exits 1 when the cluster could not be recorded now;
 #   - check takes the release-set.json written (six releases of backend, web of svp-frontend) and refuses one whose
-#     release of web has a tag that is no commit; by the table of release sources it takes web of the retired oldweb
-#     (svp-web) too, and refuses web of a repository no source names, web under the former backend prefix and the
-#     gateway under the prefix of svp-frontend, which publishes web alone; check --at-charts judges the releases by the
+#     release of web has a tag that is no commit; by the table of release sources it refuses web of a repository no
+#     source names, web under the former prefixes of backend and of svp-frontend (svp-web, the retired oldweb dropped
+#     from the table) and the gateway under the prefix of svp-frontend, which publishes web alone; check --at-charts
+#     judges the releases by the
 #     table at the payload's charts revision (a throwaway copy of this repository): backend's web under charts whose
 #     table (of before the rename) still has it passes where the working tree's table no longer does, web of svp-web
 #     under charts from before the table fails, the releases of the retired sources pass under the charts of the
-#     rename and the new sources' fail under the old table, and charts at no commit of the clone or with no revision
+#     rename (whose table has them) and fail under the working tree's, the new sources' fail under the old table, and
+#     charts at no commit of the clone or with no revision
 #     fail saying why;
 #   - record-stg.sh on a machine prints the deployment of R in stg it would make, and refuses the file of another run.
 # Runs on macOS and Linux: no network, no cluster.
@@ -223,11 +225,8 @@ if rs check "$work/bad.json" >/dev/null 2>"$work/bad.err"; then fail "check: a t
   has "$work/bad.err" "does not name one release on GHCR" && ok "check: a tag that is no commit is refused" ||
     fail "check: a tag that is no commit is refused, saying why"
 fi
-jq '.images.web.repository = "ghcr.io/anhnvcoder/svp-web/web"' "$out" >"$work/web.json"
-rs check "$work/web.json" >/dev/null 2>&1 && ok "check: web of the retired source oldweb (svp-web) is a release of web" ||
-  fail "check: web of the retired source oldweb (svp-web) is a release of web"
 for bad in "web ghcr.io/anhnvcoder/elsewhere/web" "gateway ghcr.io/anhnvcoder/svp-frontend/gateway" \
-  "web ghcr.io/anhnvcoder/short-video-platform/web"; do
+  "web ghcr.io/anhnvcoder/short-video-platform/web" "web ghcr.io/anhnvcoder/svp-web/web"; do
   read -r svc repo <<<"$bad"
   jq --arg s "$svc" --arg r "$repo" '.images[$s].repository = $r' "$out" >"$work/bad.json"
   if rs check "$work/bad.json" >/dev/null 2>"$work/bad.err"; then fail "check: $svc of $repo is refused"; else
@@ -238,8 +237,8 @@ done
 
 # check --at-charts, on a throwaway copy of this repository: k0 from before the table of release sources (its one
 # source backend, web included), k1 with the table of before the repositories were renamed (web of both sources, under
-# short-video-platform and svp-web), k2 and the working tree with the working tree's table (web of the web source and
-# of the retired oldweb, the six services of backend and of the retired oldbackend).
+# short-video-platform and svp-web), k2 with the table of the rename (web of the web source and of the retired oldweb,
+# the six services of backend and of the retired oldbackend), k3 and the working tree with the working tree's table.
 code=$work/code
 mkdir -p "$code/deploy/k8s" "$code/deploy/helm/svp-policy"
 cp -R "$here" "$code/deploy/ci"
@@ -274,9 +273,60 @@ cat >"$code/deploy/helm/svp-policy/files/sources.json" <<'TABLE'
 TABLE
 cg add -A && cg commit -q -m "the table of release sources"
 k1=$(cg rev-parse HEAD)
+# The table of the rename (history: the commit an environment may still pin after the retired sources were dropped).
+cat >"$code/deploy/helm/svp-policy/files/sources.json" <<'TABLE'
+{
+  "sources": [
+    {
+      "name": "backend",
+      "repository": "https://github.com/anhnvcoder/svp-backend",
+      "imagePrefix": "ghcr.io/anhnvcoder/svp-backend/",
+      "services": ["gateway", "user-service", "video-service", "engagement-service", "feed-service", "media-worker"],
+      "drillImages": ["drill-vulnerable", "drill-unsigned", "drill-no-provenance"],
+      "issuer": "https://token.actions.githubusercontent.com",
+      "subject": "https://github.com/anhnvcoder/svp-backend/.github/workflows/images.yml@refs/heads/main",
+      "provenanceRef": "refs/heads/main",
+      "promoter": "svp-gitops-promoter"
+    },
+    {
+      "name": "web",
+      "repository": "https://github.com/anhnvcoder/svp-frontend",
+      "imagePrefix": "ghcr.io/anhnvcoder/svp-frontend/",
+      "services": ["web"],
+      "drillImages": [],
+      "issuer": "https://token.actions.githubusercontent.com",
+      "subject": "https://github.com/anhnvcoder/svp-frontend/.github/workflows/images.yml@refs/heads/main",
+      "provenanceRef": "refs/heads/main",
+      "promoter": "svp-web-promoter"
+    },
+    {
+      "name": "oldbackend",
+      "repository": "https://github.com/anhnvcoder/short-video-platform",
+      "imagePrefix": "ghcr.io/anhnvcoder/short-video-platform/",
+      "services": ["gateway", "user-service", "video-service", "engagement-service", "feed-service", "media-worker"],
+      "drillImages": [],
+      "issuer": "https://token.actions.githubusercontent.com",
+      "subject": "https://github.com/anhnvcoder/short-video-platform/.github/workflows/images.yml@refs/heads/main",
+      "provenanceRef": "refs/heads/main"
+    },
+    {
+      "name": "oldweb",
+      "repository": "https://github.com/anhnvcoder/svp-web",
+      "imagePrefix": "ghcr.io/anhnvcoder/svp-web/",
+      "services": ["web"],
+      "drillImages": [],
+      "issuer": "https://token.actions.githubusercontent.com",
+      "subject": "https://github.com/anhnvcoder/svp-web/.github/workflows/images.yml@refs/heads/main",
+      "provenanceRef": "refs/heads/main"
+    }
+  ]
+}
+TABLE
+cg add -A && cg commit -q -m "the table of the rename"
+k2=$(cg rev-parse HEAD)
 cp "$here/../helm/svp-policy/files/sources.json" "$code/deploy/helm/svp-policy/files/sources.json"
 cg add -A && cg commit -q -m "the table of the working tree"
-k2=$(cg rev-parse HEAD)
+k3=$(cg rev-parse HEAD)
 old=ghcr.io/anhnvcoder/short-video-platform
 # at_charts NAME WANT_RC MESSAGE REVISION SIX_PREFIX WEB_REPOSITORY [--at-charts]: check of the copy on
 # release-set.json with those charts' revision, the six services under SIX_PREFIX and web's repository; MESSAGE on
@@ -306,6 +356,10 @@ at_charts "check --at-charts: web of svp-web under charts from before the table"
   "$k0" "$old" ghcr.io/anhnvcoder/svp-web/web --at-charts
 at_charts "check --at-charts: the releases of the retired sources under the charts of the rename" 0 "" "$k2" "$old" \
   ghcr.io/anhnvcoder/svp-web/web --at-charts
+at_charts "check --at-charts: the releases of the new sources under the charts of the rename" 0 "" "$k2" "$prefix" \
+  "$(repo_of web)" --at-charts
+at_charts "check --at-charts: the releases of the retired sources under the charts of the working tree" 1 \
+  "does not name one release on GHCR" "$k3" "$old" ghcr.io/anhnvcoder/svp-web/web --at-charts
 at_charts "check --at-charts: the releases of the new sources under the charts of the old table" 1 \
   "does not name one release on GHCR" "$k1" "$prefix" "$(repo_of web)" --at-charts
 at_charts "check --at-charts: charts at no commit of this clone" 1 \
