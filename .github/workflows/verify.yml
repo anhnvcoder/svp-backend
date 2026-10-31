@@ -69,8 +69,7 @@ on:
         default: ""
   # Saturday 00:37 UTC, 07:37 in Vietnam (UTC+7), off the top of the hour (busy for GitHub's scheduler, which may delay
   # or drop a run then). GitHub runs it on the latest commit of main only, and turns it off after 60 days without any
-  # activity in a public repository. Its longest jobs (330 minutes) end by 06:17 UTC, so the record of stg it makes is
-  # there before dora.yml runs at 09:17 UTC.
+  # activity in a public repository.
   schedule:
     - cron: "37 0 * * 6"
 

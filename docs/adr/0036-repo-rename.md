@@ -209,6 +209,8 @@ Cách lùi:
 
 ### 8. Đọc lịch sử dưới tên cũ là lâu dài, không phải phần chuyển tiếp
 
+> Phần DORA của mục này bị thay bởi [ADR-0037](0037-mainpath-standard-tools.md) §1 (2026-11-01): `dora.sh` rời đường chính sang bài lab; danh sách tên cũ `_ci_renamed_repos` còn cho `run_url` của bản ghi stg và comment của file `svp-gitops`.
+
 - Bản ghi stg trước đổi tên (Deployment trên `svp-gitops`, [ADR-0028](0028-dora-metrics.md)) có `run_url` dưới
   `https://github.com/anhnvcoder/short-video-platform/actions/runs/…` và image dưới prefix cũ; chúng còn trong cửa sổ của `dora.yml` (mặc định
   30 ngày, `days` tới 3650).

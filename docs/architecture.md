@@ -434,8 +434,9 @@ flowchart LR
   CRITICAL cho lockfile npm của web, ở job `web` tới giai đoạn 6b phần 4b, rồi ở CI của `svp-frontend`); `images.yml`
   build image. Mỗi file một check tổng (`ci-ok`, `images-ok`), là hai check bắt buộc của ruleset `main`. Từ giai đoạn 6b có
   workflow thứ ba `verify.yml` ngoài check bắt buộc (§5.4, [ADR-0021](adr/0021-deferred-verification-stage6b.md)); logic của cả
-  ba nằm ở `Makefile` và `deploy/ci/`, mọi chỗ chạm nền tảng CI qua adapter `deploy/ci/platform.sh`
-  ([ADR-0023](adr/0023-ci-platform-neutral.md)). Luồng và job của từng workflow cho người mới: [`ci-cd.md`](ci-cd.md). Mọi action ghim
+  ba nằm ở `Makefile` và `deploy/ci/`, script có sẵn chạm nền tảng CI qua adapter `deploy/ci/platform.sh`
+  ([ADR-0023](adr/0023-ci-platform-neutral.md)), đã đóng băng: không thêm hàm `ci_*`, script mới gọi `gh` trực tiếp
+  ([ADR-0037](adr/0037-mainpath-standard-tools.md) §2). Luồng và job của từng workflow cho người mới: [`ci-cd.md`](ci-cd.md). Mọi action ghim
   SHA commit và chỉ là action của GitHub hay của chính nhà cung cấp công cụ; trivy, syft chạy bằng image ghim digest.
   Mọi job của lượt PR, kể cả PR từ fork, chỉ có `contents: read` và không secret; quyền ghi (`packages`, `id-token`,
   `contents`, `pull-requests`, `security-events`) chỉ ở job chạy trên `main` với code đã qua PR.
@@ -626,8 +627,8 @@ flowchart LR
   cả bộ của một bản ghi stg, Code Owner duyệt; file chung cần Code Owner, người học tự merge bằng bypass ruleset `owners` (có bản
   ghi). Khoá App chỉ ở environment `promote` của repo code, ba job trên `main` dùng nó với token 1 giờ, mỗi job đúng quyền.
 - **Bản ghi stg:** job `record-stg` của `verify.yml` (sau kịch bản `gitops` xanh trên `main`) tạo Deployment `stg` trên `svp-gitops`
-  với bộ đã chạy suốt các phép kiểm (`release-set.json`); đây là đầu vào duy nhất của promote prd và là nguồn của DORA metrics
-  ([ADR-0028](adr/0028-dora-metrics.md), `dora.yml`).
+  với bộ đã chạy suốt các phép kiểm (`release-set.json`); đây là đầu vào duy nhất của promote prd. DORA metrics không đọc nó ở đây nữa:
+  là bài lab `dora/` của `svp-labs` ([ADR-0037](adr/0037-mainpath-standard-tools.md) §1).
 - **Đường dev:** đọc working tree của bản clone `svp-gitops` cạnh repo (`../gitops`, hay `SVP_GITOPS_DIR`), không tự clone hay
   fetch; CI clone ẩn danh bằng `make gitops-clone`. Thay đổi cần cả code lẫn cấu hình thành hai PR theo thứ tự (cấu hình tương
   thích bản cũ trước).
@@ -636,7 +637,7 @@ flowchart LR
   [40937054425](https://github.com/anhnvcoder/svp-backend/actions/runs/40937054425) đọc bản clone, check đầu của
   `svp-gitops` [40902199532](https://github.com/anhnvcoder/svp-gitops/actions/runs/40902199532). RAM của lượt `gitops` đó: nghỉ
   cuối 7 241 MiB (bỏ active_file), vượt ngưỡng 6,5 GiB; đỉnh `ram-peak-2` median 8 954 MiB, vượt 8,7 GiB (không kết luận đạt,
-  [ADR-0021](adr/0021-deferred-verification-stage6b.md)). **Kiểm sau push:** auto-merge PR bot, `record-stg`, promote prd, DORA.
+  [ADR-0021](adr/0021-deferred-verification-stage6b.md)). **Kiểm sau push:** auto-merge PR bot, `record-stg`, promote prd.
 
 ### 5.6 Ba repo và hợp đồng API (giai đoạn 6b phần 4b)
 
@@ -681,8 +682,8 @@ flowchart LR
 - **Đổi tên repo** (2026-10-31, [ADR-0036](adr/0036-repo-rename.md)): `short-video-platform` → `svp-backend`, `svp-web` → `svp-frontend`;
   identity ký và prefix image mang tên repo nên đổi theo. Bảng nguồn của bản chuyển có giữ hai **nguồn nghỉ hưu** `oldbackend`, `oldweb`
   (URL, prefix, identity cũ, không `promoter`): được nhận, không ai build, promote hay rescan; PR bot của nguồn mới tiếp quản file image
-  của chúng; đã gỡ ngày 2026-11-01 khi mọi env chạy bản dưới prefix mới: bản trước đổi tên nay bị policy từ chối. Lịch sử dưới tên cũ (`run_url` của bản ghi stg, DORA) đọc lâu dài qua danh sách tên
-  cũ một chỗ trong `deploy/ci/platform.sh`. Danh sách build của backend (`built_services`, sáu) tách khỏi danh sách
+  của chúng; đã gỡ ngày 2026-11-01 khi mọi env chạy bản dưới prefix mới: bản trước đổi tên nay bị policy từ chối. Tên cũ của repo khai một chỗ, dạng dữ liệu (`_ci_renamed_repos` của `deploy/ci/platform.sh`),
+  cho `run_url` của bản ghi stg và comment của file `svp-gitops` viết dưới tên cũ. Danh sách build của backend (`built_services`, sáu) tách khỏi danh sách
   bảy bản triển khai (`svp_services`) mà promote prd, bản ghi stg, rescan đọc.
 - **Script CI dùng chung:** `svp-frontend` checkout `deploy/ci/` của backend ở commit ghim `.backend-commit` (chỗ ghim duy nhất, Renovate
   nâng) và chạy với `SVP_CODE_ROOT` trỏ cây của nó; logic build, quét, ký, attest, promote, rescan chỉ có một bản.

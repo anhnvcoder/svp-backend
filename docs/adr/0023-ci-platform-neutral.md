@@ -1,6 +1,6 @@
 # 0023. CI trung lập nền tảng: YAML của nền tảng chỉ nối bước, logic ở `Makefile` và `deploy/ci/`, mọi chỗ đọc ngữ cảnh CI hay gọi API nền tảng đi qua adapter `deploy/ci/platform.sh` (hiện thực GitHub Actions và chạy trên máy), identity ký viết ở một chỗ; bảng ánh xạ GitHub ↔ GitLab (gitlab.com và self-managed)
 
-- Trạng thái: Chấp nhận; adapter hiện thực 2026-10-25 (nhánh `github`, `local`), kiểm trên CI thật sau push; bảng Tên chốt (hàm
+- Trạng thái: Bị thay bởi [0037](0037-mainpath-standard-tools.md) (2026-11-01: adapter đóng băng, GitLab là bài lab). Trước đó: Chấp nhận; adapter hiện thực 2026-10-25 (nhánh `github`, `local`), kiểm trên CI thật sau push; bảng Tên chốt (hàm
   của repo cấu hình: PR ở repo đích và auto-merge, bot và credential git của GitHub App, `ci_push_time` theo repo, lượt chạy, bản ghi
   Deployment) và bảng ánh xạ repo (dòng của repo cấu hình) chỉnh bởi [0025](0025-gitops-config-repo.md) và
   [0028](0028-dora-metrics.md), từ 2026-10-30; §4 (identity ký thành bảng nhiều nguồn `deploy/helm/svp-policy/files/sources.json`), §1 (`platform-guard.sh` nhận thư mục gốc, chạy cả ở `svp-frontend`), hàm `ci_*` đọc tác giả và người gửi PR, bảng ánh xạ (script chung, multi-project, credential thứ hai) chỉnh bởi [0033](0033-svp-web-repo.md), từ 2026-10-30

@@ -18,9 +18,7 @@
 #
 # The HLS output must use the versioned layout (media/<id>/<version>/master.m3u8, variants under
 # <attempt>/<rendition>/) and its master, a variant playlist, a segment and the thumbnail must come
-# with Cache-Control: max-age=31536000, immutable. SVP_SMOKE_LEGACY_MEDIA=1 lets a master without a
-# version pass with a NOTE line and no header check, only while a stack runs a release of
-# media-worker from before versions; a versioned master is checked whatever it is set to.
+# with Cache-Control: max-age=31536000, immutable; a master without a version fails.
 #
 # The same steps run against the local k3d cluster svp with `make k8s-smoke`: base
 # https://api.svp.localhost:8443, CURL_CA_BUNDLE=.k8s/ca.crt so curl trusts the cluster's CA for
@@ -212,8 +210,6 @@ if [[ $playlist_key =~ ^media/$clip_id/$uuid_re/master\.m3u8$ ]]; then
     [[ $got == "$immutable" ]] || fail "${object%%|*} has Cache-Control: $immutable (got '$got')"
   done
   ok "versioned key $playlist_key; Cache-Control $immutable on master, variant playlist, segment, thumbnail"
-elif [[ ${SVP_SMOKE_LEGACY_MEDIA:-} == 1 && $playlist_key == "media/$clip_id/master.m3u8" ]]; then
-  echo "NOTE  playlist key $playlist_key has no version: SVP_SMOKE_LEGACY_MEDIA=1, the running media-worker writes the layout from before versions; Cache-Control not checked"
 else
   fail "playlist key is media/<video_id>/<version>/master.m3u8 (got $playlist_key)"
 fi

@@ -207,11 +207,8 @@ liệt kê target):
   `redis-cli` trên máy và Redis native đang chạy: trước khi chạy, script xoá khoá rate limit đăng ký theo IP
   `svp:gw:rl:register:*` ở db 10 (`SCAN` + `DEL`, không `FLUSHDB`), vì mọi request đi ra từ một IP bridge của Docker và
   vài lần chạy trong một giờ sẽ cạn burst 20. Việc xoá này **chỉ dùng ở lab local**, không trỏ script vào stack dùng
-  chung. **Biến chuyển tiếp `SVP_SMOKE_LEGACY_MEDIA=1`** (chỉ cho smoke, cả `make k8s-smoke`): master không có version
-  (`media/<id>/master.m3u8`, layout của media-worker trước ADR-0029) qua với một dòng `NOTE`, không kiểm `Cache-Control`; master có
-  version thì luôn kiểm đủ. Từ giai đoạn 6b phần 4 (PR-B) không target hay kịch bản nào đặt biến này nữa: mọi bản phát hành ghi
-  key có version, nên smoke chặt trên mọi đường, cả kịch bản `gitops` (lượt 40954609229: dòng `versioned key …`, không dòng `NOTE`);
-  biến còn trong `deploy/compose/smoke.sh` để đọc được bucket cũ bằng tay.
+  chung. Smoke luôn đòi master có version và kiểm đủ `Cache-Control` (mọi bản phát hành ghi key có version từ
+  [ADR-0029](docs/adr/0029-immutable-media-versions.md); biến chuyển tiếp `SVP_SMOKE_LEGACY_MEDIA` đã bỏ, [ADR-0037](docs/adr/0037-mainpath-standard-tools.md) §4).
 - `make up OBS=lgtm|elastic|off` (ADR-0011 §9–10, ADR-0012). Không đặt `OBS`: chỉ `core`, SDK telemetry bật nhưng không có
   Collector để tới (export lỗi bị bỏ, không làm service lỗi). `OBS=lgtm` thêm profile `obs`: `otelcol` (Collector, không
   publish), `lgtm` (Grafana `127.0.0.1:3000` cùng Prometheus, Loki, Tempo, Pyroscope trong một container),
@@ -395,7 +392,7 @@ liệt kê target):
   commit merge của PR đổi tên, bảng bốn nguồn); bỏ khi không env nào, không bản ghi stg nào mà promote prd còn chép, trỏ commit có nguồn
   không `promoter`. `promoter` không trùng giữa các nguồn có nó. Repo này chỉ build, ký, promote sáu image của nó
   (`built_services` của `deploy/k8s/lib.sh`); `svp_services` vẫn là bảy bản triển khai (gồm `web`), mà rescan, promote prd, bản ghi
-  stg, check `svp-gitops`, `k8s/gitops.sh`, DORA đọc. Stg chạy web của repo `svp-frontend` từ 2026-10-30, prd từ 2026-10-31 (PR #22, #29 của `svp-gitops`). Policy: một glob mỗi tên được phát hành
+  stg, check `svp-gitops`, `k8s/gitops.sh` đọc. Stg chạy web của repo `svp-frontend` từ 2026-10-30, prd từ 2026-10-31 (PR #22, #29 của `svp-gitops`). Policy: một glob mỗi tên được phát hành
   (`<imagePrefix><tên>@*`, `<imagePrefix><tên>:*`; không glob cả prefix: Kyverno kéo từ registry mọi image khớp glob trước mọi phép,
   nên tên lạ dưới một prefix bị từ chối bằng lỗi registry thay vì phép 1, lượt `verify.yml` 41081463084), một attestor mỗi nguồn; phép 1
   nhận `<imagePrefix><tên>@sha256:<64 hex>` với `<tên>` thuộc `services` hay `drillImages` của nguồn có prefix đó (đường
@@ -692,29 +689,30 @@ liệt kê target):
     đặt); `S3_PATH_STYLE` `true` (mặc định, store local) hay `false` (virtual-hosted, cho S3); giá trị khác thì service không khởi động.
   - Lớp nền tảng của `svp-gitops`: root `argocd/apps` nhận `platform` (`k3d` hay `eks`) và trên EKS `cluster` (hợp đồng khoá ở
     `deploy/ci/cluster-values.example.yaml`); values đọc theo thứ tự `base/` < `platforms/<platform>/<tên>.yaml` < `envs/<env>/` <
-    `envs/<env>/images/` < `valuesObject` sinh từ `platforms/<platform>/<tên>.values.tpl`; revision có `platforms/` thì
-    `k8s-gitops-up` đặt `platform=k3d`, revision cũ không đặt.
+    `envs/<env>/images/` < `valuesObject` sinh từ `platforms/<platform>/<tên>.values.tpl`; revision không có `platforms/` thì
+    `k8s-gitops-up` dừng ([ADR-0037](docs/adr/0037-mainpath-standard-tools.md) §4; check của `svp-gitops` còn đọc cây cũ tới khi bước đó được rút gọn);
+    `k8s-gitops-up` đặt `platform=k3d`.
 - `make hooks`: bật git hook ở `.githooks/` một lần cho mỗi clone. `pre-commit` chạy `gofmt` trên file Go đã stage,
   `golangci-lint run`, `buf lint` và `gitleaks` trên thay đổi đã stage.
 - Giai đoạn 5, CI trên GitHub Actions ([ADR-0015](docs/adr/0015-cicd-devsecops-stage5.md)); từ giai đoạn 6b thêm workflow
-  thứ ba `verify.yml` ([ADR-0021](docs/adr/0021-deferred-verification-stage6b.md)) và thứ tư `dora.yml`
-  ([ADR-0028](docs/adr/0028-dora-metrics.md)). Bốn workflow, mọi action
+  thứ ba `verify.yml` ([ADR-0021](docs/adr/0021-deferred-verification-stage6b.md)). Ba workflow (DORA không còn workflow riêng:
+  bài lab `dora/` của `svp-labs`, [ADR-0037](docs/adr/0037-mainpath-standard-tools.md) §1), mọi action
   ghim SHA commit, `permissions: {}` ở đầu file và quyền khai theo job; mọi job của lượt `pull_request` (cả PR từ fork)
   chỉ có `contents: read` và không secret; không `pull_request_target`, `workflow_run`. CI trung lập nền tảng
-  ([ADR-0023](docs/adr/0023-ci-platform-neutral.md)): YAML chỉ nối bước, logic ở `Makefile` và `deploy/ci/`; mọi chỗ đọc
-  ngữ cảnh CI hay gọi API của nền tảng (output, summary, mask, link lượt chạy, PR, dispatch) đi qua hàm `ci_*` của adapter
-  `deploy/ci/platform.sh` (chế độ `github` trong Actions, `local` khi chạy script trên máy; CI khác thì dừng);
-  `deploy/ci/platform-guard.sh [ROOT]` báo script nào khác đọc biến `GITHUB_*` hay gọi `gh api|pr|run|workflow` (không `ROOT` hay
-  `ROOT` là repo này: file dưới `deploy/` và `Makefile`; `ROOT` là cây của nguồn khác, `svp-frontend`, chạy từ bản checkout ghim `.backend/`
-  của nó: mọi file trừ `.github/` và `.backend/`):
+  ([ADR-0023](docs/adr/0023-ci-platform-neutral.md)): YAML chỉ nối bước, logic ở `Makefile` và `deploy/ci/`; script có sẵn đọc
+  ngữ cảnh CI hay gọi API của nền tảng (output, summary, mask, link lượt chạy, PR, dispatch) qua hàm `ci_*` của adapter
+  `deploy/ci/platform.sh` (chế độ `github` trong Actions, `local` khi chạy script trên máy; CI khác thì dừng). Adapter
+  **đóng băng** ([ADR-0037](docs/adr/0037-mainpath-standard-tools.md) §2): không thêm hàm `ci_*`; script mới đọc biến `GITHUB_*` và gọi `gh`
+  trực tiếp; hàm bị xoá khi không còn script nào (ở cả hai repo) gọi nó; không còn `platform-guard.sh` kiểm điều này. CI trên GitLab là bài lab
+  của `svp-labs`:
   - `.github/workflows/ci.yml` (PR, push `main`, dispatch): `check` (`make check-go TESTFLAGS=-count=1`, Postgres và
     Redis là service container trên `127.0.0.1`, ffmpeg), `generate` (`make generate-check`), `buf` (`buf breaking` so với
     merge-base của PR, `main` trước push, hay merge-base với `origin/main` khi dispatch), `api-contract` (luật version của hợp đồng
     REST, [ADR-0033](docs/adr/0033-svp-web-repo.md) §1: `make api-contract-check BASE=<base>` với base tính như job `buf`, rồi
     `deploy/ci/contract-test.sh`), `config`
     (đủ lịch sử, `make gitops-clone` và `SVP_GITOPS_DIR` ở `env` của job; `deploy/ci/scan-gate.sh --check-ignorefile`,
-    `deploy/ci/platform-guard.sh`, `deploy/ci/platform-test.sh`, `deploy/ci/promote-test.sh`, `deploy/ci/promote-prd-test.sh`,
-    `deploy/ci/release-set-test.sh`, `deploy/ci/dora-test.sh`, `deploy/ci/provenance-predicate-test.sh`,
+    `deploy/ci/platform-test.sh`, `deploy/ci/promote-test.sh`, `deploy/ci/promote-prd-test.sh`,
+    `deploy/ci/release-set-test.sh`, `deploy/ci/provenance-predicate-test.sh`,
     `deploy/ci/verify-collect-test.sh`, `deploy/ci/sourcemaps-image-test.sh`, `make slo-check`, `make otelcol-validate`, `make env`
     rồi `make compose-config`,
     `make helm-check`, `deploy/ci/sources-test.sh`, `deploy/ci/gitops-check-test.sh "$SVP_GITOPS_DIR"`, `make k6-check`,
@@ -737,9 +735,9 @@ liệt kê target):
   - `.github/workflows/images.yml` (PR, push `main`, dispatch, lịch hằng ngày): build sáu image service Go của repo này
     (`built_services`; image `web` build, ký, promote ở `images.yml` của `svp-frontend`), chỉ service đổi so với base
     (`deploy/ci/changed-services.sh`; đổi `images.yml`, `deploy/ci/` (trừ `trivy-config-ignore.yaml`, script và test của
-    `verify.yml`, `platform-test.sh`, `platform-guard.sh`, `promote-test.sh`, `record-stg.sh`, `gitops-check.sh` cùng `values-check.sh`, `verify-release.sh` (chỉ check `svp-gitops`,
-    `make k8s-gitops-up` và diễn tập chạy hai script này), `dora.sh` và test
-    `gitops-check-test.sh`, `dora-test.sh`, `release-set-test.sh`, `promote-prd-test.sh`, `sources-test.sh`, `sourcemaps-image.sh` cùng test
+    `verify.yml`, `platform-test.sh`, `promote-test.sh`, `record-stg.sh`, `gitops-check.sh` cùng `values-check.sh`, `verify-release.sh` (chỉ check `svp-gitops`,
+    `make k8s-gitops-up` và diễn tập chạy hai script này),
+    `gitops-check-test.sh`, `release-set-test.sh`, `promote-prd-test.sh`, `sources-test.sh`, `sourcemaps-image.sh` cùng test
     của nó: không job image nào đọc chúng;
     `release-set.sh`, `promote-prd.sh` vẫn tính vì job `promote-prd` chạy chúng), `deploy/k8s/lib.sh` hay dòng
     `TRIVY_IMAGE`/`SYFT_IMAGE`/`GRYPE_IMAGE`/`COSIGN_IMAGE` của `Makefile` thì cả sáu; `build-image.sh web` trong checkout này bị từ
@@ -813,7 +811,7 @@ liệt kê target):
     bắt buộc nào, không chạy ở PR): kiểm chứng trên runner `ubuntu-24.04` những gì máy 16 GB không chạy nổi, bằng đúng
     target `make` như trên máy. Trigger: `workflow_dispatch` (chỉ người có quyền ghi; ref `main` hay `feat/stage6b-*`, ref
     khác dừng ở bước đầu) và lịch hằng tuần trên `main` (00:37 UTC thứ Bảy, 07:37 giờ Việt Nam; `compose-obs`, `dev-k3d` và
-    `gitops` song song, mọi bước, xong trước `dora.yml`; **kiểm sau push**). Kịch bản: `compose-obs` (job `compose`, hạn 120 phút: `make up OBS=lgtm`, `make smoke`,
+    `gitops` song song, mọi bước; **kiểm sau push**). Kịch bản: `compose-obs` (job `compose`, hạn 120 phút: `make up OBS=lgtm`, `make smoke`,
     `make drill-duplicates`, `make drill-kill-worker`, `make drill-obs-threats`, `make load-local` dưới quan sát Alertmanager (`RateLimitFallbackActive` không được cháy),
     `make web-lighthouse` ×3 và median LCP, `make test-stack PKGS=./internal/objstore/...` (một ca SKIP là đỏ; gồm ba test của output bất biến),
     `make drill-upload-cleanup`, `make measure-upload` và RAM đỉnh của `s3` trong lúc đó (dưới 512 MiB), `make
@@ -904,25 +902,8 @@ liệt kê target):
     `release-set.json` ở gốc artifact). `verify-collect.sh` lấy kết quả web ở `.web/svp-frontend/test-results` (cùng mẫu cho phép như cũ, vào
     `web-test-results/` của artifact). `deploy/ci/verify-collect-test.sh` chạy trên máy và ở job `config` (giá trị giả,
     `docker`/`kubectl` giả, không mạng).
-  - `.github/workflows/dora.yml` (giai đoạn 6b phần 4, [ADR-0028](docs/adr/0028-dora-metrics.md)): lịch thứ Bảy 09:17 UTC (sau
-    lịch của `verify.yml`) và dispatch `gh workflow run dora.yml --ref main [-f days=<1..3650>]` (mặc định 30); không `pull_request`;
-    job `dora` chỉ `contents: read`, `actions: read` (đọc lượt mà mỗi bản ghi chỉ tới), không secret, không environment; `make
-    gitops-clone`, `make web-clone WEB_REF=main` chỉ khi `deploy/ci/dora.sh --clones` in `web` (có bản ghi được tính chứa bản web do
-    repo `svp-frontend` build, dưới bất kỳ tên nguồn nào: lead time của nó tính trên commit của `svp-frontend`; bản ghi như vậy mà thiếu
-    bản clone thì `dora.sh` dừng), rồi
-    `deploy/ci/dora.sh --days N <file>`: deployment frequency, change lead time, change fail rate, failed deployment
-    recovery time, deployment rework rate của **stg lab**, tính trên bản ghi stg `success` của `svp-gitops` (bằng chứng triển khai,
-    không phải merge; nhiều bản ghi cùng revision và bộ digest là một deployment), lịch sử git hai repo và front matter của
-    `docs/postmortems/`; chỉ số thiếu dữ liệu in "chưa đủ dữ liệu" kèm lý do (ngưỡng 5 mẫu lead time, 10 deployment cho tỷ lệ),
-    prd in "chưa có dữ liệu prd". Bản ghi trước đổi tên ([ADR-0036](docs/adr/0036-repo-rename.md) §8) vẫn được tính, lâu dài: nguồn của
-    mỗi image gán theo bảng nguồn ở `charts.revision` của chính bản ghi (`release_sources REV`), không theo bảng working tree; commit gom
-    theo repo, tên cũ quy về tên hiện tại (`ci_repo_current`); `ci_is_run_url` nhận `run_url` dưới tên cũ của repo code. Tên cũ của repo
-    khai một chỗ, dạng dữ liệu: `_ci_renamed_repos` của `deploy/ci/platform.sh` (chỉ thêm, không bớt); `ci_run_workflow` đọc lượt bằng
-    tên hiện tại và id của lượt, không dựa vào chuyển hướng. Số PR promote đã merge (bỏ commit khởi tạo của `svp-gitops`) và digest đã merge chưa triển khai in
-    riêng; danh sách đủ 100 bản ghi (trần của `ci_deployment_list`) thì cảnh báo. Bảng vào tóm tắt của lượt, JSON vào artifact
-    `dora` (30 ngày). Chạy trên máy: `deploy/ci/dora.sh <file>` (chế độ `local`, đọc bản clone `../gitops`, chỉ đọc). Lượt đầu
-    đã chạy ngày 2026-10-30 (dispatch 41022984599): xanh, deployment frequency 1, các chỉ số thiếu mẫu "chưa đủ dữ liệu" kèm lý do; lead time n = 0 dù đã có một
-    deployment (chưa rõ có do thiết kế).
+  - DORA là bài lab `dora/` của `svp-labs` ([ADR-0037](docs/adr/0037-mainpath-standard-tools.md) §1, thay [ADR-0028](docs/adr/0028-dora-metrics.md)):
+    `dora.yml`, `dora.sh`, `dora-test.sh` đã rời repo này; front matter của `docs/postmortems/` vẫn là dữ liệu cho bài lab đó.
   - **`svp-gitops`** (`https://github.com/anhnvcoder/svp-gitops`, public, không secret; [ADR-0025](docs/adr/0025-gitops-config-repo.md),
     quy trình tay ở [`docs/runbooks/svp-gitops-setup.md`](docs/runbooks/svp-gitops-setup.md)): `base/` (values gốc của chart upstream,
     `argo-cd.yaml`, `services/<svc>.yaml` không khối `image`), `envs/{stg,prd}/` (overlay, `svp-policy.yaml`, `charts.yaml` ghim
@@ -976,9 +957,9 @@ liệt kê target):
     Lệnh bật, tắt và đọc kết quả (người học chạy) ở [`docs/ci-cd.md`](docs/ci-cd.md) mục 7.
   - Chạy lại một job trên máy, từ gốc repo: `make check-go TESTFLAGS=-count=1`; `make generate-check`;
     `buf breaking --against '.git#ref=<base>'`; `make api-contract-check BASE=<base>`, `deploy/ci/contract-test.sh`;
-    `deploy/ci/scan-gate.sh --check-ignorefile`, `deploy/ci/platform-guard.sh`,
+    `deploy/ci/scan-gate.sh --check-ignorefile`,
     `deploy/ci/platform-test.sh`, `deploy/ci/provenance-predicate-test.sh`, `deploy/ci/sourcemaps-image-test.sh`, `make slo-check`,
-    `deploy/ci/promote-test.sh`, `deploy/ci/promote-prd-test.sh`, `deploy/ci/release-set-test.sh`, `deploy/ci/dora-test.sh`,
+    `deploy/ci/promote-test.sh`, `deploy/ci/promote-prd-test.sh`, `deploy/ci/release-set-test.sh`,
     `make otelcol-validate`, `make compose-config`, `make helm-check`, `deploy/ci/sources-test.sh`,
     `deploy/ci/gitops-check-test.sh ../gitops`, `make k6-check`,
     `make cloud-check`; check của `svp-gitops` trên bản clone: `deploy/ci/gitops-check.sh ../gitops` (cần mạng tới repo chart, GHCR;

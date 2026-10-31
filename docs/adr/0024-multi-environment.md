@@ -7,7 +7,8 @@
   ExternalSecret của từng namespace qua store riêng, ở prd mỗi store assume một role chỉ đọc entry namespace đó cần) chỉnh bởi
   [0026](0026-secrets-gitops.md); §8 (payload bản ghi stg và check prd thêm `charts`, tên dành riêng `charts.yaml` trong thư mục env,
   bản cài Argo CD ở `argocd/` của `svp-gitops`) chỉnh bởi 0025; §8 (bản ghi stg ghi trạng thái `success` với `auto_inactive: false`;
-  deployment của GitLab không có payload) chỉnh bởi [0028](0028-dora-metrics.md)
+  deployment của GitLab không có payload) chỉnh bởi [0028](0028-dora-metrics.md); §8 (promote prd chép bộ của một bản ghi stg, bản ghi stg,
+  check prd so bản ghi) bị thay bởi [0037](0037-mainpath-standard-tools.md), từ 2026-11-01
 - Ngày: 2026-10-26
 
 ## Bối cảnh

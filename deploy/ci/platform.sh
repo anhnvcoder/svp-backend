@@ -1,10 +1,13 @@
 # shellcheck shell=bash
-# The one place that knows which CI platform runs a script and how to talk to it. The scripts under deploy/ci/, and
-# the scripts of deploy/k8s/ that hint at a CI run or read the repository host's API, call these functions instead of
-# reading the platform's variables or calling its CLI: moving CI to another platform is then a new branch in each
-# function below (and new workflow files that call the same make targets and scripts), not a hunt through every
-# script. Sourcing it only defines functions; common.sh sources it, and so do the scripts that do not source common.sh.
-# Written for bash 3.2 too (macOS).
+# FROZEN: this adapter gets no new ci_* function. A new script reads GitHub Actions' variables and calls gh directly,
+# like any script written for one CI; the functions below stay only for the scripts that already call them, and a
+# function is deleted once the last script that calls it is gone. Nothing enforces this: a new function would work,
+# but would deepen a layer that is being retired.
+#
+# What the adapter does: it is the place that knows which CI platform runs a script and how to talk to it. The scripts
+# under deploy/ci/, and the scripts of deploy/k8s/ that hint at a CI run or read the repository host's API, call these
+# functions instead of reading the platform's variables or calling its CLI. Sourcing it only defines functions;
+# common.sh sources it, and so do the scripts that do not source common.sh. Written for bash 3.2 too (macOS).
 #
 # Two platforms are implemented, told apart by ci_platform:
 #   github  a job of GitHub Actions (GITHUB_ACTIONS=true): outputs, the job summary and masks through the files and
@@ -202,8 +205,8 @@ _ci_code_repo=anhnvcoder/svp-backend
 
 # The former names of renamed repositories, one line each: "<old owner/name> <current owner/name>". The host redirects
 # an old name to the repository, but what was written before a rename keeps it: the run_url of a record of stg, the
-# repository of a release source that no longer builds. Those records are read for as long as a window of the
-# delivery metrics reaches back (years), so a rename adds a line here and none is ever taken out.
+# repository of a release source that no longer builds, the comment of an svp-gitops file. A rename adds a line here;
+# a line goes once nothing written under that name is read any more.
 _ci_renamed_repos='anhnvcoder/short-video-platform anhnvcoder/svp-backend
 anhnvcoder/svp-web anhnvcoder/svp-frontend'
 

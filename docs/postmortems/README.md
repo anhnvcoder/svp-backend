@@ -28,8 +28,8 @@ lặp lại hay phát hiện nhanh hơn. Mục đích là học từ sự cố, 
 
 Chép khối dưới đây vào file mới; mục nào chưa có dữ liệu thì ghi "chưa có" và vì sao, không bỏ mục.
 
-Front matter YAML ở đầu file là dữ liệu máy đọc cho DORA metrics ([ADR-0028](../adr/0028-dora-metrics.md) §5, §7):
-`deploy/ci/dora.sh` đọc nó, không đọc phần còn lại của postmortem.
+Front matter YAML ở đầu file là dữ liệu máy đọc cho bài lab `dora/` của `svp-labs` ([ADR-0037](../adr/0037-mainpath-standard-tools.md) §1;
+dạng dữ liệu theo [ADR-0028](../adr/0028-dora-metrics.md) §5, §7): script của bài lab đọc nó, không đọc phần còn lại của postmortem.
 
 - `env`: `stg`, `prd`, `compose` hay `k3d`, môi trường xảy ra sự cố.
 - `deployment`: revision (40 hex) của `svp-gitops` của deployment gây ra sự cố, hay `none` khi sự cố không do triển khai nào
@@ -39,7 +39,7 @@ Front matter YAML ở đầu file là dữ liệu máy đọc cho DORA metrics (
   bên dưới; là mốc của failed deployment recovery time. Chưa hồi phục thì để trống `restored_at:`.
 - `fix_commits`: danh sách `<owner/repo>@<40 hex>` các commit đã sửa, của repo nào cũng được (`[]` khi không có). Deployment
   đầu tiên chứa một commit trong đó được tính là rework.
-- Sai dạng (thiếu front matter, giá trị lạ) thì `dora.sh` bỏ postmortem đó và in cảnh báo, không đoán.
+- Sai dạng (thiếu front matter, giá trị lạ) thì script của bài lab bỏ postmortem đó và in cảnh báo, không đoán.
 
 ```markdown
 ---

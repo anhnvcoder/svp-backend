@@ -1,6 +1,6 @@
 # 0028. DORA metrics của lab tính bằng script của repo (`deploy/ci/dora.sh`, workflow `dora.yml` chỉ đọc) từ bằng chứng đã triển khai (bản ghi Deployment `success` của stg trên `svp-gitops`), không từ merge; mọi số là của stg lab, prd ghi "chưa có dữ liệu" tới giai đoạn 7, chỉ số thiếu mẫu ghi "chưa đủ dữ liệu", không xếp hạng theo mức DORA
 
-- Trạng thái: Chấp nhận (người học duyệt 2026-10-28, chọn (a) ở cả bốn dòng "Cần người học chọn", gồm kịch bản `gitops` vào
+- Trạng thái: Bị thay bởi [0037](0037-mainpath-standard-tools.md) (2026-11-01: DORA rời đường chính, `dora.sh` thành bài lab `dora/` của `svp-labs`). Trước đó: Chấp nhận (người học duyệt 2026-10-28, chọn (a) ở cả bốn dòng "Cần người học chọn", gồm kịch bản `gitops` vào
   lịch tuần của `verify.yml`); hiện thực 2026-10-29 (phần 4 của giai đoạn 6b, PR-B, nhánh `feat/stage6b-gitops-split`, PR #39; mục
   Hiện thực ở): `dora-test.sh` xanh ở job `config`; lượt `dora.yml` đầu chạy 2026-10-30 (kết quả ở mục Kiểm chứng sau); dòng 4 (kịch
   bản `gitops` vào lịch tuần) hiện thực 2026-10-30 ([ADR-0021](0021-deferred-verification-stage6b.md) mục 3): lịch tuần của
