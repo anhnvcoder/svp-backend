@@ -286,9 +286,11 @@ jobs:
           retention-days: 7
 
   sign:
-    # Keyless signature on the index digest, SBOM attestation on each manifest, vuln attestation (both scans) and build
-    # provenance (SLSA v1: workflow, ref, commit and attempt of this run, read from the run's own context) on the
-    # index. The only build-path job with id-token: write; it uses no cache. Its artifact release-<image>
+    # Keyless signature on the index digest, SBOM attestation on each manifest and vuln attestation (both scans) on the
+    # index, Sigstore bundles written by deploy/ci/sign-image.sh; then the build provenance (SLSA v1, built by
+    # actions/attest from the claims of this run's OIDC token) on the index, after the signature and the vuln
+    # attestation. The only build-path job with id-token: write, and the only one with attestations: write (the
+    # provenance also goes to the repository's attestations); it uses no cache. Its artifact release-<image>
     # (repository, tag, digest of the signed index) is what promotion to envs/stg/images/ of svp-gitops reads.
     needs: [plan, merge]
     if: >-
@@ -300,6 +302,7 @@ jobs:
       contents: read
       packages: write
       id-token: write
+      attestations: write
     strategy:
       fail-fast: false
       matrix:
@@ -316,6 +319,7 @@ jobs:
         with:
           cosign-release: v3.1.4
       - name: Sign and attest
+        id: sign
         env:
           IMAGE: ${{ matrix.image }}
           GITHUB_TOKEN: ${{ github.token }}
@@ -326,6 +330,17 @@ jobs:
           printf '%s' "$GITHUB_TOKEN" | docker login ghcr.io --username "$GITHUB_ACTOR" --password-stdin
           deploy/ci/sign-image.sh "${flags[@]}" "$RUNNER_TEMP/index" \
             "$RUNNER_TEMP/legs/leg-$IMAGE-amd64" "$RUNNER_TEMP/legs/leg-$IMAGE-arm64"
+      # Releases only: sign-image.sh says false for a drill image, and for a digest that has its provenance already
+      # (a run started again), as bundles have no --replace. Pushed with the docker login of the step above.
+      - name: Attest the build provenance
+        if: ${{ steps.sign.outputs.provenance == 'true' }}
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-name: ${{ steps.sign.outputs.repository }}
+          subject-digest: ${{ steps.sign.outputs.digest }}
+          push-to-registry: true
+          # Storage records exist only for repositories owned by an organization; this one belongs to a user.
+          create-storage-record: false
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: release-${{ matrix.image }}
@@ -658,8 +673,9 @@ jobs:
   rescan:
     # Daily (and on dispatch rescan=true): every released digest svp-gitops names (envs/*/images/ at its main, at the
     # open promote pull request bot/promote-stg, and at the dispatch input values_ref) is scanned again, manifest by
-    # manifest, and its vuln attestation replaced with the real result; a CRITICAL is recorded first, then fails the
-    # job, which mails the owner; a secret fails the job before anything is attested (deploy/ci/rescan.sh). svp-gitops
+    # manifest, and its vuln attestation replaced with the real result (in the format the digest is signed in; for a
+    # Sigstore bundle the older vuln bundles are taken off with packages: write); a CRITICAL is recorded first, then
+    # fails the job, which mails the owner; a secret fails the job before anything is attested (deploy/ci/rescan.sh). svp-gitops
     # is cloned anonymously and its files read as data, never run; GITHUB_TOKEN only asks whether its promote pull
     # request is open (a read of a public repository). No cache: the job holds id-token.
     needs: plan
@@ -736,7 +752,8 @@ jobs:
 
   drill-sign:
     # drill-vulnerable and drill-no-provenance: drill-unsigned stays unsigned on purpose. No build provenance for either
-    # (sign-image.sh attests it for releases only): a drill image is no release, and drill-no-provenance exists to lack it.
+    # (sign-image.sh hands provenance=false for a drill image, so the step of actions/attest is skipped, and this job
+    # has no attestations: write): a drill image is no release, and drill-no-provenance exists to lack it.
     needs: [plan, drill-merge]
     if: >-
       ${{ !cancelled() && needs.plan.outputs.mode == 'drill'

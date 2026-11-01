@@ -27,11 +27,11 @@
 #                          (envs/stg/charts.yaml of svp-gitops) predate that PodMonitor, it says so and passes: the
 #                          check starts with the first promote that brings it
 #   drill-k8s-supplychain  make drill-k8s-supplychain with the images it needs, read from GHCR without credentials
-#                          (deploy/ci/ghcr-digest.sh): the linux/amd64 manifest of the web release the cluster runs
-#                          as the unsigned image (no signature or attestation names it, they name its index), the newest
-#                          drill-vulnerable, the newest drill-unsigned for when Kyverno admits the first, and for case l
+#                          (deploy/ci/ghcr-digest.sh): the newest drill-unsigned as the unsigned image of cases b, h
+#                          and i (no signature or attestation names it), the newest drill-vulnerable, and for case l
 #                          (signed and attested vuln, without build provenance) the newest drill-no-provenance. An image
-#                          that cannot be read is left out (its case SKIPs) and the step fails after the drill. Cases c
+#                          that cannot be read is left out and the step fails after the drill: its case SKIPs, except
+#                          drill-unsigned, which the drill then looks up itself. Cases c
 #                          and l pass only when their drill image's vuln attestation is within 72 hours: dispatch
 #                          images.yml -f drill=true less than 72 hours before this run (no image file of svp-gitops
 #                          names a drill image, so the daily rescan never attests one again). Nobody dispatches it
@@ -232,21 +232,20 @@ gitops_stale() (
 
 # gitops_supplychain: see drill-k8s-supplychain in the header.
 gitops_supplychain() {
-  local unsigned vulnerable fallback no_provenance missing= rc=0
-  unsigned=$("$here/ghcr-digest.sh" web-amd64) || missing="$missing the web release's linux/amd64 manifest;"
+  local unsigned vulnerable no_provenance missing= rc=0
+  unsigned=$("$here/ghcr-digest.sh" newest drill-unsigned) || missing="$missing drill-unsigned;"
   vulnerable=$("$here/ghcr-digest.sh" newest drill-vulnerable) || missing="$missing drill-vulnerable;"
-  fallback=$("$here/ghcr-digest.sh" newest drill-unsigned) || missing="$missing drill-unsigned;"
   no_provenance=$("$here/ghcr-digest.sh" newest drill-no-provenance) || missing="$missing drill-no-provenance;"
   # A scheduled run: see SVP_VERIFY_SCHEDULED in the header.
   if [ "${SVP_VERIFY_SCHEDULED:-}" = true ]; then
     if [ -n "$vulnerable" ] && gitops_stale c "$vulnerable"; then vulnerable=; fi
     if [ -n "$no_provenance" ] && gitops_stale l "$no_provenance"; then no_provenance=; fi
   fi
-  echo "unsigned: ${unsigned:-none}; vulnerable: ${vulnerable:-none}; unsigned if Kyverno admits that: ${fallback:-none}"
+  echo "unsigned: ${unsigned:-none}; vulnerable: ${vulnerable:-none}"
   echo "without provenance: ${no_provenance:-none, case l SKIPs}"
   # none, not empty: the drill looks drill-no-provenance up itself when it is not given one.
   make drill-k8s-supplychain SUPPLYCHAIN_UNSIGNED="$unsigned" SUPPLYCHAIN_VULNERABLE="$vulnerable" \
-    SUPPLYCHAIN_UNSIGNED_FALLBACK="$fallback" SUPPLYCHAIN_NO_PROVENANCE="${no_provenance:-none}" || rc=$?
+    SUPPLYCHAIN_NO_PROVENANCE="${no_provenance:-none}" || rc=$?
   if [ -n "$missing" ]; then
     echo "FAIL  drill-k8s-supplychain ran without what GHCR did not give (above):$missing"
     return 1

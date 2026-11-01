@@ -72,7 +72,7 @@ flowchart LR
     plan["plan<br/>so với lượt push<br/>thành công cuối"]
     build["build<br/>amd64 + arm64,<br/>cổng trivy và grype<br/>trước push, push GHCR"]
     merge["merge<br/>index đa kiến trúc"]
-    sign["sign<br/>cosign keyless,<br/>attestation vuln, SBOM,<br/>build provenance"]
+    sign["sign<br/>cosign keyless (bundle),<br/>attestation vuln, SBOM,<br/>actions/attest provenance"]
     promote["promote (environment promote)<br/>token App 1 giờ,<br/>PR bot/promote-stg ở svp-gitops,<br/>bật auto-merge"]
     review["check.yml của svp-gitops<br/>gitops-ok xanh, tự merge"]
     argo["Argo CD của stg poll svp-gitops,<br/>sync; Kyverno kiểm chữ ký,<br/>vuln, provenance trước khi tạo pod"]
@@ -104,7 +104,7 @@ flowchart LR
 
 ```mermaid
 flowchart LR
-    daily["images.yml<br/>01:17 UTC mỗi ngày"] --> rescan["rescan: quét lại mọi digest<br/>đang phát hành, thay attestation vuln"]
+    daily["images.yml<br/>01:17 UTC mỗi ngày"] --> rescan["rescan: quét lại mọi digest<br/>đang phát hành, thay attestation vuln<br/>(bundle: attest mới, gỡ cũ)"]
     weekly["verify.yml<br/>00:37 UTC thứ Bảy"] --> both["compose (compose-obs) và<br/>gitops song song, mọi bước"]
 ```
 
@@ -113,6 +113,8 @@ flowchart LR
   nguồn đó rescan nó ([ADR-0033](adr/0033-svp-web-repo.md) §4); file dưới prefix không thuộc nguồn nào vẫn vào tập nên lượt đỏ.
   Rescan chỉ dùng trivy: grype chỉ quét lúc build, nên lỗ hổng chỉ grype thấy (ví dụ của `node` trong image web của `svp-frontend`) công bố sau khi
   phát hành chỉ bị bắt ở lần build kế.
+  Digest ở định dạng cũ (`.sig`, `.att`) thì `--replace`; digest Sigstore bundle thì attest `vuln` mới rồi gỡ mọi `vuln` bundle khác, vì
+  Kyverno đọc bundle cuối danh sách referrer, xếp theo digest chứ không theo tuổi ([ADR-0040](adr/0040-sigstore-bundle-actions-attest.md) §3).
 - CodeQL default setup có lịch hằng tuần riêng do GitHub đặt (`schedule: weekly` trong cấu hình), không nằm trong YAML nào.
 - Lượt lịch của `verify.yml` chạy trên commit mới nhất của `main`, không có input. GitHub có thể trễ hay bỏ lượt lịch lúc tải cao
   và tắt lịch sau 60 ngày repo không hoạt động (bật lại ở tab Actions). Lịch này mới thêm ngày 2026-10-25, chỉ kiểm được sau khi
@@ -136,7 +138,8 @@ flowchart LR
   `svp-gitops`, hay SHA của repo này trước khi tách). Ca `l` của `make drill-k8s-supplychain` từ đổi tên repo dùng image diễn tập
   `drill-no-provenance` (ký, `vuln`, không provenance; [ADR-0036](adr/0036-repo-rename.md) §6) thay cho bản phát hành cũ trước build
   provenance: dispatch `-f drill=true` trong 72 giờ trước lượt diễn tập (diễn tập in đúng lệnh khi không tìm thấy hay `vuln` quá hạn).
-  Provenance trên bản phát hành thật đã có (bảy bản của `6ca2d8a`).
+  Provenance định dạng cũ trên bản phát hành đang chạy đã có (bảy bản của `6ca2d8a`); bản phát hành bundle đầu (provenance của
+  `actions/attest`, Build L2): **kiểm sau push**, cùng phép đo admission thật của [ADR-0040](adr/0040-sigstore-bundle-actions-attest.md) §6.
 - `-f promote_prd=true [-f stg_ref=<main|SHA đủ 40 hex>]` (chỉ `main`, một mình): job `promote-prd` mở PR `bot/promote-prd` trong
   `svp-gitops` chép giá trị khối `image` của bảy file và ba khoá `charts.yaml` của `envs/stg/` ở commit `stg_ref` (mặc định `main`;
   commit cũ hơn của `main` là rollback prd; nhánh, SHA ngắn, commit ngoài `main` bị từ chối) sang `envs/prd/`, không auto-merge; người
@@ -194,7 +197,7 @@ Trigger: `pull_request`, `push` vào `main`, `workflow_dispatch`. Không trigger
 | `generate` | `make generate-check`: code sinh đã commit khớp | Mọi lượt | Không bao giờ | Có |
 | `buf` | `buf breaking` so với base | Mọi lượt | Không skip; push tạo nhánh mới thì bước in "buf breaking skipped" (không có gì để so) và xanh | Có |
 | `api-contract` | `make api-contract-check BASE=<base>` (base như `buf`): file `services/gateway/openapi.yaml` đổi thì `info.version` phải tăng đúng mức theo oasdiff (`OASDIFF_IMAGE`, không mạng), rồi `deploy/ci/contract-test.sh` (luật version với oasdiff thật, phát hành với registry và cosign giả) | Mọi lượt | Không skip; push tạo nhánh mới hay base không có spec thì một dòng summary và xanh | Có |
-| `config` | `make gitops-clone` (bản clone ẩn danh `main` của `svp-gitops`, `SVP_GITOPS_DIR`), quy tắc các tệp ngoại lệ của cổng quét (`scan-gate.sh --check-ignorefile`: `.trivyignore.yaml`, `.grype.yaml`, `deploy/ci/trivy-config-ignore.yaml`), `platform-test.sh`, guard của hai job promote (`promote-test.sh`, trên repo nháp cục bộ), `provenance-predicate-test.sh` (predicate build provenance và bước attest của `sign-image.sh` với docker, cosign giả), `verify-collect-test.sh`, rule Prometheus, Collector, compose, `make helm-check` (chart của working tree với `base/` của bản clone, gồm ExternalSecret, SecretStore của mỗi env qua kubeconform theo CRD của chart External Secrets ghim, và policy Kyverno CLI trên render: image ghim digest, không `svp.localhost` ở nền tảng thật), `sources-test.sh` (bảng nguồn phát hành hỏng bị cả template `svp-policy` lẫn `lib.sh` từ chối), `gitops-check-test.sh` (ca âm của check `svp-gitops`, gồm `kyverno test` của `deploy/ci/gitops-policies/`), k6, Job k6 của cloud (`make cloud-check`) | Mọi lượt | Không bao giờ | Có |
+| `config` | `make gitops-clone` (bản clone ẩn danh `main` của `svp-gitops`, `SVP_GITOPS_DIR`), quy tắc các tệp ngoại lệ của cổng quét (`scan-gate.sh --check-ignorefile`: `.trivyignore.yaml`, `.grype.yaml`, `deploy/ci/trivy-config-ignore.yaml`), `platform-test.sh` (gồm `sign-image.sh` và hàm Sigstore bundle của `common.sh` với docker, cosign giả), guard của hai job promote (`promote-test.sh`, trên repo nháp cục bộ), `verify-collect-test.sh`, rule Prometheus, Collector, compose, `make helm-check` (chart của working tree với `base/` của bản clone, gồm ExternalSecret, SecretStore của mỗi env qua kubeconform theo CRD của chart External Secrets ghim, và policy Kyverno CLI trên render: image ghim digest, không `svp.localhost` ở nền tảng thật), `sources-test.sh` (bảng nguồn phát hành hỏng bị cả template `svp-policy` lẫn `lib.sh` từ chối), `gitops-check-test.sh` (ca âm của check `svp-gitops`, gồm `kyverno test` của `deploy/ci/gitops-policies/`), k6, Job k6 của cloud (`make cloud-check`) | Mọi lượt | Không bao giờ | Có |
 | `gitleaks` | Quét bí mật toàn lịch sử, `--redact` | Mọi lượt | Không bao giờ | Có |
 | `trivy-config` | Quét misconfig, chỉ báo (phát hiện không làm job đỏ; trừ các mục có hạn của `deploy/ci/trivy-config-ignore.yaml`) | Mọi lượt | Không bao giờ | Có (chỉ khi lệnh lỗi, không khi có phát hiện) |
 | `stack` | Stack compose đầu-cuối, web là bản phát hành stg theo digest: `make gitops-clone`, `make web-clone` (commit của web stg), smoke, e2e Chromium và WebKit của bản clone `svp-frontend` (`make web-e2e`), k6 `ci`, Lighthouse, rồi `make dast` cuối cùng (Schemathesis theo `services/gateway/openapi.yaml`, bước `continue-on-error`, hạn 15 phút; artifact `dast` chỉ `report.json`, `summary.json` đã dò bí mật) | Mọi lượt | Không bao giờ | Không |
@@ -215,10 +218,10 @@ Trigger: `pull_request`, `push` vào `main`, `schedule` hằng ngày, `workflow_
 | `build-nopush` | Build, quét, cổng trivy (image) và grype (SBOM syft) từng image × kiến trúc, không push | Chế độ `build`, có image, PR hay ref khác `main` | Không image nào đổi; hay đang trên `main` (job `build` làm) | Có |
 | `build` | Như `build-nopush` rồi push GHCR đúng bản đã quét | Chế độ `build`, có image, trên `main` | PR, nhánh khác, hay không image nào đổi | Có |
 | `merge` | Ghép hai chân thành index đa kiến trúc | Như `build` | Như `build` | Có |
-| `sign` | Ký keyless, attestation `vuln` và SBOM, rồi build provenance SLSA v1 (`slsaprovenance1`, digest index, sau `vuln`; [ADR-0027](adr/0027-slsa-build-provenance.md)): predicate dựng từ ngữ cảnh của lượt chạy (`deploy/ci/provenance-predicate.sh`) trước khi ký gì, chỉ khi `builder.id` bằng identity ký của nguồn phát hành của lượt (`deploy/helm/svp-policy/files/sources.json`); image diễn tập không có | Như `build` | Như `build` | Có |
+| `sign` | Ký keyless, attestation `vuln` và SBOM bằng `deploy/ci/sign-image.sh` (Sigstore bundle, chỉ ghi loại chưa có trên digest nên chạy lại không thêm gì; [ADR-0040](adr/0040-sigstore-bundle-actions-attest.md)), rồi build provenance SLSA v1 bằng `actions/attest` (`attestations: write` chỉ ở job này, digest index, sau `vuln`; Build L2; ADR-0040 thay [ADR-0027](adr/0027-slsa-build-provenance.md)): chỉ khi `builder.id` bằng identity ký của nguồn phát hành của lượt (`deploy/helm/svp-policy/files/sources.json`, kiểm trước khi ký gì); image diễn tập không có | Như `build` | Như `build` | Có |
 | `promote` | Environment `promote`, token App chỉ `svp-gitops` (`contents`, `pull_requests` write); bước shell dựng lại `bot/promote-stg` của `svp-gitops` bằng `yq` (`envs/stg/images/` của service vừa ký, `envs/stg/charts.yaml`; guard tổ tiên với `revision` của stg), mở hay cập nhật PR, bật auto-merge | Chế độ `build`, trên `main`, có image hay chart đổi (`promote_charts`) | PR, nhánh khác, không image và không chart nào đổi | Có |
 | `promote-prd` | Environment `promote`, token App (`contents`, `pull_requests` write); bước shell chép giá trị `image` của bảy file và ba khoá `charts.yaml` của `envs/stg/` ở `stg_ref` vào `envs/prd/` trên `bot/promote-prd`, PR không auto-merge | Dispatch `promote_prd=true` trên `main` (kèm `services`, `rescan`, `values_ref`, `drill` thì đỏ ở bước đầu) | Mọi lượt khác | Có |
-| `rescan` | `make gitops-clone`, quét lại mọi digest phát hành của nguồn `backend` trong `envs/*/images/` của `svp-gitops` (bản của nguồn khác bỏ qua), thay attestation `vuln` | Chế độ `rescan`, trên `main` | Mọi chế độ khác | Có |
+| `rescan` | `make gitops-clone`, quét lại mọi digest phát hành của nguồn `backend` trong `envs/*/images/` của `svp-gitops` (bản của nguồn khác bỏ qua), thay attestation `vuln` (digest định dạng cũ `--replace`; bundle: attest rồi gỡ `vuln` cũ bằng `oras manifest delete`) | Chế độ `rescan`, trên `main` | Mọi chế độ khác | Có |
 | `contract` | `deploy/ci/contract.sh publish`: đẩy `info.version` của spec gateway thành OCI artifact `ghcr.io/anhnvcoder/svp-backend/api/gateway:<version>` bằng ORAS (`ORAS_IMAGE`), ký keyless digest đó; tag có cùng file thì bỏ qua (thiếu chữ ký thì ký bù), khác thì đỏ; `packages: write`, `id-token: write` | Chế độ `build`, trên `main` (push, dispatch không `rescan`, `drill`, `promote_prd`) | PR, nhánh khác, chế độ khác | Có |
 | `drill-build`, `drill-merge`, `drill-sign` | Ba image diễn tập `drill-vulnerable` (có CRITICAL, ký), `drill-unsigned` (không ký) và `drill-no-provenance` (sạch, ký và attest `vuln`, không provenance), cùng các bước của bản phát hành | Chế độ `drill`, trên `main` | Mọi chế độ khác, nên luôn skip ở PR và push | Có |
 | `sarif` | Tải SARIF của build (`trivy.sarif`, `grype.sarif` mỗi chân) và rescan trên `main` | Trên `main`, chế độ `rescan` hay `build` có image | PR, nhánh khác, không image | Không |

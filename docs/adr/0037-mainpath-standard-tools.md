@@ -1,6 +1,6 @@
 # 0037. Đường chính theo công cụ chuẩn, một đường thẳng: DORA và CI trung lập nền tảng rời đường chính, promote bằng bước Actions `yq` + `gh pr`, bỏ bản ghi stg, check của `svp-gitops` rút gọn, khác biệt nền tảng là dữ liệu
 
-- Trạng thái: Chấp nhận (người học duyệt 2026-10-31); §1, §2, §4 (smoke, `gitops.sh`) hiện thực ở PR-A 2026-11-01; §4–§6 (promote, check rút gọn, policy Kyverno CLI) ở PR-B 2026-11-01; §3 (allowlist action), Argo CD Notifications và `actions/attest` chưa
+- Trạng thái: Chấp nhận (người học duyệt 2026-10-31); §1, §2, §4 (smoke, `gitops.sh`) hiện thực ở PR-A 2026-11-01; §4–§6 (promote, check rút gọn, policy Kyverno CLI) ở PR-B 2026-11-01; `actions/attest` ở PR-D theo [0040](0040-sigstore-bundle-actions-attest.md); §3 (allowlist action), Argo CD Notifications chưa
 - Ngày: 2026-11-01
 
 ## Bối cảnh

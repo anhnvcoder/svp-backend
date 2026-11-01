@@ -26,8 +26,8 @@ images it refused and, from check 2 on, the source each belongs to:
 With requireProvenance (off by default, so the policy renders as without these), four more, after the six, for every
 source alike: an image without provenance is refused only once it passes every other check, so the message of a
 missing provenance never hides another fault:
-  7. a build provenance attestation (https://slsa.dev/provenance/v1, which cosign attest --type slsaprovenance1 writes)
-     signed by the same identity;
+  7. a build provenance attestation (https://slsa.dev/provenance/v1, which actions/attest writes; cosign attest --type
+     slsaprovenance1 for the releases signed before) signed by the same identity;
   8. its runDetails.builder.id is the subject of that identity;
   9. its buildDefinition.externalParameters.workflow.repository is the repository of its source;
  10. its buildDefinition.externalParameters.workflow.ref is the provenanceRef of its source.
@@ -38,6 +38,12 @@ side they skip, and when they did, a count of 0 from the wrong attestor would st
 The payload of an attestation is the whole in-toto statement, so its paths start at .predicate; extractPayload reads it
 only once verifyAttestationSignatures has verified it in the same evaluation (check 3 comes first for vuln, check 7 for
 provenance). Each image then costs a third verification when Kyverno has not cached it.
+Two signature formats, told apart per image by Kyverno itself, so nothing here names them: the releases are signed in
+Sigstore bundles (OCI referrers of the digest), those signed before in cosign's older format (.sig and .att images
+beside it), and the same checks read either. An image with one bundle is read through its bundles only, so a release
+never mixes the two; in bundles any attestation of the identity also counts as a signature for check 2. The older
+format is admitted while a release of envs/stg/images/ or envs/prd/images/ of svp-gitops still carries it (a rollback
+reaches one too); once none does, the comments naming it go, and a rollback to such a release needs another decision.
 */}}
 {{- /* svp-policy.pick: a CEL expression, the string KEY of the source whose imagePrefix image VAR starts with ('' for
 none), from a dict of sources (the validated list), key and var. */}}
@@ -167,7 +173,9 @@ spec:
   {{- end }}
   # 30 s, the most the API server allows (Kyverno's default is 10). A verification Kyverno has not cached reaches
   # Sigstore's TUF and GHCR (Rekor is not called: the policy sets no ctlog, so Kyverno v1.19.1 checks the transparency
-  # log proof embedded in the signature bundle offline), and a single signature took 6-8 s on the lab's cluster; each
+  # log proof embedded in the signature bundle offline), and a single signature took 6-8 s on the lab's cluster (older
+  # format; for an image in Sigstore bundles Kyverno fetches every bundle of the digest for each verification, and
+  # the CLI, with no cache, took 36-46 s against 14-16 s for the older format); each
   {{- if $iv.requireProvenance }}
   # image is verified three times (signature, vuln attestation, provenance attestation), so three uncached 6-8 s
   # verifications come close to the limit (not measured yet with provenance). Under Enforce a webhook call that times

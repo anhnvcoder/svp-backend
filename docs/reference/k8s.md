@@ -77,7 +77,14 @@ Loại tài liệu (Diátaxis): **reference**, tra cứu khi cần một lệnh 
   dừng); **đã bật ở cả stg và prd** từ commit khởi tạo của `svp-gitops` (cả bảy bản phát hành của `6ca2d8a` mang provenance, ADR-0027
   §6); kịch bản `gitops` lượt 40954609229: policy `Deny` có kiểm provenance, ca (a) và (l) của `drill-k8s-supplychain` PASS. Đường
   dev giữ mặc định `false`. Rollback về digest trước provenance khi đã bật bị từ chối: trỏ bản có provenance hay tắt trước bằng PR ở
-  `svp-gitops`.
+  `svp-gitops`. **Định dạng chữ ký** ([ADR-0040](../adr/0040-sigstore-bundle-actions-attest.md)): bản phát hành mới mang chữ ký,
+  `vuln`, SBOM, provenance dạng Sigstore bundle (referrer của digest; provenance do `actions/attest`, predicate nêu `builder.id`,
+  `workflow`, `gitCommit` như trước), bản đang chạy ở stg, prd còn định dạng cũ (`.sig`, `.att`). Kyverno chọn định dạng theo từng image
+  nên cùng policy, cùng message nhận cả hai, không khai gì thêm; một digest không bao giờ mang cả hai (có một bundle thì Kyverno và cosign
+  chỉ đọc bundle). Nhánh định dạng cũ (policy, `verify-release.sh`, rescan) bỏ khi `envs/*/images/` của `svp-gitops` không còn digest định
+  dạng cũ. Xác minh bundle chậm hơn (CLI không cache 36–46 s so với 14–16 s) mà `timeoutSeconds` của policy là 30: admission thật của
+  bản phát hành bundle đầu chưa đo, **kiểm sau push** ở lượt `verify.yml` `gitops` đầu tiên sau khi bản đó promote stg (hạn 20 s lần
+  không cache, ADR-0040 mục 6).
 
 ## Lệnh của cluster
 
@@ -231,19 +238,25 @@ Loại tài liệu (Diátaxis): **reference**, tra cứu khi cần một lệnh 
   của policy, cosign đọc bằng identity của nguồn có prefix đó như Kyverno chọn attestor): policy Kyverno của `svp`, mỗi ca
   một dòng PASS/FAIL/SKIP và chỉ PASS khi đúng message của rule cần từ chối; pod gửi bằng `--dry-run=server` (trừ ca b là
   Deployment thật, xoá sau). Ca: (a) bản phát hành đã ký, sạch được nhận, hai lần liền (lần hai từ cache); (b)
-  `drill-unsigned` bị từ chối vì thiếu chữ ký; (c) `drill-vulnerable` bị từ chối vì CRITICAL, ca này tự đọc
+  `drill-unsigned` bị từ chối vì thiếu chữ ký (mặc định script tự lấy digest mới nhất của `<imagePrefix của backend>drill-unsigned`,
+  ẩn danh, `SUPPLYCHAIN_UNSIGNED=<digest>` ghi đè, không tìm thấy thì SKIP; không dùng manifest con của một bản phát hành đã ký: với
+  bundle, attestation của bản đó trỏ cả tới từng manifest con và Kyverno tính là chữ ký, nên manifest con qua phép chữ ký và bị từ chối
+  ở phép `vuln`); (c) `drill-vulnerable` bị từ chối vì CRITICAL, ca này tự đọc
   `scanFinishedOn` bằng cosign và FAIL khi quá 72 giờ, nên chạy trong 72 giờ sau khi dispatch image diễn tập (`gh workflow
   run images.yml --ref main -f drill=true`, người học chạy); (d) image registry k3d và Docker Hub bị từ chối vì prefix,
   mỗi lần dưới 1 s; (e) image không digest; (f) attestation quá hạn (policy tạm tuổi tối đa 5 s); (g) admission
   controller không lịch được: pod `svp` bị từ chối, pod ở namespace thử `svp-probe` được nhận; (h) ephemeral container
-  chưa ký bị từ chối, đã ký được nhận; (i) UPDATE image chưa ký bị từ chối; (k) đường keyless với image công khai của nhà
-  cung cấp khác (đúng identity nhận, sai identity từ chối; chỉ trên dev); (l) image diễn tập `drill-no-provenance` (bản build sạch như
-  `drill-unsigned`, ký và attest `vuln` như bản phát hành, không attest provenance; [ADR-0036](../adr/0036-repo-rename.md) §6) bị từ
+  chưa ký (ảnh của (b); không có thì image registry k3d, từ chối vì prefix) bị từ chối, đã ký được nhận; (i) UPDATE image
+  chưa ký bị từ chối; (k) đường keyless với image công khai của nhà cung cấp khác (đúng identity nhận, sai identity từ chối;
+  chỉ trên dev); (l) image diễn tập `drill-no-provenance` (bản build sạch như `drill-unsigned`, ký và attest `vuln` (bundle) như bản phát hành, không attest provenance; [ADR-0036](../adr/0036-repo-rename.md) §6) bị từ
   chối đúng message của phép provenance, chỉ khi policy đang chạy kiểm provenance (có attestation `provenance`), không thì SKIP "policy
   off" (không hỏi GHCR); mặc định script tự lấy digest mới nhất của `<imagePrefix của backend>drill-no-provenance` (ẩn danh),
   `SUPPLYCHAIN_NO_PROVENANCE=<digest>` ghi đè, `none` làm ca SKIP; trước khi gửi pod, cosign (ẩn danh) kiểm image có chữ ký, đúng một
   `vuln` hai nền tảng không CRITICAL trong tuổi tối đa và không có provenance, không tìm thấy hay thiếu một điều thì FAIL kèm lệnh dispatch
-  `gh workflow run images.yml --ref main -f drill=true` (người học chạy, trong 72 giờ trước lượt diễn tập); (m)
+  `gh workflow run images.yml --ref main -f drill=true` (người học chạy, trong 72 giờ trước lượt diễn tập); ca (a), (c), (f), (l) đọc
+  được image bundle lẫn định dạng cũ bằng cùng lệnh cosign, Kyverno trả cùng message cho cả hai (với bundle, ca (c) đọc `vuln`
+  cũ nhất khi rescan đang giữa attest và gỡ, ca (l) đòi đúng một); ảnh chưa ký của (b), (h), (i) là `drill-unsigned`, không gì
+  trên GHCR trỏ tới nó ở định dạng nào; ca với image bundle **kiểm sau push** (chưa có image diễn tập bundle); (m)
   nguồn phát hành tách nhau, mỗi cặp nguồn A, B của bảng: image dưới prefix của A mang tên chỉ B phát hành bị từ chối đúng message của
   phép 1, không hỏi registry (không khớp glob nào; không có tên như vậy thì SKIP); bản
   phát hành của B mà pod `svp` chạy, gửi dưới bản sao tạm của policy đổi chéo issuer, subject của A và B (chỉ pod nhãn
@@ -252,7 +265,7 @@ Loại tài liệu (Diátaxis): **reference**, tra cứu khi cần một lệnh 
   Kyverno kéo image khớp glob trước mọi phép nên chỉ nhận lỗi registry; chưa bản nào của B chạy trong `svp` thì SKIP); bản của mỗi
   nguồn khác `backend` mà pod `svp` chạy được nhận (chưa có thì SKIP). Đường dev là Audit nên script từ chối chạy trừ
   khi `SUPPLYCHAIN_ENFORCE_TMP=1`: chạy (k), nâng tạm `svp-policy` lên Enforce cho các ca còn lại rồi trả Audit; trên
-  đường dev chưa có image ký nên (a), (b), (c), (f) và nửa nhận của (h) SKIP. Trên cluster GitOps (lượt 40954609229, nhánh PR-B):
+  đường dev chưa có image ký nên (a), (c), (f) và nửa nhận của (h) SKIP. Trên cluster GitOps (lượt 40954609229, nhánh PR-B):
   a–i và (l) PASS, (l) đúng message của phép provenance, (k) SKIP như thiết kế. Khi kết thúc script trả Kyverno, Argo CD sync, Audit về như cũ, xoá policy tạm, `svp-probe`, và so
   webhook với ảnh chụp đầu; JSON ở `.k8s/drills/`. Không gọi API của gateway, không xoá khoá rate limit nào.
 - `make k8s-ui-grafana`, `k8s-ui-prometheus`, `k8s-ui-alertmanager`, `k8s-ui-glitchtip`, `k8s-ui-argocd`: port-forward chỉ
