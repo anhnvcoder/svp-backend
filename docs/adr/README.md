@@ -1,7 +1,9 @@
 # Architecture Decision Records
 
-Mỗi ADR ghi một quyết định kiến trúc: bối cảnh lúc quyết, các lựa chọn đã cân nhắc, chọn gì, và cái giá phải trả. Mục đích
-là để người đọc sau (kể cả chính mình sáu tháng sau) hiểu **vì sao**, không chỉ thấy **cái gì**.
+ADR là **nhật ký lý do** của repo, theo ý của Michael Nygard ("Documenting Architecture Decisions", 2011) và mẫu MADR 4: mỗi
+ADR ghi một quyết định, bối cảnh lúc quyết, các phương án đã cân nhắc và cái giá phải trả, để người đọc sau hiểu **vì sao**, không
+chỉ thấy **cái gì**. ADR không phải tài liệu cần đọc để dùng repo: người mới bắt đầu ở [`README.md`](../../README.md) và `docs/`.
+ADR cũ giữ nguyên làm lịch sử; đảo một quyết định thì viết ADR mới.
 
 ## Khi nào viết
 
@@ -17,39 +19,59 @@ là để người đọc sau (kể cả chính mình sáu tháng sau) hiểu **
 - ADR đã chấp nhận không sửa nội dung quyết định. Đổi ý thì viết ADR mới và cập nhật trạng thái ADR cũ.
 - Code không nhắc ADR (comment tự nói lý do), nên mỗi ADR có mục **Hiện thực ở** liệt kê file và thư mục hiện thực quyết định
   của nó, để tìm ngược từ quyết định tới code; thêm hay dời file hiện thực thì sửa mục này trong cùng thay đổi.
+- ADR nêu vấn đề, ngày và người quyết, không dùng nhãn tiến độ của dự án ("giai đoạn N", "phần M") làm ngữ cảnh chính.
+- Giới hạn khoảng 150 dòng. Chi tiết hiện thực, số đo dài, lệnh và bảng lớn để ở `docs/` hoặc runbook, rồi link sang.
 
 ## Mẫu
 
 ```markdown
 # NNNN. <Quyết định, viết thành một mệnh đề>
 
-- Trạng thái: Đề xuất
+- Trạng thái: Đề xuất | Chấp nhận | Bị thay bởi NNNN | Bỏ
 - Ngày: YYYY-MM-DD
+- Người quyết: <tên hoặc vai>
 
-## Bối cảnh
+## Bối cảnh và vấn đề
 
-Vấn đề cần giải, ràng buộc, số liệu liên quan (dẫn tới docs/architecture.md nếu có).
+Vấn đề cần giải, ràng buộc, số đo liên quan. Chi tiết dài để ở docs/ và link sang.
 
-## Các lựa chọn
+## Yếu tố quyết định
 
-### A. <Tên>
+- <tiêu chí đo được hoặc ràng buộc: chi phí, độ trễ, độ phức tạp vận hành>
 
-- Được: ...
-- Mất: ...
+## Phương án đã cân nhắc
 
-## Quyết định
+- <phương án A>
+- <phương án B>
 
-Chọn ..., vì ...
+## Kết quả quyết định
 
-## Hệ quả
+Chọn <phương án>, vì <lý do gắn với yếu tố quyết định>.
 
-- Được: ...
-- Phải trả: ...
+### Hệ quả
+
+- Tốt: ...
+- Xấu: ...
 - Xem lại khi: <điều kiện đo được>
+
+## Xác nhận
+
+Cách kiểm quyết định đã được làm đúng: test, số đo, lệnh. Chưa kiểm thì ghi rõ việc còn lại.
+
+## Ưu nhược từng phương án
+
+### <phương án A>
+
+- Tốt: ...
+- Xấu: ...
 
 ## Hiện thực ở
 
 - `<đường dẫn>`: <phần nào của quyết định>
+
+## Nguồn
+
+- <link chính thức>
 ```
 
 ## Danh sách
@@ -93,3 +115,8 @@ Chọn ..., vì ...
 | [0035](0035-renovate-automerge.md) | Renovate tự merge bản `patch` và `digest` của Go module, gói npm, base image và image dịch vụ (compose, CI, chart của repo) khi `ci-ok`, `images-ok` xanh, ở backend và `svp-web` (auto-merge của GitHub, squash, `minimumReleaseAge` 3 ngày giữ; PR lỗ hổng kiểu patch tự merge ngay); action, công cụ ghim, `cosign`, commit backend, hợp đồng API, minor, major giữ duyệt tay; nhóm chỉ tự merge khi mọi update trong nhóm tự merge | Chấp nhận (2026-10-31); kiểm tĩnh bằng `renovate-config-validator --strict`; PR tự merge đầu tiên kiểm sau merge |
 | [0036](0036-repo-rename.md) | Đổi tên repo `short-video-platform` → `svp-backend`, `svp-web` → `svp-frontend`: image chuyển sang prefix mới mang tên repo (`ghcr.io/anhnvcoder/svp-backend/`, `…/svp-frontend/`), 12 package mới bật public tay; bảng nguồn của lượt chuyển có bốn nguồn, hai nguồn cũ `oldbackend`, `oldweb` ở dạng nghỉ hưu (giá trị cũ, không `promoter`: được nhận, không ai build, promote, rescan), bot tiếp quản service từ nguồn nghỉ hưu, `oldbackend` bỏ `web` (gỡ nguồn web cũ); check `svp-gitops` clone ẩn danh theo URL, không bản clone riêng; PR promote stg của backend merge trước 2026-11-02 07:00 UTC (48 giờ của `vuln`); ca (l) bằng image diễn tập `drill-no-provenance`; gỡ hai nguồn nghỉ hưu khi prd chạy bộ bản mới; đọc bản ghi dưới tên cũ là lâu dài; không dùng lại hai tên cũ | Chấp nhận (2026-10-31); chưa hiện thực |
 | [0037](0037-mainpath-standard-tools.md) | Đường chính theo công cụ chuẩn, một đường thẳng (không nhánh `if` theo chế độ, khác biệt k3d/EKS là dữ liệu, tương thích ngược tối đa một bản phát hành): DORA thành bài lab `dora/` của `svp-labs`; adapter CI trung lập đóng băng, `platform-guard.sh` bỏ, GitLab là bài lab; `allowed_actions` mở theo pattern khi cần, ghim SHA giữ; bỏ `SVP_SMOKE_LEGACY_MEDIA`, cây `svp-gitops` không `platforms/`, bảng nguồn dựng lại cho commit cũ; ma trận env × nền tảng ở khoá `platforms` của `components.json`; promote stg/prd bằng bước Actions `yq` + `gh pr` (prd chép `envs/stg/` của `stg_ref`, Code Owner duyệt), bỏ bản ghi stg, bước 1b và dạng cũ của 1c (giữ luật tác giả hẹp từ dữ liệu); `gitops-check.sh` rút gọn với Kyverno CLI, argocd-diff-preview chỉ báo | Chấp nhận (người học duyệt 2026-10-31); §1, §2, §4–§6 hiện thực 2026-11-01 (PR-A, PR-B); §3, Notifications, `actions/attest` chưa |
+
+## Chuẩn áp dụng
+
+- Nygard, "Documenting Architecture Decisions" (2011): https://www.cognitect.com/blog/2011/11/15/documenting-architecture-decisions
+- MADR 4.0 (Markdown Architectural Decision Records): https://adr.github.io/madr/

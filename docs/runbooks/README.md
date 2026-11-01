@@ -83,7 +83,7 @@ cuối) và `kubectl --context k3d-svp -n svp logs -l app.kubernetes.io/name=<se
 - `kubectl` luôn có `--context k3d-svp`; không lệnh nào vào cluster khác.
 - Cổng ghi rõ trong lệnh: Redis native `redis-cli -h 127.0.0.1 -p 6379 -n <db>` (gateway db 10, feed-service db 14, web db
   9), Postgres native `-h 127.0.0.1 -p 5432`. Redis native và Postgres native **dùng chung với dự án khác**: không restart,
-  không `FLUSHDB`/`FLUSHALL`, không xoá khoá ngoài hai tiền tố mà `CLAUDE.md` cho phép (`svp:gw:rl:register:*` ở db 10,
+  không `FLUSHDB`/`FLUSHALL`, không xoá khoá ngoài hai tiền tố mà `AGENTS.md` cho phép (`svp:gw:rl:register:*` ở db 10,
   `svp:feed:explore:*` ở db 14).
 - Không in giá trị secret: không `cat .env`, không `env` trong container, không `kubectl get secret -o yaml`. Cần đổi secret
   thì sửa `.env` bằng trình soạn thảo rồi chạy target của Makefile.

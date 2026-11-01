@@ -14,7 +14,7 @@ Yêu cầu trên máy:
 - Bản clone [`svp-gitops`](https://github.com/anhnvcoder/svp-gitops) ở `../gitops` (mục dưới): `make up` chạy web client là bản
   phát hành của stg theo digest đọc từ đó, kéo ẩn danh từ GHCR.
 - Postgres và Redis chạy trên máy, không nằm trong compose: Postgres `127.0.0.1:5432`, Redis `127.0.0.1:6379`. Các bước dưới
-  dùng database và db Redis riêng của từng service, mô tả ở [`CLAUDE.md`](CLAUDE.md).
+  dùng database và db Redis riêng của từng service, mô tả ở [`AGENTS.md`](AGENTS.md).
 - Công cụ dòng lệnh trên máy: `psql` (`make up` tạo role và database trên Postgres native), `redis-cli`, `curl`, `jq`, `openssl`
   và `ffmpeg` (`make smoke` sinh video thử và gọi API).
 
@@ -67,7 +67,7 @@ Bản phát hành tới stg bằng PR do GitHub App mở trong `svp-gitops`, t�
 git clone https://github.com/anhnvcoder/svp-gitops.git ../gitops
 ```
 
-Sổ lệnh đầy đủ (kiểm tra gồm `make vulncheck`, `make fuzz`, `make dast`, `make grype`; diễn tập, k3d, cloud, CI) nằm ở [`CLAUDE.md`](CLAUDE.md), mục "Kiểm tra" và "Quy ước". Đừng chạy
+Sổ lệnh đầy đủ (kiểm tra gồm `make vulncheck`, `make fuzz`, `make dast`, `make grype`; diễn tập, k3d, cloud, CI) nằm ở [`docs/reference/`](docs/reference/); quy ước và luật an toàn ở [`AGENTS.md`](AGENTS.md). Đừng chạy
 `make up` và `make k8s-up` cùng lúc: mỗi bên từ chối khi bên kia đang chạy.
 
 ## Bản đồ thư mục
@@ -103,7 +103,7 @@ Sổ lệnh đầy đủ (kiểm tra gồm `make vulncheck`, `make fuzz`, `make 
 | `docs/postmortems/`, `docs/rfc/` | Postmortem không đổ lỗi, và đề xuất một trang cho người không làm kỹ thuật. |
 | `docs/threat-model.md` | Mối đe doạ theo mã (JWT-8, UP-8, RL-2, WEB-9…) và cách kiểm từng mối. |
 
-Bảng service: database và Redis db của từng service nằm ở `CLAUDE.md`, không lặp ở đây.
+Bảng service: database và Redis db của từng service nằm ở `AGENTS.md`, không lặp ở đây.
 
 ## Thứ tự đọc gợi ý
 
@@ -114,7 +114,12 @@ Bảng service: database và Redis db của từng service nằm ở `CLAUDE.md`
    (outbox, event) là nền của gần như mọi thứ khác.
 4. [`docs/ci-cd.md`](docs/ci-cd.md) khi đọc một lượt chạy GitHub Actions: job nào chạy khi nào, vì sao skip, đọc kết quả ở đâu.
 5. [`docs/threat-model.md`](docs/threat-model.md) khi làm bảo mật, và [`docs/runbooks/`](docs/runbooks/) khi có cảnh báo.
-6. [`CLAUDE.md`](CLAUDE.md) khi cần một lệnh cụ thể: sổ lệnh đầy đủ và quy tắc an toàn (cloud, database) nằm ở đó.
+6. [`docs/reference/`](docs/reference/) khi cần một lệnh cụ thể; quy tắc an toàn (cloud, database) ở [`AGENTS.md`](AGENTS.md).
+
+## Đọc gì tiếp
+
+[`docs/README.md`](docs/README.md) là mục lục tài liệu theo bốn loại: how-to (runbook), reference (lệnh, biến, CI), explanation
+(kiến trúc, threat model, ADR) và tutorial. Agent đọc [`AGENTS.md`](AGENTS.md) trước khi làm việc.
 
 ## Các giai đoạn
 
