@@ -281,6 +281,11 @@ jobs:
         run: |
           make env
           make compose-config
+      # The strict rule of .env files (deploy/observability/glitchtip/dotenv.sh) and its users: init.sh, make env,
+      # make db-bootstrap, make test-stack, the profile check of make up and compose config --hash, on fixtures in a
+      # temporary directory with fake psql, go and docker (the docker CLI only parses the compose file). The checkout's
+      # .env is never read. bash, make, git, openssl and shasum: no network, no Docker daemon.
+      - run: deploy/observability/glitchtip/dotenv-test.sh
       # The working tree's charts with main of svp-gitops (deploy/ci/gitops-check.sh --worktree), every third-party
       # image pinned by digest among them; needs network: chart repositories.
       - run: make helm-check

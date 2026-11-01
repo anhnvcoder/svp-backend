@@ -543,12 +543,19 @@ SVP_VIDEO_S3_SECRET_KEY=\\
 suffix'
 "
 
+# make up runs the web client's staging release by default, which needs a clone of svp-gitops and
+# GHCR. WEB_FROM=clone builds it instead, from a folder that only has to be a git work tree whose
+# origin is svp-frontend: an empty local repository, no network, and nothing to pull.
+web=$work/frontend
+git init -q "$web"
+git -C "$web" remote add origin https://github.com/anhnvcoder/svp-frontend.git
+
 # up_case <up or refused> <running services> <OBS>: with those services running, make up starts the
 # stack, or refuses before bootstrap and compose up and says to run make down first.
 up_case() {
   local want=$1 running=$2 obs=$3 status=0
   cp -p "$m/quoted" "$m/.env"
-  FAKE_RUNNING=$running run_fake up OBS="$obs" || status=$?
+  FAKE_RUNNING=$running SVP_WEB_DIR=$web run_fake up OBS="$obs" WEB_FROM=clone || status=$?
   if [[ $want == up ]]; then
     if [[ $status -eq 0 ]] && grep -q ' up -d --build --wait' "$m/fake.log"; then
       ok "make up OBS=$obs with [$running] running: starts"

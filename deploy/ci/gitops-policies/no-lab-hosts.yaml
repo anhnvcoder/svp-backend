@@ -27,18 +27,20 @@ spec:
         object.kind == 'Pod' ? object.?spec.orValue({}) :
         object.kind == 'CronJob' ? object.?spec.?jobTemplate.?spec.?template.?spec.orValue({}) :
         object.?spec.?template.?spec.orValue({})
+    # A list field may render as null (env: with nothing under it): read as empty, as Kubernetes does.
     - name: containers
       expression: >-
-        variables.podSpec.?containers.orValue([]) + variables.podSpec.?initContainers.orValue([]) +
-        variables.podSpec.?ephemeralContainers.orValue([])
+        ['containers', 'initContainers', 'ephemeralContainers']
+        .map(f, type(variables.podSpec[?f].orValue([])) == list ? variables.podSpec[?f].orValue([]) : []).flatten()
     - name: hosts
       expression: >-
-        (object.kind in ['HTTPRoute', 'GRPCRoute', 'TLSRoute'] ? object.?spec.?hostnames.orValue([]) : [])
+        (object.kind in ['HTTPRoute', 'GRPCRoute', 'TLSRoute'] && type(object.?spec.?hostnames.orValue([])) == list
+          ? object.?spec.?hostnames.orValue([]) : [])
         + (object.kind == 'Gateway' ? object.?spec.?listeners.orValue([]).map(l, l.?hostname.orValue('')) : [])
         + (object.kind == 'Ingress' ? object.?spec.?rules.orValue([]).map(r, r.?host.orValue(''))
           + object.?spec.?tls.orValue([]).map(t, t.?hosts.orValue([])).flatten() : [])
-        + variables.containers.map(c, c.?env.orValue([]).filter(e, type(e.?value.orValue(0)) == string)
-          .map(e, e.value)).flatten()
+        + variables.containers.map(c, (type(c.?env.orValue([])) == list ? c.?env.orValue([]) : [])
+          .filter(e, type(e.?value.orValue(0)) == string).map(e, e.value)).flatten()
     - name: lab
       expression: variables.hosts.filter(h, h.contains('svp.localhost'))
   validations:
