@@ -12,6 +12,8 @@
 #     a full commit svp-gitops has not are refused, each with its own message;
 #   - promote_open_pr: the app's own open pull request of the branch, never a fork's or a person's from a branch of that
 #     name, asked for up to 500; nothing when the app has none; a full list of 500, and a gh that fails, are refused;
+#   - promote_image_row: the row of a release in the table of a promote pull request, linked to the commit and the package
+#     of its own repository; an image outside ghcr.io/<owner>/<repo>/<name> is refused;
 #   - rescan.sh list: the releases of every environment of main of svp-gitops, of bot/promote-stg while the app's pull
 #     request is open, of a values_ref of svp-gitops, and of a values_ref that is a commit of this repository from
 #     before svp-gitops (deploy/k8s/values/services/); a values_ref that is neither fails; a host that does not answer
@@ -206,6 +208,18 @@ else
     "FAIL  list the open pull requests of bot/promote-stg in anhnvcoder/svp-gitops"
 fi
 echo '[]' >"$work/gh/prs.json"
+
+# --- promote_image_row SERVICE REPOSITORY TAG DIGEST.
+check "promote_image_row: a row" guard promote_image_row gateway ghcr.io/anhnvcoder/svp-backend/gateway "${c1:0:12}" "$digest_a"
+same "promote_image_row: commit and package link to the repo of the image, digest cut to 12 hex digits" \
+  "| \`gateway\` | [\`${c1:0:12}\`](https://github.com/anhnvcoder/svp-backend/commit/${c1:0:12}) | [\`ghcr.io/anhnvcoder/svp-backend/gateway@sha256:aaaaaaaaaaaa…\`](https://github.com/anhnvcoder/svp-backend/pkgs/container/svp-backend%2Fgateway) |" \
+  "$(cat "$work/guard.out")"
+guard promote_image_row web ghcr.io/anhnvcoder/svp-frontend/web "${c2:0:12}" "$digest_b" || true
+check "promote_image_row: web links to svp-frontend" has "$work/guard.out" \
+  "https://github.com/anhnvcoder/svp-frontend/pkgs/container/svp-frontend%2Fweb"
+refused "promote_image_row: a repository that is no ghcr.io image" \
+  "image 'docker.io/library/nginx' of web is no ghcr.io/<owner>/<repo>/<name>" \
+  promote_image_row web docker.io/library/nginx "${c2:0:12}" "$digest_b"
 
 # --- rescan.sh list on the clone, as make gitops-clone leaves it.
 # list NAME WANT_RC [--source NAME] [VALUES_REF]: rescan.sh list on a machine, stdout in list.out, stderr in list.err.
