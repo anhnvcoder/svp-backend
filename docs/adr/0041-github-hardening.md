@@ -38,9 +38,11 @@ Ràng buộc: lab một người trên tài khoản cá nhân, gói Free, mọi 
   `require_last_push_approval`, `dismiss_stale_reviews_on_push`.
 - **(b) `CODEOWNERS` ở gốc mọi repo**, vì Code Owner là luật duy nhất chặn PR của bot và người khác trên đúng file chọn [N16]. `svp-gitops` giữ
   nguyên (`*` có chủ, `/envs/stg/` không chủ). `svp-backend`, `svp-frontend`, `svp-infra`: chỉ `/CODEOWNERS`, `/.github/`, `/renovate.json`,
-  `/Makefile`, `/.trivyignore.yaml`, `/.grype.yaml` có chủ, backend thêm `/deploy/ci/`, `/deploy/helm/svp-policy/`, infra thêm `/github/`,
-  `/aws/`; file khác không chủ để PR Renovate tự merge vẫn chạy; ruleset `owners` riêng (`require_code_owner_review`, vai admin bypass chỉ ở
-  chế độ `pull_request`) cùng dạng `svp-gitops`. `svp-labs`, `.github`: `* @anhnvcoder`, không đòi duyệt Code Owner (không bot nào mở PR).
+  `/Makefile`, `/.trivyignore.yaml` có chủ, backend và frontend thêm `/.grype.yaml`, backend thêm `/.govulncheck-ignore.json`, `/deploy/ci/`,
+  `/tools/vulngate/`, `/deploy/helm/svp-policy/`, frontend thêm `/.backend-commit`, `/pnpm-workspace.yaml`, infra thêm `/.tflint.hcl`,
+  `/github/`, `/aws/`; file khác không chủ để PR Renovate tự merge vẫn chạy; ruleset `owners` riêng (`require_code_owner_review`, vai admin
+  bypass chỉ ở chế độ `pull_request`) cùng dạng `svp-gitops`. `svp-labs`, `.github`: `* @anhnvcoder`, không đòi duyệt Code Owner (không bot
+  nào mở PR).
   Đã đo ở `svp-gitops` ([`ci.md`](../reference/ci.md)): tác giả PR kiêm Code Owner duy nhất được GitHub coi là đã thoả luật, nên giá trị thật
   của luật là chặn PR của bot và người khác trên đường nhạy cảm.
 - **(c) Chỉ squash merge, commit lấy `PR_TITLE` + `PR_BODY`, `required_linear_history`** ở ruleset `main` của mọi repo, vì mỗi commit trên
@@ -84,7 +86,8 @@ Ràng buộc: lab một người trên tài khoản cá nhân, gói Free, mọi 
     `fix(deps) : dấu cách trước hai chấm`, `Revert feat(feed): thiếu ngoặc kép`.
 - **(i) Renovate tự merge hẹp lại** (thay một phần [0035](0035-renovate-automerge.md)), vì bản vá Go module hay base image chạy thật vào stg
   mà chỉ CI chặn là đường chuỗi cung ứng rộng nhất [N17]. Chỉ tự merge `digest`, `pinDigest` của image (cùng tag, digest mới) và `patch` của thứ
-  chỉ dùng lúc dev (npm `devDependencies`, image của compose). Duyệt tay: mọi cập nhật Go module (cả `digest`, tức pseudo-version sang commit
+  chỉ dùng lúc dev (npm `devDependencies`, image của compose). `svp-frontend` không có image nào tự merge (Node chạy trong image, `.nvmrc`, `engines` và hai tag chỉ nêu major) và `devDependencies` mà đầu ra được
+  đóng gói (`typescript`, `tailwindcss`) cũng giữ tay. Duyệt tay: mọi cập nhật Go module (cả `digest`, tức pseudo-version sang commit
   mới, và directive `go`), npm `dependencies`, patch tag của base image và image chạy trong cluster, image của workflow (`.github/` có chủ), image công cụ ghim
   trong `Makefile` (`/Makefile` có chủ).
 - **(j) `strict_required_status_checks_policy` giữ `false`**, vì bật thì mỗi PR (cả PR bot tự merge) phải cập nhật nhánh và build lại image
@@ -142,10 +145,11 @@ Lint bảo mật workflow, tính đến 2026-11-01 (bản phát hành đọc t�
 - `svp-infra`: `github/repositories.tf` (cách merge, commit squash, `can_approve`, Actions của `svp-labs`, `.github`, pattern Scorecard),
   `github/rulesets.tf` (`main` của sáu repo, `owners` của backend, frontend, infra, `pr-title` bắt buộc), `github/environments.tf`
   (`promote-prd`), `github/README.md`; `Makefile`, `.github/workflows/check.yml` (zizmor).
-- `CODEOWNERS` ở gốc `svp-backend`, `svp-frontend`, `svp-infra`, `svp-labs`, `.github`; `.github/workflows/scorecard.yml`, `pr-title.yml`,
-  `.github/zizmor.yml` của backend, frontend, gitops, infra (sẽ có); `.github/workflows/check.yml` của `svp-gitops` (zizmor).
+- `CODEOWNERS` ở gốc `svp-backend`, `svp-frontend`, `svp-infra`, `svp-labs`, `.github`; `.github/workflows/scorecard.yml`, `pr-title.yml`
+  của backend, frontend, gitops, infra; `.github/zizmor.yml` của backend và frontend (gitops, infra chưa có finding nào cần ngoại lệ: file
+  tạo cùng ngoại lệ đầu tiên); `.github/workflows/check.yml` của `svp-gitops` và `svp-infra` (zizmor).
 - `svp-backend`, `svp-frontend`: `.github/workflows/ci.yml` (zizmor, dependency review), `Makefile`, `renovate.json`; backend thêm
-  `.github/workflows/images.yml` job `promote-prd`.
+  `.github/workflows/images.yml` job `promote-prd`; `svp-infra`: `Makefile` (target `zizmor`).
 
 ## Nguồn
 

@@ -79,7 +79,7 @@ gh api "$G/tags?per_page=100" -q '.[].name'
 | cài đặt repo | `"allow_auto_merge":true`, `"allow_squash_merge":true`, `"allow_merge_commit":false`, `"allow_rebase_merge":false`, `"delete_branch_on_merge":false`; `"default_branch":"main"` sau push đầu (repo rỗng báo `master`, chưa có nghĩa gì) |
 | squash | `{"squash_merge_commit_message":"PR_BODY","squash_merge_commit_title":"PR_TITLE"}` |
 | `actions/permissions` | `{"allowed_actions":"selected","enabled":true,"sha_pinning_required":true}` |
-| `selected-actions` | `{"github_owned_allowed":true,"patterns_allowed":[],"verified_allowed":false}` |
+| `selected-actions` | `{"github_owned_allowed":true,"patterns_allowed":["ossf/scorecard-action@*"],"verified_allowed":false}` |
 | `actions/permissions/workflow` | `{"can_approve_pull_request_reviews":false,"default_workflow_permissions":"read"}` |
 | `fork-pr-contributor-approval` | `{"approval_policy":"all_external_contributors"}` (như repo code) |
 | `security_and_analysis` | `{"push_protection":"enabled","secret_scanning":"enabled"}` |
@@ -90,7 +90,7 @@ gh api "$G/tags?per_page=100" -q '.[].name'
 | secrets | `{"names":["SVP_GITOPS_APP_PRIVATE_KEY"],"total_count":1}` |
 | repo secrets (`$C`) | `0` (khoá đặt ở mức repo chạy được ở workflow của mọi nhánh, bỏ qua rule `main`-only; xoá ở Settings → Secrets and variables → Actions → tab Repository secrets) |
 | rulesets | ba dòng, `main` và `owners` (`"target":"branch"`), `tags` (`"target":"tag"`), cả ba `"enforcement":"active"` |
-| `rules/branches/main` | `deletion`, `non_fast_forward`, `pull_request` (hai lần: một của mỗi ruleset nhắm nhánh), `required_status_checks` |
+| `rules/branches/main` | `deletion`, `non_fast_forward`, `required_linear_history`, `pull_request` (hai lần: một của mỗi ruleset nhắm nhánh), `required_status_checks` |
 | `tags` | không dòng nào (repo không dùng tag; tag lạ xem "Giảm thiểu") |
 
 Không kiểm được bằng `gh` của người học: **App và bản cài của nó** (bước A2, A3) và **Renovate** (A5). `GET /apps/svp-gitops-promoter`
@@ -230,7 +230,8 @@ phần **C** sau khi repo code chuyển job `promote` sang `svp-gitops`.
   **Automatically delete head branches**.
 - **Actions** → **General**:
   - **Actions permissions**: chọn **Allow anhnvcoder, and select non-anhnvcoder, actions and reusable workflows**, chỉ tích
-    **Allow actions created by GitHub** (không tích Marketplace verified creators, ô danh sách action để trống); tích **Require
+    **Allow actions created by GitHub** (không tích Marketplace verified creators, ô danh sách action ghi `ossf/scorecard-action@*` cho `scorecard.yml`,
+    [ADR-0041](../adr/0041-github-hardening.md) (g)); tích **Require
     actions to be pinned to a full-length commit SHA**. **Save**.
   - **Approval for running fork pull request workflows from contributors**: **Require approval for all external contributors**.
     **Save**.
@@ -250,7 +251,7 @@ phần **C** sau khi repo code chuyển job `promote` sang `svp-gitops`.
 - Auto-merge: PR promote stg của bot tự merge khi `gitops-ok` xanh, không ai phải bấm (ADR-0025 §7).
 - Không tự xoá nhánh: `bot/promote-stg` là nhánh cuộn, job `promote` tự dựng lại và đẩy nó bằng `--force-with-lease`; GitHub xoá
   nhánh sau merge là thêm một bên thứ hai đổi nhánh đó giữa hai lượt promote.
-- Chỉ action của GitHub, ghim SHA bắt buộc: tag của action có thể bị đẩy sang code khác (vụ `tj-actions/changed-files` 3/2025,
+- Chỉ action của GitHub và `ossf/scorecard-action` (của `scorecard.yml`), ghim SHA bắt buộc: tag của action có thể bị đẩy sang code khác (vụ `tj-actions/changed-files` 3/2025,
   `aquasecurity/trivy-action` 3/2026, [ADR-0015](../adr/0015-cicd-devsecops-stage5.md)); SHA thì không. Ô "bắt buộc" làm workflow
   dùng tag bị từ chối ngay, không cần ai đọc diff mới bắt được.
 - Duyệt PR fork của mọi người ngoài: repo public, PR fork chạy `check.yml` với cây của fork (token chỉ đọc, không secret), nhưng
@@ -273,7 +274,8 @@ phần **C** sau khi repo code chuyển job `promote` sang `svp-gitops`.
 
 **Nếu sai:** `allow_auto_merge` false → PR stg mở nhưng không tự merge (job `promote` đỏ ở bước bật auto-merge). `allow_merge_commit`
 true → người merge tay có thể tạo merge commit, revert một lần promote khó hơn. `sha_pinning_required` false hay `verified_allowed`
-true → workflow dùng tag hay action bên thứ ba vẫn chạy. `can_approve_pull_request_reviews` true → tắt lại ở Workflow permissions.
+true → workflow dùng tag hay action bên thứ ba vẫn chạy. Thiếu `ossf/scorecard-action@*` trong danh sách action → `scorecard.yml` bị từ
+chối; có pattern khác → xoá dòng đó. `can_approve_pull_request_reviews` true → tắt lại ở Workflow permissions.
 `approval_policy` khác `all_external_contributors` → chọn lại ô duyệt PR fork. Squash khác `PR_TITLE`/`PR_BODY` → chọn lại ô Default
 commit message. Sửa ở đúng ô rồi chạy lại lệnh kiểm.
 
@@ -325,13 +327,13 @@ select repositories" với đúng một dòng `anhnvcoder/svp-gitops`; phần qu
 
 **Nếu sai:** chọn lại repo ở cùng trang, **Save**. "All repositories" thì đổi sang "Only select repositories".
 
-### A4. Environment `promote` ở repo code
+### A4. Environment `promote` và `promote-prd` ở repo code
 
 **Làm gì** (https://github.com/anhnvcoder/svp-backend/settings/environments → **New environment**):
 
 - **Name**: `promote` → **Configure environment**.
-- **Deployment protection rules**: không tích **Required reviewers**, không **Wait timer** (stg tự động; cổng prd là Code Owner của PR
-  prd ở `svp-gitops`).
+- **Deployment protection rules**: không tích **Required reviewers**, không **Wait timer** (stg tự động; cổng prd là environment `promote-prd`
+  bên dưới, rồi Code Owner của PR prd ở `svp-gitops`).
 - **Deployment branches and tags**: **Selected branches and tags** → **Add deployment branch or tag rule** → Ref type **Branch**, Name
   pattern `main` → **Add rule**.
 - **Environment variables** → **Add environment variable**: Name `SVP_GITOPS_APP_CLIENT_ID`, Value là Client ID của A2.
@@ -344,15 +346,32 @@ select repositories" với đúng một dòng `anhnvcoder/svp-gitops`; phần qu
 
   Rồi xoá file `.pem` (khoá mới tạo lại được bất cứ lúc nào ở trang App; không cần giữ bản sao).
 
+**Environment `promote-prd`** ([ADR-0041](../adr/0041-github-hardening.md) (d)): `apply` của `github/` (`environments.tf` của `svp-infra`)
+tạo environment cùng mọi cài đặt; không tạo environment, người duyệt, luật nhánh hay variable ở UI. Cài đặt `apply` đặt, để đối chiếu:
+
+- **Deployment protection rules**: **Required reviewers** là người học; **Prevent self-review** tắt (người dispatch là người duyệt duy nhất:
+  bật thì không ai duyệt được); **Allow administrators to bypass configured protection rules** tắt.
+- **Deployment branches and tags**: chỉ `main`. Variable `SVP_GITOPS_APP_CLIENT_ID` cùng giá trị với `promote`.
+
+Người học chỉ đặt khoá: `SVP_GITOPS_APP_PRIVATE_KEY` là **khoá riêng thứ hai** của App `svp-gitops-promoter` (App có tới 25 khoá; thu hồi từng
+khoá): tạo khoá mới ở trang App (**Private keys** → **Generate a private key**), đặt bằng
+`gh secret set SVP_GITOPS_APP_PRIVATE_KEY --env promote-prd --repo anhnvcoder/svp-backend < /đường/tới/khoá.pem` sau `apply`, xoá file `.pem`.
+Không dùng lại khoá của `promote`.
+
 **Vì sao:**
 
-- Secret của environment chỉ tới job khai `environment: promote`, và chỉ khi job chạy trên nhánh khớp luật. Luật chỉ `main`: một
+- Prd cần một bước dừng có bản ghi mà admin không bỏ qua được, trước khi job lấy khoá App: nếu chỉ có duyệt Code Owner trên PR prd thì admin bypass
+  được và không có gì dừng job trước đó. Hai khoá ở hai environment: lộ một khoá thì thu hồi riêng khoá đó, khoá `promote-prd` không nằm ở nơi
+  job stg đọc được.
+- Secret của environment chỉ tới job khai `environment: promote` (hay `promote-prd`), và chỉ khi job chạy trên nhánh khớp luật. Luật chỉ `main`: một
   nhánh hay PR có workflow sửa thêm `environment: promote` bị GitHub từ chối trước khi job chạy, không lấy được khoá.
 - Client ID là **variable**: không bí mật (vô dụng khi không có khoá), đọc lại được để kiểm; workflow đọc `vars.SVP_GITOPS_APP_CLIENT_ID`.
   Khoá `.pem` là **secret**: GitHub không trả lại giá trị qua API hay UI, che trong log.
 
 **Kiểm:** bốn lệnh "Environment promote" của "Kiểm tra nhanh"; `variables` đúng một tên `SVP_GITOPS_APP_CLIENT_ID`, `secrets` đúng
-một tên `SVP_GITOPS_APP_PRIVATE_KEY`. Thời điểm đặt khoá (không có giá trị):
+một tên `SVP_GITOPS_APP_PRIVATE_KEY`. Với `promote-prd`, chạy lại bốn lệnh đó với `environments/promote-prd`, và
+`gh api repos/anhnvcoder/svp-backend/environments/promote-prd -q '{name, can_admins_bypass, rules: [.protection_rules[] | {type, prevent_self_review, reviewers: (.reviewers // [] | length)}]}'`:
+`can_admins_bypass` false, một luật `required_reviewers` với một người duyệt, `prevent_self_review` false (**kiểm sau áp**). Thời điểm đặt khoá (không có giá trị):
 
 ```sh
 gh api repos/anhnvcoder/svp-backend/environments/promote/secrets/SVP_GITOPS_APP_PRIVATE_KEY -q '{name, updated_at}'
@@ -411,6 +430,7 @@ sửa bằng `plan`, `apply` ở đó theo `github/README.md`, không nhập tay
 | --- | --- | --- |
 | `main` | `deletion` | Không ai (kể cả token App, kể cả admin) xoá được `main`, tức xoá nguồn Argo CD đọc |
 | `main` | `non_fast_forward` | Cấm force push: lịch sử triển khai không viết lại được, revert là cách lùi duy nhất |
+| `main` | `required_linear_history`, chỉ squash (`allowed_merge_methods = ["squash"]`) | `main` thẳng: mỗi commit là một lần promote hay một PR, revert một commit là lùi một lần ([ADR-0041](../adr/0041-github-hardening.md) (c)) |
 | `main` | `pull_request`, 0 approval | Mọi thay đổi qua PR (để check chạy); 0 approval để PR stg của bot tự merge; `dismiss_stale_reviews_on_push`: push mới sau khi duyệt thì mất duyệt |
 | `main` | `required_status_checks` `gitops-ok`, `integration_id` 15368 | Check tổng phải xanh; chỉ nhận từ app GitHub Actions (như `ci-ok`, `images-ok` của repo code), status giả do token khác đặt không tính |
 | `main` | `bypass_actors: []` | Không ai bỏ qua, cả admin |
@@ -425,7 +445,7 @@ sửa bằng `plan`, `apply` ở đó theo `github/README.md`, không nhập tay
 gh api repos/anhnvcoder/svp-gitops/rulesets -q '.[] | {id, name, target, enforcement}'
 # ba dòng: main, owners ("target":"branch"), tags ("target":"tag"), "enforcement":"active"
 gh api repos/anhnvcoder/svp-gitops/rules/branches/main -q '.[] | .type'
-# deletion, non_fast_forward, pull_request, pull_request, required_status_checks
+# deletion, non_fast_forward, required_linear_history, pull_request, pull_request, required_status_checks (thứ tự có thể khác)
 id=$(gh api repos/anhnvcoder/svp-gitops/rulesets -q '.[] | select(.name=="owners") | .id')
 gh api repos/anhnvcoder/svp-gitops/rulesets/$id -q '{bypass_actors, current_user_can_bypass}'
 # [{"actor_id":5,"actor_type":"RepositoryRole","bypass_mode":"pull_request"}], "pull_requests_only"
@@ -488,7 +508,7 @@ nhầm lẫn. Promote prd chép `envs/stg/` ở một commit của `main` (C3); 
 duyệt đọc. Bản ghi trạng thái sau này là Argo CD Notifications ([ADR-0032](../adr/0032-argocd-deploy-status.md) A, B). Deployment `stg`
 cũ còn trên `svp-gitops` không ai đọc; để nguyên.
 
-#### C3. Promote prd (người học dispatch, Code Owner duyệt)
+#### C3. Promote prd (người học dispatch, duyệt environment, Code Owner duyệt)
 
 **Làm gì** (người học chạy, lệnh ghi):
 
@@ -500,12 +520,13 @@ cũ còn trên `svp-gitops` không ai đọc; để nguyên.
    gh workflow run images.yml --repo anhnvcoder/svp-backend --ref main -f promote_prd=true [-f stg_ref=<SHA>]
    ```
 
-3. Job `promote-prd` (environment `promote`) dựng lại nhánh `bot/promote-prd` thành một commit trên `main` của `svp-gitops`, chép giá trị
+3. Job `promote-prd` dừng ở trạng thái chờ duyệt environment `promote-prd`: **Review deployments** ở trang lượt chạy (hay thông báo của
+   GitHub) → tích `promote-prd` → **Approve and deploy** (**Reject** thì job đỏ và không PR prd nào mở). Sau duyệt nó dựng lại nhánh `bot/promote-prd` thành một commit trên `main` của `svp-gitops`, chép giá trị
    `image` của cả bảy `envs/stg/images/*.yaml` và ba khoá của `envs/stg/charts.yaml` ở `stg_ref` vào cùng file dưới `envs/prd/` (`yq -i`,
    comment của file prd giữ nguyên), mở hay cập nhật PR (không auto-merge), mô tả nêu `stg_ref` và lệnh rescan cho bộ cũ.
 4. Đọc diff của PR, so bộ với `envs/stg/` ở `stg_ref` và với lượt `gitops` đã kiểm commit đó, chờ `gitops-ok` xanh, **Approve**, merge.
 
-**Vì sao:** `envs/prd/` có Code Owner (ruleset `owners`): tác giả là bot nên người học duyệt được, và **duyệt là cổng prd duy nhất**:
+**Vì sao:** hai lần duyệt có bản ghi: environment `promote-prd` (admin không bypass, trước khi job lấy khoá) rồi Code Owner của PR (`envs/prd/` có Code Owner, ruleset `owners`; tác giả là bot nên người học duyệt được). Duyệt là cổng prd:
 không còn bản ghi stg (C2), `stg_ref` chỉ bảo đảm bộ từng nằm trên `main` của `envs/stg/`, không bảo đảm stg đã chạy và smoke qua với
 đúng bộ đó (GIT-4 của [`threat-model.md`](../threat-model.md)). Guard `promote_stg_ref` của `deploy/ci/common.sh` chỉ nhận `main` hay SHA
 đủ 40 hex trên `main` của `svp-gitops`. Không có promote prd theo từng service.
@@ -636,7 +657,8 @@ ADR-0036 §5 (một PR của người học thay cả bảy file stg và `charts
 không làm gián đoạn:
 
 1. Trang App https://github.com/settings/apps/svp-gitops-promoter → **Private keys** → **Generate a private key** (tải `.pem` mới).
-2. Đặt secret bằng khoá mới (lệnh `gh secret set` của A4), xoá file `.pem`.
+2. Đặt secret bằng khoá mới (lệnh `gh secret set` của A4), xoá file `.pem`. Hai environment có hai khoá riêng (`promote`, `promote-prd`): xoay cả hai
+   bằng hai khoá mới, mỗi environment một khoá, hay chỉ cái nghi lộ (xoá đúng khoá cũ của environment đó ở bước 4).
 3. Kiểm `updated_at` của secret là lúc vừa đặt (lệnh ở A4); với lượt promote tiếp theo (hay dispatch `images.yml -f services=<một
    service>` do người học chạy), bước tạo token xanh. Khi nghi lộ, phần lượt promote chỉ làm sau **Unsuspend** (bước 4 của "Giảm
    thiểu"): bản cài còn suspend thì bước tạo token đỏ với mọi khoá.
