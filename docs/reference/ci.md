@@ -146,7 +146,8 @@ Loại tài liệu (Diátaxis): **reference**, tra cứu khi cần một lệnh 
     - `gitops` (job `gitops`, hạn 160 phút): `make k8s-gitops-up` (vai stg; `make gitops-clone` trước; `GITOPS_REV` là SHA của `origin/main` trong
       bản clone, nên cluster ở yên commit đó suốt các bước kiểm, PR promote merge giữa chừng không đổi gì), `gitops-env` (overlay stg có trên pod
       gateway), `gitops-external-secrets` (ExternalSecret của cluster đúng bằng danh sách của chart, mỗi cái `Ready`, Secret đích đúng
-      type và đúng tên key, không đọc giá trị), `gitops-argocd-metrics` (trong 180 s Prometheus thấy `argocd_app_info` của mọi Application,
+      type và đúng tên key, không đọc giá trị; entry có `enabledBy`, như `argocd/argocd-notifications-secret`, chỉ được đòi khi Application
+      `argocd/svp-cluster` liệt kê ExternalSecret của nó, tức Argo CD render nó từ values cluster chạy, dòng `not wanted` khi không), `gitops-argocd-metrics` (trong 180 s Prometheus thấy `argocd_app_info` của mọi Application,
       đều Synced và Healthy, không cảnh báo `ArgoCDApplication*` nào cháy; chart stg đang chạy chưa có PodMonitor của Argo CD thì nói vậy và qua),
       `gitops-admission-metrics` (số đo thời gian admission của lượt sync đầu, chạy trước smoke và diễn tập để histogram chỉ chứa lượt sync đầu; điều kiện của
       [ADR-0040](../adr/0040-sigstore-bundle-actions-attest.md) mục 6: 20 s lần không cache, hạn webhook 30 s. In ra `logs/NN-gitops-admission-metrics.log` chỉ dòng
@@ -194,7 +195,8 @@ Loại tài liệu (Diátaxis): **reference**, tra cứu khi cần một lệnh 
     nguồn có `<svc>` trong bảng nguồn ở `revision` của env; lớp nền tảng theo khoá `platforms` của `components.json` (thiếu hay sai dạng
     là đỏ, tên nền tảng khớp thư mục `platforms/`); luật tác giả hẹp viết từ bảng nguồn (dưới đây); (2) render root theo env × nền tảng
     của `platforms` × kiến trúc (mọi `targetRevision` vào `svp-gitops` phải tên đầy đủ); (3) chart repo ở `revision` của env với `base/`,
-    `platforms/` và overlay, External Secrets qua kubeconform, render của nền tảng không `localHosts` không nêu `svp.localhost` (grep cả
+    `platforms/` và overlay, External Secrets qua kubeconform (số ExternalSecret, SecretStore mỗi env × nền tảng theo dữ liệu, như
+    `make helm-check`), render của nền tảng không `localHosts` không nêu `svp.localhost` (grep cả
     render và policy `no-lab-hosts`); (4) mọi image ghim digest bằng policy `images-pinned` (dưới đây; ref ngoài tầm policy vẫn qua phép
     quét của script), render có overlay không đổi version image của render nó chồng lên; (5) `values-check.sh --gitops` cho file image đổi
     (chữ ký, `vuln`, provenance env đòi; provenance có thì tag là 12 hex của commit nó nêu). Check tổng `gitops-ok`. Tag image không còn
@@ -269,11 +271,13 @@ Loại tài liệu (Diátaxis): **reference**, tra cứu khi cần một lệnh 
     được nêu `svp.localhost`: grep cả render và policy `no-lab-hosts`); chart của working tree đứng thay `revision` của mọi env, nên không kiểm
     revision, giá trị dẫn xuất hay bản phát hành (việc của check `svp-gitops`);
     Secret của đường GitOps ([ADR-0026](../adr/0026-secrets-gitops.md)): render gốc của `svp-cluster` (đường dev) không có
-    ExternalSecret hay SecretStore, mỗi env đúng 28 ExternalSecret và 4 SecretStore (stg provider `kubernetes`; prd provider `aws`
-    và không còn `svp-secrets`), qua kubeconform `-strict` (`KUBECONFORM_IMAGE`, `--network none`) theo schema sinh từ CRD của
+    ExternalSecret hay SecretStore; mỗi env × nền tảng đúng số tính từ `files/external-secrets.yaml` với values đã ghép: một
+    ExternalSecret mỗi entry, trừ entry `inClusterObjectStore` khi `s3.mode` là `external` và entry `enabledBy` khi khoá đó của
+    `externalSecrets` không `true`, một SecretStore mỗi namespace của chúng (hôm nay stg trên `k3d` 28 và 4, stg và prd trên `eks` 25 và 4;
+    `argocdNotifications` bật thêm một mỗi loại ở `argocd`; stg provider `kubernetes`; prd provider `aws` và không còn `svp-secrets`), qua kubeconform `-strict` (`KUBECONFORM_IMAGE`, `--network none`) theo schema sinh từ CRD của
     chart External Secrets đúng version `components.json` ghim (provider `crd` bỏ khỏi schema SecretStore vì openapi2jsonschema
     sinh sai; không store nào dùng nó); cuối cùng mọi image (`helm template --include-crds` mọi component với values
-    `base/` và Argo CD theo `bootstrap.json`) phải ghim đúng một `@sha256:` theo policy `images-pinned` của `deploy/ci/gitops-policies/`
+    `base/` và Argo CD theo `bootstrap.json`, rồi Argo CD với `platforms/<platform>/argo-cd.yaml` của mỗi nền tảng có file đó) phải ghim đúng một `@sha256:` theo policy `images-pinned` của `deploy/ci/gitops-policies/`
     (Kyverno CLI `KYVERNO_CLI_IMAGE`, `--network none`; ref image ngoài các field policy đọc vẫn qua phép quét của script), image của
     render có overlay phải bằng render nó chồng lên (bước 4 của `gitops-check.sh`). Cần Docker và mạng tới mọi repo
     chart. `make trivy-config`: trivy quét cấu hình Dockerfile, chart, chỉ báo,

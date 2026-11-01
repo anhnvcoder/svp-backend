@@ -160,7 +160,10 @@
 #              ServiceAccounts only (Argo CD's application controller, svp/default and a ServiceAccount of that name in
 #              svp-secrets refused; control: the store of svp); as it, server-side dry runs: an Opaque Secret in argocd
 #              and a token Secret in svp are refused by ValidatingAdmissionPolicy svp-external-secrets-writes (control:
-#              an Opaque Secret in svp passes it); its right to read every Secret is printed as the SEC-5 exception with
+#              an Opaque Secret in svp passes it); where the chart renders Argo CD Notifications' ExternalSecret
+#              (externalSecrets.argocdNotifications), Opaque Secret argocd/argocd-notifications-secret passes it (control)
+#              while a token Secret of that name and an Opaque Secret of another name in argocd are refused, the latter
+#              with the message naming the one Secret allowed there; its right to read every Secret is printed as the SEC-5 exception with
 #              its reason; no webhook configuration of ESO and no pod but the controller in external-secrets; the probe
 #              pod of svp-probe cannot open the controller's metrics port 8080 (control: a port-forward to it, through
 #              the kubelet, gets /metrics 200). SEC-7, no ServiceAccount of svp may create ExternalSecrets or
@@ -1742,13 +1745,23 @@ eso_reader_ns=svp-data
 eso_metrics_port=18080
 
 # eso_entries: "NAMESPACE ENTRY" per source entry the ExternalSecrets of NAMESPACE read, from the list the chart renders
-# them from (values: NAME: ENTRY/KEY), not from the Roles it renders.
+# them from (values: NAME: ENTRY/KEY), not from the Roles it renders. An entry with enabledBy (rendered only when a key
+# of externalSecrets turns it on) counts only where the cluster has its ExternalSecret.
 eso_entries() {
-  awk '/^- namespace: / { ns = $3; vals = 0; next }
+  local ns entry es
+  awk '/^- namespace: / { ns = $3; name = ""; by = 0; vals = 0; next }
+    /^  name: / { name = $2 }
+    /^  enabledBy: / { by = 1 }
     /^  values:$/ { vals = 1; next }
     /^  [^ ]/ { vals = 0 }
-    vals && /^    [^ :]+: [a-z0-9-]+\/[A-Za-z0-9_]+$/ { e = $2; sub(/\/.*/, "", e); print ns, e }' \
-    "$repo_root/deploy/helm/svp-cluster/files/external-secrets.yaml" | sort -u
+    vals && /^    [^ :]+: [a-z0-9-]+\/[A-Za-z0-9_]+$/ { e = $2; sub(/\/.*/, "", e); print ns, e, (by ? ns "/" name : "") }' \
+    "$repo_root/deploy/helm/svp-cluster/files/external-secrets.yaml" |
+    while read -r ns entry es; do
+      if [[ -n $es ]] && ! kc -n "${es%/*}" get externalsecrets.external-secrets.io "${es#*/}" >/dev/null 2>&1; then
+        continue
+      fi
+      echo "$ns $entry"
+    done | sort -u
 }
 
 # eso_secret NAMESPACE NAME TYPE: Secret NAME of type TYPE in NAMESPACE, as JSON for a server-side dry run; a token
@@ -1820,6 +1833,26 @@ eso() {
   out=$(eso_secret svp svp-drill-threats Opaque | kc create --dry-run=server -f - --as="$eso_controller" 2>&1 || true)
   [[ $out == *'created (server dry run)'* ]] && control "as the controller, an Opaque Secret in svp passes $vap" ||
     miss "control: as the controller, an Opaque Secret in svp passes $vap (got: $(head -n 1 <<<"$out"))"
+  # Argo CD Notifications' Secret, where the chart renders its ExternalSecret: the one Secret the controller may write
+  # in argocd, Argo CD's namespace, and only of type Opaque. The dry run of a Secret that exists already passes
+  # admission before the API server answers AlreadyExists.
+  if kc -n argocd get externalsecrets.external-secrets.io argocd-notifications-secret >/dev/null 2>&1; then
+    out=$(eso_secret argocd argocd-notifications-secret Opaque | kc create --dry-run=server -f - --as="$eso_controller" 2>&1 || true)
+    [[ $out == *'created (server dry run)'* || $out == *AlreadyExists* || $out == *'already exists'* ]] &&
+      control "as the controller, Opaque Secret argocd/argocd-notifications-secret passes $vap" ||
+      miss "control: as the controller, Opaque Secret argocd/argocd-notifications-secret passes $vap (got: $(head -n 1 <<<"$out"))"
+    out=$(eso_secret argocd argocd-notifications-secret kubernetes.io/service-account-token |
+      kc create --dry-run=server -f - --as="$eso_controller" 2>&1 || true)
+    [[ $out == *"$vap"*denied* ]] &&
+      ok "SEC-5: as the controller, a token Secret argocd/argocd-notifications-secret is refused by $vap" ||
+      miss "SEC-5: as the controller, a token Secret argocd/argocd-notifications-secret is refused by $vap (got: $(head -n 1 <<<"$out"))"
+    out=$(eso_secret argocd svp-drill-threats Opaque | kc create --dry-run=server -f - --as="$eso_controller" 2>&1 || true)
+    [[ $out == *"$vap"*denied*'only Secret argocd/argocd-notifications-secret of type Opaque: not CREATE of argocd/svp-drill-threats'* ]] &&
+      ok "SEC-5: as the controller, Opaque Secret argocd/svp-drill-threats is refused by $vap, which names the one Secret allowed in argocd" ||
+      miss "SEC-5: as the controller, Opaque Secret argocd/svp-drill-threats is refused by $vap naming the one Secret allowed in argocd (got: $(head -n 1 <<<"$out"))"
+  else
+    info "SEC-5: no ExternalSecret argocd/argocd-notifications-secret (externalSecrets.argocdNotifications of chart svp-cluster off here): the controller writes no Secret in argocd"
+  fi
   out=$(kc auth can-i list secrets -n argocd --as="$eso_controller" 2>&1 || true)
   info "SEC-5 exception: External Secrets Operator's controller reads every Secret of the cluster (can-i list secrets in argocd: $out): it watches the metadata of every Secret whatever its flags (WatchesMetadata of Secret, externalsecret_controller.go of v2.14.0), and a right to list is a right to read; its writes are held to the namespaces of its ExternalSecrets by $vap and its tokens to the stores' ServiceAccounts (checked above; base/external-secrets.yaml of svp-gitops)"
   out=$(kc get validatingwebhookconfigurations,mutatingwebhookconfigurations -o json | jq -r '.items[]

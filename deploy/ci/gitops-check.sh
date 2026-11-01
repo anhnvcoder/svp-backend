@@ -22,7 +22,8 @@
 #      *.svp.localhost (localHosts, false when left out); a missing or malformed key fails. platforms/ holds exactly a
 #      folder per platform of that map, argocd/apps/files/platforms is a symlink to it, each file of
 #      platforms/<platform>/ is README.md, <name>.yaml or <name>.values.tpl with <name> a component that runs on that
-#      platform, and platforms of a component in components.json, when set, lists platforms of the map, each once (no
+#      platform, or argo-cd.yaml, the platform's values of Argo CD (after argocd/bootstrap.json's), and platforms of a
+#      component in components.json, when set, lists platforms of the map, each once (no
 #      platforms: every platform). A tree without platforms/ fails.
 #      The author of a pull request, with BASE: a bot's pull request merges with no review where no code owner owns
 #      the files (envs/stg/), so a bot's token, leaked or misused, may change only what that bot promotes. Each file
@@ -58,12 +59,14 @@
 #      containers). Chart svp-cluster: no ExternalSecret or SecretStore with base/
 #      alone (the dev path's), one ExternalSecret per entry of its files/external-secrets.yaml and one SecretStore per
 #      namespace there in each environment on each platform, the entries with inClusterObjectStore left out where its
-#      s3.mode is external (provider kubernetes in stg, aws in prd, no svp-secrets in prd), valid against the CRDs of
-#      the External Secrets chart components.json pins (kubeconform -strict in KUBECONFORM_IMAGE of the Makefile).
+#      s3.mode is external and those with enabledBy where that key of externalSecrets is not true (provider
+#      kubernetes in stg, aws in prd, no svp-secrets in prd), valid against the CRDs of the External Secrets chart
+#      components.json pins (kubeconform -strict in KUBECONFORM_IMAGE of the Makefile).
 #   4. Every image pinned by digest. Renders, with `helm template --include-crds`, every component of
 #      components.json with its base/ values (upstream charts at their pinned versions, the charts of this repository
 #      at each revision; a component that does not run on k3d, the dev path's platform, with its platform's values
-#      instead) and Argo CD as argocd/bootstrap.json installs it. Policy images-pinned of deploy/ci/gitops-policies/
+#      instead) and Argo CD as argocd/bootstrap.json installs it, then again with each platform's argo-cd.yaml, as
+#      deploy/k8s/gitops.sh installs it there. Policy images-pinned of deploy/ci/gitops-policies/
 #      holds every image of those renders to exactly one digest: image fields of containers, image settings in their
 #      env, args and command (an operator's --xxx-image=... flag, an env value it starts pods from), image keys of a
 #      custom resource's spec, image settings in a ConfigMap (see the policy). Kyverno checks only the release images
@@ -416,7 +419,7 @@ for plat in $platform_names; do
     [ -e "$f" ] || continue
     b=${f##*/}
     case $b in
-    README.md) continue ;;
+    README.md | argo-cd.yaml) continue ;;
     *.values.tpl) name=${b%.values.tpl} ;;
     *.yaml) name=${b%.yaml} ;;
     *) name= ;;
@@ -937,15 +940,20 @@ for target in $targets; do
   args=(--namespace cert-manager)
   while IFS= read -r f; do args+=(-f "$f"); done < <(target_values "$env" "$plat" svp-cluster)
   cp "$code/deploy/helm/svp-cluster/values.yaml" "$tmp/mv/values.yaml"
-  mode=$(helm template mv "$tmp/mv" "${args[@]}" | sed -n 's/^# json //p' | jq -r '.s3.mode // "cluster"') ||
-    fail "read s3.mode of svp-cluster for $label"
+  merged=$(helm template mv "$tmp/mv" "${args[@]}" | sed -n 's/^# json //p') && [ -n "$merged" ] ||
+    fail "read the values of svp-cluster for $label"
+  mode=$(jq -r '.s3.mode // "cluster"' <<<"$merged") || fail "read s3.mode of svp-cluster for $label"
+  # The keys of externalSecrets that are true, which turn on the entries naming them in enabledBy.
+  enabled=$(jq -r '.externalSecrets // {} | to_entries[] | select(.value == true) | .key' <<<"$merged" | paste -sd ' ' -) ||
+    fail "read externalSecrets of svp-cluster for $label"
   list=$code/deploy/helm/svp-cluster/files/external-secrets.yaml
   # One ExternalSecret per entry, one SecretStore per namespace of the entries; with a managed object store
-  # (s3.mode external) no entry with inClusterObjectStore: true.
-  read -r want_es want_ss < <(awk -v external="$([ "$mode" = external ] && echo 1)" '
-    function entry() { if (n && !(external && flagged)) { es++; seen[ns] = 1 } }
-    /^- namespace: / { entry(); n = 1; ns = $3; flagged = 0; next }
+  # (s3.mode external) no entry with inClusterObjectStore: true; no entry whose enabledBy is not true.
+  read -r want_es want_ss < <(awk -v external="$([ "$mode" = external ] && echo 1)" -v enabled=" $enabled " '
+    function entry() { if (n && !(external && flagged) && (by == "" || index(enabled, " " by " "))) { es++; seen[ns] = 1 } }
+    /^- namespace: / { entry(); n = 1; ns = $3; flagged = 0; by = ""; next }
     /^  inClusterObjectStore: true/ { flagged = 1 }
+    /^  enabledBy: / { by = $2 }
     END { entry(); for (k in seen) ss++; print es + 0, ss + 0 }' "$list")
   f=$tmp/render/t-$tag-svp-cluster.yaml
   es=$(grep -c '^kind: ExternalSecret$' "$f" || true)
@@ -1026,7 +1034,17 @@ for rev in $(for env in $envs; do revision_of "$env"; done | sort -u); do
       helm "${args[@]}" >"$out/base/$name.yaml" 2>"$tmp/err" || { cat "$tmp/err" >&2; fail "helm template $name ($label)"; }
       rendered=$((rendered + 1))
     fi
-    [ "$name" != argocd ] || continue
+    # Argo CD with the values of each platform that has some (platforms/<platform>/argo-cd.yaml after the bootstrap's),
+    # as deploy/k8s/gitops.sh installs it on that platform.
+    if [ "$name" = argocd ]; then
+      for plat in $rev_platforms; do
+        [ -f "$tree/platforms/$plat/argo-cd.yaml" ] || continue
+        helm "${args[@]}" --values "$tree/platforms/$plat/argo-cd.yaml" >"$out/platform/$plat/$name.yaml" 2>"$tmp/err" ||
+          { cat "$tmp/err" >&2; fail "helm template $name ($label) with the values of platform $plat"; }
+        platformed=$((platformed + 1))
+      done
+      continue
+    fi
     # With the values of each platform (its file, then what the root renders from its template for the first
     # environment on it): a component that has some, or none on k3d, whose base/ alone no cluster installs.
     for plat in $rev_platforms; do

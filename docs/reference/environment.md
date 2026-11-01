@@ -14,6 +14,11 @@ Loại tài liệu (Diátaxis): **reference**, tra cứu khi cần một lệnh 
   như secret key S3 khác: 40 ký tự là độ dài secret key của AWS và giới hạn của MinIO, store của đường quay lại)). `.env` có
   sẵn thì chỉ bổ sung biến còn thiếu hoặc đang rỗng, không đổi giá trị đã đặt; `SVP_MINIO_ROOT_PASSWORD` của `.env` cũ còn đó
   thì không ai đọc.
+- Người học tự đặt, `make env` không sinh (không tạo được khoá của GitHub App), chỉ cho cluster EKS có Argo CD Notifications
+  ([`eks.md`](eks.md), [ADR-0032](../adr/0032-argocd-deploy-status.md)): `SVP_ARGOCD_NOTIFY_APP_ID`, `SVP_ARGOCD_NOTIFY_INSTALLATION_ID`
+  (số của App `svp-argocd-notifier` và bản cài của nó trên `svp-gitops`), `SVP_ARGOCD_NOTIFY_PRIVATE_KEY_B64` (khoá riêng của App,
+  `base64 < key.pem | tr -d '\n'`: `.env` không nhận giá trị nhiều dòng). Chỉ `deploy/k8s/secrets.sh` đọc, khi chart `svp-cluster` bật
+  `externalSecrets.argocdNotifications`; compose không đọc.
 - Quy tắc đọc `.env` (`deploy/observability/glitchtip/dotenv.sh`, dùng chung cho `make env`, `make test-stack`,
   `make glitchtip-init`, bootstrap Postgres và script diễn tập): mỗi dòng là dòng trống, comment `#` ở cột 1, hoặc
   `KEY=value` với `KEY` ở cột 1 và `=` ngay sau; giá trị trơn (ASCII in được, không khoảng trắng, nháy, `\`, `$`) hoặc nằm
