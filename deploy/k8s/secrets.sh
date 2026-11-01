@@ -35,6 +35,14 @@
 #   - the object store is the managed one by default (SVP_OBJECT_STORE external: its users take the credentials of
 #     their pods), so the sources of the in-cluster store's users (s3-root, s3-users) are not written;
 #     deploy/k8s/gitops.sh sets SVP_OBJECT_STORE to s3.mode of the values Argo CD gives chart svp-cluster.
+#
+# On either, the source of Argo CD Notifications' Secret (entry argocd-notifications) is written only when chart
+# svp-cluster renders its ExternalSecret (externalSecrets.argocdNotifications, on only where the platform turns
+# notifications on): SVP_ARGOCD_NOTIFICATIONS on or off, which deploy/k8s/gitops.sh sets from the values Argo CD gives
+# the chart; unset (make k8s-secrets, make eks-secrets), on when the cluster has that ExternalSecret. Then
+# SVP_ARGOCD_NOTIFY_APP_ID, SVP_ARGOCD_NOTIFY_INSTALLATION_ID and SVP_ARGOCD_NOTIFY_PRIVATE_KEY_B64 are required in .env
+# (make env cannot make a GitHub App's key, so it writes none of them). Argo CD's notifications controller reads its
+# Secret whenever it changes: no restart.
 set -euo pipefail
 
 # shellcheck source=deploy/k8s/lib.sh
@@ -107,6 +115,36 @@ if kc get namespace "$source_ns" >/dev/null 2>&1; then gitops=yes; fi
 # An EKS cluster takes only the sources: its Secrets themselves are External Secrets Operator's to write.
 [ -n "$gitops" ] || ! cloud_context ||
   fail "cluster $kube_context has no namespace $source_ns, for the source Secrets of External Secrets Operator; run $make_cluster first"
+
+# Argo CD Notifications (see the header): the GitHub App that writes commit statuses on svp-gitops, checked before
+# anything is applied. Its ids are integers; its private key is the standard base64 of the PEM file on one line, which
+# the ExternalSecret decodes. The checks read the values without printing them.
+notify=off
+if [ -n "$gitops" ]; then
+  case ${SVP_ARGOCD_NOTIFICATIONS:-} in
+    on | off) notify=$SVP_ARGOCD_NOTIFICATIONS ;;
+    '') if kc -n argocd get externalsecrets.external-secrets.io argocd-notifications-secret >/dev/null 2>&1; then notify=on; fi ;;
+    *) fail "SVP_ARGOCD_NOTIFICATIONS is '$SVP_ARGOCD_NOTIFICATIONS': on or off" ;;
+  esac
+fi
+if [ "$notify" = on ]; then
+  missing=
+  for v in SVP_ARGOCD_NOTIFY_APP_ID SVP_ARGOCD_NOTIFY_INSTALLATION_ID SVP_ARGOCD_NOTIFY_PRIVATE_KEY_B64; do
+    val=$(dotenv_value "$env_file" "$v") || fail "read $env_file"
+    [ -n "$val" ] || missing="$missing $v"
+    printf -v "$v" '%s' "$val"
+  done
+  [ -z "$missing" ] ||
+    fail ".env lacks or has empty:$missing, which Argo CD Notifications needs (chart svp-cluster has externalSecrets.argocdNotifications on): set them from the GitHub App svp-argocd-notifier (.env.example), then run $again; no Secret was changed"
+  [[ $SVP_ARGOCD_NOTIFY_APP_ID =~ ^[0-9]+$ && $SVP_ARGOCD_NOTIFY_INSTALLATION_ID =~ ^[0-9]+$ ]] ||
+    fail "SVP_ARGOCD_NOTIFY_APP_ID and SVP_ARGOCD_NOTIFY_INSTALLATION_ID in .env must be the App's and its installation's numeric ids; no Secret was changed"
+  # Whole groups of four characters, padded: b64dec of the ExternalSecret (Go's standard encoding) refuses anything
+  # else and puts its error text in the Secret, where base64 -d here would decode a value cut short. Then the whole
+  # key, its END line included, as openssl reads it from the pipe; one with a passphrase fails, as Argo CD has none.
+  [[ $SVP_ARGOCD_NOTIFY_PRIVATE_KEY_B64 =~ ^[A-Za-z0-9+/]+={0,2}$ ]] && ((${#SVP_ARGOCD_NOTIFY_PRIVATE_KEY_B64} % 4 == 0)) &&
+    printf '%s' "$SVP_ARGOCD_NOTIFY_PRIVATE_KEY_B64" | base64 -d 2>/dev/null | openssl pkey -noout -passin pass: >/dev/null 2>&1 ||
+    fail "SVP_ARGOCD_NOTIFY_PRIVATE_KEY_B64 in .env is not the standard base64 of a PEM private key on one line (base64 < key.pem | tr -d '\\n'); no Secret was changed"
+fi
 
 manifests() {
   # Superuser of the Postgres svp-pg: CloudNativePG sets its password from this Secret, and the pg-bootstrap Job logs
@@ -318,6 +356,15 @@ source_manifests() {
     GLITCHTIP_SECRET_KEY="$GLITCHTIP_SECRET_KEY" \
     GLITCHTIP_ADMIN_EMAIL="$GLITCHTIP_ADMIN_EMAIL" GLITCHTIP_ADMIN_PASSWORD="$GLITCHTIP_ADMIN_PASSWORD" \
     SVP_ALERT_TELEGRAM_BOT_TOKEN="$SVP_ALERT_TELEGRAM_BOT_TOKEN" SVP_ALERT_TELEGRAM_CHAT_ID="$SVP_ALERT_TELEGRAM_CHAT_ID"
+  # Argo CD Notifications: the App's key as in .env (the ExternalSecret decodes it), and Alertmanager's bot token, empty
+  # or not, so that the store of argocd reads this entry alone.
+  if [ "$notify" = on ]; then
+    secret "$source_ns" argocd-notifications Opaque \
+      SVP_ARGOCD_NOTIFY_APP_ID="$SVP_ARGOCD_NOTIFY_APP_ID" \
+      SVP_ARGOCD_NOTIFY_INSTALLATION_ID="$SVP_ARGOCD_NOTIFY_INSTALLATION_ID" \
+      SVP_ARGOCD_NOTIFY_PRIVATE_KEY_B64="$SVP_ARGOCD_NOTIFY_PRIVATE_KEY_B64" \
+      SVP_ALERT_TELEGRAM_BOT_TOKEN="$SVP_ALERT_TELEGRAM_BOT_TOKEN"
+  fi
 }
 
 # Redpanda, unlike the object store, keeps its superuser svp-admin with its password in its own data: it creates it
@@ -388,10 +435,12 @@ redpanda_admin
 if [ -n "$gitops" ]; then
   source_manifests | kc apply --server-side --field-manager=svp-secrets --force-conflicts -f - >/dev/null ||
     fail "apply the source Secrets of namespace $source_ns"
+  notify_source=
+  if [ "$notify" = on ]; then notify_source=", argocd-notifications"; fi
   if [ "$object_store" = cluster ]; then
-    ok "source Secrets of $source_ns applied from .env: pg-superuser, pg-roles, s3-root, s3-users, kafka-admin, kafka-users, jwt-signing, jwt-verify, web, obs"
+    ok "source Secrets of $source_ns applied from .env: pg-superuser, pg-roles, s3-root, s3-users, kafka-admin, kafka-users, jwt-signing, jwt-verify, web, obs$notify_source"
   else
-    ok "source Secrets of $source_ns applied$(if cloud_context; then echo " (pg-superuser from SVP_RDS_MASTER_PASSWORD, the others from .env)"; else echo " from .env"; fi): pg-superuser, pg-roles, kafka-admin, kafka-users, jwt-signing, jwt-verify, web, obs; none for the users of an object store in the cluster (SVP_OBJECT_STORE=external: a managed store)"
+    ok "source Secrets of $source_ns applied$(if cloud_context; then echo " (pg-superuser from SVP_RDS_MASTER_PASSWORD, the others from .env)"; else echo " from .env"; fi): pg-superuser, pg-roles, kafka-admin, kafka-users, jwt-signing, jwt-verify, web, obs$notify_source; none for the users of an object store in the cluster (SVP_OBJECT_STORE=external: a managed store)"
   fi
   if ! kc -n "$source_ns" get secret glitchtip-runtime >/dev/null 2>&1; then
     secret "$source_ns" glitchtip-runtime Opaque SENTRY_DSN= SENTRY_AUTH_TOKEN= SENTRY_SOURCEMAPS_TOKEN= |

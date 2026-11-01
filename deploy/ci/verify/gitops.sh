@@ -16,10 +16,11 @@
 #                          SENTRY_ENVIRONMENT=stg (the only variable of the pod spec read)
 #   gitops-external-secrets the cluster's ExternalSecrets are exactly those of files/external-secrets.yaml of chart
 #                          svp-cluster at the commit the cluster runs its charts at (envs/stg/charts.yaml of
-#                          svp-gitops at origin/main of the clone), each Ready, and the Secret each builds exists with
-#                          the type and exactly the keys
-#                          its ExternalSecret names (those of its template, or of its data without one): one line per
-#                          Secret. Only the names of the keys leave kubectl's pipe, never a value
+#                          svp-gitops at origin/main of the clone), an entry with enabledBy (off unless the values turn
+#                          that key of externalSecrets on) only where Application svp-cluster renders its
+#                          ExternalSecret, each Ready, and the Secret each builds exists with the type and exactly the
+#                          keys its ExternalSecret names (those of its template, or of its data without one): one line
+#                          per Secret. Only the names of the keys leave kubectl's pipe, never a value
 #   gitops-argocd-metrics  Prometheus scrapes Argo CD's view of the Applications (PodMonitor argocd-application-controller
 #                          of chart svp-observability): within 180 s, argocd_app_info has one series per Application of
 #                          namespace argocd and every one is Synced and Healthy, and no ArgoCDApplication* alert fires.
@@ -255,14 +256,35 @@ gitops_admission_metrics() {
 
 # gitops_external_secrets: see gitops-external-secrets in the header.
 gitops_external_secrets() {
-  local file=deploy/helm/svp-cluster/files/external-secrets.yaml rev list want have es secrets report ns
+  local file=deploy/helm/svp-cluster/files/external-secrets.yaml rev list entries app rendered want have es secrets
+  local report ns
   rev=$(gitops_charts_rev) && [[ $rev =~ ^[0-9a-f]{40}$ ]] &&
     list=$(git -C "$repo" show "$rev:$file") || {
     echo "FAIL  gitops-external-secrets: read $file at the commit envs/stg/charts.yaml of svp-gitops pins"
     return 1
   }
   echo "charts of ${rev:0:12} (envs/stg/charts.yaml of svp-gitops)"
-  want=$(awk '/^- namespace: / { ns = $3 } /^  name: / { if (ns != "") print ns "/" $2; ns = "" }' <<<"$list" | sort)
+  # NAMESPACE/NAME of each entry, then its enabledBy when it has one.
+  entries=$(awk 'function entry() { if (id != "") print id, by }
+    /^- namespace: / { entry(); ns = $3; id = ""; by = ""; next }
+    /^  name: / { if (id == "" && ns != "") id = ns "/" $2 }
+    /^  enabledBy: / { by = $2 }
+    END { entry() }' <<<"$list")
+  # An entry with enabledBy is wanted only where Application svp-cluster renders its ExternalSecret: the values the
+  # cluster runs turn that key of externalSecrets on (requiresPruning: in the cluster, not in the render).
+  rendered=
+  if awk 'NF > 1 { found = 1 } END { exit !found }' <<<"$entries"; then
+    app=$(kc -n argocd get applications.argoproj.io svp-cluster -o json) &&
+      rendered=$(jq -r '.status.resources // [] | .[] | select(.kind == "ExternalSecret" and
+        (.requiresPruning // false | not)) | "\(.namespace)/\(.name)"' <<<"$app" | paste -sd ' ' -) || {
+      echo "FAIL  gitops-external-secrets: read the ExternalSecrets Application svp-cluster renders"
+      return 1
+    }
+  fi
+  awk -v rendered=" $rendered " 'NF > 1 && !index(rendered, " " $1 " ") {
+    print "not wanted: " $1 " (enabledBy " $2 "), as Application svp-cluster renders no ExternalSecret of it" }' \
+    <<<"$entries"
+  want=$(awk -v rendered=" $rendered " 'NF == 1 || index(rendered, " " $1 " ") { print $1 }' <<<"$entries" | sort)
   es=$(kc get externalsecrets.external-secrets.io -A -o json) || {
     echo "FAIL  gitops-external-secrets: list the ExternalSecrets"
     return 1

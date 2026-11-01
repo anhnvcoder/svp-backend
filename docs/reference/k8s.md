@@ -115,9 +115,10 @@ Loại tài liệu (Diátaxis): **reference**, tra cứu khi cần một lệnh 
   cluster dev (không có namespace đó) nhận chính các Secret như trên; cluster GitOps dựng từ revision mà overlay stg bật
   `externalSecrets` của chart `svp-cluster` (có `svp-secrets`) chỉ nhận **nguồn**: mỗi entry của
   `deploy/helm/svp-cluster/files/external-secrets.yaml` một Secret ở `svp-secrets` (10 entry từ `.env`, key đặt tên như `.env`;
-  entry thứ 11 `glitchtip-runtime` tạo rỗng khi chưa có và không bao giờ bị đổi ở đây), rồi khi ExternalSecret đã có thì dựng lại từng cái từ
+  entry thứ 11 `glitchtip-runtime` tạo rỗng khi chưa có và không bao giờ bị đổi ở đây; entry `argocd-notifications` chỉ khi chart
+  bật `externalSecrets.argocdNotifications`, xem [`eks.md`](eks.md)), rồi khi ExternalSecret đã có thì dựng lại từng cái từ
   nguồn mới (`force-sync`, chờ `status.syncedResourceVersion` đổi và `Ready`; `es_force_sync` của `deploy/k8s/lib.sh`) trước khi
-  restart như trên. External Secrets Operator ([ADR-0026](../adr/0026-secrets-gitops.md)) dựng 28 Secret từ đó; cluster GitOps
+  restart như trên. External Secrets Operator ([ADR-0026](../adr/0026-secrets-gitops.md)) dựng 28 Secret từ đó (k3d); cluster GitOps
   từ revision không có External Secrets thì nhận Secret như đường dev. `k8s-glitchtip-init` ghi DSN vào Secret
   `svp/sentry`, token API chỉ đọc vào `svp-obs/glitchtip-api` và token tải source map vào `svp-obs/glitchtip-sourcemaps`
   (không vào `.env`, không in; cluster có `svp-secrets`: ghi vào nguồn `svp-secrets/glitchtip-runtime` rồi `force-sync` ba
@@ -178,7 +179,8 @@ Loại tài liệu (Diátaxis): **reference**, tra cứu khi cần một lệnh 
   (`--certificate-github-workflow-sha`; thiếu thì in lệnh dispatch build lại service đó);
   thiếu một điều là dừng, không tạo gì. Rồi tạo namespace (chart `svp-cluster` ở commit `charts.yaml`; overlay stg bật
   `externalSecrets` nên có cả `svp-secrets`) và Secret từ `.env` (chế độ của `make k8s-secrets` ở trên), cài Argo CD theo
-  `argocd/bootstrap.json` (chart, version, values `base/argo-cd.yaml`; namespace `argocd`, PSA `restricted`) với plugin Gateway API
+  `argocd/bootstrap.json` (chart, version, values `base/argo-cd.yaml`, rồi `platforms/<platform>/argo-cd.yaml` khi revision có file
+  đó; namespace `argocd`, PSA `restricted`) với plugin Gateway API
   của Argo Rollouts theo kiến trúc node (`nodeArch` đọc từ node, cluster lẫn kiến trúc thì dừng; bản amd64 ở
   `base/argo-rollouts-amd64.yaml`, cùng file `install.sh` của đường dev đọc), AppProject `svp` và `default` đã khoá
   (`argocd/project.yaml`), root `svp-root` (`env=stg`); chờ mọi Application `Synced`, Healthy, sync cuối `Succeeded` (lỗi còn sau
@@ -192,7 +194,8 @@ Loại tài liệu (Diátaxis): **reference**, tra cứu khi cần một lệnh 
   `svp-cluster` với overlay stg render SecretStore `svp-store` (provider `kubernetes`, ServiceAccount `svp-secrets-reader` chỉ
   `get` theo tên đúng các entry namespace đó đọc), 28 ExternalSecret (`refreshPolicy: OnChange`, mọi cái có `target.template`),
   namespace và NetworkPolicy của `svp-secrets`, ValidatingAdmissionPolicy `svp-external-secrets-writes` (controller chỉ ghi Secret
-  ở bốn namespace đích, không bao giờ Secret token) và `svp-store-serviceaccount-pods`, `-tokens` (ở mọi namespace không pod nào
+  ở bốn namespace đích, không bao giờ Secret token; ở `argocd` chỉ Secret Opaque `argocd-notifications-secret`, khi chart bật
+  `externalSecrets.argocdNotifications`) và `svp-store-serviceaccount-pods`, `-tokens` (ở mọi namespace không pod nào
   chạy dưới `svp-secrets-reader`, không Secret nào giữ token của nó; controller lấy token bằng TokenRequest); overlay prd render
   store `aws` (Secrets Manager `svp/prd/<entry>`, role mỗi namespace, giá trị giữ chỗ tới khi có cluster EKS; controller thêm egress
   TCP 80 chỉ tới agent EKS Pod Identity `169.254.170.23/32`). Đã kiểm trên cluster: lượt `gitops` 40857855305 (28 ExternalSecret
@@ -220,7 +223,9 @@ Loại tài liệu (Diátaxis): **reference**, tra cứu khi cần một lệnh 
   nơi khác in một dòng bỏ qua: ServiceAccount store mỗi namespace chỉ `get` đúng entry nguồn của namespace đó theo tên, không
   list/watch, không Secret nào khác (đối chứng: store của `svp` lấy được `pg-roles`, không lấy được `pg-superuser`), không kind
   `ClusterSecretStore`; controller chỉ lấy token cho ServiceAccount của store, dry run dưới tên controller ghi Secret Opaque ở
-  `argocd` và Secret token ở `svp` bị `svp-external-secrets-writes` từ chối (đối chứng: Opaque ở `svp` qua), quyền đọc mọi Secret
+  `argocd` và Secret token ở `svp` bị `svp-external-secrets-writes` từ chối (đối chứng: Opaque ở `svp` qua; cluster có ExternalSecret
+  `argocd/argocd-notifications-secret` thêm: Opaque tên đó qua, Secret token tên đó và Opaque tên khác ở `argocd` bị từ chối, message
+  nêu Secret duy nhất được ghi ở đó; không có thì một dòng `info`), quyền đọc mọi Secret
   của controller in thành ngoại lệ SEC-5 kèm lý do, không webhook của ESO, pod thử không mở được cổng metrics 8080 của controller;
   không ServiceAccount nào của `svp` tạo được ExternalSecret hay SecretStore, ClusterRole `view`/`edit`/`admin` không cấp gì trên
   `external-secrets.io`; mục `SEC-6-reader`, cùng điều kiện: dry run ở `svp-data` (namespace có `svp-secrets-reader`), pod chạy dưới

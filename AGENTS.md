@@ -103,6 +103,10 @@ nó hoặc dựng bản sao từ event.
   Budget alert bật từ ngày đầu ở cả hai cloud.
 - **Không đăng nhập GHCR hay Sigstore từ máy:** push GHCR, ký, attest chỉ chạy trong CI; bước promote stg, prd chỉ chạy trong CI
   (token GitHub App), guard của chúng thử bằng `deploy/ci/promote-test.sh`.
+- **Khoá GitHub App `svp-argocd-notifier`** (chỉ commit status trên `svp-gitops`, [ADR-0032](docs/adr/0032-argocd-deploy-status.md)) do
+  người học tạo và đặt vào `.env` (`SVP_ARGOCD_NOTIFY_*`, `make env` không sinh); vào cluster chỉ qua External Secrets thành Secret
+  `argocd/argocd-notifications-secret`, khi chart `svp-cluster` bật `externalSecrets.argocdNotifications` (nền tảng `eks`). AI không
+  đọc, không in khoá; xoay theo [`docs/runbooks/argocd-notifier-key-rotation.md`](docs/runbooks/argocd-notifier-key-rotation.md).
 - `verify.yml` chỉ dispatch và đọc kết quả khi người học giao ([`docs/reference/ci.md`](docs/reference/ci.md)).
 
 ## Lệnh kiểm
