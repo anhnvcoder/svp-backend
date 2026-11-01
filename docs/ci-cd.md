@@ -146,7 +146,7 @@ flowchart LR
   (`up`, `k8s-up`, `k8s-gitops-up`) luôn chạy. `web_ref` (chỉ `compose-obs`, `dev-k3d`, `web-canary`, `gitops`; rỗng là commit của bản web
   stg) là `main`, một nhánh khác hay một SHA đủ 40 hex của `svp-frontend`, giá trị khác dừng ở bước đầu như ref: mã web (e2e, Lighthouse,
   canary, source map; image web của `dev-k3d`, `web-canary`) lấy từ commit đó của bản clone `make web-clone` (chỉ origin
-  `anhnvcoder/svp-frontend`). Lệnh đầy đủ ở [`CLAUDE.md`](../CLAUDE.md#kiểm-tra).
+  `anhnvcoder/svp-frontend`). Lệnh đầy đủ ở [`reference/ci.md`](reference/ci.md).
 
 ### 1.5 Repo cấu hình `svp-gitops`
 
@@ -333,7 +333,7 @@ Trang một lượt chạy (Actions → chọn lượt) có đồ thị job, dan
 
 ## 5. Chạy lại một job trên máy
 
-Lệnh tương đương từng job, chạy từ gốc repo, ở mục "Chạy lại một job trên máy" của [`CLAUDE.md`](../CLAUDE.md#kiểm-tra). Script
+Lệnh tương đương từng job, chạy từ gốc repo, ở mục "Chạy lại một job trên máy" của [`reference/ci.md`](reference/ci.md). Script
 của `deploy/ci/` chạy trên máy ở chế độ `local` của adapter: không gọi API nào của GitHub, không push lên origin mạng.
 
 Riêng cổng grype của một chân `images.yml`: `make grype IMAGE=<ref>@sha256:<digest> ARCH=amd64` (syft ghim đọc image của nền tảng

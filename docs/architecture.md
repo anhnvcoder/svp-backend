@@ -214,7 +214,7 @@ flowchart LR
     bus -.->|"user.*, video.ready"| fs
 ```
 
-Local: Postgres và Redis native trên máy (mỗi service một database, xem [`CLAUDE.md`](../CLAUDE.md)), object store RustFS
+Local: Postgres và Redis native trên máy (mỗi service một database, xem [`AGENTS.md`](../AGENTS.md) mục "Database và Redis"), object store RustFS
 thay S3, không có CDN (client đọc thẳng store). Redpanda và object store chạy trong compose profile `core`
 ([ADR-0008](adr/0008-async-upload-pipeline-stage2a.md), store theo [ADR-0022](adr/0022-local-object-store-minio-replacement.md)):
 
@@ -273,7 +273,7 @@ thay S3, không có CDN (client đọc thẳng store). Redpanda và object store
 Cùng 6 service (từ giai đoạn 5b phần C thêm web, [ADR-0019](adr/0019-web-k3d-supply-chain-observability.md)), cùng image và cùng biến môi trường như compose, chạy trên cluster k3d `svp` (1 server + 1 agent, k3s
 v1.36.5, node arm64) theo [ADR-0014](adr/0014-kubernetes-local-stage4.md). Compose vẫn là đường dev chính; hai đường không
 chạy cùng lúc (máy 16 GB). Cổng chỉ trên `127.0.0.1`: API 6550, HTTPS 8443, registry 5111. Lệnh ở
-[`CLAUDE.md`](../CLAUDE.md) mục Kiểm tra.
+[`reference/k8s.md`](reference/k8s.md).
 
 ```mermaid
 flowchart LR
@@ -387,7 +387,7 @@ flowchart LR
 Image phát hành không còn build trên máy: GitHub Actions build, quét, ký và đẩy lên GHCR; một PR ghi digest vào values (từ
 giai đoạn 6b phần 4 là PR trong repo `svp-gitops`, [§5.5](#55-hai-repo-code-và-cấu-hình-triển-khai-giai-đoạn-6b-phần-4));
 Argo CD đồng bộ; Kyverno chỉ cho pod của `svp` chạy image đã ký và sạch. Thiết kế và lý do ở
-[ADR-0015](adr/0015-cicd-devsecops-stage5.md); lệnh ở [`CLAUDE.md`](../CLAUDE.md) mục Kiểm tra. Đường dev `make k8s-up`
+[ADR-0015](adr/0015-cicd-devsecops-stage5.md); lệnh ở [`reference/ci.md`](reference/ci.md), [`reference/k8s.md`](reference/k8s.md). Đường dev `make k8s-up`
 giữ image `dev-*` chưa ký trong registry k3d, policy chạy Audit.
 
 ```mermaid
@@ -479,7 +479,7 @@ flowchart LR
 
 ### 5.3 Quan sát web (giai đoạn 5b phần C)
 
-Thiết kế ở [ADR-0019](adr/0019-web-k3d-supply-chain-observability.md) §7–§11; lệnh ở [`CLAUDE.md`](../CLAUDE.md) mục Kiểm tra.
+Thiết kế ở [ADR-0019](adr/0019-web-k3d-supply-chain-observability.md) §7–§11; lệnh ở [`reference/k8s.md`](reference/k8s.md).
 
 ```mermaid
 flowchart LR
@@ -525,7 +525,7 @@ flowchart LR
 
 ### 5.4 Reliability (giai đoạn 6)
 
-Thiết kế ở [ADR-0020](adr/0020-reliability-stage6.md); lệnh ở [`CLAUDE.md`](../CLAUDE.md) mục Kiểm tra; số đo ở mục Kết quả của
+Thiết kế ở [ADR-0020](adr/0020-reliability-stage6.md); lệnh ở [`reference/compose.md`](reference/compose.md), [`reference/k8s.md`](reference/k8s.md); số đo ở mục Kết quả của
 ADR. Giai đoạn chia hai: phần chạy được trên máy 16 GB làm ở đây, phần đo thật viết sẵn lệnh, manifest và tiêu chí đạt, chạy ở
 giai đoạn 6b (runner CI 16 GB hay VM thuê theo giờ, không dịch vụ AWS/GCP) và giai đoạn 7 (dịch vụ cloud).
 
