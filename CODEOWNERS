@@ -1,0 +1,12 @@
+# Only the paths below have an owner, who must approve a pull request that changes them (ruleset owners): the workflows,
+# the release, promote and scan gates of deploy/ci/, the image policy of the cluster, the scanners' ignore files, the
+# Makefile with its pinned tools, the Renovate config and this file. Every other file has no owner, so the pull requests
+# Renovate merges by itself (renovate.json) never touch an owned path. The last matching line wins.
+/CODEOWNERS               @anhnvcoder
+/.github/                 @anhnvcoder
+/renovate.json            @anhnvcoder
+/Makefile                 @anhnvcoder
+/.trivyignore.yaml        @anhnvcoder
+/.grype.yaml              @anhnvcoder
+/deploy/ci/               @anhnvcoder
+/deploy/helm/svp-policy/  @anhnvcoder
