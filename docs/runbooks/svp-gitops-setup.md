@@ -599,7 +599,7 @@ và bản cài App đi theo repo khi đổi tên, không phải đặt lại.
    `svp-backend/{gateway,user-service,video-service,engagement-service,feed-service,media-worker,api/gateway}` sau lượt `images.yml` đầu
    ở T, rồi chạy lại job `promote` của lượt đó (`gh run rerun <id> --repo anhnvcoder/svp-backend --job <id job promote>`) để PR bot được
    kiểm bằng checker T; ba package `svp-backend/{drill-vulnerable,drill-unsigned,drill-no-provenance}` sau `gh workflow run images.yml
-   --repo anhnvcoder/svp-backend --ref main -f drill=true`; hai package `svp-frontend/{web,web-sourcemaps}` sau lượt `images.yml` đầu
+   --repo anhnvcoder/svp-backend --ref main -f drill=true`; package `svp-frontend/web` sau lượt `images.yml` đầu
    của `svp-frontend`.
 3. PR bot stg của backend (sáu file từ `oldbackend` sang `backend`, `charts.yaml` lên T) merge **trước 2026-11-02 07:00 UTC**: nó còn để
    lại web `oldweb` ở stg, mà check của nó kiểm attestation `vuln` của cả bảy file trong 48 giờ (ADR-0036 §5).
@@ -622,7 +622,7 @@ anon() { t=$(curl -s "https://ghcr.io/token?scope=repository:anhnvcoder/$1:pull"
   echo "$1 $(curl -s -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $t" "https://ghcr.io/v2/anhnvcoder/$1/tags/list")"; }
 for p in svp-backend/gateway svp-backend/user-service svp-backend/video-service svp-backend/engagement-service \
   svp-backend/feed-service svp-backend/media-worker svp-backend/api/gateway svp-backend/drill-vulnerable svp-backend/drill-unsigned \
-  svp-backend/drill-no-provenance svp-frontend/web svp-frontend/web-sourcemaps; do anon "$p"; done   # mỗi dòng "<package> 200"
+  svp-backend/drill-no-provenance svp-frontend/web; do anon "$p"; done   # mỗi dòng "<package> 200"
 ```
 
 **Nếu sai:** PR bot đỏ "is not a clone of" → `check.yml` còn đặt `SVP_SOURCE_DIR_*`; đỏ vì kéo ẩn danh → package chưa public (bước 2),

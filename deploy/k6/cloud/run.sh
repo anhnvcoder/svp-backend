@@ -1,16 +1,8 @@
 #!/usr/bin/env bash
 # The k6 load test of the cloud cluster of stage 7: 20 pods of profile
 # cloud, 1 000 feed requests a second (1 250 req/s in all) held at least 10 minutes. The learner runs it, with the cloud
-# cluster's kubectl context; never from make. Needs kubectl and jq.
-#
-# k3d: context k3d-svp only on a runner the CI platform hands out for one job and throws away (ci_hosted_runner of
-# deploy/ci/platform.sh) running Linux, where the cluster is the job's own (the scenarios k6-cloud-mini and chaos of
-# deploy/ci/verify-run.sh); every other k3d-* context, and k3d-svp anywhere else (the 16 GB laptop), is refused before
-# any kubectl call. There the pods trust the cluster's CA (.k8s/ca.crt, unless --ca-file names another), send the
-# origin users open the web at (https://<domain>:8443, k3d's published port) and request 250m of CPU each instead of 1,
-# so that 8 of them fit beside the stack on the runner's 4 vCPUs, with a limit of 1 CPU, the most a pod of the design
-# needs: a pod throttled for more than 5% of its periods was short of CPU, a limit of the runner and not of the system
-# (the throttle criterion of deploy/ci/verify-sample.sh).
+# cluster's kubectl context; never from make. Needs kubectl and jq. A k3d-* context (the 16 GB laptop) is refused
+# before any kubectl call.
 #
 # Usage: deploy/k6/cloud/run.sh --context <ctx> --domain <domain> [--forwarded-for] [--ca-file <file>] [--pods <n>] [--ramp <duration>] [--hold <duration>] start|logs|delete
 #   --domain         the web's public host (the API is api.<domain>), as Envoy's listeners and certificates name them
@@ -39,9 +31,6 @@ set -euo pipefail
 
 here=$(cd "$(dirname "$0")" && pwd)
 repo=$(cd "$here/../../.." && pwd)
-# ci_hosted_runner: whether this is a runner the CI platform made for this one job.
-# shellcheck source=deploy/ci/platform.sh
-. "$repo/deploy/ci/platform.sh"
 
 die() {
   echo "FAIL  $1" >&2
@@ -68,12 +57,6 @@ done
 # The guard comes before any kubectl call: an empty context would be kubectl's current one, which may be k3d's.
 [ -n "$ctx" ] || die "no --context: name the cloud cluster's kubectl context"
 case $ctx in
-  k3d-svp)
-    [ "$(uname -s)" = Linux ] && ci_hosted_runner 2>/dev/null ||
-      die "context k3d-svp only on a Linux runner the CI platform made for this job (verify.yml); this load test runs on the cloud cluster otherwise"
-    ca_file=${ca_file:-$repo/.k8s/ca.crt}
-    render_args+=(--web-origin "https://$domain:8443" --cpu-request 250m --cpu-limit 1)
-    ;;
   k3d-*) die "context $ctx is a local k3d cluster; this load test runs on the cloud cluster only" ;;
 esac
 [ -z "$ca_file" ] || render_args+=(--ca-file "$ca_file")

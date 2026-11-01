@@ -1,0 +1,11 @@
+# Vulnerabilities grype leaves out of the scan of each image's SBOM (deploy/ci/build-image.sh, make grype). grype reads
+# this file whole (-c), so it holds only rules of this shape; each is one entry of .trivyignore.yaml, the same id and
+# package version, where the reason and the date are (deploy/ci/scan-gate.sh --check-ignorefile enforces both in the
+# config job). grype reads no date: remove or renew the rule with its entry. include-aliases covers the match grype
+# reports under a related id (a GHSA for the CVE named here).
+ignore:
+  - vulnerability: CVE-2026-58016
+    include-aliases: true
+    package:
+      name: glib
+      version: 2.88.1-r1

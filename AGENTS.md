@@ -115,6 +115,7 @@ Mọi lệnh chạy từ gốc repo (hay worktree của nó) qua `Makefile`; `ma
 - `buf breaking --against '.git#branch=main'` khi sửa `proto/`.
 - `make generate` sau khi sửa `proto/` hay SQL của sqlc (code sinh được commit); `make generate-check` kiểm không lệch.
 - `make api-contract-check`: luật version của hợp đồng REST `services/gateway/openapi.yaml`.
+- `deploy/ci/scan-gate.sh --check-ignorefile`: luật của `.trivyignore.yaml`, `.grype.yaml` (mỗi rule grype ứng một mục còn hạn của file trivy) và `deploy/ci/trivy-config-ignore.yaml`; `make grype IMAGE=<ref>@sha256:<digest>`: cổng grype của một chân image ([ADR-0039](docs/adr/0039-mainpath-drills-scan-gate-sourcemaps.md) §2).
 - `make helm-check`: lint, render mọi chart với `base/`, overlay của bản clone `svp-gitops` và policy Kyverno CLI.
 - `make compose-config`, `make otelcol-validate`, `make slo-check`, `make k6-check`, `make kyverno-test`, `make cloud-check`: kiểm
   cấu hình tĩnh khi sửa phần tương ứng.

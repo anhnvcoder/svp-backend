@@ -51,8 +51,8 @@ canary: false
 # under. Required with canary set; the release's values file says why its numbers.
 canaryLimits: {}
 
-# Annotations of the pod template. A changed value makes a new revision without a new image: the canary drill
-# (deploy/k8s/drills/canary.sh) changes one to run a canary of the code already running.
+# Annotations of the pod template. A changed value makes a new revision without a new image: the canary drill of the
+# lab changes one to run a canary of the code already running.
 podAnnotations: {}
 
 # A service with a database runs `migrate` with its migrator role in a Job before each install and upgrade.

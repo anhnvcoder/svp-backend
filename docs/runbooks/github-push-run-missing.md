@@ -79,7 +79,7 @@ gh run list --workflow images.yml --branch main --event push --limit 3      # l�
 gh pr list --head bot/promote                                               # PR promote cuộn có digest của service bị lỡ
 ```
 
-Merge PR promote; trên cluster GitOps Argo CD sync bản mới (`make measure-gitops REV=<commit merge>` đo push → pod Ready).
+Merge PR promote; trên cluster GitOps Argo CD sync bản mới (đo push → pod Ready: `measure-gitops` của bài lab `drills/` của `svp-labs`).
 
 ## Leo thang
 

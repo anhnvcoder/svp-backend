@@ -66,7 +66,7 @@ thì viết ADR.
 | Sẵn sàng | Khởi tạo upload thành công 99,9%; đọc feed 99,9%; trang web 99,9% | SLO `upload-init-availability`, `feed-availability`: tỉ lệ 5xx trên tổng request ở gateway, cảnh báo burn rate qua Alertmanager (giai đoạn 3); SLO `web-availability`: tỉ lệ 5xx trên mọi response của server web (giai đoạn 6) |
 | Xử lý video | Video 1 phút sẵn sàng phát p95 < 2 phút kể từ lúc upload xong | Từ `CompleteUpload` tới `READY`: `make measure-ready`; SLO `video-ready-latency`, 95% mẫu `svp_video_ready_duration_seconds` của video-service trong bucket 120 s, `FAILED` luôn tính xấu (giai đoạn 3) |
 | Độ tươi | Video `READY` xuất hiện trong feed follower p95 < 10 s | Từ `video.ready` tới dòng timeline cuối cùng: `make measure-freshness`; histogram `svp_feed_freshness_seconds` trên dashboard, chưa thành SLO vì local quá ít event |
-| Bền dữ liệu | Video đã `CompleteUpload` thành công thì không mất; event không mất; database phục hồi được từ backup | Diễn tập kill worker (giai đoạn 2); backup Postgres và `make drill-k8s-backup` đo RTO, RPO trên k3d (giai đoạn 6, [§5.4](#54-reliability-giai-đoạn-6)) |
+| Bền dữ liệu | Video đã `CompleteUpload` thành công thì không mất; event không mất; database phục hồi được từ backup | Diễn tập kill worker (giai đoạn 2); backup Postgres và diễn tập khôi phục đo RTO, RPO trên k3d (bài lab `drills/` của `svp-labs`, [ADR-0039](adr/0039-mainpath-drills-scan-gate-sourcemaps.md); giai đoạn 6, [§5.4](#54-reliability-giai-đoạn-6)) |
 | Đúng đắn | Event gửi trùng không làm sai bộ đếm, không transcode hai lần ra kết quả khác | Test gửi trùng (giai đoạn 2) |
 | Nhất quán | Số lượt xem trễ tối đa ~1 phút; like của chính mình thấy ngay | — |
 | Vận hành | Mọi request có `trace_id`; deploy không downtime; cảnh báo theo SLO | Giai đoạn 3: trace OpenTelemetry mở ở gateway, log có `trace_id`, cảnh báo burn rate của 4 SLO cùng cảnh báo lag, vòng nền, DLQ, breaker, rate limit dự phòng; `make drill-alert-to-sentry`. Deploy không downtime ở giai đoạn 4. Giai đoạn 6: 6 SLO (thêm `web-availability`, `web-inp`), runbook cho mọi cảnh báo page, game day |
@@ -515,8 +515,8 @@ flowchart LR
 - **Lỗi:** trình duyệt không có SDK Sentry: một reporter nhỏ gửi báo cáo JSON (tên, message, stack, pathname, debug ID của
   chunk) tới `/monitoring` cùng origin; server dựng event và gửi GlitchTip bằng `@sentry/nextjs` ở server, cùng bộ luật che
   với lỗi server nhưng ngân sách gửi riêng, nhỏ hơn, để báo cáo rác không đẩy lỗi server ra ngoài (WEB-9, WEB-20). Source map trình duyệt sinh kèm debug ID, không nằm trong image, tải lên GlitchTip bằng
-  `make web-sourcemaps` (compose) hay `make k8s-web-sourcemaps` (k3d); image phát hành của `svp-frontend` có image
-  `web-sourcemaps` cạnh nó trên GHCR, kịch bản `gitops` kéo về tải lên (§5.6).
+  `make web-sourcemaps` (compose) hay `make k8s-web-sourcemaps` (k3d); image phát hành không mang source map: tải map lúc build vào tracker
+  chạy lâu dài làm khi có tracker đó ([ADR-0039](adr/0039-mainpath-drills-scan-gate-sourcemaps.md) §3).
 - **RUM:** `web-vitals` gửi LCP, INP, CLS, FCP, TTFB trong một beacon khi trang bị ẩn (`visibilitychange` → hidden, cả khi rời
   trang: sự kiện đó đến sau `pagehide` và sau lúc `web-vitals` chốt CLS, INP; gửi ở `pagehide` thì thiếu hai số này); `/rum` kiểm schema, map đường sang
   8 route template cố định và ghi histogram `svp.web.vital.*` (Prometheus `svp_web_vital_*`), nhãn duy nhất `route`;
@@ -544,7 +544,7 @@ giai đoạn 6b (runner CI 16 GB hay VM thuê theo giờ, không dịch vụ AWS
   Barman Cloud (sidecar trong pod Postgres, controller ở `cnpg-system`) vào bucket `pg-backups` của object store trong cluster,
   bằng user `svp-pg-backup` riêng chỉ có quyền bucket đó. Mỗi lần phục hồi ghi vào một thế hệ lưu trữ mới (`serverName`), vì Job phục hồi
   từ chối lưu WAL vào nơi đã có WAL. PodMonitor đưa `cnpg_*`, `barman_cloud_*` vào Prometheus; cảnh báo
-  `PostgresWALArchivingFailing` (page) và `PostgresBackupTooOld` (ticket). Diễn tập `make drill-k8s-backup` xoá Cluster và ổ
+  `PostgresWALArchivingFailing` (page) và `PostgresBackupTooOld` (ticket). Diễn tập khôi phục (nay bài lab `drills/` của `svp-labs`; quy trình tay ở [`postgres-restore.md`](runbooks/postgres-restore.md)) xoá Cluster và ổ
   rồi dựng lại cùng tên từ backup: RTO đo trên máy 151 s (`MODE=latest`, một lượt) và 85, 126 s (`MODE=pitr`, hai lượt; ADR-0020
   "Restore RTO/RPO"); trên runner CI (giai đoạn 6b, số của runner 4 vCPU, không so với máy) `latest` 95,2 và 92,8 s, `pitr` 80,8
   và 84,3 s ([ADR-0021](adr/0021-deferred-verification-stage6b.md) D20); lượt
@@ -564,11 +564,12 @@ giai đoạn 6b (runner CI 16 GB hay VM thuê theo giờ, không dịch vụ AWS
   (chạy đủ bước và xanh lần đầu ngày 2026-10-24).
 - **Kiểm chứng trên runner** (giai đoạn 6b, [ADR-0021](adr/0021-deferred-verification-stage6b.md)): những gì máy 16 GB không
   chạy nổi (k3d nặng, stack có observability dưới tải, diễn tập đầy đủ) chạy trên runner GitHub `ubuntu-24.04` (4 vCPU, 16 GB,
-  amd64, VM mới mỗi job) bằng workflow `verify.yml`: dispatch tay một kịch bản (`compose-obs`, `dev-k3d`; từ phần 3 thêm
-  `gitops`, `web-canary`, `k6-cloud-mini`, `chaos`, `velero`) và lịch hằng tuần trên `main` chạy `compose-obs`, `dev-k3d`, mỗi kịch bản dựng bằng đúng target `make` của máy. Không secret; mỗi lượt có tiêu chí "runner đủ" đo được
-  (đĩa, `MemAvailable`, OOM, restart của k3s server) để tách lỗi code với giới hạn runner, VM thuê theo giờ chỉ khi runner trượt
-  hai lượt liền vì tài nguyên; artifact chỉ theo danh sách cho phép, quét giá trị bí mật. Số của runner (amd64, không VM) chỉ so
-  với ngân sách và ngưỡng, không thay số của máy. Phần 1 (2026-10-24 đến 2026-10-25): diễn tập threat model compose và k3d, canary
+  amd64, VM mới mỗi job) bằng workflow `verify.yml`: dispatch tay một kịch bản, `compose-obs` hay `gitops`, và lịch hằng tuần trên `main`
+  chạy cả hai, mỗi kịch bản dựng bằng đúng target `make` của máy. Từ [ADR-0039](adr/0039-mainpath-drills-scan-gate-sourcemaps.md) §1
+  workflow chỉ giữ regression của bản phát hành (smoke, threat model, supply chain, test object store); các kịch bản đo một lần là bài lab `drills/` của `svp-labs`:
+  `dev-k3d`, `web-canary`, `k6-cloud-mini`, `chaos`, `velero`. Không secret; cổng đĩa của `verify-host.sh` dừng lượt
+  trước khi thiếu chỗ; artifact chỉ theo danh sách cho phép, quét giá trị bí mật. Số của runner (amd64, không VM) chỉ so
+  với ngân sách và ngưỡng, không thay số của máy. Bằng chứng của các kịch bản đã chuyển (số ở các ADR 0017, 0020, 0021, 0031): phần 1 (2026-10-24 đến 2026-10-25): diễn tập threat model compose và k3d, canary
   gateway, backup hai chế độ, KEDA hai worker, RAM nghỉ (b) của đường dev đạt; RAM đỉnh (a) của đường dev vượt ngân sách của
   laptop, chấp nhận; LCP `/` chưa đạt. Phần 3 (2026-10-26 đến 2026-10-28): cluster GitOps vai stg với image đã ký (Kyverno từ
   chối manifest con chưa ký của web, threats 16/16, KEDA hai worker cùng transcode hai lượt), RAM nghỉ (b) của đường GitOps
@@ -579,11 +580,11 @@ giai đoạn 6b (runner CI 16 GB hay VM thuê theo giờ, không dịch vụ AWS
   18,5 % like hết hạn 3 s vì mỗi round trip Postgres của transaction cũng chậm), cùng Tempo OOM ở limit 768 Mi; cách sửa ở
   [ADR-0031](adr/0031-chaos-findings-feed-engagement-tempo.md), kiểm lại trên runner 2026-10-29: (a) feed-service và (b) đạt (feed
   5xx 0, like + view 5xx 0), Tempo không OOM và không bỏ span tới mức 4 pod; k6 thu nhỏ vẫn đạt tới 2 pod, mức 4 chạm trần CPU của
-  runner. Source map của image CI và đo phát hành service có Postgres (`measure-gitops`, 139 s từ merge tới pod Ready) đạt trên
-  `main` 2026-10-29. LCP sát ngưỡng, chưa ổn định, chuẩn là RUM p75.
+  runner. Source map của image CI và đo phát hành service có Postgres (139 s từ merge tới pod Ready) đạt trên
+  `main` 2026-10-29; cả hai nay ở bài lab hay đã bỏ. LCP sát ngưỡng, chưa ổn định, chuẩn là RUM p75.
 - **Dời:** Giai đoạn 7: k6 1 000 req/s, Chaos Mesh trên EKS,
-  diễn tập phục hồi RDS, Velero với S3 và snapshot EBS, hạn 50 ms của Redis trên ElastiCache. Manifest của phần đo thật kiểm schema
-  bằng `make cloud-check`; LCP mobile mô phỏng sát ngưỡng 2,5 s trên runner mà chưa ổn định, Lighthouse là tín hiệu hồi quy,
+  diễn tập phục hồi RDS, Velero với S3 và snapshot EBS, hạn 50 ms của Redis trên ElastiCache. Job k6 của phần đo thật kiểm schema
+  bằng `make cloud-check` (manifest Chaos Mesh, Velero lấy từ bài lab khi cần); LCP mobile mô phỏng sát ngưỡng 2,5 s trên runner mà chưa ổn định, Lighthouse là tín hiệu hồi quy,
   chuẩn là RUM p75 (ADR-0020, Kết quả "LCP").
 
 ### 5.5 Hai repo: code và cấu hình triển khai (giai đoạn 6b phần 4)
@@ -634,7 +635,7 @@ flowchart LR
   fetch; CI clone ẩn danh bằng `make gitops-clone`. Thay đổi cần cả code lẫn cấu hình thành hai PR theo thứ tự (cấu hình tương
   thích bản cũ trước).
 - **Đã kiểm** (2026-10-29): kịch bản `gitops` [40954609229](https://github.com/anhnvcoder/svp-backend/actions/runs/40954609229)
-  trên nhánh tách repo (26/26 Application Synced/Healthy đọc hai repo ẩn danh, provenance bắt buộc ở stg, smoke chặt), `dev-k3d`
+  trên nhánh tách repo (26/26 Application Synced/Healthy đọc hai repo ẩn danh, provenance bắt buộc ở stg, smoke chặt), `dev-k3d` (nay ở bài lab)
   [40937054425](https://github.com/anhnvcoder/svp-backend/actions/runs/40937054425) đọc bản clone, check đầu của
   `svp-gitops` [40902199532](https://github.com/anhnvcoder/svp-gitops/actions/runs/40902199532). RAM của lượt `gitops` đó: nghỉ
   cuối 7 241 MiB (bỏ active_file), vượt ngưỡng 6,5 GiB; đỉnh `ram-peak-2` median 8 954 MiB, vượt 8,7 GiB (không kết luận đạt,
@@ -654,7 +655,7 @@ flowchart LR
     end
     subgraph fe["repo svp-frontend (web)"]
         pin["api/contract.json,<br/>.backend-commit"]
-        feimg["images.yml: image web,<br/>web-sourcemaps"]
+        feimg["images.yml: image web"]
     end
     subgraph cfg["repo svp-gitops"]
         stg["envs/stg/images/"]
@@ -695,7 +696,7 @@ flowchart LR
   [41079830814](https://github.com/anhnvcoder/svp-backend/actions/runs/41079830814)); bản web đầu của `svp-frontend`
   ([41111181126](https://github.com/anhnvcoder/svp-frontend/actions/runs/41111181126)) ký, provenance, PR promote #22 của `svp-gitops` tự merge;
   kịch bản `gitops` trên `main` [41112757906](https://github.com/anhnvcoder/svp-backend/actions/runs/41112757906): Kyverno
-  Enforce nhận web mới, từ chối chéo identity, source map từ image `web-sourcemaps`. **Kiểm sau push:** promote prd
+  Enforce nhận web mới, từ chối chéo identity (lượt đó còn tải source map từ image `web-sourcemaps`, nay bỏ, [ADR-0039](adr/0039-mainpath-drills-scan-gate-sourcemaps.md) §3). **Kiểm sau push:** promote prd
   hai nguồn, rescan của `svp-frontend`, Renovate nâng hợp đồng.
 
 ### 5.7 Biến thể AWS (giai đoạn 7)

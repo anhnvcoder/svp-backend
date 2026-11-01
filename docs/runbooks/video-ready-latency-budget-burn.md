@@ -89,4 +89,4 @@ Lag media-worker về 0, video kẹt tới `READY` (hay `FAILED` có lý do), pa
 - Dashboard: `svp-slo`, `svp-pipeline`.
 - ADR: [ADR-0011](../adr/0011-observability-stage3.md) §8, [ADR-0008](../adr/0008-async-upload-pipeline-stage2a.md) (pipeline
   upload, transcode), [ADR-0017](../adr/0017-gitops-capacity-media-worker-max2.md).
-- Diễn tập, đo: `make measure-ready N=5`, `make drill-kill-worker`, `make drill-duplicates`; k3d `make drill-k8s-keda N=9`.
+- Diễn tập, đo: `make measure-ready N=5`, `make drill-kill-worker`, `make drill-duplicates`; k3d `drill-k8s-keda N=9` của bài lab `drills/` của `svp-labs`.

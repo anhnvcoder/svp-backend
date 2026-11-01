@@ -1,68 +1,36 @@
 #!/usr/bin/env bash
-# Static check of the manifests written for the cloud cluster, run by
-# `make cloud-check`. Nothing here reaches a cluster or reads .env; it needs helm, jq, git, docker and network access
-# (chart repositories, GitHub).
+# Static check of the manifests of the k6 Job of the cloud cluster, run by `make cloud-check`. Nothing here reaches a
+# cluster or reads .env; it needs helm, jq, docker and network access (GitHub).
 #
-#   1. Renders every chart of deploy/k8s/cloud/charts.json with its values (`helm template`, Helm's homes in a temporary
-#      directory as in `make helm-check`), and once more with its runnerValues after them when it has some (the overlay
-#      of the k3d cluster of a CI runner, deploy/k8s/cloud/runner/<chart>/values.yaml), and gathers every manifest
-#      under deploy/k8s/cloud/ but the values files (values/ and runner/*/values.yaml), every
-#      *.yaml / *.yml under deploy/k6/ (none yet is fine: the k6 Jobs come later), and the output of
-#      deploy/k6/cloud/render.sh when that script exists (run with no argument, manifests on stdout).
-#   2. Turns into JSON schemas, with /openapi2jsonschema of KUBECONFORM_IMAGE (no network), the CRDs of each kind used:
-#      the crds/ folder of each pinned chart but Velero's; Velero's from config/crd/ of velero-io/velero at the tag of the
-#      image in values/velero.yaml (the chart's crds/ folder is from 1.18.2, the image's CRDs are what the cluster gets);
-#      VolumeSnapshotClass from client/config/crd/ of kubernetes-csi/external-snapshotter at snapshotter_tag below,
-#      the snapshot controller of the EKS add-on. A kind without a schema fails: there is no -ignore-missing-schemas.
-#   3. kubeconform -strict against the Kubernetes schemas of CLOUD_K8S_VERSION at a pinned commit of
-#      yannh/kubernetes-json-schema first, then against those CRD schemas. Strict: an unknown field fails, at the root
-#      too (DENY_ROOT_ADDITIONAL_PROPERTIES).
-#   4. What a schema cannot say: every Chaos Mesh experiment has a duration of at most 30 minutes and a selector bound
-#      to the one namespace it lives in (svp or svp-data, never kube-system or any other) with a label, expression or
-#      pod selector; Chaos Mesh's controller, in its cloud render and its runner render, is namespaced with svp as its
-#      one target and comes with no dashboard or DNS server; in both renders its ENABLED_CONTROLLERS has no
-#      multi-cluster controller (remotecluster, <kind>-remote-apply) and no "*", and has the five controllers of each
-#      chaos kind of the pinned chart's CRDs (<kind>-records, -initFinalizers, -desiredphase, -condition,
-#      -cleanFinalizers) and the one of each child kind (podhttpchaos, podiochaos, podnetworkchaos); every image in the
-#      rendered charts and the manifests is pinned by exactly one @sha256:<64 hex>.
+#   1. Renders the k6 Job with deploy/k6/cloud/render.sh (run with no argument, manifests on stdout).
+#   2. kubeconform -strict against the Kubernetes schemas of CLOUD_K8S_VERSION at a pinned commit of
+#      yannh/kubernetes-json-schema. Strict: an unknown field fails. A kind without a schema fails: there is no
+#      -ignore-missing-schemas.
+#   3. What a schema cannot say: every image is pinned by exactly one @sha256:<64 hex>.
 #
 # Usage: deploy/k8s/cloud/check.sh [ROOT]
-#   ROOT: a directory laid out like this repository (default: the repository), from which deploy/k8s/cloud/ and
-#   deploy/k6/ are read; a copy with one field broken shows what the check reports for it. Nothing is written outside a
-#   temporary directory. KUBECONFORM_IMAGE and CLOUD_K8S_VERSION come from the Makefile.
+#   ROOT: a directory laid out like this repository (default: the repository), from which deploy/k6/ is read; a copy
+#   with one field broken shows what the check reports for it. Nothing is written outside a temporary directory.
+#   KUBECONFORM_IMAGE and CLOUD_K8S_VERSION come from the Makefile.
 set -euo pipefail
 
 root=$(cd "${1:-$(dirname "$0")/../../..}" && pwd)
-cloud=$root/deploy/k8s/cloud
 : "${KUBECONFORM_IMAGE:?set KUBECONFORM_IMAGE (run make cloud-check)}"
 : "${CLOUD_K8S_VERSION:?set CLOUD_K8S_VERSION (run make cloud-check)}"
 
 # yannh/kubernetes-json-schema at a commit, not master: the schemas a check passes against do not move under it.
 k8s_schemas_commit=f7d855e49c34b039c9ef2196444910275e31e09e
-# The snapshot CRDs: v8.7.0 was the newest release at least 3 days old when this was written. Stage 7 aligns it with the
-# EKS snapshot controller add-on.
-snapshotter_tag=v8.7.0
-# Namespaces an experiment may target: svp (experiments a and b) and svp-data (experiment c, Redpanda).
-chaos_namespaces='["svp","svp-data"]'
 
 fail() {
   echo "FAIL  $1" >&2
   exit 1
 }
 
-[ -f "$cloud/charts.json" ] || fail "$cloud/charts.json is missing"
-
 tmp=$(mktemp -d) || fail "create a temporary directory"
 trap 'rm -rf "$tmp"' EXIT
 export HELM_CACHE_HOME=$tmp/helm/cache HELM_CONFIG_HOME=$tmp/helm/config HELM_DATA_HOME=$tmp/helm/data
-mkdir -p "$tmp/manifests" "$tmp/crds" "$tmp/schemas" "$tmp/charts" "$tmp/y2j/in" "$tmp/y2j/templates"
+mkdir -p "$tmp/manifests" "$tmp/y2j/in" "$tmp/y2j/templates"
 docker_run=(env -u DOCKER_DEFAULT_PLATFORM docker run --rm --user "$(id -u):$(id -g)")
-
-# add_manifest FILE NAME: copies FILE into the set kubeconform and the extra checks read, under NAME (a repository path
-# with / turned into __, so a finding names its source).
-add_manifest() {
-  cp "$1" "$tmp/manifests/$(printf '%s' "$2" | sed 's#/#__#g')"
-}
 
 # YAML to JSON lines without a YAML tool: Helm's fromYaml in a throwaway chart, one {"file", "doc"} object per document
 # of every file in $tmp/y2j/in.
@@ -86,85 +54,16 @@ yaml2json() {
   helm template y2j "$tmp/y2j" | grep '^{' || true
 }
 
-# 1. Charts and manifests.
-sep=$'\x1f'
-list=$(jq -r '.charts[] | [.name, .namespace, .repo, .chart, .version, (.values // ""), (.runnerValues // "")]
-  | join("\u001f")' "$cloud/charts.json") || fail "read $cloud/charts.json"
-charts=0
-while IFS=$sep read -r name namespace repo chart version values runner_values; do
-  args=(template "$name" "$chart" --repo "$repo" --version "$version" --namespace "$namespace")
-  if [ -n "$values" ]; then args+=(--values "$root/$values"); fi
-  helm "${args[@]}" >"$tmp/manifests/rendered__$name.yaml" 2>"$tmp/err" || { cat "$tmp/err" >&2; fail "helm template $name"; }
-  if [ -n "$runner_values" ]; then
-    helm "${args[@]}" --values "$root/$runner_values" >"$tmp/manifests/rendered__$name-runner.yaml" 2>"$tmp/err" ||
-      { cat "$tmp/err" >&2; fail "helm template $name with $runner_values"; }
-  fi
-  helm pull "$chart" --repo "$repo" --version "$version" --untar --untardir "$tmp/charts/$name" 2>"$tmp/err" ||
-    { cat "$tmp/err" >&2; fail "helm pull $name"; }
-  # Velero's CRDs come from its source at the image's tag (step 2), not from the chart.
-  if [ "$name" != velero ] && [ -d "$tmp/charts/$name/$chart/crds" ]; then
-    for f in "$tmp/charts/$name/$chart/crds"/*.yaml; do cp "$f" "$tmp/crds/$name-$(basename "$f")"; done
-  fi
-  charts=$((charts + 1))
-done <<<"$list"
-
-files=0
-while IFS= read -r f; do
-  add_manifest "$f" "${f#"$root"/}"
-  files=$((files + 1))
-done < <(find "$cloud" -type f \( -name '*.yaml' -o -name '*.yml' \) -not -path "$cloud/values/*" \
-  -not -path "$cloud/runner/*/values.yaml" | sort)
-if [ -d "$root/deploy/k6" ]; then
-  while IFS= read -r f; do
-    add_manifest "$f" "${f#"$root"/}"
-    files=$((files + 1))
-  done < <(find "$root/deploy/k6" -type f \( -name '*.yaml' -o -name '*.yml' \) | sort)
-fi
-if [ -f "$root/deploy/k6/cloud/render.sh" ]; then
-  bash "$root/deploy/k6/cloud/render.sh" >"$tmp/manifests/rendered__k6-cloud.yaml" || fail "deploy/k6/cloud/render.sh"
-  files=$((files + 1))
-fi
-echo "rendered $charts charts; $files manifest files"
-
-# 2. CRD schemas. The tag of the Velero image is read from its values file, so a Renovate update of the image moves the
-# schemas with it.
-cp "$root/deploy/k8s/cloud/values/velero.yaml" "$tmp/y2j/in/velero-values.yaml"
-velero_tag=$(yaml2json | jq -r '.doc.image.tag // empty' | sed 's/@.*//')
-rm "$tmp/y2j/in/velero-values.yaml"
-[[ $velero_tag =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || fail "no vX.Y.Z image tag in deploy/k8s/cloud/values/velero.yaml (got '$velero_tag')"
-
-# sparse_crds URL TAG DIR NAME: the CRD files under DIR of the repository at URL, tag TAG, without the rest of it.
-sparse_crds() {
-  local dest=$tmp/src/$4
-  git -c advice.detachedHead=false clone --quiet --depth 1 --branch "$2" --filter=blob:none --sparse "$1" "$dest" ||
-    fail "git clone $1 at $2"
-  git -C "$dest" sparse-checkout set "$3" || fail "sparse checkout of $3 in $1"
-  local n=0 f
-  while IFS= read -r f; do
-    cp "$f" "$tmp/crds/$4-$(basename "$f")"
-    n=$((n + 1))
-  done < <(find "$dest/$3" -type f -name '*.yaml' | sort)
-  [ "$n" -gt 0 ] || fail "no CRD under $3 of $1 at $2"
-}
-sparse_crds https://github.com/velero-io/velero.git "$velero_tag" config/crd velero
-sparse_crds https://github.com/kubernetes-csi/external-snapshotter.git "$snapshotter_tag" client/config/crd snapshotter
-
-crds=()
-for f in "$tmp/crds"/*.yaml; do crds+=("/crds/$(basename "$f")"); done
-"${docker_run[@]}" --network none -v "$tmp/crds:/crds:ro" -v "$tmp/schemas:/schemas" --workdir /schemas \
-  -e 'FILENAME_FORMAT={kind}-{fullgroup}-{version}' -e DENY_ROOT_ADDITIONAL_PROPERTIES=1 \
-  --entrypoint /openapi2jsonschema "$KUBECONFORM_IMAGE" "${crds[@]}" >"$tmp/o2j.log" 2>&1 ||
-  { cat "$tmp/o2j.log" >&2; fail "openapi2jsonschema"; }
-echo "CRD schemas: ${#crds[@]} CRD files (charts but Velero, velero-io/velero $velero_tag, external-snapshotter $snapshotter_tag)"
+# 1. The k6 Job.
+bash "$root/deploy/k6/cloud/render.sh" >"$tmp/manifests/rendered__k6-cloud.yaml" || fail "deploy/k6/cloud/render.sh"
+echo "rendered deploy/k6/cloud/render.sh"
 
 failed=0
 
-# 3. kubeconform. The Kubernetes schemas are fetched from GitHub at the pinned commit; a CRD kind is not found there and
-# falls through to the generated schemas.
-if "${docker_run[@]}" -v "$tmp/manifests:/manifests:ro" -v "$tmp/schemas:/schemas:ro" "$KUBECONFORM_IMAGE" \
+# 2. kubeconform, with the Kubernetes schemas fetched from GitHub at the pinned commit.
+if "${docker_run[@]}" -v "$tmp/manifests:/manifests:ro" "$KUBECONFORM_IMAGE" \
   -strict -summary -kubernetes-version "$CLOUD_K8S_VERSION" \
   -schema-location "https://raw.githubusercontent.com/yannh/kubernetes-json-schema/$k8s_schemas_commit/{{.NormalizedKubernetesVersion}}-standalone{{.StrictSuffix}}/{{.ResourceKind}}{{.KindSuffix}}.json" \
-  -schema-location '/schemas/{{.ResourceKind}}-{{.Group}}-{{.ResourceAPIVersion}}.json' \
   /manifests; then
   echo "ok    kubeconform -strict (Kubernetes $CLOUD_K8S_VERSION)"
 else
@@ -172,96 +71,12 @@ else
   failed=1
 fi
 
-# 4. What the schemas cannot say, on every document as JSON.
+# 3. Images: every string field named image, and every env value whose name has the word IMAGE, on every document as
+# JSON.
 cp "$tmp/manifests"/* "$tmp/y2j/in/"
 yaml2json >"$tmp/docs.jsonl"
-
-chaos=$(jq -r --argjson allowed "$chaos_namespaces" '
-  select((.doc.apiVersion // "") | startswith("chaos-mesh.org/"))
-  | (.file | gsub("__"; "/")) as $f | .doc as $d
-  | ($d.metadata.namespace // "") as $ns | ($d.spec.selector.namespaces // []) as $sel
-  | ($d.spec.duration // "") as $dur
-  | [
-      (if ($dur | type) != "string" or ($dur | test("^[0-9]+(s|m)$") | not) then
-         "spec.duration missing or not <n>s / <n>m (got \($dur | tojson))"
-       elif ($dur | test("s$") and (rtrimstr("s") | tonumber) > 1800)
-         or ($dur | test("m$") and (rtrimstr("m") | tonumber) > 30) then
-         "spec.duration \($dur) is longer than 30 minutes"
-       else empty end),
-      (if ($ns | IN($allowed[]) | not) then
-         "metadata.namespace \($ns | tojson) is not one of \($allowed | join(", "))"
-       else empty end),
-      (if ($sel | type) != "array" or $sel != [$ns] then
-         "spec.selector.namespaces must be exactly [\($ns)], its own namespace (got \($sel | tojson))"
-       else empty end),
-      (if (($d.spec.selector.labelSelectors // {}) | length) == 0
-          and (($d.spec.selector.expressionSelectors // []) | length) == 0
-          and (($d.spec.selector.pods // {}) | length) == 0 then
-         "no labelSelectors, expressionSelectors or pods: it would hit every pod of the namespace"
-       else empty end),
-      ((($d.spec.selector.pods // {}) | keys[]) | select(. != $ns) | "spec.selector.pods names namespace \(.)")
-    ]
-  | .[] | "  \($f): \($d.kind) \($d.metadata.name // "?"): \(.)"
-' "$tmp/docs.jsonl") || fail "read the manifests as JSON"
-experiments=$(jq -r 'select((.doc.apiVersion // "") | startswith("chaos-mesh.org/")) | .file' "$tmp/docs.jsonl" | wc -l | tr -d ' ')
-if [ -n "$chaos" ]; then
-  printf 'FAIL  Chaos Mesh experiments without a bounded duration or a selector bound to their namespace:\n%s\n' "$chaos" >&2
-  failed=1
-elif [ "$experiments" -eq 0 ]; then
-  echo "FAIL  no Chaos Mesh experiment found under deploy/k8s/cloud/chaos/" >&2
-  failed=1
-else
-  echo "ok    $experiments Chaos Mesh experiments: duration <= 30m, selector bound to their own namespace"
-fi
-
-# Chaos Mesh's controller in each render of its chart (cloud values, and the runner's overlay after them): namespaced
-# (CLUSTER_SCOPED false) with svp as its one target, as experiments (a) and (b) need, and no dashboard or DNS server, so
-# that an overlay cannot widen what the controller reaches or open a UI. In both renders, its controllers
-# (ENABLED_CONTROLLERS) are listed one by one without the multi-cluster ones: remotecluster lists a cluster-scoped kind
-# a namespaced controller may not, and its cache never syncing makes the manager exit. The controller stops setting up
-# pipelines at the first chaos kind it does not find in the list, so every chaos kind of the chart's CRDs has its five.
-chaos_kinds=$(grep -h -A3 '^  names:' "$tmp/charts/chaos-mesh/chaos-mesh/crds"/*.yaml | sed -n 's/^    kind: //p' |
-  grep 'Chaos$' | jq -Rsc 'split("\n") | map(select(length > 0) | ascii_downcase)') || fail "read the kinds of the Chaos Mesh CRDs"
-[ "$(jq length <<<"$chaos_kinds")" -gt 0 ] || fail "no chaos kind in the CRDs of the Chaos Mesh chart"
-scope=$(jq -rs --argjson kinds "$chaos_kinds" '
-  ($kinds | map(select(test("^pod.+chaos$")))) as $children
-  | ([$kinds[] | select(test("^pod.+chaos$") | not) as $k
-      | ("records", "initFinalizers", "desiredphase", "condition", "cleanFinalizers") | "\($k)-\(.)"] + $children) as $want
-  | map(select(.file | test("^rendered__chaos-mesh(-runner)?\\.yaml$"))) | group_by(.file)[] | .[0].file as $f
-  | (map(.doc | select(.kind == "Deployment" and .metadata.name == "chaos-controller-manager"))) as $c
-  | ($c[0].spec.template.spec.containers[0].env // [] | map({(.name): .value}) | add // {}) as $env
-  | ($env.ENABLED_CONTROLLERS // "" | split(",")) as $on
-  | [
-      (if ($c | length) != 1 then "not exactly one Deployment chaos-controller-manager" else empty end),
-      (if $env.CLUSTER_SCOPED != "false" then "CLUSTER_SCOPED is \($env.CLUSTER_SCOPED | tojson), not \"false\"" else empty end),
-      (if $env.TARGET_NAMESPACE != "svp" then "TARGET_NAMESPACE is \($env.TARGET_NAMESPACE | tojson), not \"svp\"" else empty end),
-      (map(.doc | select(.kind == "Deployment" and (.metadata.name | test("dashboard|dns"))) | .metadata.name)[]
-        | "Deployment \(.) rendered"),
-      ($on | map(select(. == "*" or . == "remotecluster" or endswith("-remote-apply")))
-        | if length > 0 then "ENABLED_CONTROLLERS turns on \(join(", ")): a multi-cluster controller, or all of them"
-          else empty end),
-      ($want - $on | if length > 0 then "ENABLED_CONTROLLERS lacks \(join(", "))" else empty end)
-    ][] | "  \($f | gsub("__"; "/")): \(.)"
-' "$tmp/docs.jsonl") || fail "read the Chaos Mesh renders as JSON"
-renders=$(jq -r 'select(.file | test("^rendered__chaos-mesh(-runner)?\\.yaml$")) | .file' "$tmp/docs.jsonl" | sort -u)
-if [ -n "$scope" ]; then
-  printf 'FAIL  Chaos Mesh controller not namespaced on svp alone, a UI rendered, or its controllers wrong:\n%s\n' "$scope" >&2
-  failed=1
-elif [ "$(wc -l <<<"$renders" | tr -d ' ')" -ne 2 ]; then
-  echo "FAIL  Chaos Mesh: renders found [${renders//$'\n'/ }], expected the cloud one and the runner's" >&2
-  failed=1
-else
-  for f in $renders; do
-    echo "ok    Chaos Mesh ${f//__//}: controller namespaced on svp, no dashboard or DNS server," \
-      "$(jq length <<<"$chaos_kinds") chaos kinds' controllers listed, no \"*\" or multi-cluster one"
-  done
-fi
-
-# Images: every string field named image, and every env value whose name has the word IMAGE (the pause image of
-# pod-failure is one), CRDs left out.
 images=$(jq -r '
-  select(.doc.kind != "CustomResourceDefinition")
-  | (.file | gsub("__"; "/")) as $f
+  (.file | gsub("__"; "/")) as $f
   | (.doc | [.. | objects | .image? | strings]
       + [.. | objects | select((.name? | type) == "string" and (.name | test("(^|_)IMAGES?(_|$)")))
          | .value? | strings])[]
@@ -276,6 +91,9 @@ while IFS=$'\t' read -r f ref; do
 done <<<"$images"
 if [ -n "$missing" ]; then
   printf 'FAIL  images without exactly one @sha256:<64 hex>:\n%s' "$missing" >&2
+  failed=1
+elif [ "$total" -eq 0 ]; then
+  echo "FAIL  no image found in the output of deploy/k6/cloud/render.sh" >&2
   failed=1
 else
   echo "ok    $total image references, every one pinned by digest"

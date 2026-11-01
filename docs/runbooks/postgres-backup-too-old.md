@@ -45,7 +45,7 @@ curl -sG "$PROM/api/v1/query" --data-urlencode 'query=barman_cloud_cloudnative_p
    Backup `immediate` đầu có thể lỗi vì chạy trên pod Postgres cũ chưa có sidecar; CloudNativePG không chạy lại Backup lỗi, còn
    `make k8s-up` (đường dev) lấy một backup thay nó; cluster GitOps không có bước đó.
 3. **Thế hệ mới chưa có backup** (`backup="none"` sau một lần phục hồi làm tay): lần nâng chart tạo lại `ScheduledBackup`,
-   nhưng CloudNativePG nhận lại Backup `immediate` cũ thay vì chạy cái mới; `make drill-k8s-backup` và `make k8s-up` tự lấy
+   nhưng CloudNativePG nhận lại Backup `immediate` cũ thay vì chạy cái mới; diễn tập backup (bài lab `drills/` của `svp-labs`) và `make k8s-up` tự lấy
    backup cho thế hệ mới (đường dev), làm tay thì lấy (bước dưới).
 4. **Plugin không chạy** (`cnpg-system/plugin-barman-cloud`): Backup đứng ở pha đầu không tiến.
 
@@ -100,4 +100,4 @@ curl -sG "$AM/api/v2/alerts" --data-urlencode 'filter=alertname="PostgresBackupT
 - ADR: [ADR-0020](../adr/0020-reliability-stage6.md) §5 (lịch, `immediate`, retention, cảnh báo).
 - Cấu hình: `deploy/helm/svp-data/templates/backup.yaml`; backup đầu trên đường dev: `deploy/k8s/install.sh`
   (`pg_base_backup`).
-- Diễn tập: `make drill-k8s-backup` lấy backup theo yêu cầu ở bước 2 và bước 9 (thế hệ mới); chưa có diễn tập cho lịch bị lỡ.
+- Diễn tập: `drill-k8s-backup` của bài lab `drills/` của `svp-labs` lấy backup theo yêu cầu ở bước 2 và bước 9 (thế hệ mới); chưa có diễn tập cho lịch bị lỡ.

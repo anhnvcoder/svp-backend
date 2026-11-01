@@ -82,7 +82,7 @@ kubectl --context k3d-svp -n svp get rollouts.argoproj.io,analysisruns.argoproj.
   `pkg/kubectl-argo-rollouts/cmd/abort/abort.go`). Argo CD không so phần `status` nên không trả lại. Không cần `spec.paused`:
   controller dừng canary vì `Inconclusive` bằng `status.pauseConditions` (lý do `InconclusiveAnalysisRun`) và
   `status.controllerPause`, không bao giờ đặt `spec.paused`. Đối chiếu với nguồn, chưa chạy trên cluster của lab (cùng cách
-  patch subresource `status` mà `deploy/k8s/drills/web-canary.sh` dùng cho `promoteFull`).
+  patch subresource `status` mà diễn tập `drill-k8s-web-canary` của bài lab `drills/` của `svp-labs` dùng cho `promoteFull`).
 
 ```sh
 # ca nào: "<trạng thái phân tích của bước> <controllerPause> <bước hiện tại>"
@@ -126,5 +126,5 @@ Cảnh báo resolve khi series của Application trở lại `Synced`/`Healthy` 
 - [ADR-0032](../adr/0032-argocd-deploy-status.md) (trạng thái triển khai của Argo CD), ADR-0025 (repo `svp-gitops`),
   ADR-0014 §12 (canary), [svp-gitops-setup.md](svp-gitops-setup.md) (rollback).
 - Diễn tập: bước `gitops-argocd-metrics` của kịch bản `gitops` (`verify.yml`) kiểm Prometheus thấy đủ Application
-  `Synced`/`Healthy` và không cảnh báo Argo CD nào cháy. Ca canary bị abort tái hiện được bằng `make drill-k8s-canary` (cluster
+  `Synced`/`Healthy` và không cảnh báo Argo CD nào cháy. Ca canary bị abort tái hiện được bằng diễn tập canary của bài lab `drills/` của `svp-labs` (cluster
   dev, không có Argo CD nên không có cảnh báo này); chưa có diễn tập làm cảnh báo cháy trên cluster GitOps.

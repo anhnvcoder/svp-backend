@@ -89,13 +89,13 @@ Sổ lệnh đầy đủ (kiểm tra gồm `make vulncheck`, `make fuzz`, `make 
 | `deploy/docker/` | Dockerfile của service Go và media-worker (Dockerfile web ở gốc `svp-frontend`). |
 | `deploy/postgres/`, `deploy/redpanda/`, `deploy/s3/` | Bootstrap database, topic Kafka (compose), bucket, user, policy và CORS của object storage (RustFS, service `s3`). ACL Kafka của cluster k3d nằm trong chart Helm. |
 | `deploy/observability/` | Collector, Prometheus và rule SLO, Alertmanager, Grafana LGTM, GlitchTip, Elastic (so sánh). |
-| `deploy/k8s/` | Cluster k3d: script `install.sh`, `gitops.sh` (đường GitOps), `k8s.mk`, PSA, `drills/` (diễn tập), `cloud/` (manifest cho cluster đo thật, phủ chỉ cho runner ở `cloud/runner/`). Values, overlay và digest của các môi trường nằm ở `svp-gitops`. |
+| `deploy/k8s/` | Cluster k3d: script `install.sh`, `gitops.sh` (đường GitOps), `k8s.mk`, PSA, `drills/` (`smoke`, `supplychain`, `threats`, `traffic`; các diễn tập đo một lần là bài lab `drills/` của `svp-labs`, [ADR-0039](docs/adr/0039-mainpath-drills-scan-gate-sourcemaps.md)), `cloud/` (kiểm tĩnh Job k6 cho cluster đo thật). Values, overlay và digest của các môi trường nằm ở `svp-gitops`. |
 | `deploy/helm/` | Chart Helm: `svp-service` (chung cho mọi service), `svp-cluster`, `svp-data`, `svp-observability`, `svp-policy` (Kyverno). |
 | `deploy/k6/` | Kịch bản tải k6 theo SLO, chạy bằng image ghim. |
 | `deploy/dast/` | DAST của gateway theo `openapi.yaml` bằng Schemathesis (`make dast`, image ghim), chạy trên stack `make up` và ở job `stack` của CI. |
 | `deploy/ci/` | Script của pipeline: build, quét, ký, attest, guard của bước promote sang `svp-gitops` (bước promote nằm trong `images.yml`), check của `svp-gitops` (`gitops-check.sh`, policy Kyverno CLI ở `gitops-policies/`); `verify/` là trình tự từng kịch bản của `verify.yml`. Phần lớn logic CI nằm ở đây, không nằm trong YAML. |
 | `.githooks/` | Git hook `pre-commit` (gofmt, golangci-lint, buf lint, gitleaks); bật một lần bằng `make hooks`. |
-| `.github/workflows/` | `ci.yml` (kiểm tra, luật version của hợp đồng REST, stack), `images.yml` (sáu image, chuỗi cung ứng, phát hành hợp đồng, promote), `verify.yml` (kiểm chứng dồn trên runner, chạy tay và hằng tuần). DORA là bài lab `dora/` của `svp-labs` ([ADR-0037](docs/adr/0037-mainpath-standard-tools.md)). |
+| `.github/workflows/` | `ci.yml` (kiểm tra, luật version của hợp đồng REST, stack), `images.yml` (sáu image, chuỗi cung ứng, phát hành hợp đồng, promote), `verify.yml` (kiểm chứng trên runner, hai kịch bản `compose-obs` và `gitops`, chạy tay và hằng tuần). DORA là bài lab `dora/` của `svp-labs` ([ADR-0037](docs/adr/0037-mainpath-standard-tools.md)). |
 | `docs/architecture.md` | Thiết kế hiện tại: yêu cầu, ước lượng quy mô, C4, luồng chính, contract. |
 | `docs/adr/` | Quyết định kiến trúc, mỗi quyết định một file (mục lục ở `docs/adr/README.md`). |
 | `docs/runbooks/` | Một runbook cho mỗi cảnh báo mức page và các sự cố đã gặp. Mở khi có cảnh báo. |

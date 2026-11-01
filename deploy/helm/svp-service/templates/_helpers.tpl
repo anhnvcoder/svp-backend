@@ -87,7 +87,7 @@ An entry for every address is refused: a service reaches its managed peer's own 
 
 {{- /*
 Name of the release's HTTPRoute: httpRoute.name, or the release's name. The gateway keeps the name api it always had,
-which the drills, measure-canary and Argo CD's ignoreDifferences read.
+which the drills and Argo CD's ignoreDifferences read.
 */}}
 {{- define "svp-service.routeName" -}}
 {{ .Values.httpRoute.name | default .Release.Name }}

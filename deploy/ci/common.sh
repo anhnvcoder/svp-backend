@@ -412,6 +412,9 @@ check_provenance_statement() {
 trivy_db_repository=mirror.gcr.io/aquasec/trivy-db:2,ghcr.io/aquasecurity/trivy-db:2
 # The accepted risks of the tree being built: its own file, so each repository keeps the list of its own packages.
 trivyignore=$code_root/.trivyignore.yaml
+# The same exceptions for grype, read by grype itself (grype_sbom); scan-gate.sh checks each rule is an entry of the
+# file above.
+grypeignore=$code_root/.grype.yaml
 
 # tool_image NAME: prints the pinned image reference NAME (TRIVY_IMAGE, SYFT_IMAGE, COSIGN_IMAGE): from the
 # environment when set, otherwise from the line `NAME := ...` of the Makefile, so the machine and CI run the very same
@@ -478,77 +481,38 @@ grype_cache() {
   echo "$dir"
 }
 
-# grype_sbom DIR: runs the pinned grype on DIR/sbom.spdx.json (the SPDX document syft wrote, never the image again) and
-# writes DIR/grype.json and DIR/grype.sarif.raw (every match: severity and exceptions are applied by grype_sarif and the
-# gate). Runs as the calling user, with the network only to fetch the DB. The DB must be fetched or the update check
-# succeed (GRYPE_DB_REQUIRE_UPDATE_CHECK), and grype's own check that the DB was built at most five days ago stays on:
-# never a scan against a DB of unknown age. No grype configuration is read: the working directory and HOME are an empty
-# tmpfs and nothing is mounted there, so no .grype.yaml (and no ignore rule of grype's) can reach the scan; the only
-# exceptions are those of .trivyignore.yaml, applied by scan-gate.sh --grype.
+# grype_sbom DIR [ARGS...]: runs the pinned grype on DIR/sbom.spdx.json (the SPDX document syft wrote, never the image
+# again) with ARGS (scan-gate.sh --grype passes --fail-on critical) and writes DIR/grype.json and DIR/grype.sarif.raw;
+# exits as grype does (2 for a match at or above --fail-on). Runs as the calling user, with the network only to fetch
+# the DB. The DB must be fetched or the update check succeed (GRYPE_DB_REQUIRE_UPDATE_CHECK), and grype's own check
+# that the DB was built at most five days ago stays on: never a scan against a DB of unknown age. The only
+# configuration grype reads is .grype.yaml of the tree being built, passed with -c: the working directory and HOME are
+# an empty tmpfs, so no other file of grype's can reach the scan. scan-gate.sh holds that file to its rules.
 grype_sbom() {
-  local dir=$1 image
+  local dir=$1 image mounts=() config=()
+  shift
   image=$(tool_image GRYPE_IMAGE) || return 1
   [ -s "$dir/sbom.spdx.json" ] || fail "no SBOM at $dir/sbom.spdx.json"
   rm -f "$dir/grype.json" "$dir/grype.sarif.raw"
+  if [ -f "$grypeignore" ]; then
+    mounts=(-v "$grypeignore:/ignore/grype.yaml:ro")
+    config=(-c /ignore/grype.yaml)
+  fi
   docker_ run --rm --user "$(id -u):$(id -g)" --tmpfs /tmp:mode=1777 -e HOME=/tmp --workdir /tmp \
     -e GRYPE_CHECK_FOR_APP_UPDATE=false -e GRYPE_DB_CACHE_DIR=/cache -e GRYPE_DB_REQUIRE_UPDATE_CHECK=true \
-    -v "$(grype_cache):/cache" -v "$dir:/out" "$image" \
-    sbom:/out/sbom.spdx.json -o json=/out/grype.json -o sarif=/out/grype.sarif.raw -q
+    -v "$(grype_cache):/cache" -v "$dir:/out" ${mounts[@]+"${mounts[@]}"} "$image" \
+    sbom:/out/sbom.spdx.json ${config[@]+"${config[@]}"} "$@" -o json=/out/grype.json -o sarif=/out/grype.sarif.raw -q
 }
 
-# trivyignore_json: prints the entries of .trivyignore.yaml as a JSON array of {id, expired_at, purls} ([] without the
-# file), read in the shape scan-gate.sh --check-ignorefile enforces. grype gets no ignore file of its own: the gate
-# applies these entries to its matches (grype_ignore_jq), so one list of accepted risks serves both scanners.
-trivyignore_json() {
-  [ -f "$trivyignore" ] || {
-    echo '[]'
-    return 0
-  }
-  awk '
-    function close_item(   i) {
-      if (!item) return
-      if (!n) print id "\t" expired "\t"
-      for (i = 1; i <= n; i++) print id "\t" expired "\t" purls[i]
-    }
-    /^  - id:[ ]*[^ ]/ { close_item(); item = 1; n = 0; list = 0; expired = ""; id = $0; sub(/^  - id:[ ]*/, "", id); next }
-    /^    expired_at:/ { list = 0; expired = $0; sub(/^    expired_at:[ ]*/, "", expired); gsub(/"/, "", expired); next }
-    /^    purls:[ ]*$/ { list = 1; next }
-    /^    [^ ]/ { list = 0; next }
-    /^      - [^ ]/ { if (list) { p = $0; sub(/^      - /, "", p); purls[++n] = p }; next }
-    END { close_item() }' "$trivyignore" |
-    jq -R -s 'split("\n") | map(select(length > 0) | split("\t")) | group_by(.[0] + "\t" + .[1])
-      | map({id: .[0][0], expired_at: .[0][1], purls: map(.[2] | select(length > 0))})'
-}
-
-# grype_ignore_jq: jq definitions shared by the grype gate and the SARIF of build-image.sh.
-#   live($today): the entries of trivyignore_json still in force on $today (yyyy-mm-dd, UTC). An entry expires on its
-#     expired_at day, as trivy reads it.
-#   ignored($entries): true for a match one entry covers: the entry's id is the match's vulnerability.id or one of its
-#     relatedVulnerabilities (grype may report a GHSA where the entry names the CVE, or the other way round), and one of
-#     its purls is the match's artifact.purl, both compared without qualifiers (?...) or subpath (#...) and with
-#     %-escapes decoded (grype writes %2B where trivy writes +). An entry without purls covers nothing here.
-# shellcheck disable=SC2034 # read by the scripts that source this file
-grype_ignore_jq='
-  def unescape: gsub("%(?<h>[0-9A-Fa-f]{2})"; .h | ascii_downcase | explode
-    | map(if . >= 97 then . - 87 else . - 48 end) | [.[0] * 16 + .[1]] | implode);
-  def bare: sub("[?#].*$"; "") | unescape;
-  def live($today): map(select(.expired_at > $today));
-  def ignored($entries):
-    ((.artifact.purl // "") | bare) as $p
-    | ([.vulnerability.id] + [.relatedVulnerabilities[]?.id]) as $ids
-    | any($entries[]; (.id | IN($ids[])) and ((.purls | map(bare)) as $ps | $p | IN($ps[])));'
-
-# grype_sarif DIR CATEGORY: writes DIR/grype.sarif from DIR/grype.sarif.raw: only the HIGH and CRITICAL matches no live
-# entry of .trivyignore.yaml covers, as trivy's SARIF holds, under CATEGORY. grype names a rule <vulnerability>-<package
-# name> and its results carry no purl, so a result is kept when any match of that rule is kept: two versions of one
-# package, one of them excepted, both show (never fewer findings than the gate counts).
+# grype_sarif DIR CATEGORY: writes DIR/grype.sarif from DIR/grype.sarif.raw: only the HIGH and CRITICAL matches, as
+# trivy's SARIF holds (grype has already left out the matches .grype.yaml covers), under CATEGORY. grype names a rule
+# <vulnerability>-<package name> and its results carry no purl, so a result is kept when any match of that rule is High
+# or Critical.
 grype_sarif() {
   local dir=$1 category=$2
-  jq --slurpfile g "$dir/grype.json" --argjson entries "$(trivyignore_json)" --arg today "$(date -u +%F)" \
-    --arg c "$category" "$grype_ignore_jq"'
-    ($entries | live($today)) as $live
-    | ([$g[0].matches[] | select(.vulnerability.severity == "Critical" or .vulnerability.severity == "High")
-        | select(ignored($live) | not) | "\(.vulnerability.id)-\(.artifact.name)"] | unique) as $keep
+  jq --slurpfile g "$dir/grype.json" --arg c "$category" '
+    ([$g[0].matches[] | select(.vulnerability.severity == "Critical" or .vulnerability.severity == "High")
+      | "\(.vulnerability.id)-\(.artifact.name)"] | unique) as $keep
     | .runs[] |= (.automationDetails.id = $c
       | .results |= map(select(.ruleId | IN($keep[])))
       | ([.results[].ruleId] | unique) as $used
@@ -567,7 +531,7 @@ sbom_binaries() {
 # grype_check SBOM IMAGE ARCH (make grype): grype and its gate on one SBOM, from a machine. Exactly one of SBOM (the
 # absolute path of an SPDX JSON document, copied so grype never writes beside it) and IMAGE (a reference pinned by
 # digest, read anonymously from its registry by the pinned syft for linux/ARCH, amd64 when empty) is set. Exits as
-# scan-gate.sh --grype does.
+# scan-gate.sh --grype does, which runs grype.
 grype_check() {
   local sbom=$1 image=$2 arch=${3:-amd64} tmp label syft_image
   tmp=$(mktemp -d) || fail "create a temporary directory"
@@ -591,10 +555,9 @@ grype_check() {
   else
     fail "set either SBOM=<absolute path of an SPDX JSON document> or IMAGE=<ref>@sha256:<digest> [ARCH=amd64|arm64]"
   fi
-  grype_sbom "$tmp" || fail "scan the SBOM with grype"
   echo "$(jq '.packages | length' "$tmp/sbom.spdx.json") packages in the SBOM; binaries outside a package manager:" \
     "$(sbom_binaries "$tmp/sbom.spdx.json" | sed 's/^$/none/')"
-  "$ci_dir/scan-gate.sh" --grype "$label" "$tmp/grype.json"
+  "$ci_dir/scan-gate.sh" --grype "$label" "$tmp"
 }
 
 # oci_labels [SOURCE]: prints the OCI labels of the commit at HEAD of code_root as key=value lines: the repository of

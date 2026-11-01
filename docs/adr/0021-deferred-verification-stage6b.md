@@ -15,7 +15,7 @@
   `gitops-external-secrets`, `k8s-smoke` với `SVP_SMOKE_LEGACY_MEDIA=1` tới khi bản media-worker phát hành ghi key có version, ca `l`
   của `drill-k8s-supplychain`) chỉnh bởi [0026](0026-secrets-gitops.md), [0027](0027-slsa-build-provenance.md) và 0029; §3 (job
   `record-stg` có environment `promote`), §6 (Argo CD và kịch bản `gitops` đọc `svp-gitops`, bước chờ phát hành theo dõi `main` của
-  `svp-gitops`, bản phát hành tới không qua merge tay) chỉnh bởi 0025 và [0024](0024-multi-environment.md) §8
+  `svp-gitops`, bản phát hành tới không qua merge tay) chỉnh bởi 0025 và [0024](0024-multi-environment.md) §8. Một phần bị thay bởi [0039](0039-mainpath-drills-scan-gate-sourcemaps.md) (§2: sampler `verify-sample.sh`; §3: `verify.yml` còn `gitops` và `compose-obs` thu gọn, cả hai lịch tuần, bỏ job `k3d`, `web_ref`, clone `svp-frontend`; §6: bỏ bước source map, e2e web, KEDA, RAM, chờ phát hành, `measure-gitops`; §7, §8: kịch bản `chaos`, `velero`, `k6-cloud-mini`, `web-canary` thành bài lab)
 - Chỉnh 2026-10-28 (phần 3): điều kiện mở script cloud trên k3d đi qua hàm `ci_hosted_runner` của adapter nền tảng (mục 7, Tên
   chốt); job `gitops` tách bước chờ phát hành khỏi bước kịch bản (mục 2, 6); kịch bản `chaos` chạy mỗi thí nghiệm một lượt k6 riêng
   có cửa sổ ổn định riêng, thay một lượt k6 chạy suốt (người học chốt, mục 7)

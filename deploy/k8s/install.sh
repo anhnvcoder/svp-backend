@@ -56,7 +56,7 @@ service_chart=deploy/helm/svp-service
 web_source
 if [ -n "$web_release" ]; then
   build_dev_images "${built_services[@]}"
-  ok "web runs release $web_release (WEB_FROM=${WEB_FROM:-stg}), with the build id CI gave it: make k8s-web-sourcemaps needs SOURCEMAPS_DIR with its maps"
+  ok "web runs release $web_release (WEB_FROM=${WEB_FROM:-stg}), with the build id CI gave it: make k8s-web-sourcemaps does not apply to it"
 else
   build_dev_images
 fi
@@ -225,16 +225,16 @@ wait_rollout() {
 }
 
 # pg_backup_sets: sets the array pg_sets to the flag that keeps the archive generation of the running Cluster svp-pg,
-# for the upgrade of chart svp-data. Each restore of make
-# drill-k8s-backup creates svp-pg again archiving into a new generation (value postgres.backup.serverName), and the
-# chart's default is the first generation's: an upgrade without the flag would point the restored Cluster's WAL
+# for the upgrade of chart svp-data. Each restore of svp-pg from its backups creates svp-pg again archiving into a new
+# generation (value postgres.backup.serverName), and the chart's default is the first generation's: an upgrade without
+# the flag would point the restored Cluster's WAL
 # archiving back at the generation it was restored from, whose archive is not empty, and archiving would fail. As on
 # the rest of this path the value is passed with --set, never written to a file. A new cluster, or a Cluster made
 # before the backups (no serverName yet), gets the chart's default. A Cluster that is gone while Backups of it remain was
-# deleted after it had data (a restore drill stopped half way): the chart would create an empty database in its place,
+# deleted after it had data (a restore stopped half way): the chart would create an empty database in its place,
 # so the script stops before chart svp-data is upgraded. So it does for a Cluster still being restored (bootstrap.recovery
 # set and not Ready yet): the upgrade would remove bootstrap.recovery and externalClusters, which the chart renders only
-# on the drill's own command line, while the restore still reads them.
+# on the restore's own command line, while the restore still reads them.
 pg_backup_sets() {
   local found server backups restoring origin
   pg_sets=()
@@ -263,7 +263,7 @@ pg_backup_sets() {
   backups=$(kc -n svp-data get backups.postgresql.cnpg.io -o jsonpath='{range .items[?(@.spec.cluster.name=="svp-pg")]}{.metadata.name}{" "}{end}' 2>/dev/null) ||
     backups=
   [ -z "$backups" ] ||
-    fail "Cluster svp-data/svp-pg is missing while Backups of it remain (${backups% }): it was deleted after it had data, a restore drill stopped half way? Installing svp-data would create an empty database in its place. Finish the restore as docs/runbooks/postgres-restore.md says (make drill-k8s-backup printed its commands), or start over with no data: make k8s-down && make k8s-up"
+    fail "Cluster svp-data/svp-pg is missing while Backups of it remain (${backups% }): it was deleted after it had data, a restore stopped half way? Installing svp-data would create an empty database in its place. Finish the restore as docs/runbooks/postgres-restore.md says, or start over with no data: make k8s-down && make k8s-up"
 }
 
 # rollouts_plugin_check: Argo Rollouts' Gateway API traffic router plugin is a native binary, which the controller
@@ -526,25 +526,6 @@ while IFS=$sep read -r name namespace wave path repo chart version values canary
     args+=(${pg_sets[@]+"${pg_sets[@]}"})
   fi
   if [ "$name" = argo-rollouts ]; then rollouts_plugin_check; fi
-  # A CI runner's job only (scenario velero of deploy/ci/verify-run.sh sets SVP_K8S_RUNNER_CSI=1): Redpanda's volume on
-  # the StorageClass of the CSI hostpath driver, whose snapshots Velero takes. The driver goes in right before this
-  # release, whose --wait needs the PVC bound; deploy/k8s/cloud/runner/csi/install.sh refuses any machine but such a
-  # runner, and fails before Redpanda is installed when the driver or the StorageClass is not ready. Unset, nothing here
-  # runs and the values of the dev and GitOps paths are untouched.
-  if [ "$name" = redpanda ] && [ -n "${SVP_K8S_RUNNER_CSI:-}" ]; then
-    [ "$SVP_K8S_RUNNER_CSI" = 1 ] || fail "SVP_K8S_RUNNER_CSI is 1 or unset"
-    # A PVC's StorageClass cannot change, and a StatefulSet's volumeClaimTemplates neither: a Redpanda installed
-    # without the variable keeps its volume, so the cluster is made again (always the case on a runner, whose cluster
-    # is new).
-    rp_class=$(kc -n "$namespace" get pvc datadir-redpanda-0 --ignore-not-found -o jsonpath='{.spec.storageClassName}') ||
-      fail "read PVC $namespace/datadir-redpanda-0"
-    if [ -n "$rp_class" ] && [ "$rp_class" != csi-hostpath ]; then
-      fail "Redpanda's volume is on StorageClass $rp_class, which cannot change to csi-hostpath in place: start over with make k8s-down && SVP_K8S_RUNNER_CSI=1 make k8s-up"
-    fi
-    "$repo_root/deploy/k8s/cloud/runner/csi/install.sh" ||
-      fail "the CSI hostpath driver is not ready (deploy/k8s/cloud/runner/csi/install.sh): Redpanda is not installed"
-    args+=(--set storage.persistentVolume.storageClass=csi-hostpath)
-  fi
   watcher=
   # The Collector mounts ConfigMap otel-collector-config of chart svp-observability, which its own chart cannot
   # checksum, and reads it only when it starts: the checksum of the file that ConfigMap holds goes into the pod

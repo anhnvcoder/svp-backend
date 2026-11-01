@@ -1,7 +1,7 @@
 # 0031. Sửa ba phát hiện của Chaos Mesh và k6 trên runner: feed-service luôn hai replica, engagement-service lỗi nhanh có kiểm soát khi Postgres chậm hay mất, Tempo tự giới hạn bộ nhớ, không sampling
 
 - Trạng thái: Chấp nhận (người học duyệt 2026-10-29); đã hiện thực, đã kiểm trên runner ngày 2026-10-29 (mục Kết quả): ba quyết định
-  đạt; còn mở: tải lệch giữa hai pod feed-service và biên bộ nhớ của Tempo ở mức 4 pod (mục Kết quả)
+  đạt; còn mở: tải lệch giữa hai pod feed-service và biên bộ nhớ của Tempo ở mức 4 pod (mục Kết quả). Một phần bị thay bởi [0039](0039-mainpath-drills-scan-gate-sourcemaps.md) (§1: kiểm chứng bằng `drill-k8s-pdb` và §3: `verify-tempo.sh` thành bài lab; PDB và giới hạn của Tempo giữ)
 - Ngày: 2026-10-29
 
 ## Bối cảnh

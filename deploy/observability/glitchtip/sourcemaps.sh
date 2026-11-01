@@ -6,26 +6,18 @@
 #   k3d      `make k8s-web-sourcemaps`: the web of cluster svp (https://svp.localhost:8443, CA .k8s/ca.crt) and its
 #            GlitchTip through a port-forward on 127.0.0.1:8000 for the time of the upload, token of Secret
 #            svp-obs/glitchtip-sourcemaps (written by make k8s-glitchtip-init).
-# MAPS_DIR, when given, is a folder that already holds the chunks and maps of the build the web runs, laid out as stage
-# `sourcemaps` writes them (_next/static/...): on the GitOps cluster the image comes from CI, which exports them beside
-# it as the artifact web-sourcemaps-<arch> (`make k8s-web-sourcemaps SOURCEMAPS_DIR=...`). Nothing is built then.
 # Steps:
-#   1. With MAPS_DIR: it is an absolute path to a real folder holding only regular files under _next/static/, each a
-#      .js chunk or a .map, no hidden entry or link, at least one *.js.map and one chunk with a debug id; otherwise
-#      stop before anything else is asked or sent. The folder may come from another run (an artifact): it is only read,
-#      never run.
-#   2. GlitchTip answers, the token is there, the web answers: otherwise stop, naming the command to run first,
+#   1. GlitchTip answers, the token is there, the web answers: otherwise stop, naming the command to run first,
 #      before anything is built or sent.
-#   3. Without MAPS_DIR: build stage `sourcemaps` of the web's Dockerfile from its source (web_dir and web_dockerfile
-#      of deploy/k8s/lib.sh, as make up and make k8s-up build it) with the build argument the running image got
+#   2. Build stage `sourcemaps` of the web's Dockerfile from its source (web_dir and web_dockerfile of
+#      deploy/k8s/lib.sh, as make up and make k8s-up build it) with the build argument the running image got
 #      (SVP_BUILD_ID: empty in compose, web_build_id of deploy/k8s/lib.sh on k3d), into a private temporary directory.
 #      The build cache gives the stage of that very build, so the maps of the bundle served. A web that runs a
 #      release (WEB_FROM=stg|image) was built by CI with a build id of its own, from no tree here: refused, naming
-#      the release; on k3d its maps can still be given as MAPS_DIR.
-#   4. Every chunk the web serves on /login must carry a debug id found in those chunks: otherwise the web runs
-#      another build (the image was built from another tree, or the cache was pruned since; or MAPS_DIR holds another
-#      build's), and nothing is sent.
-#   5. `sentry sourcemap upload` (the Sentry CLI of the web's package.json, through pnpm) sends chunks and maps as an
+#      the release.
+#   3. Every chunk the web serves on /login must carry a debug id found in those chunks: otherwise the web runs
+#      another build (the image was built from another tree, or the cache was pruned since), and nothing is sent.
+#   4. `sentry sourcemap upload` (the Sentry CLI of the web's package.json, through pnpm) sends chunks and maps as an
 #      artifact bundle of organization and project svp that GlitchTip matches to an event by debug id. Without
 #      --no-rewrite on purpose: the CLI then reads the debug id Turbopack already wrote (`//# debugId=`, the file is left
 #      as it is) and puts it in the bundle's manifest as each file's `debug-id` header. With --no-rewrite the CLI sends
@@ -33,11 +25,11 @@
 #      release ("skipped ... no debug-id header and no release" in its log), while the upload itself still succeeds.
 #      The token is exported to that process alone, never printed or put on a command line; the CLI's telemetry,
 #      update check and configuration directory are off or temporary.
-#   6. GlitchTip assembles the bundle after the upload answers and has no API to read it back, so the script can only
+#   5. GlitchTip assembles the bundle after the upload answers and has no API to read it back, so the script can only
 #      say it was sent; the check that the stack maps is e2e/glitchtip.e2e.ts (SVP_E2E_GLITCHTIP=1).
 # The temporary directory and the port-forward go away when the script ends, however it ends.
 #
-# Usage: sourcemaps.sh compose|k3d [MAPS_DIR] (run from the Makefile of svp-frontend, make sourcemaps or make
+# Usage: sourcemaps.sh compose|k3d (run from the Makefile of svp-frontend, make sourcemaps or make
 # k8s-sourcemaps, which puts the Node and pnpm of its clone first on PATH).
 set -euo pipefail
 
@@ -47,7 +39,6 @@ set -euo pipefail
 . "$repo_root/deploy/observability/glitchtip/dotenv.sh"
 
 stack=${1:-}
-maps_dir=${2:-}
 # The web client's source: the build below and the Sentry CLI of its package.json.
 web_src=$(web_dir) || exit 1
 dockerfile=$(web_dockerfile "$web_src")
@@ -68,18 +59,7 @@ glitchtip_up() { curl -fs -o /dev/null --max-time 5 "$glitchtip/_health/"; }
 # debug_ids DIR: the debug ids of the chunks in DIR, sorted; Turbopack ends each chunk with a //# debugId=<uuid> line.
 debug_ids() { find "$1" -name '*.js' -exec sed -n 's|^//# debugId=||p' {} + | LC_ALL=C sort -u; }
 
-case $stack in compose | k3d) ;; *) fail "usage: sourcemaps.sh compose|k3d [MAPS_DIR]" ;; esac
-if [ -n "$maps_dir" ]; then
-  [[ $maps_dir == /* ]] || fail "MAPS_DIR must be an absolute path (got '$maps_dir')"
-  [ -d "$maps_dir" ] && [ ! -L "$maps_dir" ] || fail "MAPS_DIR $maps_dir is not a folder"
-  bad=$(cd "$maps_dir" && find . -mindepth 1 \( -name '.*' -o \( ! -type f ! -type d \) \) -print)
-  [ -z "$bad" ] || fail "MAPS_DIR $maps_dir holds hidden entries or entries that are neither files nor folders: $bad"
-  bad=$(cd "$maps_dir" && find . -type f | grep -vE '^\./_next/static/.+\.(js|map)$' || true)
-  [ -z "$bad" ] || fail "MAPS_DIR $maps_dir holds files other than chunks and maps under _next/static/: $bad"
-  [ -n "$(find "$maps_dir" -type f -name '*.js.map' | head -n 1)" ] || fail "MAPS_DIR $maps_dir holds no source map (*.js.map)"
-  built=$(debug_ids "$maps_dir")
-  [ -n "$built" ] || fail "MAPS_DIR $maps_dir holds no chunk with a debug id"
-fi
+[ $# -eq 1 ] && case $stack in compose | k3d) true ;; *) false ;; esac || fail "usage: sourcemaps.sh compose|k3d"
 
 case $stack in
 compose)
@@ -88,7 +68,7 @@ compose)
   build_id=
   running=$(docker_ ps --filter label=com.docker.compose.project=svp --filter label=com.docker.compose.service=web \
     --format '{{.Image}}') || fail "read the image of the web container"
-  [ -n "$maps_dir" ] || case $running in "" | svp/web:dev) ;; *)
+  case $running in "" | svp/web:dev) ;; *)
     fail "the web of the stack runs release $running, built by CI with a build id of its own: its maps are not built here (make web-sourcemaps applies to a web that make up WEB_FROM=clone built)"
     ;;
   esac
@@ -113,16 +93,14 @@ k3d)
   kubectl --context k3d-svp -n svp-obs port-forward --address 127.0.0.1 service/glitchtip 8000:8000 >/dev/null 2>&1 &
   forward_pid=$!
   wait_until 30 "GlitchTip through the port-forward on 127.0.0.1:8000" glitchtip_up
-  # The build id names the build made below; a folder given holds a build already.
-  if [ -z "$maps_dir" ]; then
-    running=$(kc -n svp get "$(workload_kind svp web)" web \
-      -o jsonpath='{.spec.template.spec.containers[?(@.name=="web")].image}') || fail "read the image of svp/web"
-    case $running in "" | k3d-svp-registry:5111/*) ;; *)
-      fail "the web of cluster svp runs release $running, built by CI with a build id of its own: give its maps as SOURCEMAPS_DIR (CI exports them beside the image), or build the web with make k8s-up WEB_FROM=clone"
-      ;;
-    esac
-    build_id=$(web_build_id) || fail "compute the build id of the web"
-  fi
+  # The build id names the build made below.
+  running=$(kc -n svp get "$(workload_kind svp web)" web \
+    -o jsonpath='{.spec.template.spec.containers[?(@.name=="web")].image}') || fail "read the image of svp/web"
+  case $running in "" | k3d-svp-registry:5111/*) ;; *)
+    fail "the web of cluster svp runs release $running, built by CI with a build id of its own: its maps are not built here (make k8s-web-sourcemaps applies to a web that make k8s-up WEB_FROM=clone built)"
+    ;;
+  esac
+  build_id=$(web_build_id) || fail "compute the build id of the web"
   ;;
 esac
 
@@ -132,19 +110,14 @@ served=$(printf '%s\n' "$login" | grep -oE '/_next/static/chunks/[A-Za-z0-9._~-]
 [ -n "$served" ] || fail "$web/login names no chunk under /_next/static/chunks/"
 
 tmp=$(mktemp -d)
-if [ -n "$maps_dir" ]; then
-  maps=$maps_dir
-  build="the build in $maps_dir"
-else
-  maps=$tmp/maps
-  build="build ${build_id:-<empty>}"
-  echo "build stage sourcemaps of $dockerfile (SVP_BUILD_ID=${build_id:-<empty>})"
-  docker_ build --file "$dockerfile" --target sourcemaps \
-    --build-arg "SVP_BUILD_ID=$build_id" --output "type=local,dest=$maps" "$web_src" ||
-    fail "build stage sourcemaps of the web image"
-  built=$(debug_ids "$maps")
-  [ -n "$built" ] || fail "stage sourcemaps holds no chunk with a debug id"
-fi
+maps=$tmp/maps
+build="build ${build_id:-<empty>}"
+echo "build stage sourcemaps of $dockerfile (SVP_BUILD_ID=${build_id:-<empty>})"
+docker_ build --file "$dockerfile" --target sourcemaps \
+  --build-arg "SVP_BUILD_ID=$build_id" --output "type=local,dest=$maps" "$web_src" ||
+  fail "build stage sourcemaps of the web image"
+built=$(debug_ids "$maps")
+[ -n "$built" ] || fail "stage sourcemaps holds no chunk with a debug id"
 ok "$(find "$maps" -name '*.js.map' | wc -l | tr -d ' ') source maps of $build"
 
 checked=0
@@ -152,7 +125,7 @@ for path in $served; do
   id=$("${curl_web[@]}" "$web$path" | sed -n 's|^//# debugId=||p') || fail "fetch $web$path"
   [ -n "$id" ] || continue
   printf '%s\n' "$built" | grep -qxF -- "$id" ||
-    fail "$web$path (debug id $id) is not a chunk of $build: the web runs another one; rebuild it (make up / make k8s-up), or give the maps of the build it runs, then run this again"
+    fail "$web$path (debug id $id) is not a chunk of $build: the web runs another one; rebuild it (make up / make k8s-up), then run this again"
   checked=$((checked + 1))
 done
 [ "$checked" -gt 0 ] || fail "no chunk of $web/login carries a debug id"

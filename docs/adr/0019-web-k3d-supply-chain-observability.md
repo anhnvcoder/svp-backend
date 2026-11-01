@@ -11,7 +11,7 @@
   canary web dưới traffic và client trình duyệt (D6, D14, D18) đạt; source map của image CI kiểm sau merge (D5); §9 (source map
   của image CI kéo từ giai đoạn 7 về giai đoạn 6b, artifact `web-sourcemaps-<arch>` của `images.yml`) và §3 (ngưỡng p99 canary
   của web 250 ms theo số k6) chỉnh bởi 0021; §6 (CORS toàn cục của MinIO ở k3d) bị thay một phần bởi
-  [0022](0022-local-object-store-minio-replacement.md) (CORS theo bucket trên RustFS, cùng origin `https://svp.localhost:8443`); từ 2026-10-30 §1 (image `web` build, ký, promote ở CI của `svp-frontend`, đường `ghcr.io/anhnvcoder/svp-frontend/web`, `SVP_BUILD_ID` theo commit của `svp-frontend`; Kyverno chọn attestor theo nguồn phát hành) và §9 (source map của image CI là image `web-sourcemaps` trên GHCR thay artifact của lượt chạy) chỉnh bởi [0033](0033-svp-web-repo.md)
+  [0022](0022-local-object-store-minio-replacement.md) (CORS theo bucket trên RustFS, cùng origin `https://svp.localhost:8443`); từ 2026-10-30 §1 (image `web` build, ký, promote ở CI của `svp-frontend`, đường `ghcr.io/anhnvcoder/svp-frontend/web`, `SVP_BUILD_ID` theo commit của `svp-frontend`; Kyverno chọn attestor theo nguồn phát hành) và §9 (source map của image CI là image `web-sourcemaps` trên GHCR thay artifact của lượt chạy) chỉnh bởi [0033](0033-svp-web-repo.md). Một phần bị thay bởi [0039](0039-mainpath-drills-scan-gate-sourcemaps.md) (§9: source map của image CI và bước tải lên GlitchTip của cluster GitOps bỏ; tải lúc build chờ tracker chạy lâu dài)
 - Ngày: 2026-10-22
 
 ## Bối cảnh

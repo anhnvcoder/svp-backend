@@ -1,6 +1,6 @@
 # Template of the k6 Job of the cloud cluster, filled in by render.sh:
-# @K6_IMAGE@ (K6_IMAGE of the Makefile), @DOMAIN@, @WEB_ORIGIN@, @ENVOY_IP@, @FORWARDED_FOR@, @SCRIPT_ITEMS@, @PODS@,
-# @DEADLINE@, @CPU_REQUEST@, @CPU_LIMIT@, @RAMP@ and @HOLD@. Not a manifest on its own (hence .yaml.in, which make cloud-check does
+# @K6_IMAGE@ (K6_IMAGE of the Makefile), @DOMAIN@, @ENVOY_IP@, @FORWARDED_FOR@, @SCRIPT_ITEMS@, @PODS@,
+# @DEADLINE@, @RAMP@ and @HOLD@. Not a manifest on its own (hence .yaml.in, which make cloud-check does
 # not read; it checks the output of render.sh).
 #
 # Namespace svp-load is outside svp, so Kyverno's image policy does not apply, and runs under PSA restricted. 20 pods of
@@ -9,7 +9,7 @@
 # lib/config.js, which sizes VUs and pools per pod; setup() refuses a run with another number of segments. Fewer pods
 # (render.sh --pods) keep the lines marked @PODS@: SVP_K6_PODS tells the scripts the count, and the rates shrink with
 # it, each pod keeping the load of one pod of the design. The lines marked @RAMP@ and @HOLD@ stay only with
-# render.sh --ramp and --hold, @CPU_LIMIT@ only with --cpu-limit. The pods
+# render.sh --ramp and --hold. The pods
 # call Envoy's Service inside the cluster: hostAliases point the public names at its ClusterIP, so TLS checks the real
 # certificate while the load never crosses the public load balancer or the internet.
 #
@@ -84,7 +84,7 @@ spec:
             - name: SVP_WEB_URL
               value: "https://@DOMAIN@"
             - name: SVP_WEB_ORIGIN
-              value: "@WEB_ORIGIN@"
+              value: "https://@DOMAIN@"
             - name: SVP_K6_PODS # @PODS@
               value: "@PODS@" # @PODS@
             - name: SVP_K6_RAMP # @RAMP@
@@ -106,10 +106,9 @@ spec:
               value: /etc/svp-k6-ca/ca.crt # @CA@
           resources:
             requests:
-              cpu: "@CPU_REQUEST@"
+              cpu: "1"
               memory: 256Mi
             limits:
-              cpu: "@CPU_LIMIT@" # @CPU_LIMIT@
               memory: 1Gi
           securityContext:
             allowPrivilegeEscalation: false
