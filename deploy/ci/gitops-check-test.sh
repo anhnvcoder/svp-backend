@@ -453,6 +453,32 @@ policy_case "the lab host on a route" 1 no-lab-hosts \
   "  base/route.yaml: HTTPRoute svp/api: names the lab host svp.localhost: api.svp.localhost" base/route.yaml
 sed 's/api\.svp\.localhost/api.example.com/' "$pd/base/route.yaml" >"$pd/base/route-ok.yaml"
 policy_case "a real host on a route" 0 no-lab-hosts "ok    policy no-lab-hosts: 1 resources pass" base/route-ok.yaml
+# Files of comments and a CustomResourceDefinition alone leave nothing to apply a policy to: no CLI run, one ok line naming
+# the folder.
+cat >"$pd/base/crd-only.yaml" <<'EOF'
+---
+# Source: chart/templates/crds.yaml
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: things.example.com
+spec:
+  group: example.com
+  names: {kind: Thing, plural: things}
+  scope: Namespaced
+  versions:
+    - name: v1
+      served: true
+      storage: true
+EOF
+policy_case "files of CRDs and comments alone have no resource to check" 0 images-pinned \
+  "ok    policy images-pinned: 0 resources pass" base/crd-only.yaml
+# Two renders of one kind and name without a namespace make the Kyverno CLI panic: the case is named instead.
+for n in one two; do
+  printf 'apiVersion: v1\nkind: Namespace\nmetadata:\n  name: dup\n' >"$pd/base/ns-$n.yaml"
+done
+policy_case "one resource rendered twice without a namespace is named, not a panic" 1 no-lab-hosts \
+  "base/ns-one.yaml base/ns-two.yaml: Namespace dup is rendered 2 times without a namespace" base/ns-one.yaml base/ns-two.yaml
 # A policy that does not compile applies to nothing: the check fails instead of passing. On a copy of deploy/ci/ and
 # deploy/k8s/lib.sh, the policy's last expression broken.
 bad=$work/bad-policy

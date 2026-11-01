@@ -161,7 +161,9 @@ pinned_re='^[^@]+@sha256:[0-9a-f]{64}$'
 # kyverno_apply ROOT POLICY FILE...: policy POLICY on the resources of the rendered FILEs, which must not hold one
 # resource twice (the CLI's fake cluster stops at a second copy). Prints one line per resource that does not pass,
 # "  <file, relative to ROOT>: <kind> <namespace>/<name>: <message>", and returns 1 then, or when the CLI gives no
-# report, or one without a result for every resource (a policy that does not compile applies to nothing). Sets
+# report, or one without a result for every resource (a policy that does not compile applies to nothing), or when
+# two resources of one kind and name are rendered without a namespace (named before the CLI is run). FILEs with no
+# resource left once comments and CustomResourceDefinitions are dropped: the CLI is not run, one "ok" line. Sets
 # kyverno_checked to the number of resources.
 kyverno_apply() {
   local root=$1 policy=$2 dir n=0 f image args=() want got
@@ -191,6 +193,18 @@ kyverno_apply() {
     args+=(--resource "/r/$n.yaml")
   done
   kyverno_checked=$(wc -l <"$dir/index" | tr -d ' ')
+  if [ "$kyverno_checked" -eq 0 ]; then
+    echo "  ok    no resources to apply policy $policy to in $(dirname "${1#"$root"/}"): comments and CustomResourceDefinitions alone"
+    return 0
+  fi
+  # The CLI panics on a second copy of a resource rendered without a namespace (it reads both as one in default).
+  awk -F '\t' '$3 == "" { k = $2 "\t" $4; n[k]++; if (index(" " f[k] " ", " " $1 " ") == 0) f[k] = f[k] (f[k] == "" ? "" : " ") $1 }
+    END { for (k in n) if (n[k] > 1) { split(k, p, "\t"); print "  " f[k] ": " p[1] " " p[2] " is rendered " n[k] " times without a namespace: the Kyverno CLI cannot apply a policy to two copies of one resource" } }' \
+    "$dir/index" | sort >"$dir/duplicates"
+  if [ -s "$dir/duplicates" ]; then
+    cat "$dir/duplicates"
+    return 1
+  fi
   docker_ run --rm --user "$(id -u):$(id -g)" --network none -v "$policies:/p:ro" -v "$dir:/r:ro" "$image" apply \
     "/p/$policy.yaml" --remove-color --policy-report --output-format json "${args[@]}" >"$dir/report" 2>"$dir/err" || true
   if ! got=$(jq -e '.results | length' "$dir/report" 2>/dev/null); then

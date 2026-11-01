@@ -715,7 +715,7 @@ liệt kê target):
     `deploy/ci/platform-test.sh`, `deploy/ci/promote-test.sh` (guard của hai job promote, danh sách bản phát hành của rescan),
     `deploy/ci/provenance-predicate-test.sh`,
     `deploy/ci/verify-collect-test.sh`, `deploy/ci/sourcemaps-image-test.sh`, `make slo-check`, `make otelcol-validate`, `make env`
-    rồi `make compose-config`,
+    rồi `make compose-config`, `deploy/observability/glitchtip/dotenv-test.sh`,
     `make helm-check`, `deploy/ci/sources-test.sh`, `deploy/ci/gitops-check-test.sh "$SVP_GITOPS_DIR"`, `make k6-check`,
     `make cloud-check`),
     `gitleaks` (toàn lịch sử, `--redact`), `trivy-config` (chỉ báo), `sarif` (chỉ `main`), check tổng `ci-ok` (cần đủ 7 job,
@@ -956,7 +956,7 @@ liệt kê target):
     `deploy/ci/scan-gate.sh --check-ignorefile`,
     `deploy/ci/platform-test.sh`, `deploy/ci/provenance-predicate-test.sh`, `deploy/ci/sourcemaps-image-test.sh`, `make slo-check`,
     `deploy/ci/promote-test.sh`,
-    `make otelcol-validate`, `make compose-config`, `make helm-check`, `make kyverno-test`, `deploy/ci/sources-test.sh`,
+    `make otelcol-validate`, `make compose-config`, `deploy/observability/glitchtip/dotenv-test.sh`, `make helm-check`, `make kyverno-test`, `deploy/ci/sources-test.sh`,
     `deploy/ci/gitops-check-test.sh ../gitops`, `make k6-check`,
     `make cloud-check`; check của `svp-gitops` trên bản clone: `deploy/ci/gitops-check.sh ../gitops` (cần mạng tới repo chart, GHCR;
     ~5 phút); `gitleaks git --redact --no-banner`; `make trivy-config`; một chân image (build, quét, cổng, không push):

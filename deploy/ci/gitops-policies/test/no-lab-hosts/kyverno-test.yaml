@@ -52,6 +52,7 @@ results:
     result: pass
     resources:
       - pass-httproute
+      - pass-httproute-empty-hostnames
   - policy: no-lab-hosts
     isValidatingPolicy: true
     kind: Gateway
@@ -64,3 +65,9 @@ results:
     result: pass
     resources:
       - pass-deployment
+  - policy: no-lab-hosts
+    isValidatingPolicy: true
+    kind: Deployment
+    result: pass
+    resources:
+      - pass-deployment-empty-lists
