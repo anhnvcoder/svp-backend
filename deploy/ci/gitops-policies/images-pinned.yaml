@@ -1,0 +1,120 @@
+# Every image a rendered manifest names is pinned by exactly one digest, image:tag@sha256:<64 hex> or image@sha256:<64 hex>:
+# a tag can be pushed again to other content, a digest cannot. Kyverno checks only the release images of namespace svp at
+# admission, so the images of the platform namespaces are held to their digests on the render instead, by
+# deploy/ci/gitops-check.sh with the Kyverno CLI (kyverno apply, no cluster). The release images pass too: a render of
+# base/ alone gives them a placeholder tag and digest.
+#
+# Where an image is read:
+#   - each container, init container and ephemeral container of a pod template (Pod, CronJob, and every kind with
+#     spec.template.spec: Deployment, StatefulSet, DaemonSet, ReplicaSet, Job, Argo Rollouts' Rollout): image; the value
+#     of an env entry whose name says it holds an image (OPERATOR_IMAGE_NAME, RELATED_IMAGE_FOO); in env values, args and
+#     command, a flag whose name holds "image" (--acme-http01-solver-image=...) and anything shaped like
+#     registry/path:tag or registry/path@sha256:... with a dotted registry host (--prometheus-config-reloader=quay.io/...);
+#   - a key of spec ending in image, Image or imageName with a string value (spec.image of Prometheus and Alertmanager,
+#     spec.imageName of CloudNativePG's Cluster);
+#   - each value of a ConfigMap's data: the value of a key whose name says it holds an image (SIDECAR_IMAGE), and in the
+#     text (a configuration file an operator reads, as Envoy Gateway's envoy-gateway.yaml), lines image: ..., imageName:
+#     ..., <anything>Image: ..., FOO_IMAGE: ..., the flags and the registry/path:tag shapes above.
+# A name that says it holds an image: an env name or upper-case key with the word IMAGE or IMAGES, a flag with "image";
+# not a setting of an image (..._PULL_POLICY, ..._TAG, --image-pull-secrets), and only for a value shaped like an image
+# (with "/", ":" or "@", or a bare name such as alpine; not a number or a boolean: --imageVerifyCacheMaxSize=1048576).
+# What lies elsewhere is not read here; deploy/ci/gitops-check.sh scans the render's text for any image reference left
+# without a digest and names it as outside this policy.
+apiVersion: policies.kyverno.io/v1
+kind: ValidatingPolicy
+metadata:
+  name: images-pinned
+spec:
+  validationActions: [Deny]
+  matchConstraints:
+    resourceRules:
+      - apiGroups: ["*"]
+        apiVersions: ["*"]
+        operations: [CREATE, UPDATE]
+        resources: ["*"]
+  matchConditions:
+    # Their schemas describe image fields, they hold none.
+    - name: not-a-crd
+      expression: object.kind != 'CustomResourceDefinition'
+  variables:
+    - name: pinned
+      expression: "'^[^@]+@sha256:[0-9a-f]{64}$'"
+    - name: imageKey
+      expression: "'^([A-Z0-9_]+_)?IMAGES?(_[A-Z0-9_]+)?$'"
+    # Lower-cased, "_" as "-": a setting of an image, not the image.
+    - name: attribute
+      expression: "'images?-?(pull-?policy|pull-?secrets?|tag|digest|version|registry|repository|repo)$'"
+    - name: podSpec
+      expression: >-
+        object.kind == 'Pod' ? object.?spec.orValue({}) :
+        object.kind == 'CronJob' ? object.?spec.?jobTemplate.?spec.?template.?spec.orValue({}) :
+        object.?spec.?template.?spec.orValue({})
+    # A list field may render as null (env: with nothing under it): read as empty, as Kubernetes does.
+    - name: containers
+      expression: >-
+        ['containers', 'initContainers', 'ephemeralContainers']
+        .map(f, type(variables.podSpec[?f].orValue([])) == list ? variables.podSpec[?f].orValue([]) : []).flatten()
+    - name: envs
+      expression: >-
+        variables.containers.map(c, type(c.?env.orValue([])) == list ? c.?env.orValue([]) : []).flatten()
+        .filter(e, type(e.?value.orValue(0)) == string)
+    - name: args
+      expression: >-
+        variables.containers.map(c, ['args', 'command']
+          .map(f, type(c[?f].orValue([])) == list ? c[?f].orValue([]) : []).flatten()).flatten()
+        .filter(a, type(a) == string)
+    - name: data
+      expression: >-
+        object.kind == 'ConfigMap' && type(object.?data.orValue({})) == map ? object.?data.orValue({}) : {}
+    - name: spec
+      expression: "object.kind != 'ConfigMap' && type(object.?spec.orValue('')) == map ? object.spec : {}"
+    # The texts read for flags, image lines and registry shapes: env values, args and command, ConfigMap data.
+    - name: texts
+      expression: >-
+        variables.envs.map(e, string(e.value)) + variables.args
+        + variables.data.map(k, string(variables.data[k]))
+    # Image fields and spec keys: the whole value.
+    - name: fieldRefs
+      expression: >-
+        variables.containers.filter(c, type(c.?image.orValue(0)) == string).map(c, string(c.image))
+        + variables.spec.filter(k, k.matches('([Ii]mage|imageName)$') && type(variables.spec[k]) == string)
+          .map(k, string(variables.spec[k]))
+    # Values named as an image, [name, value]: env entries, ConfigMap keys, and KEY: value lines of a ConfigMap's text.
+    - name: namedValues
+      expression: >-
+        variables.envs.map(e, [string(e.name), string(e.value)])
+        + variables.data.map(k, [string(k), string(variables.data[k])])
+        + variables.data.map(k, string(variables.data[k]).findAll('(?m)^[ \\t]*(- )?["\']?[A-Z0-9_]+["\']?:[ \\t]+[^\\s#|>{\\[]\\S*')
+          .map(l, [l.substring(0, l.indexOf(':')).trim().replace('- ', '').replace('"', '').replace("'", ''),
+            l.substring(l.indexOf(':') + 1).trim()])).flatten()
+    - name: namedRefs
+      expression: >-
+        variables.namedValues.map(p, [string(p[0]), string(p[1]).replace('"', '').replace("'", '')])
+        .filter(p, p[0].matches(variables.imageKey) && !p[0].lowerAscii().replace('_', '-').matches(variables.attribute)
+          && (p[1].matches('[/:@]') || (p[1].matches('^[a-z][a-z0-9._-]*$') && !(p[1] in ['true', 'false']))))
+        .map(p, p[1])
+    # image: ... lines (imageName:, <anything>Image:) of a ConfigMap's text.
+    - name: lineRefs
+      expression: >-
+        variables.data.map(k, string(variables.data[k]).findAll('(?m)^[ \\t]*(- )?[A-Za-z]*([Ii]mage|imageName):[ \\t]+[^\\s#|>{\\[]\\S*')
+          .map(l, l.substring(l.indexOf(':') + 1).trim().replace('"', '').replace("'", ''))).flatten()
+    # --<name with image>=<value> flags, the value shaped like an image.
+    - name: flagRefs
+      expression: >-
+        variables.texts.map(s, s.findAll('--[A-Za-z0-9-]*image[A-Za-z0-9-]*=[^\\s"\',]+')).flatten()
+        .filter(f, !f.substring(0, f.indexOf('=')).lowerAscii().matches(variables.attribute))
+        .map(f, f.substring(f.indexOf('=') + 1))
+        .filter(v, v.matches('[/:@]') || (v.matches('^[a-z][a-z0-9._-]*$') && !(v in ['true', 'false'])))
+    # registry/path:tag or registry/path@sha256:..., the registry a dotted host; not a URL, whose host follows "/".
+    - name: registryRefs
+      expression: >-
+        variables.texts.map(s, s.findAll('(^|[\\s"\'=,])[a-z0-9-]+(\\.[a-z0-9-]+)+(:[0-9]+)?/[A-Za-z0-9._/-]+(:[A-Za-z0-9._-]+)?(@sha256:[0-9a-f]+)?')).flatten()
+        .map(r, r.matches('^[a-z0-9-]') ? r : r.substring(1))
+        .filter(r, r.matches('/[A-Za-z0-9._-]+(:[A-Za-z0-9._-]+|@sha256:)'))
+    - name: unpinned
+      expression: >-
+        (variables.fieldRefs + variables.namedRefs + variables.lineRefs + variables.flagRefs + variables.registryRefs)
+        .filter(r, !r.matches(variables.pinned))
+  validations:
+    - expression: size(variables.unpinned) == 0
+      messageExpression: "'images without exactly one @sha256:<64 hex>: ' + variables.unpinned.join(' ')"

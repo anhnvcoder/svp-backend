@@ -1,0 +1,352 @@
+# Resources of the test of policy images-pinned: one that fails per kind and field where the renders of svp-gitops
+# name an image (deploy/ci/gitops-check.sh lists them), each with one image left without its digest, then resources
+# that pass. Names: fail-<kind>-<field>, pass-<what>.
+# --- containers[].image of a Pod
+apiVersion: v1
+kind: Pod
+metadata:
+  name: fail-pod-containers-image
+  namespace: t
+spec:
+  containers:
+    - name: c
+      image: busybox:1.37
+---
+# containers[].image of a Deployment
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: fail-deployment-containers-image
+  namespace: t
+spec:
+  template:
+    spec:
+      containers:
+        - name: c
+          image: ghcr.io/kyverno/kyverno:v1.19.1
+---
+# initContainers[].image of a Deployment
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: fail-deployment-initcontainers-image
+  namespace: t
+spec:
+  template:
+    spec:
+      initContainers:
+        - name: init
+          image: ghcr.io/kyverno/kyvernopre:v1.19.1
+      containers:
+        - name: c
+          image: ghcr.io/kyverno/kyverno:v1.19.1@sha256:b31d8511ae5fd6010e2a01ea72ebae08eb82fa51d91af14a1d9fe989949b4edb
+---
+# containers[].image of a StatefulSet
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: fail-statefulset-containers-image
+  namespace: t
+spec:
+  template:
+    spec:
+      containers:
+        - name: c
+          image: docker.io/redpandadata/redpanda:v26.1.1
+---
+# initContainers[].image of a StatefulSet
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: fail-statefulset-initcontainers-image
+  namespace: t
+spec:
+  template:
+    spec:
+      initContainers:
+        - name: init
+          image: busybox:1.37
+      containers:
+        - name: c
+          image: busybox:1.37@sha256:1111111111111111111111111111111111111111111111111111111111111111
+---
+# containers[].image of a Job
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: fail-job-containers-image
+  namespace: t
+spec:
+  template:
+    spec:
+      containers:
+        - name: c
+          image: quay.io/minio/mc:latest
+---
+# containers[].image of a CronJob
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: fail-cronjob-containers-image
+  namespace: t
+spec:
+  schedule: "0 * * * *"
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          containers:
+            - name: c
+              image: alpine
+---
+# containers[].image of an Argo Rollouts Rollout
+apiVersion: argoproj.io/v1alpha1
+kind: Rollout
+metadata:
+  name: fail-rollout-containers-image
+  namespace: t
+spec:
+  template:
+    spec:
+      containers:
+        - name: c
+          image: ghcr.io/anhnvcoder/svp-frontend/web:abcdef123456
+---
+# containers[].ephemeralContainers[].image of a Pod
+apiVersion: v1
+kind: Pod
+metadata:
+  name: fail-pod-ephemeralcontainers-image
+  namespace: t
+spec:
+  containers:
+    - name: c
+      image: busybox@sha256:1111111111111111111111111111111111111111111111111111111111111111
+  ephemeralContainers:
+    - name: debug
+      image: busybox:1.37
+---
+# containers[].env[].value of a Deployment: an env name that says it holds an image (CloudNativePG's operator)
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: fail-deployment-env-image-name
+  namespace: t
+spec:
+  template:
+    spec:
+      containers:
+        - name: c
+          image: ghcr.io/cloudnative-pg/cloudnative-pg:1.30.1@sha256:923c267ec29636db3bee20f993d0ec4973fa22998e1adad37da79e4d32b5bc07
+          env:
+            - name: OPERATOR_IMAGE_NAME
+              value: ghcr.io/cloudnative-pg/cloudnative-pg:1.30.1
+---
+# containers[].env[].value of a Deployment: a bare name under an image env name
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: fail-deployment-env-bare-name
+  namespace: t
+spec:
+  template:
+    spec:
+      containers:
+        - name: c
+          image: busybox@sha256:1111111111111111111111111111111111111111111111111111111111111111
+          env:
+            - name: RELATED_IMAGE_HELPER
+              value: alpine
+---
+# containers[].args[] of a Deployment: a flag whose name holds "image" (cert-manager's ACME solver)
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: fail-deployment-args-image-flag
+  namespace: t
+spec:
+  template:
+    spec:
+      containers:
+        - name: c
+          image: quay.io/jetstack/cert-manager-controller:v1.21.2@sha256:1111111111111111111111111111111111111111111111111111111111111111
+          args:
+            - --v=2
+            - --acme-http01-solver-image=quay.io/jetstack/cert-manager-acmesolver:v1.21.2
+---
+# containers[].args[] of a Deployment: registry/path:tag after a flag of another name (the Prometheus operator)
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: fail-deployment-args-registry-ref
+  namespace: t
+spec:
+  template:
+    spec:
+      containers:
+        - name: c
+          image: quay.io/prometheus-operator/prometheus-operator:v0.94.1@sha256:1111111111111111111111111111111111111111111111111111111111111111
+          args:
+            - --prometheus-config-reloader=quay.io/prometheus-operator/prometheus-config-reloader:v0.94.1
+---
+# containers[].command[] of a Deployment
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: fail-deployment-command-registry-ref
+  namespace: t
+spec:
+  template:
+    spec:
+      containers:
+        - name: c
+          image: busybox@sha256:1111111111111111111111111111111111111111111111111111111111111111
+          command: [/manager, --thanos-default-base-image=quay.io/thanos/thanos:v0.42.4]
+---
+# spec.image of a Prometheus
+apiVersion: monitoring.coreos.com/v1
+kind: Prometheus
+metadata:
+  name: fail-prometheus-spec-image
+  namespace: t
+spec:
+  image: quay.io/prometheus/prometheus:v3.15.0-distroless
+---
+# spec.image of an Alertmanager
+apiVersion: monitoring.coreos.com/v1
+kind: Alertmanager
+metadata:
+  name: fail-alertmanager-spec-image
+  namespace: t
+spec:
+  image: quay.io/prometheus/alertmanager:v0.34.1
+---
+# spec.imageName of a CloudNativePG Cluster
+apiVersion: postgresql.cnpg.io/v1
+kind: Cluster
+metadata:
+  name: fail-cluster-spec-imagename
+  namespace: t
+spec:
+  instances: 1
+  imageName: ghcr.io/cloudnative-pg/postgresql:15.19-minimal-trixie
+---
+# data of a ConfigMap: a key that says it holds an image (the Barman Cloud plugin's sidecar)
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: fail-configmap-data-image-key
+  namespace: t
+data:
+  SIDECAR_IMAGE: ghcr.io/cloudnative-pg/plugin-barman-cloud-sidecar:v0.15.1
+---
+# data of a ConfigMap: an image: line of a configuration file (Envoy Gateway's envoy-gateway.yaml)
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: fail-configmap-data-image-line
+  namespace: t
+data:
+  envoy-gateway.yaml: |
+    provider:
+      kubernetes:
+        rateLimitDeployment:
+          container:
+            image: docker.io/envoyproxy/ratelimit:0482748e
+        shutdownManager:
+          image: docker.io/envoyproxy/gateway:v1.9.3@sha256:192fc9bdadb6d2462e8cf7bd702ce3dd9648f3310c6038787448a1f509b7cd9f
+---
+# Two digests, which no runtime pulls (a chart appending its digest to a tag that holds one)
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: fail-deployment-containers-image-two-digests
+  namespace: t
+spec:
+  template:
+    spec:
+      containers:
+        - name: c
+          image: busybox:1.37@sha256:1111111111111111111111111111111111111111111111111111111111111111@sha256:1111111111111111111111111111111111111111111111111111111111111111
+---
+# A digest that is not 64 hex
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: fail-deployment-containers-image-short-digest
+  namespace: t
+spec:
+  template:
+    spec:
+      containers:
+        - name: c
+          image: busybox:1.37@sha256:1111
+---
+# Every image pinned, and what only looks like one: settings of an image, a number under a flag with "image", a URL,
+# and an env list rendered as null.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: pass-deployment
+  namespace: t
+spec:
+  template:
+    spec:
+      initContainers:
+        - name: init
+          image: ghcr.io/kyverno/kyvernopre:v1.19.1@sha256:c25c47461f06f2845a48c319ae86fbbc1730a7b9ed5b701889c9dc1f9ee94b09
+          env:
+      containers:
+        - name: c
+          image: ghcr.io/kyverno/kyverno:v1.19.1@sha256:b31d8511ae5fd6010e2a01ea72ebae08eb82fa51d91af14a1d9fe989949b4edb
+          args:
+            - --imageVerifyCacheMaxSize=1048576
+            - --image-pull-secrets=regcred
+            - --acme-http01-solver-image=quay.io/jetstack/cert-manager-acmesolver:v1.21.2@sha256:699b40d622211ab7accad8a21b04c5fbaa1841ef7a12621e8de492dbe27b2503
+            - --tufRootURL=https://tuf.example.com/repo/root:1
+          env:
+            - name: OPERATOR_IMAGE_NAME
+              value: ghcr.io/cloudnative-pg/cloudnative-pg:1.30.1@sha256:923c267ec29636db3bee20f993d0ec4973fa22998e1adad37da79e4d32b5bc07
+            - name: OPERATOR_IMAGE_PULL_POLICY
+              value: IfNotPresent
+            - name: IMAGE_TAG
+              value: v1.19.1
+            - name: RELATED_IMAGE_ENABLED
+              value: "true"
+            - name: GATEWAY_URL
+              value: http://gateway.svp:8080/api/v1
+---
+apiVersion: monitoring.coreos.com/v1
+kind: Prometheus
+metadata:
+  name: pass-prometheus
+  namespace: t
+spec:
+  image: quay.io/prometheus/prometheus:v3.15.0-distroless@sha256:b2a413d5a03ea6a76782a508d1c7947440bba3b973931a25676e278431891b01
+  imagePullPolicy: IfNotPresent
+---
+apiVersion: postgresql.cnpg.io/v1
+kind: Cluster
+metadata:
+  name: pass-cluster
+  namespace: t
+spec:
+  instances: 1
+  imageName: ghcr.io/cloudnative-pg/postgresql:15.19-minimal-trixie@sha256:f6091200bc5e1926efea8babe8a511d091e9a253d8f33fe4e920d0e89a67b57e
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: pass-configmap
+  namespace: t
+data:
+  SIDECAR_IMAGE: ghcr.io/cloudnative-pg/plugin-barman-cloud-sidecar:v0.15.1@sha256:2287a793a804db751edd0d07d44cd549e357677e98a800eb12e2cf7c0d53f9b0
+  SIDECAR_IMAGE_PULL_POLICY: Always
+  envoy-gateway.yaml: |
+    provider:
+      kubernetes:
+        rateLimitDeployment:
+          container:
+            image: docker.io/envoyproxy/ratelimit:0482748e@sha256:5fdd8e3ae335ab6d64316f8d2fd9a886830075cbbb40a1d8065c869275909162
+            imagePullPolicy: IfNotPresent
+    endpoint: https://otel.example.com/v1/traces:4318

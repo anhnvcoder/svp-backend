@@ -74,6 +74,12 @@ SCHEMATHESIS_IMAGE := schemathesis/schemathesis:4.32.4@sha256:b501f25d00fa6e2b39
 # into schemas, so no Python is needed. It runs as root unless docker run gets --user.
 # renovate: datasource=docker depName=ghcr.io/yannh/kubeconform
 KUBECONFORM_IMAGE := ghcr.io/yannh/kubeconform:v0.8.0@sha256:faffaf43f95aa6425306e1ab8d6fcad72acb9049158f38e574c085ea1ec0f64e
+# Policies on the manifests the GitOps path renders (deploy/ci/gitops-policies/: every image pinned by digest, no lab
+# host on a real platform), applied by deploy/ci/gitops-check.sh and tested by make kyverno-test, with no cluster and no
+# network: the Kyverno CLI from its official image pinned by digest, the minor of the Kyverno the clusters run (chart
+# kyverno of argocd/apps/components.json in svp-gitops), so the CLI reads the policies as admission would.
+# renovate: datasource=docker depName=ghcr.io/kyverno/kyverno-cli
+KYVERNO_CLI_IMAGE := ghcr.io/kyverno/kyverno-cli:v1.19.1@sha256:ced7b2be0b04250cabfe695f15307f69eb715fe23234816388af4f3812915b2a
 # The REST contract of the gateway as a versioned release (deploy/ci/contract.sh): oasdiff compares the spec of a pull
 # request with its base (make api-contract-check), ORAS pushes a new version to GHCR as an OCI artifact on main. Both from
 # their official images pinned by digest, run on a dev machine as in CI; no GitHub Action of either is used.
@@ -81,6 +87,11 @@ KUBECONFORM_IMAGE := ghcr.io/yannh/kubeconform:v0.8.0@sha256:faffaf43f95aa642530
 OASDIFF_IMAGE := tufin/oasdiff:v1.34.1@sha256:67a23cfea7d251e2ae34ee703ac8733c5d96bc2e7b90fd0f4d475ec99367b85f
 # renovate: datasource=docker depName=ghcr.io/oras-project/oras
 ORAS_IMAGE := ghcr.io/oras-project/oras:v1.3.6@sha256:9cfb578be975b762fd898b9d004243d8003aeb807a3e15b2ed212cdd1326c9eb
+# yq of the steps of images.yml that write svp-gitops (jobs promote and promote-prd, through yq_ of deploy/ci/common.sh),
+# from its official image pinned by digest, run without network: the yq preinstalled on the runner changes with the
+# runner image, unseen by Renovate and unreviewed, and these steps write the deployment repository.
+# renovate: datasource=docker depName=mikefarah/yq
+YQ_IMAGE := mikefarah/yq:4.54.1@sha256:4b3d9475d65571d28cbb19544d3820ec2945e4c8b2f18279394282b8dc3a592e
 
 # Tools installed by `go install` land here; the PATH of the caller is not assumed to contain it.
 GOBIN ?= $(shell go env GOPATH)/bin
@@ -102,7 +113,7 @@ SVP_TEST_REDIS_URL ?= redis://127.0.0.1:6379/15
 .DEFAULT_GOAL := help
 
 .PHONY: help tools ci-tools generate generate-go generate-check slo otelcol-validate fmt-check vet lint actionlint buf-lint vulncheck test fuzz \
-	cover check check-go helm-check trivy-config grype renovate-check api-contract-check hooks web-e2e measure-web measure-upload \
+	cover check check-go helm-check kyverno-test trivy-config grype renovate-check api-contract-check hooks web-e2e measure-web measure-upload \
 	web-lighthouse web-sourcemaps
 
 help: ## List the targets
@@ -258,12 +269,22 @@ check-go: fmt-check vet lint actionlint buf-lint vulncheck test ## Run the Go, w
 # Rollouts built for each, every source of svp-gitops on a full ref); each chart of this repository with base/ alone and
 # with each environment's overlay and image file, as Argo CD reads them (prd without svp.localhost); the ExternalSecrets
 # and SecretStores of each environment against the CRD schemas of the pinned External Secrets chart (kubeconform in
-# KUBECONFORM_IMAGE, no network), none with base/ alone; every third-party image pinned by digest and no overlay
-# changing one. Needs Docker and network access to the chart repositories. A change that needs a new value in base/
-# merges in svp-gitops first, then here.
-helm-check: ## helm lint and helm template every chart of the working tree with base/ of the clone of svp-gitops (../gitops, or SVP_GITOPS_DIR) alone and with the overlays and image files of each environment (prd without svp.localhost), its root chart argocd/apps for each environment on amd64 and arm64 nodes, the ExternalSecrets and SecretStores of each environment against the CRD schemas of the pinned External Secrets chart (kubeconform), every third-party image pinned by digest (deploy/ci/gitops-check.sh --worktree)
+# KUBECONFORM_IMAGE, no network), none with base/ alone; the rules on the rendered manifests as Kyverno policies of
+# deploy/ci/gitops-policies/ (Kyverno CLI in KYVERNO_CLI_IMAGE, no network): every image pinned by digest
+# (images-pinned), no svp.localhost on a platform without localHosts (no-lab-hosts, beside a grep of the whole render);
+# no overlay changing an image. Needs Docker and network access to the chart repositories. A change that needs a new
+# value in base/ merges in svp-gitops first, then here.
+helm-check: ## helm lint and helm template every chart of the working tree with base/ of the clone of svp-gitops (../gitops, or SVP_GITOPS_DIR) alone and with the overlays and image files of each environment, its root chart argocd/apps for each environment on amd64 and arm64 nodes, the ExternalSecrets and SecretStores of each environment against the CRD schemas of the pinned External Secrets chart (kubeconform), and the Kyverno policies of deploy/ci/gitops-policies/ on the renders: every image pinned by digest, no svp.localhost on a real platform (deploy/ci/gitops-check.sh --worktree)
 	@gitops=$$(bash -c '$(K8S_LIB) && gitops_dir') && \
-	  KUBECONFORM_IMAGE='$(KUBECONFORM_IMAGE)' deploy/ci/gitops-check.sh --worktree "$$gitops"
+	  KUBECONFORM_IMAGE='$(KUBECONFORM_IMAGE)' KYVERNO_CLI_IMAGE='$(KYVERNO_CLI_IMAGE)' \
+	  deploy/ci/gitops-check.sh --worktree "$$gitops"
+
+# The kyverno test of each policy deploy/ci/gitops-check.sh applies to rendered manifests: the resources of
+# deploy/ci/gitops-policies/test/<policy>/ that must fail and those that must pass. No cluster, no network; the policies
+# are mounted read-only and the CLI runs as the caller.
+kyverno-test: ## kyverno test of the policies on rendered manifests (deploy/ci/gitops-policies/, Kyverno CLI in KYVERNO_CLI_IMAGE, no network)
+	env -u DOCKER_DEFAULT_PLATFORM docker run --rm --user "$$(id -u):$$(id -g)" --network none \
+	  -v "$(CURDIR)/deploy/ci/gitops-policies:/p:ro" '$(KYVERNO_CLI_IMAGE)' test /p --remove-color
 
 # Misconfiguration scan of the Dockerfiles, charts and manifests with the pinned trivy. It only
 # reports: exit 0 whatever it finds. The findings that are deliberate choices are left out by

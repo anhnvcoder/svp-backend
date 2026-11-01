@@ -4,25 +4,15 @@
 # are made up, and a fake gh and a fake cosign first on PATH record their arguments and answer from fixtures, so no
 # test reaches GitHub, a registry or Sigstore. Checked:
 #   - github (a made-up job): outputs, the job summary, masks, warnings and run links land where GitHub reads them,
-#     and pull requests are written through gh with the job's repository;
+#     and pull requests are read through gh with the job's repository;
 #   - local: everything on stdout, no mask, links "local", and no write through the platform's API (reads still are);
 #   - another CI (GitLab CI, a CI=true one): a clear error, nothing written;
-#   - the author of the pull request a run checks, read from the event (an app's bot, a person), nothing for a push, a
-#     dispatch or a machine without SVP_CHANGE_REQUEST_AUTHOR, a failure naming the problem for a pull request event
-#     whose author is missing, of another shape or unreadable, and on GitLab CI; the sender of that event the same way
-#     (sender.login; SVP_CHANGE_REQUEST_SENDER on a machine);
-#   - pull requests of another repository (svp-gitops) and of an app's bot, auto-merge for a given head, the bot of an
-#     app (its id read from the host), the credential helper a push gets the job's token from, and the push time of a
-#     commit of another repository;
-#   - the records of an environment (deployments of svp-gitops): a record is a deployment with auto_merge false and
-#     required_contexts [], then a status success that leaves earlier records active, its id printed; a dry run and a
-#     machine print both requests and write nothing; a record of a short ref, an environment that is not a plain name
-#     or a payload that is not JSON is refused before gh; the list gives each record its latest state and every
-#     status the host returns, newest first; a run URL is a run of the code repository;
+#   - pull requests of another repository (svp-gitops) and of an app's bot, and the push time of a commit of another
+#     repository;
 #   - the scripts give what they gave when they read GitHub's variables themselves: plan.sh, vuln-predicate.sh,
 #     provenance-predicate.sh (the workflow, ref and commit of the run, and the services input of a dispatch),
 #     scan-gate.sh and values-check.sh (the signing identity is read from the table of release sources of the
-#     policy's chart; promote.sh has a test of its own, promote-test.sh);
+#     policy's chart);
 #   - scan-gate.sh --grype on grype reports written by hand: a Critical match blocks and is named, --allow-critical lets
 #     it through, High and below are only counted; an entry of .trivyignore.yaml covers a match by its id or a related
 #     id with the same purl (qualifiers and escapes aside), never another version; an expired entry fails the gate;
@@ -37,7 +27,7 @@
 #     call that failed and a second that verified) asks to check again, never for a new release; the ok line it prints
 #     is the one tag_provenance_mismatch of common.sh reads (image.tag against the provenance's commit); an image is
 #     verified with the identity of the release source whose prefix it is under, in the table at the commit an
-#     environment's charts.yaml pins (a commit from before the table reads as its one source backend), a service its
+#     environment's charts.yaml pins (a commit from before the table stops the check, naming it), a service its
 #     source does not publish is refused before cosign, and every environment must admit it without --env;
 #   - the release sources in common.sh: sign_identity and provenance_source without a source name are backend's,
 #     oci_labels names its source's repository and the commit of SVP_CODE_ROOT, and drill_images is drillImages of
@@ -53,11 +43,9 @@
 #     platform.sh, as for common.sh and rescan.sh, and none for a change under web/ (a file added, then deleted) or of
 #     this test, of promote-test.sh, of sourcemaps-image.sh and its test (another
 #     source's CI pushes that image), of a scenario file under deploy/ci/verify/, of the
-#     scripts of other workflows and of svp-gitops's check (record-stg.sh, gitops-check.sh with values-check.sh and
-#     verify-release.sh and the tests of
-#     these and of release-set.sh, promote-prd.sh), of the policy's values or of docs/; all six for a change of
-#     release-set.sh and promote-prd.sh (job promote-prd of images.yml), and of the GRYPE_IMAGE line of the Makefile,
-#     none for another line of it;
+#     scripts of other workflows and of svp-gitops's check (gitops-check.sh with
+#     values-check.sh and verify-release.sh and the tests of these), of the policy's values or of docs/; all six for a
+#     change of the GRYPE_IMAGE line of the Makefile, none for another line of it;
 #   - rescan.sh run attests only the releases of the source of the run's repository, as that source's signing
 #     workflow: a run of svp-frontend without --source web, a run of backend with --source web, and a run of svp-frontend from
 #     another workflow fail, naming both sources (or the identity), before the host or cosign is asked anything; the
@@ -104,7 +92,7 @@ lacks() { ! grep -qF -- "$2" "$1"; }
 
 # --- Fakes. gh writes each call to gh.log, one line of %q-quoted arguments, and answers pr list from gh/prs.json; api
 # with gh/runs.json for a workflow's runs, gh/artifacts-<run>.json for a run's artifacts (none when the file is missing),
-# gh/run-<run>.json for a run (the host fails when the file is missing), gh/pulls.json for the pull requests of a commit (none when the file is missing), gh/user.json for a user, and
+# gh/pulls.json for the pull requests of a commit (none when the file is missing), and
 # gh/events.json otherwise, run through its --jq filter; run download writes the file image-digest into its --dir.
 # With FAKE_GH_FAIL set it fails as the host would; with FAKE_GH_DOWNLOAD_FAIL set only run download fails, naming the
 # signed link it was sent to, as gh does, and with GH_DEBUG or DEBUG set run download prints its request line as gh's
@@ -123,26 +111,8 @@ fi
 case "$1 $2" in
 "pr list") cat "$FAKE_GH_DIR/prs.json" ;;
 "api -X")
-  method=$3 path=$4
-  # A body (--input FILE, - for stdin) is appended to inputs.jsonl, one compact line.
-  for ((i = 1; i <= $#; i++)); do
-    if [ "${!i}" = --input ]; then
-      j=$((i + 1))
-      if [ "${!j}" = - ]; then jq -c . >>"$FAKE_GH_DIR/inputs.jsonl"; else jq -c . "${!j}" >>"$FAKE_GH_DIR/inputs.jsonl"; fi
-    fi
-  done
+  path=$4
   while [ $# -gt 0 ] && [ "$1" != --jq ]; do shift; done
-  case $method:$path in
-  POST:*/deployments) file=$FAKE_GH_DIR/deployment-made.json ;;
-  POST:*/deployments/*/statuses) file=$FAKE_GH_DIR/status-made.json ;;
-  GET:*/deployments/*/statuses)
-    id=${path%/statuses}
-    file=$FAKE_GH_DIR/statuses-${id##*/}.json
-    [ -f "$file" ] || file=$FAKE_GH_DIR/no-pulls.json
-    ;;
-  GET:*/deployments) file=$FAKE_GH_DIR/deployments.json ;;
-  esac
-  [ -z "${file:-}" ] || { jq -r "$2" "$file"; exit; }
   case $path in
   */actions/workflows/*/runs) file=$FAKE_GH_DIR/runs.json ;;
   */actions/runs/*/artifacts)
@@ -150,15 +120,10 @@ case "$1 $2" in
     file=$FAKE_GH_DIR/artifacts-${id##*/}.json
     [ -f "$file" ] || file=$FAKE_GH_DIR/no-artifacts.json
     ;;
-  */actions/runs/*)
-    file=$FAKE_GH_DIR/run-${path##*/}.json
-    [ -f "$file" ] || { echo "HTTP 404: Not Found" >&2 && exit 1; }
-    ;;
   */commits/*/pulls)
     file=$FAKE_GH_DIR/pulls.json
     [ -f "$file" ] || file=$FAKE_GH_DIR/no-pulls.json
     ;;
-  users/*) file=$FAKE_GH_DIR/user.json ;;
   *) file=$FAKE_GH_DIR/events.json ;;
   esac
   jq -r "$2" "$file"
@@ -221,9 +186,6 @@ chmod 755 "$work/bin/gh" "$work/bin/cosign"
 echo '[]' >"$work/gh/prs.json"
 echo '{"total_count": 0, "artifacts": []}' >"$work/gh/no-artifacts.json"
 echo '[]' >"$work/gh/no-pulls.json"
-echo '{"id": 271828}' >"$work/gh/user.json"
-echo '{"id": 9001, "sha": "x"}' >"$work/gh/deployment-made.json"
-echo '{"id": 1, "state": "success"}' >"$work/gh/status-made.json"
 
 # on PLATFORM COMMAND...: runs COMMAND with the variables of PLATFORM and none of the others': github (a made-up job of
 # repository octo/repo), local (none), gitlab (GitLab CI's own). git reads no configuration of this machine.
@@ -234,8 +196,7 @@ on() {
     -u GITHUB_RUN_ID -u GITHUB_RUN_ATTEMPT -u GITHUB_WORKFLOW_REF -u GITHUB_REF -u GITHUB_SHA -u GITHUB_EVENT_NAME
     -u GITHUB_EVENT_PATH -u RUNNER_TEMP -u CI -u GITLAB_CI -u JENKINS_URL
     -u TF_BUILD -u GIT_DIR -u GIT_WORK_TREE -u PROMOTE_DRY_RUN -u PROMOTE_DRY_RUN_PRS -u RUNNER_ENVIRONMENT
-    -u FAKE_GH_FAIL -u FAKE_GH_DOWNLOAD_FAIL -u SVP_CODE_ROOT -u SVP_CHANGE_REQUEST_AUTHOR
-    -u SVP_CHANGE_REQUEST_SENDER
+    -u FAKE_GH_FAIL -u FAKE_GH_DOWNLOAD_FAIL -u SVP_CODE_ROOT
     PATH="$work/bin:$PATH" HOME="$work/home" GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1
     FAKE_GH_LOG="$work/gh.log" FAKE_GH_DIR="$work/gh" FAKE_GH_DIGEST=sha256:fetched FAKE_COSIGN_LOG="$work/cosign.log")
   case $platform in
@@ -337,111 +298,10 @@ echo 'not json' >"$work/event.json"
 if dispatch 'ci_dispatch_input services' >/dev/null 2>&1; then fail "github: an unreadable event fails"; else
   ok "github: an unreadable event fails"
 fi
-# The author of a pull request, from the event: the bot of an app, a person; nothing for a push or a dispatch; a pull
-# request event without a login, with a login of another shape or unreadable fails, naming the problem.
-pr() { on github env GITHUB_EVENT_NAME="$1" "$BASH" -c '. "$0"; ci_change_request_author' "$here/platform.sh"; }
-jq -n '{pull_request: {user: {login: "svp-web-promoter[bot]"}}}' >"$work/event.json"
-same "github: the author of a pull request, an app's bot, from the event" "svp-web-promoter[bot]" "$(pr pull_request)"
-jq -n '{pull_request: {user: {login: "anhnvcoder"}}}' >"$work/event.json"
-same "github: the author of a pull request, a person" anhnvcoder "$(pr pull_request)"
-same "github: no author on a push or a dispatch" "|" "$(pr push)|$(pr workflow_dispatch)"
-for event in '{"pull_request": {}}' '{"pull_request": {"user": {"login": "a b"}}}' '{"pull_request": {"user": {"login": "-x"}}}' \
-  '{"pull_request": {"user": {"login": "x[bot][bot]"}}}' 'not json'; do
-  printf '%s\n' "$event" >"$work/event.json"
-  if out=$(pr pull_request 2>&1); then
-    fail "github: a pull request event $event fails (got '$out')"
-  else
-    case $event in
-    'not json') want="FAIL  the pull_request event in $work/event.json cannot be read" ;;
-    '{"pull_request": {}}') want="FAIL  the author of the pull request is '', not a login of the host" ;;
-    *) want="FAIL  the author of the pull request is '$(jq -r .pull_request.user.login <<<"$event")', not a login of the host" ;;
-    esac
-    same "github: a pull request event $event fails, naming it" "$want" "$out"
-  fi
-done
-out=$(on github env -u GITHUB_EVENT_PATH GITHUB_EVENT_NAME=pull_request "$BASH" -c '. "$0"; ci_change_request_author' \
-  "$here/platform.sh" 2>&1) && fail "github: a pull request without GITHUB_EVENT_PATH fails" ||
-  same "github: a pull request without GITHUB_EVENT_PATH fails, naming it" \
-    "FAIL  GITHUB_EVENT_PATH is empty: the CI platform sets it for every job" "$out"
-same "local: no author unless SVP_CHANGE_REQUEST_AUTHOR names one" "|renovate[bot]" \
-  "$(fn local ci_change_request_author)|$(on local env SVP_CHANGE_REQUEST_AUTHOR='renovate[bot]' "$BASH" -c \
-    '. "$0"; ci_change_request_author' "$here/platform.sh")"
-if on local env SVP_CHANGE_REQUEST_AUTHOR='not a login' "$BASH" -c '. "$0"; ci_change_request_author' \
-  "$here/platform.sh" >/dev/null 2>&1; then
-  fail "local: an author that is no login fails"
-else
-  ok "local: an author that is no login fails"
-fi
-if fn gitlab ci_change_request_author >/dev/null 2>&1; then fail "gitlab: the author of a merge request is not implemented"; else
-  ok "gitlab: the author of a merge request is not implemented"
-fi
-# The sender of the pull request's event (who pushed the commit a synchronize event checks), read the same way.
-sender() { on github env GITHUB_EVENT_NAME="$1" "$BASH" -c '. "$0"; ci_change_request_sender' "$here/platform.sh"; }
-jq -n '{pull_request: {user: {login: "svp-gitops-promoter[bot]"}}, sender: {login: "svp-web-promoter[bot]"}}' >"$work/event.json"
-same "github: the sender of a pull request event, not its author" "svp-web-promoter[bot]|svp-gitops-promoter[bot]" \
-  "$(sender pull_request_target)|$(pr pull_request)"
-same "github: no sender on a push or a dispatch" "|" "$(sender push)|$(sender workflow_dispatch)"
-jq -n '{pull_request: {user: {login: "svp-gitops-promoter[bot]"}}}' >"$work/event.json"
-out=$(sender pull_request 2>&1) && fail "github: a pull request event without a sender fails (got '$out')" ||
-  same "github: a pull request event without a sender fails, naming it" \
-    "FAIL  the sender of the pull request is '', not a login of the host" "$out"
-echo 'not json' >"$work/event.json"
-out=$(sender pull_request 2>&1) && fail "github: an unreadable event has no sender (got '$out')" ||
-  same "github: an unreadable event has no sender, naming it" \
-    "FAIL  the pull_request event in $work/event.json cannot be read" "$out"
-same "local: no sender unless SVP_CHANGE_REQUEST_SENDER names one" "|anhnvcoder" \
-  "$(fn local ci_change_request_sender)|$(on local env SVP_CHANGE_REQUEST_SENDER=anhnvcoder "$BASH" -c \
-    '. "$0"; ci_change_request_sender' "$here/platform.sh")"
-if on local env SVP_CHANGE_REQUEST_SENDER='a b' "$BASH" -c '. "$0"; ci_change_request_sender' \
-  "$here/platform.sh" >/dev/null 2>&1; then
-  fail "local: a sender that is no login fails"
-else
-  ok "local: a sender that is no login fails"
-fi
 out=$(on github env -u GITHUB_SHA "$BASH" -c '. "$0"; ci_commit' "$here/platform.sh" 2>&1) &&
   fail "github: no GITHUB_SHA fails" || same "github: no GITHUB_SHA fails, naming it" \
   "FAIL  GITHUB_SHA is empty: the CI platform sets it for every job" "$out"
-same "github: the bot" 'github-actions[bot] 41898282+github-actions[bot]@users.noreply.github.com' \
-  "$(fn github 'echo "$(ci_bot_name) $(ci_bot_email)"')"
-fresh
-same "github: the bot of an app, its id read from the host" \
-  'svp-gitops-promoter[bot] 271828+svp-gitops-promoter[bot]@users.noreply.github.com' \
-  "$(fn github 'echo "$(ci_bot_name svp-gitops-promoter) $(ci_bot_email svp-gitops-promoter)"')"
-same "github: the bot's user is asked for by its escaped name" \
-  "$(gh_line api -X GET 'users/svp-gitops-promoter%5Bbot%5D' --jq .id)" "$(cat "$work/gh.log")"
-echo '{"message": "Not Found"}' >"$work/gh/user.json"
-if fn github 'ci_bot_email no-such-app' >/dev/null 2>&1; then fail "github: an app with no bot user fails"; else
-  ok "github: an app with no bot user fails"
-fi
-echo '{"id": 271828}' >"$work/gh/user.json"
-
-# The credential helper of a push: git asks it, and it answers with GH_TOKEN of that moment; none without a token.
-got=$(on github env GH_TOKEN=s3cret-token "$BASH" -c '. "$0"; ci_git_auth' "$here/platform.sh")
-same "github: two git options, the first clearing every other helper" 2 "$(grep -c . <<<"$got")"
-check "github: the token is not in the options" test "${got/s3cret-token/}" = "$got"
-auth=()
-while IFS= read -r o; do auth+=(-c "$o"); done <<<"$got"
-same "github: git gets the token from the helper" $'username=x-access-token\npassword=s3cret-token' \
-  "$(printf 'protocol=https\nhost=github.com\npath=anhnvcoder/svp-gitops.git\n\n' |
-    on github env GH_TOKEN=s3cret-token GIT_TERMINAL_PROMPT=0 git "${auth[@]}" credential fill | grep -E '^(username|password)=')"
-if on github env -u GH_TOKEN "$BASH" -c '. "$0"; ci_git_auth' "$here/platform.sh" >/dev/null 2>&1; then
-  fail "github: no GH_TOKEN, no credential helper"
-else ok "github: no GH_TOKEN, no credential helper"; fi
-
 # Pull requests through gh, with the job's repository.
-fresh
-fn github 'ci_change_request_write 7 bot/promote main "chore(release): x y" /tmp/body' >/dev/null
-same "github: an open pull request is edited" "$(gh_line pr edit 7 --repo octo/repo --title "chore(release): x y" \
-  --body-file /tmp/body)" "$(cat "$work/gh.log")"
-fresh
-fn github 'ci_change_request_write "" bot/promote main "chore(release): x y" /tmp/body' >/dev/null
-same "github: no open pull request, one is created" "$(gh_line pr create --repo octo/repo --base main \
-  --head bot/promote --title "chore(release): x y" --body-file /tmp/body)" "$(cat "$work/gh.log")"
-fresh
-got=$(fn github 'ci_change_request_write --dry-run 7 bot/promote main "chore(release): x y" /tmp/body')
-same "github: --dry-run prints the command" "dry run: gh $(gh_line pr edit 7 --repo octo/repo --title \
-  "chore(release): x y" --body-file /tmp/body)" "$got "
-check "github: --dry-run runs no gh" test ! -s "$work/gh.log"
 fresh
 jq -n '[{number: 3, isCrossRepository: true, author: {login: "app/github-actions"}},
   {number: 4, isCrossRepository: false, author: {login: "someone"}},
@@ -470,22 +330,6 @@ same "github: the list asks for the other repository" "$(gh_line pr list --repo 
   --head bot/promote-stg --base main --state open --limit 500 --json number,isCrossRepository,author)" \
   "$(cat "$work/gh.log")"
 echo '[]' >"$work/gh/prs.json"
-fresh
-fn github 'ci_change_request_write "" bot/promote-stg main "chore(stg): x" /tmp/body anhnvcoder/svp-gitops' >/dev/null
-same "github: a pull request opened in the other repository" "$(gh_line pr create --repo anhnvcoder/svp-gitops \
-  --base main --head bot/promote-stg --title "chore(stg): x" --body-file /tmp/body)" "$(cat "$work/gh.log")"
-fresh
-fn github "ci_change_request_auto_merge 7 $(printf 'a%.0s' $(seq 40)) anhnvcoder/svp-gitops" >/dev/null
-same "github: auto-merge, squashed, only while the head is that commit" "$(gh_line pr merge 7 \
-  --repo anhnvcoder/svp-gitops --auto --squash --match-head-commit "$(printf 'a%.0s' $(seq 40))")" "$(cat "$work/gh.log")"
-fresh
-got=$(fn github "ci_change_request_auto_merge --dry-run bot/promote-stg $(printf 'b%.0s' $(seq 40)) anhnvcoder/svp-gitops")
-same "github: auto-merge --dry-run prints the command" "dry run: gh $(gh_line pr merge bot/promote-stg \
-  --repo anhnvcoder/svp-gitops --auto --squash --match-head-commit "$(printf 'b%.0s' $(seq 40))")" "$got "
-check "github: auto-merge --dry-run runs no gh" test ! -s "$work/gh.log"
-if fn github 'ci_change_request_auto_merge 7 main anhnvcoder/svp-gitops' >/dev/null 2>&1; then
-  fail "github: auto-merge takes only a full commit as the head"
-else ok "github: auto-merge takes only a full commit as the head"; fi
 
 # --- local: stdout, nothing masked, no write through the API.
 fresh
@@ -545,16 +389,6 @@ else
     "$out"
 fi
 gw remote set-url origin https://github.com/anhnvcoder/svp-frontend.git
-got=$(fn local 'ci_change_request_write "" bot/promote main "chore(release): x" /tmp/body')
-same "local: a pull request is printed, not written" "dry run: gh $(gh_line pr create \
-  --repo anhnvcoder/svp-backend --base main --head bot/promote --title "chore(release): x" \
-  --body-file /tmp/body)" "$got "
-check "local: gh is not called to write" test ! -s "$work/gh.log"
-got=$(fn local "ci_change_request_auto_merge 7 $(printf 'a%.0s' $(seq 40)) anhnvcoder/svp-gitops")
-same "local: auto-merge is printed, not turned on" "dry run: gh $(gh_line pr merge 7 --repo anhnvcoder/svp-gitops \
-  --auto --squash --match-head-commit "$(printf 'a%.0s' $(seq 40))")" "$got "
-check "local: gh is not called for auto-merge" test ! -s "$work/gh.log"
-same "local: no credential helper" "" "$(fn local ci_git_auth)"
 same "local: the dispatch hint names the code repository" \
   "gh workflow run images.yml --repo anhnvcoder/svp-backend --ref main -f rescan=true -f values_ref=abc" \
   "$(fn local 'ci_dispatch_hint images.yml main rescan=true values_ref=abc')"
@@ -774,101 +608,6 @@ results.blob.example: no such host" "$(cat "$work/err")"
   same "$p: ci_artifact_fetch prints nothing on stdout when the download fails" "" "$(cat "$work/out")"
   check "$p: ci_artifact_fetch never prints the signed part of the link" lacks "$work/err" SIGNEDQUERY
 done
-
-# --- ci_is_run_url, ci_run_workflow, ci_deployment_record, ci_deployment_list: the records of an environment in
-# svp-gitops and the runs they name.
-check "github: a run of the code repository is a run URL" fn github \
-  'ci_is_run_url https://github.com/anhnvcoder/svp-backend/actions/runs/4242'
-# A record made before the code repository was renamed names its run under the former name.
-check "local: a run of the code repository under its former name is a run URL" fn local \
-  'ci_is_run_url https://github.com/anhnvcoder/short-video-platform/actions/runs/4242'
-same "ci_repo_current: the former name of the code repository is its current name" anhnvcoder/svp-backend \
-  "$(fn local 'ci_repo_current anhnvcoder/short-video-platform')"
-same "ci_repo_current: the former name of the web client's repository is its current name" anhnvcoder/svp-frontend \
-  "$(fn local 'ci_repo_current anhnvcoder/svp-web')"
-same "ci_repo_current: a repository never renamed keeps its name" anhnvcoder/svp-gitops \
-  "$(fn local 'ci_repo_current anhnvcoder/svp-gitops')"
-for bad in https://github.com/someone/fork/actions/runs/4242 https://github.com/anhnvcoder/svp-backend/actions/runs/x \
-  "https://github.com/anhnvcoder/svp-backend/actions/runs/4242/attempts/1" \
-  https://github.com/anhnvcoder/svp-web/actions/runs/4242 ""; do
-  if fn local "ci_is_run_url '$bad'"; then fail "local: '$bad' is no run URL"; else ok "local: '$bad' is no run URL"; fi
-done
-echo '{"id": 4242, "path": ".github/workflows/verify.yml", "head_branch": "main", "event": "schedule"}' >"$work/gh/run-4242.json"
-for p in github local; do
-  fresh
-  same "$p: ci_run_workflow prints the workflow file and the branch of a run" ".github/workflows/verify.yml main" \
-    "$(fn "$p" 'ci_run_workflow https://github.com/anhnvcoder/svp-backend/actions/runs/4242')"
-  check "$p: ci_run_workflow asks the host for the run of the code repository" grep -qF -- \
-    "$(gh_line api -X GET repos/anhnvcoder/svp-backend/actions/runs/4242)" "$work/gh.log"
-  fresh
-  same "$p: ci_run_workflow reads a run named under the former name of the code repository" \
-    ".github/workflows/verify.yml main" \
-    "$(fn "$p" 'ci_run_workflow https://github.com/anhnvcoder/short-video-platform/actions/runs/4242')"
-  check "$p: ci_run_workflow asks the host for that run under the current name" grep -qF -- \
-    "$(gh_line api -X GET repos/anhnvcoder/svp-backend/actions/runs/4242)" "$work/gh.log"
-  if fn "$p" 'ci_run_workflow https://github.com/anhnvcoder/svp-backend/actions/runs/4243' >/dev/null 2>&1; then
-    fail "$p: ci_run_workflow fails when the host knows no such run"
-  else
-    ok "$p: ci_run_workflow fails when the host knows no such run"
-  fi
-  fresh
-  if fn "$p" 'ci_run_workflow https://github.com/someone/fork/actions/runs/4242' >/dev/null 2>&1; then
-    fail "$p: ci_run_workflow refuses a run of another repository"
-  else
-    ok "$p: ci_run_workflow refuses a run of another repository"
-  fi
-  check "$p: a refused run URL calls no gh" test ! -s "$work/gh.log"
-done
-rev=$(printf 'c%.0s' $(seq 40))
-echo '{"environment": "stg", "ref": "'"$rev"'", "images": {}}' >"$work/payload.json"
-fresh
-: >"$work/gh/inputs.jsonl"
-same "github: ci_deployment_record prints the id of the record" 9001 "$(fn github "ci_deployment_record anhnvcoder/svp-gitops stg $rev '$work/payload.json' 'stg checked' https://github.com/anhnvcoder/svp-backend/actions/runs/4242")"
-same "github: a deployment, then its status" \
-  "$(gh_line api -X POST repos/anhnvcoder/svp-gitops/deployments --input - --jq .id)"$'\n'"$(gh_line api -X POST repos/anhnvcoder/svp-gitops/deployments/9001/statuses --input - --jq .state)" \
-  "$(cat "$work/gh.log")"
-same "github: the deployment: ref, environment, payload, no auto-merge, no required contexts" \
-  "$rev stg stg false [] false" \
-  "$(sed -n 1p "$work/gh/inputs.jsonl" | jq -r '"\(.ref) \(.environment) \(.payload.environment) \(.auto_merge) \(.required_contexts | tojson) \(.transient_environment)"')"
-same "github: the status: success, the run as its log, earlier records left active" \
-  "success https://github.com/anhnvcoder/svp-backend/actions/runs/4242 false" \
-  "$(sed -n 2p "$work/gh/inputs.jsonl" | jq -r '"\(.state) \(.log_url) \(.auto_inactive)"')"
-fresh
-got=$(fn github "ci_deployment_record --dry-run anhnvcoder/svp-gitops stg $rev '$work/payload.json' 'stg checked' https://example.invalid/run")
-check "github: ci_deployment_record --dry-run runs no gh" test ! -s "$work/gh.log"
-check "github: ci_deployment_record --dry-run prints the deployment" grep -qF \
-  'dry run: gh api -X POST repos/anhnvcoder/svp-gitops/deployments --input -' <<<"$got"
-check "github: ci_deployment_record --dry-run prints the body" grep -qF '"auto_merge":false,"required_contexts":[]' <<<"$got"
-got=$(fn local "ci_deployment_record anhnvcoder/svp-gitops stg $rev '$work/payload.json' 'stg checked' https://example.invalid/run")
-check "local: ci_deployment_record writes nothing" test ! -s "$work/gh.log"
-check "local: ci_deployment_record prints the status it would write" grep -qF '"state":"success"' <<<"$got"
-for args in "anhnvcoder/svp-gitops stg main '$work/payload.json' d https://example.invalid/run" \
-  "anhnvcoder/svp-gitops 'st g' $rev '$work/payload.json' d https://example.invalid/run" \
-  "anhnvcoder/svp-gitops stg $rev '$work/gh.log' d https://example.invalid/run"; do
-  if fn github "ci_deployment_record $args" >/dev/null 2>&1; then fail "github: ci_deployment_record refuses $args"; else
-    ok "github: ci_deployment_record refuses $args"
-  fi
-done
-check "github: a refused record calls no gh" test ! -s "$work/gh.log"
-echo '[{"id": 12, "sha": "'"$rev"'", "ref": "'"$rev"'", "created_at": "2026-10-30T02:00:00Z", "creator": {"login": "svp-gitops-promoter[bot]"}, "payload": {"environment": "stg"}},
-  {"id": 11, "sha": "'"$rev"'", "ref": "'"$rev"'", "created_at": "2026-10-30T01:00:00Z", "creator": {"login": "someone"}, "payload": "text"}]' \
-  >"$work/gh/deployments.json"
-echo '[{"state": "success"}, {"state": "in_progress"}]' >"$work/gh/statuses-12.json"
-fresh
-same "github: ci_deployment_list: each record with its latest state, newest first" \
-  '12 svp-gitops-promoter[bot] success stg|11 someone  text' \
-  "$(fn github 'ci_deployment_list anhnvcoder/svp-gitops stg' | jq -r 'map("\(.id) \(.creator) \(.state) \(.payload.environment? // .payload)") | join("|")')"
-check "github: ci_deployment_list asks for the environment" grep -qF -- "$(gh_line api -X GET repos/anhnvcoder/svp-gitops/deployments -f environment=stg -f per_page=100)" "$work/gh.log"
-same "github: ci_deployment_list: every status of each record, newest first" '12 success,in_progress|11 ' \
-  "$(fn github 'ci_deployment_list anhnvcoder/svp-gitops stg' | jq -r 'map("\(.id) \(.states | join(","))") | join("|")')"
-check "github: ci_deployment_list reads every status of a record" grep -qF -- \
-  "$(gh_line api -X GET repos/anhnvcoder/svp-gitops/deployments/12/statuses -f per_page=100)" "$work/gh.log"
-if on github env FAKE_GH_FAIL=1 "$BASH" -c '. "$0"; ci_deployment_list anhnvcoder/svp-gitops stg' "$here/platform.sh" \
-  >/dev/null 2>&1; then
-  fail "github: ci_deployment_list fails when the host does"
-else
-  ok "github: ci_deployment_list fails when the host does"
-fi
 
 # --- another CI: a clear error, nothing written.
 fresh
@@ -1255,7 +994,7 @@ check "scan-gate.sh, svp-frontend's tree without .trivyignore.yaml: names the fi
 mv "$work/web-trivyignore.yaml" "$webtree/.trivyignore.yaml"
 
 # --- changed-services.sh: platform.sh is part of the image pipeline (common.sh sources it), so a change of it builds
-# all six, as do release-set.sh and promote-prd.sh (job promote-prd); this test, provenance-predicate-test.sh,
+# all six; this test, provenance-predicate-test.sh,
 # the scripts of the verification runs and of the other workflows, the policy's values and docs/ are read by no
 # image job.
 changed_by() {
@@ -1284,12 +1023,9 @@ for f in sourcemaps-image.sh sourcemaps-image-test.sh; do
   same "changed-services: a change of $f builds nothing" "" "$(changed_by "deploy/ci/$f")"
 done
 same "changed-services: a change of rescan.sh builds all six" "$all" "$(changed_by deploy/ci/rescan.sh)"
-for f in record-stg.sh gitops-check.sh gitops-check-test.sh values-check.sh verify-release.sh release-set-test.sh \
-  promote-prd-test.sh; do
+for f in gitops-check.sh gitops-check-test.sh values-check.sh verify-release.sh; do
   same "changed-services: a change of $f builds nothing" "" "$(changed_by "deploy/ci/$f")"
 done
-same "changed-services: a change of release-set.sh builds all six" "$all" "$(changed_by deploy/ci/release-set.sh)"
-same "changed-services: a change of promote-prd.sh builds all six" "$all" "$(changed_by deploy/ci/promote-prd.sh)"
 same "changed-services: a change of common.sh builds all six" "$all" "$(changed_by deploy/ci/common.sh)"
 same "changed-services: a change of the policy's values builds nothing" "" \
   "$(changed_by deploy/helm/svp-policy/values.yaml)"
@@ -1508,12 +1244,10 @@ check "verify-release.sh: an overlay refused: cosign never asked" test ! -s "$wo
 
 # Release sources: each image is verified with the identity of the source whose prefix it is under, at the revision
 # the environment's charts.yaml pins. A commit of the copy from before the table (the policy's values with the
-# identity lines, no files/sources.json) reads as its one source backend: such commits predate the rename of the
-# repository, so their lines name it as it was then, short-video-platform, which published web too.
+# identity lines, no files/sources.json) stops the check, naming the commit, before cosign is asked anything.
 web_image=ghcr.io/anhnvcoder/svp-frontend/web
 web_subject=https://github.com/anhnvcoder/svp-frontend/.github/workflows/images.yml@refs/heads/main
 backend_image=$image
-legacy_image=ghcr.io/anhnvcoder/short-video-platform/web
 legacy_subject=https://github.com/anhnvcoder/short-video-platform/.github/workflows/images.yml@refs/heads/main
 gv rm -q -r deploy/helm/svp-policy/files
 awk -v s="$legacy_subject" '{ print }
@@ -1553,23 +1287,17 @@ check "verify-release.sh: a service the source does not publish: names what is a
   "ghcr.io/anhnvcoder/svp-frontend/gateway is not a release of gateway that the policy of stg admits (at ${off_rev:0:12}: ghcr.io/anhnvcoder/svp-backend/gateway)"
 check "verify-release.sh: a service the source does not publish: cosign never asked" test ! -s "$work/cosign.log"
 charts stg "$legacy_rev"
-image=$legacy_image
-release "the backend's web at a commit before the table" 0 --env stg
-check "verify-release.sh: before the table, the identity of the values' lines" has "$work/cosign.log" \
-  "--certificate-identity $legacy_subject $legacy_image@$digest_a"
 image=$backend_image
-release "the backend's gateway under its new prefix at a commit before the table" 1 --env stg
-check "verify-release.sh: before the table, the new prefix is not admitted" has "$work/vr.out" \
-  "$backend_image is not a release of gateway that the policy of stg admits (at ${legacy_rev:0:12}: ghcr.io/anhnvcoder/short-video-platform/gateway)"
-image=$web_image
-release "the web source's image at a commit before the table" 1 --env stg
-check "verify-release.sh: before the table, the web source is not admitted" has "$work/vr.out" \
-  "$web_image is not a release of web that the policy of stg admits (at ${legacy_rev:0:12}: ghcr.io/anhnvcoder/short-video-platform/web)"
+release "an image at a commit before the table" 1 --env stg
+check "verify-release.sh: a commit before the table stops, naming it" has "$work/vr.out" \
+  "commit ${legacy_rev:0:12} has no deploy/helm/svp-policy/files/sources.json"
+check "verify-release.sh: a commit before the table: cosign never asked" test ! -s "$work/cosign.log"
 charts stg "$off_rev"
 charts prd "$legacy_rev"
+image=$web_image
 release "the web source's image, prd before the table, every environment" 1
-check "verify-release.sh: every environment: prd before the table refuses it" has "$work/vr.out" \
-  "$web_image is not a release of web that the policy of prd admits"
+check "verify-release.sh: every environment: prd before the table stops, naming it" has "$work/vr.out" \
+  "commit ${legacy_rev:0:12} has no deploy/helm/svp-policy/files/sources.json"
 release "the web source's image, prd before the table, checked for stg" 0 --env stg
 charts prd "$off_rev"
 image=$backend_image

@@ -1,0 +1,66 @@
+# kyverno test of policy no-lab-hosts (from backend/: make kyverno-test): each resource of resources.yaml named fail-…
+# fails, each named pass-… passes.
+apiVersion: cli.kyverno.io/v1alpha1
+kind: Test
+metadata:
+  name: no-lab-hosts
+policies:
+  - ../../no-lab-hosts.yaml
+resources:
+  - resources.yaml
+results:
+  - policy: no-lab-hosts
+    isValidatingPolicy: true
+    kind: HTTPRoute
+    result: fail
+    resources:
+      - fail-httproute-hostnames
+  - policy: no-lab-hosts
+    isValidatingPolicy: true
+    kind: GRPCRoute
+    result: fail
+    resources:
+      - fail-grpcroute-hostnames
+  - policy: no-lab-hosts
+    isValidatingPolicy: true
+    kind: Gateway
+    result: fail
+    resources:
+      - fail-gateway-listeners-hostname
+  - policy: no-lab-hosts
+    isValidatingPolicy: true
+    kind: Ingress
+    result: fail
+    resources:
+      - fail-ingress-rules-host
+      - fail-ingress-tls-hosts
+  - policy: no-lab-hosts
+    isValidatingPolicy: true
+    kind: Deployment
+    result: fail
+    resources:
+      - fail-deployment-env-value
+  - policy: no-lab-hosts
+    isValidatingPolicy: true
+    kind: Rollout
+    result: fail
+    resources:
+      - fail-rollout-env-value
+  - policy: no-lab-hosts
+    isValidatingPolicy: true
+    kind: HTTPRoute
+    result: pass
+    resources:
+      - pass-httproute
+  - policy: no-lab-hosts
+    isValidatingPolicy: true
+    kind: Gateway
+    result: pass
+    resources:
+      - pass-gateway
+  - policy: no-lab-hosts
+    isValidatingPolicy: true
+    kind: Deployment
+    result: pass
+    resources:
+      - pass-deployment

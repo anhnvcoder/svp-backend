@@ -42,18 +42,6 @@ require_code_files() {
   done
 }
 
-# current_repo_urls: copies stdin to stdout with every https://github.com/<old name> of a renamed repository
-# (ci_repo_renames of platform.sh) in a comment line ("#" first) replaced by the URL of its current name, so the
-# comments a promote writes into svp-gitops name each repository as it is called now.
-current_repo_urls() {
-  local old new script=
-  while read -r old new; do
-    [ -n "$old" ] || continue
-    script+="/^#/ s#https://github\\.com/${old//./\\.}([^A-Za-z0-9_-]|\$)#https://github.com/$new\\1#g;"
-  done < <(ci_repo_renames)
-  sed -E "$script"
-}
-
 # use_build_source [IMAGE]: sets, for the release source this CI run builds for, build_source (compact JSON),
 # build_source_name and build_prefix (its imagePrefix, ending in /). That source is the one whose repository is the
 # repository of this run (ci_repo_url of platform.sh: the job's own on CI, the repository of code_root on a machine),
@@ -219,8 +207,8 @@ provenance_required() {
 # release_source_in REPOSITORY [REV [ENV [DIR]]]: prints, as compact JSON, the release source REPOSITORY is a release
 # of (<imagePrefix><service> of a source whose services name <service>: release_source_of of deploy/k8s/lib.sh) in
 # the table chart svp-policy reads where provenance_required reads its values: in environment ENV of DIR at REV, the
-# table of this repository at the commit envs/ENV/charts.yaml pins (release_sources, which reads a commit from before
-# the table as its one source backend). Without ENV every environment of envs/, which must all admit REPOSITORY with
+# table of this repository at the commit envs/ENV/charts.yaml pins (release_sources, which refuses a commit from
+# before the table). Without ENV every environment of envs/, which must all admit REPOSITORY with
 # the same source and identity; the working tree's table when DIR has no environment. Fails, printing nothing on
 # stdout, otherwise.
 release_source_in() {
@@ -294,15 +282,76 @@ tag_provenance_mismatch() {
 # shellcheck disable=SC2034 # read by the scripts that source this file
 policy_values_paths=('envs/*/svp-policy.yaml' 'envs/*/charts.yaml')
 
-# The deployment repository (owner/name on its host, from gitops_url of deploy/k8s/lib.sh), the branch the promote of
-# stg rebuilds there, and the GitHub App whose token alone writes to it (its pull requests carry the app as author).
+# The deployment repository (owner/name on its host, from gitops_url of deploy/k8s/lib.sh) and the branch the promote
+# of stg rebuilds there.
 # shellcheck disable=SC2034 # read by the scripts that source this file
 gitops_repo=${gitops_url#https://github.com/}
 gitops_repo=${gitops_repo%.git}
 # shellcheck disable=SC2034
 gitops_promote_branch=bot/promote-stg
-# shellcheck disable=SC2034
-gitops_app=svp-gitops-promoter
+
+# promote_not_behind COMMIT REVISION: the guard of the promote to stg (job promote of images.yml). Fails when COMMIT,
+# the commit of the run, is a proper ancestor of REVISION, the commit of this repository whose charts stg runs (the
+# revision of envs/stg/charts.yaml in svp-gitops): a run started again, or a dispatch of an older commit, would take
+# stg's charts, migrations and images back. The same commit passes (a dispatch that builds again at that commit
+# replaces its releases), and so does a newer one. Also fails when REVISION is not a full commit this clone has: what
+# stg runs cannot then be compared, and is not guessed.
+promote_not_behind() {
+  [[ $2 =~ ^[0-9a-f]{40}$ ]] || fail "stg's charts name revision '$2', not a full commit of this repository"
+  git -C "$repo_root" cat-file -e "$2^{commit}" 2>/dev/null ||
+    fail "revision ${2:0:12} of stg's charts is no commit of this clone: cannot tell whether this run is older"
+  [ "$1" = "$2" ] || ! git -C "$repo_root" merge-base --is-ancestor "$1" "$2" ||
+    fail "this run's commit ${1:0:12} is older than ${2:0:12}, whose charts stg runs: promoting it would take stg back"
+}
+
+# promote_stg_ref REF CLONE: the guard of the promote to prd (job promote-prd of images.yml). Prints the full commit of
+# svp-gitops that REF names, read in CLONE (a clone of svp-gitops): REF is main or a full commit (40 hex digits), and
+# the commit must be on main of svp-gitops, so only a set that main of stg held reaches prd (an older one is a
+# rollback); a branch, a short SHA, or a commit only of another branch (the bot's, a pull request's) is refused.
+promote_stg_ref() {
+  local commit
+  if [ "$1" = main ]; then
+    commit=$(git -C "$2" rev-parse --verify --quiet "refs/remotes/origin/main^{commit}") ||
+      fail "the clone of svp-gitops has no main"
+  else
+    [[ $1 =~ ^[0-9a-f]{40}$ ]] || fail "stg_ref '$1' must be main or a full commit (40 hex digits) of svp-gitops"
+    commit=$(git -C "$2" rev-parse --verify --quiet "$1^{commit}") || fail "stg_ref $1 is no commit of svp-gitops"
+  fi
+  git -C "$2" merge-base --is-ancestor "$commit" refs/remotes/origin/main ||
+    fail "stg_ref $1 is not on main of svp-gitops: only a set that main of stg held goes to prd"
+  echo "$commit"
+}
+
+# promote_open_pr REPO BRANCH APP: prints the number of the open pull request from BRANCH into main of REPO
+# (owner/name) that GitHub App APP opened, or nothing: a fork's or a person's from a branch of that name is never the
+# app's. GitHub's --head matches the bare branch name, so forks' pull requests from such a branch are listed too, and gh
+# lists 30 by default, newest first: the list goes up to 500, and a full one fails rather than guess. A gh that fails
+# fails too: read as "no pull request", an outage would drop the releases the open one holds.
+promote_open_pr() {
+  local list
+  list=$(gh pr list --repo "$1" --head "$2" --base main --state open --limit 500 \
+    --json number,isCrossRepository,author) || fail "list the open pull requests of $2 in $1"
+  [ "$(jq length <<<"$list")" -lt 500 ] ||
+    fail "500 or more open pull requests from a branch $2 in $1: close the forks' before promoting"
+  jq -r --arg author "app/$3" \
+    '[.[] | select(.isCrossRepository == false and .author.login == $author)][0].number // empty' <<<"$list"
+}
+
+# yq_ [NAME=VALUE...] ARGS...: the pinned yq (YQ_IMAGE of the Makefile) with ARGS, without network, as the calling
+# user, with the current directory as its working directory (so yq -i edits a file there, named by a relative path)
+# and stdin passed through (never call it inside a loop that reads its list from stdin: docker would read the rest of
+# it). Each leading NAME=VALUE is set in its environment alone, for strenv(NAME) in an expression: a value never
+# becomes part of the expression.
+yq_() {
+  local image env=()
+  image=$(tool_image YQ_IMAGE) || return 1
+  while [[ ${1:-} =~ ^[A-Za-z_][A-Za-z0-9_]*= ]]; do
+    env+=(--env "$1")
+    shift
+  done
+  docker_ run --rm -i --network none --user "$(id -u):$(id -g)" -v "$PWD:/workdir" -w /workdir \
+    ${env[@]+"${env[@]}"} "$image" "$@"
+}
 
 # provenance_absent ISSUER SUBJECT IMAGE: status 0 when cosign verifies attestations of that identity on IMAGE
 # (REPOSITORY@DIGEST) and none of them is a build provenance (cosign's "none of the attestations matched the predicate

@@ -132,7 +132,6 @@ Theo thứ tự hay gặp, mỗi cái kèm dấu hiệu trong kết quả của 
    gh api repos/anhnvcoder/svp-gitops/branches -q '.[].name'
    gh api 'repos/anhnvcoder/svp-gitops/tags?per_page=100' -q '.[] | {name, sha: .commit.sha}'
    gh api 'repos/anhnvcoder/svp-gitops/releases?per_page=20' -q '.[] | {id, tag_name, created_at, author: .author.login}'
-   gh api 'repos/anhnvcoder/svp-gitops/deployments?per_page=20' -q '.[] | {id, environment, ref, created_at, creator: .creator.login}'
    ```
 
    Token App không bỏ được ruleset trên `main`: mọi thay đổi vào `main` vẫn qua PR có `gitops-ok` (chặn digest không ký bởi
@@ -206,19 +205,9 @@ Theo thứ tự hay gặp, mỗi cái kèm dấu hiệu trong kết quả của 
    - Release lạ: `gh release delete <tag> --repo anhnvcoder/svp-gitops --cleanup-tag` (xoá cả tag của nó). Tag lạ còn lại:
      `gh api -X DELETE repos/anhnvcoder/svp-gitops/git/refs/tags/<tag>`. Ruleset `tags` chưa có hay không `active` thì nhập hay bật
      nó ngay (phần B).
-   - Bản ghi Deployment lạ: token lộ ghi được bản ghi giả có URL lượt `verify.yml` thật, tức khớp đúng thứ check của PR prd đòi
-     (ADR-0025 §6); khớp bản ghi chỉ chặn nhầm lẫn, chặn kẻ tấn công là duyệt của Code Owner trên PR prd. Đừng chỉ ghi lại id: đặt
-     bản ghi về `inactive` rồi xoá, để không PR prd nào khớp được nó
-     (GitHub chỉ cho xoá Deployment `inactive` khi repo có hơn một Deployment,
-     [REST deployments](https://docs.github.com/en/rest/deployments/deployments)):
-
-     ```sh
-     gh api -X POST repos/anhnvcoder/svp-gitops/deployments/<id>/statuses -f state=inactive
-     gh api -X DELETE repos/anhnvcoder/svp-gitops/deployments/<id>
-     ```
-
-     Không phân biệt được bản ghi thật với bản giả trong thời gian nghi lộ thì làm vậy với mọi bản ghi `stg` tạo trong thời gian đó;
-     lượt `gitops` kế của `verify.yml` trên `main` ghi lại bản ghi thật bằng khoá mới.
+   - Bản ghi Deployment: từ khi `CHECKER_COMMIT` của `svp-gitops` ở bản checker rút gọn, không còn gì đọc bản ghi `stg`
+     ([ADR-0037](../adr/0037-mainpath-standard-tools.md) §6), không cần dọn; trước đó (checker cũ, bước 1b) đặt Deployment giả `inactive` rồi xoá; App còn quyền Deployments thì
+     bỏ theo A2.
 4. **Unsuspend** (cùng trang, **Unsuspend**) khi secret đã là khoá mới, khoá cũ đã xoá và bước 3 đã dọn xong. Rồi mới kiểm khoá mới
    bằng bước 3 của "Xoay khoá App".
 
@@ -295,9 +284,9 @@ commit message. Sửa ở đúng ô rồi chạy lại lệnh kiểm.
 - **GitHub App name**: `svp-gitops-promoter`. **Homepage URL**: `https://github.com/anhnvcoder/svp-backend`.
 - **Callback URL** để trống, không tích **Request user authorization (OAuth) during installation**.
 - **Webhook**: **bỏ tích Active**.
-- **Permissions** → **Repository permissions**: **Contents** Read and write, **Pull requests** Read and write, **Deployments** Read
-  and write; **Metadata** Read-only (tự có, bắt buộc). Mọi quyền khác No access, đặc biệt **Workflows**, **Actions**,
-  **Administration**, **Checks**, **Commit statuses**. Không quyền nào ở **Organization permissions**, **Account permissions**.
+- **Permissions** → **Repository permissions**: **Contents** Read and write, **Pull requests** Read and write; **Metadata** Read-only
+  (tự có, bắt buộc). Mọi quyền khác No access, đặc biệt **Deployments**, **Workflows**, **Actions**, **Administration**, **Checks**,
+  **Commit statuses**. Không quyền nào ở **Organization permissions**, **Account permissions**.
 - **Where can this GitHub App be installed?**: **Only on this account**. **Create GitHub App**.
 - Trên trang App vừa tạo: đọc **Client ID** (mục About, dạng `Iv…`, để dán ở A4); mục **Private keys** → **Generate a private key**:
   trình duyệt tải một file `.pem`, để ở thư mục tạm ngoài mọi repo. Không bấm **Generate a new client secret**: App không dùng OAuth.
@@ -305,7 +294,10 @@ commit message. Sửa ở đúng ô rồi chạy lại lệnh kiểm.
 **Vì sao:**
 
 - Contents write: đẩy nhánh `bot/promote-stg`/`bot/promote-prd`, merge PR (auto-merge). Pull requests write: mở, sửa PR, bật
-  auto-merge. Deployments write: ghi bản ghi triển khai `stg` sau khi phép kiểm trên stg qua; PR prd đòi khớp bản ghi đó.
+  auto-merge. Không Deployments: bản ghi triển khai `stg` đã bỏ ([ADR-0037](../adr/0037-mainpath-standard-tools.md) §6), không job nào xin quyền đó nữa.
+- **Thu hẹp App đã tạo trước 2026-11-01** (App cũ có **Deployments** Read and write cho bản ghi stg): trang App → **Permissions &
+  events** → **Deployments** → **No access** → **Save changes**. Bớt quyền có hiệu lực ngay, bản cài không phải chấp nhận lại; kiểm
+  như dưới (ba quyền).
 - Không Workflows: GitHub từ chối mọi push đổi file trong `.github/workflows/` của token không có quyền này, nên bot không sửa được
   chính check đang chặn nó. Không Administration: bot không đổi được ruleset, cài đặt repo.
 - Webhook tắt: App không cần nhận sự kiện nào (job tự gọi API); bật thì phải có URL và secret, GitHub gửi payload sự kiện của repo
@@ -313,11 +305,11 @@ commit message. Sửa ở đúng ô rồi chạy lại lệnh kiểm.
 - Only on this account: không ai khác cài được App này. Client ID là định danh, không phải bí mật; khoá `.pem` là bí mật duy nhất.
 
 **Kiểm** (UI, API không đọc được, xem "Kiểm tra nhanh"): https://github.com/settings/apps/svp-gitops-promoter → **Permissions &
-events**: đúng bốn quyền repository trên, không quyền organization/account, không sự kiện nào được tích; trang **General**: Webhook
+events**: đúng ba quyền repository trên (Contents, Pull requests, Metadata), không quyền organization/account, không sự kiện nào được tích; trang **General**: Webhook
 không Active, **Private keys** có đúng một khoá (ngày tạo hôm nay); tab **Advanced** còn nút **Make public** (tức App vẫn chỉ cài
 được trên tài khoản này).
 
-**Nếu sai:** thiếu Deployments → bước ghi bản ghi stg của `verify.yml` báo 403 `Resource not accessible by integration`; thiếu
+**Nếu sai:** còn Deployments → bỏ như mục "Thu hẹp" trên (không job nào cần, token lộ ghi được bản ghi vô dụng); thiếu
 Contents/Pull requests → job `promote` đỏ khi push hay mở PR với cùng message. Thừa quyền → bỏ ở Permissions & events: GitHub yêu cầu
 bản cài chấp nhận khi **thêm** quyền, bớt quyền thì có hiệu lực ngay.
 
@@ -329,7 +321,7 @@ bản cài chấp nhận khi **thêm** quyền, bớt quyền thì có hiệu l�
 **Vì sao:** token của App chỉ tới repo đã cài. Cài cả repo code thì token bị lộ đẩy được nhánh, mở PR ở chính repo build image.
 
 **Kiểm** (UI): https://github.com/settings/installations → `svp-gitops-promoter` → **Configure**: **Repository access** là "Only
-select repositories" với đúng một dòng `anhnvcoder/svp-gitops`; phần quyền liệt kê đúng bốn quyền của A2.
+select repositories" với đúng một dòng `anhnvcoder/svp-gitops`; phần quyền liệt kê đúng ba quyền của A2.
 
 **Nếu sai:** chọn lại repo ở cùng trang, **Save**. "All repositories" thì đổi sang "Only select repositories".
 
@@ -467,14 +459,16 @@ Lượt promote đầu tiên (C1) cũng là phép kiểm của A2–A4 mà API k
 
 #### C1. Promote stg (tự động)
 
-**Làm gì:** không làm gì. Mỗi lượt `images.yml` trên `main` của repo code ký xong thì job `promote` (environment `promote`) dựng lại
-nhánh `bot/promote-stg` của `svp-gitops` thành một commit trên `main` của nó, chỉ đổi `envs/stg/images/<svc>.yaml` của service vừa ký và
-`envs/stg/charts.yaml` (commit của lượt đó), mở hay cập nhật PR, bật auto-merge; PR tự merge khi `gitops-ok` xanh, Argo CD của stg kéo về.
+**Làm gì:** không làm gì. Mỗi lượt `images.yml` trên `main` của repo code ký xong thì job `promote` (environment `promote`; bước shell
+`yq` + `gh pr` trong YAML, [ADR-0037](../adr/0037-mainpath-standard-tools.md) §6) dựng lại nhánh `bot/promote-stg` của `svp-gitops` thành một commit trên `main` của nó, giữ file
+mà PR bot đang mở đã đổi, `yq -i` khối `image` của `envs/stg/images/<svc>.yaml` mỗi service vừa ký và `envs/stg/charts.yaml` (commit của
+lượt đó), mở hay cập nhật PR, bật auto-merge; PR tự merge khi `gitops-ok` xanh, Argo CD của stg kéo về.
 
-**Vì sao:** `envs/stg/` không có Code Owner, nên PR chỉ đổi thư mục đó cần check, không cần duyệt (ADR-0025 §7). Giá trị nào cũng không
-bao giờ lùi: với mỗi service, ứng viên là bản trên `main` của `svp-gitops`, bản trên `bot/promote-stg` (chỉ khi PR của nó còn mở) và bản
-lượt này ký; ứng viên có commit là con cháu của mọi ứng viên khác thắng (so tổ tiên, không so thời gian), nên lượt chạy lại muộn không thay
-được bản mới hơn (header của `deploy/ci/promote.sh`).
+**Vì sao:** `envs/stg/` không có Code Owner, nên PR chỉ đổi thư mục đó cần check, không cần duyệt (ADR-0025 §7). Thứ tự: các lượt trên
+`main` nối nhau trong nhóm `concurrency` không huỷ của build, nên lượt sau không promote trước lượt trước; guard `promote_not_behind` của
+`deploy/ci/common.sh` từ chối lượt có commit cũ hơn `revision` của `charts.yaml` ở `main` hay ở PR đang mở (chạy lại, dispatch commit
+cũ), bằng `revision` thì nhận. Check của `svp-gitops` không còn chặn tag lùi: luật tác giả hẹp chỉ giới hạn bot ở file image và
+`charts.yaml`.
 
 **Kiểm:**
 
@@ -489,56 +483,40 @@ gh api 'repos/anhnvcoder/svp-backend/deployments?environment=promote&per_page=3'
 ```
 
 **Nếu sai:** job `promote` đỏ ở bước tạo token → A4 (tên biến, khoá) rồi A2, A3. PR mở mà không tự merge → `allow_auto_merge` (A1), hay
-PR đổi file có chủ (mục Leo thang). Job đỏ với `is newer than the charts' revision`, `descends from all the others` hay `is not a commit of main
-of this repository` → giá trị đó giữ như `main` đang có, message nêu service; đọc log của lượt, sửa nguyên nhân ở repo code, lượt sau
-promote lại.
+PR đổi file có chủ (mục Leo thang). Job đỏ trước push (nhánh không đổi): `is older than …, whose charts stg runs` → lượt của commit cũ
+(chạy lại hay dispatch), chạy ở HEAD của `main`; `is no release of a service of this repository at this commit` → artifact của lượt sai,
+đọc log `sign`; `gh` lỗi khi đọc PR đang mở → chạy lại job. `pull request #… was merged or closed during this run` → chạy lại job (từ
+`main` như đang có).
 
-#### C2. Bản ghi triển khai stg
+#### C2. Bản ghi triển khai stg (đã bỏ)
 
-**Làm gì:** không làm gì. Sau mỗi lượt kịch bản `gitops` của `verify.yml` trên `main` (lịch hằng tuần hay dispatch) có bước
-"Scenario" xanh và `release-set.json` trong artifact (bước chờ phát hành sau đó đỏ cũng vậy; lượt lịch không chờ phát hành), job
-`record-stg` (environment `promote`, token App chỉ `deployments: write`) ghi một Deployment `stg` trên `svp-gitops`: `ref` là commit
-`svp-gitops` stg đã chạy, payload là bộ bảy bản phát hành (repository, tag, digest), `charts` (ba khoá của `charts.yaml`), `deployed_at`,
-URL lượt chạy. Bộ chỉ được ghi khi không gì đổi giữa ảnh chụp trước smoke và ảnh chụp sau phép kiểm cuối.
-
-**Vì sao:** prd chỉ nhận bộ đã chạy **cùng nhau** qua các phép kiểm ở stg (ADR-0024 §8); bản ghi là bằng chứng đó, PR prd so với nó.
-
-**Kiểm** (chỉ đọc, `gh` của người học; từ gốc repo code):
-
-```sh
-# bản ghi thô: id, commit svp-gitops, người tạo, lúc tạo
-gh api 'repos/anhnvcoder/svp-gitops/deployments?environment=stg&per_page=10' \
-  -q '.[] | {id, ref, created_at, creator: .creator.login}'                  # creator svp-gitops-promoter[bot]
-# bản ghi được tính (đúng bộ lọc mà check của PR prd dùng): trạng thái success, do bot của App tạo, lượt là
-# verify.yml trên main của repo code, payload đúng dạng; bản ghi bị bỏ in ra stderr kèm lý do
-deploy/ci/release-set.sh records | jq '.[] | {id, ref, created_at, run: .payload.run_url}'
-```
-
-**Nếu sai:** bước "Scenario" xanh trên `main` mà không có bản ghi → đọc job `record-stg` của lượt đó (403 là App thiếu Deployments,
-A2; job `record-stg` skip thì bước "Note whether the set of releases can be recorded" của job `gitops` in vì sao). Bước "Scenario" đỏ
-hay không có `release-set.json` → bước `release-set` đỏ hay SKIP (đọc lý do trong `results.tsv` của artifact `verify-gitops`): stg đã
-đổi giữa hai ảnh chụp (một PR promote stg merge giữa lượt), `targets` của dispatch bỏ một bước kiểm, hay một bước kiểm đỏ; chạy lại
-kịch bản với mọi bước.
+Job `record-stg` của `verify.yml`, Deployment `stg` trên `svp-gitops` và phép "bộ prd = một bản ghi" của check đã bỏ ngày 2026-11-01
+([ADR-0037](../adr/0037-mainpath-standard-tools.md) §6): stg dựng và xoá mỗi lượt, không Argo CD nào sống đủ lâu để báo trạng thái, bản ghi do chính token App ghi nên chỉ chặn
+nhầm lẫn. Promote prd chép `envs/stg/` ở một commit của `main` (C3); bằng chứng stg đã chạy bộ đó là lượt `verify.yml gitops` mà người
+duyệt đọc. Bản ghi trạng thái sau này là Argo CD Notifications ([ADR-0032](../adr/0032-argocd-deploy-status.md) A, B). Deployment `stg`
+cũ còn trên `svp-gitops` không ai đọc; để nguyên.
 
 #### C3. Promote prd (người học dispatch, Code Owner duyệt)
 
 **Làm gì** (người học chạy, lệnh ghi):
 
-1. Chọn bản ghi: mới nhất của C2 (để trống `record`), hay id cụ thể.
+1. Chọn `stg_ref`: `main` (mặc định, bộ stg hiện tại), hay SHA đủ 40 hex của một commit trên `main` của `svp-gitops` mà lượt
+   `verify.yml gitops` đã kiểm (`GITOPS_REV` của lượt đó, in ở log bước kịch bản).
 2. Dispatch, không kèm `services`, `rescan`, `values_ref`, `drill` (lượt promote prd là một lượt riêng, job từ chối nếu kèm):
 
    ```sh
-   gh workflow run images.yml --repo anhnvcoder/svp-backend --ref main -f promote_prd=true [-f record=<id>]
+   gh workflow run images.yml --repo anhnvcoder/svp-backend --ref main -f promote_prd=true [-f stg_ref=<SHA>]
    ```
 
-3. Job `promote-prd` (environment `promote`) dựng lại nhánh `bot/promote-prd` thành một commit trên `main` của `svp-gitops`, chép **cả
-   bộ** bảy bản phát hành của bản ghi vào `envs/prd/images/` và `charts` vào `envs/prd/charts.yaml`, mở hay cập nhật PR (không auto-merge),
-   mô tả ghi id bản ghi, commit stg và lượt đã kiểm.
-4. Đọc diff của PR, chờ `gitops-ok` xanh, **Approve**, merge.
+3. Job `promote-prd` (environment `promote`) dựng lại nhánh `bot/promote-prd` thành một commit trên `main` của `svp-gitops`, chép giá trị
+   `image` của cả bảy `envs/stg/images/*.yaml` và ba khoá của `envs/stg/charts.yaml` ở `stg_ref` vào cùng file dưới `envs/prd/` (`yq -i`,
+   comment của file prd giữ nguyên), mở hay cập nhật PR (không auto-merge), mô tả nêu `stg_ref` và lệnh rescan cho bộ cũ.
+4. Đọc diff của PR, so bộ với `envs/stg/` ở `stg_ref` và với lượt `gitops` đã kiểm commit đó, chờ `gitops-ok` xanh, **Approve**, merge.
 
-**Vì sao:** `envs/prd/` có Code Owner (ruleset `owners`): tác giả là bot nên người học duyệt được, đó là cổng prd. Check `gitops-ok`
-(bước 1b của `deploy/ci/gitops-check.sh`) so lại bộ ở HEAD của PR với các bản ghi được tính (như lệnh thứ hai của C2) có `ref` trên `main`
-của `svp-gitops`: bảy digest **và** `charts.yaml` phải bằng đúng payload của **một** bản ghi. Không có promote prd theo từng service.
+**Vì sao:** `envs/prd/` có Code Owner (ruleset `owners`): tác giả là bot nên người học duyệt được, và **duyệt là cổng prd duy nhất**:
+không còn bản ghi stg (C2), `stg_ref` chỉ bảo đảm bộ từng nằm trên `main` của `envs/stg/`, không bảo đảm stg đã chạy và smoke qua với
+đúng bộ đó (GIT-4 của [`threat-model.md`](../threat-model.md)). Guard `promote_stg_ref` của `deploy/ci/common.sh` chỉ nhận `main` hay SHA
+đủ 40 hex trên `main` của `svp-gitops`. Không có promote prd theo từng service.
 
 **Kiểm:**
 
@@ -549,37 +527,36 @@ gh pr list --repo anhnvcoder/svp-gitops --head bot/promote-prd --state all --lim
 gh pr view <số PR> --repo anhnvcoder/svp-gitops --json files -q '.files[].path'      # chỉ envs/prd/images/…, envs/prd/charts.yaml
 ```
 
-**Nếu sai** (message của `gitops-ok` trên PR):
+**Nếu sai:**
 
-- `mixes releases of several records of stg` → có người sửa tay một file `envs/prd/images/`: đóng PR, dispatch lại.
-- `is the set of envs/stg/images/ at … but no record of stg holds it` → bộ đó chỉ mới merge vào stg, chưa qua lượt `gitops` nào: chờ
-  lượt `gitops` trên `main` ghi bản ghi (C2: lượt lịch tuần, hay dispatch) rồi promote bản ghi đó.
-- `matches no record of stg` → bản ghi không được tính (C2, lệnh thứ hai in lý do), `charts.yaml` khác `charts` của bản ghi, hay `ref`
-  không còn trên `main` của `svp-gitops`. Job `promote-prd` cũng từ chối bản ghi có commit không trên `main`.
-- `the records of stg in … cannot be read` → `check.yml` của `svp-gitops` thiếu `GH_TOKEN: ${{ github.token }}` ở bước
-  `gitops-check.sh` (C5), hay API của GitHub lỗi: chạy lại check.
-- Attestation `vuln` của bộ quá 48 giờ (bước 5 của check) → check in sẵn lệnh rescan có `values_ref` là commit của bản ghi; người học
-  chạy lệnh đó, xong thì **Re-run** check của PR.
+- Job đỏ `stg_ref '…' must be main or a full commit`, `is no commit of svp-gitops` hay `is not on main of svp-gitops` → `stg_ref` là
+  nhánh, SHA ngắn hay commit ngoài `main` (nhánh bot): dispatch lại với SHA đủ của `main`; không lệnh `gh` nào đã chạy.
+- `gitops-ok` đỏ ở bước 1b (`records of stg`, `matches no record of stg`) → `CHECKER_COMMIT` còn ghim checker cũ: nâng nó (C5) rồi
+  **Re-run** check.
+- Attestation `vuln` của bộ quá 48 giờ (bước 5 của check) → chạy lệnh rescan mà mô tả PR in sẵn (`values_ref` là `stg_ref`), xong
+  thì **Re-run** check của PR.
 
 #### C4. Rollback
 
-**prd** (người học dispatch): như C3 với id của một bản ghi **cũ hơn** bản prd đang chạy:
-`gh workflow run images.yml --repo anhnvcoder/svp-backend --ref main -f promote_prd=true -f record=<id cũ>`. Bản cũ gần như luôn
-có attestation `vuln` quá 48 giờ: chạy trước lệnh rescan mà check in ra (`… -f rescan=true -f values_ref=<commit svp-gitops của bản ghi>`).
-Duyệt và merge như C3. Rollback prd là promote một bộ đã chạy ở stg, không phải sửa tay.
+**prd** (người học dispatch): như C3 với `stg_ref` là commit **cũ hơn** trên `main` của `svp-gitops` mà `envs/stg/` mang bộ muốn
+về (thường commit merge của PR promote stg trước bản lỗi; `git log --oneline -- envs/stg/` trong bản clone):
+`gh workflow run images.yml --repo anhnvcoder/svp-backend --ref main -f promote_prd=true -f stg_ref=<SHA cũ>`. Bộ cũ gần như luôn
+có attestation `vuln` quá 48 giờ: chạy lệnh rescan mà mô tả PR in ra (`… -f rescan=true -f values_ref=<stg_ref>`) rồi Re-run check.
+Duyệt và merge như C3. Rollback prd là promote một bộ từng nằm ở stg, không phải sửa tay.
 
 **stg** (người học mở PR revert trong `svp-gitops`):
 
 1. Trên PR promote đã merge gây lỗi, bấm **Revert** (GitHub tạo nhánh và PR revert). Giữ tiêu đề `Revert "…"` và dòng `This reverts
    commit <sha>.` trong mô tả (hay đặt tiêu đề `revert: …` với footer `Refs: <sha>`): DORA nhận ra rollback bằng hai dạng đó (A1).
-2. PR đang mở của `bot/promote-stg` mà chứa đúng bản lỗi: đóng nó trước (ứng viên trên nhánh bot chỉ được tính khi PR của nó còn mở).
+2. PR đang mở của `bot/promote-stg` mà chứa đúng bản lỗi: đóng nó trước (job `promote` chỉ giữ file của PR bot khi PR đó còn mở).
 3. PR revert chỉ đổi `envs/stg/` nên không cần duyệt; chờ `gitops-ok` rồi merge. Attestation `vuln` của digest cũ quá 48 giờ thì chạy
    rescan với `values_ref=refs/pull/<số PR revert>/head`, rồi Re-run check.
 
-**Vì sao revert đứng được:** promote stg không bao giờ lùi, nhưng sau revert `main` của `svp-gitops` mang bản cũ và job `promote` chỉ
-xét bản trên `main`, bản trên nhánh bot khi PR còn mở, và bản **lượt đó vừa ký**. Bản lỗi đã nằm trong lịch sử `main` và PR bot cũ đã đóng,
-nên không lượt nào đưa nó lại; digest của service đó chỉ tiến lên khi một bản phát hành **mới** của chính service đó được build (thường
-là bản sửa). Riêng `charts.yaml`: commit của mọi lượt promote mới là con cháu của commit bị revert, nên revert `revision` chỉ đứng tới
+**Vì sao revert đứng được:** sau revert `main` của `svp-gitops` mang bản cũ, và job `promote` dựng nhánh trên `main`, giữ file của PR bot
+chỉ khi PR đó còn mở, rồi chỉ ghi bản **lượt đó vừa ký**. Bản lỗi đã nằm trong lịch sử `main` và PR bot cũ đã đóng, nên không lượt nào đưa
+nó lại; digest của service đó chỉ tiến lên khi một bản phát hành **mới** của chính service đó được build (thường là bản sửa). Chạy lại
+đúng lượt của bản lỗi thì đưa nó lại được (guard chỉ so với `revision`, mà commit đó con cháu của `revision` sau revert): đừng re-run
+lượt đó. Riêng `charts.yaml`: commit của mọi lượt promote mới là con cháu của commit bị revert, nên revert `revision` chỉ đứng tới
 lượt promote kế tiếp; chart lỗi thì sửa ở repo code (PR revert ở repo code), lượt promote sau đưa commit đã sửa lên stg.
 
 **Kiểm:** lệnh lịch sử sync của "Giảm thiểu" bước 3 (SHA mới nhất là commit merge của PR revert); `make k8s-smoke` trên cluster GitOps
@@ -593,17 +570,18 @@ nếu đang chạy.
   `deploy/helm/svp-cluster/values.yaml`, sha256 của `deploy/observability/otelcol/k8s-config.yaml`) tính từ commit đó. Lượt push `main`
   chỉ đổi `deploy/helm/` hay file mà symlink trong đó trỏ tới (không image nào build) vẫn chạy job `promote` và chỉ ghi `charts.yaml`
   (summary của job `plan` ghi "No image to build, but the charts changed"). Không sửa tay `envs/stg/charts.yaml`.
-- **prd** chỉ đổi qua C3: `charts.yaml` đi cùng bảy digest của bản ghi.
-- Check của `svp-gitops` chặn hai thứ: `revision` không trên `main` của repo code, và image có commit (`image.tag`) không phải tổ tiên
-  hay chính `revision` (image không chạy với chart cũ hơn code của nó).
+- **prd** chỉ đổi qua C3: `charts.yaml` đi cùng bảy digest của `envs/stg/` ở `stg_ref`.
+- Check của `svp-gitops` chặn `revision` không trên `main` của repo code và giá trị dẫn xuất sai. Luật "image không mới hơn chart"
+  (tag image là tổ tiên của `revision`) đã bỏ ([ADR-0037](../adr/0037-mainpath-standard-tools.md) §6); còn guard ở bước promote stg (C1).
 
 **Commit checker (`CHECKER_COMMIT` của `.github/workflows/check.yml` của `svp-gitops`):**
 
 - **Làm gì:** Renovate (A5, datasource `git-refs` theo `main` của repo code, nhóm `checker commit`) mở PR mỗi khi `main` của repo code
   tiến; hay người học tự sửa dòng `CHECKER_COMMIT:` thành SHA đầy đủ của một commit trên `main` của repo code, mở PR. Trước khi duyệt,
   đọc `git log <CHECKER_COMMIT cũ>..<mới> -- deploy/ci deploy/k8s/lib.sh` ở repo code: từ commit mới, chính script đó kiểm cây này.
-  Lần bump đầu sau khi repo code có bản ghi stg (C2) cũng thêm `GH_TOKEN: ${{ github.token }}` vào `env` của bước `gitops-check.sh` (job đã
-  có `deployments: read`): bước 1b đọc bản ghi bằng `gh`, thiếu token thì mọi PR prd đỏ "cannot be read".
+  Lần bump lên commit có check rút gọn ([ADR-0037](../adr/0037-mainpath-standard-tools.md) §4–§6: không bước 1b, luật tác giả hẹp, policy Kyverno CLI) cũng bỏ
+  `deployments: read` của job và `GH_TOKEN` của bước `gitops-check.sh` (không bước nào đọc bản ghi stg nữa); trước bump đó, mọi PR prd
+  đỏ ở bước 1b của checker cũ.
 - **Vì sao:** checker chạy từ repo code ở commit ghim, nên PR của `svp-gitops` không đổi được bộ kiểm trừ khi đổi chính file
   workflow, mà `.github/` có Code Owner và App không có quyền `workflows` (ADR-0025 §5).
 - **Kiểm:** bước `The commit of the checker` trong log lượt `check` của PR in đúng commit mới; `gitops-ok` xanh trước khi merge.
@@ -690,9 +668,10 @@ không làm gián đoạn:
   §9 (trình tự chuyển), §10 (Renovate); mục "Kiểm chứng sau" của ADR đó: các phép kiểm sau push của auto-merge, Code Owner, bypass.
 - [ADR-0015](../adr/0015-cicd-devsecops-stage5.md) §11: cài đặt tương ứng của repo code.
 - `README.md` của `svp-gitops` (https://github.com/anhnvcoder/svp-gitops): cây, ai duyệt gì, promote.
-- [ADR-0024](../adr/0024-multi-environment.md) §8 (bản ghi stg, promote prd cả bộ), [ADR-0028](../adr/0028-dora-metrics.md) §5 (dạng
+- [ADR-0024](../adr/0024-multi-environment.md) §8 (promote prd cả bộ; phần bản ghi stg thay bởi [ADR-0037](../adr/0037-mainpath-standard-tools.md) §6), [ADR-0037](../adr/0037-mainpath-standard-tools.md)
+  §6 (promote bằng bước Actions, `stg_ref`, bỏ bản ghi stg), [ADR-0028](../adr/0028-dora-metrics.md) §5 (dạng
   commit revert mà DORA tính là rollback).
-- Không có diễn tập; phép kiểm sau push là lượt promote đầu (C1), lượt `gitops` đầu trên `main` (C2) và promote prd đầu (C3).
+- Không có diễn tập; phép kiểm sau push là lượt promote đầu (C1) và promote prd đầu (C3) của bước `yq` + `gh pr`.
 
 ## Đã kiểm
 
@@ -714,6 +693,7 @@ không làm gián đoạn:
   kube-prometheus-stack) là PR của người học trên file có chủ, merge trước lượt đó.
 - 2026-10-30, lệnh `squash` của "Kiểm tra nhanh": `COMMIT_OR_PR_TITLE` / `COMMIT_MESSAGES` (mặc định của GitHub), **lệch** A1: người
   học đổi ô Default commit message sang "Pull request title and description" trước PR revert đầu tiên.
-- Chưa kiểm (sau merge PR cắt ở repo code): PR bot stg đầu tiên tự merge (C1), bản ghi stg đầu tiên (C2), promote prd và ba ca đỏ của
-  check prd (C3), rollback (C4), bump `CHECKER_COMMIT` kèm `GH_TOKEN` (C5), bypass `owners` có bản ghi, lệnh patch `svp-root` của
-  "Giảm thiểu" bước 3. Xoay khoá, gỡ khẩn cấp: chưa làm.
+- Chưa kiểm (sau merge PR cắt ở repo code): PR bot stg đầu tiên tự merge (C1), bản ghi stg đầu tiên (C2, nay đã bỏ), promote prd (C3),
+  rollback (C4), bump `CHECKER_COMMIT` (C5), bypass `owners` có bản ghi, lệnh patch `svp-root` của
+  "Giảm thiểu" bước 3. Xoay khoá, gỡ khẩn cấp: chưa làm. Bước promote `yq` + `gh pr` thay `promote.sh`, `promote-prd.sh` (2026-11-01;
+  stg, prd, rollback `stg_ref`), thu hẹp quyền Deployments của App (A2): chưa kiểm.

@@ -1,7 +1,7 @@
 # 0036. Đổi tên repo `short-video-platform` → `svp-backend`, `svp-web` → `svp-frontend`: image chuyển sang prefix mới mang tên repo; bảng nguồn của lượt chuyển giữ hai nguồn cũ ở dạng nghỉ hưu (được nhận, không ai phát hành) để stg, prd đi qua bằng PR bot như mọi bản phát hành, rồi gỡ khi prd chạy bộ bản mới
 
 - Trạng thái: Chấp nhận (2026-10-31); hiện thực: PR đổi tên ở backend merge `b5f22c2` (PR #59), stg và prd chạy bảy bản dưới prefix mới
-  (mục Kết quả); PR gỡ hai nguồn nghỉ hưu (mục 4, bước 8) hiện thực 2026-11-01, chưa merge
+  (mục Kết quả); PR gỡ hai nguồn nghỉ hưu (mục 4, bước 8) hiện thực 2026-11-01 (PR #61, `344da5f`)
 - Ngày: 2026-10-31
 
 ## Bối cảnh
@@ -209,7 +209,7 @@ Cách lùi:
 
 ### 8. Đọc lịch sử dưới tên cũ là lâu dài, không phải phần chuyển tiếp
 
-> Phần DORA của mục này bị thay bởi [ADR-0037](0037-mainpath-standard-tools.md) §1 (2026-11-01): `dora.sh` rời đường chính sang bài lab; danh sách tên cũ `_ci_renamed_repos` còn cho `run_url` của bản ghi stg và comment của file `svp-gitops`.
+> Phần DORA của mục này bị thay bởi [ADR-0037](0037-mainpath-standard-tools.md) §1 (2026-11-01): `dora.sh` rời đường chính sang bài lab; danh sách tên cũ `_ci_renamed_repos` cùng hai người đọc còn lại (bản ghi stg, comment của file `svp-gitops`) bỏ ở phần B của ADR-0037.
 
 - Bản ghi stg trước đổi tên (Deployment trên `svp-gitops`, [ADR-0028](0028-dora-metrics.md)) có `run_url` dưới
   `https://github.com/anhnvcoder/short-video-platform/actions/runs/…` và image dưới prefix cũ; chúng còn trong cửa sổ của `dora.yml` (mặc định
@@ -282,11 +282,13 @@ Không tạo repo nào tên `short-video-platform` hay `svp-web` dưới `anhnvc
   từ chart của commit gỡ, rollback về bản trước đổi tên bị phép 1 từ chối (prefix không thuộc nguồn nào), `promote.sh` đỏ khi `main` của
   `svp-gitops` còn file dưới prefix cũ, rescan liệt kê file đó nên lượt đỏ, bản ghi stg trước đổi tên không còn promote prd được. Giữ: đọc
   bảng có nguồn không `promoter` (prd còn ở T tới lần promote prd sau; `sources-test.sh` đòi mọi nguồn của bảng working tree có `promoter`)
-  và phần đọc lịch sử của mục 8 (`dora.sh`, `_ci_renamed_repos`). PR gỡ chưa merge; `CHECKER_COMMIT` (mục 9): chưa nâng.
+  và phần đọc lịch sử của mục 8 (`dora.sh`, `_ci_renamed_repos`). PR gỡ merge `344da5f` (PR #61, 2026-11-01); `CHECKER_COMMIT` (mục 9) nâng lên `344da5f` (PR #41 của `svp-gitops`, `e37fd8d`); bản phát hành
+  đầu sau gỡ lên stg qua PR bot #42; lượt `verify.yml gitops` hẹp 41235847539 (`k8s-smoke`, `drill-k8s-supplychain` mọi ca PASS, ca (m) chỉ
+  cặp `backend`/`web`; `drill-k8s-threats` PASS), rescan hai repo 41235850238, 41235859422 xanh.
 
 ## Hiện thực ở
 
-PR đổi tên ở backend (chưa merge):
+PR đổi tên ở backend (PR #59, `b5f22c2`):
 
 - Bảng nguồn (mục 3): `deploy/helm/svp-policy/files/sources.json` (bốn nguồn), `deploy/helm/svp-policy/templates/imagevalidatingpolicy.yaml`
   (`promoter` tuỳ chọn); `deploy/k8s/lib.sh` (`_release_sources_jq`, `ghcr_prefix`, `web_url`, `web_ci_clone`, `web_is_clone`,
@@ -312,7 +314,7 @@ PR đổi tên ở backend (chưa merge):
   (comment), `README.md`.
 - `svp-frontend`: `.backend-commit`, `api/contract.json`, `scripts/backend.sh`, `.github/workflows/`, `renovate.json`, tài liệu.
 
-PR gỡ (mục 4, bước 8; chưa merge): `deploy/helm/svp-policy/files/sources.json` còn `backend`, `web`; bỏ nhánh tiếp quản từ nguồn nghỉ hưu ở
+PR gỡ (mục 4, bước 8; PR #61, `344da5f`): `deploy/helm/svp-policy/files/sources.json` còn `backend`, `web`; bỏ nhánh tiếp quản từ nguồn nghỉ hưu ở
 `deploy/ci/gitops-check.sh` (`author_rule`), `deploy/ci/promote.sh`, phần riêng cho nguồn nghỉ hưu ở `deploy/ci/rescan.sh`,
 `deploy/k8s/drills/supplychain.sh` (ca m) và `deploy/ci/common.sh` (`active_source`, nhánh nghỉ hưu của `use_build_source`); giữ
 `_release_sources_jq` của `deploy/k8s/lib.sh` và template của `svp-policy` đọc được nguồn không `promoter` (comment ghi lúc bỏ được) và phần

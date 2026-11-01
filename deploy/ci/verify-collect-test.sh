@@ -13,8 +13,8 @@
 # also with its last sample written late by a fake sampler; its k6.tsv over fixtures of /proc and of the cgroup tree;
 # the criteria of the k3d scenarios of part 3 (two KEDA drills of gitops, the k6 pods' CPU throttling).
 # Then deploy/ci/verify-run.sh with a fake make (and a fake psql and docker for the copy back to MinIO): its clones
-# (--clones), the scenarios of compose-obs and dev-k3d, each scenario of part 3 by its name, gitops with part of its checks in targets (no set
-# recorded), its release wait on a scheduled run, and made-up scenario files for what a scenario file can get wrong and
+# (--clones), the scenarios of compose-obs and dev-k3d, each scenario of part 3 by its name, gitops's release wait on a
+# scheduled run, and made-up scenario files for what a scenario file can get wrong and
 # for a drill run twice. Then gitops_stale of deploy/ci/verify/gitops.sh with a fake cosign, and the self-test of
 # deploy/ci/verify-tempo.sh.
 # Last, that deploy/ci/changed-services.sh builds no image for a change of these scripts, in a throwaway git repository
@@ -829,11 +829,6 @@ printf 'RAM at rest (start): MEM USAGE median 5800 MiB\nfree -m of the runner at
   "Mem:  15995  9000  1200  50  5795  6700" >"$out/ram-rest-start.txt"
 echo '{}' >"$out/.hidden.json"
 echo 230 >"$out/run-end"
-# The set of releases stg ran (deploy/ci/release-set.sh): the record's payload is kept, the snapshots it was read from
-# are not.
-echo '{"environment":"stg","ref":"0123456789abcdef0123456789abcdef01234567","images":{}}' >"$out/release-set.json"
-mkdir -p "$out/release-set"
-echo '{"applications":[]}' >"$out/release-set/before.json"
 
 # --- The fake checkout's results.
 d=$repo/.k8s/drills
@@ -997,7 +992,7 @@ collect k3d "$work/secrets-k3d"
 for src in '$SVP_VERIFY_OUT/results.tsv' '$SVP_VERIFY_OUT/scenario' '$SVP_VERIFY_OUT/samples/host.tsv' \
   '$SVP_VERIFY_OUT/logs/01-k8s-up.log' '$SVP_VERIFY_OUT/logs/03-drill-k8s-keda.log' \
   '$SVP_VERIFY_OUT/logs/04-drill-k8s-threats.log (verdict lines)' '$SVP_VERIFY_OUT/ram-rest-start.json' \
-  '$SVP_VERIFY_OUT/ram-rest-start.txt' '$SVP_VERIFY_OUT/release-set.json' \
+  '$SVP_VERIFY_OUT/ram-rest-start.txt' \
   '$SVP_VERIFY_OUT/logs/06-drill-obs-threats.log (verdict lines)' \
   '$SVP_VERIFY_OUT/logs/05-drill-alert-to-sentry.log' .k8s/drills/canary-drill-1.json .k8s/drills/names-1.json \
   .k8s/drills/identifiers-1.json .k8s/drills/traffic-1.log .k6/local-1/summary.json \
@@ -1010,9 +1005,6 @@ expect k3d .k8s/drills/binary-piece-1.json secret-value
 expect k3d '$SVP_VERIFY_OUT/logs/02-k8s-smoke.log' secret-value
 expect k3d '$SVP_VERIFY_OUT/sampler.pid' not-allowed
 expect k3d '$SVP_VERIFY_OUT/run-end' not-allowed
-expect k3d '$SVP_VERIFY_OUT/release-set/before.json' not-allowed
-[ -f "$work/art-k3d/release-set.json" ] && ok "k3d: release-set.json lands at the top of the artifact" ||
-  fail "k3d: release-set.json lands at the top of the artifact"
 lacks k3d "verify-run.sh's end mark is dropped without a warning" 'run-end'
 expect k3d '$SVP_VERIFY_OUT/.hidden.json' hidden
 expect k3d .k8s/drills/backup-1.json secret-value
@@ -2000,15 +1992,6 @@ if timeout --version 2>/dev/null | grep -q GNU; then
   same "verify-run: velero needs no clone of svp-frontend: its build target runs" "$(printf -- '-s gitops-clone\nk8s-up')" \
     "$(cat "$work/run-no-web-clone-velero.make")"
   mv "$work/web-aside" "$vr/.web"
-  # gitops with targets that leave out some of its checks: release-set, though chosen, is skipped with the reason and
-  # fails the run, so no release-set.json is written for job record-stg to record.
-  rc=$(run_verify part-gitops gitops 'SVP_VERIFY_TARGETS=k8s-smoke release-set-before release-set')
-  same "verify-run: gitops with part of its checks in targets fails" 1 "$rc"
-  same "verify-run: gitops skips release-set when the targets leave out a check of the set" \
-    "release-set skipped targets leave out gitops-env gitops-external-secrets gitops-argocd-metrics ram-rest-start drill-k8s-supplychain drill-k8s-threats gitops-sourcemaps k8s-web-e2e drill-k8s-web-obs drill-k8s-keda-1 ram-peak-1 drill-k8s-keda-2 ram-peak-2 ram-rest-end: the set of releases stg ran was not checked by every step" \
-    "$(results part-gitops | awk '$2 == "release-set" { $1 = ""; print substr($0, 2) }')"
-  [ ! -e "$work/run-part-gitops.out/release-set.json" ] && ok "verify-run: gitops with part of its checks writes no release-set.json" ||
-    fail "verify-run: gitops with part of its checks writes no release-set.json"
   # The step after the scenario (release_wait): a scheduled run waits for no release; only true marks one, so any
   # other value is a dispatch, here of a branch, which waits for nothing either but says so for its own reason.
   wait_step() {

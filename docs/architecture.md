@@ -595,7 +595,7 @@ flowchart LR
     subgraph code["repo svp-backend (code)"]
         src["code, test, Dockerfile,<br/>chart deploy/helm/*"]
         img["images.yml: build, quét,<br/>ký, provenance"]
-        ver["verify.yml: kịch bản gitops,<br/>job record-stg"]
+        ver["verify.yml: kịch bản gitops<br/>(dựng stg ở commit đã kiểm)"]
         env["environment promote<br/>(khoá App, chỉ main)"]
     end
     subgraph cfg["repo svp-gitops (cấu hình)"]
@@ -603,14 +603,12 @@ flowchart LR
         stg["envs/stg/: overlay,<br/>charts.yaml, images/"]
         prd["envs/prd/: overlay,<br/>charts.yaml, images/"]
         argo["argocd/: AppProject,<br/>bootstrap, app-of-apps"]
-        dep["Deployment stg<br/>(bản ghi)"]
     end
     cluster["cluster stg<br/>(Argo CD)"]
     img -->|"PR bot/promote-stg, auto-merge"| stg
-    ver -->|"bản ghi bộ đã kiểm"| dep
-    dep -->|"PR bot/promote-prd,<br/>Code Owner duyệt"| prd
+    img -->|"dispatch promote_prd, stg_ref:<br/>PR bot/promote-prd, Code Owner duyệt"| prd
+    ver -.->|"đọc main"| cfg
     env -.-> img
-    env -.-> ver
     cluster -->|"root, values: refs/heads/main"| cfg
     cluster -->|"chart: SHA của charts.yaml"| src
 ```
@@ -620,15 +618,18 @@ flowchart LR
   (`envs/<env>/images/`) của mỗi env, bản cài và manifest Argo CD. Push vào `main` repo code không đổi cluster nào.
 - **Một bản phát hành = bảy digest + một commit chart**, đi qua stg rồi mới tới prd (như Freight của Kargo). `charts.yaml` mang
   `revision` (commit repo code) cùng hai giá trị dẫn xuất (`podSecurityVersion`, `collectorConfigSha256`) thay hai symlink cũ;
-  check của `svp-gitops` tính lại chúng và chặn image mới hơn chart.
+  check của `svp-gitops` tính lại chúng (luật "image không mới hơn chart" đã bỏ,
+  [ADR-0037](adr/0037-mainpath-standard-tools.md) §6; còn guard tổ tiên ở bước promote stg của repo code).
 - **Argo CD multi-source:** root `svp-root` và nguồn `ref: values` đọc `svp-gitops` ở `refs/heads/main` (tên đầy đủ, không bao giờ
   tên ngắn: tên ngắn có thể phân giải sang tag cùng tên; ruleset `tags` cấm tạo tag), nguồn chart đọc repo code ở SHA 40 hex.
 - **Quyền:** stg tự động (PR của bot chỉ đổi `envs/stg/`, không Code Owner, tự merge sau `gitops-ok`); prd chỉ qua PR do bot mở chép
-  cả bộ của một bản ghi stg, Code Owner duyệt; file chung cần Code Owner, người học tự merge bằng bypass ruleset `owners` (có bản
-  ghi). Khoá App chỉ ở environment `promote` của repo code, ba job trên `main` dùng nó với token 1 giờ, mỗi job đúng quyền.
-- **Bản ghi stg:** job `record-stg` của `verify.yml` (sau kịch bản `gitops` xanh trên `main`) tạo Deployment `stg` trên `svp-gitops`
-  với bộ đã chạy suốt các phép kiểm (`release-set.json`); đây là đầu vào duy nhất của promote prd. DORA metrics không đọc nó ở đây nữa:
-  là bài lab `dora/` của `svp-labs` ([ADR-0037](adr/0037-mainpath-standard-tools.md) §1).
+  `envs/stg/` của một commit trên `main` của `svp-gitops` (`stg_ref`), Code Owner duyệt; file chung cần Code Owner, người học tự merge
+  bằng bypass ruleset `owners` (có bản ghi). Khoá App chỉ ở environment `promote` của repo code, hai job trên `main` (`promote`,
+  `promote-prd`) dùng nó với token 1 giờ, chỉ `contents`, `pull_requests` write.
+- **Không còn bản ghi stg** ([ADR-0037](adr/0037-mainpath-standard-tools.md) §6): job `record-stg`, Deployment `stg` trên `svp-gitops`
+  và phép "bộ prd = một bản ghi" của check đã bỏ; cổng prd là duyệt của Code Owner, `stg_ref` không bảo đảm stg đã chạy và smoke qua
+  với đúng bộ đó. Bản ghi trạng thái triển khai sau này là Argo CD Notifications ([ADR-0032](adr/0032-argocd-deploy-status.md) A, B),
+  khi có EKS stg chạy suốt buổi.
 - **Đường dev:** đọc working tree của bản clone `svp-gitops` cạnh repo (`../gitops`, hay `SVP_GITOPS_DIR`), không tự clone hay
   fetch; CI clone ẩn danh bằng `make gitops-clone`. Thay đổi cần cả code lẫn cấu hình thành hai PR theo thứ tự (cấu hình tương
   thích bản cũ trước).
@@ -637,7 +638,7 @@ flowchart LR
   [40937054425](https://github.com/anhnvcoder/svp-backend/actions/runs/40937054425) đọc bản clone, check đầu của
   `svp-gitops` [40902199532](https://github.com/anhnvcoder/svp-gitops/actions/runs/40902199532). RAM của lượt `gitops` đó: nghỉ
   cuối 7 241 MiB (bỏ active_file), vượt ngưỡng 6,5 GiB; đỉnh `ram-peak-2` median 8 954 MiB, vượt 8,7 GiB (không kết luận đạt,
-  [ADR-0021](adr/0021-deferred-verification-stage6b.md)). **Kiểm sau push:** auto-merge PR bot, `record-stg`, promote prd.
+  [ADR-0021](adr/0021-deferred-verification-stage6b.md)). **Kiểm sau push:** bước promote `yq` + `gh pr` (stg, prd) thay `promote.sh`, `promote-prd.sh`.
 
 ### 5.6 Ba repo và hợp đồng API (giai đoạn 6b phần 4b)
 
@@ -678,15 +679,15 @@ flowchart LR
   web, bỏ cái cũ (major).
 - **Nguồn phát hành:** mỗi repo phát hành image dưới prefix riêng, ký bằng workflow của chính nó (`deploy/helm/svp-policy/files/sources.json`:
   `backend` sáu service Go dưới `ghcr.io/anhnvcoder/svp-backend/`, `web` chỉ `ghcr.io/anhnvcoder/svp-frontend/web`); Kyverno chọn attestor
-  theo prefix, check của `svp-gitops` giới hạn file mỗi bot được đổi (tác giả PR).
+  theo prefix, check của `svp-gitops` giới hạn file mỗi bot được đổi (luật tác giả hẹp, đọc từ bảng nguồn).
 - **Đổi tên repo** (2026-10-31, [ADR-0036](adr/0036-repo-rename.md)): `short-video-platform` → `svp-backend`, `svp-web` → `svp-frontend`;
   identity ký và prefix image mang tên repo nên đổi theo. Bảng nguồn của bản chuyển có giữ hai **nguồn nghỉ hưu** `oldbackend`, `oldweb`
-  (URL, prefix, identity cũ, không `promoter`): được nhận, không ai build, promote hay rescan; PR bot của nguồn mới tiếp quản file image
-  của chúng; đã gỡ ngày 2026-11-01 khi mọi env chạy bản dưới prefix mới: bản trước đổi tên nay bị policy từ chối. Tên cũ của repo khai một chỗ, dạng dữ liệu (`_ci_renamed_repos` của `deploy/ci/platform.sh`),
-  cho `run_url` của bản ghi stg và comment của file `svp-gitops` viết dưới tên cũ. Danh sách build của backend (`built_services`, sáu) tách khỏi danh sách
-  bảy bản triển khai (`svp_services`) mà promote prd, bản ghi stg, rescan đọc.
+  (URL, prefix, identity cũ, không `promoter`): được nhận, không ai build, promote hay rescan; PR bot của nguồn mới thay file image
+  của chúng; đã gỡ ngày 2026-11-01 khi mọi env chạy bản dưới prefix mới: bản trước đổi tên nay bị policy từ chối. Danh sách build của backend
+  (`built_services`, sáu) tách khỏi danh sách bảy bản triển khai (`svp_services`) mà promote prd, rescan đọc.
 - **Script CI dùng chung:** `svp-frontend` checkout `deploy/ci/` của backend ở commit ghim `.backend-commit` (chỗ ghim duy nhất, Renovate
-  nâng) và chạy với `SVP_CODE_ROOT` trỏ cây của nó; logic build, quét, ký, attest, promote, rescan chỉ có một bản.
+  nâng) và chạy với `SVP_CODE_ROOT` trỏ cây của nó; logic build, quét, ký, attest, rescan chỉ có một bản; promote là bước
+  `yq` + `gh pr` trong `images.yml` của mỗi repo ([ADR-0037](adr/0037-mainpath-standard-tools.md) §6).
 - **Kiểm chéo:** job `stack` của `svp-frontend` dựng compose của backend ở commit stg chạy với sáu image stg theo digest
   (`make up IMAGES=stg WEB_FROM=clone`) và chạy e2e của PR; job `stack` của backend chạy web bản stg và e2e của `svp-frontend` ở commit đó.
   Cả hai chỉ báo; e2e không chặn một PR backend làm hỏng web mà oasdiff không thấy.
@@ -694,7 +695,7 @@ flowchart LR
   [41079830814](https://github.com/anhnvcoder/svp-backend/actions/runs/41079830814)); bản web đầu của `svp-frontend`
   ([41111181126](https://github.com/anhnvcoder/svp-frontend/actions/runs/41111181126)) ký, provenance, PR promote #22 của `svp-gitops` tự merge;
   kịch bản `gitops` trên `main` [41112757906](https://github.com/anhnvcoder/svp-backend/actions/runs/41112757906): Kyverno
-  Enforce nhận web mới, từ chối chéo identity, source map từ image `web-sourcemaps`, bản ghi stg. **Kiểm sau push:** promote prd
+  Enforce nhận web mới, từ chối chéo identity, source map từ image `web-sourcemaps`. **Kiểm sau push:** promote prd
   hai nguồn, rescan của `svp-frontend`, Renovate nâng hợp đồng.
 
 ### 5.7 Biến thể AWS (giai đoạn 7)
