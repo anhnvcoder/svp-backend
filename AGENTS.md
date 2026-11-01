@@ -42,7 +42,7 @@ Quy ước chung (ngôn ngữ, tài liệu timeless, ADR, comment, Git, repo pub
   trên `main` (thêm cảnh báo page thì thêm runbook trong cùng thay đổi); sự cố đã gặp và quy trình tay cũng ở đây.
   `docs/postmortems/<yymmdd>-<slug>.md`: postmortem không đổ lỗi theo mẫu của `README.md`, mốc thời gian UTC có nguồn.
   `docs/rfc/NNNN-<slug>.md`: một trang cho người không làm kỹ thuật (vấn đề, phương án, chi phí có nguồn, rủi ro, đề xuất).
-- **Git:** mọi thay đổi vào `main` đi qua PR có `ci-ok` và `images-ok` xanh (ruleset `.github/rulesets/main.json`,
+- **Git:** mọi thay đổi vào `main` đi qua PR có `ci-ok` và `images-ok` xanh (ruleset `main`, Terraform ở `github/rulesets.tf` của `svp-infra`,
   [ADR-0015](docs/adr/0015-cicd-devsecops-stage5.md) §11), cả của người học.
 
 ## Database và Redis
