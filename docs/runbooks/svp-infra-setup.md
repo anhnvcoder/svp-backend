@@ -2,7 +2,7 @@
 
 - Quy trình làm tay, không có cảnh báo. Mở khi dựng repo hạ tầng `anhnvcoder/svp-infra` lần đầu (giai đoạn 7), khi kiểm lại cài đặt sau
   một thay đổi của GitHub hay của repo, khi PR không merge được vì check bắt buộc, hay khi nghi repo đã lộ thông tin của tài khoản AWS.
-- Mọi thao tác ghi (UI Settings, nhập ruleset, cài Renovate, push đầu) do **người học chạy** với quyền admin. Mọi lệnh "Kiểm" ở đây chỉ
+- Mọi thao tác ghi (UI Settings, ruleset qua `apply` của `svp-infra`, cài Renovate, push đầu) do **người học chạy** với quyền admin. Mọi lệnh "Kiểm" ở đây chỉ
   `GET`, chạy bằng đăng nhập `gh` của người học (scope `repo` là đủ).
 - Thiết kế và lý do ở [ADR-0034](../adr/0034-aws-stage7.md) §2 (repo, bố cục, CI không credential) và threat model
   [AWS-6](../threat-model.md#411-biên-aws-giai-đoạn-7); cài đặt theo cùng mẫu với [svp-frontend-setup.md](svp-frontend-setup.md) và
@@ -57,7 +57,7 @@ gh api $I/actions/variables -q .total_count
 gh api $I/environments -q .total_count
 # B1. Nhánh mặc định và lượt CI đầu
 gh run list --repo anhnvcoder/svp-infra --workflow check.yml --branch main --limit 1 --json conclusion,headSha
-# C1. Ruleset (sau khi nhập)
+# C1. Ruleset (sau `apply`)
 gh api $I/rulesets -q '.[] | {id, name, target, enforcement}'
 gh api $I/rules/branches/main -q '.[] | .type'
 ```
@@ -85,7 +85,7 @@ Kiểm bằng UI ở bước đó.
 Theo thứ tự hay gặp (ba cái đầu đã gặp hay suýt gặp khi dựng `svp-gitops`, `svp-frontend`), mỗi cái kèm dấu hiệu trong kết quả của "Kiểm tra
 nhanh":
 
-1. **Ruleset nhập trước lượt CI đầu xanh trên `main`**: commit thêm sau đó phải đi qua PR mà check `infra-ok` chưa từng chạy trên `main`.
+1. **Ruleset tạo trước lượt CI đầu xanh trên `main`**: commit thêm sau đó phải đi qua PR mà check `infra-ok` chưa từng chạy trên `main`.
    Xem C1.
 2. **Push đầu lên `master`**: bản clone ở `infra/` đang ở nhánh `master` chưa có commit; push nhánh đó thì `default_branch` thành `master`,
    ruleset (`~DEFAULT_BRANCH`) và workflow (`push` lên `main`) lệch nhau. Xem B1.
@@ -263,7 +263,8 @@ gh api repos/anhnvcoder/svp-infra/rulesets/$id -q '{bypass_actors, include: .con
 # {"bypass_actors":[],"checks":[{"context":"infra-ok","integration_id":15368}],"include":["~DEFAULT_BRANCH"]}
 ```
 
-**Nếu sai:** `disabled`/`evaluate` → mở ruleset → **Enforcement status** → Active. Hai ruleset cùng tên → xoá bản thừa ở UI. PR đứng chờ
+**Nếu sai:** ruleset do Terraform giữ, không sửa ở UI: `disabled`/`evaluate` → sửa `rulesets.tf` bằng PR rồi `apply`. Hai ruleset cùng tên
+(một bản tạo tay ngoài Terraform) → xoá bản không có trong state ở UI. PR đứng chờ
 check (nguyên nhân 4) → so tên job tổng của `check.yml` với `context`, sửa bên sai (PR sửa `rulesets.tf` rồi `apply`, hay PR đổi tên job khi ruleset tạm ở
 `evaluate`).
 

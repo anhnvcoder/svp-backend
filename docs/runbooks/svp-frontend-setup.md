@@ -2,7 +2,7 @@
 
 - Quy trình làm tay, không có cảnh báo. Mở khi dựng repo web `anhnvcoder/svp-frontend` lần đầu (tách web khỏi repo backend), khi dựng lại sau
   khi gỡ App, khi xoay khoá App, khi nghi khoá hay token của App bị lộ, khi lượt promote stg của web đỏ hay PR của nó không tự merge.
-- Mọi thao tác ghi (tạo repo, UI Settings, tạo và cài App, đặt secret, đổi visibility package, nhập ruleset, bật CodeQL, chạy lại check) do
+- Mọi thao tác ghi (tạo repo, UI Settings, tạo và cài App, đặt secret, đổi visibility package, ruleset qua `apply` của `svp-infra`, bật CodeQL, chạy lại check) do
   **người học chạy** với quyền admin. Mọi lệnh "Kiểm" ở đây chỉ `GET` (hay kéo ẩn danh từ GHCR), chạy bằng đăng nhập `gh` của người học:
   scope `repo` là đủ, trừ lệnh đọc package (`users/anhnvcoder/packages/…`) cần thêm `read:packages` (`gh auth refresh -s read:packages`,
   người học chạy; không có scope này API trả 403 `You need at least read:packages scope`, đọc ngày 2026-10-30).
@@ -81,7 +81,7 @@ anon() { t=$(curl -s "https://ghcr.io/token?scope=repository:anhnvcoder/$1:pull"
 anon svp-backend/api/gateway; anon svp-frontend/web
 # B2. CodeQL default setup
 gh api $W/code-scanning/default-setup -q '{state, languages, query_suite, schedule}'
-# C2. Ruleset (sau khi nhập)
+# C2. Ruleset (sau `apply`)
 gh api $W/rulesets -q '.[] | {id, name, target, enforcement}'
 gh api $W/rules/branches/main -q '.[] | .type'
 ```
@@ -124,7 +124,7 @@ Theo thứ tự hay gặp (hai cái đầu đã gặp khi dựng `svp-gitops`, 2
 4. **Thiếu `sigstore/cosign-installer` trong danh sách action** (`patterns_allowed` rỗng, chép từ `svp-gitops`): job ký của `images.yml`
    bị từ chối trước khi chạy ("not allowed to be used"). Sửa ở A2.
 5. **App cài "All repositories"** hay thêm repo khác: không lỗi nào, token xin được cho repo thừa. Chỉ UI thấy (A4).
-6. **Ruleset nhập trước lượt CI đầu xanh trên `main`**: push thẳng `main` bị từ chối, commit thêm CI phải đi qua PR. Xem C2.
+6. **Ruleset tạo trước lượt CI đầu xanh trên `main`**: push thẳng `main` bị từ chối, commit thêm CI phải đi qua PR. Xem C2.
 
 ## Giảm thiểu
 
@@ -430,10 +430,10 @@ role Write. Sau khi package public, PR `bot/promote-stg-web` đang đỏ ở che
 
 ### C2. Ruleset (sau lượt `ci.yml` và `images.yml` đầu xanh trên `main`)
 
-Thứ tự như backend và `svp-gitops`: ruleset cấm push thẳng `main` và đòi `ci-ok`, `images-ok`; nhập sau lượt xanh trên `main` thì commit
+Thứ tự như backend và `svp-gitops`: ruleset cấm push thẳng `main` và đòi `ci-ok`, `images-ok`; tạo sau lượt xanh trên `main` thì commit
 thêm CI đã push thẳng được, và hai check đã chạy được trên `main` trước khi thành bắt buộc.
 
-**Trước khi nhập:**
+**Trước khi `apply`:**
 
 ```sh
 gh api repos/anhnvcoder/svp-frontend -q .default_branch                                     # main
@@ -463,8 +463,8 @@ gh api repos/anhnvcoder/svp-frontend/rulesets/$id -q '{bypass_actors, include: .
 # {"bypass_actors":[],"checks":[{"context":"ci-ok","integration_id":15368},{"context":"images-ok","integration_id":15368}],"include":["~DEFAULT_BRANCH"]}
 ```
 
-**Nếu sai:** `disabled`/`evaluate` → mở ruleset → **Enforcement status** → Active. Hai ruleset cùng tên → xoá bản thừa ở UI. Thiếu một
-check hay `integration_id` khác → sửa `rulesets.tf` của `svp-infra` bằng PR rồi `apply`.
+**Nếu sai:** ruleset do Terraform giữ, không sửa ở UI: `disabled`/`evaluate`, thiếu một check hay `integration_id` khác → sửa `rulesets.tf` của `svp-infra` bằng PR rồi `apply`. Hai ruleset cùng tên (một bản tạo tay ngoài Terraform) → xoá bản không có
+trong state ở UI.
 
 ### D1. PR đầu của bot web (bản phát hành đầu)
 
