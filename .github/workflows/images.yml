@@ -423,21 +423,67 @@ jobs:
             exit 0
           fi
           # Every release the branch holds, this run's and those its open pull request already had.
-          names='' list=''
+          names='' list='' rows='' count=0
           while IFS= read -r f <&3; do
-            svc=$(basename "$f" .yaml) names+=" $svc"
-            list+="- $svc: $(yq_ '.image.repository + ":" + .image.tag + "@" + .image.digest' "$f")"$'\n'
+            svc=$(basename "$f" .yaml)
+            line=$(yq_ '.image | [.repository, .tag, .digest] | join("|")' "$f")
+            IFS='|' read -r R T D <<<"$line"
+            names+="${names:+, }$svc" count=$((count + 1))
+            list+="- $svc: $R:$T@$D"$'\n'
+            rows+="$(promote_image_row "$svc" "$R" "$T" "$D")"$'\n'
           done 3< <(git diff --name-only origin/main -- envs/stg/images/)
-          git diff --quiet origin/main -- envs/stg/charts.yaml || list+="- charts: $RUN_COMMIT"$'\n'
-          title="chore(stg): chart ${RUN_COMMIT:0:12}"
-          [ -z "$names" ] || title="chore(stg): phát hành$names ${RUN_COMMIT:0:12}"
+          code_url=https://github.com/$GITHUB_REPOSITORY/commit/$RUN_COMMIT
+          charts=false
+          if ! git diff --quiet origin/main -- envs/stg/charts.yaml; then
+            charts=true
+            list+="- charts: $RUN_COMMIT"$'\n'
+            rows+="| \`charts.yaml\` | [\`${RUN_COMMIT:0:12}\`]($code_url) | — |"$'\n'
+          fi
+          commit_link="[\`${RUN_COMMIT:0:12}\`]($code_url)"
+          if [ "$count" -eq 0 ]; then
+            title="chore(stg): cập nhật chart ở ${RUN_COMMIT:0:12}"
+            summary="Chuyển chart của stg sang commit $commit_link."
+            why="Commit $commit_link vào \`main\` của \`$GITHUB_REPOSITORY\` đổi chart, nên stg cần chạy chart của commit đó."
+            ran="[Lượt CI]($RUN_URL) chạy trên commit đó."
+          else
+            if [ "$count" -le 3 ]; then
+              title="chore(stg): phát hành $names ở ${RUN_COMMIT:0:12}"
+            else
+              title="chore(stg): phát hành $count service ở ${RUN_COMMIT:0:12}"
+            fi
+            summary="Đưa $count service lên stg bằng image mới"
+            [ "$charts" = false ] || summary+=" và chuyển chart sang commit $commit_link"
+            summary+="."
+            why="Các commit vào \`main\` của \`$GITHUB_REPOSITORY\` ghi trong bảng đã build và ký image mới, nên stg cần chạy bản đó.
+          Mỗi dòng của bảng ghi commit của chính nó: PR giữ cả bản của lượt trước chưa merge.
+          Bảng chỉ hiện 12 ký tự đầu của digest; digest đầy đủ nằm trong commit của PR."
+            ran="Mỗi image trong bảng do lượt CI của commit ở dòng đó build và ký; [lượt CI]($RUN_URL) của $commit_link dựng PR này."
+          fi
           msg="${list}
-          Code: https://github.com/$GITHUB_REPOSITORY/commit/$RUN_COMMIT
+          Code: $code_url
           Run: $RUN_URL"
-          body="Promote lên stg do job \`promote\` của \`images.yml\` ghi: chỉ \`envs/stg/\`. Nhánh dựng lại trên \`main\`
-          mỗi lượt, giữ mọi bản chưa merge của PR này. Auto-merge khi \`gitops-ok\` xanh, không cần duyệt.
+          body="## Thay đổi gì
 
-          $msg"
+          $summary
+
+          | Service | Commit | Image |
+          | --- | --- | --- |
+          ${rows}
+          ## Vì sao
+
+          $why
+
+          ## Đã kiểm gì
+
+          - $ran
+          - Check \`gitops-ok\` của \`svp-gitops\` chạy trên PR này. Với mỗi file image đổi, nó kiểm image ghim digest, có chữ ký,
+            kết quả quét lỗ hổng còn hạn và provenance khớp commit; nó cũng kiểm chart render được.
+          - PR tự merge (squash) khi \`gitops-ok\` xanh. \`envs/stg/\` không có Code Owner nên không cần ai duyệt.
+
+          ## Phạm vi
+
+          Bot \`$app\` chỉ sửa khối \`image\` của \`envs/stg/images/<service>.yaml\` và ba giá trị \`revision\`, \`podSecurityVersion\`,
+          \`collectorConfigSha256\` của \`envs/stg/charts.yaml\`. Mỗi lượt build dựng lại nhánh \`$branch\` từ \`main\` và giữ các bản chưa merge của PR này."
           id=$(gh api "users/${app}%5Bbot%5D" --jq .id)
           git -c user.name="${app}[bot]" -c user.email="$id+${app}[bot]@users.noreply.github.com" \
             commit --quiet -am "$title" -m "$msg"
@@ -513,11 +559,14 @@ jobs:
           lease=$(git rev-parse --verify --quiet "refs/remotes/origin/$branch") || lease=
           git checkout --quiet -B "$branch" origin/main
           # Read into a variable, not through a pipe into read: a file missing at stg_ref fails the step.
+          list='' rows=''
           for svc in "${svp_services[@]}"; do
             line=$(git show "$ref:envs/stg/images/$svc.yaml" | yq_ '.image | [.repository, .tag, .digest] | join("|")')
             IFS='|' read -r R T D <<<"$line"
             yq_ R="$R" T="$T" D="$D" -i \
               '.image.repository = strenv(R) | .image.tag = strenv(T) | .image.digest = strenv(D)' "envs/prd/images/$svc.yaml"
+            list+="- $svc: $R:$T@$D"$'\n'
+            rows+="$(promote_image_row "$svc" "$R" "$T" "$D")"$'\n'
           done
           line=$(git show "$ref:envs/stg/charts.yaml" |
             yq_ '[.revision, .podSecurityVersion, .collectorConfigSha256] | join("|")')
@@ -525,20 +574,46 @@ jobs:
           yq_ REV="$REV" PSV="$PSV" SUM="$SUM" -i \
             '.revision = strenv(REV) | .podSecurityVersion = strenv(PSV) | .collectorConfigSha256 = strenv(SUM)' \
             envs/prd/charts.yaml
+          list+="- charts: $REV"$'\n'
+          rows+="| \`charts.yaml\` | [\`${REV:0:12}\`](https://github.com/$GITHUB_REPOSITORY/commit/$REV) | — |"$'\n'
           if git diff --quiet origin/main; then
             echo "prd on main of svp-gitops already runs envs/stg/ of ${ref:0:12}: no push, no pull request."
             exit 0
           fi
           title="chore(prd): phát hành bộ stg của svp-gitops ${ref:0:12}"
-          body="Promote lên prd do job \`promote-prd\` của \`images.yml\` ghi: giá trị \`image\` của bảy file và ba khoá
-          \`charts.yaml\` của \`envs/stg/\` ở commit $ref của \`svp-gitops\`, chép vào \`envs/prd/\`. Không auto-merge:
-          code owner duyệt. Check đỏ vì attestation \`vuln\` quá hạn (bộ cũ, rollback): quét lại rồi chạy lại check:
-          \`gh workflow run images.yml --repo $GITHUB_REPOSITORY --ref main -f rescan=true -f values_ref=$ref\`
-
+          msg="${list}
+          Stg-ref: $ref
           Run: $RUN_URL"
+          body="## Thay đổi gì
+
+          Đưa prd lên đúng bộ mà stg chạy ở commit [\`${ref:0:12}\`](https://github.com/$repo/commit/$ref) của \`svp-gitops\`: image của ${#svp_services[@]} service và chart.
+
+          | Service | Commit | Image |
+          | --- | --- | --- |
+          ${rows}
+          Digest đầy đủ nằm trong commit của PR.
+
+          ## Vì sao
+
+          stg đã chạy bộ này và qua \`gitops-ok\`; prd chép nguyên bộ đó, không build lại. Bộ lấy từ \`envs/stg/\` ở commit trên theo
+          \`stg_ref\` của [lượt promote]($RUN_URL). Nếu \`stg_ref\` trỏ một commit cũ, PR này đưa prd về bản cũ (rollback).
+
+          ## Đã kiểm gì
+
+          - [Lượt promote]($RUN_URL) đọc \`envs/stg/\` ở commit trên và chép vào \`envs/prd/\`.
+          - Check \`gitops-ok\` của \`svp-gitops\` chạy trên PR này, kiểm như PR của stg: image ghim digest, chữ ký, kết quả quét lỗ hổng
+            và provenance, chart render được.
+          - **Cần Code Owner duyệt.** PR không tự merge: \`envs/prd/\` có Code Owner, duyệt của họ là cổng vào prd.
+          - Nếu \`gitops-ok\` đỏ vì kết quả quét lỗ hổng (\`vuln\`) quá hạn (bộ cũ, rollback), quét lại bằng
+            \`gh workflow run images.yml --repo $GITHUB_REPOSITORY --ref main -f rescan=true -f values_ref=$ref\` rồi chạy lại check.
+
+          ## Phạm vi
+
+          Bot \`$app\` chỉ sửa khối \`image\` của ${#svp_services[@]} file \`envs/prd/images/*.yaml\` và ba giá trị \`revision\`, \`podSecurityVersion\`,
+          \`collectorConfigSha256\` của \`envs/prd/charts.yaml\`. Các dòng khác của file, kể cả chú thích, giữ nguyên."
           id=$(gh api "users/${app}%5Bbot%5D" --jq .id)
           git -c user.name="${app}[bot]" -c user.email="$id+${app}[bot]@users.noreply.github.com" \
-            commit --quiet -am "$title" -m "$body"
+            commit --quiet -am "$title" -m "$msg"
           gh auth setup-git
           git push --quiet --force-with-lease="refs/heads/$branch:$lease" origin "HEAD:refs/heads/$branch"
           pr=$(promote_open_pr "$repo" "$branch" "$app")

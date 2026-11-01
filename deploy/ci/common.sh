@@ -337,6 +337,17 @@ promote_open_pr() {
     '[.[] | select(.isCrossRepository == false and .author.login == $author)][0].number // empty' <<<"$list"
 }
 
+# promote_image_row SERVICE REPOSITORY TAG DIGEST: prints one row of the table of a promote pull request (Service, Commit,
+# Image). REPOSITORY is ghcr.io/<owner>/<repo>/<name>; the commit links to TAG in that repo, the image to its package
+# page, with the digest cut to 12 hex digits for reading (the full digest stays in the commit message).
+promote_image_row() {
+  [[ $2 =~ ^ghcr\.io/([^/]+)/([^/]+)/([^/]+)$ ]] || fail "image '$2' of $1 is no ghcr.io/<owner>/<repo>/<name>"
+  local owner=${BASH_REMATCH[1]} repo=${BASH_REMATCH[2]} name=${BASH_REMATCH[3]}
+  # shellcheck disable=SC2016 # backticks of the markdown
+  printf '| `%s` | [`%s`](https://github.com/%s/%s/commit/%s) | [`%s@%s…`](https://github.com/%s/%s/pkgs/container/%s%%2F%s) |\n' \
+    "$1" "$3" "$owner" "$repo" "$3" "$2" "${4:0:19}" "$owner" "$repo" "$repo" "$name"
+}
+
 # yq_ [NAME=VALUE...] ARGS...: the pinned yq (YQ_IMAGE of the Makefile) with ARGS, without network, as the calling
 # user, with the current directory as its working directory (so yq -i edits a file there, named by a relative path)
 # and stdin passed through (never call it inside a loop that reads its list from stdin: docker would read the rest of
