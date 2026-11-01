@@ -1025,7 +1025,7 @@ makes() { cat "$work/run-$1.make"; }
 # results NAME: "id name status note" of each target of run NAME, one per line.
 results() { awk -F '\t' 'NR > 1 { print $1, $2, $3, $8 }' "$work/run-$1.out/results.tsv"; }
 compose_names="up smoke drill-obs-threats test-stack-objstore"
-gitops_names="k8s-gitops-up gitops-env gitops-external-secrets gitops-argocd-metrics k8s-smoke drill-k8s-supplychain
+gitops_names="k8s-gitops-up gitops-env gitops-external-secrets gitops-argocd-metrics gitops-admission-metrics k8s-smoke drill-k8s-supplychain
 drill-k8s-threats"
 gitops_build="k8s-gitops-up GITOPS_REV=$fake_clone_sha"
 # want_rows NAMES STATUS_OF_FIRST NOTE_OF_REST [ID NAME STATUS NOTE]...: the rows of a run: the first of NAMES with
@@ -1081,7 +1081,7 @@ if timeout --version 2>/dev/null | grep -q GNU; then
 SUPPLYCHAIN_UNSIGNED=fake/newest-drill-unsigned@sha256:0 SUPPLYCHAIN_VULNERABLE=fake/newest-drill-vulnerable@sha256:0 \
 SUPPLYCHAIN_NO_PROVENANCE=fake/newest-drill-no-provenance@sha256:0")" "$(makes one)"
   same "verify-run: the targets left out keep their ids and are skipped as not in targets" \
-    "$(want_rows "$gitops_names" ok 'not in targets' '05 k8s-smoke ok ' '06 drill-k8s-supplychain ok ')" \
+    "$(want_rows "$gitops_names" ok 'not in targets' '06 k8s-smoke ok ' '07 drill-k8s-supplychain ok ')" \
     "$(results one)"
 
   rc=$(run_verify one-fails gitops 'SVP_VERIFY_TARGETS=drill-k8s-threats  k8s-smoke' FAKE_MAKE_FAIL=k8s-smoke)
@@ -1225,6 +1225,76 @@ same "gitops_stale: an attestation within 72h keeps the case" 1 "$(stale fresh c
 lacks stale-fresh "nothing is noted for a case kept" NOTE
 same "gitops_stale: cosign without an answer keeps the case (the drill fails it)" 1 \
   "$(stale no-cosign c FAKE_COSIGN_FAIL=1 FAKE_SCAN_HOURS=100)"
+
+# --- The summaries of gitops-admission-metrics (gitops_admission_apiserver, gitops_admission_kyverno) over a sample of
+# /metrics with the real buckets: the apiserver's 10, 25 and +Inf (two series of the Kyverno webhook, rejected false and
+# true, and one of another webhook that must not count), Kyverno's 20 and 30 (policy svp-images, and another policy).
+admission_sample=$work/admission-sample.txt
+cat >"$admission_sample" <<'SAMPLE'
+# TYPE apiserver_admission_webhook_admission_duration_seconds histogram
+apiserver_admission_webhook_admission_duration_seconds_bucket{le="10",name="ivpol.validate.kyverno.svc-ignore-finegrained-svp-images",operation="CREATE",rejected="false",type="validating"} 7
+apiserver_admission_webhook_admission_duration_seconds_bucket{le="25",name="ivpol.validate.kyverno.svc-ignore-finegrained-svp-images",operation="CREATE",rejected="false",type="validating"} 9
+apiserver_admission_webhook_admission_duration_seconds_bucket{le="+Inf",name="ivpol.validate.kyverno.svc-ignore-finegrained-svp-images",operation="CREATE",rejected="false",type="validating"} 10
+apiserver_admission_webhook_admission_duration_seconds_sum{name="ivpol.validate.kyverno.svc-ignore-finegrained-svp-images",operation="CREATE",rejected="false",type="validating"} 50.5
+apiserver_admission_webhook_admission_duration_seconds_count{name="ivpol.validate.kyverno.svc-ignore-finegrained-svp-images",operation="CREATE",rejected="false",type="validating"} 10
+apiserver_admission_webhook_admission_duration_seconds_bucket{le="10",name="ivpol.validate.kyverno.svc-ignore-finegrained-svp-images",operation="CREATE",rejected="true",type="validating"} 1
+apiserver_admission_webhook_admission_duration_seconds_bucket{le="25",name="ivpol.validate.kyverno.svc-ignore-finegrained-svp-images",operation="CREATE",rejected="true",type="validating"} 2
+apiserver_admission_webhook_admission_duration_seconds_bucket{le="+Inf",name="ivpol.validate.kyverno.svc-ignore-finegrained-svp-images",operation="CREATE",rejected="true",type="validating"} 2
+apiserver_admission_webhook_admission_duration_seconds_sum{name="ivpol.validate.kyverno.svc-ignore-finegrained-svp-images",operation="CREATE",rejected="true",type="validating"} 9.5
+apiserver_admission_webhook_admission_duration_seconds_count{name="ivpol.validate.kyverno.svc-ignore-finegrained-svp-images",operation="CREATE",rejected="true",type="validating"} 2
+apiserver_admission_webhook_admission_duration_seconds_bucket{le="10",name="validate.kyverno.svc-fail",operation="CREATE",rejected="false",type="validating"} 100
+apiserver_admission_webhook_admission_duration_seconds_bucket{le="25",name="validate.kyverno.svc-fail",operation="CREATE",rejected="false",type="validating"} 100
+apiserver_admission_webhook_admission_duration_seconds_bucket{le="+Inf",name="validate.kyverno.svc-fail",operation="CREATE",rejected="false",type="validating"} 100
+apiserver_admission_webhook_admission_duration_seconds_sum{name="validate.kyverno.svc-fail",operation="CREATE",rejected="false",type="validating"} 3
+apiserver_admission_webhook_admission_duration_seconds_count{name="validate.kyverno.svc-fail",operation="CREATE",rejected="false",type="validating"} 100
+kyverno_admission_review_duration_seconds_bucket{le="20",resource_kind="Pod"} 40
+kyverno_admission_review_duration_seconds_bucket{le="30",resource_kind="Pod"} 44
+kyverno_admission_review_duration_seconds_bucket{le="+Inf",resource_kind="Pod"} 45
+kyverno_admission_review_duration_seconds_sum{resource_kind="Pod"} 90
+kyverno_admission_review_duration_seconds_count{resource_kind="Pod"} 45
+kyverno_image_validating_policy_execution_duration_seconds_bucket{le="20",policy_name="svp-images"} 5
+kyverno_image_validating_policy_execution_duration_seconds_bucket{le="30",policy_name="svp-images"} 6
+kyverno_image_validating_policy_execution_duration_seconds_bucket{le="+Inf",policy_name="svp-images"} 6
+kyverno_image_validating_policy_execution_duration_seconds_sum{policy_name="svp-images"} 60
+kyverno_image_validating_policy_execution_duration_seconds_count{policy_name="svp-images"} 6
+kyverno_image_validating_policy_execution_duration_seconds_bucket{le="20",policy_name="other"} 900
+kyverno_image_validating_policy_execution_duration_seconds_bucket{le="30",policy_name="other"} 900
+kyverno_image_validating_policy_execution_duration_seconds_bucket{le="+Inf",policy_name="other"} 900
+kyverno_image_validating_policy_execution_duration_seconds_sum{policy_name="other"} 900
+kyverno_image_validating_policy_execution_duration_seconds_count{policy_name="other"} 900
+SAMPLE
+# admission NAME FUNCTION [ARG...]: the function over the sample (SAMPLE=FILE: another text) on stdin; output in $work/admission-NAME.log.
+admission() {
+  local name=$1
+  shift
+  bash -c '. "$1/verify/gitops.sh" && shift && "$@"' _ "$here" "$@" <"${SAMPLE:-$admission_sample}" \
+    >"$work/admission-$name.log" 2>&1
+}
+apiserver_webhook=ivpol.validate.kyverno.svc-ignore-finegrained-svp-images
+admission apiserver gitops_admission_apiserver "$apiserver_webhook"
+has admission-apiserver "the line adds the series of the webhook (rejected false and true) and leaves the other webhook out" \
+  "apiserver_admission_webhook_admission_duration_seconds{name=$apiserver_webhook}: _count 12, _sum 60.000 s, mean 5.000 s, <= 10 s: 8, <= 25 s: 11, > 25 s: 1"
+has admission-apiserver "it says where 20 s and 30 s fall in the buckets" \
+  "20 s lies between le=10 and le=25, the 30 s timeout of the webhook between le=25 and +Inf"
+admission kyverno gitops_admission_kyverno
+has admission-kyverno "the Kyverno admission review line" \
+  "kyverno_admission_review_duration_seconds: _count 45, _sum 90.000 s, mean 2.000 s, <= 20 s: 40, <= 30 s: 44, > 30 s: 1"
+has admission-kyverno "the line of policy svp-images leaves the other policy out" \
+  'kyverno_image_validating_policy_execution_duration_seconds{policy_name="svp-images"}: _count 6, _sum 60.000 s, mean 10.000 s, <= 20 s: 5, <= 30 s: 6, > 30 s: 0'
+admission apiserver-other gitops_admission_apiserver ivpol.validate.kyverno.svc-fail-finegrained-other
+has admission-apiserver-other "a webhook with no series is a NOTE" \
+  "NOTE  apiserver_admission_webhook_admission_duration_seconds{name=ivpol.validate.kyverno.svc-fail-finegrained-other}: no apiserver_admission_webhook_admission_duration_seconds_count and _sum series"
+admission apiserver-none gitops_admission_apiserver ""
+has admission-apiserver-none "no webhook of an image policy is a NOTE" "NOTE  apiserver: no webhook of an image policy (ivpol.*)"
+sed '/le="25"/d' "$admission_sample" >"$work/admission-sample-nobucket.txt"
+SAMPLE=$work/admission-sample-nobucket.txt admission apiserver-nobucket gitops_admission_apiserver "$apiserver_webhook"
+has admission-apiserver-nobucket "a missing bucket is a NOTE that says which" "but no bucket le= 25"
+: >"$work/admission-empty.txt"
+SAMPLE=$work/admission-empty.txt admission kyverno-empty gitops_admission_kyverno
+has admission-kyverno-empty "no Kyverno metrics is a NOTE for the review histogram" \
+  "NOTE  kyverno_admission_review_duration_seconds: no kyverno_admission_review_duration_seconds_count and _sum series in what was read"
+has admission-kyverno-empty "and for the policy histogram" \
+  'NOTE  kyverno_image_validating_policy_execution_duration_seconds{policy_name="svp-images"}: no'
 
 # --- changed-services.sh: a change of a verification script builds no image; one of verify-release.sh, which the image
 # jobs run, still builds all seven. GIT_DIR is set for the throwaway repository, so git can never reach another one.
