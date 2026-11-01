@@ -27,28 +27,23 @@ Người học ưu tiên học DevOps + SA.
 
 ## Quy ước
 
+Quy ước chung (ngôn ngữ, tài liệu timeless, ADR, comment, Git, repo public, phụ thuộc): [`CONTRIBUTING.md` của `anhnvcoder/.github`](https://github.com/anhnvcoder/.github/blob/main/CONTRIBUTING.md); dưới đây chỉ luật riêng của repo này.
+
 - **Ngôn ngữ lập trình:** Go, ưu tiên thư viện chuẩn. Web client (TypeScript, Next.js, [ADR-0016](docs/adr/0016-web-client.md)) ở repo
   `svp-frontend` (bản clone `<workspace>/frontend`, [ADR-0033](docs/adr/0033-svp-web-repo.md)), theo `AGENTS.md` của repo đó. Thêm
   dependency phải có lý do.
-- **Ngôn ngữ viết:** file `.md` viết tiếng Việt; mọi thứ trong code (comment, log, tên test, error message, `.env.example`) viết
-  tiếng Anh.
-- **Comment trong code** tự đủ nghĩa: nói lý do ngay tại chỗ, người đọc không cần mở tài liệu nào mới hiểu. **Trong code không nhắc
-  ADR** (Go, TypeScript, shell, YAML, Dockerfile, Makefile, workflow, `.proto`, `.env.example`, file cấu hình): số mục của ADR đổi hay
-  ADR bị thay thì tham chiếu thành sai. Tìm ngược từ quyết định tới code qua mục "Hiện thực ở" của mỗi ADR. File `.md` vẫn link ADR.
-- **Không nhãn tiến độ:** code và tài liệu hiện trạng (README, `AGENTS.md`, `docs/` ngoài ADR và postmortem, comment, tên job và
-  bước của workflow) không mang nhãn "giai đoạn N", "phần M"; nói thứ đó làm gì. Lịch sử nằm ở git log, ADR, postmortem.
+- **Ngôn ngữ viết:** file `.md` viết tiếng Việt.
+- **Link ADR:** tìm ngược từ quyết định tới code qua mục "Hiện thực ở" của mỗi ADR; file `.md` vẫn link ADR.
 - **Monorepo:** `services/<tên>/`, `proto/`, `deploy/`, `docs/`; thư mục nào tạo khi cần nó. Repo `anhnvcoder/svp-backend` (tên
   `short-video-platform` tới 2026-10-31, [ADR-0036](docs/adr/0036-repo-rename.md)), Go module `github.com/anhnvcoder/svp-backend`.
-- **ADR** ở `docs/adr/NNNN-<slug>.md`, theo mẫu ngắn trong [`docs/adr/README.md`](docs/adr/README.md). Đảo một quyết định cũ thì viết
-  ADR mới và đánh dấu ADR cũ là "Bị thay bởi".
+- **ADR** ở `docs/adr/NNNN-<slug>.md`, theo mẫu ngắn trong [`docs/adr/README.md`](docs/adr/README.md).
 - **Runbook, postmortem, RFC** ([ADR-0020](docs/adr/0020-reliability-stage6.md) §12, §14): `docs/runbooks/` (mẫu và mục lục ở
   `README.md`): một runbook mỗi cảnh báo `severity=page`, tên file là tên alert kebab-case, rule page mang `runbook_url` trỏ file đó
   trên `main` (thêm cảnh báo page thì thêm runbook trong cùng thay đổi); sự cố đã gặp và quy trình tay cũng ở đây.
   `docs/postmortems/<yymmdd>-<slug>.md`: postmortem không đổ lỗi theo mẫu của `README.md`, mốc thời gian UTC có nguồn.
   `docs/rfc/NNNN-<slug>.md`: một trang cho người không làm kỹ thuật (vấn đề, phương án, chi phí có nguồn, rủi ro, đề xuất).
-- **Git:** conventional commits, mô tả tiếng Việt. **Không commit `.env`, secret, token, file state Terraform.** Mọi thay đổi vào
-  `main` đi qua PR có `ci-ok` và `images-ok` xanh (ruleset `.github/rulesets/main.json`, [ADR-0015](docs/adr/0015-cicd-devsecops-stage5.md)
-  §11), cả của người học; không force push, hoàn tác bằng PR revert.
+- **Git:** mọi thay đổi vào `main` đi qua PR có `ci-ok` và `images-ok` xanh (ruleset `.github/rulesets/main.json`,
+  [ADR-0015](docs/adr/0015-cicd-devsecops-stage5.md) §11), cả của người học.
 
 ## Database và Redis
 
