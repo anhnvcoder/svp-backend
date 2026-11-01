@@ -25,8 +25,8 @@ fail() {
   echo "FAIL  $1" >&2
   failures=$((failures + 1))
 }
-# mode prints a file's permission bits (BSD stat first, GNU stat second).
-mode() { stat -f %Lp "$1" 2>/dev/null || stat -c %a "$1"; }
+# mode prints a file's permission bits (GNU stat first: there `stat -f` reads the file system, not the file; BSD stat second).
+mode() { stat -c %a "$1" 2>/dev/null || stat -f %Lp "$1"; }
 # leftovers lists the temporary files init.sh and make env left in a directory (*.tmp.*, *.new.*).
 leftovers() { ls -A "$1" | grep -E '\.(tmp|new)\.' || true; }
 # lines writes its arguments one per line into a file; none makes an empty file.
