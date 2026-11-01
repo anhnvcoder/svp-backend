@@ -469,8 +469,9 @@ flowchart LR
   tĩnh trong CI bằng bước 4 của `deploy/ci/gitops-check.sh` (`make helm-check`, check của `svp-gitops`), chưa kiểm chữ ký nhà cung cấp.
 - **Renovate** (§10): App Mend cho repo này và `svp-gitops`, mở PR hằng tuần cho Go module, action (SHA), base image, công cụ của
   `Makefile` (repo này), chart upstream, image ghim trong `base/`, commit checker (`svp-gitops`, bỏ qua `envs/**`); chờ bản phát hành
-  3 ngày; repo này tự merge bản `patch`, `digest` của Go module, base image và image dịch vụ khi `ci-ok`, `images-ok` xanh, còn lại (và
-  mọi PR của `svp-gitops`) duyệt tay ([ADR-0035](adr/0035-renovate-automerge.md)).
+  3 ngày; repo này tự merge khi `ci-ok`, `images-ok` xanh chỉ `digest`, `pinDigest` của base image và image của chart (cùng tag, digest
+  mới) và `patch`, `digest` của image compose; còn lại (mọi cập nhật Go module, patch tag của base image và image chạy trong cluster, và
+  mọi PR của `svp-gitops`) duyệt tay ([ADR-0041](adr/0041-github-hardening.md) (i), thay một phần [ADR-0035](adr/0035-renovate-automerge.md)).
 - **Chi phí:** repo public nên runner (cả arm64) và package GHCR public không tính tiền; ngân sách thời gian mỗi workflow
   dưới 10 phút (kiểm sau push). Kyverno thêm 0,13–0,16 GiB RAM: cluster dev nghỉ 6,40 GiB, đỉnh 7,92 GiB khi media-worker
   scale lên (đo 2026-10-21, cách đo ADR-0014 §2); cluster GitOps đo sau push.
@@ -600,6 +601,7 @@ flowchart LR
         img["images.yml: build, quét,<br/>ký, provenance"]
         ver["verify.yml: kịch bản gitops<br/>(dựng stg ở commit đã kiểm)"]
         env["environment promote<br/>(khoá App, chỉ main)"]
+        envprd["environment promote-prd<br/>(khoá App thứ hai, người duyệt, chỉ main)"]
     end
     subgraph cfg["repo svp-gitops (cấu hình)"]
         base["base/ values gốc"]
@@ -609,9 +611,10 @@ flowchart LR
     end
     cluster["cluster stg<br/>(Argo CD)"]
     img -->|"PR bot/promote-stg, auto-merge"| stg
-    img -->|"dispatch promote_prd, stg_ref:<br/>PR bot/promote-prd, Code Owner duyệt"| prd
+    img -->|"dispatch promote_prd, stg_ref:<br/>PR bot/promote-prd, duyệt environment rồi Code Owner duyệt"| prd
     ver -.->|"đọc main"| cfg
     env -.-> img
+    envprd -.-> img
     cluster -->|"root, values: refs/heads/main"| cfg
     cluster -->|"chart: SHA của charts.yaml"| src
 ```
@@ -626,11 +629,13 @@ flowchart LR
 - **Argo CD multi-source:** root `svp-root` và nguồn `ref: values` đọc `svp-gitops` ở `refs/heads/main` (tên đầy đủ, không bao giờ
   tên ngắn: tên ngắn có thể phân giải sang tag cùng tên; ruleset `tags` cấm tạo tag), nguồn chart đọc repo code ở SHA 40 hex.
 - **Quyền:** stg tự động (PR của bot chỉ đổi `envs/stg/`, không Code Owner, tự merge sau `gitops-ok`); prd chỉ qua PR do bot mở chép
-  `envs/stg/` của một commit trên `main` của `svp-gitops` (`stg_ref`), Code Owner duyệt; file chung cần Code Owner, người học tự merge
-  bằng bypass ruleset `owners` (có bản ghi). Khoá App chỉ ở environment `promote` của repo code, hai job trên `main` (`promote`,
-  `promote-prd`) dùng nó với token 1 giờ, chỉ `contents`, `pull_requests` write.
+  `envs/stg/` của một commit trên `main` của `svp-gitops` (`stg_ref`), sau khi người học duyệt environment `promote-prd` của repo code (job dừng
+  chờ, admin không bypass) rồi Code Owner duyệt PR; file chung cần Code Owner, người học tự merge
+  bằng bypass ruleset `owners` (có bản ghi). Khoá App chỉ ở hai environment của repo code, mỗi nơi một khoá riêng: `promote` (stg) và `promote-prd` (prd); hai job trên `main` (`promote`,
+  `promote-prd`) dùng khoá của mình với token 1 giờ, chỉ `contents`, `pull_requests` write
+  ([ADR-0041](adr/0041-github-hardening.md) (d)).
 - **Không còn bản ghi stg** ([ADR-0037](adr/0037-mainpath-standard-tools.md) §6): job `record-stg`, Deployment `stg` trên `svp-gitops`
-  và phép "bộ prd = một bản ghi" của check đã bỏ; cổng prd là duyệt của Code Owner, `stg_ref` không bảo đảm stg đã chạy và smoke qua
+  và phép "bộ prd = một bản ghi" của check đã bỏ; cổng prd là duyệt environment `promote-prd` rồi duyệt của Code Owner, `stg_ref` không bảo đảm stg đã chạy và smoke qua
   với đúng bộ đó. Bản ghi trạng thái triển khai sau này là Argo CD Notifications ([ADR-0032](adr/0032-argocd-deploy-status.md) A, B),
   khi có EKS stg chạy suốt buổi.
 - **Đường dev:** đọc working tree của bản clone `svp-gitops` cạnh repo (`../gitops`, hay `SVP_GITOPS_DIR`), không tự clone hay

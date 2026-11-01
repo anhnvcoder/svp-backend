@@ -43,7 +43,9 @@ Quy ước chung (ngôn ngữ, tài liệu timeless, ADR, comment, Git, repo pub
   `docs/postmortems/<yymmdd>-<slug>.md`: postmortem không đổ lỗi theo mẫu của `README.md`, mốc thời gian UTC có nguồn.
   `docs/rfc/NNNN-<slug>.md`: một trang cho người không làm kỹ thuật (vấn đề, phương án, chi phí có nguồn, rủi ro, đề xuất).
 - **Git:** mọi thay đổi vào `main` đi qua PR có `ci-ok` và `images-ok` xanh (ruleset `main`, Terraform ở `github/rulesets.tf` của `svp-infra`,
-  [ADR-0015](docs/adr/0015-cicd-devsecops-stage5.md) §11), cả của người học.
+  [ADR-0015](docs/adr/0015-cicd-devsecops-stage5.md) §11), cả của người học. Chỉ squash merge, lịch sử thẳng, tiêu đề PR theo Conventional Commits
+  (thành tiêu đề commit; workflow `pr-title.yml`); file nhạy cảm (`/.github/`, `/Makefile`, `/renovate.json`, `deploy/ci/`…) có Code Owner
+  ([ADR-0041](docs/adr/0041-github-hardening.md)).
 
 ## Database và Redis
 
@@ -116,6 +118,8 @@ Mọi lệnh chạy từ gốc repo (hay worktree của nó) qua `Makefile`; `ma
 - `make generate` sau khi sửa `proto/` hay SQL của sqlc (code sinh được commit); `make generate-check` kiểm không lệch.
 - `make api-contract-check`: luật version của hợp đồng REST `services/gateway/openapi.yaml`.
 - `deploy/ci/scan-gate.sh --check-ignorefile`: luật của `.trivyignore.yaml`, `.grype.yaml` (mỗi rule grype ứng một mục còn hạn của file trivy) và `deploy/ci/trivy-config-ignore.yaml`; `make grype IMAGE=<ref>@sha256:<digest>`: cổng grype của một chân image ([ADR-0039](docs/adr/0039-mainpath-drills-scan-gate-sourcemaps.md) §2).
+- `make zizmor`: lint bảo mật workflow (zizmor ghim; audit online khi có `GH_TOKEN`); ngoại lệ ở `.github/zizmor.yml`
+  ([ADR-0041](docs/adr/0041-github-hardening.md) (g)).
 - `make helm-check`: lint, render mọi chart với `base/`, overlay của bản clone `svp-gitops` và policy Kyverno CLI.
 - `make compose-config`, `make otelcol-validate`, `make slo-check`, `make k6-check`, `make kyverno-test`, `make cloud-check`: kiểm
   cấu hình tĩnh khi sửa phần tương ứng.

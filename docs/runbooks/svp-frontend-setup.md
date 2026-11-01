@@ -91,7 +91,7 @@ gh api $W/rules/branches/main -q '.[] | .type'
 | repo | `"visibility":"public"`, `"has_issues":true`, `"allow_auto_merge":true`, `"allow_squash_merge":true`, `"allow_merge_commit":false`, `"allow_rebase_merge":false`; `"default_branch":"main"` sau push đầu (repo rỗng báo `main` hay `master` tuỳ cài đặt tài khoản, chưa có nghĩa gì) |
 | squash | `{"squash_merge_commit_message":"PR_BODY","squash_merge_commit_title":"PR_TITLE"}` |
 | `actions/permissions` | `{"allowed_actions":"selected","enabled":true,"sha_pinning_required":true}` |
-| `selected-actions` | `{"github_owned_allowed":true,"patterns_allowed":["sigstore/cosign-installer@*"],"verified_allowed":false}` |
+| `selected-actions` | `{"github_owned_allowed":true,"patterns_allowed":["sigstore/cosign-installer@*","ossf/scorecard-action@*"],"verified_allowed":false}` |
 | `actions/permissions/workflow` | `{"can_approve_pull_request_reviews":false,"default_workflow_permissions":"read"}` |
 | `fork-pr-contributor-approval` | `{"approval_policy":"all_external_contributors"}` |
 | `security_and_analysis` | `{"push_protection":"enabled","secret_scanning":"enabled"}` |
@@ -103,8 +103,8 @@ gh api $W/rules/branches/main -q '.[] | .type'
 | repo secrets | `0` (`actions/secrets`: khoá đặt ở repo thay vì environment chạy được ở mọi nhánh, bỏ qua rule `main`-only; xoá ở Settings → Secrets and variables → Actions → tab Repository secrets) |
 | `anon` | mỗi package một dòng `<package> 200`. `DENIED` là package private hay chưa có (đọc ngày 2026-10-30: package chưa có trả `DENIED`, package public `200`). sau đổi tên repo (2026-10-31) cả ba là package mới: `svp-backend/api/gateway` có từ lượt `images.yml` đầu của backend sau đổi tên, hai package `svp-frontend/…` từ lượt `images.yml` đầu của `svp-frontend` sau đổi tên (E1) |
 | `default-setup` | `"state":"configured"`, `languages` có `actions` và `javascript-typescript` (API liệt kê thêm `javascript`, `typescript`), `"query_suite":"default"`, `"schedule":"weekly"` |
-| rulesets | đúng một dòng `main`, `"target":"branch"`, `"enforcement":"active"` |
-| `rules/branches/main` | `deletion`, `non_fast_forward`, `pull_request`, `required_status_checks` |
+| rulesets | hai dòng: `main`, `owners`, cả hai `"target":"branch"`, `"enforcement":"active"` |
+| `rules/branches/main` | `deletion`, `non_fast_forward`, `required_linear_history`, `pull_request` (hai lần: một của mỗi ruleset nhắm nhánh), `required_status_checks` (một dòng: khi `pr-title` thành check bắt buộc, nó nằm trong danh sách check của chính luật này, không thêm dòng) |
 
 Không kiểm được bằng `gh` của người học: **App `svp-web-promoter` và bản cài của nó** (A3, A4) và **Renovate** (B3). Như với App của
 `svp-gitops` (đã thử 2026-10-29, [svp-gitops-setup.md](svp-gitops-setup.md#kiểm-tra-nhanh-5-phút)): `GET /apps/<tên>` trả 404 với App chỉ
@@ -209,7 +209,7 @@ Làm trước khi bất kỳ commit nào có `.github/workflows/` được push 
   description**; tắt **Allow merge commits** và **Allow rebase merging**; bật **Allow auto-merge**. Mục **Features**: giữ **Issues** bật.
 - **Actions** → **General**:
   - **Actions permissions**: **Allow anhnvcoder, and select non-anhnvcoder, actions and reusable workflows**; tích **Allow actions created
-    by GitHub**, không tích Marketplace verified creators; ô danh sách action ghi đúng một dòng `sigstore/cosign-installer@*`; tích
+    by GitHub**, không tích Marketplace verified creators; ô danh sách action ghi đúng hai dòng `sigstore/cosign-installer@*`, `ossf/scorecard-action@*`; tích
     **Require actions to be pinned to a full-length commit SHA**. **Save**.
   - **Approval for running fork pull request workflows from contributors**: **Require approval for all external contributors**. **Save**.
   - **Workflow permissions**: **Read repository contents and packages permissions**; **bỏ tích** **Allow GitHub Actions to create and
@@ -217,20 +217,20 @@ Làm trước khi bất kỳ commit nào có `.github/workflows/` được push 
 - **Advanced Security**: bật **Dependabot alerts**; **Secret Protection** (secret scanning) và **Push protection** bật (repo public thường
   đã bật sẵn, kiểm lại).
 
-**Vì sao** (ADR-0033 §10: như `svp-gitops` ở điểm khác backend, còn lại như backend):
+**Vì sao** (ADR-0033 §10, [ADR-0041](../adr/0041-github-hardening.md) (c), (e): như backend và `svp-gitops`):
 
 - Chỉ squash, auto-merge: mỗi PR là đúng một commit trên `main`, tức một tag image (12 hex của commit) và một ứng viên phát hành; guard
   không lùi của job `promote` web so tổ tiên trên `main` của `svp-frontend` (lượt cũ hơn tag web ở `main` hay ở PR đang mở của
   `svp-gitops` thì đỏ), lịch sử thẳng thì tổ tiên trùng thứ tự merge; rollback
-  một thay đổi là revert một commit. Auto-merge: Renovate tự bật trên PR bản `patch`, `digest` của danh sách cho phép (gói npm, Node,
-  base image, image dịch vụ của CI; ADR-0035); người học bật trên PR của mình hay PR Renovate còn lại (sau khi đọc) để PR tự merge khi
-  `ci-ok`, `images-ok` xanh; không mở đường nào qua ruleset (C2).
+  một thay đổi là revert một commit. Auto-merge: Renovate tự bật trên PR của danh sách hẹp
+  (patch của `devDependencies` chạy trên máy dev và CI; [ADR-0041](../adr/0041-github-hardening.md) (i), thay một phần ADR-0035; Node, image, `dependencies` giữ tay); người học
+  bật trên PR của mình hay PR Renovate còn lại (sau khi đọc) để PR tự merge khi `ci-ok`, `images-ok` xanh; không mở đường nào qua ruleset (C2).
 - Commit squash lấy tiêu đề và mô tả của PR: tiêu đề PR (conventional commit) thành message trên `main`, footer `Refs:` hay dòng `This
   reverts commit <sha>.` của PR revert còn trong commit; mặc định của GitHub lấy message commit lẻ khi PR có một commit.
-- Chỉ action của GitHub và `sigstore/cosign-installer`, ghim SHA bắt buộc: như repo backend (ADR-0015 §11); `svp-frontend` ký image và
-  attest provenance bằng cosign nên cần action cài cosign, khác `svp-gitops` (danh sách rỗng). Tag của action có thể bị đẩy sang code
+- Chỉ action của GitHub, `sigstore/cosign-installer` và `ossf/scorecard-action`, ghim SHA bắt buộc: như repo backend (ADR-0015 §11); `svp-frontend` ký image và
+  attest provenance bằng cosign nên cần action cài cosign, `scorecard.yml` cần action Scorecard ([ADR-0041](../adr/0041-github-hardening.md) (g)). Tag của action có thể bị đẩy sang code
   khác, SHA thì không.
-- Tắt "create and approve pull requests" (khác backend, như `svp-gitops`): không workflow nào của `svp-frontend` mở hay duyệt PR trong chính
+- Tắt "create and approve pull requests" (như backend và `svp-gitops`): không workflow nào của `svp-frontend` mở hay duyệt PR trong chính
   nó; PR promote mở ở `svp-gitops` bằng token App, không bằng `GITHUB_TOKEN`. Quyền không ai dùng thì tắt. Token mặc định chỉ đọc; job
   cần `packages: write` (đẩy image) hay `id-token: write` (ký keyless) tự khai ở `permissions:` của job.
 - Duyệt PR fork của mọi người ngoài: repo public, PR fork chạy `ci.yml` với code lạ trên runner; người học xem trước khi cho chạy.
@@ -450,9 +450,12 @@ done                                                                            
 | Luật | Vì sao |
 | --- | --- |
 | `deletion`, `non_fast_forward` | Không ai xoá `main` hay force push: tag image là commit trên `main`, check của `svp-gitops` đòi tag là commit của `main` `svp-frontend` (ADR-0033 §3), viết lại lịch sử làm image đã phát hành mất commit gốc |
-| `pull_request`, 0 approval | Mọi thay đổi qua PR để check chạy; repo một người nên không bắt người thứ hai (cổng triển khai nằm ở `svp-gitops`); không CODEOWNERS |
+| `pull_request`, 0 approval | Mọi thay đổi qua PR để check chạy; repo một người nên không bắt người thứ hai (cổng triển khai nằm ở `svp-gitops`); chỉ squash (`allowed_merge_methods = ["squash"]`, chặn cả khi cài đặt repo bị mở lại) |
+| `required_linear_history` | `main` thẳng, mỗi commit là một PR revert được, mang tiêu đề đã lint (ADR-0041 (c), (h)) |
 | `required_status_checks` `ci-ok`, `images-ok`, `integration_id` 15368 | Hai check tổng phải xanh, chỉ nhận từ app GitHub Actions (`gh api apps/github-actions -q .id` là 15368, đọc 2026-10-30) |
 | `bypass_actors: []` | Không ai bỏ qua, cả admin |
+| Ruleset `owners` (`require_code_owner_review`; vai admin bypass chỉ ở chế độ `pull_request`) | PR đổi file có Code Owner ở `CODEOWNERS` (`/.github/`, `/Makefile`, `/renovate.json`…) cần người học duyệt, kể cả PR của bot; file khác không chủ để PR Renovate tự merge vẫn chạy (ADR-0041 (b)) |
+| `pr-title` thêm vào check bắt buộc | Chỉ sau khi xanh trên một PR người và một PR bot (ADR-0041 (h)) |
 
 **Kiểm:** hai lệnh "Ruleset" của "Kiểm tra nhanh", rồi:
 

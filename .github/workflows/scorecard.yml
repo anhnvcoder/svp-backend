@@ -1,0 +1,58 @@
+# OpenSSF Scorecard of the repository (ADR-0041 (g)): pinning, token permissions, rulesets, dangerous workflow
+# patterns and the other checks of https://github.com/ossf/scorecard/blob/main/docs/checks.md, on every push to main,
+# weekly and when a classic branch protection rule changes. The results are published to the public Scorecard API
+# (publish_results: true, the badge and https://scorecard.dev/viewer/?uri=github.com/anhnvcoder/svp-backend) and
+# uploaded to code scanning. No pull_request trigger: this is no check of a pull request. Branch-Protection reads the
+# rulesets with GITHUB_TOKEN, so no repo_token.
+#
+# Publishing binds this file to the rules the Scorecard API checks before it accepts the results ("Workflow
+# Restrictions" of the README of ossf/scorecard-action, code in api/app/server/verify_workflow.go of
+# ossf/scorecard-infra): no env or defaults at workflow level and none in the job, no write permission at workflow
+# level, id-token: write in the Scorecard job alone, no container or service, one GitHub-hosted Ubuntu runner label
+# (ubuntu-latest or ubuntu-YY.MM, 22.04 or later), and only actions/checkout, actions/upload-artifact,
+# github/codeql-action/upload-sarif, ossf/scorecard-action and step-security/harden-runner as steps of that job, each
+# a uses: (no run: step). Whether the API accepted the results shows in the log of the Scorecard step.
+#
+# Every action is pinned to a full commit SHA; checkout never leaves the token in .git/config.
+name: scorecard
+
+on:
+  push:
+    branches: [main]
+  # Sunday 02:23 UTC, off the top of the hour (busy for GitHub's scheduler). GitHub runs it on main only.
+  schedule:
+    - cron: "23 2 * * 0"
+  # Changes of classic branch protection rules (the repository uses rulesets, which do not fire it).
+  branch_protection_rule:
+
+permissions: {}
+
+# One run at a time: a newer push replaces the waiting run, and the results of the newest commit are the ones kept.
+concurrency:
+  group: scorecard
+  cancel-in-progress: false
+
+jobs:
+  analysis:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      # actions/checkout; Scorecard reads the repository with GITHUB_TOKEN.
+      contents: read
+      # The code scanning upload of the results.
+      security-events: write
+      # The OIDC token that proves to the Scorecard API which workflow produced the results it publishes.
+      id-token: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: ossf/scorecard-action@fa7117db83c52d787ae5a89f350999701505d78e # v2.5.0
+        with:
+          results_file: results.sarif
+          results_format: sarif
+          publish_results: true
+      - uses: github/codeql-action/upload-sarif@9b3254085494b55a0f7c4c2b3d2d52cc712ce370 # v4.39.1
+        with:
+          sarif_file: results.sarif
+          category: scorecard
