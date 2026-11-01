@@ -401,16 +401,8 @@ gh run list --repo anhnvcoder/svp-gitops --workflow check.yml --branch main --li
 
 Khác `main` → Settings → General → **Default branch** → đổi sang `main`.
 
-**Làm gì** (người học chạy, từ gốc một bản clone của `svp-gitops`, hay từ thư mục tạm `gitops/` của repo code khi còn):
-
-```sh
-gh api -X POST repos/anhnvcoder/svp-gitops/rulesets --input .github/rulesets/main.json
-gh api -X POST repos/anhnvcoder/svp-gitops/rulesets --input .github/rulesets/owners.json
-gh api -X POST repos/anhnvcoder/svp-gitops/rulesets --input .github/rulesets/tags.json
-```
-
-(UI tương đương: Settings → **Rules** → **Rulesets** → **New ruleset** → **Import a ruleset**, chọn từng file.) Ba file trong
-`.github/rulesets/` chỉ là bản để nhập, nằm trong repo thì không có hiệu lực gì.
+**Làm gì** (người học chạy): ba ruleset `main`, `owners`, `tags` do root Terraform `github/` của `svp-infra` (`rulesets.tf`) giữ; tạo và
+sửa bằng `plan`, `apply` ở đó theo `github/README.md`, không nhập tay.
 
 **Từng luật và vì sao** (`main`, `owners`: ADR-0025 §7; hai ruleset cùng nhắm nhánh mặc định nên rule cộng dồn, bản chặt nhất thắng;
 `tags` nhắm tag, không cộng với hai cái kia):
@@ -449,7 +441,7 @@ UI: Settings → Rules → Rulesets → `owners` → **Bypass list** có "Reposi
 
 **Nếu sai:** `actor_id` 5 không phải vai admin (bypass list trống hay ghi vai khác) → sửa bypass list ở UI (**Add bypass** →
 Repository admin → For pull requests only). Ruleset `disabled`/`evaluate` → mở ruleset → **Enforcement status** → Active. Nhập
-trùng (hai ruleset cùng tên) → xoá bản thừa ở UI. Thiếu `tags` → nhập `tags.json` như trên. Lệnh `tags` có dòng nào → tag lạ (repo không dùng
+trùng (hai ruleset cùng tên) → xoá bản thừa ở UI. Thiếu `tags` → `apply` `rulesets.tf` của `svp-infra`. Lệnh `tags` có dòng nào → tag lạ (repo không dùng
 tag): xử lý như "Giảm thiểu" bước 3.
 
 ### C. Vận hành sau khi repo code chuyển job `promote` sang `svp-gitops`

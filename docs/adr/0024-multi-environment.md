@@ -429,7 +429,7 @@ Giả định chưa kiểm được lúc viết; mỗi dòng nêu phép kiểm c
   Từ phần 4, overlay và chart app-of-apps nằm ở repo `svp-gitops` (`envs/stg/`, `envs/prd/`, `argocd/apps/`); phép kiểm tĩnh là
   `deploy/ci/gitops-check.sh` (`make helm-check` chạy `--worktree`), gộp cả `check-image-digests.sh` đã xoá.
 - Phần 4 (hiện thực 2026-10-29 đến 2026-10-30): repo `svp-gitops` (`base/`, `envs/<env>/images/`, `envs/<env>/charts.yaml`,
-  `CODEOWNERS`, `.github/rulesets/`); promote stg `deploy/ci/promote.sh` (job `promote` của `.github/workflows/images.yml`); bản ghi stg
+  `CODEOWNERS`; ruleset ở `github/rulesets.tf` của `svp-infra`); promote stg `deploy/ci/promote.sh` (job `promote` của `.github/workflows/images.yml`); bản ghi stg
   `deploy/ci/release-set.sh`, `deploy/ci/record-stg.sh` (job `record-stg` của `.github/workflows/verify.yml`); promote prd
   `deploy/ci/promote-prd.sh` (job `promote-prd` của `images.yml`); check của PR prd ở bước 1b của `deploy/ci/gitops-check.sh`; hàm
   Deployment `ci_deployment_record`, `ci_deployment_list` của `deploy/ci/platform.sh`. Chi tiết ở mục Hiện thực ở của

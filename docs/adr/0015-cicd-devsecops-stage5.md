@@ -1223,4 +1223,4 @@ tới #6), chữ ký đọc ẩn danh bằng cosign, và trên hai cluster GitOp
   `deploy/k8s/lib.sh`, `deploy/k8s/k8s.mk` và values bên thứ ba ở `deploy/k8s/values/` (`argo-cd.yaml`, `argo-rollouts.yaml`,
   `cert-manager.yaml`, `cloudnative-pg.yaml`, `envoy-gateway.yaml`, `keda.yaml`, `kube-prometheus-stack.yaml`, `kyverno.yaml`,
   `loki.yaml`, `otel-collector.yaml`, `plugin-barman-cloud.yaml`, `pyroscope.yaml`, `tempo.yaml`).
-- Bảo vệ `main` (§11): `.github/rulesets/main.json`.
+- Bảo vệ `main` (§11): ruleset `main` ở `github/rulesets.tf` của `svp-infra`.

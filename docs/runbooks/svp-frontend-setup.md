@@ -442,14 +442,8 @@ for w in ci.yml images.yml; do
 done                                                                                    # hai dòng "conclusion":"success"
 ```
 
-**Làm gì** (người học chạy, từ gốc bản clone `svp-frontend`, ở workspace là `frontend/`):
-
-```sh
-gh api -X POST repos/anhnvcoder/svp-frontend/rulesets --input .github/rulesets/main.json
-```
-
-(UI: Settings → **Rules** → **Rulesets** → **New ruleset** → **Import a ruleset**.) File trong repo chỉ là bản để nhập; sửa sau đó bằng
-`gh api -X PUT repos/anhnvcoder/svp-frontend/rulesets/<id> --input .github/rulesets/main.json`.
+**Làm gì** (người học chạy): ruleset `main` do root Terraform `github/` của `svp-infra` (`rulesets.tf`) giữ; tạo và sửa bằng `plan`,
+`apply` ở đó theo `github/README.md`, không nhập tay.
 
 **Từng luật và vì sao** (ADR-0033 §10, cùng luật với `main` của backend, ADR-0015 §11):
 
@@ -470,7 +464,7 @@ gh api repos/anhnvcoder/svp-frontend/rulesets/$id -q '{bypass_actors, include: .
 ```
 
 **Nếu sai:** `disabled`/`evaluate` → mở ruleset → **Enforcement status** → Active. Hai ruleset cùng tên → xoá bản thừa ở UI. Thiếu một
-check hay `integration_id` khác → sửa file bằng PR rồi `PUT` như trên.
+check hay `integration_id` khác → sửa `rulesets.tf` của `svp-infra` bằng PR rồi `apply`.
 
 ### D1. PR đầu của bot web (bản phát hành đầu)
 

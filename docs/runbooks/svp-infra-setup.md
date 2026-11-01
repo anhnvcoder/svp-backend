@@ -233,41 +233,17 @@ gh issue list --repo anhnvcoder/svp-infra --state all --search 'Dependency Dashb
 
 ### C1. Ruleset `main` (sau lượt `check.yml` đầu xanh trên `main`)
 
-Thứ tự như ba repo kia: ruleset cấm push thẳng `main` và đòi check tổng `infra-ok`; nhập sau lượt xanh trên `main` thì commit đầu đã push
+Thứ tự như ba repo kia: ruleset cấm push thẳng `main` và đòi check tổng `infra-ok`; tạo sau lượt xanh trên `main` thì commit đầu đã push
 thẳng được, và check đã chạy được trên `main` trước khi thành bắt buộc.
 
-**Trước khi nhập:** hai lệnh "Kiểm" của B1 ra `main` và `success`; tên job tổng của `check.yml` là `infra-ok`:
+**Trước khi `apply`:** hai lệnh "Kiểm" của B1 ra `main` và `success`; tên job tổng của `check.yml` là `infra-ok`:
 
 ```sh
 gh api repos/anhnvcoder/svp-infra/commits/main/check-runs -q '.check_runs[] | {name, conclusion}'   # có {"conclusion":"success","name":"infra-ok"}
 ```
 
-**Làm gì** (người học chạy; repo không giữ file ruleset nên JSON nằm ở đây):
-
-```sh
-gh api -X POST repos/anhnvcoder/svp-infra/rulesets --input - <<'JSON'
-{
-  "name": "main",
-  "target": "branch",
-  "enforcement": "active",
-  "conditions": {"ref_name": {"include": ["~DEFAULT_BRANCH"], "exclude": []}},
-  "bypass_actors": [],
-  "rules": [
-    {"type": "deletion"},
-    {"type": "non_fast_forward"},
-    {"type": "pull_request", "parameters": {
-      "required_approving_review_count": 0, "dismiss_stale_reviews_on_push": true, "require_code_owner_review": false,
-      "require_last_push_approval": false, "required_review_thread_resolution": false}},
-    {"type": "required_status_checks", "parameters": {
-      "strict_required_status_checks_policy": false,
-      "required_status_checks": [{"context": "infra-ok", "integration_id": 15368}]}}
-  ]
-}
-JSON
-```
-
-(UI: Settings → **Rules** → **Rulesets** → **New ruleset** → **Import a ruleset**, dán JSON trên vào một file trước.) Sửa sau đó bằng
-`gh api -X PUT repos/anhnvcoder/svp-infra/rulesets/<id> --input -` với cùng JSON đã sửa.
+**Làm gì** (người học chạy): ruleset `main` là `github_repository_ruleset.infra_main` của root Terraform `github/` (`rulesets.tf`);
+tạo và sửa bằng `plan`, `apply` ở đó theo `github/README.md`, không nhập tay.
 
 **Từng luật và vì sao** (như `main` của `svp-gitops`, `svp-frontend`):
 
@@ -288,7 +264,7 @@ gh api repos/anhnvcoder/svp-infra/rulesets/$id -q '{bypass_actors, include: .con
 ```
 
 **Nếu sai:** `disabled`/`evaluate` → mở ruleset → **Enforcement status** → Active. Hai ruleset cùng tên → xoá bản thừa ở UI. PR đứng chờ
-check (nguyên nhân 4) → so tên job tổng của `check.yml` với `context`, sửa bên sai (`PUT` ruleset, hay PR đổi tên job khi ruleset tạm ở
+check (nguyên nhân 4) → so tên job tổng của `check.yml` với `context`, sửa bên sai (PR sửa `rulesets.tf` rồi `apply`, hay PR đổi tên job khi ruleset tạm ở
 `evaluate`).
 
 ## Leo thang

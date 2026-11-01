@@ -518,7 +518,7 @@ Hiện thực 2026-10-29 đến 2026-10-30 (PR-B, nhánh `feat/stage6b-gitops-sp
   `base/services/<svc>.yaml` không khối `image`); `envs/{stg,prd}/` (overlay, `svp-policy.yaml`, `charts.yaml`, `images/<svc>.yaml`);
   `argocd/project.yaml`, `argocd/bootstrap.json`, `argocd/apps/` (`components.json`, `values.yaml` mặc định `refs/heads/main`,
   `templates/applications.yaml`, symlink `files/envs`); `.github/workflows/check.yml` (job `gitops`, check tổng `gitops-ok`, commit
-  checker ghim một chỗ), `.github/rulesets/main.json`, `owners.json`, `tags.json`.
+  checker ghim một chỗ); ba ruleset `main`, `owners`, `tags` ở `github/rulesets.tf` của `svp-infra`.
 - Thư mục cấu hình và đường dev (mục 3): `gitops_is_clone`, `gitops_dir`, `gitops_clone` của `deploy/k8s/lib.sh`; target `gitops-clone`
   (`GITOPS_REF`) của `deploy/k8s/k8s.mk`; `.gitops/` trong `.gitignore`; `deploy/k8s/install.sh` (`components.json`, `base/` của bản
   clone); `deploy/k8s/drills/threats.sh` đọc `components.json` của bản clone.

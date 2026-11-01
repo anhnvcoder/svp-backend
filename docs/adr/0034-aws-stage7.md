@@ -585,7 +585,7 @@ Chưa hiện thực (2026-10-31). Nơi sẽ hiện thực:
 
 - Repo `svp-infra` (`infra/`): `Makefile`, `.tflint.hcl`, `.trivyignore.yaml`, `renovate.json`, `.github/workflows/check.yml` (mục 2, 15);
   `aws/bootstrap/` (state, budget, zone; mục 2, 3, 5); `aws/modules/network/`, `aws/modules/eks/`, `aws/modules/rds/`, `aws/modules/media/`
-  (mục 6, 8, 9, 11); `aws/envs/stg/` (output `cluster_values`, role Pod Identity của hai service; mục 7, 10); `aws/scripts/`,
+  (mục 6, 8, 9, 11); `github/` (cài đặt GitHub của mọi repo, gồm ruleset ở `github/rulesets.tf`; mục 2); `aws/envs/stg/` (output `cluster_values`, role Pod Identity của hai service; mục 7, 10); `aws/scripts/`,
   `docs/runbooks/session-stg.md` (mục 13, 14).
 - Repo code: `internal/objstore` (`S3_CREDENTIALS`, `S3_PATH_STYLE`; mục 9, 10); `deploy/helm/svp-data` (`postgres.mode`, `s3.mode`),
   `deploy/helm/svp-observability` (`postgres.mode`), `deploy/helm/svp-cluster` (StorageClass `gp3`, issuer `acme`, Service NLB của Envoy,

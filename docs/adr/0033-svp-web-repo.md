@@ -525,8 +525,8 @@ Cách lùi:
 - Cây: gốc là web (`package.json`, `src/`…, `e2e/`, `lighthouse/`), `Dockerfile`, `Makefile` (target web chuyển từ backend:
   `check`, `generate`, `generate-check`, `lockfile-scan`, `e2e`…, cùng kiểm Node và pnpm), `api/contract.json`, `.backend-commit`,
   `.github/workflows/ci.yml` (lint, test, build, `generate-check`, `lockfile-scan`, `platform-guard`, e2e chỉ báo), `.github/workflows/images.yml`
-  (build hai kiến trúc, quét, ký, provenance, source map, promote, rescan hằng ngày), `.github/rulesets/main.json`, `renovate.json`,
-  `README.md`.
+  (build hai kiến trúc, quét, ký, provenance, source map, promote, rescan hằng ngày), `renovate.json`,
+  `README.md`; ruleset `main` ở `github/rulesets.tf` của `svp-infra`.
 - **Check tổng:** `ci-ok` và `images-ok`, cùng tên và ý nghĩa như backend (mỗi repo một không gian tên).
 - **Ruleset `main`:** PR bắt buộc, `ci-ok` và `images-ok` từ app GitHub Actions, cấm xoá và force push, không ai bypass; 0 approval (như
   backend: cổng triển khai nằm ở `svp-gitops`). Không CODEOWNERS (backend cũng không).
@@ -724,7 +724,7 @@ PR-2 của mục 9 (cắt `web/`, 2026-10-31, nhánh `feat/stage6b-svp-web-cut`,
 - `svp-web` (PR #1, `8dd59c9`, 2026-10-30): `Dockerfile` ở gốc, `Makefile`, `.backend-commit`, `scripts/backend.sh`, `api/contract.json`,
   `scripts/contract.sh` (`make generate`), `.github/workflows/ci.yml` (`check`, `config`, `gitleaks`, `stack`, `sarif`, `ci-ok`),
   `.github/workflows/images.yml` (`plan`, build, ký, provenance, image `web-sourcemaps`, `promote` với App `svp-web-promoter`, `rescan`,
-  `images-ok`), `.github/rulesets/main.json`, `renovate.json`, `.trivyignore.yaml`, `README.md`, `CLAUDE.md`.
+  `images-ok`), `renovate.json`, `.trivyignore.yaml`, `README.md`, `CLAUDE.md`; ruleset `main` ở `github/rulesets.tf` của `svp-infra`.
 - Cài đặt GitHub (người học, theo [`docs/runbooks/svp-frontend-setup.md`](../runbooks/svp-frontend-setup.md)): App `svp-web-promoter`, environment
   `promote` của `svp-web` và package `svp-web/web`, `svp-web/web-sourcemaps`, `short-video-platform/api/gateway` public đã dùng ở các lượt
   của mục Kết quả.
