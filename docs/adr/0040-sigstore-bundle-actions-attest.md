@@ -1,6 +1,6 @@
 # 0040. Chữ ký, `vuln`, SBOM và provenance của image phát hành sang Sigstore bundle trong một bản phát hành mỗi nguồn; provenance bằng `actions/attest`; rescan gỡ bundle `vuln` cũ; revert nếu admission thật vượt hạn
 
-- Trạng thái: Chấp nhận (người học duyệt 2026-11-01); hiện thực ở `svp-backend`, `svp-frontend` chờ ghim commit này; số đo admission đạt (mục Xác nhận)
+- Trạng thái: Chấp nhận (người học duyệt 2026-11-01); hiện thực ở `svp-backend` (#72) và `svp-frontend` (#17); kiểm ở lượt phát hành đầu và số đo admission đạt (mục Xác nhận)
 - Ngày: 2026-11-01
 - Người quyết: người học (duyệt), AI (đề xuất)
 
@@ -127,7 +127,8 @@ webhook `ivpol.validate.kyverno.svc-fail-finegrained-svp-images` 18 lần, trung
 trung bình 5,4 s, 18/18 ≤ 20 s. Có cache (ca (a) của `drill-k8s-supplychain`): 536 ms. Rescan bundle (backend run 41330733964, frontend run
 41330736595): mỗi image giữ đúng một bundle `vuln`, `scanFinishedOn` mới.
 
-Kiểm ở lượt phát hành đầu (chưa kiểm): lượt `images.yml` của mỗi repo xanh; một image mỗi repo qua `verify-release.sh` (chữ ký, `vuln`,
+Kiểm ở lượt phát hành đầu (**đạt**: `images.yml` run 41326534756 backend, 41329548993 frontend; rescan 41330733964, 41330736595;
+image diễn tập 41330755152; `verify.yml gitops` 41334373082): lượt `images.yml` của mỗi repo xanh; một image mỗi repo qua `verify-release.sh` (chữ ký, `vuln`,
 provenance của `actions/attest`, identity đúng nguồn); `oras discover` chỉ thấy bundle referrer, không `.sig`/`.att` mới; PR promote stg qua
 `gitops-ok`; sau một lượt rescan dispatch, `verify-release.sh` vẫn qua và đọc `scanFinishedOn` mới; `drill-k8s-supplychain` trong 72 giờ sau
 dispatch image diễn tập: ca (a) nhận bản bundle, (b), (c) (CRITICAL trong `vuln` bundle, chưa thử ở spike), (l) từ chối đúng message. Thời
