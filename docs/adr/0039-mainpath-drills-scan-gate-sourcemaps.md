@@ -1,6 +1,6 @@
 # 0039. Diễn tập đo một lần và kịch bản runner thành bài lab, `verify.yml` còn hai kịch bản tuần; cổng quét bằng cờ của trivy, grype; bỏ image source map
 
-- Trạng thái: Chấp nhận (người học duyệt 2026-11-01); §1, §2 và §3 phần A (bỏ image source map) hiện thực ở `svp-backend`; còn chờ `svp-frontend` ghim commit này và người học chọn tracker, công cụ tải source map (§3)
+- Trạng thái: Chấp nhận (người học duyệt 2026-11-01); §1, §2 và §3 phần A (bỏ image source map) hiện thực ở `svp-backend`; còn người học chọn tracker, công cụ tải source map (§3)
 - Ngày: 2026-11-01
 - Người quyết: người học (duyệt), AI (đề xuất)
 

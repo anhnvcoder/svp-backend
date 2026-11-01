@@ -15,6 +15,9 @@
 # identity that passes what Kyverno checks (builder.id, workflow repository and ref of its source), whose source commit
 # is the commit the certificate of its signature names (cosign --certificate-github-workflow-sha): a provenance that
 # claims another commit than the run that signed it is refused.
+# The same cosign commands read a release signed in Sigstore bundles (the provenance written by actions/attest) and one
+# in cosign's older format (.sig, .att images), so the releases of both pass while environments still run the older
+# ones; a digest carries one format only (release_format of common.sh).
 set -euo pipefail
 
 # shellcheck source=deploy/ci/common.sh

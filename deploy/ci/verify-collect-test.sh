@@ -1078,8 +1078,7 @@ if timeout --version 2>/dev/null | grep -q GNU; then
   same "verify-run: a run of the chosen targets that pass passes" 0 "$rc"
   same "verify-run: gitops clones svp-gitops, then only the build target and the chosen ones run" \
     "$(printf -- '-s gitops-clone\n%s\nk8s-smoke\n%s' "$gitops_build" "drill-k8s-supplychain \
-SUPPLYCHAIN_UNSIGNED=fake/web-amd64@sha256:0 SUPPLYCHAIN_VULNERABLE=fake/newest-drill-vulnerable@sha256:0 \
-SUPPLYCHAIN_UNSIGNED_FALLBACK=fake/newest-drill-unsigned@sha256:0 \
+SUPPLYCHAIN_UNSIGNED=fake/newest-drill-unsigned@sha256:0 SUPPLYCHAIN_VULNERABLE=fake/newest-drill-vulnerable@sha256:0 \
 SUPPLYCHAIN_NO_PROVENANCE=fake/newest-drill-no-provenance@sha256:0")" "$(makes one)"
   same "verify-run: the targets left out keep their ids and are skipped as not in targets" \
     "$(want_rows "$gitops_names" ok 'not in targets' '05 k8s-smoke ok ' '06 drill-k8s-supplychain ok ')" \

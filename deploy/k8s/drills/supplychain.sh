@@ -6,12 +6,14 @@
 # case b, which is a real Deployment:
 #   a  the image a pod of svp runs, a signed release on GHCR: admitted, twice in a row (the second answer comes from
 #      Kyverno's verification cache, the time of both is printed);
-#   b  SUPPLYCHAIN_UNSIGNED (drill-unsigned, pushed by CI without a signature; or the linux/amd64 manifest of a signed
-#      release's index, which the signature and the attestations do not name) in a Deployment of svp: its ReplicaSet
-#      reports FailedCreate with the signature rule's message; the Deployment is deleted. When Kyverno admits that
-#      image instead (its pod is created), a WARN line says so, and with SUPPLYCHAIN_UNSIGNED_FALLBACK set (the digest of
-#      drill-unsigned) the case is run again with that image, which then stands for "unsigned" in h and i too;
-#      without it the case fails;
+#   b  the unsigned image in a Deployment of svp: its ReplicaSet reports FailedCreate with the signature rule's
+#      message; the Deployment is deleted; a pod of it created fails the case. The unsigned image is
+#      SUPPLYCHAIN_UNSIGNED when set, otherwise the newest drill-unsigned under the prefix of release source backend on
+#      GHCR (deploy/ci/ghcr-digest.sh newest, anonymous): CI pushes it with no signature and no attestation, so nothing
+#      on GHCR refers to it. Not a platform manifest of a signed release's index: in Sigstore bundles the release's
+#      attestations refer to each platform manifest too and Kyverno counts them as its signature, so it passes the
+#      signature rule and is refused later, for the vuln attestation; b, h and i would then depend on the format. No
+#      drill-unsigned found: b SKIPs;
 #   c  SUPPLYCHAIN_VULNERABLE (drill-vulnerable, signed and attested with CRITICAL vulnerabilities): refused with the
 #      CRITICAL rule's message. Kyverno stops at the first check that fails, and CRITICAL is checked before the age, so
 #      the drill image (never rescanned) is still refused with that message once its attestation is past the maximum
@@ -78,12 +80,16 @@
 # and verified with its own identity. Case a and f send an image of source backend (this repository) that a pod of svp
 # runs, e an image of that prefix by tag; the images of b, c and l may be any service or drill image of a source under
 # that source's prefix (the names the first check admits), and whatever the drill reads of them with cosign it reads
-# with the identity of that source, as Kyverno does.
-# "Unsigned" in h and i is SUPPLYCHAIN_UNSIGNED when set (the signature rule's message), otherwise the dev image of the
-# local registry (the prefix rule's message). A case whose image is not available is printed SKIP with the reason:
-# b without SUPPLYCHAIN_UNSIGNED, c without SUPPLYCHAIN_VULNERABLE, l with SUPPLYCHAIN_NO_PROVENANCE=none, a, f and the
-# admitted half of h while no pod of svp
-# runs an image of GHCR (the dev path).
+# with the identity of that source, as Kyverno does. The images of a, c, f and l may be signed in Sigstore bundles (the
+# releases and drill images built since the bundle format) or in cosign's older format (.sig, .att images): the same
+# cosign commands read both, and Kyverno answers both with the same messages for them. The unsigned image of b, h and i
+# is drill-unsigned, which nothing on GHCR refers to in either format (b says why). In bundles a rescan leaves a second
+# vuln bundle on a digest between its attest and its delete: c reads the oldest of them, l needs exactly one, as for
+# the older format.
+# "Unsigned" in h and i is the unsigned image of b (the signature rule's message), or the dev image of the local
+# registry when there is none (the prefix rule's message). A case whose image is not available is printed SKIP with
+# the reason: b without drill-unsigned, c without SUPPLYCHAIN_VULNERABLE, l with SUPPLYCHAIN_NO_PROVENANCE=none, a, f
+# and the admitted half of h while no pod of svp runs an image of GHCR (the dev path).
 #
 # The dev path (`make k8s-up`) installs the policy in Audit, which refuses nothing: the drill refuses to run there
 # unless SUPPLYCHAIN_ENFORCE_TMP=1, which runs case k first, then upgrades release svp-policy to Enforce for the other
@@ -96,8 +102,8 @@
 # Results as JSON in .k8s/drills/supplychain-<time>.json. Calls no API of the gateway, so it deletes no rate limit key.
 #
 # Usage (from the repo root, cluster up): make drill-k8s-supplychain [SUPPLYCHAIN_UNSIGNED=ghcr.io/...@sha256:...]
-#   [SUPPLYCHAIN_UNSIGNED_FALLBACK=ghcr.io/...@sha256:...] [SUPPLYCHAIN_VULNERABLE=ghcr.io/...@sha256:...]
-#   [SUPPLYCHAIN_NO_PROVENANCE=ghcr.io/...@sha256:...|none] [SUPPLYCHAIN_ENFORCE_TMP=1].
+#   [SUPPLYCHAIN_VULNERABLE=ghcr.io/...@sha256:...] [SUPPLYCHAIN_NO_PROVENANCE=ghcr.io/...@sha256:...|none]
+#   [SUPPLYCHAIN_ENFORCE_TMP=1].
 set -euo pipefail
 
 # Only the cluster's API: deploy/compose/lib.sh (the gateway's API helpers, which delete rate limit keys) is left out.
@@ -140,7 +146,7 @@ psa_version=$(sed -n 's/^podSecurityVersion: *//p' "$repo_root/deploy/helm/svp-c
 [[ $psa_version =~ ^v1\.[0-9]+$ ]] || fail "read podSecurityVersion of deploy/helm/svp-cluster/values.yaml (got '$psa_version')"
 # Every <imagePrefix><name> the policy's first check admits: a service or drill image of a source, under its prefix.
 admitted_names=$(jq -r '.sources[] | .imagePrefix as $p | (.services + .drillImages)[] | $p + .' <<<"$sources")
-for v in SUPPLYCHAIN_UNSIGNED SUPPLYCHAIN_UNSIGNED_FALLBACK SUPPLYCHAIN_VULNERABLE SUPPLYCHAIN_NO_PROVENANCE; do
+for v in SUPPLYCHAIN_UNSIGNED SUPPLYCHAIN_VULNERABLE SUPPLYCHAIN_NO_PROVENANCE; do
   [ -n "${!v:-}" ] || continue
   [ "$v" != SUPPLYCHAIN_NO_PROVENANCE ] || [ "${!v}" != none ] || continue
   [[ ${!v} =~ ^([a-z0-9._/-]+)(:[A-Za-z0-9._-]+)?@sha256:[0-9a-f]{64}$ ]] &&
@@ -148,7 +154,6 @@ for v in SUPPLYCHAIN_UNSIGNED SUPPLYCHAIN_UNSIGNED_FALLBACK SUPPLYCHAIN_VULNERAB
     fail "$v must be <imagePrefix of a release source><one of its services or drill images>@sha256:<64 hex>, one of: $(tr "\n" " " <<<"$admitted_names")(got '${!v}')"
 done
 unsigned=${SUPPLYCHAIN_UNSIGNED:-}
-unsigned_fallback=${SUPPLYCHAIN_UNSIGNED_FALLBACK:-}
 vulnerable=${SUPPLYCHAIN_VULNERABLE:-}
 no_provenance=${SUPPLYCHAIN_NO_PROVENANCE:-}
 # Docker Hub's busybox 1.37.0 (multi-arch index), only ever named in a dry run.
@@ -499,6 +504,10 @@ signed=$(kc -n svp get pods -o json | jq -r --arg p "$prefix" '[.items[].spec.co
 local_image=$(kc -n svp get pods -o json | jq -r '[.items[].spec.containers[].image
   | select(startswith("k3d-svp-registry:5111/"))] | first // empty')
 local_image=${local_image:-k3d-svp-registry:5111/svp/gateway:dev-000000000000}
+# The unsigned image of b, h and i (the header says why drill-unsigned).
+if [[ -z $unsigned ]]; then
+  unsigned=$("$repo_root/deploy/ci/ghcr-digest.sh" newest drill-unsigned 2>"$work/unsigned.err") || unsigned=
+fi
 bad=${unsigned:-$local_image}
 if [[ -n $unsigned ]]; then bad_rule="image without a keyless signature by"; else bad_rule="image not allowed in namespace svp"; fi
 echo "      pod to patch: svp/$target (container $target_container); signed image: ${signed:-none (no pod of svp runs one)}"
@@ -634,13 +643,6 @@ EOF
 }
 if [[ -n $unsigned ]]; then
   unsigned_deployment "$unsigned"
-  # The digest of a release's linux/amd64 manifest is not the index that was signed and attested, but Kyverno might
-  # still trace it back to that index: then it admits the pod, and the case says so and uses drill-unsigned instead.
-  if [[ -z $msg && $pods != 0 && -n $unsigned_fallback ]]; then
-    result b WARN "deployment svp/$deploy_name with $unsigned: Kyverno admitted it ($pods pod(s) created), so the case runs again with SUPPLYCHAIN_UNSIGNED_FALLBACK $unsigned_fallback, which also stands for the unsigned image in h and i"
-    unsigned=$unsigned_fallback bad=$unsigned_fallback
-    unsigned_deployment "$unsigned"
-  fi
   out=$msg rc=1 ms=
   if [[ -z $msg && $pods != 0 ]]; then
     result b FAIL "deployment svp/$deploy_name with $unsigned: Kyverno admitted it ($pods pod(s) created)"
@@ -652,7 +654,7 @@ if [[ -n $unsigned ]]; then
       result b FAIL "deployment svp/$deploy_name has no pod (got $pods)"
   fi
 else
-  result b SKIP "SUPPLYCHAIN_UNSIGNED is not set (digest of drill-unsigned, which CI pushes without a signature)"
+  result b SKIP "SUPPLYCHAIN_UNSIGNED is not set and no drill-unsigned was found on GHCR ($(tail -n 1 "$work/unsigned.err")); build the drill images ($(ci_dispatch_hint images.yml main drill=true))"
 fi
 
 # --- c: CRITICAL, once the drill image's attestation is shown to be within the maximum age (the header says why).

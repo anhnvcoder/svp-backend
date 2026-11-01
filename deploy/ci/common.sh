@@ -609,6 +609,118 @@ verify_signature() {
   cosign_ verify --certificate-oidc-issuer "$sign_issuer" --certificate-identity "$sign_subject" "$1@$2" >/dev/null
 }
 
+# Sigstore bundles. A release is signed and attested in Sigstore bundles (cosign sign and attest, actions/attest), each
+# an OCI referrer of the digest it is about; GHCR has no referrers API, so the clients keep the list in the fallback tag
+# sha256-<hex> (OCI distribution spec 1.1). The releases signed before keep cosign's older format, a .sig and an .att
+# image beside the digest (tags sha256-<hex>.sig and .att), and the same cosign commands verify either. A digest never
+# carries both: once it has one bundle, Kyverno and cosign read bundles only, and refuse what is missing there.
+# shellcheck disable=SC2034 # read by the scripts that source this file
+bundle_artifact_type=application/vnd.dev.sigstore.bundle.v0.3+json
+# The predicate type of each bundle a release carries: the signature of cosign sign, the SBOM (cosign attest --type
+# spdxjson, on each manifest), the scan result (--type vuln) and the build provenance (actions/attest).
+# shellcheck disable=SC2034
+sign_predicate_type=https://sigstore.dev/cosign/sign/v1
+# shellcheck disable=SC2034
+sbom_predicate_type=https://spdx.dev/Document
+vuln_predicate_type=https://cosign.sigstore.dev/attestation/vuln/v1
+# shellcheck disable=SC2034
+provenance_predicate_type=https://slsa.dev/provenance/v1
+
+# registry_oras ARGS...: the pinned ORAS (ORAS_IMAGE of the Makefile) as the calling user, with the credentials docker
+# login wrote (the file only, read-only): for the jobs that sign, which log in to the registry first.
+registry_oras() {
+  local image config
+  image=$(tool_image ORAS_IMAGE) || return 1
+  config=${DOCKER_CONFIG:-$HOME/.docker}/config.json
+  [ -f "$config" ] || {
+    echo "FAIL  no $config: docker login to the registry first" >&2
+    return 1
+  }
+  docker_ run --rm --user "$(id -u):$(id -g)" -e HOME=/tmp -v "$config:/auth/config.json:ro" "$image" "$@" \
+    --registry-config /auth/config.json
+}
+
+# bundle_referrers IMAGE: prints one line "<digest> <predicate type>" per Sigstore bundle referrer of IMAGE
+# (REPOSITORY@DIGEST), the type as its annotation dev.sigstore.bundle.predicateType names it (cosign and actions/attest
+# both write it); nothing when it has none. Not verified: it tells what is there, never what is trusted.
+bundle_referrers() {
+  local out
+  out=$(registry_oras discover --format json --artifact-type "$bundle_artifact_type" "$1") || {
+    echo "FAIL  list the referrers of $1" >&2
+    return 1
+  }
+  jq -r 'if (.referrers | type) == "array"
+    then .referrers[] | "\(.digest) \(.annotations["dev.sigstore.bundle.predicateType"] // "-")"
+    else error("no referrers") end' <<<"$out" 2>/dev/null || {
+    echo "FAIL  read the referrers of $1 from what oras answered" >&2
+    return 1
+  }
+}
+
+# bundles_of TYPE: reads lines of bundle_referrers on stdin and prints the digest of each bundle of predicate type TYPE.
+bundles_of() { awk -v t="$1" '$2 == t { print $1 }'; }
+
+# release_format IMAGE: prints how IMAGE (REPOSITORY@DIGEST) is signed: bundle (Sigstore bundle referrers), legacy
+# (cosign's older .sig image) or none. Fails when it carries both, or when the registry gives no clear answer (only its
+# "not found" for the tag of the .sig image counts as none).
+release_format() {
+  local bundles err tag=${1%@*}:sha256-${1##*@sha256:}.sig legacy=false
+  bundles=$(bundle_referrers "$1") || return 1
+  if err=$(registry_oras manifest fetch --descriptor "$tag" 2>&1 >/dev/null); then
+    legacy=true
+  else
+    case $err in
+    *": not found"*) ;;
+    *)
+      printf '%s\n' "$err" | tail -n 1 >&2
+      echo "FAIL  read whether $1 has a signature in cosign's older format ($tag)" >&2
+      return 1
+      ;;
+    esac
+  fi
+  if [ -n "$bundles" ] && [ "$legacy" = true ]; then
+    echo "FAIL  $1 carries Sigstore bundles and cosign's older format ($tag): verifiers read the bundles only" >&2
+    return 1
+  fi
+  if [ -n "$bundles" ]; then echo bundle; elif [ "$legacy" = true ]; then echo legacy; else echo none; fi
+}
+
+# replace_vuln_bundle REPOSITORY DIGEST PREDICATE: attests PREDICATE as the vuln attestation of REPOSITORY@DIGEST, a
+# release signed in Sigstore bundles, and takes every other vuln bundle off it, so it carries exactly one again. Each
+# attest adds a bundle (--replace does nothing for bundles), cosign verify-attestation returns all of them, and Kyverno
+# v1.19.1 reads the one last in the referrer list, which GHCR keeps sorted by digest, not by age: an older one left
+# there could be what Kyverno reads, and refuse every new pod once it is past the maximum age. The one kept is the one
+# this call wrote (the vuln bundle that was not listed before it), never one picked by what an unverified bundle says.
+# GHCR deletes no manifest through the registry API (oras manifest delete answers "unsupported", exit 1), but oras has
+# rewritten the fallback tag by then, which takes the bundle off the list (its manifest stays in the package,
+# untagged); so the exit code is not trusted and the list is read again: only the new vuln bundle may be left, and
+# cosign must verify exactly one vuln attestation of the identity of the release's source (sign_issuer and
+# sign_subject, set first). Only vuln bundles are ever taken off: never the signature, the SBOM or the provenance. For a
+# few seconds the digest carries two: verify-release.sh refuses it then, Kyverno reads either (both within the age).
+# Fails naming what is wrong; needs `docker login` (registry_oras) and the id-token of the job (cosign attest).
+replace_vuln_bundle() {
+  local ref=$1@$2 before after new d left count
+  before=$(bundle_referrers "$ref") || fail "list the bundles of $ref"
+  cosign attest --yes --new-bundle-format=true --type vuln --predicate "$3" "$ref" || fail "attest $ref"
+  after=$(bundle_referrers "$ref") || fail "list the bundles of $ref after the attestation"
+  new=$(comm -13 <(bundles_of "$vuln_predicate_type" <<<"$before" | sort) \
+    <(bundles_of "$vuln_predicate_type" <<<"$after" | sort))
+  [ "$(grep -c . <<<"$new")" -eq 1 ] ||
+    fail "$ref: not exactly one new vuln bundle after the attestation (${new:-none}); nothing taken off"
+  for d in $(bundles_of "$vuln_predicate_type" <<<"$after"); do
+    [ "$d" != "$new" ] || continue
+    registry_oras manifest delete --force "$1@$d" >/dev/null 2>&1 ||
+      echo "note  oras manifest delete $1@$d did not exit 0 (GHCR answers unsupported); the list is read again below"
+  done
+  left=$(bundle_referrers "$ref") || fail "list the bundles of $ref after taking the older ones off"
+  [ "$(bundles_of "$vuln_predicate_type" <<<"$left")" = "$new" ] ||
+    fail "$ref: the vuln bundles left are $(bundles_of "$vuln_predicate_type" <<<"$left" | tr '\n' ' ')not only $new"
+  count=$(cosign_ verify-attestation --type vuln --certificate-oidc-issuer "$sign_issuer" \
+    --certificate-identity "$sign_subject" "$ref" 2>/dev/null | grep -c . || true)
+  [ "$count" = 1 ] || fail "$ref: cosign verifies $count vuln attestations of $sign_subject, not exactly one"
+  echo "ok    $ref: one vuln bundle, $new"
+}
+
 # check_index REPOSITORY DIGEST DIR DIR: true when REPOSITORY@DIGEST, read back from the registry, is an index of
 # exactly two manifests, linux/amd64 and linux/arm64, whose digests are the `digest` files of the two DIRs (one per
 # platform, named in their `platform` files), and when DIGEST really is the digest of those bytes. What gets signed

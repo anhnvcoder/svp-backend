@@ -2,6 +2,10 @@
 # rescan.sh: the daily rescan of released images. A release was
 # clean when it was built; new vulnerabilities are published every day, and Kyverno accepts a vuln attestation for
 # 72 hours only, so every released digest is scanned again with the newest DB and its attestation replaced.
+# A digest keeps the format it was signed in: one in cosign's older format (.sig, .att images) gets its vuln
+# attestation replaced in that format with --replace, as when it was built; one in Sigstore bundles gets a new vuln
+# bundle and every older vuln bundle taken off (replace_vuln_bundle of common.sh). Never the other format: a digest
+# that carries both is read by its bundles alone. The older branch goes once no environment names such a digest.
 #
 #   rescan.sh scan-index REPOSITORY DIGEST OUT
 #     Reads the index REPOSITORY@DIGEST from the registry, finds its two manifests (linux/amd64, linux/arm64) and scans
@@ -12,15 +16,15 @@
 #   rescan.sh run [--source NAME] OUT GITOPS_DIR [VALUES_REF]   (CI only: it attests)
 #     NAME must be the release source of the repository running the job (use_build_source of common.sh), and the job
 #     the workflow that source signs with (ci_builder_id against its subject): checked before anything is read, as
-#     cosign attest --replace swaps the vuln attestation whoever signed the old one, so a run of one repository naming
-#     another's source (or forgetting --source) would replace that source's attestations with its own identity, and
-#     Kyverno would then refuse every new pod of those releases. For every release `list` prints: an empty digest is skipped; a repository other than the service's image of
+#     the vuln attestation is replaced whoever signed the old one (cosign attest --replace, or the older vuln bundles
+#     taken off), so a run of one repository naming another's source (or forgetting --source) would replace that
+#     source's attestations with its own identity, and Kyverno would then refuse every new pod of those releases. For every release `list` prints: an empty digest is skipped; a repository other than the service's image of
 #     release source NAME (backend, this repository, when not given; deploy/helm/svp-policy/files/sources.json of this
 #     checkout), a malformed digest, or a digest without a signature of that source's images.yml on main is not attested
 #     and fails the run, so whatever a ref lists, only digests the workflow running this signed on main get a fresh
 #     attestation: no repository attests another's releases. Each digest left is scanned (scan-index), its predicate
-#     built by vuln-predicate.sh --allow-critical and attested with `cosign attest --replace --type vuln`, so the
-#     attestation always holds the real result: a CRITICAL found today is recorded (Kyverno then refuses new pods
+#     built by vuln-predicate.sh --allow-critical and attested as the one vuln attestation of the digest, in the
+#     format it is signed in (above), so the attestation always holds the real result: a CRITICAL found today is recorded (Kyverno then refuses new pods
 #     because of it, not because of an old attestation) and fails the run, which mails the owner. A secret found today
 #     is never attested: it fails the run before anything is written, as at build time. SARIF of the digests of main of
 #     svp-gitops go to OUT/sarif for the Security tab. The drill images are in no image file, so they are never
@@ -46,7 +50,7 @@
 set -euo pipefail
 
 # shellcheck source=deploy/ci/common.sh
-. "$(dirname "$0")/common.sh"
+. "$(dirname "${BASH_SOURCE[0]}")/common.sh"
 
 # scan_index REPOSITORY DIGEST OUT: see scan-index above.
 scan_index() {
@@ -192,7 +196,7 @@ list() {
 # release; SARIF_DIR empty for a digest that is not main's. Run in a subshell, so a failure (fail exits) stops this
 # digest only.
 rescan_one() {
-  local svc=$1 repo=$2 digest=$3 dir=$4 sarif=$5 arch blocked=0 critical
+  local svc=$1 repo=$2 digest=$3 dir=$4 sarif=$5 arch blocked=0 critical format
   verify_signature "$repo" "$digest" || fail "$repo@$digest has no signature of its source's images.yml on main; not attested"
   echo "rescan $repo@$digest"
   scan_index "$repo" "$digest" "$dir"
@@ -213,9 +217,17 @@ rescan_one() {
   [ "$blocked" -eq 0 ] || fail "$repo@$digest is blocked by the scan gate; not attested"
   "$ci_dir/vuln-predicate.sh" --allow-critical "$dir/predicate.json" "$dir/amd64" "$dir/arm64" ||
     fail "build the vuln predicate of $repo@$digest"
-  cosign attest --yes --new-bundle-format=false --use-signing-config=false --replace --type vuln \
-    --predicate "$dir/predicate.json" "$repo@$digest" || fail "attest $repo@$digest"
-  echo "ok    $repo@$digest attested with today's scan"
+  format=$(release_format "$repo@$digest") || fail "read how $repo@$digest is signed (above); not attested"
+  case $format in
+  legacy)
+    # The two flags go together: --new-bundle-format=false alone is refused while the signing config is on.
+    cosign attest --yes --new-bundle-format=false --use-signing-config=false --replace --type vuln \
+      --predicate "$dir/predicate.json" "$repo@$digest" || fail "attest $repo@$digest"
+    ;;
+  bundle) replace_vuln_bundle "$repo" "$digest" "$dir/predicate.json" ;;
+  *) fail "$repo@$digest has neither Sigstore bundles nor a signature in cosign's older format; not attested" ;;
+  esac
+  echo "ok    $repo@$digest attested with today's scan ($format format)"
   # A CRITICAL is now recorded (Kyverno refuses new pods because of it, not because of an old attestation) and fails
   # the run.
   critical=$(jq -s '[.[].Results[]?.Vulnerabilities[]? | select(.Severity == "CRITICAL")] | length' \
@@ -265,22 +277,25 @@ run() {
   return "$failed"
 }
 
-case ${1:-} in
-scan-index)
-  [ $# -eq 4 ] || fail "usage: rescan.sh scan-index REPOSITORY DIGEST OUT"
-  is_digest "$3" || fail "$3 is not sha256:<64 hex>"
-  scan_index "$2" "$3" "$4"
-  ;;
-run)
-  shift
-  run "$@"
-  ;;
-list)
-  shift
-  source_args "$@"
-  set -- ${args[@]+"${args[@]}"}
-  [ $# -ge 1 ] && [ $# -le 2 ] || fail "usage: rescan.sh list [--source NAME] GITOPS_DIR [VALUES_REF]"
-  list "$1" "${2:-}"
-  ;;
-*) fail "usage: rescan.sh scan-index REPOSITORY DIGEST OUT | rescan.sh run [--source NAME] OUT GITOPS_DIR [VALUES_REF] | rescan.sh list [--source NAME] GITOPS_DIR [VALUES_REF]" ;;
-esac
+# Sourced (by deploy/ci/platform-test.sh, which replaces what rescan_one calls), the functions above are all that is defined.
+if [[ ${BASH_SOURCE[0]} == "$0" ]]; then
+  case ${1:-} in
+  scan-index)
+    [ $# -eq 4 ] || fail "usage: rescan.sh scan-index REPOSITORY DIGEST OUT"
+    is_digest "$3" || fail "$3 is not sha256:<64 hex>"
+    scan_index "$2" "$3" "$4"
+    ;;
+  run)
+    shift
+    run "$@"
+    ;;
+  list)
+    shift
+    source_args "$@"
+    set -- ${args[@]+"${args[@]}"}
+    [ $# -ge 1 ] && [ $# -le 2 ] || fail "usage: rescan.sh list [--source NAME] GITOPS_DIR [VALUES_REF]"
+    list "$1" "${2:-}"
+    ;;
+  *) fail "usage: rescan.sh scan-index REPOSITORY DIGEST OUT | rescan.sh run [--source NAME] OUT GITOPS_DIR [VALUES_REF] | rescan.sh list [--source NAME] GITOPS_DIR [VALUES_REF]" ;;
+  esac
+fi

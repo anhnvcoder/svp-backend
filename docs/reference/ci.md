@@ -21,8 +21,8 @@ Loại tài liệu (Diátaxis): **reference**, tra cứu khi cần một lệnh 
     REST, [ADR-0033](../adr/0033-svp-web-repo.md) §1: `make api-contract-check BASE=<base>` với base tính như job `buf`, rồi
     `deploy/ci/contract-test.sh`), `config`
     (đủ lịch sử, `make gitops-clone` và `SVP_GITOPS_DIR` ở `env` của job; `deploy/ci/scan-gate.sh --check-ignorefile`,
-    `deploy/ci/platform-test.sh`, `deploy/ci/promote-test.sh` (guard của hai job promote, danh sách bản phát hành của rescan),
-    `deploy/ci/provenance-predicate-test.sh`,
+    `deploy/ci/platform-test.sh` (cả `sign-image.sh` và hàm bundle của `common.sh`, trên registry giả), `deploy/ci/promote-test.sh`
+    (guard của hai job promote, danh sách bản phát hành của rescan),
     `deploy/ci/verify-collect-test.sh`, `make slo-check`, `make otelcol-validate`, `make env`
     rồi `make compose-config`, `deploy/observability/glitchtip/dotenv-test.sh`,
     `make helm-check`, `deploy/ci/sources-test.sh`, `deploy/ci/gitops-check-test.sh "$SVP_GITOPS_DIR"`, `make k6-check`,
@@ -67,12 +67,15 @@ Loại tài liệu (Diátaxis): **reference**, tra cứu khi cần một lệnh 
     `--fail-on` thoát 2 và vẫn ghi output. Hai file ngoại lệ được kiểm như ở mục `.trivyignore.yaml` dưới đây. DB grype cache theo ngày
     (`SVP_GRYPE_CACHE`), SARIF category `grype-image-<svc>-<arch>/` (chỉ HIGH, CRITICAL) lên tab Security ở `main`; push lên `ghcr.io/anhnvcoder/svp-backend/<svc>`
     đúng bản đã quét, ghép index, ký keyless bằng cosign kèm attestation `vuln` (kết quả trivy của hai nền tảng; attestation,
-    Kyverno và rescan hằng ngày không đọc grype), SBOM syft mỗi nền tảng và **build provenance**
-    ([ADR-0027](../adr/0027-slsa-build-provenance.md); chỉ bản phát hành, không image diễn tập): predicate SLSA v1 do
-    `deploy/ci/provenance-predicate.sh` dựng chỉ từ hàm `ci_*` của `platform.sh` (`buildType` GitHub workflow/v1, workflow
-    `ref`/`repository`/`path`, input `services` của dispatch khi có, commit, `builder.id`, `invocationId`), dựng và kiểm **trước**
-    khi ký gì (`builder.id` phải bằng `subject` của nguồn phát hành của lượt trong `sources.json`, không thì không ký), attest `--type slsaprovenance1` định
-    dạng cũ `--replace` trên digest index sau `vuln`; mức SLSA ghi trung thực là Build L1 (predicate do script của repo dựng); rồi
+    Kyverno và rescan hằng ngày không đọc grype), SBOM syft mỗi nền tảng, mỗi thứ là một Sigstore bundle (referrer của
+    digest; [ADR-0040](../adr/0040-sigstore-bundle-actions-attest.md)), và **build provenance** (chỉ bản phát hành, không image
+    diễn tập): `deploy/ci/sign-image.sh` ký và attest `vuln`, SBOM rồi in `repository`, `digest`, `provenance=true|false`; bước
+    `actions/attest` (ghim SHA; `subject-digest` là digest index, `push-to-registry: true`; `attestations: write` chỉ ở job `sign`) chạy sau
+    chúng khi `provenance=true`, dựng predicate SLSA v1 từ claim của token OIDC của lượt (`builder.id`, workflow, commit); trước khi ký gì
+    `sign-image.sh` đòi `builder.id` bằng `subject` của nguồn phát hành của lượt trong `sources.json`, không thì không ký. Bundle không có
+    `--replace`: job chạy lại (Re-run failed jobs) liệt kê referrer của từng digest trước và chỉ ghi loại chưa có; digest đã có `.sig` định
+    dạng cũ thì bị từ chối. Mức SLSA là Build L2 (không L3: attest chạy trong job của chính workflow build). Lượt phát hành đầu ở định dạng
+    bundle chưa chạy: **kiểm sau push** (ADR-0040 mục Xác nhận); rồi
     **promote stg sang `svp-gitops`** ([ADR-0025](../adr/0025-gitops-config-repo.md) §2, §6): job `promote` (chỉ `main`,
     environment `promote` chỉ nhận deployment branch `main`, biến `SVP_GITOPS_APP_CLIENT_ID` và secret `SVP_GITOPS_APP_PRIVATE_KEY`
     của GitHub App `svp-gitops-promoter` chỉ cài trên `svp-gitops`) đổi khoá thành token 1 giờ bằng `actions/create-github-app-token`
@@ -103,8 +106,13 @@ Loại tài liệu (Diátaxis): **reference**, tra cứu khi cần một lệnh 
     stderr (CI của nguồn đó rescan nó, `rescan.sh run|list --source <tên>`, nhánh bot `bot/promote-stg-<tên>`), file dưới prefix không
     thuộc nguồn nào vẫn vào tập nên lượt đỏ; không repo nào attest bản của repo khác. `rescan.sh run` đòi `--source` (mặc định
     `backend`) bằng nguồn của repo của lượt (`use_build_source`) và `ci_builder_id` bằng `subject` của nguồn đó, kiểm trước khi đọc gì
-    (`cosign attest --replace` thay attestation `vuln` bất kể ai ký bản cũ: CI của `svp-frontend` quên `--source web` sẽ thay attestation của
-    bản backend bằng identity `svp-frontend`). `-f drill=true` đẩy ba image
+    (rescan thay attestation `vuln` bất kể ai ký bản cũ: CI của `svp-frontend` quên `--source web` sẽ thay attestation của
+    bản backend bằng identity `svp-frontend`). Rescan theo định dạng đang có trên digest (`release_format` của `common.sh`):
+    digest định dạng cũ (`.sig`, `.att`; stg và prd tới bản phát hành bundle đầu) `cosign attest --replace` như khi build; digest bundle
+    attest `vuln` mới rồi gỡ mọi `vuln` bundle khác của digest bằng `oras manifest delete` (`replace_vuln_bundle`; ORAS ghim, quyền
+    `packages: write` của job; không tin mã thoát của GHCR, đọc lại danh sách referrer, rồi cosign phải xác minh đúng một `vuln`; chữ
+    ký, provenance, SBOM không bao giờ bị gỡ), vì Kyverno đọc bundle cuối danh sách referrer chứ không bundle mới nhất. Không bao giờ hai
+    định dạng trên một digest. Nhánh định dạng cũ bỏ khi `envs/*/images/` của `svp-gitops` không còn digest định dạng cũ. `-f drill=true` đẩy ba image
     diễn tập `drill-vulnerable`, `drill-unsigned`, `drill-no-provenance` (hai cái ký và attest `vuln`: `drill-vulnerable` với
     `--allow-critical`, `drill-no-provenance` không CRITICAL; không image diễn tập nào có provenance; rescan hằng ngày không đụng). **Hợp đồng API** ([ADR-0033](../adr/0033-svp-web-repo.md) §1): job `contract` (mọi lượt build trên `main`: push, hay
     dispatch không `rescan`, `drill`, `promote_prd`; cùng nhóm concurrency không huỷ của build; quyền `contents: read`,
@@ -121,8 +129,9 @@ Loại tài liệu (Diátaxis): **reference**, tra cứu khi cần một lệnh 
     nhánh `bot/promote-prd`, mở PR không auto-merge (Code Owner duyệt), mô tả nêu `stg_ref`. Guard `promote_stg_ref` của `common.sh` chỉ
     nhận `main` hay SHA đủ 40 hex của một commit trên `main` của `svp-gitops` (nhánh, SHA ngắn, commit ngoài `main` bị từ chối trước mọi
     lệnh `gh`). Không còn bản ghi stg: `stg_ref` chỉ bảo đảm bộ từng nằm trên `main` của `envs/stg/`, không bảo đảm stg đã chạy và smoke
-    qua với đúng bộ đó; cổng là duyệt của Code Owner. Check tổng `images-ok` (gồm `contract`; dispatch promote prd: `plan` skipped vẫn xanh). Provenance trên bản phát hành
-    thật đã kiểm (bảy bản của `6ca2d8a`, `cosign verify-attestation --type slsaprovenance1` và lượt `gitops` 40954609229). Đã kiểm ngày
+    qua với đúng bộ đó; cổng là duyệt của Code Owner. Check tổng `images-ok` (gồm `contract`; dispatch promote prd: `plan` skipped vẫn xanh). Provenance định dạng cũ trên bản phát hành
+    đang chạy ở stg, prd đã kiểm (bảy bản của `6ca2d8a`, `cosign verify-attestation --type slsaprovenance1` và lượt `gitops` 40954609229);
+    bản phát hành bundle: **kiểm sau push**, gồm đo admission thật (ADR-0040 mục 6). Đã kiểm ngày
     2026-10-30 với `promote.sh`, `promote-prd.sh` cũ: lần promote stg đầu và auto-merge của PR bot (PR #4, #5, #6 của `svp-gitops`, lượt
     `images.yml` 40984668411 trên `2d9dab0`), promote prd (lượt 41022346853, PR #7 `523ba34`, người học duyệt); bước shell thay chúng:
     **kiểm sau push**. Rescan đọc `svp-gitops` (lượt 41018158008: 14 digest của stg và prd, 28/28 qua cổng quét).
@@ -139,9 +148,9 @@ Loại tài liệu (Diátaxis): **reference**, tra cứu khi cần một lệnh 
       gateway), `gitops-external-secrets` (ExternalSecret của cluster đúng bằng danh sách của chart, mỗi cái `Ready`, Secret đích đúng
       type và đúng tên key, không đọc giá trị), `gitops-argocd-metrics` (trong 180 s Prometheus thấy `argocd_app_info` của mọi Application,
       đều Synced và Healthy, không cảnh báo `ArgoCDApplication*` nào cháy; chart stg đang chạy chưa có PodMonitor của Argo CD thì nói vậy và qua),
-      `make k8s-smoke` (chặt, không biến chuyển tiếp), `make drill-k8s-supplychain` (ca chưa ký là manifest con `linux/amd64` của digest web
-      đang chạy; ca (l) là digest mới nhất của `drill-no-provenance` dưới prefix của `backend`, lấy như ca (c) lấy `drill-vulnerable`; cả hai
-      do `deploy/ci/ghcr-digest.sh` đọc ẩn danh từ GHCR, không đọc được thì ca SKIP và bước đỏ sau drill; chỉ ở lượt lịch, `SVP_VERIFY_SCHEDULED=true`,
+      `make k8s-smoke` (chặt, không biến chuyển tiếp), `make drill-k8s-supplychain` (ảnh chưa ký của ca (b), (h), (i) là digest mới nhất của
+      `drill-unsigned` (không chữ ký, không attestation nên không có hạn 72 giờ); ca (l) là digest mới nhất của `drill-no-provenance` dưới
+      prefix của `backend`, lấy như ca (c) lấy `drill-vulnerable`; cả ba do `deploy/ci/ghcr-digest.sh` đọc ẩn danh từ GHCR, không đọc được thì ca SKIP (trừ `drill-unsigned`: drill tự tra lại) và bước đỏ sau drill; chỉ ở lượt lịch, `SVP_VERIFY_SCHEDULED=true`,
       image của ca (c) hay (l) có attestation `vuln` quá 72 giờ thì không đưa cho drill: ca đó SKIP kèm dòng `NOTE` nêu tuổi và lệnh dispatch
       dựng lại image diễn tập (`-f drill=true`), mọi ca khác vẫn phải PASS; lượt dispatch quá hạn là đỏ, nên (c), (l) chỉ được chứng minh ở lượt
       dispatch sau lượt đó), `make drill-k8s-threats`.
@@ -220,7 +229,7 @@ Loại tài liệu (Diátaxis): **reference**, tra cứu khi cần một lệnh 
   - Chạy lại một job trên máy, từ gốc repo: `make check-go TESTFLAGS=-count=1`; `make generate-check`;
     `buf breaking --against '.git#ref=<base>'`; `make api-contract-check BASE=<base>`, `deploy/ci/contract-test.sh`;
     `deploy/ci/scan-gate.sh --check-ignorefile`,
-    `deploy/ci/platform-test.sh`, `deploy/ci/provenance-predicate-test.sh`, `make slo-check`,
+    `deploy/ci/platform-test.sh`, `make slo-check`,
     `deploy/ci/promote-test.sh`,
     `make otelcol-validate`, `make compose-config`, `deploy/observability/glitchtip/dotenv-test.sh`, `make helm-check`, `make kyverno-test`, `deploy/ci/sources-test.sh`,
     `deploy/ci/gitops-check-test.sh ../gitops`, `make k6-check`,
@@ -243,8 +252,8 @@ Loại tài liệu (Diátaxis): **reference**, tra cứu khi cần một lệnh 
     github.com và HEAD của `SVP_CODE_ROOT` (không có origin đó thì lỗi). Thử một chân web từ cây khác:
     `SVP_CODE_ROOT=<checkout svp-frontend> deploy/ci/build-image.sh web arm64 "$(mktemp -d)"`.
     Image source map `web-sourcemaps` không còn ([ADR-0039](../adr/0039-mainpath-drills-scan-gate-sourcemaps.md) §3): `build-image.sh` không có
-    `--sourcemaps-artifact`; tải source map lúc build vào tracker chạy lâu dài làm khi có tracker đó. Digest `linux/amd64` của web stg và
-    digest mới nhất của image diễn tập lấy bằng `deploy/ci/ghcr-digest.sh web-amd64|newest IMAGE` (đọc GHCR ẩn danh).
+    `--sourcemaps-artifact`; tải source map lúc build vào tracker chạy lâu dài làm khi có tracker đó. Digest mới nhất của image diễn tập
+    lấy bằng `deploy/ci/ghcr-digest.sh newest IMAGE` (đọc GHCR ẩn danh).
   - `make helm-check` (`deploy/ci/gitops-check.sh --worktree`, cùng script với check của `svp-gitops`; cần bản clone `../gitops`
     hay `SVP_GITOPS_DIR`): `helm lint` và `helm template` mọi chart của working tree với `base/` của bản clone (`HELM_*_HOME` trong
     thư mục tạm), cộng overlay và file image của từng môi trường `envs/<stg|prd>/` ([ADR-0024](../adr/0024-multi-environment.md);

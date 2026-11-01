@@ -1,6 +1,6 @@
 # 0027. SLSA build provenance cho bảy image phát hành: predicate SLSA v1 do script của repo dựng, `cosign attest --type slsaprovenance1` định dạng cũ trên digest index ở job `sign`, Kyverno `svp-images` kiểm thêm provenance trên đường GitOps, bật theo bậc sau khi cả bảy service có bản phát hành mang provenance
 
-- Trạng thái: Chấp nhận (người học duyệt 2026-10-28, chọn (a) ở cả ba dòng "Cần người học chọn"); bậc 1 của mục 6 hiện thực
+- Trạng thái: Bị thay bởi [0040](0040-sigstore-bundle-actions-attest.md) (2026-11-01: chữ ký, `vuln`, provenance sang Sigstore bundle, provenance bằng `actions/attest`). Trước đó: Chấp nhận (người học duyệt 2026-10-28, chọn (a) ở cả ba dòng "Cần người học chọn"); bậc 1 của mục 6 hiện thực
   2026-10-29 (provenance trong `images.yml`, policy và `verify-release.sh` có giá trị bật, mặc định tắt); bậc 2–5 xong 2026-10-29
   đến 2026-10-30: bảy bản phát hành build ở `6ca2d8a` mang provenance (PR promote #36), bật `requireProvenance` ở `envs/stg/`,
   `envs/prd/svp-policy.yaml` của `svp-gitops` ngay từ commit khởi tạo ([ADR-0025](0025-gitops-config-repo.md)), kịch bản `gitops` với

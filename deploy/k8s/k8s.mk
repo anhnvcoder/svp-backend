@@ -115,12 +115,12 @@ drill-k8s-threats: ## Check the stage 4 threat model rows on cluster svp, each w
 	$(K8S_DRILL_ENV) deploy/k8s/drills/threats.sh https://api.svp.localhost:8443
 
 # The image policy of namespace svp; the cases are listed at the
-# top of deploy/k8s/drills/supplychain.sh. It talks to the cluster's API, and for the CRITICAL case and the case without
-# provenance to GHCR and Sigstore through cosign (anonymous, COSIGN_IMAGE when cosign is not installed), so it needs
+# top of deploy/k8s/drills/supplychain.sh. It talks to the cluster's API, to GHCR (anonymous) for the newest drill image,
+# and for the CRITICAL case and the case without provenance to GHCR and Sigstore through cosign (anonymous, COSIGN_IMAGE when cosign is not installed), so it needs
 # neither .k8s/ca.crt nor the gateway, and deletes no rate limit key.
-drill-k8s-supplychain: ## Check Kyverno's image policy of namespace svp: a signed, clean release admitted; unsigned (SUPPLYCHAIN_UNSIGNED=<GHCR digest>; SUPPLYCHAIN_UNSIGNED_FALLBACK=<GHCR digest> is used instead when Kyverno admits the first), CRITICAL (SUPPLYCHAIN_VULNERABLE=<GHCR digest>, attestation within the maximum age), outside GHCR, without digest, attestation too old, ephemeral container and image UPDATE refused, a release without build provenance (SUPPLYCHAIN_NO_PROVENANCE=<GHCR digest>, its vuln attestation within the maximum age) refused when the running policy checks provenance, each with its rule's message; Kyverno down refuses svp only; PASS/FAIL per case, JSON in .k8s/drills/ (dev path, whose policy is Audit: SUPPLYCHAIN_ENFORCE_TMP=1 switches it to Enforce for the drill and back)
+drill-k8s-supplychain: ## Check Kyverno's image policy of namespace svp: a signed, clean release admitted; unsigned (SUPPLYCHAIN_UNSIGNED=<GHCR digest>, default the newest drill-unsigned on GHCR), CRITICAL (SUPPLYCHAIN_VULNERABLE=<GHCR digest>, attestation within the maximum age), outside GHCR, without digest, attestation too old, ephemeral container and image UPDATE refused, a release without build provenance (SUPPLYCHAIN_NO_PROVENANCE=<GHCR digest>, its vuln attestation within the maximum age) refused when the running policy checks provenance, each with its rule's message; Kyverno down refuses svp only; PASS/FAIL per case, JSON in .k8s/drills/ (dev path, whose policy is Audit: SUPPLYCHAIN_ENFORCE_TMP=1 switches it to Enforce for the drill and back)
 	SVP_STACK=k3d SUPPLYCHAIN_UNSIGNED='$(SUPPLYCHAIN_UNSIGNED)' SUPPLYCHAIN_VULNERABLE='$(SUPPLYCHAIN_VULNERABLE)' \
-	  SUPPLYCHAIN_UNSIGNED_FALLBACK='$(SUPPLYCHAIN_UNSIGNED_FALLBACK)' SUPPLYCHAIN_NO_PROVENANCE='$(SUPPLYCHAIN_NO_PROVENANCE)' \
+	  SUPPLYCHAIN_NO_PROVENANCE='$(SUPPLYCHAIN_NO_PROVENANCE)' \
 	  SUPPLYCHAIN_ENFORCE_TMP='$(SUPPLYCHAIN_ENFORCE_TMP)' \
 	  deploy/k8s/drills/supplychain.sh
 

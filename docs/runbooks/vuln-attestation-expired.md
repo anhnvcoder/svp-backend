@@ -8,7 +8,8 @@
 
 Mỗi digest phát hành có một attestation `vuln` (kết quả trivy của hai nền tảng, ký keyless). Rescan hằng ngày (`images.yml`,
 cron `17 1 * * *` UTC, script `deploy/ci/rescan.sh`) quét lại mọi digest của `main` và của PR promote đang mở rồi ghi lại
-attestation. Ngưỡng tuổi ([ADR-0015](../adr/0015-cicd-devsecops-stage5.md) §7–8):
+attestation: digest định dạng cũ (`.sig`, `.att`) bằng `cosign attest --replace`; digest Sigstore bundle bằng attest mới rồi gỡ mọi `vuln`
+bundle khác của digest ([ADR-0040](../adr/0040-sigstore-bundle-actions-attest.md) §3). Ngưỡng tuổi ([ADR-0015](../adr/0015-cicd-devsecops-stage5.md) §7–8):
 
 - **72 giờ**: Kyverno (đường GitOps, Enforce) từ chối pod mới.
 - **48 giờ**: check `gitops-ok` của PR trong `svp-gitops` (bước 5 của `deploy/ci/gitops-check.sh`), `make k8s-gitops-up`
@@ -52,6 +53,11 @@ done
 3. **Digest không có trong tập của rescan**: digest chỉ có ở một nhánh khác `main` và không phải PR promote đang mở, hay cluster
    dựng từ revision cũ (`GITOPS_REV`) có digest đã rời `main`.
 4. **PR đổi values để quá 72 giờ rồi mới merge** (giới hạn ghi ở ADR-0015 §7): check của PR không chạy lại lúc merge.
+5. **Digest bundle còn hai `vuln` sau một lượt rescan** (chỉ digest định dạng Sigstore bundle): lượt rescan dừng giữa attest và gỡ,
+   hay GHCR giữ lại bundle cũ. Kyverno đọc bundle cuối danh sách referrer, xếp theo digest chứ không theo tuổi, nên có thể đọc đúng
+   bundle quá 72 giờ dù rescan vừa chạy; `verify-release.sh` báo `carries 2 vuln attestations, not exactly one`. Rescan chạy lại
+   (lệnh ở mục Giảm thiểu) attest bản mới và gỡ mọi bản khác nên đưa digest về đúng một; log job `rescan` nêu bundle nào còn lại. Chưa
+   gặp ở lượt phát hành thật nào (định dạng bundle còn **kiểm sau push**).
 
 ## Giảm thiểu
 

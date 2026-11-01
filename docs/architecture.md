@@ -403,7 +403,7 @@ flowchart LR
         rescan["rescan hằng ngày"]
     end
     gitops["repo svp-gitops<br/>PR bot/promote-stg,<br/>gitops-ok, auto-merge"]
-    ghcr[("GHCR<br/>image theo digest,<br/>.sig, .att")]
+    ghcr[("GHCR<br/>image theo digest,<br/>Sigstore bundle")]
     sigstore["Sigstore công khai<br/>Fulcio, Rekor, TUF"]
     subgraph cluster["cluster GitOps svp"]
         argo["Argo CD<br/>poll git"]
@@ -415,7 +415,7 @@ flowchart LR
     pr --> checks
     checks -->|"xanh, merge"| main
     main --> build
-    build -->|"push, .sig, .att"| ghcr
+    build -->|"push, Sigstore bundle"| ghcr
     build -->|"OIDC → chứng chỉ, log ký"| sigstore
     build --> promote
     promote -->|"envs/stg/images/, charts.yaml"| gitops
@@ -450,8 +450,10 @@ flowchart LR
 - **Ký và attestation** (§7): cosign keyless bằng OIDC của GitHub (chứng chỉ Fulcio, ghi Rekor; không khoá dài hạn), ký
   digest index với identity `images.yml@refs/heads/main`; attestation `vuln` trên index gộp kết quả quét hai nền tảng,
   SBOM SPDX của syft trên từng manifest con. Rescan hằng ngày quét lại mọi digest đang phát hành bằng DB mới và thay
-  attestation `vuln`. Từ giai đoạn 6b phần 4 ([ADR-0027](adr/0027-slsa-build-provenance.md)) index của bản phát hành mang thêm
-  attestation build provenance SLSA v1 (`slsaprovenance1`: workflow, ref, commit, lượt chạy), mức ghi trung thực là Build L1.
+  attestation `vuln` (rescan attest bundle mới rồi gỡ bundle `vuln` cũ). Chữ ký và attestation ở định dạng Sigstore bundle
+  ([ADR-0040](adr/0040-sigstore-bundle-actions-attest.md)); định dạng cũ (`.sig`, `.att`) chỉ còn cho bản phát hành cũ tới khi stg, prd
+  hết digest cũ. Index của bản phát hành mang thêm attestation build provenance SLSA v1 do `actions/attest` sinh (workflow, ref,
+  commit, lượt chạy), mức SLSA Build L2 (không L3).
 - **Promote** (§9; từ giai đoạn 6b phần 4 theo [ADR-0025](adr/0025-gitops-config-repo.md) §2, §6, [§5.5](#55-hai-repo-code-và-cấu-hình-triển-khai-giai-đoạn-6b-phần-4)):
   job `promote` dựng lại nhánh `bot/promote-stg` từ `main` của repo `svp-gitops` bằng token GitHub App, ghi `repository`, `tag`,
   `digest` của mọi service đã ký mà stg chưa chạy (không bao giờ ghi lùi) vào `envs/stg/images/<svc>.yaml` cùng commit chart vào
