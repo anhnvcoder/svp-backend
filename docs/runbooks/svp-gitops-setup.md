@@ -2,7 +2,7 @@
 
 - Quy trình làm tay, không có cảnh báo. Mở khi dựng `svp-gitops` lần đầu, khi dựng lại sau khi gỡ App, khi xoay khoá App, khi nghi
   khoá hay token của App bị lộ, khi một lượt promote đỏ, khi promote hay rollback prd, rollback stg, hay bump commit ghim (phần C).
-- Mọi thao tác ghi (UI Settings, tạo App, đặt secret, nhập ruleset, dispatch promote prd, duyệt và merge PR, patch `svp-root`) do
+- Mọi thao tác ghi (UI Settings, tạo App, đặt secret, dispatch promote prd, duyệt và merge PR, patch `svp-root`; ruleset qua `apply` của `svp-infra`) do
   **người học chạy** với quyền admin. Mọi lệnh "Kiểm" ở đây
   chỉ `GET`, chạy bằng đăng nhập `gh` của người học (token scope `repo` là đủ).
 - Thiết kế và lý do ở [ADR-0025](../adr/0025-gitops-config-repo.md) (§5 check, §6 App, §7 ruleset và CODEOWNERS, §9 trình tự chuyển);
@@ -68,7 +68,7 @@ gh api $C/environments/promote/variables -q '{total_count, names: [.variables[].
 gh api $C/environments/promote/secrets -q '{total_count, names: [.secrets[].name]}'
 # Khoá đặt nhầm ở mức repo (không qua environment) đi tới workflow của mọi nhánh
 gh api $C/actions/secrets -q .total_count
-# B. Ruleset (sau khi nhập)
+# B. Ruleset (sau `apply`)
 gh api $G/rulesets -q '.[] | {id, name, target, enforcement}'
 gh api $G/rules/branches/main -q '.[] | .type'
 gh api "$G/tags?per_page=100" -q '.[].name'
@@ -110,7 +110,7 @@ Theo thứ tự hay gặp, mỗi cái kèm dấu hiệu trong kết quả của 
 3. **Khoá `.pem` dán thiếu dòng** (thiếu `-----BEGIN …-----` hay `-----END …-----`, hay dán nội dung file khác): bước tạo token đỏ
    với lỗi đọc khoá hay ký JWT. Đặt lại secret từ file (bước A4).
 4. **App cài "All repositories"** hay thêm repo khác: không lỗi nào, token xin được cho repo thừa. Chỉ UI thấy (bước A3).
-5. **Ruleset nhập trước khi workflow có trên `main`**: push thẳng `main` bị từ chối, nên commit thêm `check.yml` phải đi qua PR. PR
+5. **Ruleset tạo trước khi workflow có trên `main`**: push thẳng `main` bị từ chối, nên commit thêm `check.yml` phải đi qua PR. PR
    đó tự chạy `check.yml` của chính nó (trigger `pull_request`) và báo `gitops-ok`; PR nào không chứa workflow (nhánh tách từ `main`
    trước khi có nó) thì chờ `gitops-ok` mãi. Xem phần B.
 6. **Nhánh mặc định không phải `main`**: ruleset nhắm `~DEFAULT_BRANCH`, nên bảo vệ nhầm nhánh. Xem phần B.
@@ -137,7 +137,7 @@ Theo thứ tự hay gặp, mỗi cái kèm dấu hiệu trong kết quả của 
    Token App không bỏ được ruleset trên `main`: mọi thay đổi vào `main` vẫn qua PR có `gitops-ok` (chặn digest không ký bởi
    `images.yml` của `main`), file ngoài `envs/stg/` vẫn cần người học duyệt. Nhưng ruleset `main`, `owners` chỉ nhắm nhánh
    (`"target": "branch"`), còn quyền Contents write của App đẩy được **tag** và tạo **release**. Chỉ ruleset `tags` (phần B: không ai
-   ngoài vai admin tạo, sửa, xoá tag) chặn việc đó, và chỉ từ lúc nó được nhập và `active`. Repo không dùng tag hay release nào, nên
+   ngoài vai admin tạo, sửa, xoá tag) chặn việc đó, và chỉ từ lúc nó được tạo và `active`. Repo không dùng tag hay release nào, nên
    mọi dòng của hai lệnh `tags`, `releases` là lạ.
 
    Tag nguy hiểm nhất là tag trùng tên nhánh Argo CD theo dõi (`main`). Với `targetRevision` tên ngắn, Argo CD lấy ref **đầu tiên**
@@ -203,8 +203,8 @@ Theo thứ tự hay gặp, mỗi cái kèm dấu hiệu trong kết quả của 
 
    - PR lạ: đóng. Nhánh lạ: xoá.
    - Release lạ: `gh release delete <tag> --repo anhnvcoder/svp-gitops --cleanup-tag` (xoá cả tag của nó). Tag lạ còn lại:
-     `gh api -X DELETE repos/anhnvcoder/svp-gitops/git/refs/tags/<tag>`. Ruleset `tags` chưa có hay không `active` thì nhập hay bật
-     nó ngay (phần B).
+     `gh api -X DELETE repos/anhnvcoder/svp-gitops/git/refs/tags/<tag>`. Ruleset `tags` chưa có hay không `active` thì `apply`
+     `rulesets.tf` của `svp-infra` ngay (phần B).
    - Bản ghi Deployment: từ khi `CHECKER_COMMIT` của `svp-gitops` ở bản checker rút gọn, không còn gì đọc bản ghi `stg`
      ([ADR-0037](../adr/0037-mainpath-standard-tools.md) §6), không cần dọn; trước đó (checker cũ, bước 1b) đặt Deployment giả `inactive` rồi xoá; App còn quyền Deployments thì
      bỏ theo A2.
@@ -386,12 +386,12 @@ gh issue list --repo anhnvcoder/svp-gitops --state all --search 'Dependency Dash
 
 ### B. Ruleset (sau commit thứ hai và lượt đầu xanh của `check.yml` trên `main`)
 
-Thứ tự này có lý do: ruleset `main` cấm push thẳng `main` và đòi check `gitops-ok`. Nhập trước khi workflow có trên `main` thì commit
+Thứ tự này có lý do: ruleset `main` cấm push thẳng `main` và đòi check `gitops-ok`. Tạo trước khi workflow có trên `main` thì commit
 thứ hai (thêm workflow) không push thẳng được nữa, phải qua PR. PR đó vẫn qua được: `check.yml` chạy trên `pull_request` bằng bản
-workflow của chính PR nên báo `gitops-ok`; chỉ PR không chứa workflow mới chờ `gitops-ok` mãi. Nhập sau lượt xanh trên `main` thì
+workflow của chính PR nên báo `gitops-ok`; chỉ PR không chứa workflow mới chờ `gitops-ok` mãi. Tạo sau lượt xanh trên `main` thì
 commit thứ hai push thẳng như commit đầu, và check đã chạy được trên `main` trước khi thành bắt buộc.
 
-**Trước khi nhập**, nhánh mặc định phải là `main` (ruleset nhắm `~DEFAULT_BRANCH`) và lượt cuối của `check.yml` trên `main` xanh:
+**Trước khi `apply`**, nhánh mặc định phải là `main` (ruleset nhắm `~DEFAULT_BRANCH`) và lượt cuối của `check.yml` trên `main` xanh:
 
 ```sh
 gh api repos/anhnvcoder/svp-gitops -q .default_branch                      # main
@@ -439,9 +439,9 @@ gh api 'repos/anhnvcoder/svp-gitops/tags?per_page=100' -q '.[].name'
 
 UI: Settings → Rules → Rulesets → `owners` → **Bypass list** có "Repository admin", "For pull requests only".
 
-**Nếu sai:** `actor_id` 5 không phải vai admin (bypass list trống hay ghi vai khác) → sửa bypass list ở UI (**Add bypass** →
-Repository admin → For pull requests only). Ruleset `disabled`/`evaluate` → mở ruleset → **Enforcement status** → Active. Nhập
-trùng (hai ruleset cùng tên) → xoá bản thừa ở UI. Thiếu `tags` → `apply` `rulesets.tf` của `svp-infra`. Lệnh `tags` có dòng nào → tag lạ (repo không dùng
+**Nếu sai:** ruleset do Terraform giữ, không sửa ở UI (`plan` sau sẽ thấy lệch): `actor_id` 5 không phải vai admin, ruleset
+`disabled`/`evaluate` hay thiếu luật → sửa `rulesets.tf` của `svp-infra` bằng PR rồi `apply`. Hai ruleset cùng tên (một bản tạo tay ngoài
+Terraform) → xoá bản không có trong state ở UI. Thiếu `tags` → `apply` `rulesets.tf` của `svp-infra`. Lệnh `tags` có dòng nào → tag lạ (repo không dùng
 tag): xử lý như "Giảm thiểu" bước 3.
 
 ### C. Vận hành sau khi repo code chuyển job `promote` sang `svp-gitops`
@@ -678,7 +678,7 @@ không làm gián đoạn:
 - Commit khởi tạo của `svp-gitops` (`55258e1`, không workflow) đã push 2026-10-29.
 - 2026-10-29, phần B đạt: commit thứ hai `a84e26d` (thêm `check.yml` ghim checker `c59c742`, `targetRevision` tên đầy đủ
   `refs/heads/main`, `tags.json`); lượt đầu của `check` trên `main` [40902199532](https://github.com/anhnvcoder/svp-gitops/actions/runs/40902199532)
-  xanh `gitops-ok`, quyền token ở đầu log chỉ `Contents: read`. Ba ruleset `main`, `owners`, `tags` đã nhập, cả ba `active`; repo 0 tag.
+  xanh `gitops-ok`, quyền token ở đầu log chỉ `Contents: read`. Ba ruleset `main`, `owners`, `tags` có, cả ba `active`; repo 0 tag.
 - 2026-10-29, trước merge PR cắt ở repo code, kịch bản `gitops` của `verify.yml` trên nhánh
   [40954609229](https://github.com/anhnvcoder/svp-backend/actions/runs/40954609229): Argo CD đọc `svp-gitops` ở `refs/heads/main`
   qua HTTPS không credential, chart ở commit ghim, 26/26 Application Synced/Healthy. PR #2 của `svp-gitops` (sync wave cho
