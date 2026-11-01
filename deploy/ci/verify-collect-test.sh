@@ -5,18 +5,9 @@
 # secrets, the JWT and the private key header are made at run time, so no file of the repository holds one. Before the
 # filter, unready_report of deploy/k8s/lib.sh, with the same fake kubectl listing made-up pods and their logs; its
 # output is one of the fake results, as is a migrate Job's log marked by mark_log of the same file. verify-mask.sh
-# cluster on a binary value of 200 KiB, timed, and on small ones against the cut it made before. Then the
-# deadline criterion of the summary of deploy/ci/verify-sample.sh, with a fake docker and a fake sudo first on PATH;
-# and its count of the compose containers' restarts over a fixture of restarts.tsv; one sample of its docker.tsv
-# (workers transcoding, memory.stat of the nodes), compose.tsv and restarts.tsv with a fake docker, kubectl and pgrep
-# and a fixture of /proc; its peak over a fixture of docker.tsv, and the object store's peak over one of compose.tsv,
-# also with its last sample written late by a fake sampler; its k6.tsv over fixtures of /proc and of the cgroup tree;
-# the criteria of the k3d scenarios of part 3 (two KEDA drills of gitops, the k6 pods' CPU throttling).
-# Then deploy/ci/verify-run.sh with a fake make (and a fake psql and docker for the copy back to MinIO): its clones
-# (--clones), the scenarios of compose-obs and dev-k3d, each scenario of part 3 by its name, gitops's release wait on a
-# scheduled run, and made-up scenario files for what a scenario file can get wrong and
-# for a drill run twice. Then gitops_stale of deploy/ci/verify/gitops.sh with a fake cosign, and the self-test of
-# deploy/ci/verify-tempo.sh.
+# cluster on a binary value of 200 KiB, timed, and on small ones against the cut it made before.
+# Then deploy/ci/verify-run.sh with a fake make: the scenarios compose-obs and gitops, and made-up scenario files for
+# what a scenario file can get wrong. Then gitops_stale of deploy/ci/verify/gitops.sh with a fake cosign.
 # Last, that deploy/ci/changed-services.sh builds no image for a change of these scripts, in a throwaway git repository
 # holding a copy of it. Runs on macOS and Linux, no network, no Docker, no cluster.
 #
@@ -63,8 +54,7 @@ printf '%s\n' "$env_secret" "$quoted_secret" "$dsn_secret" "$jwt" "$(b64 "$env_s
 } >"$work/all-secrets"
 
 repo=$work/repo
-mkdir -p "$repo/.k8s/drills" "$repo/.k6/local-1" "$repo/.web/svp-frontend/test-results/lighthouse/.lighthouseci" \
-  "$repo/.web/svp-frontend/test-results/playwright" "$work/bin"
+mkdir -p "$repo/.k8s/drills" "$repo/.k6/local-1" "$repo/.web/svp-frontend/test-results/lighthouse" "$work/bin"
 cat >"$repo/.env" <<EOF
 # a comment
 SVP_FAKE_APP_DB_PASSWORD=$env_secret
@@ -561,193 +551,17 @@ follow_case follow-none "$built" "$built" follow
   ok "gitops.sh follow: a broken branch name or none is refused, nothing patched" ||
   fail "gitops.sh follow: a broken branch name or none is refused, nothing patched"
 
-# --- What release_wait of deploy/ci/verify/gitops.sh does with that output: follow_moved reads both commits of the note
-# line, nothing from the ok line; gitops_releases_between names the releases a moved branch brought (they are not
-# measured), oldest first, over a fake clone of svp-gitops: a release of web, a commit that releases nothing, a release
-# of gateway and web; a commit the clone lacks fails. release_wait then waits from the commit Argo CD deploys now.
-# verify_gitops FUNCTION ARG...: FUNCTION of verify/gitops.sh, with lib.sh's values_field and svp_services (repo, the
-# fake checkout's folder here, is what verify-run.sh gives the scenario file, so it is left out).
-verify_gitops() { (unset repo && . "$here/../k8s/lib.sh" && . "$here/verify/gitops.sh" && "$@"); }
-[ "$(verify_gitops follow_moved <"$work/follow-moved.out")" = "$built $newer" ] &&
-  [ -z "$(verify_gitops follow_moved <"$work/follow-same.out")" ] &&
-  ok "release wait: follow_moved reads both commits of the note line, nothing from the ok line" ||
-  fail "release wait: follow_moved reads both commits of the note line, nothing from the ok line"
-pinned=$work/pinned-clone
-git init -q "$pinned"
-# image_file DIGIT: an image file of svp-gitops whose digest is 64 times DIGIT.
-image_file() { printf 'image:\n  repository: r\n  tag: ""\n  digest: "sha256:%s"\n' "$(printf "%064d" 0 | tr 0 "$1")"; }
-# pinned_commit MESSAGE: commits the files of the fake clone, prints the commit.
-pinned_commit() {
-  git -C "$pinned" add -A &&
-    git -C "$pinned" -c user.name=test -c user.email=test@example.invalid -c commit.gpgsign=false \
-      -c core.hooksPath=/dev/null commit -q -m "$1" && git -C "$pinned" rev-parse HEAD
-}
-mkdir -p "$pinned/envs/stg/images"
-image_file 1 >"$pinned/envs/stg/images/gateway.yaml" && image_file 1 >"$pinned/envs/stg/images/web.yaml"
-pin_from=$(pinned_commit base)
-image_file 2 >"$pinned/envs/stg/images/web.yaml"
-pin_web=$(pinned_commit "release web")
-echo docs >"$pinned/README.md"
-pinned_commit docs >/dev/null
-image_file 3 >"$pinned/envs/stg/images/gateway.yaml" && image_file 3 >"$pinned/envs/stg/images/web.yaml"
-pin_both=$(pinned_commit "release gateway web")
-want=$(printf '%s (web)\n%s (gateway web)' "${pin_web:0:12}" "${pin_both:0:12}")
-[ "$(verify_gitops gitops_releases_between "$pinned" "$pin_from" "$pin_both")" = "$want" ] &&
-  [ -z "$(verify_gitops gitops_releases_between "$pinned" "$pin_both" "$pin_both")" ] &&
-  ok "release wait: the releases a moved branch brought are named, oldest first, a commit without one left out" ||
-  fail "release wait: the releases a moved branch brought are named, oldest first, a commit without one left out"
-rc=0 && verify_gitops gitops_releases_between "$pinned" "$pin_from" "$newer" >/dev/null 2>&1 || rc=$?
-[ "$rc" = 1 ] && ok "release wait: a commit the clone lacks fails the list of releases" ||
-  fail "release wait: a commit the clone lacks fails the list of releases (exit $rc)"
-# release_wait run for real: a fake gitops.sh follow says main moved from the commit the cluster ran to pin_both, a
-# local repository stands for GitHub (origin of the clone, which the real git fetch and git ls-remote read) and has a
-# release after pin_both, and a fake kubectl and make stand for the cluster. The releases between the two commits are
-# named, never measured, and the wait starts from the commit Argo CD deploys now.
-if timeout --version 2>/dev/null | grep -q GNU; then
-  git -C "$pinned" branch -M main
-  image_file 4 >"$pinned/envs/stg/images/web.yaml"
-  pin_next=$(pinned_commit "release web again")
-  git -C "$pinned" clone -q --bare "$pinned" "$work/rw-remote.git" 2>/dev/null
-  git clone -q "$work/rw-remote.git" "$work/rw-clone" 2>/dev/null
-  git -C "$work/rw-clone" update-ref refs/remotes/origin/main "$pin_from"
-  mkdir -p "$work/rw-repo/deploy/k8s" "$work/bin-rw" "$work/rw-out"
-  cat >"$work/rw-repo/deploy/k8s/gitops.sh" <<EOF
-#!/usr/bin/env bash
-echo "note  Application svp-root follows refs/heads/main of svp-gitops, which moved from $pin_from (the commit the cluster runs) to $pin_both: Argo CD deploys it now"
-EOF
-  printf '#!/usr/bin/env bash\nexit 0\n' >"$work/bin-rw/kubectl"
-  printf '#!/usr/bin/env bash\nexit 0\n' >"$work/bin-rw/make"
-  chmod 755 "$work/rw-repo/deploy/k8s/gitops.sh" "$work/bin-rw/kubectl" "$work/bin-rw/make"
-  rc=0
-  (
-    unset repo
-    . "$here/../k8s/lib.sh"
-    . "$here/verify/gitops.sh"
-    # The clone's origin is a local path here, not svp-gitops on GitHub.
-    gitops_is_clone() { [ -d "$1" ]; }
-    gitops_repo=$work/rw-repo gitops_branch=main
-    export PATH=$work/bin-rw:$PATH GH_TOKEN= SVP_GITOPS_DIR=$work/rw-clone SVP_VERIFY_OUT=$work/rw-out \
-      SVP_VERIFY_TARGETS=wait-release SVP_VERIFY_SCHEDULED=
-    release_wait
-  ) >"$work/rw.out" 2>&1 </dev/null || rc=$?
-  [ "$rc" = 0 ] &&
-    grep -qF "not measured: main of svp-gitops moved from ${pin_from:0:12} to ${pin_both:0:12} while" "$work/rw.out" &&
-    grep -qF "Releases among those commits: ${pin_web:0:12} (web), ${pin_both:0:12} (gateway web)" "$work/rw.out" &&
-    grep -qF "to move from ${pin_both:0:12} to a release" "$work/rw.out" &&
-    grep -qF "main of svp-gitops moved to ${pin_next:0:12}, a release of: web" "$work/rw.out" &&
-    ok "release wait: after a moved branch, its releases are named, not measured, and the wait starts from the commit deployed now" ||
-    fail "release wait: after a moved branch, its releases are named, not measured, and the wait starts from the commit deployed now (exit $rc: $(cat "$work/rw.out"))"
-else
-  echo "skip  release wait: no GNU timeout on PATH (Linux, or coreutils on macOS)"
-fi
-# The bootstrap builds at the commit it checked and follows the branch only after its wait; the verification run
-# builds at a commit and has the cluster follow main in the step after the scenario.
+# The bootstrap builds at the commit it checked and follows the branch only after its wait.
 grep -qF 'argocd_root_app "$gitops_url" "$sha" "$env" "$chart_repo_url"' "$here/../k8s/gitops.sh" &&
   [ "$(grep -n -e '^ok "$want Applications Synced and Healthy' -e '^\[ -z "$branch" \] || follow_branch "$branch"$' \
     "$here/../k8s/gitops.sh" | cut -d: -f1 | awk 'NR == 1 { a = $1 } NR == 2 { print ($1 == a + 1) }')" = 1 ] &&
-  grep -qF '"$gitops_repo/deploy/k8s/gitops.sh" follow "$gitops_rev"' "$here/verify/gitops.sh" &&
-  ok "gitops.sh: the root is applied at the commit checked, follows the branch after the wait; release_wait follows main" ||
-  fail "gitops.sh: the root is applied at the commit checked, follows the branch after the wait; release_wait follows main"
-
-# --- deploy/k8s/drills/gitops.sh (make measure-gitops) over a fake kubectl. The Applications of the root are
-# multi-source: status.history[].revisions lists the commit of the code repository (the chart) first and the commit of
-# svp-gitops (the values) second, in the order of sources. The drill must compare REV with the revision of the source
-# whose repoURL is svp-gitops, not with the first one. The scripts run from a copy (mg) so that the JSON the drill
-# writes does not land in this checkout. The clone has three commits: parent, rev (releases web) and later (docs).
-mg=$work/mg
-mkdir -p "$mg/deploy/k8s/drills" "$mg/deploy/ci" "$work/bin-mg"
-cp "$here/../k8s/lib.sh" "$mg/deploy/k8s/lib.sh"
-cp "$here/../k8s/drills/gitops.sh" "$mg/deploy/k8s/drills/gitops.sh"
-cp "$here/platform.sh" "$mg/deploy/ci/platform.sh"
-mgc=$work/mg-gitops
-git init -q "$mgc"
-git -C "$mgc" remote add origin https://github.com/anhnvcoder/svp-gitops.git
-mkdir -p "$mgc/envs/stg/images" "$mgc/base/services"
-image_file 1 >"$mgc/envs/stg/images/web.yaml"
-printf 'migrate: false\n' >"$mgc/base/services/web.yaml"
-pinned=$mgc pinned_commit parent >/dev/null
-mg_parent=$(git -C "$mgc" rev-parse HEAD)
-image_file 2 >"$mgc/envs/stg/images/web.yaml"
-pinned=$mgc pinned_commit "release web" >/dev/null
-mg_rev=$(git -C "$mgc" rev-parse HEAD)
-echo docs >"$mgc/README.md"
-pinned=$mgc pinned_commit docs >/dev/null
-mg_later=$(git -C "$mgc" rev-parse HEAD)
-git -C "$mgc" update-ref refs/remotes/origin/main "$mg_later"
-mg_chart1=1111111111111111111111111111111111111111
-mg_chart2=2222222222222222222222222222222222222222
-mg_chart_url=https://github.com/anhnvcoder/svp-backend.git
-mg_gitops_url=https://github.com/anhnvcoder/svp-gitops.git
-cat >"$work/bin-mg/kubectl" <<'EOS'
-#!/usr/bin/env bash
-[ "$1 $2" = "--context k3d-svp" ] || exit 2
-shift 2
-case "$*" in
-  "get --raw /readyz" | "-n argocd get applications.argoproj.io svp-root") exit 0 ;;
-  "-n argocd get applications.argoproj.io -o json") cat "$FAKE_MG_DIR/apps.json" ;;
-  "-n svp get rollouts.argoproj.io web --ignore-not-found -o json" | "-n svp get job web-migrate --ignore-not-found -o json") ;;
-  "-n svp get pods -l app.kubernetes.io/name=web,app.kubernetes.io/component=server -o json") cat "$FAKE_MG_DIR/pods.json" ;;
-  "-n svp logs pod/web-1 --all-containers=true") ;;
-  *) echo "unexpected: $*" >&2; exit 2 ;;
-esac
-EOS
-printf '#!/usr/bin/env bash\nexit 1\n' >"$work/bin-mg/gh"
-chmod 755 "$work/bin-mg/kubectl" "$work/bin-mg/gh"
-jq -n --arg d "sha256:$(printf '%064d' 0 | tr 0 2)" '{items: [{metadata: {name: "web-1", creationTimestamp: "2026-10-31T06:50:40Z"},
-  spec: {containers: [{image: ("r@" + $d)}]},
-  status: {containerStatuses: [{restartCount: 0}], conditions: [{type: "Ready", status: "True", lastTransitionTime: "2026-10-31T06:50:55Z"}]}}]}' \
-  >"$work/mg-pods.json"
-# mg_apps CHART1 GITOPS1 CHART2 GITOPS2: the Applications as JSON; web (multi-source) has two history entries, the
-# second synced at 06:50:30Z to 06:51:00Z; single (single-source, its revision a commit of svp-gitops) and chart
-# (multi-source, its chart a version, not a commit) synced REV.
-mg_apps() {
-  jq -n --arg c1 "$1" --arg g1 "$2" --arg c2 "$3" --arg g2 "$4" --arg rev "$mg_rev" --arg cu "$mg_chart_url" --arg gu "$mg_gitops_url" '
-    def multi($c; $g; $id; $s; $e): {id: $id, sources: [{repoURL: $cu, path: "deploy/helm/svp-service"}, {repoURL: $gu, ref: "values"}],
-      revisions: [$c, $g], deployStartedAt: $s, deployedAt: $e};
-    {items: [
-      {metadata: {name: "web"}, status: {history: [
-        multi($c1; $g1; 1; "2026-10-31T06:10:00Z"; "2026-10-31T06:10:20Z"),
-        multi($c2; $g2; 2; "2026-10-31T06:50:30Z"; "2026-10-31T06:51:00Z")]}},
-      {metadata: {name: "single"}, status: {history: [
-        {id: 1, source: {repoURL: $gu}, revision: $rev, deployStartedAt: "2026-10-31T06:50:31Z", deployedAt: "2026-10-31T06:50:40Z"}]}},
-      {metadata: {name: "chart"}, status: {history: [
-        {id: 1, sources: [{repoURL: "https://charts.example.invalid", chart: "c"}, {repoURL: $gu, ref: "values"}],
-         revisions: ["1.2.3", $rev], deployStartedAt: "2026-10-31T06:50:32Z", deployedAt: "2026-10-31T06:50:50Z"}]}}]}'
-}
-# mg_case NAME CHART2 GITOPS2: measure-gitops REV over the fake; output in NAME.out, exit status in NAME.rc.
-mg_case() {
-  local rc=0
-  mg_apps "$mg_chart1" "$mg_parent" "$2" "$3" >"$work/mg-apps.json"
-  rm -rf "$mg/.k8s"
-  env -u GITHUB_ACTIONS -u CI -u GITLAB_CI -u JENKINS_URL -u TF_BUILD PATH="$work/bin-mg:$PATH" SVP_GITOPS_DIR="$mgc" \
-    FAKE_MG_DIR="$work" bash "$mg/deploy/k8s/drills/gitops.sh" "$mg_rev" >"$work/$1.out" 2>&1 </dev/null || rc=$?
-  echo "$rc" >"$work/$1.rc"
-}
-ln -sf mg-apps.json "$work/apps.json" && ln -sf mg-pods.json "$work/pods.json"
-mg_case mg-synced "$mg_chart2" "$mg_rev"
-mg_json=$mg/.k8s/drills/gitops-${mg_rev:0:12}.json
-[ "$(cat "$work/mg-synced.rc")" = 0 ] && [ -f "$mg_json" ] &&
-  [ "$(jq -r '.sync_apps | join(" ")' "$mg_json")" = "chart single web" ] &&
-  [ "$(jq -r '.sync_started + " " + .sync_finished' "$mg_json")" = "2026-10-31T06:50:30Z 2026-10-31T06:51:00Z" ] &&
-  [ "$(jq -r '.last_pod_ready' "$mg_json")" = 2026-10-31T06:50:55Z ] &&
-  ok "measure-gitops: a multi-source Application is compared by its svp-gitops commit, the chart's commit first in revisions" ||
-  fail "measure-gitops: a multi-source Application is compared by its svp-gitops commit, the chart's commit first in revisions (exit $(cat "$work/mg-synced.rc"): $(cat "$work/mg-synced.out"))"
-mg_case mg-waiting "$mg_chart2" "$mg_parent"
-[ "$(cat "$work/mg-waiting.rc")" = 2 ] &&
-  grep -qxF "WAIT  Application web has not synced ${mg_rev:0:12} yet (its last sync: ${mg_parent:0:12})" "$work/mg-waiting.out" &&
-  ok "measure-gitops: a multi-source Application whose last sync is an earlier commit of svp-gitops is waited for, that commit named" ||
-  fail "measure-gitops: a multi-source Application whose last sync is an earlier commit of svp-gitops is waited for, that commit named (exit $(cat "$work/mg-waiting.rc"): $(cat "$work/mg-waiting.out"))"
-mg_case mg-later "$mg_chart2" "$mg_later"
-[ "$(cat "$work/mg-later.rc")" = 1 ] &&
-  grep -qxF "FAIL  ${mg_rev:0:12} cannot be measured: Application web has synced ${mg_later:0:12}, a later commit, since; its pods may come from that sync. Measure the latest release commit" \
-    "$work/mg-later.out" &&
-  ok "measure-gitops: a multi-source Application that synced a later commit of svp-gitops fails the measure, that commit named" ||
-  fail "measure-gitops: a multi-source Application that synced a later commit of svp-gitops fails the measure, that commit named (exit $(cat "$work/mg-later.rc"): $(cat "$work/mg-later.out"))"
+  ok "gitops.sh: the root is applied at the commit checked, follows the branch after the wait" ||
+  fail "gitops.sh: the root is applied at the commit checked, follows the branch after the wait"
 
 # --- The fake results of a k3d run.
 out=$work/out
-mkdir -p "$out/logs" "$out/samples"
-echo dev-k3d >"$out/scenario"
+mkdir -p "$out/logs"
+echo gitops >"$out/scenario"
 printf 'id\tname\tstatus\texit\tstart\tend\tseconds\tnote\n' >"$out/results.tsv"
 printf '01\tk8s-up\tok\t0\t100\t160\t60\t\n02\tk8s-smoke\tfail\t1\t160\t170\t10\t\n' >>"$out/results.tsv"
 printf '03\tdrill-k8s-keda\tfail\t1\t170\t180\t10\t\n04\tdrill-k8s-threats\tfail\t1\t180\t190\t10\t\n' >>"$out/results.tsv"
@@ -822,13 +636,9 @@ printf 'FAIL  WEB-9: the cookie jar holds svp_sid\n' >"$out/logs/10-drill-obs-th
 printf 'ok    session cookie __Host-Http-svp_sid in the jar\n' >"$out/logs/11-k8s-web-e2e.log"
 printf 'ok    OPS-1: 8 loopback ports\nprobe answered: PROBE-OBS-MARKER\ndrill-obs-threats: all checks passed\n' \
   >"$out/logs/06-drill-obs-threats.log"
-printf '100\t4000000\t0\t12\n' >"$out/samples/host.tsv"
-echo 4242 >"$out/sampler.pid"
-echo '{"label":"start","mem_usage_median_mib":5800}' >"$out/ram-rest-start.json"
-printf 'RAM at rest (start): MEM USAGE median 5800 MiB\nfree -m of the runner at rest:\n%s\n' \
-  "Mem:  15995  9000  1200  50  5795  6700" >"$out/ram-rest-start.txt"
 echo '{}' >"$out/.hidden.json"
-echo 230 >"$out/run-end"
+# A file of the results folder that is not on the allow list.
+echo '{"label":"start"}' >"$out/ram-rest-start.json"
 
 # --- The fake checkout's results.
 d=$repo/.k8s/drills
@@ -848,33 +658,9 @@ echo "1792332629000 u1 explore 200 12" >"$d/traffic-1.log"
 head -c 6000000 /dev/zero | tr '\0' a >"$d/big-1.json"
 ln -s ../../.env "$d/link-1.json"
 echo "CA" >"$repo/.k8s/ca.crt"
+# Results of the checkout outside .k8s/drills, which the filter does not even look at.
 echo '{"metrics":{"http_reqs":{"count":10}}}' >"$repo/.k6/local-1/summary.json"
-echo '{"raw":true}' >"$repo/.k6/local-1/machine.json"
-# The summaries of the k6 Job's pods (deploy/k6/cloud/run.sh logs): one clean, one holding a cluster secret.
-k6c=$repo/.k6/cloud-20261026T080000Z
-mkdir -p "$k6c"
-echo '{"thresholds_ok":true,"dropped_iterations":0}' >"$k6c/pod-0.json"
-echo "{\"thresholds_ok\":true,\"header\":\"$cluster_secret\"}" >"$k6c/pod-1.json"
-echo '{"raw":true}' >"$k6c/machine.json"
-l=$repo/.web/svp-frontend/test-results/lighthouse
-echo "<html>Set-Cookie: svp=1</html>" >"$l/a.report.html"
-echo '{"audits":{}}' >"$l/b.report.json"
-echo '{}' >"$l/.lighthouseci/lhr-1.json"
-echo 'zip' >"$repo/.web/svp-frontend/test-results/playwright/trace.zip"
-mkdir -p "$repo/.web/svp-frontend/test-results/playwright/feed-first-video-chromium"
-printf '# Error\n- generic [ref=e1]: Feed\n' >"$repo/.web/svp-frontend/test-results/playwright/feed-first-video-chromium/error-context.md"
-echo 'zip' >"$repo/.web/svp-frontend/test-results/playwright/feed-first-video-chromium/trace.zip"
-mkdir -p "$repo/.web/svp-frontend/test-results/playwright/login-chromium"
-printf -- '- generic: Cookie: svp_sid=abc\n' >"$repo/.web/svp-frontend/test-results/playwright/login-chromium/error-context.md"
-echo '{"status":"failed","failedTests":["abc-123"]}' >"$repo/.web/svp-frontend/test-results/playwright/.last-run.json"
-echo '{"header":"Bearer abc"}' >"$repo/.web/svp-frontend/test-results/glitchtip-chromium.json"
-echo '{"stack":"k3d","project":"webkit","event_id":"0123456789abcdef0123456789abcdef","environment":"stg","mapped_frames":3}' \
-  >"$repo/.web/svp-frontend/test-results/glitchtip-webkit.json"
-echo '{"cookie":"svp_sid=abc"}' >"$repo/.web/svp-frontend/test-results/measure-web-1.json"
-echo "{\"key\":\"$private_key_header\"}" >"$repo/.web/svp-frontend/test-results/measure-upload-1.json"
-# A clean result where the web client's results were before they moved to its clone: no place of the allow list.
-mkdir -p "$repo/web/test-results"
-echo '{"ok":true}' >"$repo/web/test-results/measure-web-2.json"
+echo '{"audits":{}}' >"$repo/.web/svp-frontend/test-results/lighthouse/b.report.json"
 
 # job: the variables a GitHub Actions job runs the two scripts with (deploy/ci/platform.sh prints masks and warnings
 # as the runner's commands only there), with the job's temp directory in $work.
@@ -989,62 +775,37 @@ cmp -s "$mb/want" "$work/mask-small.secrets/cluster.values" &&
 
 # --- k3d run, cluster readable.
 collect k3d "$work/secrets-k3d"
-for src in '$SVP_VERIFY_OUT/results.tsv' '$SVP_VERIFY_OUT/scenario' '$SVP_VERIFY_OUT/samples/host.tsv' \
+for src in '$SVP_VERIFY_OUT/results.tsv' '$SVP_VERIFY_OUT/scenario' \
   '$SVP_VERIFY_OUT/logs/01-k8s-up.log' '$SVP_VERIFY_OUT/logs/03-drill-k8s-keda.log' \
-  '$SVP_VERIFY_OUT/logs/04-drill-k8s-threats.log (verdict lines)' '$SVP_VERIFY_OUT/ram-rest-start.json' \
-  '$SVP_VERIFY_OUT/ram-rest-start.txt' \
+  '$SVP_VERIFY_OUT/logs/04-drill-k8s-threats.log (verdict lines)' \
   '$SVP_VERIFY_OUT/logs/06-drill-obs-threats.log (verdict lines)' \
   '$SVP_VERIFY_OUT/logs/05-drill-alert-to-sentry.log' .k8s/drills/canary-drill-1.json .k8s/drills/names-1.json \
-  .k8s/drills/identifiers-1.json .k8s/drills/traffic-1.log .k6/local-1/summary.json \
-  .web/svp-frontend/test-results/lighthouse/b.report.json; do
+  .k8s/drills/identifiers-1.json .k8s/drills/traffic-1.log; do
   expect k3d "$src" kept
 done
 expect k3d .k8s/drills/kafka-1.json secret-value
 expect k3d .k8s/drills/jwt-1.json jwt
 expect k3d .k8s/drills/binary-piece-1.json secret-value
 expect k3d '$SVP_VERIFY_OUT/logs/02-k8s-smoke.log' secret-value
-expect k3d '$SVP_VERIFY_OUT/sampler.pid' not-allowed
-expect k3d '$SVP_VERIFY_OUT/run-end' not-allowed
-lacks k3d "verify-run.sh's end mark is dropped without a warning" 'run-end'
+expect k3d '$SVP_VERIFY_OUT/ram-rest-start.json' not-allowed
 expect k3d '$SVP_VERIFY_OUT/.hidden.json' hidden
+has k3d "a hidden file gets a warning" '.hidden.json: hidden'
 expect k3d .k8s/drills/backup-1.json secret-value
 expect k3d .k8s/drills/b64-1.json secret-value
 expect k3d .k8s/drills/multiline-1.json secret-value
 expect k3d .k8s/drills/threats-1.log not-allowed
 expect k3d .k8s/drills/big-1.json too-large
 expect k3d .k8s/drills/link-1.json not-regular
-expect k3d .k6/local-1/machine.json not-allowed
-expect k3d .k6/cloud-20261026T080000Z/pod-0.json kept
-expect k3d .k6/cloud-20261026T080000Z/pod-1.json secret-value
-expect k3d .k6/cloud-20261026T080000Z/machine.json not-allowed
-[ -f "$work/art-k3d/k6/cloud-20261026T080000Z/pod-0.json" ] && ok "k3d: a k6 pod's summary lands under k6/" ||
-  fail "k3d: a k6 pod's summary lands under k6/"
-expect k3d .web/svp-frontend/test-results/lighthouse/a.report.html set-cookie
-expect k3d .web/svp-frontend/test-results/lighthouse/.lighthouseci/lhr-1.json hidden
-expect k3d .web/svp-frontend/test-results/playwright/trace.zip not-allowed
-expect k3d .web/svp-frontend/test-results/playwright/feed-first-video-chromium/trace.zip not-allowed
-expect k3d .web/svp-frontend/test-results/playwright/login-chromium/error-context.md session-cookie
-[ -f "$work/art-k3d/web-test-results/playwright/feed-first-video-chromium/error-context.md" ] &&
-  ok "k3d: a failed test's error-context.md is kept" || fail "k3d: a failed test's error-context.md is kept"
-expect k3d .web/svp-frontend/test-results/playwright/.last-run.json not-allowed
-lacks k3d "Playwright's .last-run.json is dropped without a warning" '.last-run.json'
-has k3d "another hidden file still gets a warning" 'lighthouse/.lighthouseci/lhr-1.json: hidden'
-expect k3d .web/svp-frontend/test-results/glitchtip-chromium.json bearer
-expect k3d .web/svp-frontend/test-results/glitchtip-webkit.json kept
-expect k3d .web/svp-frontend/test-results/measure-web-1.json session-cookie
-expect k3d .web/svp-frontend/test-results/measure-upload-1.json private-key
-grep -q 'web/test-results/measure-web-2.json' "$work/art-k3d/files.txt" ||
-  [ -n "$(find "$work/art-k3d" -name measure-web-2.json)" ] &&
-  fail "k3d: web/test-results of the checkout is not read" || ok "k3d: web/test-results of the checkout is not read"
+grep -qE '\.k6/|\.web/' "$work/art-k3d/files.txt" || [ -n "$(find "$work/art-k3d" -name 'summary.json' -o -name 'b.report.json')" ] &&
+  fail "k3d: .k6 and the clone of svp-frontend are not read" || ok "k3d: .k6 and the clone of svp-frontend are not read"
 for n in 07-drill-k8s-threats 08-drill-k8s-threats 09-drill-obs-threats 10-drill-obs-threats; do
   expect k3d "\$SVP_VERIFY_OUT/logs/$n.log (verdict lines)" session-cookie
 done
 expect k3d '$SVP_VERIFY_OUT/logs/11-k8s-web-e2e.log' session-cookie
 grep -rqa SID-MARKER "$work/art-k3d" && fail "k3d: no session cookie value in the artifact" ||
   ok "k3d: no session cookie value in the artifact"
-[ -f "$work/art-k3d/k8s-drills/canary-drill-1.json" ] && [ -f "$work/art-k3d/k6/local-1/summary.json" ] &&
-  [ -f "$work/art-k3d/web-test-results/lighthouse/b.report.json" ] && ok "k3d: the checkout's files under visible folders" ||
-  fail "k3d: the checkout's files under visible folders"
+[ -f "$work/art-k3d/k8s-drills/canary-drill-1.json" ] && ok "k3d: the checkout's files under a visible folder" ||
+  fail "k3d: the checkout's files under a visible folder"
 [ -z "$(find "$work/art-k3d" -name '.*')" ] && ok "k3d: no hidden file in the artifact" || fail "k3d: no hidden file in the artifact"
 [ ! -e "$work/art-k3d/ca.crt" ] && ! grep -q 'ca.crt' "$work/art-k3d/files.txt" && ok "k3d: .k8s/ca.crt not a candidate" ||
   fail "k3d: .k8s/ca.crt not a candidate"
@@ -1120,7 +881,7 @@ has k3d "the closing table of a failed threat drill is printed" "$(printf '  %-1
 lacks k3d "the probe output of a threat drill is not printed" 'PROBE-'
 lacks k3d "the output of a failed target with a secret is not printed" 'step 2'
 has k3d "a dropped file gets a warning with its rule" '::warning::.k8s/drills/backup-1.json: secret-value'
-lacks k3d "not-allowed files get no warning" '::warning::.k6/local-1/machine.json'
+lacks k3d "not-allowed files get no warning" '::warning::.k8s/drills/threats-1.log'
 if grep -qF "::add-mask::$helm_payload" "$work/k3d.log" || grep -qF "::add-mask::$role_name" "$work/k3d.log"; then
   fail "k3d: Helm release payloads and user names are not masked"
 else
@@ -1145,11 +906,11 @@ fi
 
 # --- k3d run, the cluster never read: only the files written on the runner itself.
 collect dead "$work/secrets-dead" FAKE_KUBECTL_FAIL=1
-for src in '$SVP_VERIFY_OUT/results.tsv' '$SVP_VERIFY_OUT/scenario' '$SVP_VERIFY_OUT/samples/host.tsv'; do
+for src in '$SVP_VERIFY_OUT/results.tsv' '$SVP_VERIFY_OUT/scenario'; do
   expect dead "$src" kept
 done
 for src in '$SVP_VERIFY_OUT/logs/01-k8s-up.log' '$SVP_VERIFY_OUT/logs/03-drill-k8s-keda.log' \
-  '$SVP_VERIFY_OUT/ram-rest-start.json' .k8s/drills/canary-drill-1.json .k8s/drills/backup-1.json .k6/local-1/summary.json; do
+  .k8s/drills/canary-drill-1.json .k8s/drills/backup-1.json; do
   expect dead "$src" no-secret-list
 done
 no_leak dead
@@ -1163,7 +924,7 @@ expect late .k8s/drills/canary-drill-1.json kept
 has late "it says the earlier list is used" 'the list read while it ran is used'
 no_leak late
 
-# --- k3d run, a Secret made again with a new value (drill-k8s-backup rebuilds Postgres): both values are searched for.
+# --- k3d run, a Secret made again with a new value: both values are searched for.
 rebuilt_secret=$(openssl rand -hex 20)
 printf '%s\n' "$rebuilt_secret" >>"$work/all-secrets"
 cp -R "$work/kube" "$work/kube.orig"
@@ -1181,36 +942,17 @@ mv "$work/kube.orig" "$work/kube"
 
 # --- compose-obs run: no cluster list needed, .env's still applies.
 echo compose-obs >"$out/scenario"
-# The object store's files of a compose-obs run: the samples of each compose container, the store's RAM over
-# measure-upload and that target's summary, the outputs of the object store's tests and of the copy back to MinIO; and
-# a copy's output that printed the store's root password (a value of .env).
-printf '100\tsvp-s3-1\t130.6\n100\tsvp-gateway-1\t40\n' >"$out/samples/compose.tsv"
-printf '100\tsvp-web-1\t2026-10-25T08:00:00.123456789Z\t1\n' >"$out/samples/restarts.tsv"
-echo '{"container":"svp-s3-1","samples":30,"peak_mib":210,"limit_mib":512,"peak_under_limit":true}' \
-  >"$out/ram-s3-upload.json"
-echo 'RAM of svp-s3-1 during measure-upload: peak 210 MiB at 1970-01-01T00:01:40Z over 30 sample(s)' \
-  >"$out/ram-s3-upload.txt"
+# The object store's tests of a compose-obs run, and a target's output that printed the store's root password (a value
+# of .env).
 printf '%s\n' '=== RUN   TestIntegrationPresignedPost' \
   '    integration_test.go:250: POST http://127.0.0.1:9000/media: status 400' \
   '--- PASS: TestIntegrationPresignedPost (0.20s)' \
   'object store tests: 39 passed, 0 failed, 0 skipped (tests and subtests); make test-stack exit 0' \
   >"$out/logs/14-test-stack-objstore.log"
-printf '%s\n' 'object-store-copy: bucket media at MinIO: 12 object(s), 3456789 byte(s)' \
-  "object-store-copy: READY videos' keys lost before this copy: 0" \
-  's3-init (after the copy, on a store already initialised): 6 log line(s), 0 with a secret value of .env' \
-  >"$out/logs/19-object-store-roundtrip.log"
-printf 'object-store-copy: root %s\n' "$env_secret" >"$out/logs/20-object-store-roundtrip.log"
-jq -n '{measured_at: "2026-10-25T08:00:00Z", browser: "chromium", file_mb: 100.2, duration_s: 160, upload_ms: 4200,
-  throughput_mb_s: 23.9, cpu: {window_ms: 4300, task_ms: 300, script_ms: 120, task_share_pct: 7}, ready_ms: 190000}' \
-  >"$repo/.web/svp-frontend/test-results/measure-upload-2.json"
+printf 'make up: s3 root %s\n' "$env_secret" >"$out/logs/15-up.log"
 collect compose "$work/secrets-compose" FAKE_KUBECTL_FAIL=1
-for src in '$SVP_VERIFY_OUT/samples/compose.tsv' '$SVP_VERIFY_OUT/samples/restarts.tsv' \
-  '$SVP_VERIFY_OUT/ram-s3-upload.json' \
-  '$SVP_VERIFY_OUT/ram-s3-upload.txt' '$SVP_VERIFY_OUT/logs/14-test-stack-objstore.log' \
-  '$SVP_VERIFY_OUT/logs/19-object-store-roundtrip.log' .web/svp-frontend/test-results/measure-upload-2.json; do
-  expect compose "$src" kept
-done
-expect compose '$SVP_VERIFY_OUT/logs/20-object-store-roundtrip.log' secret-value
+expect compose '$SVP_VERIFY_OUT/logs/14-test-stack-objstore.log' kept
+expect compose '$SVP_VERIFY_OUT/logs/15-up.log' secret-value
 expect compose .k8s/drills/canary-drill-1.json kept
 expect compose .k8s/drills/b64-1.json secret-value
 expect compose '$SVP_VERIFY_OUT/logs/02-k8s-smoke.log' secret-value
@@ -1228,528 +970,64 @@ has broken "the broken line is named" 'SVP_BROKEN_PASSWORD'
 no_leak broken
 cp "$work/env.good" "$repo/.env"
 
-# --- verify-sample.sh stop: the criterion "the job ended in time" of runner.json, from results.tsv. A fake docker
-# that fails (no container, no cluster) and a fake sudo whose dmesg prints nothing; the samples are a few lines.
-sb=$work/sample-bin
-so=$work/sample-out
-mkdir -p "$sb" "$so/samples"
-printf '#!/bin/sh\nexit 1\n' >"$sb/docker"
-printf '#!/bin/sh\nexit 0\n' >"$sb/sudo"
-chmod 755 "$sb/docker" "$sb/sudo"
-echo compose-obs >"$so/scenario"
-printf '100\t4000000\t0\t12\n105\t3900000\t0\t40\n' >"$so/samples/host.tsv"
-printf '100\t50000000000\t100000000000\t0\n' >"$so/samples/disk.tsv"
-for f in docker pods events event-polls; do : >"$so/samples/$f.tsv"; done
-# Two compose containers, the object store sampled three times.
-printf '100\tsvp-s3-1\t120\n100\tsvp-web-1\t300\n110\tsvp-s3-1\t260\n120\tsvp-s3-1\t140\n' >"$so/samples/compose.tsv"
-# sample [--no-end] NAME [ROW...]: verify-sample.sh stop over a results.tsv of ROWs (none: no results.tsv) and, with
-# ROWs and without --no-end, the end mark of verify-run.sh; prints within_deadline of runner.json and the targets it
-# lists as cut, its output in $work/sample-NAME.log.
-sample() {
-  local name end=1
-  [ "$1" = --no-end ] && { end=; shift; }
-  name=$1
-  shift
-  rm -f "$so/results.tsv" "$so/runner.json" "$so/run-end"
-  if [ "$#" -gt 0 ]; then
-    printf 'id\tname\tstatus\texit\tstart\tend\tseconds\tnote\n' >"$so/results.tsv"
-    printf '%s\n' "$@" >>"$so/results.tsv"
-    [ -z "$end" ] || echo 200 >"$so/run-end"
-  fi
-  env "${job[@]}" PATH="$sb:$PATH" SVP_VERIFY_OUT="$so" "$here/verify-sample.sh" stop >"$work/sample-$name.log" 2>&1 ||
-    fail "sample $name: verify-sample.sh stop exits 0"
-  jq -r '"\(.runner_enough.within_deadline) \(.targets_cut | join(","))"' "$so/runner.json" 2>/dev/null
-}
-# expect_deadline NAME WANT GOT
-expect_deadline() {
-  if [ "$3" = "$2" ]; then ok "sample $1: within_deadline and cut targets '$2'"; else fail "sample $1: want '$2', got '$3'"; fi
-}
-row() { local IFS=$'\t'; printf '%s' "$*"; }
-expect_deadline in-time "true " "$(sample in-time "$(row 01 up ok 0 100 160 60 '')" "$(row 02 smoke fail 1 160 170 10 '')" \
-  "$(row 03 lcp skipped '' 170 170 0 'disk: free space under 15% + 1 GiB')")"
-expect_deadline timeout "false smoke=timeout" "$(sample timeout "$(row 01 up ok 0 100 160 60 '')" \
-  "$(row 02 smoke timeout 124 160 1060 900 'stopped after 900 s')")"
-expect_deadline deadline "false lcp=skipped" "$(sample deadline "$(row 01 up ok 0 100 160 60 '')" \
-  "$(row 02 lcp skipped '' 170 170 0 deadline)")"
-expect_deadline cancelled "false lcp=cancelled" "$(sample cancelled "$(row 01 up ok 0 100 160 60 '')" \
-  "$(row 02 lcp cancelled '' 170 180 10 'the run was cancelled or the step timed out')")"
-expect_deadline no-results "false " "$(sample no-results)"
-# Cancelled, or stopped by the step's timeout-minutes, before the running target got its line: every line there is
-# looks fine, only the end mark is missing.
-expect_deadline no-end "false " "$(sample --no-end no-end "$(row 01 up ok 0 100 160 60 '')")"
-grep -q '^runner: results.tsv read true, verify-run.sh reached its end false, ' "$work/sample-no-end.log" &&
-  ok "sample: runner.txt says verify-run.sh did not reach its end" ||
-  fail "sample: runner.txt says verify-run.sh did not reach its end"
-same "sample: runner.json has the highest MEM USAGE of each compose container, with its time" \
-  "svp-s3-1=260@1970-01-01T00:01:50Z svp-web-1=300@1970-01-01T00:01:40Z" \
-  "$(jq -r '.compose_container_memory_max_mib | to_entries | map("\(.key)=\(.value.mib)@\(.value.at)") | join(" ")' \
-    "$so/runner.json")"
-# Restarts of compose containers, also of those removed since (make down, a drill that recreates a service): web
-# restarted once, then was made anew (count 0 again); the store restarted twice, was made anew and restarted once more;
-# the gateway never. The fake docker lists no container now, as after make down.
-printf '%s\n' '100 svp-web-1 2026-10-25T08:00:00.1Z 0' '110 svp-web-1 2026-10-25T08:00:00.1Z 1' \
-  '120 svp-web-1 2026-10-25T08:30:00.1Z 0' '100 svp-s3-1 2026-10-25T08:00:00.2Z 2' \
-  '120 svp-s3-1 2026-10-25T08:30:00.2Z 0' '130 svp-s3-1 2026-10-25T08:30:00.2Z 1' \
-  '100 svp-gateway-1 2026-10-25T08:00:00.3Z 0' | tr ' ' '\t' >"$so/samples/restarts.tsv"
-sample restarts "$(row 01 up ok 0 100 160 60 '')" >/dev/null
-same "sample: a restart counts after its container was made anew; the counts of each container of a name are summed" \
-  "svp-s3-1=3 svp-web-1=1 false" \
-  "$(jq -r '"\(.compose_restarts | join(" ")) \(.runner_enough.compose_no_restart)"' "$so/runner.json")"
-grep -q '^runner: OOMKilled \[\], kernel OOM lines 0, compose restarts \[svp-s3-1=3 svp-web-1=1\]$' \
-  "$work/sample-restarts.log" && ok "sample: runner.txt names the restarts" ||
-  fail "sample: runner.txt names the restarts"
-printf '100\tsvp-web-1\t2026-10-25T08:00:00.1Z\t0\n' >"$so/samples/restarts.tsv"
-sample no-restart "$(row 01 up ok 0 100 160 60 '')" >/dev/null
-same "sample: no restart, compose_no_restart" " true" \
-  "$(jq -r '"\(.compose_restarts | join(" ")) \(.runner_enough.compose_no_restart)"' "$so/runner.json")"
-: >"$so/samples/restarts.tsv"
-grep -q '^runner enough: within_deadline=false ' "$work/sample-deadline.log" &&
-  ok "sample: the runner enough line names within_deadline" || fail "sample: the runner enough line names within_deadline"
-# Targets verify-run.sh skipped after a failed build target, or left out by SVP_VERIFY_TARGETS, did not run out of time.
-expect_deadline infrastructure "true " "$(sample infrastructure "$(row 01 up fail 2 100 160 60 '')" \
-  "$(row 02 smoke skipped '' 160 160 0 'infrastructure step failed')")"
-expect_deadline unchosen "true " "$(sample unchosen "$(row 01 up ok 0 100 160 60 '')" \
-  "$(row 02 smoke skipped '' 160 160 0 'not in targets')")"
-
-# --- verify-sample.sh sample: one line of docker.tsv. Three media-worker pods Running (A, B, C); ffmpeg runs twice in
-# A (cgroupfs path), once in B (systemd path), once on the runner itself (no pod), once in another pod D, and one pid
-# has gone by the time its cgroup is read: 2 transcoding. memory.stat of both nodes, summed in MiB, exact keys only.
-ss=$work/sample2-out
-sb2=$work/sample2-bin
-sp=$work/sample2-proc
-mkdir -p "$ss" "$sb2"
-uid_a=0a1b2c3d-0000-4000-8000-00000000000a
-uid_b=0a1b2c3d-0000-4000-8000-00000000000b
-uid_c=0a1b2c3d-0000-4000-8000-00000000000c
-uid_d=0a1b2c3d-0000-4000-8000-00000000000d
-cgroup_of() { mkdir -p "$sp/$1" && printf '0::%s\n' "$2" >"$sp/$1/cgroup"; }
-cgroup_of 101 "/system.slice/docker-$(printf 'e%.0s' {1..64}).scope/kubepods/burstable/pod$uid_a/$(printf 'c%.0s' {1..64})"
-cgroup_of 102 "/system.slice/docker-$(printf 'e%.0s' {1..64}).scope/kubepods/burstable/pod$uid_a/$(printf 'd%.0s' {1..64})"
-cgroup_of 103 "/kubepods.slice/kubepods-burstable.slice/kubepods-burstable-pod${uid_b//-/_}.slice/cri-containerd-abc.scope"
-cgroup_of 104 /user.slice/user-1001.slice/session-1.scope
-cgroup_of 105 "/system.slice/docker-$(printf 'e%.0s' {1..64}).scope/kubepods/besteffort/pod$uid_d/$(printf 'f%.0s' {1..64})"
-cat >"$sb2/pgrep" <<'EOF'
-#!/bin/sh
-[ "$*" = "-x ffmpeg" ] || exit 2
-printf '101\n102\n103\n104\n105\n106\n'
-EOF
-cat >"$sb2/docker" <<'EOF'
-#!/bin/sh
-case $1 in
-  stats)
-    printf 'k3d-svp-server-0\t150.00%%\t3GiB / 15.6GiB\nk3d-svp-agent-0\t120.00%%\t2.5GiB / 15.6GiB\nk3d-svp-registry\t0.00%%\t20MiB / 15.6GiB\n'
-    [ -z "${FAKE_COMPOSE:-}" ] ||
-      printf 'svp-s3-1\t3.00%%\t%s / 512MiB\nsvp-web-1\t1.00%%\t1.25GiB / 1.5GiB\nother-1\t0.00%%\t9MiB / 1GiB\n' \
-        "${FAKE_S3_MEM:-130.6MiB}" ;;
-  ps)
-    [ "$*" = "ps -aq --filter label=com.docker.compose.project=svp" ] || exit 2
-    [ -z "${FAKE_COMPOSE:-}" ] || printf 'c0ffee000001\nc0ffee000002\n' ;;
-  inspect)
-    if [ "$3" = '{{.Name}} {{.Created}} {{.RestartCount}}' ]; then
-      [ "$4 $5" = "c0ffee000001 c0ffee000002" ] || exit 2
-      printf '/svp-s3-1 2026-10-25T00:00:01.5Z 0\n/svp-web-1 2026-10-25T00:00:02.5Z 1\n'
-    else
-      echo "running 0 2026-10-25T00:00:00Z"
-    fi ;;
-  exec)
-    [ "$2" = "${FAKE_EXEC_FAIL:-}" ] && exit 1
-    case $2 in
-      k3d-svp-server-0) printf 'anon 1073741824\nanon_thp 999\nactive_file 524288000\ninactive_file 999\nkernel 104857600\n' ;;
-      k3d-svp-agent-0) printf 'anon 536870912\nactive_file 209715200\nkernel_stack 999\nkernel 52428800\n' ;;
-    esac ;;
-  *) exit 1 ;;
-esac
-EOF
-cat >"$sb2/kubectl" <<'EOF'
-#!/bin/sh
-[ "${FAKE_KUBECTL_FAIL:-}" = 1 ] && exit 1
-case "$*" in
-  *" get pods -l app.kubernetes.io/name=media-worker,app.kubernetes.io/component=server --field-selector=status.phase=Running -o jsonpath="*)
-    printf '%s\n' "$FAKE_UIDS" ;;
-  *" get nodes --no-headers") printf 'k3d-svp-server-0   Ready   control-plane   1h   v1.36.0+k3s1\nk3d-svp-agent-0   Ready,SchedulingDisabled   <none>   1h   v1.36.0+k3s1\n' ;;
-  *) exit 2 ;;
-esac
-EOF
-chmod 755 "$sb2/pgrep" "$sb2/docker" "$sb2/kubectl"
-# take_sample [VAR=VALUE...]: verify-sample.sh sample; prints the new line of docker.tsv without its time.
-take_sample() {
-  rm -rf "$ss/samples"
-  env "${job[@]}" PATH="$sb2:$PATH" SVP_VERIFY_OUT="$ss" SVP_VERIFY_PROC="$sp" \
-    FAKE_UIDS="$(printf '%s\n' "$uid_a" "$uid_b" "$uid_c")" "$@" "$here/verify-sample.sh" sample >"$work/sample2.log" 2>&1 ||
-    fail "sample: verify-sample.sh sample exits 0"
-  cut -f 2- "$ss/samples/docker.tsv"
-}
-row_tail() { local IFS=$'\t'; printf '%s' "$*"; }
-same "sample: 3 Running workers, 2 transcoding (ffmpeg in their pod), memory.stat of both nodes summed" \
-  "$(row_tail 5652 0 150.00 120.00 3 0 running 0 2026-10-25T00:00:00Z 2 1536 700 150)" "$(take_sample)"
-same "sample: no worker Running counts 0 transcoding" \
-  "$(row_tail 5652 0 150.00 120.00 0 0 running 0 2026-10-25T00:00:00Z 0 1536 700 150)" "$(take_sample FAKE_UIDS=)"
-[ ! -s "$ss/samples/compose.tsv" ] && [ ! -s "$ss/samples/restarts.tsv" ] &&
-  ok "sample: no compose container, no compose.tsv or restarts.tsv line" ||
-  fail "sample: no compose container, no compose.tsv or restarts.tsv line"
-same "sample: compose containers are summed in docker.tsv" \
-  "$(row_tail 5652 1411 150.00 120.00 3 0 running 0 2026-10-25T00:00:00Z 2 1536 700 150)" "$(take_sample FAKE_COMPOSE=1)"
-same "sample: compose.tsv has a line per compose container, in MiB as docker stats gives it" \
-  "svp-s3-1 130.6|svp-web-1 1280" "$(cut -f 2,3 "$ss/samples/compose.tsv" | tr '\t' ' ' | paste -sd '|' -)"
-same "sample: restarts.tsv has each compose container's name, creation time and RestartCount" \
-  "svp-s3-1 2026-10-25T00:00:01.5Z 0|svp-web-1 2026-10-25T00:00:02.5Z 1" \
-  "$(cut -f 2- "$ss/samples/restarts.tsv" | tr '\t' ' ' | paste -sd '|' -)"
-# The store just under its limit, as docker stats prints it: the sample keeps 511.6 and s3-peak passes on it.
-take_sample FAKE_COMPOSE=1 FAKE_S3_MEM=511.6MiB >/dev/null
-t_s3=$(awk -F '\t' '$2 == "svp-s3-1" { print $1 }' "$ss/samples/compose.tsv")
-if env "${job[@]}" SVP_VERIFY_OUT="$ss" "$here/verify-sample.sh" s3-peak "$t_s3" "$t_s3" \
-  >"$work/s3-peak-sampled.log" 2>&1; then
-  same "sample: 511.6MiB of docker stats is under the 512 MiB limit of s3-peak" "511.6 true" \
-    "$(jq -r '"\(.peak_mib) \(.peak_under_limit)"' "$ss/ram-s3-upload.json")"
-else
-  fail "sample: 511.6MiB of docker stats is under the 512 MiB limit of s3-peak (s3-peak failed)"
-fi
-same "sample: the API not answering gives - for the workers; one node's memory.stat unread gives - for all three" \
-  "$(row_tail 5652 0 150.00 120.00 - - running 0 2026-10-25T00:00:00Z - - - -)" \
-  "$(take_sample FAKE_KUBECTL_FAIL=1 FAKE_EXEC_FAIL=k3d-svp-agent-0)"
-
-# --- verify-sample.sh peak START END over a fixture of docker.tsv (time, MEM USAGE k3d, compose, CPU server, agent,
-# Running workers, nodes not Ready, server state, RestartCount, StartedAt, workers transcoding, anon, active_file,
-# kernel). 5 samples with 2 Running workers but 1 transcoding and the highest MEM USAGE (run 5's window) must not count;
-# then 8 with 2 transcoding (3 windows of 6), one the API missed, 5 more (no window), 1 worker; one sample before START
-# and one after END.
-po=$work/peak-out
-mkdir -p "$po/samples"
-peak_row() { local IFS=$'\t'; printf '%s\t%s\t0\t100.00\t100.00\t%s\t0\trunning\t0\t2026-10-25T00:00:00Z\t%s\t3000\t%s\t200\n' "$@"; }
-{
-  peak_row 90 99999 2 2 1000
-  for t in 100 110 120 130 140; do peak_row "$t" $((9100 + t)) 2 1 1000; done
-  peak_row 150 8000 2 2 -
-  i=0
-  for m in 8800 8820 8840 8860 8900 8950 9100; do
-    peak_row $((160 + i * 10)) "$m" 2 2 $((1000 + i * 100))
-    i=$((i + 1))
-  done
-  peak_row 230 8500 2 - 1000
-  for t in 240 250 260 270 280; do peak_row "$t" 8500 2 2 1000; done
-  peak_row 290 7000 1 0 1000
-  peak_row 300 99999 2 2 1000
-} >"$po/samples/docker.tsv"
-env "${job[@]}" SVP_VERIFY_OUT="$po" "$here/verify-sample.sh" peak 100 295 >"$work/peak.log" 2>&1 ||
-  fail "peak: verify-sample.sh peak exits 0"
-same "peak: only samples with 2 workers transcoding count, 6 in a row; the median minus active_file over the same 6" \
-  "20 19 13 8 1970-01-01T00:02:30Z 1970-01-01T00:03:40Z 3 8880 1970-01-01T00:02:50Z 7530 9240 9100 true" \
-  "$(jq -r '[.samples, .samples_with_2_running, .samples_with_2_transcoding, .longest_run_with_2_transcoding.samples,
-    .longest_run_with_2_transcoding.from, .longest_run_with_2_transcoding.to, .windows_of_6_with_2_transcoding,
-    .peak_median_of_6_mib, .peak_window_from, .peak_median_of_6_minus_active_file_mib, .highest_sample_mib,
-    .highest_sample_with_2_transcoding_mib, .peak_within_8_7_gib] | map(tostring) | join(" ")' "$po/ram-peak.json")"
-has peak "ram-peak.txt is printed" "RAM peak during drill-k8s-keda: median of 6 with 2 workers transcoding 8880 MiB (3 window(s), longest run 8 samples)"
-printf '%s\n' "$(peak_row 100 8000 2 1 1000)" >"$po/samples/docker.tsv"
-env "${job[@]}" SVP_VERIFY_OUT="$po" "$here/verify-sample.sh" peak 100 295 >"$work/peak-none.log" 2>&1 ||
-  fail "peak: verify-sample.sh peak exits 0 without a window"
-same "peak: no 6 samples in a row with 2 transcoding gives no peak" "0 null null null" \
-  "$(jq -r '[.windows_of_6_with_2_transcoding, .peak_median_of_6_mib, .peak_window_from, .peak_within_8_7_gib]
-    | map(tostring) | join(" ")' "$po/ram-peak.json")"
-if env "${job[@]}" SVP_VERIFY_OUT="$po" "$here/verify-sample.sh" peak 100 >/dev/null 2>&1; then
-  fail "peak: a missing END is refused"
-else
-  ok "peak: a missing END is refused"
-fi
-
-# --- verify-sample.sh s3-peak START END over a fixture of compose.tsv: the object store's samples before, in and after
-# the window, another container higher than it.
-# s3_peak NAME LINE...: s3-peak 100 200 over a compose.tsv of LINEs ("time name MiB"); prints its exit status and the
-# fields of ram-s3-upload.json, its output in $work/s3-peak-NAME.log.
-s3_peak() {
-  local name=$1 rc=0
-  shift
-  printf '%s\n' "$@" | tr ' ' '\t' >"$po/samples/compose.tsv"
-  rm -f "$po/ram-s3-upload.json"
-  env "${job[@]}" SVP_VERIFY_OUT="$po" "$here/verify-sample.sh" s3-peak 100 200 >"$work/s3-peak-$name.log" 2>&1 || rc=$?
-  printf '%s ' "$rc"
-  jq -r '[.samples, .before_mib, .before_at, .peak_mib, .peak_at, .peak_under_limit] | map(tostring) | join(" ")' \
-    "$po/ram-s3-upload.json"
-}
-same "s3-peak: the highest sample of svp-s3-1 in the window, the last one before it" \
-  "0 3 125 1970-01-01T00:01:30Z 300 1970-01-01T00:02:30Z true" \
-  "$(s3_peak ok '80 svp-s3-1 110' '90 svp-s3-1 125' '90 svp-web-1 900' '100 svp-s3-1 200' '150 svp-s3-1 300' \
-    '150 svp-web-1 1400' '200 svp-s3-1 180' '210 svp-s3-1 600')"
-grep -qx 'RAM of svp-s3-1 during measure-upload: peak 300 MiB at 1970-01-01T00:02:30Z over 3 sample(s), before it 125 MiB, under the 512 MiB limit: true' \
-  "$work/s3-peak-ok.log" && ok "s3-peak: ram-s3-upload.txt is printed" || fail "s3-peak: ram-s3-upload.txt is printed"
-same "s3-peak: a sample at the limit fails" "1 2 null null 512 1970-01-01T00:02:30Z false" \
-  "$(s3_peak limit '120 svp-s3-1 300' '150 svp-s3-1 512')"
-same "s3-peak: a sample a fraction under the limit passes" "0 2 null null 511.6 1970-01-01T00:02:30Z true" \
-  "$(s3_peak under '120 svp-s3-1 300' '150 svp-s3-1 511.6')"
-same "s3-peak: no sample of the store in the window fails, with no peak" "1 0 110 1970-01-01T00:01:20Z null null null" \
-  "$(s3_peak none '80 svp-s3-1 110' '150 svp-web-1 900' '210 svp-s3-1 600')"
-if env "${job[@]}" SVP_VERIFY_OUT="$po" "$here/verify-sample.sh" s3-peak 100 >/dev/null 2>&1; then
-  fail "s3-peak: a missing END is refused"
-else
-  ok "s3-peak: a missing END is refused"
-fi
-
-# --- s3-peak while the sampler runs: the window's last sample is taken before END but written after the step that
-# reads the window has started (docker stats and the cluster take seconds to answer). A fake sampler, its command line
-# that of the loop, writes it 2 s late, then a docker.tsv sample after END: s3-peak waits for that one, so its JSON
-# holds every sample of compose.tsv in the window, the late one the highest.
-lo=$work/late-out
-ls_dir=$work/late-sampler
-mkdir -p "$lo/samples" "$ls_dir"
-printf '%s\n' '90 svp-s3-1 200' '100 svp-s3-1 250' '150 svp-s3-1 300' | tr ' ' '\t' >"$lo/samples/compose.tsv"
-printf '150\t5000\n' >"$lo/samples/docker.tsv"
-cat >"$ls_dir/verify-sample.sh" <<'EOF2'
-sleep 2
-printf '195\tsvp-s3-1\t338\n' >>"$LATE_OUT/samples/compose.tsv"
-printf '195\t5000\n205\t5000\n' >>"$LATE_OUT/samples/docker.tsv"
-for _ in $(seq 1 30); do sleep 1; done
-EOF2
-LATE_OUT=$lo bash "$ls_dir/verify-sample.sh" loop &
-late_pid=$!
-echo "$late_pid" >"$lo/sampler.pid"
-if env "${job[@]}" SVP_VERIFY_OUT="$lo" "$here/verify-sample.sh" s3-peak 100 200 >"$work/s3-peak-late.log" 2>&1; then
-  ok "s3-peak: exits 0 with the late sample"
-else
-  fail "s3-peak: exits 0 with the late sample"
-fi
-kill "$late_pid" 2>/dev/null || :
-wait "$late_pid" 2>/dev/null || :
-same "s3-peak: the last sample of the window, written late, is the peak" "3 338 1970-01-01T00:03:15Z" \
-  "$(jq -r '[.samples, .peak_mib, .peak_at] | map(tostring) | join(" ")' "$lo/ram-s3-upload.json")"
-same "s3-peak: its JSON matches compose.tsv over the window" \
-  "$(awk -F '\t' '$2 == "svp-s3-1" && $1 >= 100 && $1 <= 200 { n++; if ($3 > m) m = $3 } END { print n, m }' \
-    "$lo/samples/compose.tsv")" \
-  "$(jq -r '"\(.samples) \(.peak_mib)"' "$lo/ram-s3-upload.json")"
-
-# --- verify-sample.sh sample: one k6.tsv line per pod of namespace svp-load running k6, with nr_periods, nr_throttled
-# and the cpu.max quota of the cgroup of its k6 process. k6 runs in pods E (cgroupfs path, a CPU limit), F (systemd
-# path, none) and H (no cpu.max read) of svp-load, in pod G of another namespace, and in a container that is no pod
-# (the compose stack's k6); pod E's cpu.stat has other keys around the two.
-kb=$work/k6-bin
-kp=$work/k6-proc
-kg=$work/k6-cgroup
-ko=$work/k6-out
-mkdir -p "$kb" "$kp" "$kg" "$ko"
-uid_e=0a1b2c3d-0000-4000-8000-0000000000e1
-uid_f=0a1b2c3d-0000-4000-8000-0000000000f1
-uid_g=0a1b2c3d-0000-4000-8000-0000000000a1
-uid_h=0a1b2c3d-0000-4000-8000-0000000000f2
-# k6_cgroup PID PATH NR_PERIODS NR_THROTTLED [CPU_MAX]: the cgroup of PID, its cpu.stat and, given, its cpu.max.
-k6_cgroup() {
-  mkdir -p "$kp/$1" "$kg$2"
-  printf '0::%s\n' "$2" >"$kp/$1/cgroup"
-  printf 'usage_usec 900\nnr_periods %s\nnr_throttled %s\nthrottled_usec 77\n' "$3" "$4" >"$kg$2/cpu.stat"
-  [ -z "${5:-}" ] || printf '%s\n' "$5" >"$kg$2/cpu.max"
-}
-k6_cgroup 301 "/system.slice/docker-$(printf 'e%.0s' {1..64}).scope/kubepods/burstable/pod$uid_e/$(printf 'c%.0s' {1..64})" 1000 30 \
-  '100000 100000'
-k6_cgroup 302 "/kubepods.slice/kubepods-burstable.slice/kubepods-burstable-pod${uid_f//-/_}.slice/cri-containerd-f.scope" 0 0 \
-  'max 100000'
-k6_cgroup 303 "/system.slice/docker-$(printf 'e%.0s' {1..64}).scope/kubepods/besteffort/pod$uid_g/$(printf 'd%.0s' {1..64})" 500 400 \
-  '50000 100000'
-k6_cgroup 304 "/system.slice/docker-$(printf 'a%.0s' {1..64}).scope" 700 600 '50000 100000'
-k6_cgroup 305 "/system.slice/docker-$(printf 'e%.0s' {1..64}).scope/kubepods/burstable/pod$uid_h/$(printf 'b%.0s' {1..64})" 900 9
-cat >"$kb/pgrep" <<'EOF2'
-#!/bin/sh
-[ "$*" = "-x k6" ] || exit 1
-printf '301\n302\n303\n304\n305\n'
-EOF2
-cat >"$kb/kubectl" <<'EOF2'
-#!/bin/sh
-case "$*" in
-  *" -n svp-load get pods -o jsonpath="*) printf '%s\n' "$FAKE_K6_UIDS" ;;
-  *) exit 1 ;;
-esac
-EOF2
-chmod 755 "$kb/pgrep" "$kb/kubectl"
-env "${job[@]}" PATH="$kb:$sb2:$PATH" SVP_VERIFY_OUT="$ko" SVP_VERIFY_PROC="$kp" SVP_VERIFY_CGROUP="$kg" \
-  FAKE_K6_UIDS="$(printf '%s\n' "$uid_e" "$uid_f" "$uid_h")" "$here/verify-sample.sh" sample >"$work/k6-sample.log" 2>&1 ||
-  fail "k6 sample: verify-sample.sh sample exits 0"
-same "k6 sample: a line per k6 pod of svp-load, its cgroup's nr_periods, nr_throttled and CPU quota" \
-  "$uid_e 1000 30 100000|$uid_f 0 0 max|$uid_h 900 9 -" "$(cut -f 2- "$ko/samples/k6.tsv" | tr '\t' ' ' | paste -sd '|' -)"
-
-# --- verify-sample.sh stop: the criteria of the k3d scenarios of part 3, over the fixtures of the sample tests above.
-# gitops: each drill-k8s-keda-<n> that ran needs 6 samples in a row with 2 workers transcoding within its own window.
-# keda_rows FIRST_RUN_IN_A_ROW SECOND_RUN_IN_A_ROW: docker.tsv with that many samples in a row with 2 transcoding at the
-# start of the windows 100-200 and 300-400, then one with 1, then 4 more with 2.
-keda_rows() {
-  local t
-  for t in $(seq 100 10 $((100 + ($1 - 1) * 10))); do peak_row "$t" 8000 2 2 1000; done
-  peak_row $((100 + $1 * 10)) 8000 2 1 1000
-  for t in 170 180 190 200; do peak_row "$t" 8000 2 2 1000; done
-  for t in $(seq 300 10 $((300 + ($2 - 1) * 10))); do peak_row "$t" 8000 2 2 1000; done
-  peak_row $((300 + $2 * 10)) 8000 2 1 1000
-  for t in 370 380 390 400; do peak_row "$t" 8000 2 2 1000; done
-}
-keda1="$(row 02 drill-k8s-keda-1 ok 0 100 200 100 '')"
-keda2="$(row 04 drill-k8s-keda-2 ok 0 300 400 100 '')"
-echo gitops >"$so/scenario"
-keda_rows 6 6 >"$so/samples/docker.tsv"
-sample keda-both "$(row 01 k8s-gitops-up ok 0 50 100 50 '')" "$keda1" "$(row 03 ram-peak-1 ok 0 200 201 1 '')" "$keda2" \
-  >/dev/null
-same "sample: gitops, both drill-k8s-keda runs with 6 samples in a row with 2 transcoding" \
-  "true drill-k8s-keda-1=6 drill-k8s-keda-2=6" \
-  "$(jq -r '"\(.runner_enough.gitops_keda_two_transcoding) \(.keda_runs | map("\(.name)=\(.longest_run_with_2_transcoding)") | join(" "))"' \
-    "$so/runner.json")"
-grep -q '^runner: drill-k8s-keda, longest run of samples with 2 workers transcoding: drill-k8s-keda-1=6 drill-k8s-keda-2=6$' \
-  "$work/sample-keda-both.log" && ok "sample: runner.txt names each drill-k8s-keda run" ||
-  fail "sample: runner.txt names each drill-k8s-keda run"
-keda_rows 6 5 >"$so/samples/docker.tsv"
-sample keda-one "$(row 01 k8s-gitops-up ok 0 50 100 50 '')" "$keda1" "$keda2" >/dev/null
-same "sample: gitops, one drill-k8s-keda run with only 5 in a row fails the criterion" "false 6 5" \
-  "$(jq -r '"\(.runner_enough.gitops_keda_two_transcoding) \(.keda_runs | map(.longest_run_with_2_transcoding) | join(" "))"' \
-    "$so/runner.json")"
-sample keda-none "$(row 01 k8s-gitops-up ok 0 50 100 50 '')" "$(row 02 drill-k8s-keda-1 skipped '' 100 100 0 'not in targets')" \
-  >/dev/null
-same "sample: gitops, no drill-k8s-keda run: unmeasured, not passed" "unmeasured" \
-  "$(jq -r '.runner_enough.gitops_keda_two_transcoding' "$so/runner.json")"
-same "sample: every k3d scenario has the k3d criteria" "true" \
-  "$(jq -r '.runner_enough | has("k3d_server_kept") and has("k3d_nodes_ready") and has("k3d_no_eviction")' "$so/runner.json")"
-: >"$so/samples/docker.tsv"
-# k6-cloud-mini, chaos: no k6 pod throttled over 5% of its CPU periods in a window of k6-windows.tsv. In 100-200 pod A
-# 40 of 1000 periods (4%), pod B 20 of 1000 (2%); 100-300 adds pod C, 6 of 100 (6%); in 400-500 pods D and E without a
-# CPU limit (no period counted); in 600-700 pod F 1 251 of 25 000 (5.004%); in 800-900 pod G 1 000 of 20 000 (5%); in
-# 1000-1100 pod H 40 of 1000 and pod I a single sample (it ended); 1500-1600 has no sample.
-printf '%s\n' '100 a 1000 10 50000' '110 a 1500 30 50000' '200 a 2000 50 50000' '100 b 3000 0 50000' \
-  '200 b 4000 20 50000' '300 b 4100 21 50000' '250 c 0 0 50000' '300 c 100 6 50000' \
-  '400 d 0 0 max' '500 d 0 0 max' '400 e 0 0 max' '450 e 0 0 max' \
-  '600 f 1000 0 100000' '700 f 26000 1251 100000' '800 g 0 0 100000' '900 g 20000 1000 100000' \
-  '1000 h 0 0 100000' '1100 h 1000 40 100000' '1000 i 0 0 100000' | tr ' ' '\t' >"$so/samples/k6.tsv"
-# throttle NAME SCENARIO [WINDOW...]: verify-sample.sh stop with k6-windows.tsv of WINDOWs ("label from to pods"; none:
-# no file); prints the criterion and each window's highest share, pods measured and pods it ran.
-throttle() {
-  local name=$1
-  echo "$2" >"$so/scenario"
-  shift 2
-  rm -f "$so/k6-windows.tsv"
-  [ "$#" = 0 ] || printf '%s\n' "$@" | tr ' ' '\t' >"$so/k6-windows.tsv"
-  sample "$name" "$(row 01 k8s-up ok 0 50 100 50 '')" >/dev/null
-  jq -r '"\(.runner_enough.k6_cpu_throttle_5pct) \(.k6_windows | map("\(.label)=\(.throttled_pct_max)/\(.pods_measured)/\(.pods)") | join(" "))"' \
-    "$so/runner.json"
-}
-same "sample: k6-cloud-mini, every k6 pod at 5% or less of its periods throttled" "true level-1=4/2/2" \
-  "$(throttle k6-ok k6-cloud-mini 'level-1 100 200 2')"
-grep -qxF 'runner: k6 windows, highest share of CPU periods throttled in a pod: level-1=4% (2 of 2 pod(s) measured, 2 seen, 0 without a CPU limit)' \
-  "$work/sample-k6-ok.log" && ok "sample: runner.txt names each k6 window" || fail "sample: runner.txt names each k6 window"
-same "sample: chaos, a k6 pod over 5% fails the criterion" "false level-1=4/2/2 level-2=6/3/3" \
-  "$(throttle k6-over chaos 'level-1 100 200 2' 'level-2 100 300 3')"
-same "sample: k6 pods without a CPU limit are measured, none throttled" "true hold=0/2/2 2" \
-  "$(throttle k6-no-limit chaos 'hold 400 500 2') $(jq -r '.k6_windows[0].pods_without_cpu_limit' "$so/runner.json")"
-same "sample: 1 251 of 25 000 periods (5.004%) is over 5%, its share rounded up" "false level-8=5.01/1/1" \
-  "$(throttle k6-just-over k6-cloud-mini 'level-8 600 700 1')"
-same "sample: exactly 5% of the periods throttled passes" "true level-8=5/1/1" \
-  "$(throttle k6-at-5 k6-cloud-mini 'level-8 800 900 1')"
-same "sample: a k6 pod with a single sample in the window leaves it unmeasured" "unmeasured level-2=4/1/2" \
-  "$(throttle k6-one-sample k6-cloud-mini 'level-2 1000 1100 2')"
-grep -qxF 'runner: k6 windows, highest share of CPU periods throttled in a pod: level-2=4% unmeasured (1 of 2 pod(s) measured, 2 seen, 0 without a CPU limit)' \
-  "$work/sample-k6-one-sample.log" && ok "sample: runner.txt marks a window unmeasured" ||
-  fail "sample: runner.txt marks a window unmeasured"
-same "sample: a pod over 5% fails the criterion even beside a window unmeasured" "false level-2=4/1/2 level-4=5.01/1/1" \
-  "$(throttle k6-one-over k6-cloud-mini 'level-2 1000 1100 2' 'level-4 600 700 1')"
-same "sample: fewer k6 pods with two samples than the window ran: unmeasured" "unmeasured hold=0/2/3" \
-  "$(throttle k6-fewer chaos 'hold 400 500 3')"
-same "sample: a window without a k6 sample is unmeasured, not passed" "unmeasured level-1=4/2/2 level-3=null/0/1" \
-  "$(throttle k6-gap k6-cloud-mini 'level-1 100 200 2' 'level-3 1500 1600 1')"
-same "sample: lines of k6-windows.tsv not of its format leave the criterion unmeasured" "unmeasured level-1=4/2/2 3" \
-  "$(throttle k6-malformed k6-cloud-mini 'level-1 100 200 2' 'level-1 100 200' 'Level-2 100 200 2' 'level-3 100 200 0') $(
-    jq -r '.k6_windows_malformed_lines' "$so/runner.json")"
-grep -qxF 'runner: k6-windows.tsv, lines not label, start, end, pods: 3' "$work/sample-k6-malformed.log" &&
-  ok "sample: runner.txt counts the lines of k6-windows.tsv not of its format" ||
-  fail "sample: runner.txt counts the lines of k6-windows.tsv not of its format"
-same "sample: without k6-windows.tsv the criterion is unmeasured" "unmeasured " "$(throttle k6-none k6-cloud-mini)"
-same "sample: dev-k3d has no k6 criterion" "null level-1=4/2/2" "$(throttle k6-dev dev-k3d 'level-1 100 200 2')"
-rm -f "$so/k6-windows.tsv" "$so/samples/k6.tsv"
-echo compose-obs >"$so/scenario"
-
 # --- verify-run.sh: the build target's failure skips the rest at once, SVP_VERIFY_TARGETS picks targets, every scenario
-# clones svp-gitops first (make gitops-clone) and starts nothing when that fails, a web scenario none without the clone
-# of svp-frontend that --clones makes. It runs from a copy in a throwaway
+# clones svp-gitops first (make gitops-clone) and starts nothing when that fails. It runs from a copy in a throwaway
 # tree with a fake .env, a fake make first on PATH (it logs its arguments and fails for the targets FAKE_MAKE_FAIL
-# names), a fake docker and the fake kubectl above (no cluster answers), so no target, no container, no cluster, no
-# clone and no real .env is ever reached. verify-run.sh needs GNU timeout (and GNU date for its time lines: gdate on
-# macOS).
+# names) and the fake kubectl above (no cluster answers), so no target, no container, no cluster, no clone and no real
+# .env is ever reached. verify-run.sh needs GNU timeout (and GNU date for its time lines: gdate on macOS).
 vr=$work/verify-run
 vb=$work/verify-run-bin
 mkdir -p "$vr/deploy/ci" "$vr/deploy/k8s" "$vr/deploy/observability/glitchtip" "$vb"
-cp "$here/verify-run.sh" "$here/verify-mask.sh" "$here/verify-sample.sh" "$here/platform.sh" "$vr/deploy/ci/"
+cp "$here/verify-run.sh" "$here/verify-mask.sh" "$here/platform.sh" "$vr/deploy/ci/"
 cp "$here/../k8s/lib.sh" "$vr/deploy/k8s/"
 cp -R "$here/verify" "$vr/deploy/ci/"
 cp "$here/../observability/glitchtip/dotenv.sh" "$vr/deploy/observability/glitchtip/"
 cp "$repo/.env" "$vr/.env"
-# The fake make logs SVP_WEB_DIR beside its arguments when that is set, for web-clone SVP_GITOPS_DIR always (empty
-# too: without it a runner's web-clone finds no clone of svp-gitops to read the web release of staging from), and the
-# fake pnpm its arguments and folder.
 cat >"$vb/make" <<'EOF'
 #!/usr/bin/env bash
-gitops=
-[ "$1 $2" = "-s web-clone" ] && gitops=" [SVP_GITOPS_DIR=${SVP_GITOPS_DIR:-}]"
-echo "$*${SVP_WEB_DIR:+ [SVP_WEB_DIR=$SVP_WEB_DIR]}$gitops" >>"$FAKE_MAKE_LOG"
+echo "$*" >>"$FAKE_MAKE_LOG"
 [ "$1" = -s ] && shift
 [ -f "${FAKE_MAKE_DIR:-/nonexistent}/$1.out" ] && cat "$FAKE_MAKE_DIR/$1.out"
 case " ${FAKE_MAKE_FAIL:-} " in *" $1 "*) exit 2 ;; esac
 case " ${FAKE_MAKE_SLOW:-} " in *" $1 "*) sleep 60 ;; esac
-case " ${FAKE_MAKE_PAUSE:-} " in *" $1 "*) sleep 2 ;; esac
 EOF
 printf '#!/bin/sh\ncommand -v gdate >/dev/null 2>&1 && exec gdate "$@"\nexec /bin/date "$@"\n' >"$vb/date"
-# The fake docker of verify-sample.sh sample: one container of compose project svp, restarted once; docker ps logged
-# with the make calls, so its place among them shows. Nothing else answers (no stats, no k3d server).
-cat >"$vb/docker" <<'EOF'
-#!/usr/bin/env bash
-case "$*" in
-  "ps -aq --filter label=com.docker.compose.project=svp") echo "docker ps" >>"$FAKE_MAKE_LOG"; echo c0ffee000001 ;;
-  "inspect -f {{.Name}} {{.Created}} {{.RestartCount}} c0ffee000001") echo "/svp-web-1 2026-10-25T08:00:00.1Z 1" ;;
-  *) exit 1 ;;
-esac
-EOF
-# The fake psql of the copy back to MinIO: the count of the videos of a status, FAKE_PSQL_<STATUS> (0 when unset), only
-# for the database, user and password verify-run.sh must give.
-cat >"$vb/psql" <<'EOF'
-#!/usr/bin/env bash
-[ "$PGPASSWORD" = postgres ] && [ "$1 $2 $3 $4 $5 $6 $7 $8" = "-h 127.0.0.1 -p 5432 -U postgres -d svp_video" ] || exit 2
-case $* in
-  *"WHERE status = 'PROCESSING'"*) echo "${FAKE_PSQL_PROCESSING:-0}" ;;
-  *"WHERE status = 'READY'"*) echo "${FAKE_PSQL_READY:-0}" ;;
-  *) exit 2 ;;
-esac
-EOF
-printf '#!/bin/sh\necho "pnpm $* in $PWD" >>"$FAKE_MAKE_LOG"\ncase " ${FAKE_MAKE_FAIL:-} " in *" pnpm "*) exit 1 ;; esac\n' \
-  >"$vb/pnpm"
-chmod 755 "$vb/make" "$vb/date" "$vb/psql" "$vb/docker" "$vb/pnpm"
-# Where make web-clone leaves svp-frontend; the fake make clones nothing, so a clone of it is made here: an empty
-# repository whose origin is svp-frontend.
-git init -q "$vr/.web/svp-frontend" && git -C "$vr/.web/svp-frontend" remote add origin https://github.com/anhnvcoder/svp-frontend.git
-web_dir_of=$(cd "$vr" && pwd)/.web/svp-frontend
-# Where make gitops-clone leaves svp-gitops, which --clones names to make web-clone.
-gitops_dir_of=$(cd "$vr" && pwd)/.gitops/svp-gitops
+chmod 755 "$vb/make" "$vb/date"
+# The images drill-k8s-supplychain reads from GHCR, named after what it asks for instead.
+printf '#!/bin/sh\necho "fake/$1${2:+-$2}@sha256:0"\n' >"$vr/deploy/ci/ghcr-digest.sh"
+chmod 755 "$vr/deploy/ci/ghcr-digest.sh"
+# The copy is a git checkout on a branch, which gitops does not give Argo CD: the cluster is built at main of
+# svp-gitops whatever the branch of this repository, at the commit of origin/main in the clone where make gitops-clone
+# leaves it (a fake one here, with one commit), given as that commit.
+git -c init.defaultBranch=feat/stage6b-verify init -q "$vr"
+fake_clone=$vr/.gitops/svp-gitops
+git init -q "$fake_clone" &&
+  git -C "$fake_clone" -c user.name=test -c user.email=test@example.invalid -c commit.gpgsign=false \
+    -c core.hooksPath=/dev/null commit -q --allow-empty -m base &&
+  git -C "$fake_clone" update-ref refs/remotes/origin/main HEAD
+fake_clone_sha=$(git -C "$fake_clone" rev-parse HEAD)
 # run_verify NAME SCENARIO [VAR=VALUE...]: the copy of verify-run.sh (in run_tree, default $vr) for SCENARIO; its
-# output in $work/run-NAME.log,
-# the make calls in $work/run-NAME.make, its results in $work/run-NAME.out; prints its exit status. It runs as on a
-# machine, without the variables of any CI: a runner sets CI=true, which alone makes platform.sh refuse to run.
+# output in $work/run-NAME.log, the make calls in $work/run-NAME.make, its results in $work/run-NAME.out; prints its
+# exit status. It runs as on a machine, without the variables of any CI: a runner sets CI=true, which alone makes
+# platform.sh refuse to run.
 run_verify() {
   local name=$1 scenario=$2 rc=0
   shift 2
   : >"$work/run-$name.make"
-  env -u GITHUB_ACTIONS -u CI -u GITLAB_CI -u JENKINS_URL -u TF_BUILD -u SVP_WEB_DIR PATH="$vb:$work/bin:$PATH" \
+  env -u GITHUB_ACTIONS -u CI -u GITLAB_CI -u JENKINS_URL -u TF_BUILD PATH="$vb:$work/bin:$PATH" \
     SVP_VERIFY_OUT="$work/run-$name.out" SVP_VERIFY_SECRETS="$work/run-$name.secrets" \
-    FAKE_MAKE_LOG="$work/run-$name.make" SVP_VERIFY_TARGETS= SVP_VERIFY_WEB_REF= "$@" \
+    FAKE_MAKE_LOG="$work/run-$name.make" SVP_VERIFY_TARGETS= "$@" \
     "${run_tree:-$vr}/deploy/ci/verify-run.sh" "$scenario" >"$work/run-$name.log" 2>&1 </dev/null || rc=$?
   echo "$rc"
 }
-# run_clones NAME SCENARIO [VAR=VALUE...]: verify-run.sh --clones SCENARIO as run_verify runs the scenario, without
-# an SVP_GITOPS_DIR of the shell that runs the test, as on a runner.
-run_clones() {
-  local name=$1 scenario=$2 rc=0
-  shift 2
-  : >"$work/run-$name.make"
-  env -u GITHUB_ACTIONS -u CI -u GITLAB_CI -u JENKINS_URL -u TF_BUILD -u SVP_WEB_DIR -u SVP_GITOPS_DIR \
-    PATH="$vb:$work/bin:$PATH" SVP_VERIFY_OUT="$work/run-$name.out" SVP_VERIFY_SECRETS="$work/run-$name.secrets" \
-    FAKE_MAKE_LOG="$work/run-$name.make" SVP_VERIFY_TARGETS= SVP_VERIFY_WEB_REF= "$@" \
-    "$vr/deploy/ci/verify-run.sh" --clones "$scenario" >"$work/run-$name.log" 2>&1 </dev/null || rc=$?
-  echo "$rc"
-}
-# makes NAME: the make calls of run NAME, without the SVP_WEB_DIR the fake make adds to each of a web scenario.
-makes() { sed "s| \[SVP_WEB_DIR=$web_dir_of\]\$||" "$work/run-$1.make"; }
+# makes NAME: the make calls of run NAME.
+makes() { cat "$work/run-$1.make"; }
 # results NAME: "id name status note" of each target of run NAME, one per line.
 results() { awk -F '\t' 'NR > 1 { print $1, $2, $3, $8 }' "$work/run-$1.out/results.tsv"; }
-compose_names="up smoke drill-duplicates drill-kill-worker drill-obs-threats load-local fallback-alert-under-load
-web-lighthouse-1 web-lighthouse-2 web-lighthouse-3 lcp test-stack-objstore drill-upload-cleanup measure-upload ram-s3-upload
-drill-alert-to-sentry object-store-roundtrip"
-k3d_names="k8s-up k8s-smoke ram-rest-start drill-k8s-threats drill-k8s-pdb drill-k8s-canary k8s-web-sourcemaps
-k8s-web-e2e drill-k8s-web-obs drill-k8s-keda ram-peak drill-k8s-backup drill-k8s-backup-pitr ram-rest-end"
+compose_names="up smoke drill-obs-threats test-stack-objstore"
+gitops_names="k8s-gitops-up gitops-env gitops-external-secrets gitops-argocd-metrics k8s-smoke drill-k8s-supplychain
+drill-k8s-threats"
+gitops_build="k8s-gitops-up GITOPS_REV=$fake_clone_sha"
 # want_rows NAMES STATUS_OF_FIRST NOTE_OF_REST [ID NAME STATUS NOTE]...: the rows of a run: the first of NAMES with
 # STATUS_OF_FIRST and no note, every other skipped with NOTE_OF_REST, except the rows given whole after it.
 want_rows() {
@@ -1764,19 +1042,21 @@ want_rows() {
   done
 }
 if timeout --version 2>/dev/null | grep -q GNU; then
+  # Each scenario: its failed build target makes the run fail and skips every other target at once.
   rc=$(run_verify infra compose-obs FAKE_MAKE_FAIL=up)
   same "verify-run: a failed build target makes the run fail" 1 "$rc"
   same "verify-run: after the clone of svp-gitops and a failed build target no other target runs" \
     "$(printf -- '-s gitops-clone\nup OBS=lgtm')" "$(makes infra)"
-  grep -qxF "up OBS=lgtm [SVP_WEB_DIR=$web_dir_of]" "$work/run-infra.make" &&
-    ok "verify-run: compose-obs gives its targets the clone of svp-frontend" ||
-    fail "verify-run: compose-obs gives its targets the clone of svp-frontend"
   same "verify-run: every target after a failed build target is skipped for it" \
     "$(want_rows "$compose_names" fail 'infrastructure step failed')" "$(results infra)"
-  [ -s "$work/run-infra.out/run-end" ] && ok "verify-run: a run that reached its last target writes its end mark" ||
-    fail "verify-run: a run that reached its last target writes its end mark"
+  rc=$(run_verify infra-gitops gitops FAKE_MAKE_FAIL=k8s-gitops-up)
+  same "verify-run: gitops's failed build target makes the run fail" 1 "$rc"
+  same "verify-run: gitops builds the cluster at the commit of main of svp-gitops, cloned first" \
+    "$(printf -- '-s gitops-clone\n%s' "$gitops_build")" "$(makes infra-gitops)"
+  same "verify-run: gitops skips every target after its failed build target for it" \
+    "$(want_rows "$gitops_names" fail 'infrastructure step failed')" "$(results infra-gitops)"
 
-  # A run stopped while a target runs (a cancel, the step's timeout-minutes): that target is cancelled, no end mark.
+  # A run stopped while a target runs (a cancel, the step's timeout-minutes): that target is cancelled.
   : >"$work/run-cut.make"
   env -u GITHUB_ACTIONS -u CI -u GITLAB_CI -u JENKINS_URL -u TF_BUILD PATH="$vb:$work/bin:$PATH" \
     SVP_VERIFY_OUT="$work/run-cut.out" SVP_VERIFY_SECRETS="$work/run-cut.secrets" FAKE_MAKE_LOG="$work/run-cut.make" \
@@ -1789,39 +1069,33 @@ if timeout --version 2>/dev/null | grep -q GNU; then
   done
   kill -TERM "$cut_pid"
   wait "$cut_pid" || :
-  [ ! -e "$work/run-cut.out/run-end" ] && results cut | grep -qx '02 smoke cancelled the run was cancelled or the step timed out' &&
-    ok "verify-run: a run stopped mid-target records it cancelled and writes no end mark" ||
-    fail "verify-run: a run stopped mid-target records it cancelled and writes no end mark"
+  results cut | grep -qx '02 smoke cancelled the run was cancelled or the step timed out' &&
+    ok "verify-run: a run stopped mid-target records it cancelled" ||
+    fail "verify-run: a run stopped mid-target records it cancelled"
 
-  rc=$(run_verify one dev-k3d SVP_VERIFY_TARGETS=drill-k8s-threats)
+  # The narrow dispatch: the build target, then only the chosen ones, in the scenario's order.
+  rc=$(run_verify one gitops 'SVP_VERIFY_TARGETS=k8s-smoke drill-k8s-supplychain')
   same "verify-run: a run of the chosen targets that pass passes" 0 "$rc"
-  same "verify-run: a k3d scenario clones svp-gitops, then only the build target and the chosen one run" \
-    "$(printf -- '-s gitops-clone\nk8s-up WEB_FROM=clone\ndrill-k8s-threats')" "$(makes one)"
+  same "verify-run: gitops clones svp-gitops, then only the build target and the chosen ones run" \
+    "$(printf -- '-s gitops-clone\n%s\nk8s-smoke\n%s' "$gitops_build" "drill-k8s-supplychain \
+SUPPLYCHAIN_UNSIGNED=fake/web-amd64@sha256:0 SUPPLYCHAIN_VULNERABLE=fake/newest-drill-vulnerable@sha256:0 \
+SUPPLYCHAIN_UNSIGNED_FALLBACK=fake/newest-drill-unsigned@sha256:0 \
+SUPPLYCHAIN_NO_PROVENANCE=fake/newest-drill-no-provenance@sha256:0")" "$(makes one)"
   same "verify-run: the targets left out keep their ids and are skipped as not in targets" \
-    "$(want_rows "$k3d_names" ok 'not in targets' '04 drill-k8s-threats ok ')" "$(results one)"
+    "$(want_rows "$gitops_names" ok 'not in targets' '05 k8s-smoke ok ' '06 drill-k8s-supplychain ok ')" \
+    "$(results one)"
 
-  rc=$(run_verify one-fails dev-k3d 'SVP_VERIFY_TARGETS=drill-k8s-pdb  drill-k8s-threats' FAKE_MAKE_FAIL=drill-k8s-pdb)
+  rc=$(run_verify one-fails gitops 'SVP_VERIFY_TARGETS=drill-k8s-threats  k8s-smoke' FAKE_MAKE_FAIL=k8s-smoke)
   same "verify-run: a chosen target that fails makes the run fail" 1 "$rc"
   same "verify-run: chosen targets run in the scenario's order, whatever the order given" \
-    "$(printf -- '-s gitops-clone\nk8s-up WEB_FROM=clone\ndrill-k8s-threats\ndrill-k8s-pdb')" "$(makes one-fails)"
+    "$(printf -- '-s gitops-clone\n%s\nk8s-smoke\ndrill-k8s-threats' "$gitops_build")" "$(makes one-fails)"
 
-  rc=$(run_verify clone-fails dev-k3d FAKE_MAKE_FAIL=gitops-clone)
+  rc=$(run_verify clone-fails gitops FAKE_MAKE_FAIL=gitops-clone)
   same "verify-run: a failed clone of svp-gitops makes the run fail" 1 "$rc"
   [ "$(cat "$work/run-clone-fails.make")" = "-s gitops-clone" ] && [ ! -e "$work/run-clone-fails.out/results.tsv" ] &&
     ok "verify-run: after a failed clone of svp-gitops no target starts" ||
     fail "verify-run: after a failed clone of svp-gitops no target starts"
   has run-clone-fails "the failed clone is named" "make gitops-clone (the deployment configuration svp-gitops); nothing started"
-
-  rc=$(run_verify peak dev-k3d SVP_VERIFY_TARGETS=ram-peak)
-  same "verify-run: ram-peak without drill-k8s-keda makes the run fail" 1 "$rc"
-  same "verify-run: ram-peak without drill-k8s-keda is skipped for it" \
-    "$(want_rows "$k3d_names" ok 'not in targets' '11 ram-peak skipped drill-k8s-keda did not run')" "$(results peak)"
-
-  rc=$(run_verify s3-peak compose-obs SVP_VERIFY_TARGETS=ram-s3-upload)
-  same "verify-run: ram-s3-upload without measure-upload makes the run fail" 1 "$rc"
-  same "verify-run: ram-s3-upload without measure-upload is skipped for it" \
-    "$(want_rows "$compose_names" ok 'not in targets' '15 ram-s3-upload skipped measure-upload did not run')" \
-    "$(results s3-peak)"
 
   # test-stack-objstore over the output of a fake make test-stack: a unit test and the eight integration tests pass, one
   # with a subtest; then a subtest skipped, an integration test missing, go test failing.
@@ -1845,7 +1119,7 @@ if timeout --version 2>/dev/null | grep -q GNU; then
     run_verify "objstore-$name" compose-obs SVP_VERIFY_TARGETS=test-stack-objstore FAKE_MAKE_DIR="$fm" \
       ${FAKE_FAIL:+FAKE_MAKE_FAIL=test-stack} >/dev/null
     printf '%s ' "$(results "objstore-$name" | awk '$2 == "test-stack-objstore" { print $3 }')"
-    grep '^object store tests: ' "$work/run-objstore-$name.out/logs/12-test-stack-objstore.log"
+    grep '^object store tests: ' "$work/run-objstore-$name.out/logs/04-test-stack-objstore.log"
   }
   same "verify-run: test-stack-objstore passes when every test passes" \
     "ok object store tests: 10 passed, 0 failed, 0 skipped (tests and subtests); make test-stack exit 0" "$(objstore pass)"
@@ -1859,232 +1133,57 @@ if timeout --version 2>/dev/null | grep -q GNU; then
     "fail object store tests: 9 passed, 0 failed, 0 skipped (tests and subtests); make test-stack exit 0" \
     "$(DROP_TEST=TestIntegrationMultipartChecksum objstore missing)"
   grep -qx 'FAIL  did not pass: TestIntegrationMultipartChecksum' \
-    "$work/run-objstore-missing.out/logs/12-test-stack-objstore.log" &&
+    "$work/run-objstore-missing.out/logs/04-test-stack-objstore.log" &&
     ok "verify-run: the integration test that did not pass is named" ||
     fail "verify-run: the integration test that did not pass is named"
   same "verify-run: go test failing fails test-stack-objstore" \
     "fail object store tests: 10 passed, 0 failed, 0 skipped (tests and subtests); make test-stack exit 2" \
     "$(FAKE_FAIL=1 objstore exit)"
 
-  # object-store-roundtrip with a fake make (the s3-init log, the copy's output) and the fake psql.
-  # roundtrip NAME [VAR=VALUE...]: the step over INIT_LOG and a copy that reports LOST keys lost (default 0), 3 READY
-  # videos; prints its status.
-  roundtrip() {
-    local name=$1
-    shift
-    printf '%s\n' "${INIT_LOG:-s3-init-1  | ok buckets uploads media objstore-probe}" >"$fm/logs.out"
-    printf '%s\n' "object-store-copy: bucket media at MinIO: 12 object(s), 3456 byte(s)" \
-      "object-store-copy: READY videos' keys lost before this copy: ${LOST:-0}" >"$fm/object-store-copy.out"
-    run_verify "roundtrip-$name" compose-obs SVP_VERIFY_TARGETS=object-store-roundtrip FAKE_MAKE_DIR="$fm" \
-      FAKE_PSQL_READY=3 "$@" >/dev/null
-    results "roundtrip-$name" | awk '$2 == "object-store-roundtrip" { print $3 }'
-  }
-  rlog() { cat "$work/run-roundtrip-$1.out/logs/17-object-store-roundtrip.log"; }
-  same "verify-run: object-store-roundtrip passes when the copy, make up and smoke pass" ok "$(roundtrip pass)"
-  same "verify-run: object-store-roundtrip reads the s3-init log, stops the stack, copies back, starts it on RustFS" \
-    "$(printf '%s\n' '-s gitops-clone' 'up OBS=lgtm' '-s logs SVC=s3-init' down 'object-store-copy TO=minio' \
-      'up OBS=lgtm' '-s logs SVC=s3-init' smoke)" "$(makes roundtrip-pass)"
-  # With the sampler's samples there, one sample just before make down keeps the restart of a container it removes.
-  mkdir -p "$work/run-roundtrip-sampled.out/samples"
-  same "verify-run: object-store-roundtrip passes with the sampler's samples" ok "$(roundtrip sampled)"
-  same "verify-run: object-store-roundtrip reads the compose containers' restarts just before make down" \
-    "$(printf '%s\n' 'docker ps' down)" "$(makes roundtrip-sampled | grep -A 1 -x 'docker ps')"
-  same "verify-run: that reading is in restarts.tsv" "svp-web-1 2026-10-25T08:00:00.1Z 1" \
-    "$(cut -f 2- "$work/run-roundtrip-sampled.out/samples/restarts.tsv" | tr '\t' ' ')"
-  rlog pass | grep -qx 's3-init (before the copy): 1 log line(s), 0 with a secret value of .env' &&
-    rlog pass | grep -qx 'videos READY in svp_video, made on RustFS by the targets before: 3' &&
-    ok "verify-run: object-store-roundtrip prints the counts" || fail "verify-run: object-store-roundtrip prints the counts"
-  same "verify-run: a failed copy fails object-store-roundtrip" fail "$(roundtrip copy FAKE_MAKE_FAIL=object-store-copy)"
-  same "verify-run: after a failed copy the stack still comes back on RustFS and smoke runs" \
-    "$(printf '%s\n' 'up OBS=lgtm' smoke)" "$(makes roundtrip-copy | tail -n 3 | grep -v '^-s logs')"
-  same "verify-run: a READY video's key lost fails object-store-roundtrip" fail "$(LOST=2 roundtrip lost)"
-  same "verify-run: no READY video fails object-store-roundtrip" fail "$(roundtrip none FAKE_PSQL_READY=0)"
-  same "verify-run: a value of .env in the s3-init log fails object-store-roundtrip" fail \
-    "$(INIT_LOG="s3-init-1  | key $env_secret" roundtrip leak)"
-  ! rlog leak | grep -qF "$env_secret" && rlog leak | grep -q ' 1 with a secret value of .env$' &&
-    ok "verify-run: the s3-init log is counted, never printed" || fail "verify-run: the s3-init log is counted, never printed"
-
-  # Each scenario of part 3 is a name verify-run.sh takes, its file sourced: the build target failing skips every other
-  # target at once, and only the build target ran, after the clone of svp-gitops. What comes after it is left to each
-  # scenario's own work. The copy is a git checkout on a branch, which gitops does not give Argo CD: the cluster is
-  # built at main of svp-gitops whatever the branch of this repository, at the commit of origin/main in the clone (a
-  # fake one here, with one commit), given as that commit.
-  git -c init.defaultBranch=feat/stage6b-verify init -q "$vr"
-  fake_clone=$vr/.gitops/svp-gitops
-  git init -q "$fake_clone" &&
-    git -C "$fake_clone" -c user.name=test -c user.email=test@example.invalid -c commit.gpgsign=false \
-      -c core.hooksPath=/dev/null commit -q --allow-empty -m base &&
-    git -C "$fake_clone" update-ref refs/remotes/origin/main HEAD
-  fake_clone_sha=$(git -C "$fake_clone" rev-parse HEAD)
-  for sc in gitops:k8s-gitops-up web-canary:k8s-up k6-cloud-mini:k8s-up chaos:k8s-up velero:k8s-up; do
-    scn=${sc%%:*}
-    b=${sc#*:}
-    rc=$(run_verify "infra-$scn" "$scn" FAKE_MAKE_FAIL="$b")
-    same "verify-run: $scn is a scenario whose failed build target makes the run fail" 1 "$rc"
-    same "verify-run: $scn starts with its build target $b, which fails" "01 $b fail " \
-      "$(results "infra-$scn" | head -n 1)"
-    rows=$(results "infra-$scn" | tail -n +2)
-    [ -n "$rows" ] && ! printf '%s\n' "$rows" | grep -qv '^[0-9][0-9] [a-z0-9-]* skipped infrastructure step failed$' &&
-      ok "verify-run: $scn skips every target after its build target for it" ||
-      fail "verify-run: $scn skips every target after its build target for it"
+  for scn in nope dev-k3d chaos; do
+    rc=$(run_verify "no-scenario-$scn" "$scn")
+    same "verify-run: $scn is no scenario and stops it" 2 "$rc"
+    [ ! -s "$work/run-no-scenario-$scn.make" ] && [ ! -e "$work/run-no-scenario-$scn.out/results.tsv" ] &&
+      ok "verify-run: $scn starts nothing" || fail "verify-run: $scn starts nothing"
   done
-  same "verify-run: gitops builds the cluster at the commit of main of svp-gitops, cloned first" \
-    "$(printf -- '-s gitops-clone\nk8s-gitops-up GITOPS_REV=%s' "$fake_clone_sha")" "$(makes infra-gitops)"
-  same "verify-run: a k3d scenario of the dev path runs only the clone and make k8s-up when it fails" \
-    "$(printf -- '-s gitops-clone\nk8s-up')" "$(makes infra-velero)"
-
-  # The clones (--clones): svp-gitops for every scenario, then svp-frontend for a web scenario, at web_ref
-  # (SVP_VERIFY_WEB_REF) or, without it, at the web release of staging (make web-clone with no WEB_REF), its folder
-  # handed to the job as web_dir; a scenario that takes no web_ref, a value that is no branch name or full SHA and a
-  # failed clone each start nothing. The run then gives every target of a web scenario SVP_WEB_DIR, the clone as
-  # --clones left it, which it neither clones nor installs again, and starts nothing without it.
-  web_sha=$(printf 'c%.0s' $(seq 40))
-  rc=$(run_clones clones-ref dev-k3d SVP_VERIFY_WEB_REF=feat/new-player)
-  same "verify-run --clones: dev-k3d with web_ref passes" 0 "$rc"
-  same "verify-run --clones: dev-k3d clones svp-gitops, then svp-frontend at web_ref" \
-    "$(printf -- '-s gitops-clone\n-s web-clone WEB_REF=feat/new-player [SVP_GITOPS_DIR=%s]' "$gitops_dir_of")" \
-    "$(cat "$work/run-clones-ref.make")"
-  has run-clones-ref "the clone's folder is handed to the job" "web_dir=.web/svp-frontend"
-  rc=$(run_clones clones-stg web-canary)
-  same "verify-run --clones: web-canary without web_ref passes" 0 "$rc"
-  same "verify-run --clones: without web_ref svp-frontend is cloned at the web release of staging of the clone just made" \
-    "$(printf -- '-s gitops-clone\n-s web-clone [SVP_GITOPS_DIR=%s]' "$gitops_dir_of")" "$(cat "$work/run-clones-stg.make")"
-  for scn in gitops web-canary compose-obs; do
-    rc=$(run_clones "clones-$scn" "$scn" SVP_VERIFY_WEB_REF="$web_sha")
-    same "verify-run --clones: $scn takes web_ref, a full commit SHA" \
-      "0 -s web-clone WEB_REF=$web_sha [SVP_GITOPS_DIR=$gitops_dir_of]" "$rc $(tail -n 1 "$work/run-clones-$scn.make")"
-  done
-  rc=$(run_clones clones-velero velero)
-  same "verify-run --clones: velero clones svp-gitops alone" "0 -s gitops-clone" "$rc $(cat "$work/run-clones-velero.make")"
-  lacks run-clones-velero "a scenario without the web hands no web_dir to the job" "web_dir="
-  rc=$(run_clones web-ref-velero velero SVP_VERIFY_WEB_REF=main)
-  same "verify-run --clones: velero takes no web_ref" 2 "$rc"
-  [ ! -s "$work/run-web-ref-velero.make" ] && ok "verify-run: a scenario that takes no web_ref starts nothing" ||
-    fail "verify-run: a scenario that takes no web_ref starts nothing"
-  has run-web-ref-velero "the scenario taking no web_ref is named" \
-    "scenario velero does not build or test the web client, so it takes no SVP_VERIFY_WEB_REF (main)"
-  for bad in '::error::x' '-x' 'a..b' 'feat/' 'two words' 'x.lock' "$(printf 'c%.0s' $(seq 39))\$"; do
-    rc=$(run_clones web-ref-bad dev-k3d SVP_VERIFY_WEB_REF="$bad")
-    same "verify-run --clones: web_ref '$bad' stops it" 2 "$rc"
-    [ ! -s "$work/run-web-ref-bad.make" ] && lacks run-web-ref-bad "web_ref '$bad' is not printed back" "$bad" ||
-      fail "verify-run --clones: web_ref '$bad' starts nothing"
-  done
-  for step in gitops-clone web-clone; do
-    rc=$(run_clones "clones-$step-fails" dev-k3d FAKE_MAKE_FAIL="$step")
-    same "verify-run --clones: a failed $step makes it fail" 1 "$rc"
-    lacks "run-clones-$step-fails" "after a failed $step no web_dir is handed to the job" "web_dir="
-  done
-  rc=$(run_verify web-ref dev-k3d SVP_VERIFY_TARGETS=drill-k8s-threats SVP_VERIFY_WEB_REF=feat/new-player)
-  same "verify-run: dev-k3d with web_ref passes" 0 "$rc"
-  same "verify-run: dev-k3d clones svp-gitops again, not svp-frontend, and every target builds from the clone of svp-frontend" \
-    "$(printf -- '-s gitops-clone\nk8s-up WEB_FROM=clone [SVP_WEB_DIR=%s]\ndrill-k8s-threats [SVP_WEB_DIR=%s]' \
-      "$web_dir_of" "$web_dir_of")" "$(cat "$work/run-web-ref.make")"
-  mv "$vr/.web" "$work/web-aside"
-  for scn in dev-k3d compose-obs; do
-    rc=$(run_verify "no-web-clone-$scn" "$scn")
-    same "verify-run: $scn without the clone of svp-frontend fails" 1 "$rc"
-    [ ! -e "$work/run-no-web-clone-$scn.out/results.tsv" ] && [ "$(cat "$work/run-no-web-clone-$scn.make")" = "-s gitops-clone" ] &&
-      ok "verify-run: $scn without the clone of svp-frontend starts no target" ||
-      fail "verify-run: $scn without the clone of svp-frontend starts no target"
-    has "run-no-web-clone-$scn" "the missing clone is named" "run verify-run.sh --clones $scn first; nothing started"
-  done
-  rc=$(run_verify no-web-clone-velero velero FAKE_MAKE_FAIL=k8s-up)
-  same "verify-run: velero needs no clone of svp-frontend: its build target runs" "$(printf -- '-s gitops-clone\nk8s-up')" \
-    "$(cat "$work/run-no-web-clone-velero.make")"
-  mv "$work/web-aside" "$vr/.web"
-  # The step after the scenario (release_wait): a scheduled run waits for no release; only true marks one, so any
-  # other value is a dispatch, here of a branch, which waits for nothing either but says so for its own reason.
-  wait_step() {
-    env -u GITHUB_ACTIONS -u CI -u GITLAB_CI -u JENKINS_URL -u TF_BUILD PATH="$vb:$work/bin:$PATH" GH_TOKEN= \
-      SVP_VERIFY_TARGETS= SVP_VERIFY_OUT="$work/wait-$1.out" "${@:2}" bash "$vr/deploy/ci/verify/gitops.sh" release \
-      >"$work/wait-$1.log" 2>&1 </dev/null
-  }
-  rc=0 && wait_step scheduled SVP_VERIFY_SCHEDULED=true || rc=$?
-  same "release wait: a scheduled run passes without waiting" 0 "$rc"
-  has wait-scheduled "a scheduled run says why it waits for nothing" \
-    "skipped: wait-release and measure-gitops: a scheduled run waits for no release"
-  rc=0 && wait_step not-scheduled SVP_VERIFY_SCHEDULED=1 || rc=$?
-  same "release wait: SVP_VERIFY_SCHEDULED other than true is a dispatch (of a branch here)" 0 "$rc"
-  has wait-not-scheduled "a dispatch of a branch says it is one" "skipped: this run is of branch feat/stage6b-verify"
-  lacks wait-not-scheduled "a dispatch is not taken for a scheduled run" "a scheduled run"
-  rc=$(run_verify no-scenario nope)
-  same "verify-run: a name that is no scenario stops it" 2 "$rc"
-  [ ! -s "$work/run-no-scenario.make" ] && [ ! -e "$work/run-no-scenario.out/results.tsv" ] &&
-    ok "verify-run: an unknown scenario starts nothing" || fail "verify-run: an unknown scenario starts nothing"
 
   # A second copy whose scenario files are made for the test: one missing, one that declares too little, one whose
-  # first target is not its build target, one fake scenario that runs a drill twice, each followed by its RAM peak.
+  # first target is not its build target.
   vr2=$work/verify-run-2
   mkdir -p "$vr2/deploy"
   cp -R "$vr/deploy/ci" "$vr/deploy/k8s" "$vr/deploy/observability" "$vr2/deploy/"
   cp "$vr/.env" "$vr2/.env"
-  rm "$vr2/deploy/ci/verify/web-canary.sh"
-  printf 'build=k8s-up\njob_minutes_default=330\nscenario_targets() { step k8s-up 1 make k8s-up; }\n' \
-    >"$vr2/deploy/ci/verify/chaos.sh"
-  printf 'build=k8s-up\njob_minutes_default=330\nk3d=1\nscenario_targets() { step other 1 make other; step k8s-up 1 make k8s-up; }\n' \
-    >"$vr2/deploy/ci/verify/k6-cloud-mini.sh"
-  cat >"$vr2/deploy/ci/verify/velero.sh" <<'EOF2'
-build=fake-up
-job_minutes_default=60
-k3d=0
-scenario_targets() {
-  local round
-  step fake-up 1 make fake-up
-  for round in 1 2; do
-    step "drill-k8s-keda-$round" 1 make "keda-$round"
-    if [ "$last_status" = skipped ]; then
-      skip "ram-peak-$round" "drill-k8s-keda-$round did not run"
-    else
-      step "ram-peak-$round" 1 "$here/verify-sample.sh" peak "$last_start" "$last_end" "$round"
-    fi
-  done
-}
-EOF2
-  rc=$(run_tree=$vr2 run_verify no-file web-canary)
+  rm "$vr2/deploy/ci/verify/compose-obs.sh"
+  rc=$(run_tree=$vr2 run_verify no-file compose-obs)
   same "verify-run: a scenario without its file stops it" 2 "$rc"
-  has run-no-file "the missing file is named" "no file deploy/ci/verify/web-canary.sh for scenario web-canary"
-  rc=$(run_tree=$vr2 run_verify no-k3d chaos)
+  has run-no-file "the missing file is named" "no file deploy/ci/verify/compose-obs.sh for scenario compose-obs"
+  printf 'build=k8s-gitops-up\njob_minutes_default=160\nscenario_targets() { step k8s-gitops-up 1 make k8s-gitops-up; }\n' \
+    >"$vr2/deploy/ci/verify/gitops.sh"
+  rc=$(run_tree=$vr2 run_verify no-k3d gitops)
   same "verify-run: a scenario file that does not set k3d stops it" 2 "$rc"
   [ ! -s "$work/run-no-k3d.make" ] && ok "verify-run: a scenario file that declares too little starts nothing" ||
     fail "verify-run: a scenario file that declares too little starts nothing"
-  rc=$(run_tree=$vr2 run_verify build-second k6-cloud-mini)
+  printf 'build=k8s-gitops-up\njob_minutes_default=160\nk3d=1\nscenario_targets() { step other 1 make other; step k8s-gitops-up 1 make k8s-gitops-up; }\n' \
+    >"$vr2/deploy/ci/verify/gitops.sh"
+  rc=$(run_tree=$vr2 run_verify build-second gitops)
   same "verify-run: a scenario whose first target is not its build target stops it" 2 "$rc"
-  mkdir -p "$work/run-keda2.out/samples"
-  : >"$work/run-keda2.out/samples/docker.tsv"
-  rc=$(run_tree=$vr2 run_verify keda2 velero FAKE_MAKE_PAUSE='keda-1 keda-2')
-  same "verify-run: a scenario that runs a drill twice passes" 0 "$rc"
-  # window NAME ID: the start and end of target ID of run keda2 as verify-sample.sh writes them, and those of the file.
-  window() {
-    awk -F '\t' -v id="$2" '$1 == id { print $5, $6 }' "$work/run-keda2.out/results.tsv" |
-      while read -r a b; do jq -rn --argjson a "$a" --argjson b "$b" '"\($a | todate) \($b | todate)"'; done
-  }
-  w1=$(window keda2 02)
-  w2=$(window keda2 04)
-  [ "$w1" != "$w2" ] && ok "verify-run: the two drill runs have windows of their own" ||
-    fail "verify-run: the two drill runs have windows of their own"
-  same "verify-run: ram-peak-1 reads the window of drill-k8s-keda-1" "$w1" \
-    "$(jq -r '"\(.window.start) \(.window.end)"' "$work/run-keda2.out/ram-peak-1.json")"
-  same "verify-run: ram-peak-2 reads the window of drill-k8s-keda-2" "$w2" \
-    "$(jq -r '"\(.window.start) \(.window.end)"' "$work/run-keda2.out/ram-peak-2.json")"
-  rc=$(run_tree=$vr2 run_verify keda2-one velero SVP_VERIFY_TARGETS='drill-k8s-keda-1 ram-peak-1 ram-peak-2')
-  same "verify-run: ram-peak-2 without drill-k8s-keda-2 is skipped for it and fails the run" \
-    "1 05 ram-peak-2 skipped drill-k8s-keda-2 did not run" \
-    "$rc $(results keda2-one | tail -n 1)"
+  [ ! -s "$work/run-build-second.make" ] && ok "verify-run: a scenario whose first target is not its build starts nothing" ||
+    fail "verify-run: a scenario whose first target is not its build starts nothing"
 
-  rc=$(run_verify unknown dev-k3d 'SVP_VERIFY_TARGETS=drill-k8s-threats drill-k8s-thraets')
+  rc=$(run_verify unknown gitops 'SVP_VERIFY_TARGETS=drill-k8s-threats drill-k8s-thraets')
   same "verify-run: a name that is no target of the scenario stops it" 2 "$rc"
   [ ! -s "$work/run-unknown.make" ] && [ ! -e "$work/run-unknown.out/results.tsv" ] &&
     ok "verify-run: an unknown name stops it before any target or results.tsv" ||
     fail "verify-run: an unknown name stops it before any target or results.tsv"
   # The error names the targets of the scenario: the list that the scenario's own steps make.
   has run-unknown "an unknown name is named, with the scenario's targets" \
-    "not a target of dev-k3d: drill-k8s-thraets (its targets: $(printf '%s' "$k3d_names" | tr '\n' ' '))"
+    "not a target of gitops: drill-k8s-thraets (its targets: $(printf '%s' "$gitops_names" | tr '\n' ' '))"
   rc=$(run_verify unknown-compose compose-obs SVP_VERIFY_TARGETS=k8s-smoke)
   same "verify-run: a target of the other scenario is unknown" 2 "$rc"
   has run-unknown-compose "the compose-obs targets are listed" \
     "(its targets: $(printf '%s' "$compose_names" | tr '\n' ' '))"
 
-  rc=$(run_verify bad dev-k3d $'SVP_VERIFY_TARGETS=k8s-smoke\n::warning::BAD-TARGET-MARKER')
+  rc=$(run_verify bad gitops $'SVP_VERIFY_TARGETS=k8s-smoke\n::warning::BAD-TARGET-MARKER')
   same "verify-run: a target list with another character stops it" 2 "$rc"
   [ ! -s "$work/run-bad.make" ] && lacks run-bad "the rejected list is not printed back" BAD-TARGET-MARKER ||
     fail "verify-run: a rejected list starts no target"
@@ -2128,15 +1227,6 @@ lacks stale-fresh "nothing is noted for a case kept" NOTE
 same "gitops_stale: cosign without an answer keeps the case (the drill fails it)" 1 \
   "$(stale no-cosign c FAKE_COSIGN_FAIL=1 FAKE_SCAN_HOURS=100)"
 
-# --- verify-tempo.sh: its own self-test (fake kubectl, curl and nc; no cluster, no network), so that job config of CI
-# runs it with the rest of the verification scripts' tests.
-if bash "$here/verify-tempo.sh" test >"$work/verify-tempo-test.out" 2>&1; then
-  ok "verify-tempo.sh: its self-test passes"
-else
-  sed 's/^/    /' "$work/verify-tempo-test.out" >&2
-  fail "verify-tempo.sh: its self-test passes"
-fi
-
 # --- changed-services.sh: a change of a verification script builds no image; one of verify-release.sh, which the image
 # jobs run, still builds all seven. GIT_DIR is set for the throwaway repository, so git can never reach another one.
 cs=$work/changed-services
@@ -2159,7 +1249,7 @@ changed_by() {
 got=$(changed_by deploy/ci/verify-run.sh)
 [ -z "$got" ] && ok "changed-services: a change of verify-run.sh builds nothing" ||
   fail "changed-services: a change of verify-run.sh builds nothing (got '$got')"
-got=$(changed_by deploy/ci/verify/dev-k3d.sh)
+got=$(changed_by deploy/ci/verify/compose-obs.sh)
 [ -z "$got" ] && ok "changed-services: a change of a scenario file of verify-run.sh builds nothing" ||
   fail "changed-services: a change of a scenario file of verify-run.sh builds nothing (got '$got')"
 # verify-release.sh runs in svp-gitops's check, make k8s-gitops-up and the drills only, no image job.

@@ -7,7 +7,7 @@
   (Renovate của `svp-web`: không automerge; bản `patch`, `digest` của gói npm, Node, base image và service container của CI tự merge khi
   `ci-ok`, `images-ok` xanh; action, `.backend-commit`, `api/contract.json`, minor, major giữ tay) chỉnh bởi
   [0035](0035-renovate-automerge.md);
-  tên repo (`svp-web` thành `svp-frontend`, repo backend thành `svp-backend`), prefix và identity của hai nguồn (§2), check không đọc bản clone repo web (§3) và bước 8 của §9 (gỡ `web` khỏi nguồn backend cũ, làm trong bảng chuyển) chỉnh bởi [0036](0036-repo-rename.md)
+  tên repo (`svp-web` thành `svp-frontend`, repo backend thành `svp-backend`), prefix và identity của hai nguồn (§2), check không đọc bản clone repo web (§3) và bước 8 của §9 (gỡ `web` khỏi nguồn backend cũ, làm trong bảng chuyển) chỉnh bởi [0036](0036-repo-rename.md). Một phần bị thay bởi [0039](0039-mainpath-drills-scan-gate-sourcemaps.md) (§7: image `web-sourcemaps`, `gitops-sourcemaps.sh` bỏ; `verify.yml` thôi clone `svp-frontend` và input `web_ref`)
 - Ngày: 2026-10-30
 
 ## Bối cảnh

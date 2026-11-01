@@ -128,5 +128,5 @@ backup cơ sở để có điểm phục hồi mới (lệnh ở [postgres-backu
 - ADR: [ADR-0020](../adr/0020-reliability-stage6.md) §5 (plugin, thế hệ lưu trữ, NetworkPolicy, cảnh báo); threat model BAK-1.
 - Cấu hình: `deploy/helm/svp-data/templates/backup.yaml` (ObjectStore, ScheduledBackup), `templates/postgres.yaml` (plugin
   của Cluster), `base/plugin-barman-cloud.yaml` của repo `svp-gitops` (values của plugin; sửa bằng PR vào repo đó), `deploy/s3/pg-backup-policy.json`, `deploy/helm/svp-data/templates/s3.yaml` (store, Job `s3-init`).
-- Diễn tập: `make drill-k8s-backup` dừng trước khi xoá gì nếu `ContinuousArchiving` không `True`; chưa có diễn tập làm hỏng
+- Diễn tập: `drill-k8s-backup` của bài lab `drills/` của `svp-labs` dừng trước khi xoá gì nếu `ContinuousArchiving` không `True`; chưa có diễn tập làm hỏng
   việc lưu WAL có chủ đích.

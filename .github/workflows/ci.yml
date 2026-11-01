@@ -215,7 +215,7 @@ jobs:
           make api-contract-check BASE="$base"
       - run: deploy/ci/contract-test.sh
 
-  # The configuration that no Go test covers: the rules of .trivyignore.yaml and deploy/ci/trivy-config-ignore.yaml,
+  # The configuration that no Go test covers: the rules of .trivyignore.yaml, .grype.yaml and deploy/ci/trivy-config-ignore.yaml,
   # Prometheus rules and their tests, the three Collector configs, the compose file of every profile, every chart of the
   # repository, the digests of third-party images, the k6 scripts with each profile and the cloud cluster's manifests.
   config:
@@ -235,8 +235,9 @@ jobs:
           fetch-depth: 0
       # Public repository, over HTTPS without credentials: no token, no secret.
       - run: make gitops-clone
-      # Here and not only in the image gate: a pull request that changes nothing but .trivyignore.yaml builds no image,
-      # and a broken entry merged into main would stop the daily rescan from attesting every service.
+      # Here and not only in the image gate: a pull request that changes nothing but .trivyignore.yaml or .grype.yaml
+      # builds no image, and a broken entry merged into main would stop the daily rescan from attesting every service.
+      # Only here does an expired entry fail (grype reads no date, so its rule would go on covering the match).
       # The same step holds the misconfigurations job trivy-config leaves out to their rules: paths, reason, at most 90
       # days. Needs no image, no tool and no token.
       - run: deploy/ci/scan-gate.sh --check-ignorefile
@@ -255,10 +256,9 @@ jobs:
       # would use otherwise: a pull request that breaks one of their rules fails here. Fake secrets, kubectl, docker and
       # make in a temporary directory; bash, git, jq and openssl, no network.
       - run: deploy/ci/verify-collect-test.sh
-      # The image of the source maps of another source's web (deploy/ci/sourcemaps-image.sh), pushed only by that
-      # source's CI on its main: refused folders, the tag never written twice, read back by gitops-sourcemaps.sh as
-      # the GitOps run reads it. A fake docker answers the ORAS commands from files; bash, git, jq and tar, no network.
-      - run: deploy/ci/sourcemaps-image-test.sh
+      # The two digests ghcr-digest.sh reads from GHCR for the supply chain drill (the linux/amd64 manifest of the web
+      # release, the newest drill image): a fake ghcr_get and throwaway repositories; bash, git and jq, no network.
+      - run: deploy/ci/ghcr-digest-test.sh
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version: 1.27.3
@@ -306,9 +306,8 @@ jobs:
       # k6 inspect of every profile in the pinned k6 image, with no network: a script that no longer loads or a profile
       # whose scenarios are malformed is caught here, without the compose stack the load runs need.
       - run: make k6-check
-      # kubeconform -strict of the cloud cluster's manifests and rendered charts: a wrong field or kind in a Chaos Mesh,
-      # Velero or snapshot manifest is caught here, without a cluster that has those CRDs; helm
-      # from the PATH set above. Needs network: chart repositories and GitHub.
+      # kubeconform -strict of the k6 Job of the cloud cluster (deploy/k6/cloud/render.sh): a wrong field or kind is
+      # caught here, without a cluster; every image must be pinned by digest. Needs network: the pinned Kubernetes schemas.
       - run: make cloud-check
 
   # gitleaks over the whole history of every ref (no --log-opts: setting it drops gitleaks's default --full-history
@@ -489,7 +488,7 @@ jobs:
       # make web-lighthouse launches Playwright's Chromium with Chrome's sandbox, which needs unprivileged user
       # namespaces. Ubuntu 24.04 restricts those through AppArmor for every binary without a profile of its own, and
       # Playwright's download has none, so Chrome stops with "No usable sandbox". The restriction is lifted on this
-      # throwaway runner (as deploy/ci/verify-host.sh does), so the sandbox stays on; the e2e tests turn it off themselves.
+      # throwaway runner, so the sandbox stays on; the e2e tests turn it off themselves.
       - name: Let Chrome's sandbox use user namespaces
         run: |
           if [ "$(sysctl -n kernel.apparmor_restrict_unprivileged_userns 2>/dev/null || echo absent)" = 1 ]; then

@@ -1,31 +1,25 @@
 # Deferred verification of stage 6b, on a fresh GitHub-hosted runner
-# of the public repository: one scenario per run dispatched by hand, and once a week compose-obs, dev-k3d and gitops
-# side by side on main, every target. It builds the compose stack or the k3d cluster with the same make targets as a dev
-# machine and runs the drills and measurements that machine cannot hold (16 GB). Not a check of pull requests: no
-# ruleset requires it, and nothing but the dispatch and the weekly schedule triggers it.
+# of the public repository: one scenario per run dispatched by hand, and once a week compose-obs and gitops side by
+# side on main, every target. It builds the compose stack or the k3d cluster with the same make targets as a dev
+# machine and runs what that machine cannot hold (16 GB): the threat model drills, the object store's tests against the
+# stack, and the supply chain drill on a cluster Argo CD builds. Not a check of pull requests: no ruleset requires it,
+# and nothing but the dispatch and the weekly schedule triggers it.
 #
 #   gh workflow run verify.yml --ref <main or feat/stage6b-...> -f scenario=<scenario> [-f targets='<name> ...']
-#     [-f web_ref=<branch or full commit SHA of svp-frontend>]
 #
-# Scenarios (deploy/ci/verify/<scenario>.sh lists the targets of each): compose-obs (job compose), dev-k3d, web-canary,
-# k6-cloud-mini, chaos and velero (job k3d, the k3d cluster of the dev path), gitops (job gitops, the cluster Argo CD
-# builds from this repository).
+# Scenarios (deploy/ci/verify/<scenario>.sh lists the targets of each): compose-obs (job compose: the compose stack with
+# OBS=lgtm) and gitops (job gitops: the cluster Argo CD builds from this repository and svp-gitops).
 #
 # The repository is public, so the log and the artifact of every run are too, red or not:
 # - only workflow_dispatch (write access to the repository needed) and schedule (the code of main, no input), never
-#   pull_request_target or workflow_run; every job has contents: read, and job gitops also actions: read (the source
-#   map artifact of the images run that built the web image it runs), with the job's token given to its two steps that
-#   read the platform's API only, never to the scenario's step. No job holds a secret or an environment;
+#   pull_request_target or workflow_run; every job has contents: read and nothing more. No job holds a secret or an
+#   environment;
 # - every action is GitHub's own and pinned to a full commit SHA; checkout never leaves the token in .git/config;
-# - the inputs reach the scripts only through env (SCENARIO, SVP_VERIFY_TARGETS, SVP_VERIFY_WEB_REF) and
-#   deploy/ci/verify-run.sh checks them again with a case; if: compares the scenario as an expression, never in a
-#   shell. A scheduled run has no inputs: each job's SCENARIO falls back to its own scenario, the targets are empty
-#   (every one) and so is web_ref (the web client's code at the commit of the web release staging runs);
-# - the web client's code is svp-frontend, its repository: the step "Clone svp-gitops and svp-frontend" (verify-run.sh --clones)
-#   clones it from github.com/anhnvcoder/svp-frontend only (make web-clone), so a fork's code never runs here, for the
-#   scenarios that build, test or measure the web (compose-obs, dev-k3d, web-canary, gitops), before Node, pnpm, its
-#   packages and Playwright's browsers are installed as that clone pins them; at web_ref, checked in each job's first
-#   step, a branch or a full commit SHA of svp-frontend, or without it at the commit of the web release staging runs;
+# - the inputs reach the scripts only through env (SCENARIO, SVP_VERIFY_TARGETS) and deploy/ci/verify-run.sh checks
+#   them again with a case; if: compares the scenario as an expression, never in a shell. A scheduled run has no
+#   inputs: each job's SCENARIO falls back to its own scenario, and the targets are empty (every one);
+# - no code of another repository runs: the deployment configuration svp-gitops is cloned anonymously from GitHub (make
+#   gitops-clone in verify-run.sh) and only read, its images pulled by digest;
 # - make env writes a .env of fresh random secrets that lives on this runner until the job ends; the cluster makes more
 #   (GlitchTip's tokens, its CA). deploy/ci/verify-mask.sh masks them in the log as soon as they exist, every target's
 #   output goes to a file on the runner instead of the log, and deploy/ci/verify-collect.sh copies into the artifact
@@ -41,24 +35,14 @@ on:
   workflow_dispatch:
     inputs:
       scenario:
-        description: Scenario (compose-obs is the compose stack with OBS=lgtm, gitops the cluster of the GitOps path, the others the k3d cluster of the dev path)
+        description: Scenario (compose-obs is the compose stack with OBS=lgtm, gitops the cluster of the GitOps path)
         type: choice
         required: true
         options:
           - compose-obs
-          - dev-k3d
           - gitops
-          - web-canary
-          - k6-cloud-mini
-          - chaos
-          - velero
       targets:
         description: Targets to run, separated by spaces; empty runs every one, the build target always runs (deploy/ci/verify-run.sh)
-        type: string
-        required: false
-        default: ""
-      web_ref:
-        description: "compose-obs, dev-k3d, web-canary, gitops: the web client's code from svp-frontend (github.com/anhnvcoder/svp-frontend), main, another of its branches or a full commit SHA; empty is the commit of the web release staging runs (deploy/ci/verify-run.sh)"
         type: string
         required: false
         default: ""
@@ -70,37 +54,31 @@ on:
 
 permissions: {}
 
-# One run of each scenario at a time, the two scenarios side by side: each has a runner of its own, and both run on
-# Linux by now, so a fix rarely waits on the other's run. A third dispatch of a scenario while one runs and one waits
-# replaces the waiting one. The scheduled run (all three jobs) is a group of its own, verify-schedule: a dispatch
-# during it runs beside it, on its own runner.
+# One run of each scenario at a time, the two scenarios side by side: each has a runner of its own, so a fix rarely
+# waits on the other's run. A third dispatch of a scenario while one runs and one waits replaces the waiting one. The
+# scheduled run (both jobs) is a group of its own, verify-schedule: a dispatch during it runs beside it, on its own
+# runner.
 concurrency:
   group: verify-${{ inputs.scenario || github.event_name }}
   cancel-in-progress: false
 
 jobs:
   # The compose stack with the LGTM observability profile, as job stack of ci.yml builds it: make up OBS=lgtm (GlitchTip
-  # included), make smoke, make drill-obs-threats, make load-local under a watch of Alertmanager, make web-lighthouse
-  # three times; then the object store's checks: make test-stack of internal/objstore (no test may skip), make
-  # drill-upload-cleanup, make measure-upload with the store's RAM peak; make drill-alert-to-sentry (Telegram is not
-  # configured, so that step SKIPs); last, the copy back to MinIO (make object-store-copy TO=minio into a volume of this
-  # runner), make up again on RustFS and make smoke. The LOCAL LAB ONLY resets of smoke, the drills, e2e, k6 and
-  # Lighthouse (they delete the gateway's register rate limit keys in Redis db 10) touch only the Redis service
-  # container below, which belongs to this run; the copy reads svp_video of the Postgres service container of this run
-  # only.
+  # included), make smoke, make drill-obs-threats, then make test-stack of internal/objstore against the stack's object
+  # store (no test may skip). The LOCAL LAB ONLY resets of smoke and the drill (they delete the gateway's register rate
+  # limit keys in Redis db 10) touch only the Redis service container below, which belongs to this run.
   compose:
     if: github.event_name == 'schedule' || inputs.scenario == 'compose-obs'
     runs-on: ubuntu-24.04
-    # Setup about 20 minutes, the scenario step 75, then 25 for the steps after it.
-    timeout-minutes: 120
+    # Setup about 10 minutes, the scenario step 50, then 25 for the steps after it.
+    timeout-minutes: 90
     permissions:
       contents: read
     env:
       SCENARIO: ${{ inputs.scenario || 'compose-obs' }}
       SVP_VERIFY_TARGETS: ${{ inputs.targets }}
-      SVP_VERIFY_WEB_REF: ${{ inputs.web_ref }}
-      SVP_VERIFY_JOB_MINUTES: 120
-      SVP_VERIFY_STEP_MINUTES: 75
+      SVP_VERIFY_JOB_MINUTES: 90
+      SVP_VERIFY_STEP_MINUTES: 50
     services:
       # As in job stack of ci.yml: published on loopback (the scripts on the runner) and on the gateway of Docker's
       # default bridge, 172.17.0.1, where the compose services reach them as host.docker.internal; never on every
@@ -130,8 +108,7 @@ jobs:
     steps:
       # Before anything else: a dispatch of another branch (an old one without the fixes of this stage) stops here, and
       # so does a scheduled run anywhere but main (GitHub runs it on the default branch, which is main). An accident
-      # guard, not a security boundary: whoever can dispatch can also push a branch of that name. So does a web_ref that
-      # names no branch or commit; verify-run.sh refuses it for a scenario that takes none (compose-obs among them).
+      # guard, not a security boundary: whoever can dispatch can also push a branch of that name.
       - name: Check the ref and note the job's start
         id: ref
         run: |
@@ -139,11 +116,6 @@ jobs:
             schedule:refs/heads/main | workflow_dispatch:refs/heads/main | workflow_dispatch:refs/heads/feat/stage6b-*) ;;
             *) echo "::error::verify runs on main, or dispatched on a feat/stage6b-* branch, not $GITHUB_EVENT_NAME on $GITHUB_REF"; exit 1 ;;
           esac
-          # web_ref: empty, a full commit SHA or a branch name (not printed back: a line starting with :: is a command).
-          if [ -n "$SVP_VERIFY_WEB_REF" ] && ! [[ $SVP_VERIFY_WEB_REF =~ ^[0-9a-f]{40}$ ]] &&
-            ! { [[ $SVP_VERIFY_WEB_REF =~ ^[A-Za-z0-9][A-Za-z0-9._/-]*$ ]] && git check-ref-format "refs/heads/$SVP_VERIFY_WEB_REF"; }; then
-            echo "::error::web_ref is neither a full commit SHA nor a branch name of svp-frontend"; exit 1
-          fi
           echo "SVP_VERIFY_OUT=$RUNNER_TEMP/verify" >>"$GITHUB_ENV"
           mkdir -p "$RUNNER_TEMP/verify"
           date +%s >"$RUNNER_TEMP/verify/job-start"
@@ -157,45 +129,18 @@ jobs:
           go-version: 1.27.3
           cache-dependency-path: go.sum
       - run: make ci-bridge-check
-      # svp-gitops (the web release of staging that make up runs) and svp-frontend (the web client's code that make
-      # web-lighthouse and make measure-upload run), anonymously over HTTPS; web_dir names the clone of svp-frontend. A failed
-      # clone stops the job here: no later step but the ones that always run.
-      - name: Clone svp-gitops and svp-frontend
-        id: clones
-        run: deploy/ci/verify-run.sh --clones "$SCENARIO"
-      # Node and pnpm as the clone pins them (its .nvmrc, the packageManager field of its package.json).
-      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
-        with:
-          node-version-file: ${{ steps.clones.outputs.web_dir }}/.nvmrc
-      - name: Install pnpm
-        working-directory: ${{ steps.clones.outputs.web_dir }}
-        run: |
-          version=$(node -p 'require("./package.json").packageManager.split("@")[1]')
-          npm install -g "pnpm@$version"
-      # psql of the Postgres bootstrap and the copy back to MinIO, redis-cli of the rate limit resets, ffmpeg for the
-      # test videos (the ~100 MB one of make measure-upload too), jq everywhere.
+      # psql of the Postgres bootstrap, redis-cli of the rate limit resets, ffmpeg for the test video of smoke, jq
+      # everywhere.
       - name: Install the tools of the scripts
         run: |
           sudo apt-get update -q
           sudo apt-get install -y -q --no-install-recommends postgresql-client redis-tools ffmpeg jq
-      # make web-lighthouse needs lhci from the clone's node_modules and Playwright's Chromium, and make measure-upload
-      # uploads from Chromium; this scenario runs no test on WebKit.
-      - name: Install the web client's packages
-        working-directory: ${{ steps.clones.outputs.web_dir }}
-        run: make install
-      - name: Install the Playwright browser
-        working-directory: ${{ steps.clones.outputs.web_dir }}
-        run: pnpm exec playwright install --with-deps chromium
       - run: make env
       - run: deploy/ci/verify-mask.sh env
       - run: deploy/ci/verify-host.sh "$SCENARIO"
-      - run: deploy/ci/verify-sample.sh start
       - name: Scenario
-        timeout-minutes: 75
+        timeout-minutes: 50
         run: deploy/ci/verify-run.sh "$SCENARIO"
-      - name: Stop the sampler
-        if: always() && steps.ref.outcome == 'success'
-        run: deploy/ci/verify-sample.sh stop
       - name: Collect and filter the results
         if: always() && steps.ref.outcome == 'success'
         run: deploy/ci/verify-collect.sh
@@ -213,28 +158,24 @@ jobs:
         run: |
           if [ -f .env ]; then make down; else echo "no .env: make env never ran, so no stack was started"; fi
 
-  # The k3d cluster of the dev path, built by make k8s-up, for scenario dev-k3d (scheduled too: smoke, RAM at rest, the
-  # threat model drill, PodDisruptionBudget, the gateway's canary under the new probes, the web's source maps, its e2e
-  # tests with GlitchTip, its observability drill, KEDA with two workers transcoding (RAM peak), the Postgres restore
-  # twice, RAM at rest again), web-canary (the web's canary under traffic), k6-cloud-mini (the k6 Job of stage 7 scaled
-  # down), chaos (Chaos Mesh's experiments) and velero (Velero's backup and restore of Redpanda). The LOCAL LAB ONLY
-  # resets of the drills delete the register rate limit keys in the cluster's Valkey, on this runner; Chaos Mesh,
-  # Velero and the CSI driver they need live in the cluster of this runner only.
-  k3d:
-    if: >-
-      github.event_name == 'schedule' ||
-      contains(fromJSON('["dev-k3d", "web-canary", "k6-cloud-mini", "chaos", "velero"]'), inputs.scenario)
+  # The GitOps path: make k8s-gitops-up builds a new cluster from the branch this run checked out, Argo CD reading the
+  # public repository over anonymous HTTPS (no deploy key, no secret) and running the signed release images of GHCR by
+  # digest under Kyverno's Enforce policy; then the staging overlay, the ExternalSecrets and Argo CD's metrics are
+  # checked, make k8s-smoke, the supply chain and threat model drills (deploy/ci/verify/gitops.sh). Dispatched, and
+  # weekly on main beside job compose: SVP_VERIFY_SCHEDULED tells the scripts a run is the scheduled one, which leaves
+  # out the supply chain drill's cases whose drill-only image is past its maximum age (nobody rescans those before it).
+  gitops:
+    if: github.event_name == 'schedule' || inputs.scenario == 'gitops'
     runs-on: ubuntu-24.04
-    # Setup about 20 minutes, the scenario step 285, then 25 for the steps after it; 30 minutes under GitHub's 6 hours.
-    timeout-minutes: 330
+    # Setup about 10 minutes, the scenario step 120, then 25 for the steps after it.
+    timeout-minutes: 160
     permissions:
       contents: read
     env:
-      SCENARIO: ${{ inputs.scenario || 'dev-k3d' }}
+      SCENARIO: gitops
       SVP_VERIFY_TARGETS: ${{ inputs.targets }}
-      SVP_VERIFY_WEB_REF: ${{ inputs.web_ref }}
-      SVP_VERIFY_JOB_MINUTES: 330
-      SVP_VERIFY_STEP_MINUTES: 285
+      SVP_VERIFY_JOB_MINUTES: 160
+      SVP_VERIFY_STEP_MINUTES: 120
     steps:
       # As in job compose.
       - name: Check the ref and note the job's start
@@ -244,16 +185,14 @@ jobs:
             schedule:refs/heads/main | workflow_dispatch:refs/heads/main | workflow_dispatch:refs/heads/feat/stage6b-*) ;;
             *) echo "::error::verify runs on main, or dispatched on a feat/stage6b-* branch, not $GITHUB_EVENT_NAME on $GITHUB_REF"; exit 1 ;;
           esac
-          # web_ref: empty, a full commit SHA or a branch name (not printed back: a line starting with :: is a command).
-          if [ -n "$SVP_VERIFY_WEB_REF" ] && ! [[ $SVP_VERIFY_WEB_REF =~ ^[0-9a-f]{40}$ ]] &&
-            ! { [[ $SVP_VERIFY_WEB_REF =~ ^[A-Za-z0-9][A-Za-z0-9._/-]*$ ]] && git check-ref-format "refs/heads/$SVP_VERIFY_WEB_REF"; }; then
-            echo "::error::web_ref is neither a full commit SHA nor a branch name of svp-frontend"; exit 1
-          fi
           echo "SVP_VERIFY_OUT=$RUNNER_TEMP/verify" >>"$GITHUB_ENV"
           mkdir -p "$RUNNER_TEMP/verify"
           date +%s >"$RUNNER_TEMP/verify/job-start"
+      # The whole history: make k8s-gitops-up checks the release at origin/<branch>, and gitops-argocd-metrics and
+      # gitops-external-secrets read the charts at the commit svp-gitops pins.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          fetch-depth: 0
           persist-credentials: false
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
@@ -268,184 +207,22 @@ jobs:
       - name: Install the pinned tools
         if: steps.tools.outputs.cache-hit != 'true'
         run: make tools ci-tools
-      # k3d and Helm for deploy/k8s/install.sh and the drills, which call them by name; kubectl is the runner image's
+      # k3d and Helm for the bootstrap and the drills, which call them by name; kubectl is the runner image's
       # (deploy/ci/verify-host.sh checks its version against k3s).
       - run: echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
-      # As in job compose. Only dev-k3d and web-canary build, test or measure the web and get a clone of svp-frontend
-      # (web_dir); k6-cloud-mini, chaos and velero run the web release of staging and need no Node.
-      - name: Clone svp-gitops and svp-frontend
-        id: clones
-        run: deploy/ci/verify-run.sh --clones "$SCENARIO"
-      - if: steps.clones.outputs.web_dir != ''
-        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
-        with:
-          node-version-file: ${{ steps.clones.outputs.web_dir }}/.nvmrc
-      - name: Install pnpm
-        if: steps.clones.outputs.web_dir != ''
-        working-directory: ${{ steps.clones.outputs.web_dir }}
-        run: |
-          version=$(node -p 'require("./package.json").packageManager.split("@")[1]')
-          npm install -g "pnpm@$version"
-      # ffmpeg for the test videos of smoke and KEDA, jq everywhere, nc for the drills' port checks.
+      # ffmpeg for the test video of smoke, jq everywhere, nc for the drills' port checks.
       - name: Install the tools of the scripts
         run: |
           sudo apt-get update -q
           sudo apt-get install -y -q --no-install-recommends ffmpeg jq netcat-openbsd
-      # make k8s-web-e2e runs on Chromium and WebKit, the web's canary drill its clients on Chromium.
-      - name: Install the web client's packages
-        if: steps.clones.outputs.web_dir != ''
-        working-directory: ${{ steps.clones.outputs.web_dir }}
-        run: make install
-      - name: Install the Playwright browsers
-        if: steps.clones.outputs.web_dir != ''
-        working-directory: ${{ steps.clones.outputs.web_dir }}
-        run: pnpm exec playwright install --with-deps chromium webkit
       - run: make env
       - run: deploy/ci/verify-mask.sh env
       - run: deploy/ci/verify-host.sh "$SCENARIO"
-      - run: deploy/ci/verify-sample.sh start
       - name: Scenario
-        timeout-minutes: 285
-        run: deploy/ci/verify-run.sh "$SCENARIO"
-      - name: Stop the sampler
-        if: always() && steps.ref.outcome == 'success'
-        run: deploy/ci/verify-sample.sh stop
-      - name: Collect and filter the results
-        if: always() && steps.ref.outcome == 'success'
-        run: deploy/ci/verify-collect.sh
-      - name: Keep the filtered results
-        if: always() && steps.ref.outcome == 'success'
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        with:
-          name: verify-${{ env.SCENARIO }}
-          path: ${{ runner.temp }}/verify-artifact/
-          retention-days: 30
-          if-no-files-found: warn
-      - name: make k8s-down
-        if: always() && steps.ref.outcome == 'success'
-        run: make k8s-down
-
-  # The GitOps path: make k8s-gitops-up builds a new cluster from the branch this run checked out, Argo CD reading the
-  # public repository over anonymous HTTPS (no deploy key, no secret) and running the signed release images of GHCR by
-  # digest under Kyverno's Enforce policy; then smoke, RAM at rest, the supply chain and threat model drills, the source
-  # maps of the web image CI built, the web's e2e tests with GlitchTip and its observability drill, KEDA twice with the
-  # RAM peak of each, RAM at rest again; after the scenario, on a dispatch of main, the wait for a release merged while
-  # the cluster runs and make measure-gitops on it (deploy/ci/verify/gitops.sh). Dispatched, and weekly on main beside
-  # jobs compose and k3d: SVP_VERIFY_SCHEDULED tells the scripts a run is the scheduled one, which waits for no release
-  # (nobody merges one for it) and leaves out the supply chain drill's cases whose drill-only image is past its maximum
-  # age (nobody rescans those before it). A red wait for a release makes this job red, as its measurement is that
-  # step's.
-  gitops:
-    if: github.event_name == 'schedule' || inputs.scenario == 'gitops'
-    runs-on: ubuntu-24.04
-    # Setup about 10 minutes, the scenario step 175, the wait for a release 115, then 25 for the steps after them; 30
-    # minutes under GitHub's 6 hours.
-    timeout-minutes: 330
-    permissions:
-      contents: read
-      # The artifact web-sourcemaps-amd64 of the images run that built the web image the cluster runs.
-      actions: read
-      # The release's push time: merged_at of the promote pull request whose merge is the release commit.
-      pull-requests: read
-    env:
-      SCENARIO: gitops
-      SVP_VERIFY_TARGETS: ${{ inputs.targets }}
-      SVP_VERIFY_WEB_REF: ${{ inputs.web_ref }}
-      SVP_VERIFY_JOB_MINUTES: 330
-      SVP_VERIFY_STEP_MINUTES: 175
-    steps:
-      # As in job compose.
-      - name: Check the ref and note the job's start
-        id: ref
-        run: |
-          case $GITHUB_EVENT_NAME:$GITHUB_REF in
-            schedule:refs/heads/main | workflow_dispatch:refs/heads/main | workflow_dispatch:refs/heads/feat/stage6b-*) ;;
-            *) echo "::error::verify runs on main, or dispatched on a feat/stage6b-* branch, not $GITHUB_EVENT_NAME on $GITHUB_REF"; exit 1 ;;
-          esac
-          # web_ref: empty, a full commit SHA or a branch name (not printed back: a line starting with :: is a command).
-          if [ -n "$SVP_VERIFY_WEB_REF" ] && ! [[ $SVP_VERIFY_WEB_REF =~ ^[0-9a-f]{40}$ ]] &&
-            ! { [[ $SVP_VERIFY_WEB_REF =~ ^[A-Za-z0-9][A-Za-z0-9._/-]*$ ]] && git check-ref-format "refs/heads/$SVP_VERIFY_WEB_REF"; }; then
-            echo "::error::web_ref is neither a full commit SHA nor a branch name of svp-frontend"; exit 1
-          fi
-          echo "SVP_VERIFY_OUT=$RUNNER_TEMP/verify" >>"$GITHUB_ENV"
-          mkdir -p "$RUNNER_TEMP/verify"
-          date +%s >"$RUNNER_TEMP/verify/job-start"
-      # The whole history: make k8s-gitops-up checks the release at origin/<branch>, and make measure-gitops reads the
-      # parent of the release commit.
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          fetch-depth: 0
-          persist-credentials: false
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
-        with:
-          go-version: 1.27.3
-          cache-dependency-path: go.sum
-      # As in job k3d.
-      - id: tools
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: ~/go/bin
-          key: tools-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('Makefile') }}
-      - name: Install the pinned tools
-        if: steps.tools.outputs.cache-hit != 'true'
-        run: make tools ci-tools
-      - run: echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
-      # As in job compose: svp-frontend for the web's e2e tests and the Sentry CLI of the source map upload.
-      - name: Clone svp-gitops and svp-frontend
-        id: clones
-        run: deploy/ci/verify-run.sh --clones "$SCENARIO"
-      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
-        with:
-          node-version-file: ${{ steps.clones.outputs.web_dir }}/.nvmrc
-      - name: Install pnpm
-        working-directory: ${{ steps.clones.outputs.web_dir }}
-        run: |
-          version=$(node -p 'require("./package.json").packageManager.split("@")[1]')
-          npm install -g "pnpm@$version"
-      - name: Install the tools of the scripts
-        run: |
-          sudo apt-get update -q
-          sudo apt-get install -y -q --no-install-recommends ffmpeg jq netcat-openbsd
-      - name: Install the web client's packages
-        working-directory: ${{ steps.clones.outputs.web_dir }}
-        run: make install
-      - name: Install the Playwright browsers
-        working-directory: ${{ steps.clones.outputs.web_dir }}
-        run: pnpm exec playwright install --with-deps chromium webkit
-      - run: make env
-      - run: deploy/ci/verify-mask.sh env
-      - run: deploy/ci/verify-host.sh "$SCENARIO"
-      - run: deploy/ci/verify-sample.sh start
-      # The source maps CI exported beside the web image Argo CD is about to run (artifact web-sourcemaps-amd64 of the
-      # images run that built it, chosen by the digest it was built as), downloaded with the job's token into the
-      # runner's temp directory for the scenario's step gitops-sourcemaps. A failure here does not stop the job: the
-      # scenario reports it there, and runs every step that needs no maps.
-      - name: Find the source maps of the web image
-        continue-on-error: true
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: deploy/ci/gitops-sourcemaps.sh fetch
-      - name: Scenario
-        id: scenario
-        timeout-minutes: 175
+        timeout-minutes: 120
         env:
           SVP_VERIFY_SCHEDULED: ${{ github.event_name == 'schedule' && 'true' || '' }}
         run: deploy/ci/verify-run.sh "$SCENARIO"
-      # On a run of main: the promote pull request waiting since before the run is merged while this step runs (the
-      # job's steps show it running), then the release is measured from its push to its pods Ready. The job's token is
-      # for make measure-gitops alone, which reads the push from the merged pull request (else GitHub's events). On a branch it prints why it skips.
-      # These are the scenario's targets wait-release and measure-gitops: the input targets chooses them as any other.
-      # A scheduled run says why it waits for nothing.
-      - name: Waiting for a release on main
-        if: ${{ !cancelled() && steps.ref.outcome == 'success' }}
-        timeout-minutes: 115
-        env:
-          GH_TOKEN: ${{ github.token }}
-          SVP_VERIFY_SCHEDULED: ${{ github.event_name == 'schedule' && 'true' || '' }}
-        run: bash deploy/ci/verify/gitops.sh release
-      - name: Stop the sampler
-        if: always() && steps.ref.outcome == 'success'
-        run: deploy/ci/verify-sample.sh stop
       - name: Collect and filter the results
         if: always() && steps.ref.outcome == 'success'
         run: deploy/ci/verify-collect.sh

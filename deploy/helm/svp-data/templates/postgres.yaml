@@ -59,8 +59,8 @@ spec:
   {{- if eq .source $.Values.postgres.backup.serverName }}
   {{- fail "postgres.recovery.source must differ from postgres.backup.serverName: a restored Cluster archives into a new generation" }}
   {{- end }}
-  # Only on the upgrade of make drill-k8s-backup that creates svp-pg again: the first instance is restored from the
-  # newest base backup of generation {{ .source }} and its WAL, up to its end or to recoveryTarget.
+  # Only on the upgrade of a restore that creates svp-pg again (docs/runbooks/postgres-restore.md): the first instance
+  # is restored from the newest base backup of generation {{ .source }} and its WAL, up to its end or to recoveryTarget.
   bootstrap:
     recovery:
       source: origin

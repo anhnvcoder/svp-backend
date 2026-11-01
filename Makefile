@@ -69,9 +69,9 @@ K6_IMAGE := grafana/k6:2.3.0@sha256:2dd4756ec6e14e62778916e1eb850108e4b499304c02
 # dev machine and in the CI job stack.
 # renovate: datasource=docker depName=schemathesis/schemathesis
 SCHEMATHESIS_IMAGE := schemathesis/schemathesis:4.32.4@sha256:b501f25d00fa6e2b393ddd1b525a11bb560d593fd06268491595c2e439090bf0
-# Schema check of the manifests written for the cloud cluster (make cloud-check), with nothing
-# installed: the image is FROM scratch with kubeconform and openapi2jsonschema, which turns the CRDs of the pinned charts
-# into schemas, so no Python is needed. It runs as root unless docker run gets --user.
+# Schema check of the manifests of the cloud cluster, with nothing installed: the image is FROM scratch with kubeconform
+# and openapi2jsonschema, which turns the CRDs of the pinned charts into schemas (make helm-check), so no Python is
+# needed. make cloud-check checks the k6 Job with no CRD schema. It runs as root unless docker run gets --user.
 # renovate: datasource=docker depName=ghcr.io/yannh/kubeconform
 KUBECONFORM_IMAGE := ghcr.io/yannh/kubeconform:v0.8.0@sha256:faffaf43f95aa6425306e1ab8d6fcad72acb9049158f38e574c085ea1ec0f64e
 # Policies on the manifests the GitOps path renders (deploy/ci/gitops-policies/: every image pinned by digest, no lab
@@ -301,8 +301,8 @@ trivy-config: ## trivy config on the repository, report only (TRIVY_CONFIG_SARIF
 	env -u DOCKER_DEFAULT_PLATFORM docker run --rm --user "$$(id -u):$$(id -g)" -v "$(CURDIR):/src:ro" --workdir /src \
 		"$$@" --quiet --cache-dir /tmp/trivy --ignorefile deploy/ci/trivy-config-ignore.yaml --exit-code 0 .
 
-# The grype gate of the image pipeline, from a machine: grype on an SPDX SBOM, then deploy/ci/scan-gate.sh --grype (any
-# Critical left after .trivyignore.yaml fails; an expired entry there fails too). SBOM=<absolute path> scans that
+# The grype gate of the image pipeline, from a machine: deploy/ci/scan-gate.sh --grype runs grype on an SPDX SBOM with
+# --fail-on critical and .grype.yaml (any Critical left after its rules fails). SBOM=<absolute path> scans that
 # document; IMAGE=<ref>@sha256:<digest> [ARCH=amd64|arm64] first has the pinned syft read the image of that platform
 # from its registry, anonymously. grype needs the network for its DB, and a DB it cannot fetch fails the target.
 # SVP_GRYPE_CACHE, when set, keeps the DB in that directory (it is about 3 GB unpacked); unset, in $TMPDIR.

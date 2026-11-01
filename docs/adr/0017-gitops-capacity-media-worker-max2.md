@@ -6,7 +6,7 @@
   worker cùng transcode giữ (c) ở hai lượt, RAM nghỉ (b) đạt ở điểm 60 s; đỉnh (a) không đạt ngân sách của laptop, chấp nhận.
   Ghi chú 2026-10-28: đường GitOps trên runner (ADR-0021 phần 3, kịch bản `gitops`, [40620627534](https://github.com/anhnvcoder/svp-backend/actions/runs/40620627534)): hai lượt KEDA giữ (c), mỗi
   lượt có cửa sổ 6 mẫu liền hai worker cùng transcode (D1 đạt); RAM nghỉ (b) và đỉnh (a) không đạt, cluster vượt ngân sách
-  thật; cắt theo thứ tự hay ghi nhận là quyết định còn mở của người học
+  thật; cắt theo thứ tự hay ghi nhận là quyết định còn mở của người học. Một phần bị thay bởi [0039](0039-mainpath-drills-scan-gate-sourcemaps.md) (kiểm lại tiêu chí (c) và RAM bằng `drill-k8s-keda` rời đường chính thành bài lab, đo lại trên EKS bằng k6 của buổi AWS)
 - Ngày: 2026-10-21
 
 ## Bối cảnh

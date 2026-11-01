@@ -25,8 +25,7 @@
 # Every request is one line of the log .k8s/drills/traffic-<UTC start>.log:
 #   <unix time of the request's start, ms> <user u1..u4, web for the web client's> <route explore|following|login, or
 #   web-login|web-asset> <HTTP status, 000 when none> <time to the response, ms>
-# and lines starting with # mark the start and stop. drill-k8s-canary and measure-canary read it; a window where more
-# than 1% of the feed requests got 401 or 429 makes them report "inconclusive".
+# and lines starting with # mark the start and stop.
 #
 # Run through make (k8s-traffic-start, k8s-traffic-stop): SVP_STACK=k3d and CURL_CA_BUNDLE (the cluster's CA) come from
 # there. Users are registered fresh at each start. LOCAL LAB ONLY: starting deletes the register rate limit keys in the

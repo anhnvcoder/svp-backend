@@ -26,17 +26,17 @@ postgres:
   backup:
     # The archive generation svp-pg writes its WAL and base backups to, a prefix of the bucket. A Cluster restored from
     # backups must archive into a new, empty one (the recovery Job refuses an archive that already holds WAL, and two
-    # generations in one prefix would mix their backups), so each restore of make drill-k8s-backup starts the next
-    # generation, svp-pg-<yymmddhhmmss> (UTC), and deploy/k8s/install.sh passes the one the running Cluster uses with
-    # --set, so that make k8s-up keeps it. This default is the first generation's, that of a new cluster.
+    # generations in one prefix would mix their backups), so each restore (docs/runbooks/postgres-restore.md) starts
+    # the next generation, svp-pg-<yymmddhhmmss> (UTC), and deploy/k8s/install.sh passes the one the running Cluster
+    # uses with --set, so that make k8s-up keeps it. This default is the first generation's, that of a new cluster.
     serverName: svp-pg
     # The plugin's sidecar in the Postgres pod (and in the recovery Job's pod): Barman compresses and uploads WAL and
     # base backups. The memory limit bounds the page cache a base backup fills (plugin issue #825).
     sidecarResources:
       requests: {cpu: 50m, memory: 128Mi}
       limits: {memory: 256Mi}
-  # Set only by make drill-k8s-backup (deploy/k8s/drills/backup.sh), on the command line of the one upgrade that
-  # creates svp-pg again from its backups, never in a file: source is the archive generation to restore from (the one
+  # Set only by a restore (docs/runbooks/postgres-restore.md), on the command line of the one upgrade that creates
+  # svp-pg again from its backups, never in a file: source is the archive generation to restore from (the one
   # the deleted Cluster archived to), targetTime (RFC 3339) an optional point in time to stop the recovery at (PITR).
   # CloudNativePG reads bootstrap only when it creates the first instance, so the next upgrade without these values
   # removes them from the Cluster and changes nothing in the restored database.

@@ -7,16 +7,22 @@
 #     and pull requests are read through gh with the job's repository;
 #   - local: everything on stdout, no mask, links "local", and no write through the platform's API (reads still are);
 #   - another CI (GitLab CI, a CI=true one): a clear error, nothing written;
-#   - pull requests of another repository (svp-gitops) and of an app's bot, and the push time of a commit of another
-#     repository;
+#   - pull requests of another repository (svp-gitops) and of an app's bot;
 #   - the scripts give what they gave when they read GitHub's variables themselves: plan.sh, vuln-predicate.sh,
 #     provenance-predicate.sh (the workflow, ref and commit of the run, and the services input of a dispatch),
 #     scan-gate.sh and values-check.sh (the signing identity is read from the table of release sources of the
 #     policy's chart);
-#   - scan-gate.sh --grype on grype reports written by hand: a Critical match blocks and is named, --allow-critical lets
-#     it through, High and below are only counted; an entry of .trivyignore.yaml covers a match by its id or a related
-#     id with the same purl (qualifiers and escapes aside), never another version; an expired entry fails the gate;
-#     a report that is not grype's exits 2;
+#   - scan-gate.sh with a fake docker standing in for trivy and grype: the flags each pass gets (trivy convert of the
+#     secrets with no --severity and no ignore file, of the vulnerabilities with --severity CRITICAL and the tree's
+#     .trivyignore.yaml, each reading only its own findings; grype with --fail-on critical and the tree's .grype.yaml),
+#     a secret blocks even with --allow-critical, a CRITICAL blocks unless --allow-critical, a scanner that fails or a
+#     report that is not trivy's exits 2, one summary line per scan; --check-ignorefile holds .trivyignore.yaml to
+#     vulnerabilities with a statement, purls with a version and at most 30 days, refuses an expired entry, and holds
+#     .grype.yaml to ignore rules of vulnerability, include-aliases: true, package name and version, each exactly one
+#     entry in force of .trivyignore.yaml (the purl's name as grype names the package, with its namespace unless it is
+#     a distribution's, a %40 scope decoded), refusing any other key (only-notfixed, fix-state, package.type) and a
+#     plain value YAML reads as a null, a bool, a number or a date; the image gates refuse a broken file but leave an
+#     expired entry to trivy and job config;
 #   - verify-release.sh with a fake cosign that answers from fixtures, on a tree laid out as svp-gitops: without
 #     requireProvenance in the policy's values at the commit charts.yaml pins or in the overlays only the signature and
 #     the vuln attestation are asked for; with it on (in the values at that commit, in the overlay of an environment,
@@ -41,8 +47,7 @@
 #     empty) with the step failing when GHCR does not give it;
 #   - changed-services.sh builds all six images of this repository (never web, which svp-frontend builds) for a change of
 #     platform.sh, as for common.sh and rescan.sh, and none for a change under web/ (a file added, then deleted) or of
-#     this test, of promote-test.sh, of sourcemaps-image.sh and its test (another
-#     source's CI pushes that image), of a scenario file under deploy/ci/verify/, of the
+#     this test, of promote-test.sh, of ghcr-digest.sh and its test, of a scenario file under deploy/ci/verify/, of the
 #     scripts of other workflows and of svp-gitops's check (gitops-check.sh with
 #     values-check.sh and verify-release.sh and the tests of these), of the policy's values or of docs/; all six for a
 #     change of the GRYPE_IMAGE line of the Makefile, none for another line of it;
@@ -58,7 +63,8 @@
 #     in this checkout refuses a run of svp-frontend that forgot SVP_CODE_ROOT, a run of a fork and a run of this
 #     repository under its name before the rename (no source names it); in this checkout plan.sh
 #     builds the six for services all and refuses services web, and build-image.sh refuses web before it builds
-#     anything; scan-gate.sh reads that tree's .trivyignore.yaml and stops, naming it, when the tree has none;
+#     anything; scan-gate.sh reads that tree's .trivyignore.yaml and .grype.yaml and stops, naming the file, when the
+#     tree has either not;
 #   - web_clone of deploy/k8s/lib.sh without WEB_REF checks out the commit of the web release stg runs when it is a
 #     release of web, and refuses one under another prefix before anything is cloned.
 # Runs on macOS and Linux: no network, no Docker, no cluster.
@@ -90,15 +96,11 @@ same() {
 has() { grep -qF -- "$2" "$1"; }
 lacks() { ! grep -qF -- "$2" "$1"; }
 
-# --- Fakes. gh writes each call to gh.log, one line of %q-quoted arguments, and answers pr list from gh/prs.json; api
-# with gh/runs.json for a workflow's runs, gh/artifacts-<run>.json for a run's artifacts (none when the file is missing),
-# gh/pulls.json for the pull requests of a commit (none when the file is missing), and
-# gh/events.json otherwise, run through its --jq filter; run download writes the file image-digest into its --dir.
-# With FAKE_GH_FAIL set it fails as the host would; with FAKE_GH_DOWNLOAD_FAIL set only run download fails, naming the
-# signed link it was sent to, as gh does, and with GH_DEBUG or DEBUG set run download prints its request line as gh's
-# debug log does. cosign records its arguments and refuses every signature; with FAKE_COSIGN_DIR set it accepts every
-# signature, prints FAKE_COSIGN_DIR/<type>.jsonl for verify-attestation --type <type> (refusing without that file), and
-# with --certificate-github-workflow-sha accepts only the commit in FAKE_COSIGN_DIR/cert-sha.
+# --- Fakes. gh writes each call to gh.log, one line of %q-quoted arguments, and answers pr list from gh/prs.json; with
+# FAKE_GH_FAIL set it fails as the host would. cosign records its arguments and refuses every signature; with
+# FAKE_COSIGN_DIR set it accepts every signature, prints FAKE_COSIGN_DIR/<type>.jsonl for verify-attestation --type
+# <type> (refusing without that file), and with --certificate-github-workflow-sha accepts only the commit in
+# FAKE_COSIGN_DIR/cert-sha.
 mkdir -p "$work/bin" "$work/gh" "$work/runner-temp" "$work/home"
 cat >"$work/bin/gh" <<'EOF'
 #!/usr/bin/env bash
@@ -110,38 +112,6 @@ if [ -n "${FAKE_GH_FAIL:-}" ]; then
 fi
 case "$1 $2" in
 "pr list") cat "$FAKE_GH_DIR/prs.json" ;;
-"api -X")
-  path=$4
-  while [ $# -gt 0 ] && [ "$1" != --jq ]; do shift; done
-  case $path in
-  */actions/workflows/*/runs) file=$FAKE_GH_DIR/runs.json ;;
-  */actions/runs/*/artifacts)
-    id=${path%/artifacts}
-    file=$FAKE_GH_DIR/artifacts-${id##*/}.json
-    [ -f "$file" ] || file=$FAKE_GH_DIR/no-artifacts.json
-    ;;
-  */commits/*/pulls)
-    file=$FAKE_GH_DIR/pulls.json
-    [ -f "$file" ] || file=$FAKE_GH_DIR/no-pulls.json
-    ;;
-  *) file=$FAKE_GH_DIR/events.json ;;
-  esac
-  jq -r "$2" "$file"
-  ;;
-"run download")
-  if [ -n "${GH_DEBUG:-}${DEBUG:-}" ]; then
-    echo "> GET /a/archive.zip?sv=2025-01-05&sig=SIGNEDQUERY%3D HTTP/1.1" >&2
-  fi
-  if [ -n "${FAKE_GH_DOWNLOAD_FAIL:-}" ]; then
-    echo "error downloading web-sourcemaps-amd64: HTTP 403: Server failed to authenticate the request." \
-      "(https://results.blob.example/a/archive.zip?sv=2025-01-05&se=2026-10-26T14%3A00Z&sig=SIGNEDQUERY%3D)" >&2
-    echo "error downloading web-sourcemaps-amd64: Get \"https://results.blob.example:443/a/archive.zip?sig=SIGNEDQUERY\":" \
-      "dial tcp: lookup results.blob.example: no such host" >&2
-    exit 1
-  fi
-  while [ $# -gt 0 ] && [ "$1" != --dir ]; do shift; done
-  echo "$FAKE_GH_DIGEST" >"$2/image-digest"
-  ;;
 esac
 EOF
 cat >"$work/bin/cosign" <<'EOF'
@@ -184,8 +154,6 @@ exit 1
 EOF
 chmod 755 "$work/bin/gh" "$work/bin/cosign"
 echo '[]' >"$work/gh/prs.json"
-echo '{"total_count": 0, "artifacts": []}' >"$work/gh/no-artifacts.json"
-echo '[]' >"$work/gh/no-pulls.json"
 
 # on PLATFORM COMMAND...: runs COMMAND with the variables of PLATFORM and none of the others': github (a made-up job of
 # repository octo/repo), local (none), gitlab (GitLab CI's own). git reads no configuration of this machine.
@@ -196,9 +164,9 @@ on() {
     -u GITHUB_RUN_ID -u GITHUB_RUN_ATTEMPT -u GITHUB_WORKFLOW_REF -u GITHUB_REF -u GITHUB_SHA -u GITHUB_EVENT_NAME
     -u GITHUB_EVENT_PATH -u RUNNER_TEMP -u CI -u GITLAB_CI -u JENKINS_URL
     -u TF_BUILD -u GIT_DIR -u GIT_WORK_TREE -u PROMOTE_DRY_RUN -u PROMOTE_DRY_RUN_PRS -u RUNNER_ENVIRONMENT
-    -u FAKE_GH_FAIL -u FAKE_GH_DOWNLOAD_FAIL -u SVP_CODE_ROOT
+    -u FAKE_GH_FAIL -u SVP_CODE_ROOT
     PATH="$work/bin:$PATH" HOME="$work/home" GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1
-    FAKE_GH_LOG="$work/gh.log" FAKE_GH_DIR="$work/gh" FAKE_GH_DIGEST=sha256:fetched FAKE_COSIGN_LOG="$work/cosign.log")
+    FAKE_GH_LOG="$work/gh.log" FAKE_GH_DIR="$work/gh" FAKE_COSIGN_LOG="$work/cosign.log")
   case $platform in
   github)
     "${base[@]}" GITHUB_ACTIONS=true CI=true GITHUB_OUTPUT="$work/output" GITHUB_STEP_SUMMARY="$work/summary" \
@@ -395,219 +363,6 @@ same "local: the dispatch hint names the code repository" \
 same "github: the dispatch hint names the code repository, not the job's" \
   "gh workflow run images.yml --repo anhnvcoder/svp-backend --ref main" \
   "$(fn github 'ci_dispatch_hint images.yml main')"
-sha=0123456789abcdef0123456789abcdef01234567
-jq -n --arg sha "$sha" '[{type: "PushEvent", payload: {head: "ffff"}, created_at: "2026-10-01T00:00:00Z"},
-  {type: "PushEvent", payload: {head: $sha}, created_at: "2026-10-02T03:04:05Z"},
-  {type: "PullRequestEvent", payload: {head: $sha}, created_at: "2026-10-03T00:00:00Z"}]' >"$work/gh/events.json"
-pulls_filter="[.[] | select(.merge_commit_sha == \"$sha\" and .merged_at != null)] | first // empty
-        | \"\(.merged_at) merged_at of PR #\(.number)\""
-events_filter="[.[] | select(.type == \"PushEvent\" and .payload.head == \"$sha\") | .created_at] | last // empty
-          | \"\(.) PushEvent of the repository's events\""
-same "local: no pull request of the commit, the push time is read from the host's events" \
-  "2026-10-02T03:04:05Z PushEvent of the repository's events" "$(fn local "ci_push_time $sha")"
-same "local: the pull requests, then the events, are read for this repository" "$(gh_line api -X GET \
-  repos/anhnvcoder/svp-backend/commits/$sha/pulls -f per_page=100 --jq "$pulls_filter")
-$(gh_line api -X GET repos/anhnvcoder/svp-backend/events -f per_page=100 --jq "$events_filter")" \
-  "$(cat "$work/gh.log")"
-# A pull request merged as the commit gives its merged_at, and the events are not read; one merged as another commit,
-# or not merged, is skipped.
-jq -n --arg sha "$sha" '[{number: 7, merge_commit_sha: "eeee", merged_at: "2026-10-04T00:00:00Z"},
-  {number: 8, merge_commit_sha: $sha, merged_at: null},
-  {number: 9, merge_commit_sha: $sha, merged_at: "2026-10-02T03:00:00Z"}]' >"$work/gh/pulls.json"
-fresh
-same "github: a pull request merged as the commit gives its merged_at" "2026-10-02T03:00:00Z merged_at of PR #9" \
-  "$(fn github "ci_push_time $sha")"
-check "github: the events are not read when the pull request answers" test "$(wc -l <"$work/gh.log")" -eq 1
-jq -n --arg sha "$sha" '[{number: 7, merge_commit_sha: "eeee", merged_at: "2026-10-04T00:00:00Z"},
-  {number: 8, merge_commit_sha: $sha, merged_at: null}]' >"$work/gh/pulls.json"
-same "github: pull requests merged as another commit or not merged are skipped, the events answer" \
-  "2026-10-02T03:04:05Z PushEvent of the repository's events" "$(fn github "ci_push_time $sha")"
-rm "$work/gh/pulls.json"
-fresh
-if got=$(fn local "export FAKE_GH_FAIL=1; ci_push_time $sha" 2>/dev/null); then
-  fail "local: a host error is not an answer ($got)"
-else
-  ok "local: a host error is not an answer"
-fi
-check "local: a failed read of the pull requests is not answered from the events" test "$(wc -l <"$work/gh.log")" -eq 1
-if fn local 'ci_push_time "x\" or true"' 2>/dev/null; then fail "local: ci_push_time takes only a full SHA"; else
-  ok "local: ci_push_time takes only a full SHA"
-fi
-fresh
-same "local: the push time of a commit of another repository" \
-  "2026-10-02T03:04:05Z PushEvent of the repository's events" "$(fn local "ci_push_time $sha anhnvcoder/svp-gitops")"
-same "local: the pull requests, then the events, are read for that repository" "$(gh_line api -X GET \
-  repos/anhnvcoder/svp-gitops/commits/$sha/pulls -f per_page=100 --jq "$pulls_filter")
-$(gh_line api -X GET repos/anhnvcoder/svp-gitops/events -f per_page=100 --jq "$events_filter")" \
-  "$(cat "$work/gh.log")"
-if fn local "ci_push_time $sha 'a b/c'" 2>/dev/null; then fail "local: ci_push_time takes a repository as owner/name"; else
-  ok "local: ci_push_time takes a repository as owner/name"
-fi
-
-# --- ci_hosted_runner: true only on a runner GitHub hands out for the job; silent either way.
-check "github: a github-hosted runner is a hosted runner" on github env RUNNER_ENVIRONMENT=github-hosted "$BASH" -c \
-  '. "$0"; ci_hosted_runner' "$here/platform.sh"
-same "github: a hosted runner prints nothing" "" "$(on github env RUNNER_ENVIRONMENT=github-hosted "$BASH" -c \
-  '. "$0"; ci_hosted_runner' "$here/platform.sh" 2>&1)"
-for runner in self-hosted ""; do
-  rc=0
-  out=$(on github env RUNNER_ENVIRONMENT="$runner" "$BASH" -c '. "$0"; ci_hosted_runner' "$here/platform.sh" 2>&1) ||
-    rc=$?
-  same "github: RUNNER_ENVIRONMENT='$runner' is no hosted runner, silently" "1 " "$rc $out"
-done
-rc=0
-out=$(fn github ci_hosted_runner 2>&1) || rc=$?
-same "github: no RUNNER_ENVIRONMENT is no hosted runner, silently" "1 " "$rc $out"
-rc=0
-out=$(on local env RUNNER_ENVIRONMENT=github-hosted "$BASH" -c '. "$0"; ci_hosted_runner' "$here/platform.sh" 2>&1) ||
-  rc=$?
-same "local: a machine is no hosted runner, whatever RUNNER_ENVIRONMENT says, silently" "1 " "$rc $out"
-rc=0
-out=$(on gitlab env RUNNER_ENVIRONMENT=github-hosted "$BASH" -c '. "$0"; ci_hosted_runner' "$here/platform.sh" 2>&1) ||
-  rc=$?
-case "$rc $out" in "1 FAIL  this runs on GitLab CI"*) ok "gitlab: ci_hosted_runner fails, naming GitLab CI" ;;
-*) fail "gitlab: ci_hosted_runner fails, naming GitLab CI (got '$rc $out')" ;; esac
-
-# --- ci_artifact_runs, ci_artifact_fetch. Runs of images.yml: two builds of the commit that hold the artifact (a push,
-# then a dispatch that built it again, started later), a red run that still released it, and runs that must not be
-# listed: a pull request's, one still running, one whose artifact expired, the latest one with no such artifact (and
-# another artifact), and a run of another commit.
-other=fedcba9876543210fedcba9876543210fedcba98
-jq -n --arg sha "$sha" --arg other "$other" '[
-  {id: 101, head_sha: $sha, event: "push", status: "completed", conclusion: "success",
-    run_started_at: "2026-10-01T00:00:00Z"},
-  {id: 102, head_sha: $sha, event: "workflow_dispatch", status: "completed", conclusion: "success",
-    run_started_at: "2026-10-03T00:00:00Z"},
-  {id: 103, head_sha: $sha, event: "push", status: "completed", conclusion: "failure",
-    run_started_at: "2026-10-02T00:00:00Z"},
-  {id: 104, head_sha: $sha, event: "pull_request", status: "completed", conclusion: "success",
-    run_started_at: "2026-10-04T00:00:00Z"},
-  {id: 105, head_sha: $sha, event: "push", status: "in_progress", conclusion: null,
-    run_started_at: "2026-10-05T00:00:00Z"},
-  {id: 106, head_sha: $sha, event: "push", status: "completed", conclusion: "success",
-    run_started_at: "2026-10-06T00:00:00Z"},
-  {id: 107, head_sha: $sha, event: "workflow_dispatch", status: "completed", conclusion: "failure",
-    run_started_at: "2026-10-07T00:00:00Z"},
-  {id: 108, head_sha: $other, event: "push", status: "completed", conclusion: "success",
-    run_started_at: "2026-10-08T00:00:00Z"}
-] | {total_count: length, workflow_runs: .}' >"$work/gh/runs.json"
-for id in 101 102 103 104 105 108; do
-  jq -n '{total_count: 1, artifacts: [{name: "web-sourcemaps-amd64", expired: false}]}' >"$work/gh/artifacts-$id.json"
-done
-jq -n '{total_count: 1, artifacts: [{name: "web-sourcemaps-amd64", expired: true}]}' >"$work/gh/artifacts-106.json"
-jq -n '{total_count: 1, artifacts: [{name: "release-web", expired: false}]}' >"$work/gh/artifacts-107.json"
-runs_jq="\"\\(.total_count) \\(.workflow_runs | length)\", (.workflow_runs
-        | map(select(.head_sha == \"$sha\" and .status == \"completed\"
-          and (.event == \"push\" or .event == \"workflow_dispatch\")))
-        | sort_by(.run_started_at, .id) | reverse | .[].id)"
-for p in github local; do
-  [ $p = github ] && repo=octo/repo || repo=anhnvcoder/svp-backend
-  fresh
-  rc=0
-  got=$(fn $p "ci_artifact_runs images.yml $sha web-sourcemaps-amd64") || rc=$?
-  same "$p: ci_artifact_runs lists every finished push or dispatch build holding the artifact, latest started first" \
-    "0 102 103 101" "$rc $(echo $got)"
-  same "$p: ci_artifact_runs asks for the workflow's finished runs of the commit in the repository" "$(gh_line api \
-    -X GET "repos/$repo/actions/workflows/images.yml/runs" -f head_sha=$sha -f status=completed -f per_page=100 \
-    --jq "$runs_jq")" "$(head -n 1 "$work/gh.log")"
-  check "$p: ci_artifact_runs asks a candidate run for its artifact" has "$work/gh.log" "$(gh_line api -X GET \
-    "repos/$repo/actions/runs/102/artifacts" -f name=web-sourcemaps-amd64 -f per_page=100 --jq \
-    '[.artifacts[] | select(.name == "web-sourcemaps-amd64" and .expired == false)] | length')"
-  same "$p: ci_artifact_runs asks only the five finished push or dispatch runs of the commit for artifacts" \
-    "107 106 102 103 101" "$(sed -n 's|.*/actions/runs/\([0-9]*\)/artifacts .*|\1|p' "$work/gh.log" | tr '\n' ' ' |
-      sed 's/ $//')"
-done
-rc=0
-got=$(fn local "ci_artifact_runs images.yml $sha web-sourcemaps-arm64" 2>&1) || rc=$?
-same "local: ci_artifact_runs exits 3, silently, when no run holds the artifact" "3 " "$rc $got"
-rc=0
-got=$(fn local "ci_artifact_runs images.yml 1111111111111111111111111111111111111111 web-sourcemaps-amd64" 2>&1) ||
-  rc=$?
-same "local: ci_artifact_runs exits 3 for a commit with no run" "3 " "$rc $got"
-for args in "images.yml ${sha:0:12} web-sourcemaps-amd64" "images.yml $(tr a-f A-F <<<"$sha") web-sourcemaps-amd64" \
-  "'images.yml\" or true' $sha web-sourcemaps-amd64" "images.yml $sha 'web\") or true'" "images.yml $sha ''" \
-  "images.yml $sha"; do
-  fresh
-  rc=0
-  fn local "ci_artifact_runs $args" >/dev/null 2>"$work/err" || rc=$?
-  same "local: ci_artifact_runs $args is refused before gh is called" "1 0" "$rc $(wc -l <"$work/gh.log" | tr -d ' ')"
-done
-rc=0
-fn local "export FAKE_GH_FAIL=1; ci_artifact_runs images.yml $sha web-sourcemaps-amd64" >/dev/null 2>"$work/err" ||
-  rc=$?
-same "local: ci_artifact_runs exits 1 when the host fails" 1 "$rc"
-check "local: ci_artifact_runs shows the host's error" has "$work/err" "HTTP 502: Bad Gateway"
-jq '.total_count = 101' "$work/gh/runs.json" >"$work/gh/runs-more.json" &&
-  mv "$work/gh/runs-more.json" "$work/gh/runs.json"
-rc=0
-got=$(fn local "ci_artifact_runs images.yml $sha web-sourcemaps-amd64" 2>"$work/err") || rc=$?
-same "local: ci_artifact_runs fails, listing nothing, when the host has more runs than one page" "1 " "$rc $got"
-check "local: ci_artifact_runs says a page is missing" has "$work/err" \
-  "FAIL  the host has 101 finished runs of images.yml at $sha but returned 8: read the next page"
-rc=0
-fn gitlab "ci_artifact_runs images.yml $sha web-sourcemaps-amd64" >/dev/null 2>"$work/err" || rc=$?
-same "gitlab: ci_artifact_runs fails" 1 "$rc"
-check "gitlab: ci_artifact_runs names GitLab CI" has "$work/err" "this runs on GitLab CI"
-
-for p in github local; do
-  [ $p = github ] && repo=octo/repo || repo=anhnvcoder/svp-backend
-  fresh
-  rm -rf "$work/fetch" && mkdir "$work/fetch"
-  rc=0
-  fn $p "ci_artifact_fetch 102 web-sourcemaps-amd64 '$work/fetch'" >/dev/null || rc=$?
-  same "$p: ci_artifact_fetch downloads the run's artifact into the directory" "0 sha256:fetched" \
-    "$rc $(cat "$work/fetch/image-digest" 2>/dev/null)"
-  same "$p: ci_artifact_fetch checks the artifact, then downloads it by name from the repository" "$(gh_line api \
-    -X GET "repos/$repo/actions/runs/102/artifacts" -f name=web-sourcemaps-amd64 -f per_page=100 --jq \
-    '[.artifacts[] | select(.name == "web-sourcemaps-amd64" and .expired == false)] | length')"$'\n'"$(gh_line run \
-    download 102 --repo "$repo" --name web-sourcemaps-amd64 --dir "$work/fetch")" "$(cat "$work/gh.log")"
-done
-for run in 106 107 999; do
-  fresh
-  rm -rf "$work/fetch" && mkdir "$work/fetch"
-  rc=0
-  got=$(fn local "ci_artifact_fetch $run web-sourcemaps-amd64 '$work/fetch'" 2>&1) || rc=$?
-  same "local: ci_artifact_fetch exits 3, silently, for run $run (artifact expired, absent, no run)" "3 " "$rc $got"
-  check "local: ci_artifact_fetch downloads nothing from run $run" lacks "$work/gh.log" "run download"
-done
-rm -rf "$work/fetch" && mkdir "$work/fetch"
-echo old >"$work/fetch/.left-over"
-fresh
-rc=0
-fn local "ci_artifact_fetch 102 web-sourcemaps-amd64 '$work/fetch'" >/dev/null 2>"$work/err" || rc=$?
-same "local: ci_artifact_fetch refuses a directory that is not empty" "1 0" "$rc $(wc -l <"$work/gh.log" | tr -d ' ')"
-check "local: ci_artifact_fetch names the directory that is not empty" has "$work/err" \
-  "FAIL  $work/fetch is not an empty directory"
-same "local: ci_artifact_fetch leaves that directory as it was" .left-over "$(ls -A "$work/fetch")"
-for args in "102 web-sourcemaps-amd64 '$work/no-such-dir'" \
-  "'102 or true' web-sourcemaps-amd64 '$work/empty'" "-1 web-sourcemaps-amd64 '$work/empty'" \
-  "102 'web\") or true' '$work/empty'" "102 web-sourcemaps-amd64"; do
-  fresh
-  rm -rf "$work/empty" && mkdir "$work/empty"
-  rc=0
-  fn local "ci_artifact_fetch $args" >/dev/null 2>"$work/err" || rc=$?
-  same "local: ci_artifact_fetch $args is refused before gh is called" "1 0" "$rc $(wc -l <"$work/gh.log" | tr -d ' ')"
-done
-rm -rf "$work/empty" && mkdir "$work/empty"
-rc=0
-fn local "export FAKE_GH_FAIL=1; ci_artifact_fetch 102 web-sourcemaps-amd64 '$work/empty'" >/dev/null 2>"$work/err" ||
-  rc=$?
-same "local: ci_artifact_fetch exits 1 when the host fails" 1 "$rc"
-check "local: ci_artifact_fetch shows the host's error" has "$work/err" "HTTP 502: Bad Gateway"
-for p in github local; do
-  rm -rf "$work/empty" && mkdir "$work/empty"
-  rc=0
-  fn $p "export FAKE_GH_DOWNLOAD_FAIL=1 GH_DEBUG=api DEBUG=1
-    ci_artifact_fetch 102 web-sourcemaps-amd64 '$work/empty'" >"$work/out" 2>"$work/err" || rc=$?
-  same "$p: ci_artifact_fetch exits 1 when the download fails" 1 "$rc"
-  same "$p: ci_artifact_fetch shows gh's error with each link cut to its scheme and host, and no debug log" \
-    "error downloading web-sourcemaps-amd64: HTTP 403: Server failed to authenticate the request. \
-(https://results.blob.example/<hidden>
-error downloading web-sourcemaps-amd64: Get \"https://results.blob.example/<hidden>\": dial tcp: lookup \
-results.blob.example: no such host" "$(cat "$work/err")"
-  same "$p: ci_artifact_fetch prints nothing on stdout when the download fails" "" "$(cat "$work/out")"
-  check "$p: ci_artifact_fetch never prints the signed part of the link" lacks "$work/err" SIGNEDQUERY
-done
 
 # --- another CI: a clear error, nothing written.
 fresh
@@ -854,144 +609,340 @@ same "provenance-predicate.sh on github: workflow, input, commit, builder and at
   '{"buildDefinition":{"buildType":"https://actions.github.io/buildtypes/workflow/v1","externalParameters":{"workflow":{"ref":"refs/heads/main","repository":"https://github.example/octo/repo","path":".github/workflows/images.yml"},"inputs":{"services":"all"}},"resolvedDependencies":[{"uri":"git+https://github.example/octo/repo@refs/heads/main","digest":{"gitCommit":"89abcdef0123456789abcdef0123456789abcdef"}}]},"runDetails":{"builder":{"id":"https://github.example/octo/repo/.github/workflows/images.yml@refs/heads/main"},"metadata":{"invocationId":"https://github.example/octo/repo/actions/runs/4242/attempts/3"}}}' \
   "$(jq -c . "$work/provenance.json")"
 
-# scan-gate.sh: the table in the summary and the counts in the log on github; the table in the log on a machine. A
-# secret's line goes to both.
-jq -n --arg c "$digest_b" '{SchemaVersion: 2, Metadata: {ImageID: $c}, Results: [{Target: "app",
-  Vulnerabilities: [{Severity: "HIGH"}], Secrets: [{RuleID: "aws-key", Severity: "CRITICAL", StartLine: 3}]}]}' \
-  >"$work/report.json"
-fresh
-if on github "$tree/deploy/ci/scan-gate.sh" "gw linux/amd64" "$work/report.json" >"$work/gate.out" \
-  2>"$work/gate.err"; then
-  fail "scan-gate.sh: a secret blocks"
-else ok "scan-gate.sh: a secret blocks"; fi
-same "scan-gate.sh on github: the table and the secret in the summary" '| Image | CRITICAL | HIGH | MEDIUM | LOW | UNKNOWN | Secrets |
-| --- | --- | --- | --- | --- | --- | --- |
-| gw linux/amd64 | 0 | 1 | 0 | 0 | 0 | 1 |
-
-secret  aws-key (CRITICAL) in app line 3' "$(cat "$work/summary")"
-same "scan-gate.sh on github: the counts in the log" \
-  "gw linux/amd64: CRITICAL 0, HIGH 1, MEDIUM 0, LOW 0, UNKNOWN 0, secrets 1" "$(cat "$work/gate.out")"
-check "scan-gate.sh on github: the secret in the log too" has "$work/gate.err" "secret  aws-key (CRITICAL) in app line 3"
-fresh
-on local "$tree/deploy/ci/scan-gate.sh" "gw linux/amd64" "$work/report.json" >"$work/gate.out" 2>"$work/gate.err" ||
-  true
-same "scan-gate.sh on a machine: the table in the log, no counts line" '| Image | CRITICAL | HIGH | MEDIUM | LOW | UNKNOWN | Secrets |
-| --- | --- | --- | --- | --- | --- | --- |
-| gw linux/amd64 | 0 | 1 | 0 | 0 | 0 | 1 |' "$(cat "$work/gate.out")"
-check "scan-gate.sh on a machine: the secret in the log" has "$work/gate.err" "secret  aws-key (CRITICAL) in app line 3"
-
-# scan-gate.sh --grype: reports of grype written by hand. match ID SEVERITY PURL [RELATED_ID]: one match of a report.
-match() {
-  jq -n --arg id "$1" --arg sev "$2" --arg purl "$3" --arg rel "${4:-}" '{
-    vulnerability: {id: $id, severity: $sev, fix: {versions: ["9.9.9"], state: "fixed"}},
-    relatedVulnerabilities: (if $rel == "" then [] else [{id: $rel}] end),
-    artifact: {name: ($purl | sub("^pkg:[^/]+/(.*/)?"; "") | sub("@.*$"; "")),
-      version: ($purl | sub("^[^@]*@"; "") | sub("[?#].*$"; "")), purl: $purl}}'
-}
-# grype_report FILE MATCH...: a grype JSON report holding the matches.
-grype_report() {
-  local file=$1
+# scan-gate.sh. The verdicts are trivy's and grype's: here a fake docker stands in for both, records each call in
+# docker.log (one line of arguments) and answers with the exit code the case sets: FAKE_TRIVY_VULNS for trivy convert
+# with --severity (the vulnerability pass), FAKE_TRIVY_SECRETS for the one without (the secret pass), FAKE_GRYPE for
+# grype, which also gets FAKE_GRYPE_JSON as its report. Each convert input is kept in fake/ to check what each pass
+# reads. What the scanners do with these flags (an entry covering exactly its package version, a HIGH secret found
+# without --severity, include-aliases) was run with the pinned images, not here.
+cat >"$work/bin/docker" <<'EOF'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >>"$FAKE_DOCKER_LOG"
+in= out= file= convert= severity=
+for a in "$@"; do
+  case $a in
+  *:/in:ro) in=${a%:/in:ro} ;;
+  *:/out) out=${a%:/out} ;;
+  /in/*) file=${a#/in/} ;;
+  convert) convert=1 ;;
+  --severity) severity=1 ;;
+  esac
+done
+if [ -n "$convert" ]; then
+  cp "$in/$file" "$FAKE_DOCKER_DIR/$file"
+  if [ -n "$severity" ]; then exit "${FAKE_TRIVY_VULNS:-0}"; else exit "${FAKE_TRIVY_SECRETS:-0}"; fi
+fi
+case " $* " in
+*" sbom:/out/sbom.spdx.json "*)
+  [ "${FAKE_GRYPE:-0}" = 1 ] || { cp "$FAKE_GRYPE_JSON" "$out/grype.json" && echo '{}' >"$out/grype.sarif.raw"; }
+  exit "${FAKE_GRYPE:-0}"
+  ;;
+esac
+echo "fake docker: unexpected call: $*" >&2
+exit 99
+EOF
+chmod 755 "$work/bin/docker"
+mkdir -p "$work/fake"
+# gate PLATFORM NAME WANT_EXIT [VAR=VALUE...] -- ARGS...: scan-gate.sh ARGS on PLATFORM with the fake scanners; ok
+# when it exits WANT_EXIT. Output in gate.out and gate.err, the fake's calls in docker.log.
+gate() {
+  local platform=$1 name=$2 want=$3 vars=() rc=0
+  shift 3
+  while [ "$1" != -- ]; do vars+=("$1") && shift; done
   shift
-  jq -s '{descriptor: {name: "grype", version: "0.121.0"}, matches: .}' <<<"$*" >"$file"
+  fresh
+  : >"$work/docker.log"
+  rm -f "$work/fake/"*
+  on "$platform" env TRIVY_IMAGE=trivy@sha256:1 GRYPE_IMAGE=grype@sha256:1 SVP_TRIVY_CACHE="$work/cache/trivy" \
+    SVP_GRYPE_CACHE="$work/cache/grype" FAKE_DOCKER_LOG="$work/docker.log" FAKE_DOCKER_DIR="$work/fake" \
+    ${vars[@]+"${vars[@]}"} "$tree/deploy/ci/scan-gate.sh" "$@" >"$work/gate.out" 2>"$work/gate.err" || rc=$?
+  same "$name (exit code)" "$want" "$rc"
 }
+soon=$(date -u -d '+10 days' +%F 2>/dev/null || date -u -v+10d +%F)
+late=$(date -u -d '+40 days' +%F 2>/dev/null || date -u -v+40d +%F)
+today=$(date -u +%F)
 # ignore_entry ID EXPIRED_AT PURL: one entry of .trivyignore.yaml.
 ignore_entry() {
   printf '  - id: %s\n    statement: Accepted for the test.\n    expired_at: %s\n    purls:\n      - %s\n' "$1" "$2" "$3"
 }
-# gate_grype NAME WANT_EXIT REPORT [FLAG]: runs the grype gate on a machine; ok when it exits WANT_EXIT.
-gate_grype() {
-  local name=$1 want=$2 report=$3 rc=0
-  shift 3
-  on local "$tree/deploy/ci/scan-gate.sh" "$@" --grype "web linux/arm64" "$report" >"$work/gate.out" \
-    2>"$work/gate.err" || rc=$?
-  same "$name (exit code)" "$want" "$rc"
+# grype_rule ID NAME VERSION: one rule of .grype.yaml.
+grype_rule() {
+  printf '  - vulnerability: %s\n    include-aliases: true\n    package:\n      name: %s\n      version: %s\n' "$1" "$2" "$3"
 }
-soon=$(date -u -d '+10 days' +%F 2>/dev/null || date -u -v+10d +%F)
-today=$(date -u +%F)
+# ignore_files: a .trivyignore.yaml with one entry for left-pad@1.0.0 and the matching .grype.yaml, the shape both
+# cases below start from.
+ignore_files() {
+  { echo "vulnerabilities:" && ignore_entry CVE-2026-1111 "$soon" pkg:npm/left-pad@1.0.0; } >"$tree/.trivyignore.yaml"
+  { echo "ignore:" && grype_rule CVE-2026-1111 left-pad 1.0.0; } >"$tree/.grype.yaml"
+}
+
+# The trivy gate on a report with one HIGH vulnerability and one secret.
+jq -n --arg c "$digest_b" '{SchemaVersion: 2, Metadata: {ImageID: $c}, Results: [{Target: "app",
+  Vulnerabilities: [{Severity: "HIGH"}], Secrets: [{RuleID: "aws-key", Severity: "HIGH", StartLine: 3}]}]}' \
+  >"$work/report.json"
+ignore_files
+gate github "scan-gate.sh: trivy finds a secret, it blocks" 1 FAKE_TRIVY_SECRETS=5 -- "gw linux/amd64" "$work/report.json"
+same "scan-gate.sh on github: one line in the summary, the secret under it" '- gw linux/amd64 (trivy): CRITICAL 0, HIGH 1, secrets 1
+secret  aws-key (HIGH) in app line 3' "$(cat "$work/summary")"
+same "scan-gate.sh on github: the counts in the log" "gw linux/amd64 (trivy): CRITICAL 0, HIGH 1, secrets 1" \
+  "$(cat "$work/gate.out")"
+check "scan-gate.sh on github: the secret in the log too, rule, file and line" has "$work/gate.err" \
+  "secret  aws-key (HIGH) in app line 3"
+same "scan-gate.sh: the secret pass, then the vulnerability pass" \
+  "convert --exit-code 5 --format json --output /dev/null --ignorefile  /in/secrets.json --cache-dir /cache
+convert --exit-code 5 --format table --table-mode detailed --severity CRITICAL --ignorefile /ignore.yaml /in/vulnerabilities.json --cache-dir /cache" \
+  "$(sed 's/^.* trivy@sha256:1 //' "$work/docker.log")"
+check "scan-gate.sh: the ignore file trivy reads is the tree's" grep -qF -- "-v $tree/.trivyignore.yaml:/ignore.yaml:ro" \
+  "$work/docker.log"
+same "scan-gate.sh: the secret pass reads only the secrets" '[{"Target":"app","Secrets":[{"RuleID":"aws-key","Severity":"HIGH","StartLine":3}]}]' \
+  "$(jq -c .Results "$work/fake/secrets.json")"
+same "scan-gate.sh: the vulnerability pass reads only the vulnerabilities" \
+  '[{"Target":"app","Vulnerabilities":[{"Severity":"HIGH"}]}]' "$(jq -c .Results "$work/fake/vulnerabilities.json")"
+gate local "scan-gate.sh: --allow-critical never lets a secret through" 1 FAKE_TRIVY_SECRETS=5 -- --allow-critical \
+  "gw linux/amd64" "$work/report.json"
+same "scan-gate.sh on a machine: the summary line in the log, no counts line" \
+  "- gw linux/amd64 (trivy): CRITICAL 0, HIGH 1, secrets 1" "$(cat "$work/gate.out")"
+check "scan-gate.sh on a machine: the secret in the log" has "$work/gate.err" "secret  aws-key (HIGH) in app line 3"
+gate local "scan-gate.sh: trivy finds a CRITICAL, it blocks" 1 FAKE_TRIVY_VULNS=5 -- "gw linux/amd64" "$work/report.json"
+check "scan-gate.sh: a CRITICAL says nothing ships" has "$work/gate.err" \
+  "FAIL  gw linux/amd64 (trivy): CRITICAL vulnerabilities; nothing is pushed, signed or attested"
+gate local "scan-gate.sh: --allow-critical lets a CRITICAL through" 0 FAKE_TRIVY_VULNS=5 -- --allow-critical \
+  "gw linux/amd64" "$work/report.json"
+check "scan-gate.sh: --allow-critical says so" has "$work/gate.err" \
+  "note  gw linux/amd64 (trivy): CRITICAL vulnerabilities let through (--allow-critical)"
+gate local "scan-gate.sh: nothing found passes" 0 -- "gw linux/amd64" "$work/report.json"
+check "scan-gate.sh: the pass is said" has "$work/gate.out" "ok    gw linux/amd64 (trivy) passes the scan gate"
+check "scan-gate.sh: the report itself is not printed" lacks "$work/gate.out" '"Results"'
+gate local "scan-gate.sh: trivy failing is no pass, even with --allow-critical" 2 FAKE_TRIVY_VULNS=1 -- --allow-critical \
+  "gw linux/amd64" "$work/report.json"
+check "scan-gate.sh: trivy failing is said" has "$work/gate.err" "FAIL  gw linux/amd64: trivy could not read"
+gate local "scan-gate.sh: a report that is not trivy's image report is refused" 2 -- "gw linux/amd64" "$work/event.json"
+check "scan-gate.sh: says it is not a trivy image report" has "$work/gate.err" "is not a trivy image JSON report"
+check "scan-gate.sh: trivy is not asked about it" test ! -s "$work/docker.log"
+rm -f "$tree/.trivyignore.yaml" "$tree/.grype.yaml"
+gate local "scan-gate.sh: this tree without ignore files passes" 0 -- "gw linux/amd64" "$work/report.json"
+check "scan-gate.sh: without .trivyignore.yaml trivy reads no ignore file" grep -qF -- \
+  "--severity CRITICAL --ignorefile  /in/vulnerabilities.json" "$work/docker.log"
+
+# The grype gate: grype runs on DIR/sbom.spdx.json with .grype.yaml and --fail-on critical (exit 2 when it finds one).
+# match ID SEVERITY PURL: one match of a grype report.
+match() {
+  jq -n --arg id "$1" --arg sev "$2" --arg purl "$3" '{
+    vulnerability: {id: $id, severity: $sev, fix: {versions: ["9.9.9"], state: "fixed"}},
+    artifact: {name: ($purl | sub("^pkg:[^/]+/(.*/)?"; "") | sub("@.*$"; "")),
+      version: ($purl | sub("^[^@]*@"; "") | sub("[?#].*$"; "")), purl: $purl}}'
+}
+# grype_report FILE IGNORED MATCH...: a grype JSON report holding the matches and IGNORED ignored matches.
+grype_report() {
+  local file=$1 ignored=$2
+  shift 2
+  jq -s --argjson n "$ignored" '{descriptor: {name: "grype", version: "0.121.0"}, matches: .,
+    ignoredMatches: [range($n) | {}]}' <<<"$*" >"$file"
+}
+mkdir -p "$work/leg"
+echo '{"spdxVersion": "SPDX-2.3"}' >"$work/leg/sbom.spdx.json"
 critical_npm=$(match CVE-2026-1111 Critical pkg:npm/left-pad@1.0.0)
 high_npm=$(match CVE-2026-2222 High pkg:npm/zod@3.25.76)
-
-rm -f "$tree/.trivyignore.yaml"
-grype_report "$work/grype.json" "$critical_npm" "$high_npm"
-gate_grype "scan-gate.sh --grype: a Critical match blocks" 1 "$work/grype.json"
-check "scan-gate.sh --grype: id, package@version, purl and fix of the Critical match" has "$work/gate.err" \
-  "critical  CVE-2026-1111 left-pad@1.0.0 pkg:npm/left-pad@1.0.0 (fixed: 9.9.9)"
+grype_report "$work/grype.json" 1 "$critical_npm" "$high_npm"
+ignore_files
+grype_gate() { gate "$1" "$2" "$3" FAKE_GRYPE_JSON="$work/grype.json" "${@:4}"; }
+grype_gate github "scan-gate.sh --grype: grype finds a Critical, it blocks" 1 FAKE_GRYPE=2 -- --grype "web linux/arm64" \
+  "$work/leg"
+check "scan-gate.sh --grype: grype runs with --fail-on critical and the tree's .grype.yaml" grep -qF -- \
+  "-v $tree/.grype.yaml:/ignore/grype.yaml:ro grype@sha256:1 sbom:/out/sbom.spdx.json -c /ignore/grype.yaml --fail-on critical -o json=/out/grype.json -o sarif=/out/grype.sarif.raw -q" \
+  "$work/docker.log"
+same "scan-gate.sh --grype on github: one line in the summary, the Critical under it" '- web linux/arm64 (grype): Critical 1, High 1, excepted by .grype.yaml 1
+critical  CVE-2026-1111 left-pad@1.0.0 pkg:npm/left-pad@1.0.0 (fixed: 9.9.9)' "$(cat "$work/summary")"
 check "scan-gate.sh --grype: the report itself is not printed" lacks "$work/gate.out" '"matches"'
-gate_grype "scan-gate.sh --grype: --allow-critical lets a Critical match through" 0 "$work/grype.json" \
-  --allow-critical
+grype_gate local "scan-gate.sh --grype: --allow-critical lets a Critical through" 0 -- --allow-critical --grype \
+  "web linux/arm64" "$work/leg"
+check "scan-gate.sh --grype: --allow-critical runs grype without --fail-on" lacks "$work/docker.log" "--fail-on"
 check "scan-gate.sh --grype: --allow-critical says so" has "$work/gate.err" \
   "note  web linux/arm64 (grype): 1 Critical vulnerabilities let through (--allow-critical)"
+grype_report "$work/grype.json" 0 "$high_npm"
+grype_gate local "scan-gate.sh --grype: High and below only counted" 0 -- --grype "web linux/arm64" "$work/leg"
+check "scan-gate.sh --grype: the counts" has "$work/gate.out" \
+  "- web linux/arm64 (grype): Critical 0, High 1, excepted by .grype.yaml 0"
+grype_gate local "scan-gate.sh --grype: grype failing (a DB it cannot fetch) is no pass" 2 FAKE_GRYPE=1 -- --grype \
+  "web linux/arm64" "$work/leg"
+check "scan-gate.sh --grype: grype failing is said" has "$work/gate.err" "FAIL  web linux/arm64: grype could not scan"
 
-grype_report "$work/grype.json" "$high_npm" "$(match CVE-2026-3333 Negligible pkg:deb/debian/libc6@2.41-12)"
-fresh
-rc=0
-on github "$tree/deploy/ci/scan-gate.sh" --grype "web linux/arm64" "$work/grype.json" >"$work/gate.out" 2>&1 || rc=$?
-same "scan-gate.sh --grype: High and below only counted" 0 "$rc"
-same "scan-gate.sh --grype on github: one grype row in the summary" '| Image | CRITICAL | HIGH | MEDIUM | LOW | NEGLIGIBLE | UNKNOWN | Excepted |
-| --- | --- | --- | --- | --- | --- | --- | --- |
-| web linux/arm64 (grype) | 0 | 1 | 0 | 0 | 1 | 0 | 0 |' "$(cat "$work/summary")"
-grype_report "$work/grype.json"
-gate_grype "scan-gate.sh --grype: no match passes" 0 "$work/grype.json"
-check "scan-gate.sh --grype: no match still has its row" has "$work/gate.out" \
-  "| web linux/arm64 (grype) | 0 | 0 | 0 | 0 | 0 | 0 | 0 |"
-
-# Exceptions from .trivyignore.yaml: by the match's id, by a related id, by a purl that has qualifiers on grype's side
-# and an escape (+ as %2B), never by another version.
-{
-  echo "vulnerabilities:"
-  ignore_entry CVE-2026-1111 "$soon" pkg:npm/left-pad@1.0.0
-  ignore_entry CVE-2021-44228 "$soon" pkg:maven/org.apache.logging.log4j/log4j-core@2.14.1
-  ignore_entry CVE-2026-4444 "$soon" pkg:deb/debian/libc6@2.41-12+deb13u4
-  ignore_entry CVE-2023-54404 "$soon" pkg:npm/zod@3.25.75
-} >"$tree/.trivyignore.yaml"
-grype_report "$work/grype.json" "$critical_npm" \
-  "$(match GHSA-jfh8-c2jp-5v3q Critical pkg:maven/org.apache.logging.log4j/log4j-core@2.14.1 CVE-2021-44228)" \
-  "$(match CVE-2026-4444 Critical 'pkg:deb/debian/libc6@2.41-12%2Bdeb13u4?arch=arm64&distro=debian-13.7')"
-gate_grype "scan-gate.sh --grype: entries cover by id, by related id, by purl with qualifiers" 0 "$work/grype.json"
-check "scan-gate.sh --grype: the three excepted are counted" has "$work/gate.out" \
-  "| web linux/arm64 (grype) | 0 | 0 | 0 | 0 | 0 | 0 | 3 |"
-grype_report "$work/grype.json" "$(match CVE-2023-54404 Critical pkg:npm/zod@3.25.76)"
-gate_grype "scan-gate.sh --grype: an entry of another version does not cover" 1 "$work/grype.json"
-check "scan-gate.sh --grype: the uncovered match is named" has "$work/gate.err" \
-  "critical  CVE-2023-54404 zod@3.25.76 pkg:npm/zod@3.25.76"
-
-# An expired entry fails the gate on the file: on a clean report, and on a report whose Critical it no longer covers.
-{
-  echo "vulnerabilities:"
-  ignore_entry CVE-2026-1111 "$today" pkg:npm/left-pad@1.0.0
-} >"$tree/.trivyignore.yaml"
-grype_report "$work/grype.json" "$high_npm"
-gate_grype "scan-gate.sh --grype: an expired entry fails a clean report" 1 "$work/grype.json"
-check "scan-gate.sh --grype: the expired entry is named" has "$work/gate.out" \
-  ".trivyignore.yaml:2: entry CVE-2026-1111 expired on $today"
-check "scan-gate.sh --grype: the clean report blocks on the file alone" lacks "$work/gate.err" "critical  "
-grype_report "$work/grype.json" "$critical_npm"
-gate_grype "scan-gate.sh --grype: an expired entry no longer covers its match" 1 "$work/grype.json"
-check "scan-gate.sh --grype: the match it covered is named again" has "$work/gate.err" "critical  CVE-2026-1111 "
-rm -f "$tree/.trivyignore.yaml"
-
-gate_grype "scan-gate.sh --grype: a trivy report is refused" 2 "$work/report.json"
-check "scan-gate.sh --grype: says it is not a grype report" has "$work/gate.err" "is not a grype JSON report"
-
-# Another repository's tree (SVP_CODE_ROOT): its own .trivyignore.yaml, which must be there.
-grype_report "$work/grype.json" "$critical_npm"
-{
-  echo "vulnerabilities:"
-  ignore_entry CVE-2026-1111 "$soon" pkg:npm/left-pad@1.0.0
-} >"$webtree/.trivyignore.yaml"
-# web_gate NAME WANT_EXIT: the grype gate on a machine with svp-frontend's tree as SVP_CODE_ROOT.
-web_gate() {
-  local rc=0
-  on local env SVP_CODE_ROOT="$webtree" "$tree/deploy/ci/scan-gate.sh" --grype "web linux/arm64" "$work/grype.json" \
-    >"$work/gate.out" 2>"$work/gate.err" || rc=$?
-  same "$1 (exit code)" "$2" "$rc"
+# The rules of the ignore files: --check-ignorefile (job config), and the image gates, which refuse a broken file but
+# leave an expired entry to trivy (it drops the entry) and to job config.
+# ignorefiles NAME WANT_EXIT [WANT_LINE]: --check-ignorefile on the tree's files; ok when it exits WANT_EXIT and, when
+# given, prints WANT_LINE. The copy's trivy-config-ignore.yaml names files the copy does not have, so it is set aside
+# meanwhile (its rules are checked on this repository by job config).
+ignorefiles() {
+  gate local "scan-gate.sh --check-ignorefile: $1" "$2" -- --check-ignorefile
+  [ -z "${3:-}" ] || check "scan-gate.sh --check-ignorefile: $1, says why" has "$work/gate.out" "$3"
 }
-web_gate "scan-gate.sh --grype, svp-frontend's tree: its .trivyignore.yaml covers the match" 0
-mv "$webtree/.trivyignore.yaml" "$work/web-trivyignore.yaml"
-web_gate "scan-gate.sh --grype, svp-frontend's tree without .trivyignore.yaml" 1
-check "scan-gate.sh, svp-frontend's tree without .trivyignore.yaml: names the file" has "$work/gate.err" \
-  "$webtree has no file .trivyignore.yaml: SVP_CODE_ROOT must be the checkout whose code is built"
-mv "$work/web-trivyignore.yaml" "$webtree/.trivyignore.yaml"
+mv "$tree/deploy/ci/trivy-config-ignore.yaml" "$work/trivy-config-ignore.yaml"
+ignore_files
+ignorefiles "an entry and its grype rule" 0
+check "scan-gate.sh --check-ignorefile: no scanner runs" test ! -s "$work/docker.log"
+printf 'vulnerabilities: []\n' >"$tree/.trivyignore.yaml"
+printf 'ignore: []\n' >"$tree/.grype.yaml"
+ignorefiles "nothing to except" 0
+{
+  echo "vulnerabilities:"
+  ignore_entry CVE-2026-3333 "$soon" pkg:npm/%40scope/pkg@1.0.0
+} >"$tree/.trivyignore.yaml"
+{ echo "ignore:" && grype_rule CVE-2026-3333 '"@scope/pkg"' 1.0.0; } >"$tree/.grype.yaml"
+ignorefiles "a scoped npm package, quoted in .grype.yaml, %40 in the purl" 0
+
+ignore_files
+{ echo "vulnerabilities:" && ignore_entry CVE-2026-1111 "$late" pkg:npm/left-pad@1.0.0; } >"$tree/.trivyignore.yaml"
+ignorefiles "an entry for more than 30 days" 1 "entry CVE-2026-1111 expires $late, more than 30 days from today"
+{ echo "vulnerabilities:" && ignore_entry CVE-2026-1111 "$soon" pkg:npm/left-pad; } >"$tree/.trivyignore.yaml"
+ignorefiles "a purl without its version" 1 "purl pkg:npm/left-pad is not pkg:<type>/<name>@<version>"
+printf 'vulnerabilities:\n  - id: CVE-2026-1111\n    statement: Accepted.\n    expired_at: %s\n' "$soon" \
+  >"$tree/.trivyignore.yaml"
+ignorefiles "an entry without purls" 1 "entry CVE-2026-1111 has no purls"
+{
+  echo "vulnerabilities:"
+  ignore_entry CVE-2026-1111 "$soon" pkg:npm/left-pad@1.0.0
+  printf 'secrets:\n  - id: aws-access-key-id\n'
+} >"$tree/.trivyignore.yaml"
+ignorefiles "a secrets section" 1 "only vulnerabilities may be ignored, never secrets or anything else: secrets:"
+gate local "scan-gate.sh: the image gate refuses a secrets section of .trivyignore.yaml" 1 -- "gw linux/amd64" \
+  "$work/report.json"
+check "scan-gate.sh: the image gate says the ignore file breaks its rules" has "$work/gate.err" \
+  "FAIL  an ignore file breaks its rules: fix it before anything is pushed"
+
+ignore_files
+{ echo "only-notfixed: true" && echo "ignore:" && grype_rule CVE-2026-1111 left-pad 1.0.0; } >"$tree/.grype.yaml"
+ignorefiles "a root key of .grype.yaml other than ignore (only-notfixed)" 1 \
+  ".grype.yaml:1: only the key ignore may be set"
+grype_report "$work/grype.json" 0
+grype_gate local "scan-gate.sh --grype: the image gate refuses only-notfixed in .grype.yaml" 1 -- --grype \
+  "web linux/arm64" "$work/leg"
+printf 'ignore:\n  - vulnerability: CVE-2026-1111\n    package:\n      name: left-pad\n      version: 1.0.0\n' \
+  >"$tree/.grype.yaml"
+ignorefiles "a rule without include-aliases" 1 "rule CVE-2026-1111 needs include-aliases: true once"
+printf 'ignore:\n  - vulnerability: CVE-2026-1111\n    include-aliases: true\n    fix-state: fixed\n' >"$tree/.grype.yaml"
+ignorefiles "a rule with fix-state and no package" 1 \
+  "unexpected line (a rule has only vulnerability, include-aliases, package.name, package.version):     fix-state: fixed"
+check "scan-gate.sh --check-ignorefile: a rule with no package, says why" has "$work/gate.out" \
+  "rule CVE-2026-1111 needs one package with a plain name and version"
+{ echo "ignore:" && grype_rule CVE-2026-1111 left-pad 1.0.0 && echo "      type: npm"; } >"$tree/.grype.yaml"
+ignorefiles "a rule with package.type" 1 "unexpected line"
+{ echo "ignore:" && grype_rule CVE-2026-1111 left-pad 1.0.1; } >"$tree/.grype.yaml"
+ignorefiles "a rule for another version than the entry's" 1 \
+  "rule CVE-2026-1111 left-pad@1.0.1 is 0 entries of .trivyignore.yaml in force, not exactly one"
+{ echo "ignore:" && grype_rule CVE-2026-9999 left-pad 1.0.0; } >"$tree/.grype.yaml"
+ignorefiles "a rule whose id no entry has" 1 "rule CVE-2026-9999 left-pad@1.0.0 is 0 entries"
+# grype reads package.name as a regex anchored at both ends: a name must be the purl's name with each metacharacter
+# escaped by a backslash. Written any other way it is refused even when an entry with that very name exists (.* would
+# cover every package at the version, mini.* and minimis[t] cover minimist), and is not matched against the entries.
+for name in '.*' '"mini.*"' 'minimis.' 'minimis[t]' 'libstdc++' 'socket.io-parser' 'mini\st'; do
+  plain=${name//\"/}
+  { echo "vulnerabilities:" && ignore_entry CVE-2021-44906 "$soon" "pkg:npm/$plain@1.2.5"; } >"$tree/.trivyignore.yaml"
+  { echo "ignore:" && grype_rule CVE-2021-44906 "$name" 1.2.5; } >"$tree/.grype.yaml"
+  ignorefiles "a rule whose package.name is $name" 1 "package.name $plain is not a purl name with each of"
+  check "scan-gate.sh --check-ignorefile: the rule for $name is not matched against the entries" lacks "$work/gate.out" \
+    "entries of .trivyignore.yaml"
+done
+check "scan-gate.sh --check-ignorefile: the refusal gives the name to write" has "$work/gate.out" 'write minist'
+# The purl's name escaped, plain or in single quotes, matches its entry; in double quotes YAML would read the escapes.
+for case in 'socket\.io-parser pkg:npm/socket.io-parser' "'libstdc\+\+' pkg:apk/alpine/libstdc++" \
+  'golang\.org/x/net pkg:golang/golang.org/x/net'; do
+  name=${case% *} purl=${case#* }
+  { echo "vulnerabilities:" && ignore_entry CVE-2021-44906 "$soon" "$purl@1.2.5"; } >"$tree/.trivyignore.yaml"
+  { echo "ignore:" && grype_rule CVE-2021-44906 "$name" 1.2.5; } >"$tree/.grype.yaml"
+  ignorefiles "a rule whose package.name is $name, the escaped name of $purl" 0
+done
+{ echo "vulnerabilities:" && ignore_entry CVE-2021-44906 "$soon" pkg:npm/socket.io-parser@1.2.5; } >"$tree/.trivyignore.yaml"
+{ echo "ignore:" && grype_rule CVE-2021-44906 'socket\.io-parsers' 1.2.5; } >"$tree/.grype.yaml"
+ignorefiles "an escaped name that is not the entry's" 1 "rule CVE-2021-44906 socket.io-parsers@1.2.5 is 0 entries"
+{ echo "ignore:" && grype_rule CVE-2021-44906 '"socket\.io-parser"' 1.2.5; } >"$tree/.grype.yaml"
+ignorefiles "an escaped name in double quotes" 1 "where YAML reads \\ as an escape"
+# The name of a purl is the one grype gives its package: with its namespace (an npm scope, a Go module path), except
+# for a distribution's package (apk, deb, rpm), whose namespace is the distribution. A rule for foo would cover the
+# unscoped foo too, one for net any package named net.
+for case in 'foo pkg:npm/%40scope/foo' 'net pkg:golang/golang.org/x/net' 'alpine/glib pkg:apk/alpine/glib'; do
+  name=${case% *} purl=${case#* }
+  { echo "vulnerabilities:" && ignore_entry CVE-2026-1111 "$soon" "$purl@1.0.0"; } >"$tree/.trivyignore.yaml"
+  { echo "ignore:" && grype_rule CVE-2026-1111 "$name" 1.0.0; } >"$tree/.grype.yaml"
+  ignorefiles "a rule for $name, an entry for $purl" 1 "rule CVE-2026-1111 $name@1.0.0 is 0 entries"
+done
+for case in 'glib 2.88.1-r1 pkg:apk/alpine/glib@2.88.1-r1?arch=aarch64&distro=3.24.0' \
+  'libc6 2.36-9+deb12u4 pkg:deb/debian/libc6@2.36-9%2Bdeb12u4?arch=amd64&distro=debian-12'; do
+  read -r name version purl <<<"$case"
+  { echo "vulnerabilities:" && ignore_entry CVE-2026-1111 "$soon" "$purl"; } >"$tree/.trivyignore.yaml"
+  { echo "ignore:" && grype_rule CVE-2026-1111 "$name" "$version"; } >"$tree/.grype.yaml"
+  ignorefiles "a rule for $name $version, an entry for $purl (a distribution's package, qualifiers, %2B)" 0
+done
+# A plain value YAML reads as a null, a bool, a number or a date is not the text it shows: grype drops a null or a date
+# from the rule (null as the version covers every version of the package, as the name every package) and reads 1.10
+# as 1.1. Refused in vulnerability, name and version even with an entry of that very text; in quotes it is text.
+for value in null NULL true False 1.10 017 0x1F 0o17 0b101 1e5 1_000 2026-1-2 2001-12-14T21:59:43Z; do
+  { echo "vulnerabilities:" && ignore_entry CVE-2021-44906 "$soon" "pkg:npm/minimist@$value"; } >"$tree/.trivyignore.yaml"
+  { echo "ignore:" && grype_rule CVE-2021-44906 minimist "$value"; } >"$tree/.grype.yaml"
+  ignorefiles "a rule whose package.version is $value, plain" 1 \
+    "package.version $value is a null, a bool, a number or a date to YAML, not text"
+  check "scan-gate.sh --check-ignorefile: the rule for version $value is not matched against the entries" lacks \
+    "$work/gate.out" "entries of .trivyignore.yaml"
+  { echo "ignore:" && grype_rule CVE-2021-44906 minimist "'$value'"; } >"$tree/.grype.yaml"
+  ignorefiles "a rule whose package.version is '$value', in quotes" 0
+done
+for value in null true 017; do
+  { echo "vulnerabilities:" && ignore_entry CVE-2021-44906 "$soon" "pkg:npm/$value@1.2.5"; } >"$tree/.trivyignore.yaml"
+  { echo "ignore:" && grype_rule CVE-2021-44906 "$value" 1.2.5; } >"$tree/.grype.yaml"
+  ignorefiles "a rule whose package.name is $value, plain" 1 \
+    "package.name $value is a null, a bool, a number or a date to YAML, not text"
+  { echo "ignore:" && grype_rule CVE-2021-44906 "'$value'" 1.2.5; } >"$tree/.grype.yaml"
+  ignorefiles "a rule whose package.name is '$value', in quotes" 0
+done
+for value in null False; do
+  { echo "vulnerabilities:" && ignore_entry "$value" "$soon" pkg:npm/lodash@4.17.15; } >"$tree/.trivyignore.yaml"
+  { echo "ignore:" && grype_rule "$value" lodash 4.17.15; } >"$tree/.grype.yaml"
+  ignorefiles "a rule whose vulnerability is $value, plain" 1 \
+    "vulnerability $value is a null, a bool, a number or a date to YAML, not text"
+done
+# yes and 1:20 are text to the YAML grype reads (1.2: no yes/no bools, no base 60).
+{ echo "vulnerabilities:" && ignore_entry CVE-2021-44906 "$soon" pkg:deb/debian/yes@1:20; } >"$tree/.trivyignore.yaml"
+{ echo "ignore:" && grype_rule CVE-2021-44906 yes 1:20; } >"$tree/.grype.yaml"
+ignorefiles "a rule whose name is yes and version 1:20, plain" 0
+{ echo "vulnerabilities:" && ignore_entry CVE-2021-44906 "$soon" pkg:npm/mini.st@1.2.5; } >"$tree/.trivyignore.yaml"
+{ echo "ignore:" && grype_rule CVE-2021-44906 mini.st 1.2.5; } >"$tree/.grype.yaml"
+grype_gate local "scan-gate.sh --grype: the image gate refuses a package.name with a regex metacharacter" 1 -- --grype \
+  "web linux/arm64" "$work/leg"
+check "scan-gate.sh --grype: the image gate says the regex name breaks the rules" has "$work/gate.err" \
+  "FAIL  an ignore file breaks its rules: fix it before anything is pushed"
+
+# An expired entry: job config fails, on the entry and on the grype rule that would go on covering its match; the image
+# gate does not (trivy drops the entry, so its match blocks again if CRITICAL).
+ignore_files
+{ echo "vulnerabilities:" && ignore_entry CVE-2026-1111 "$today" pkg:npm/left-pad@1.0.0; } >"$tree/.trivyignore.yaml"
+ignorefiles "an expired entry" 1 ".trivyignore.yaml:2: entry CVE-2026-1111 expired on $today"
+check "scan-gate.sh --check-ignorefile: the grype rule of an expired entry fails too" has "$work/gate.out" \
+  "rule CVE-2026-1111 left-pad@1.0.0 is 0 entries of .trivyignore.yaml in force"
+gate local "scan-gate.sh: the image gate leaves an expired entry to trivy" 0 -- "gw linux/amd64" "$work/report.json"
+grype_gate local "scan-gate.sh --grype: the image gate leaves an expired entry to job config" 0 -- --grype \
+  "web linux/arm64" "$work/leg"
+rm -f "$tree/.trivyignore.yaml" "$tree/.grype.yaml"
+mv "$work/trivy-config-ignore.yaml" "$tree/deploy/ci/trivy-config-ignore.yaml"
+
+# Another repository's tree (SVP_CODE_ROOT): its own .trivyignore.yaml and .grype.yaml, which must both be there.
+{ echo "vulnerabilities:" && ignore_entry CVE-2026-1111 "$soon" pkg:npm/left-pad@1.0.0; } >"$webtree/.trivyignore.yaml"
+{ echo "ignore:" && grype_rule CVE-2026-1111 left-pad 1.0.0; } >"$webtree/.grype.yaml"
+grype_gate local "scan-gate.sh --grype, svp-frontend's tree: its files pass" 0 SVP_CODE_ROOT="$webtree" -- --grype \
+  "web linux/arm64" "$work/leg"
+check "scan-gate.sh --grype, svp-frontend's tree: grype reads its .grype.yaml" grep -qF -- \
+  "-v $webtree/.grype.yaml:/ignore/grype.yaml:ro" "$work/docker.log"
+mv "$tree/deploy/ci/trivy-config-ignore.yaml" "$work/trivy-config-ignore.yaml"
+gate local "scan-gate.sh --check-ignorefile, svp-frontend's tree: its files pass" 0 SVP_CODE_ROOT="$webtree" -- \
+  --check-ignorefile
+mv "$work/trivy-config-ignore.yaml" "$tree/deploy/ci/trivy-config-ignore.yaml"
+for file in .trivyignore.yaml .grype.yaml; do
+  mv "$webtree/$file" "$work/web-ignore"
+  gate local "scan-gate.sh, svp-frontend's tree without $file" 1 SVP_CODE_ROOT="$webtree" -- "web linux/arm64" \
+    "$work/report.json"
+  check "scan-gate.sh, svp-frontend's tree without $file: names the file" has "$work/gate.err" \
+    "$webtree has no file $file: SVP_CODE_ROOT must be the checkout whose code is built"
+  check "scan-gate.sh, svp-frontend's tree without $file: no scanner runs" test ! -s "$work/docker.log"
+  mv "$work/web-ignore" "$webtree/$file"
+done
 
 # --- changed-services.sh: platform.sh is part of the image pipeline (common.sh sources it), so a change of it builds
 # all six; this test, provenance-predicate-test.sh,
@@ -1015,13 +966,8 @@ same "changed-services: a change of promote-test.sh builds nothing" "" "$(change
 same "changed-services: a change of provenance-predicate-test.sh builds nothing" "" \
   "$(changed_by deploy/ci/provenance-predicate-test.sh)"
 same "changed-services: a change under deploy/ci/verify/ builds nothing" "" "$(changed_by deploy/ci/verify/gitops.sh)"
-same "changed-services: a change of verify-tempo.sh builds nothing" "" "$(changed_by deploy/ci/verify-tempo.sh)"
-same "changed-services: a change of gitops-sourcemaps.sh builds nothing" "" "$(changed_by deploy/ci/gitops-sourcemaps.sh)"
-same "changed-services: a change of gitops-sourcemaps-test.sh builds nothing" "" \
-  "$(changed_by deploy/ci/gitops-sourcemaps-test.sh)"
-for f in sourcemaps-image.sh sourcemaps-image-test.sh; do
-  same "changed-services: a change of $f builds nothing" "" "$(changed_by "deploy/ci/$f")"
-done
+same "changed-services: a change of ghcr-digest.sh builds nothing" "" "$(changed_by deploy/ci/ghcr-digest.sh)"
+same "changed-services: a change of ghcr-digest-test.sh builds nothing" "" "$(changed_by deploy/ci/ghcr-digest-test.sh)"
 same "changed-services: a change of rescan.sh builds all six" "$all" "$(changed_by deploy/ci/rescan.sh)"
 for f in gitops-check.sh gitops-check-test.sh values-check.sh verify-release.sh; do
   same "changed-services: a change of $f builds nothing" "" "$(changed_by "deploy/ci/$f")"
@@ -1416,11 +1362,11 @@ plan_charts "a push that changes the file a chart's link points to promotes the 
 
 # --- The supply chain step of deploy/ci/verify/gitops.sh in the copy. gitops_supplychain hands the drill the newest
 # drill-no-provenance for case l, and none (never empty, which the drill reads as "look it up yourself") when GHCR did
-# not give it, the step then failing; a stub gitops-sourcemaps.sh answers for GHCR and a fake make records its
+# not give it, the step then failing; a stub ghcr-digest.sh answers for GHCR and a fake make records its
 # arguments. gitops_stale has its tests in deploy/ci/verify-collect-test.sh.
 sc=$work/supplychain
 mkdir -p "$sc/bin"
-cat >"$sc/gitops-sourcemaps.sh" <<'STUB'
+cat >"$sc/ghcr-digest.sh" <<'STUB'
 #!/usr/bin/env bash
 # Test stub: answers newest IMAGE and web-amd64 the way GHCR would, failing for the image in FAKE_GHCR_MISSING.
 case $1 in
@@ -1432,7 +1378,7 @@ newest)
 esac
 STUB
 printf '#!/usr/bin/env bash\nprintf "%%s\\n" "$@" >"%s"\n' "$sc/make.args" >"$sc/bin/make"
-chmod 755 "$sc/gitops-sourcemaps.sh" "$sc/bin/make"
+chmod 755 "$sc/ghcr-digest.sh" "$sc/bin/make"
 dnp=ghcr.io/anhnvcoder/svp-backend/drill-no-provenance@sha256:$(printf 'd%.0s' $(seq 64))
 # supplychain WANT_RC [VAR=VALUE...]: gitops_supplychain with the stubs, stdout and stderr in sc.out.
 supplychain() {

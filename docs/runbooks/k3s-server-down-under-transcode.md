@@ -86,5 +86,5 @@ Video đang transcode lúc server chết được làm lại (record chưa commi
 
 - ADR: [ADR-0017](../adr/0017-gitops-capacity-media-worker-max2.md) (sự cố, tiêu chí (c), tối đa 2),
   [ADR-0014](../adr/0014-kubernetes-local-stage4.md) §2 (ngân sách RAM, cách đo), [ADR-0020](../adr/0020-reliability-stage6.md) §9.
-- Diễn tập tái hiện: `make drill-k8s-keda N=9` (tự kiểm (c): `RestartCount` và `StartedAt` của `k3d-svp-server-0` không đổi).
+- Diễn tập tái hiện: `drill-k8s-keda N=9` của bài lab `drills/` của `svp-labs` (tự kiểm (c): `RestartCount` và `StartedAt` của `k3d-svp-server-0` không đổi).
   Máy 16 GB: chỉ chạy khi cần, cắm sạc, đóng bớt app; đo năng lực để cluster cloud.

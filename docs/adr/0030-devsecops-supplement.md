@@ -2,7 +2,7 @@
 
 - Trạng thái: Chấp nhận (người học duyệt ADR, gồm mục 6, và phần hạ tầng ngày 2026-10-28); hiện thực và kiểm trên PR #28, SHA
   `d58e67d`, ngày 2026-10-29 (mục Kết quả; rule Renovate của mục 1 thêm sau SHA đó, cùng PR). **Kiểm sau push:** SARIF grype lên tab Security, cảnh báo CodeQL #36, #37 đóng trên
-  `main`, lượt `stack` và CodeQL trên `main`, PR Renovate thật đầu tiên đổi cùng lúc directive `go`, image `golang` và `setup-go` (mục Kết quả)
+  `main`, lượt `stack` và CodeQL trên `main`, PR Renovate thật đầu tiên đổi cùng lúc directive `go`, image `golang` và `setup-go` (mục Kết quả). Một phần bị thay bởi [0039](0039-mainpath-drills-scan-gate-sourcemaps.md) (§6: grype đọc `.grype.yaml` với `--fail-on critical` thay áp `.trivyignore.yaml` bằng jq; mục hết hạn bị bắt ở phép kiểm file của job `config`)
 - Ngày: 2026-10-28
 
 ## Bối cảnh

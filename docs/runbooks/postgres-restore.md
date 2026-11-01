@@ -3,7 +3,7 @@
 - Quy trình làm tay, không có cảnh báo riêng. Chỉ cho cluster k3d **đường dev** (`make k8s-up`); compose dùng Postgres native,
   không có backup ở đây. Cluster GitOps (có Application `svp-root`, bước 4 dưới) không dùng được quy trình này: Argo CD sửa
   Cluster về git và `make k8s-up` bị từ chối; xem Leo thang.
-- Cùng các bước với `make drill-k8s-backup` (`deploy/k8s/drills/backup.sh`, [ADR-0020](../adr/0020-reliability-stage6.md) §5).
+- Cùng các bước với diễn tập `drill-k8s-backup` ([ADR-0020](../adr/0020-reliability-stage6.md) §5), nay ở bài lab `drills/` của `svp-labs` ([ADR-0039](../adr/0039-mainpath-drills-scan-gate-sourcemaps.md) §1); quy trình tay này là bản còn lại trong repo.
   Diễn tập dừng giữa chừng thì nó in đúng các lệnh còn lại với tên thế hệ của lần chạy đó; trang này giải thích từng lệnh.
 
 ## Ý nghĩa và tác động tới người dùng
@@ -38,7 +38,7 @@ thời điểm lớn nhất; thế hệ đầu tên `svp-pg`).
 
 ## Nguyên nhân thường gặp
 
-1. **Diễn tập `make drill-k8s-backup` dừng giữa chừng**: Cluster đã xoá, chưa dựng lại. `make k8s-up` từ chối chạy lúc này
+1. **Diễn tập `drill-k8s-backup` (bài lab `drills/` của `svp-labs`) dừng giữa chừng**: Cluster đã xoá, chưa dựng lại. `make k8s-up` từ chối chạy lúc này
    (Cluster mất mà còn Backup của nó), để không tạo database rỗng đè lên.
 2. **PVC hay dữ liệu Postgres hỏng**: pod `svp-pg-1` CrashLoopBackOff với lỗi đọc dữ liệu, Cluster `phase` báo lỗi.
 3. **Thao tác sai trên dữ liệu** (xoá nhầm): cần PITR tới trước thời điểm đó.
@@ -123,6 +123,6 @@ Không bao giờ xoá Backup hay object của bucket `pg-backups` để "dọn":
 - ADR: [ADR-0020](../adr/0020-reliability-stage6.md) §5 (thế hệ lưu trữ, diễn tập, RTO/RPO); threat model BAK-1.
 - Cấu hình: `deploy/helm/svp-data/templates/postgres.yaml` (`plugins`, `bootstrap.recovery`, `externalClusters`),
   `templates/backup.yaml`, `deploy/k8s/install.sh` (`pg_backup_sets`, `pg_base_backup`).
-- Diễn tập tái hiện: `make drill-k8s-backup` (`MODE=latest`) và `make drill-k8s-backup MODE=pitr`, JSON ở
+- Diễn tập tái hiện: `drill-k8s-backup` (`MODE=latest`) và `MODE=pitr` của bài lab `drills/` của `svp-labs`, JSON ở
   `.k8s/drills/backup-<time>.json` (RTO, RPO, số dòng mỗi bảng trước và sau). Số đo của buổi k3d ghi ở mục Kết quả của
   ADR-0020.

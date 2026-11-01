@@ -14,7 +14,7 @@
   user, policy, `endpointURL`) và việc tồn "Thay MinIO" (§16) bị thay một phần bởi [0022](0022-local-object-store-minio-replacement.md) (RustFS, `s3.svp-data:9000`;
   bucket, user `svp-pg-backup`, policy giữ nguyên; backup hai chế độ kiểm lại trên RustFS ngày 2026-10-25). Ghi chú 2026-10-29: hai
   phát hiện của Chaos Mesh và Tempo OOM sửa ở [0031](0031-chaos-findings-feed-engagement-tempo.md); chạy lại `chaos` trên runner:
-  (a) feed-service và (b) đạt (Kết quả "Chaos Mesh trên runner")
+  (a) feed-service và (b) đạt (Kết quả "Chaos Mesh trên runner"). Một phần bị thay bởi [0039](0039-mainpath-drills-scan-gate-sourcemaps.md) (§2: chế độ runner của `deploy/k6/cloud/run.sh`; §5: diễn tập DR `drill-k8s-backup`; §6, §7: Velero, Chaos Mesh trên k3d; §8: `make cloud-check` chỉ còn Job k6; §9: hai media-worker và RAM; các diễn tập thành bài lab)
 - Ngày: 2026-10-24
 
 ## Bối cảnh

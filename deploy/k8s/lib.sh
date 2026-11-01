@@ -362,7 +362,7 @@ gitops_dir() {
 }
 
 # gitops_clone: CI's copy of the configuration (make gitops-clone). Clones svp-gitops anonymously into $gitops_ci_clone
-# (the whole history, which the bootstrap and measure-gitops read), or fetches it when it is there, then checks out
+# (the whole history, which the bootstrap reads), or fetches it when it is there, then checks out
 # GITOPS_REF (default main: a branch, as origin/<branch>, or a full commit SHA) detached, and exports SVP_GITOPS_DIR to
 # that folder for what this shell runs next. Refuses a clone there with uncommitted changes, or a folder that is no
 # clone of svp-gitops, instead of overwriting either. A clone with no index was never checked out (a run that stopped
@@ -980,18 +980,17 @@ web_build_id() {
   echo "dev-$(printf '%s\n' "$list" | shasum -a 256 | cut -c1-12)"
 }
 
-# build_image SERVICE CONTEXT [WEB_BUILD_ID]: builds SERVICE's image from the source tree CONTEXT (native architecture,
-# the Dockerfiles compose uses) and sets image_id to its ID, without the sha256: prefix. The web image is built from
+# build_image SERVICE CONTEXT: builds SERVICE's image from the source tree CONTEXT (native architecture, the
+# Dockerfiles compose uses) and sets image_id to its ID, without the sha256: prefix. The web image is built from
 # web_dir with web_dockerfile instead, whatever CONTEXT is, and gets SVP_BUILD_ID from web_build_id, which reads the
-# same folder. WEB_BUILD_ID replaces it for a second build of the same source (make drill-k8s-web-canary): next build
-# runs again with that id, so the image is another build, with its own deploymentId and Server Action ids.
+# same folder.
 build_image() {
   local args=(--file "$2/$(dockerfile "$1")") context=$2 id dir
   case $1 in
   media-worker) ;;
   web)
     dir=$(web_dir) || return 1
-    id=${3:-$(web_build_id)} || return 1
+    id=$(web_build_id) || return 1
     args=(--file "$(web_dockerfile "$dir")" --build-arg "SVP_BUILD_ID=$id")
     context=$dir
     ;;
@@ -1311,7 +1310,7 @@ gitops_at() {
 # WEB_IMAGE, a release given as ghcr.io/<repository>@sha256:<digest>, which GHCR must serve to an anonymous pull as the
 # nodes and compose pull it. Sets web_release to REPOSITORY@DIGEST of that release, empty when the image is built. A
 # release keeps the SVP_BUILD_ID CI built it with and is never built here, so the targets that build the source maps of
-# the web (make web-sourcemaps, and make k8s-web-sourcemaps without SOURCEMAPS_DIR) do not apply to it.
+# the web (make web-sourcemaps, make k8s-web-sourcemaps) do not apply to it.
 web_source() {
   local repo code
   web_release=

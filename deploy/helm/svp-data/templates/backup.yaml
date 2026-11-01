@@ -51,9 +51,9 @@ spec:
 # it), and make k8s-up takes a base backup itself when the running generation has none (deploy/k8s/install.sh,
 # pg_base_backup).
 #
-# The Backups it makes belong to nothing, so that making this object again, or deleting the Cluster as make
-# drill-k8s-backup does, leaves them; the plugin deletes those of the running Cluster whose backup the retention
-# policy above has removed from the bucket. No object of the bucket is ever deleted but by that policy.
+# The Backups it makes belong to nothing, so that making this object again, or deleting the Cluster as a restore
+# does (docs/runbooks/postgres-restore.md), leaves them; the plugin deletes those of the running Cluster whose backup
+# the retention policy above has removed from the bucket. No object of the bucket is ever deleted but by that policy.
 apiVersion: postgresql.cnpg.io/v1
 kind: ScheduledBackup
 metadata:

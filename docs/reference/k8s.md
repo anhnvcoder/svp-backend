@@ -141,13 +141,13 @@ Loại tài liệu (Diátaxis): **reference**, tra cứu khi cần một lệnh 
   `<workspace>/frontend`; thư mục đó phải là bản clone `svp-frontend` (gốc work tree, `origin` là `svp-frontend`), không thì in lệnh clone và
   dừng. Đọc working tree như đang có, không clone, fetch hay đổi nhánh. Dockerfile là `Dockerfile` ở gốc bản clone, context là gốc
   bản clone (`web_dockerfile`); `web_build_id` đọc cùng thư mục. Chỉ cần thư mục web khi có việc với mã web (`WEB_FROM=clone`,
-  `k8s-images`, wrapper `web-*`, `drill-k8s-web-canary`); không thì web chạy bản phát hành stg. `make web-clone` (cho CI): clone ẩn
+  `k8s-images`, wrapper `web-*`); không thì web chạy bản phát hành stg. `make web-clone` (cho CI): clone ẩn
   danh đủ lịch sử vào `.web/svp-frontend` (gitignore), có rồi thì
   fetch, checkout `WEB_REF` (nhánh hay SHA đủ 40 hex; không đặt thì commit `tag` của `envs/stg/images/web.yaml` trong bản clone
   `svp-gitops`, chỉ khi web của stg là `<imagePrefix>web` của một nguồn phát hành `web` theo bảng nguồn, tức `web`, tag là commit của
   `svp-frontend`; không thì dừng và đòi `WEB_REF`); bản clone có thay
   đổi chưa commit thì từ chối; job đặt `SVP_WEB_DIR` tới đó.
-- `make k8s-gitops-up [GITOPS_REV=main]`, `make measure-gitops REV=<commit của svp-gitops>`: đường GitOps (ADR-0014 §12, ADR-0015
+- `make k8s-gitops-up [GITOPS_REV=main]`: đường GitOps (ADR-0014 §12, ADR-0015
   §9, [ADR-0025](../adr/0025-gitops-config-repo.md) §8), tạo cluster `svp` **mới** đóng vai stg
   ([ADR-0024](../adr/0024-multi-environment.md): `base/` cộng overlay `envs/stg/` và digest `envs/stg/images/` của `svp-gitops`,
   `gitops.sh` luôn đặt `env=stg` cho root, không có biến chọn env) mà Argo CD dựng từ GitHub qua HTTPS ẩn danh (không deploy key,
@@ -190,13 +190,8 @@ Loại tài liệu (Diátaxis): **reference**, tra cứu khi cần một lệnh 
   store `aws` (Secrets Manager `svp/prd/<entry>`, role mỗi namespace, giá trị giữ chỗ tới khi có cluster EKS; controller thêm egress
   TCP 80 chỉ tới agent EKS Pod Identity `169.254.170.23/32`). Đã kiểm trên cluster: lượt `gitops` 40857855305 (28 ExternalSecret
   `Ready`) và 40954609229 (đọc `svp-gitops`, 26/26 Application Synced/Healthy, 28/28 ExternalSecret `Ready`).
-  `measure-gitops` đo commit phát hành của `svp-gitops` (merge của PR
-  promote ở repo đó) từ lúc push (reflog `origin/main` của bản clone, không có thì `merged_at` của PR có `merge_commit_sha` là commit
-  đó, rồi PushEvent, cả hai qua `gh api` vào repo `svp-gitops` (`ci_push_time SHA REPO`), chỉ đọc, ghi nguồn) qua sync của Argo CD tới pod đầu
-  và cuối Ready với digest mới; service có `migrate: true` ở revision đó thì Job migrate phải tạo trong cửa sổ của đúng sync
-  đã đo và `restartCount` 0 (thiếu Job là FAIL, sync đang chạy là exit 2: đo lại); chỉ đọc, JSON ở `.k8s/drills/`. `k8s-gitops-up` đọc
-  `svp-gitops` đã kiểm trên nhánh PR-B (lượt 40954609229, dựng 610 s); `measure-gitops` đo commit của `svp-gitops`: chưa chạy,
-  **kiểm sau push** (bước chờ phát hành chỉ chạy trên `main`; lượt `gitops` 41015270736 trên `main` bỏ `wait-release`, `measure-gitops` khỏi `targets`).
+  Đo thời gian từ merge tới pod Ready (`measure-gitops`) nay là bài lab `drills/` của `svp-labs`
+  ([ADR-0039](../adr/0039-mainpath-drills-scan-gate-sourcemaps.md) §1).
 - `make k8s-traffic-start` / `make k8s-traffic-stop`: traffic diễn tập chạy nền, 4 user, ~10 request/s vào
   `GET /feed/explore`, `/feed/following` qua `https://api.svp.localhost:8443` và ~4 request/s vào web
   `https://svp.localhost:8443` (`GET /login`, một asset `/_next/static/...`; dòng log `web-login`, `web-asset`), mỗi
@@ -204,20 +199,8 @@ Loại tài liệu (Diátaxis): **reference**, tra cứu khi cần một lệnh 
   `.k8s/drills/traffic-<time>.log`, chạy tới khi dừng (qua cả lúc push phát hành trên cluster GitOps); `stop` chỉ dừng
   đúng pid đã ghi và in số request theo status. **LOCAL LAB ONLY:** đăng ký user mới và xoá khoá rate limit đăng ký ở
   Valkey db 10 của cluster.
-- `make k8s-smoke`, `make drill-k8s-keda N=9`, `make drill-k8s-pdb`, `make drill-k8s-canary`, `make measure-canary`,
-  `make drill-k8s-threats`: trên cluster đang chạy, qua Envoy với `.k8s/ca.crt` (thiếu thì chạy `make k8s-ca`), script ở
-  `deploy/k8s/drills/` (`k8s-smoke` dùng `deploy/compose/smoke.sh`). Lần lượt: luồng đầu-cuối như `make smoke`; N (mặc
-  định 9; chỉ 6, 9 hay 12) video 60 s 1080p, dàn đều đúng N/3 video mỗi partition (video tạo thừa để `UPLOADING`, job dọn
-  upload xử lý sau 1 giờ), chờ tới 240 s cho tới khi mọi pod worker cùng có job liền 60 s trước khi ghim (không có thì FAIL
-  riêng, không phải lỗi KEDA), đo KEDA scale media-worker lên tối đa 2 replica và về 1, lag đỉnh, mỗi
-  `READY`, CPU/RAM, scale down một pod đang transcode (ghim `paused-replicas` của KEDA thấp hơn một, pod tắt êm) rồi kiểm
-  mọi video transcode đúng một lần, và k3s server không restart suốt diễn tập (`RestartCount`, `StartedAt` của container
-  `k3d-svp-server-0`, [ADR-0017](../adr/0017-gitops-capacity-media-worker-max2.md)); cordon node và evict lần lượt hai pod gateway rồi hai pod feed-service
-  (feed-service hai replica, PDB `minAvailable: 1`, [ADR-0031](../adr/0031-chaos-findings-feed-engagement-tempo.md) §1) như drain:
-  mỗi service PDB cho pod đầu (201), từ chối pod thứ hai (429) khi pod thay còn Pending, rồi uncordon, chờ lại 2 pod Ready và in
-  node của hai pod trước và sau (hai pod cùng node chỉ là ghi chú: trải node là ưu tiên); canary của gateway trên cluster dev dưới traffic diễn tập:
-  bản tốt qua 25%, 50%, 100% và được promote, bản lỗi (`FEED_SERVICE_ADDR` trỏ Service không có) bị phân tích abort,
-  trọng số về 0, pod stable không đổi, rồi trả bản tốt; `measure-canary` đọc lại lần abort canary gần nhất (chỉ đọc);
+- `make k8s-smoke`, `make drill-k8s-threats`: trên cluster đang chạy, qua Envoy với `.k8s/ca.crt` (thiếu thì chạy `make k8s-ca`), script ở
+  `deploy/k8s/drills/` (`k8s-smoke` dùng `deploy/compose/smoke.sh`). Lần lượt: luồng đầu-cuối như `make smoke`;
   các dòng Kubernetes của threat model, mỗi dòng có ca đối chứng (pod thử ở namespace `svp-probe` tạo rồi xoá,
   NetworkPolicy, ACL Kafka, PSA, `pg_hba`, RL-1 với `X-Forwarded-For` giả, pprof/metrics, UI không lộ, Grafana 401,
   RBAC: không ServiceAccount nào của `svp` đọc Secret hay pod, CloudNativePG và Envoy Gateway chỉ có quyền ở các
@@ -237,18 +220,11 @@ Loại tài liệu (Diátaxis): **reference**, tra cứu khi cần một lệnh 
   ServiceAccount đó và Secret token của nó bị `svp-store-serviceaccount-pods`, `-tokens` từ chối đúng message, đối chứng cùng pod với
   `default` và Secret token của `default` được nhận), log ở
   `.k8s/drills/threats-<time>.log` được dò các giá trị
-  Secret đã đọc. Kết quả và JSON ở `.k8s/drills/`; script trả cluster về như cũ khi kết thúc (uncordon, bỏ ghim KEDA,
-  trả bản gateway tốt). **LOCAL LAB ONLY:** trừ `measure-canary`, mọi target này xoá khoá `svp:gw:rl:register:*` ở
-  Valkey db 10 của cluster (qua `kubectl exec`).
-- `make drill-k8s-backup [MODE=latest|pitr]` (ADR-0020 §5, script `deploy/k8s/drills/backup.sh`): diễn tập DR
-  tại chỗ, chỉ cluster dev (`k3d-svp` trên `127.0.0.1:6550`, không cluster GitOps vì Argo CD tự sửa `serverName` về git): tạo
-  database `svp_drill` (bảng `markers`, không đụng bảng của service), backup theo yêu cầu, 60 s dòng đánh dấu (`pitr` ép
-  `pg_switch_wal` và đặt mục tiêu ở giữa), xoá Cluster `svp-pg` và PVC, **T0** dựng lại cùng tên bằng `bootstrap.recovery` vào
-  thế hệ lưu trữ mới `svp-pg-<yymmddhhmmss>`, restart một lần 4 service có Postgres và GlitchTip, **T1** khi luồng
-  `k8s-smoke` qua; RTO = T1 − T0, RPO theo dòng đánh dấu còn lại (không dòng nào trở lại thì in cận dưới `RPO at least N s`),
-  số dòng mọi bảng của service trước/sau; WAL không lưu được hay backup chưa xong thì dừng trước khi xoá gì; **không bao giờ
-  xoá backup**. JSON ở `.k8s/drills/backup-<time>.json`. Cần `.k8s/ca.crt`. **LOCAL LAB ONLY:** xoá khoá
-  `svp:gw:rl:register:*` ở Valkey db 10 của cluster như `k8s-smoke`.
+  Secret đã đọc. Kết quả và JSON ở `.k8s/drills/`. **LOCAL LAB ONLY:** cả hai target xoá khoá `svp:gw:rl:register:*` ở
+  Valkey db 10 của cluster (qua `kubectl exec`). Các diễn tập đo một lần (KEDA và RAM, PDB, canary của gateway và của web, backup và PITR,
+  `measure-canary`, `measure-gitops`, `drill-k8s-web-obs`) là bài lab `drills/` của `svp-labs`
+  ([ADR-0039](../adr/0039-mainpath-drills-scan-gate-sourcemaps.md) §1); quy trình khôi phục Postgres bằng tay ở
+  [`postgres-restore.md`](../runbooks/postgres-restore.md).
 - `make drill-k8s-supplychain [SUPPLYCHAIN_UNSIGNED=<digest GHCR>] [SUPPLYCHAIN_VULNERABLE=<digest GHCR>]
   [SUPPLYCHAIN_NO_PROVENANCE=<digest GHCR>|none] [SUPPLYCHAIN_ENFORCE_TMP=1]` (script `deploy/k8s/drills/supplychain.sh`;
   ba biến digest nhận `<imagePrefix><tên>@sha256:…` với `<tên>` thuộc `services` hay `drillImages` của nguồn có prefix đó, như phép 1
@@ -284,52 +260,26 @@ Loại tài liệu (Diátaxis): **reference**, tra cứu khi cần một lệnh 
   LoadBalancer hay NodePort nào cho UI (OPS-2). Grafana đăng nhập `admin` + `SVP_GRAFANA_ADMIN_PASSWORD`, GlitchTip bằng
   `GLITCHTIP_ADMIN_EMAIL`/`GLITCHTIP_ADMIN_PASSWORD`, Argo CD (cluster GitOps, chứng chỉ tự ký) `admin` với mật khẩu đọc
   bằng lệnh target in ra; Prometheus và Alertmanager không có đăng nhập nên chỉ mở khi forward đang chạy.
-- `make k8s-web-sourcemaps`, `make k8s-web-e2e`, `make drill-k8s-web-obs`
-  ([ADR-0019](../adr/0019-web-k3d-supply-chain-observability.md)), trên
-  cluster dev; hai target đầu là wrapper gọi `make k8s-sourcemaps`, `make k8s-e2e` của thư mục web như `web-e2e`:
+- `make k8s-web-sourcemaps`, `make k8s-web-e2e` ([ADR-0019](../adr/0019-web-k3d-supply-chain-observability.md)), trên
+  cluster dev; wrapper gọi target `k8s-sourcemaps`, `k8s-e2e` của `Makefile` thư mục web như `web-e2e`:
   `k8s-web-sourcemaps` như `web-sourcemaps` với bản build mà cluster chạy (`web_build_id`) và token của Secret
-  `svp-obs/glitchtip-sourcemaps`, qua port-forward riêng `127.0.0.1:8000`; `SOURCEMAPS_DIR=<thư mục tuyệt đối>` tải chunk và
-  map của thư mục đó thay vì build (`_next/` mà `deploy/ci/gitops-sourcemaps.sh` lấy cho image mà cluster GitOps chạy, kịch bản `gitops`:
-  image `web-sourcemaps` của `svp-frontend`, hay artifact `web-sourcemaps-amd64` cho web của nguồn cũ;
-  web của cluster dev chạy bản phát hành `WEB_FROM=stg|image` thì không có `SOURCEMAPS_DIR` là từ chối), vẫn kiểm mọi chunk `/login` đang phục vụ có debug ID trong bộ map; `k8s-web-e2e` chạy e2e của web vào
+  `svp-obs/glitchtip-sourcemaps`, qua port-forward riêng `127.0.0.1:8000`; cluster dev chạy bản phát hành `WEB_FROM=stg|image` thì từ chối
+  (không có bản build để tải map); kiểm mọi chunk `/login` đang phục vụ có debug ID trong bộ map; `k8s-web-e2e` chạy e2e của web vào
   `https://svp.localhost:8443` (`e2e/k3d-e2e.sh` của `svp-frontend`: `SVP_STACK=k3d`, CA `.k8s/ca.crt`, cookie `__Host-Http-svp_sid` +
   `Secure`), `SVP_E2E_GLITCHTIP=1` đọc token chỉ đọc của Secret `svp-obs/glitchtip-api` vào môi trường của lượt chạy và tự mở
-  forward `127.0.0.1:8000`, `SVP_E2E_EVIDENCE` như `web-e2e`; `drill-k8s-web-obs` (chỉ đọc, sau `k8s-web-e2e`) kiểm Tempo có
-  trace với span của `web` và gateway, Prometheus có histogram RUM LCP, CLS (INP khi có tương tác) với nhãn route đóng và
-  in p75, event GlitchTip của lượt `SVP_E2E_GLITCHTIP=1` có frame đã map và environment bằng `SENTRY_ENVIRONMENT` của pod `web` đang chạy
-  (`k3d` ở cluster dev, `stg` ở cluster GitOps; file e2e không có environment hay lệch là FAIL) (`SVP_WEB_OBS_SKIP_ERRORS=<lý do>` bỏ riêng phép kiểm
-  này, in `SKIP  errors (<lý do>)`; rỗng hay chỉ khoảng trắng bị từ chối; chỉ kịch bản `gitops` trên nhánh đặt); forward riêng `127.0.0.1:13200` (Tempo), `19090`
-  (Prometheus), `8000` (GlitchTip), cổng bị chiếm thì dừng. **LOCAL LAB ONLY:** `k8s-web-e2e` xoá khoá
+  forward `127.0.0.1:8000`, `SVP_E2E_EVIDENCE` như `web-e2e`; cổng bị chiếm thì dừng. Hai target là công cụ đường dev: e2e của web chạy ở
+  job `stack` của CI `svp-frontend`; image source map không còn
+  ([ADR-0039](../adr/0039-mainpath-drills-scan-gate-sourcemaps.md) §3). **LOCAL LAB ONLY:** `k8s-web-e2e` xoá khoá
   `svp:gw:rl:register:*` ở Valkey db 10 của cluster.
-- `make drill-k8s-web-canary` (script `deploy/k8s/drills/web-canary.sh`, client trình duyệt
-  `e2e/canary/clients.ts` của thư mục web chạy bằng Node theo `.nvmrc` và Playwright của bản clone đó; chỉ trên runner, không chạy trên
-  máy 16 GB): trên cluster dev `make k8s-up WEB_FROM=clone`, build lại web từ thư mục web với `SVP_BUILD_ID` khác (`build_image` của `deploy/k8s/lib.sh`, image khác bản đang
-  chạy thì mới đi tiếp) làm canary 25 %, 50 %, 100 % dưới traffic diễn tập và bốn client trình duyệt (một tab cũ mở trước canary
-  gửi Server Action đều đặn), phải promote; bản lỗi (`GATEWAY_URL` trỏ Service không có, `/api/feed/explore` 502) phải bị phân
-  tích abort, route về 100/0, pod stable không đổi; rồi trả build cũ bằng canary thứ hai. AnalysisRun nền đạt khi trong giới
-  hạn khai ở chính spec của nó, mỗi lần đo trượt in một dòng `note`. Đếm mỗi client số lần tải lại theo nguyên nhân (action 409,
-  chunk 404), điều hướng toàn trang do lệch `deploymentId`, tỷ lệ Server Action 409 (> 10 % in dòng `TASK`), 404 của
-  `web-asset`, restart pod web; không tín hiệu lệch bản nào là "inconclusive" (exit 1). Trap trả `GATEWAY_URL` và build cũ (chỉ
-  khi `GATEWAY_URL` đã về), dừng client và traffic đúng pid. JSON ở `.k8s/drills/web-canary-<time>.json`. **LOCAL LAB ONLY:**
-  xoá khoá `svp:gw:rl:register:*` ở Valkey db 10 của cluster.
 
 ## Manifest cho cluster đo thật
 
-- `make cloud-check` (ADR-0020 §8, script `deploy/k8s/cloud/check.sh`): kiểm tĩnh manifest viết sẵn cho cluster
-  đo thật (runner của `verify.yml`, EKS) không cần cluster hay `.env`: `helm template` chart của `deploy/k8s/cloud/charts.json` (Chaos
-  Mesh, Velero), manifest của `deploy/k8s/cloud/chaos/`, `velero/`, Job k6 do `deploy/k6/cloud/render.sh` in, rồi
-  kubeconform `-strict` (`KUBECONFORM_IMAGE` ghim; schema Kubernetes `CLOUD_K8S_VERSION` của `deploy/k8s/k8s.mk` ở commit
-  ghim, schema CRD sinh từ CRD của đúng bản chart ghim; kind không có schema là FAIL); mọi thí nghiệm Chaos Mesh có
-  `duration` và chỉ chọn pod của namespace của nó, mọi image ghim `@sha256:`; render cả bản có values phủ chỉ cho runner
-  (`runnerValues` của `charts.json`: `deploy/k8s/cloud/runner/chaos-mesh/`, `velero/`) và manifest `deploy/k8s/cloud/runner/csi/`
-  (driver CSI hostpath, external-snapshotter, schema CRD của bản ghim), kiểm controller Chaos Mesh chỉ có quyền ở namespace đích.
-  Cần mạng (repo chart, GitHub). `deploy/k6/cloud/render.sh --pods N` (mặc định 20, pod i chạy segment i/N, giữ phần tải mỗi
-  pod của thiết kế 20 pod), `--ramp`, `--hold` (cú pháp `SVP_K6_HOLD`; hạn Job tính theo cả lượt khi đặt), `run.sh --pods N
-  [--ramp D] [--hold D] start`. Lệnh chạy thật (`deploy/k6/cloud/run.sh`, `deploy/k8s/cloud/velero/drill-restore.sh`, `helm`,
-  `kubectl apply` của Chaos Mesh) do người học chạy với context của cluster đo ghi trong lệnh; script từ chối context `k3d-*` và
-  context rỗng, trừ **chế độ runner**: context đúng `k3d-svp` khi `ci_hosted_runner` của `deploy/ci/platform.sh` exit 0 (job trên
-  runner dùng một lần do nền tảng CI cấp) và `uname -s` là `Linux`, kiểm trước mọi `kubectl` (chặn tai nạn cho máy, không phải
-  ranh giới bảo mật). Ở chế độ đó `run.sh` thêm CA `.k8s/ca.crt`, origin web `https://svp.localhost:8443`, request CPU 250m và
-  limit 1 CPU cho pod k6; `drill-restore.sh` backup `svp-data` theo nhãn của Redpanda và fixture, chỉ xoá StatefulSet, PVC của
-  Redpanda và ConfigMap fixture, bỏ bước Argo CD khi cluster không có Argo CD, tự chạy `make k8s-smoke`. `SVP_K8S_RUNNER_CSI=1`
-  (chỉ kịch bản `velero`, chỉ mở ở chế độ runner) cho `make k8s-up` cài driver CSI hostpath ngay trước release `redpanda`.
+- `make cloud-check` (ADR-0020 §8, [ADR-0039](../adr/0039-mainpath-drills-scan-gate-sourcemaps.md) §1, script `deploy/k8s/cloud/check.sh`): kiểm
+  tĩnh Job k6 của cluster đo thật (EKS) không cần cluster hay `.env`: `deploy/k6/cloud/render.sh` in manifest (không đối số), rồi kubeconform
+  `-strict` (`KUBECONFORM_IMAGE` ghim; schema Kubernetes `CLOUD_K8S_VERSION` của `deploy/k8s/k8s.mk` ở commit ghim; kind không có
+  schema là FAIL, không `-ignore-missing-schemas`) và mọi image ghim đúng một `@sha256:` (không thấy image nào cũng là FAIL). Cần mạng (schema trên
+  GitHub). `deploy/k6/cloud/render.sh --pods N` (mặc định 20, pod i chạy segment i/N, giữ phần tải mỗi pod của thiết kế 20 pod), `--ramp`,
+  `--hold` (cú pháp `SVP_K6_HOLD`; hạn Job tính theo cả lượt khi đặt), `run.sh --pods N [--ramp D] [--hold D] start`. Lệnh chạy thật
+  (`deploy/k6/cloud/run.sh`) do người học chạy với context của cluster đo ghi trong lệnh; script từ chối mọi context `k3d-*` và context
+  rỗng trước mọi `kubectl`. Manifest Chaos Mesh, Velero và overlay runner không còn ở repo; Velero cho EKS quyết lại ở việc 7b
+  ([ADR-0034](../adr/0034-aws-stage7.md)), lấy từ bài lab.

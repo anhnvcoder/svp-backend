@@ -7,35 +7,24 @@
 # the rule, never the text that matched.
 #
 # The allow list. From the run's results ($SVP_VERIFY_OUT, default verify in ci_temp_dir; never uploaded as a whole):
-#   written on the runner itself  results.tsv, scenario, host-start.txt, runner.json, runner.txt, df-before.txt,
-#                                 df-after.txt, samples/*.tsv (deploy/ci/verify-run.sh, verify-host.sh,
-#                                 verify-sample.sh; the samples that come from the cluster are numbers, states, names
-#                                 and event reasons, never an event's text)
+#   written on the runner itself  results.tsv, scenario, df-before.txt (deploy/ci/verify-run.sh, verify-host.sh)
 #   read from the stack/cluster   logs/*.log (each make target's own output; of the two threat model drills, whose
 #                                 output holds what their probes got back, only the verdict lines, ok, PASS, FAIL,
 #                                 SKIP, WARN, with the item headings, the closing table and the last line around
-#                                 them), ram-*.json, ram-*.txt, rate-limit-load.json, lcp.json, k8s-status.txt,
-#                                 events.txt, compose-ps.txt
-# A target's output may quote a container's log, and no service log may reach the artifact. make k8s-up prints the log
-# of a failed migrate Job and, after a release that did not get ready, the last lines of each unready container's log
-# (unready_report of deploy/k8s/lib.sh), each line as "    [NAMESPACE] LINE"; drill-alert-to-sentry prints the gateway's
-# access log line it found in Loki. The copy of a target's output leaves out every such line of a namespace not in
-# log_tail_namespaces of deploy/k8s/lib.sh (third-party servers and operators only: never svp, the project's services),
-# every line of a JSON log record (a "msg" or "level" key, the form of the services' slog and of most third-party
-# servers) and every line quoting an access log ("access log of trace"), and files.txt says how many lines it left out.
-# What is kept of a third-party log goes through the scan below like the rest of the file.
+#                                 them)
+# A target's output may quote a container's log, and no service log may reach the artifact. make k8s-gitops-up prints,
+# when its wait for the Applications runs out, the last lines of the Prometheus operator's log (gitops_timeout_report
+# of deploy/k8s/lib.sh), each line as "    [NAMESPACE] LINE", the form unready_report and mark_log of the same file
+# give the logs make k8s-up quotes. The copy of a target's output leaves out every such line of a namespace not in
+# log_tail_namespaces of deploy/k8s/lib.sh (third-party servers and operators only: never svp, the project's
+# services), every line of a JSON log record (a "msg" or "level" key, the form of the services' slog and of most
+# third-party servers) and every line quoting an access log ("access log of trace", the form a drill quotes one in),
+# and files.txt says how many lines it left out. What is kept of a third-party log goes through the scan below like
+# the rest of the file.
 # From the checkout (all read from the stack/cluster): .k8s/drills/*.json and traffic-*.log (each line a time, a user,
-# a route, a status and a duration), .k6/<run>/summary.json, the summary of each pod of the k6 Job
-# (.k6/cloud-<time>/pod-<i>.json of deploy/k6/cloud/run.sh logs, whose table is in the target's output),
-# and, from the clone of the web client's repository svp-frontend the run's web targets ran in (.web/svp-frontend, the
-# folder of make web-clone), test-results/measure-*.json and glitchtip-*.json, the Lighthouse reports
-# test-results/lighthouse/*.json and *.html, and the error-context.md Playwright writes for a failed test
-# (test-results/playwright/<test>/: the error and the page's accessibility tree at that moment, text, so the next red
-# e2e test has evidence; its trace stays out). Everything else under those places is listed in files.txt as
-# not-allowed: .env, kubeconfig, .k8s/ca.*, .k8s/helm/, .k8s/drills/threats-*.log, Playwright traces,
-# videos, screenshots, HAR and HTML report, k6's machine.json, hidden files and every service log never get in. A
-# hidden file is dropped with its own rule and a warning, except test-results/playwright/.last-run.json, which
-# Playwright writes on every run (the ids of the tests that failed): known, so not-allowed without a warning.
+# a route, a status and a duration). Everything else under that place is listed in files.txt as not-allowed:
+# .k8s/drills/threats-*.log and every service log never get in; a hidden file is dropped with its own rule and a
+# warning. Nothing else of the checkout (.env, kubeconfig, .k8s/ca.*, .k8s/helm/) is even looked at.
 #
 # Each candidate is refused when it is hidden, not a regular file (a link could point at .env), over 5 MiB, or when it
 # matches (grep -a: binary files are read as text):
@@ -53,9 +42,8 @@
 # has one.
 #
 # The artifact holds files.txt (every candidate: kept, with the lines left out of it if any, or dropped with its
-# rule), the results under their own names,
-# and the checkout's files under k8s-drills/, k6/ and web-test-results/ (upload-artifact leaves hidden folders such as
-# .k8s out). Exits 0 whatever it dropped; 1 only when it cannot build the artifact folder.
+# rule), the results under their own names, and the checkout's files under k8s-drills/ (upload-artifact leaves hidden
+# folders such as .k8s out). Exits 0 whatever it dropped; 1 only when it cannot build the artifact folder.
 #
 # SVP_VERIFY_REPO (default: this checkout) points it at another tree, for deploy/ci/verify-collect-test.sh.
 set -uo pipefail
@@ -188,10 +176,8 @@ if [ -d "$out" ]; then
     src="\$SVP_VERIFY_OUT/$sub"
     if hidden "$sub"; then drop "$src" hidden; continue; fi
     case $sub in
-      results.tsv | scenario | host-start.txt | runner.json | runner.txt | df-before.txt | df-after.txt)
+      results.tsv | scenario | df-before.txt)
         consider "$file" "$src" "$sub" runner ;;
-      samples/*/*) drop "$src" not-allowed ;;
-      samples/*.tsv) consider "$file" "$src" "$sub" runner ;;
       logs/*/*) drop "$src" not-allowed ;;
       logs/*-drill-k8s-threats.log | logs/*-drill-obs-threats.log)
         grep -aE -e "$verdict_re" -e "$item_re" -e "$table_re" -e "$drill_end_re" "$file" |
@@ -207,41 +193,25 @@ if [ -d "$out" ]; then
         note=
         [ "$removed" = 0 ] || note="$removed service log line(s) left out"
         consider "$work/output" "$src" "$sub" stack "$note" ;;
-      */*) drop "$src" not-allowed ;;
-      ram-*.json | ram-*.txt | rate-limit-load.json | lcp.json | k8s-status.txt | events.txt | compose-ps.txt)
-        consider "$file" "$src" "$sub" stack ;;
       *) drop "$src" not-allowed ;;
     esac
   done < <(find "$out" \( -type f -o -type l \) -print0 | LC_ALL=C sort -z)
 fi
 
-# --- The checkout's results: BASE in the tree, DEST its folder in the artifact. The web client's are in the clone of
-# svp-frontend in the tree, where its targets write them.
-web_results=.web/svp-frontend/test-results
-for pair in .k8s/drills:k8s-drills .k6:k6 "$web_results:web-test-results"; do
-  base=${pair%%:*}
-  dest=${pair#*:}
-  [ -d "$repo/$base" ] || continue
+# --- The checkout's results: the drills' files in .k8s/drills, under k8s-drills/ in the artifact.
+base=.k8s/drills
+if [ -d "$repo/$base" ]; then
   while IFS= read -r -d '' file; do
     sub=${file#"$repo/$base"/}
     src=$base/$sub
-    if [ "$src" = "$web_results/playwright/.last-run.json" ]; then drop "$src" not-allowed; continue; fi
     if hidden "$sub"; then drop "$src" hidden; continue; fi
-    allowed=0
-    case $base:$sub in
-      .k8s/drills:*/*) ;;
-      .k8s/drills:*.json | .k8s/drills:traffic-*.log) allowed=1 ;;
-      .k6:*/*/*) ;;
-      .k6:*/summary.json | .k6:cloud-*/pod-*.json) allowed=1 ;;
-      "$web_results":lighthouse/*/*) ;;
-      "$web_results":lighthouse/*.json | "$web_results":lighthouse/*.html) allowed=1 ;;
-      "$web_results":playwright/*/error-context.md) allowed=1 ;;
-      "$web_results":*/*) ;;
-      "$web_results":measure-*.json | "$web_results":glitchtip-*.json) allowed=1 ;;
+    case $sub in
+      */*) drop "$src" not-allowed ;;
+      *.json | traffic-*.log) consider "$file" "$src" "k8s-drills/$sub" stack ;;
+      *) drop "$src" not-allowed ;;
     esac
-    if [ "$allowed" = 1 ]; then consider "$file" "$src" "$dest/$sub" stack; else drop "$src" not-allowed; fi
   done < <(find "$repo/$base" \( -type f -o -type l \) -print0 | LC_ALL=C sort -z)
-done
+fi
 
 # files.txt holds only paths this script chose and rule names; scanned all the same before it is published.
 cp "$work/files" "$work/files.txt"

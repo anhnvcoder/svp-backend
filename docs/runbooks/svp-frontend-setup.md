@@ -25,7 +25,7 @@ flowchart LR
     scripts["deploy/ci/*.sh, sources.json<br/>(ở BACKEND_COMMIT)"]
   end
   subgraph web["repo anhnvcoder/svp-frontend"]
-    ci["ci.yml: lint, test, build, generate-check"] --> img["images.yml: build, quét, ký, provenance<br/>ghcr.io/anhnvcoder/svp-frontend/web<br/>…/svp-frontend/web-sourcemaps"]
+    ci["ci.yml: lint, test, build, generate-check"] --> img["images.yml: build, quét, ký, provenance<br/>ghcr.io/anhnvcoder/svp-frontend/web"]
     img --> promote["job promote<br/>environment promote (chỉ main)<br/>variable SVP_WEB_APP_CLIENT_ID + secret SVP_WEB_APP_PRIVATE_KEY"]
   end
   app["GitHub App svp-web-promoter<br/>token 1 giờ, chỉ svp-gitops,<br/>contents + pull_requests"]
@@ -78,7 +78,7 @@ gh api $W/actions/secrets -q .total_count
 anon() { t=$(curl -s "https://ghcr.io/token?scope=repository:anhnvcoder/$1:pull" | jq -r '.token // empty')
   [ -n "$t" ] || { echo "$1 DENIED"; return; }
   echo "$1 $(curl -s -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $t" "https://ghcr.io/v2/anhnvcoder/$1/tags/list")"; }
-anon svp-backend/api/gateway; anon svp-frontend/web; anon svp-frontend/web-sourcemaps
+anon svp-backend/api/gateway; anon svp-frontend/web
 # B2. CodeQL default setup
 gh api $W/code-scanning/default-setup -q '{state, languages, query_suite, schedule}'
 # C2. Ruleset (sau khi nhập)
@@ -172,7 +172,7 @@ Dựng từ đầu theo thứ tự phụ thuộc của ADR-0033 §9:
 - **B. Sau push lịch sử và commit thêm CI** (bước 3 của §9 và commit kế tiếp của §8: CI, `Makefile`, `renovate.json`, `README.md`): kiểm
   lịch sử, CodeQL, Renovate.
 - **C. Sau lượt CI đầu trên `main`** (`ci.yml`, `images.yml` của commit thêm CI): package image public, ruleset.
-- **D. Sau bản phát hành đầu** (bước 5 của §9): PR đầu của bot web tự merge, image và source map kéo ẩn danh, chữ ký đúng identity.
+- **D. Sau bản phát hành đầu** (bước 5 của §9): PR đầu của bot web tự merge, image kéo ẩn danh, chữ ký đúng identity.
 
 ### A1. Tạo repo rỗng
 
@@ -187,7 +187,7 @@ None, **License** None).
 
 **Vì sao:** lịch sử web được chuyển bằng `git filter-repo` rồi push lên `main` (ADR-0033 §8). Repo có sẵn commit (README, license) thì
 `main` có lịch sử khác gốc, push lịch sử bị từ chối non-fast-forward, mà force push hay merge hai gốc đều làm lịch sử khác bản đã kiểm
-(`commit-map`). Public: image và source map kéo ẩn danh, như hai repo kia.
+(`commit-map`). Public: image kéo ẩn danh, như hai repo kia.
 
 **Kiểm:**
 
@@ -405,18 +405,18 @@ của ADR-0033): nâng tay bằng `make contract-bump VERSION=<x>` trong `svp-fr
 
 ### C1. Package image public, gắn repo (sau lượt `images.yml` đầu trên `main`)
 
-**Làm gì:** với mỗi package `svp-frontend/web`, `svp-frontend/web-sourcemaps`: https://github.com/users/anhnvcoder/packages/container/package/svp-frontend%2Fweb
-(và `svp-frontend%2Fweb-sourcemaps`) → **Package settings** → **Change visibility** → **Public**. Không có API đổi visibility (ADR-0015 §5).
+**Làm gì:** với package `svp-frontend/web`: https://github.com/users/anhnvcoder/packages/container/package/svp-frontend%2Fweb
+→ **Package settings** → **Change visibility** → **Public**. Không có API đổi visibility (ADR-0015 §5).
 
 **Vì sao:** cluster stg kéo image ẩn danh theo digest; check `gitops-ok` của `svp-gitops` kéo ẩn danh để kiểm chữ ký, attestation `vuln`,
-provenance; `gitops-sourcemaps.sh` kéo image source map ẩn danh (ADR-0033 §7). Package do `GITHUB_TOKEN` tạo ở lần đẩy đầu thường là
+provenance. Package do `GITHUB_TOKEN` tạo ở lần đẩy đầu thường là
 private. Gắn repo: package có nhãn `org.opencontainers.image.source` của `svp-frontend` từ lần đẩy đầu thì tự gắn và workflow của `svp-frontend`
 giữ quyền ghi; package gắn repo khác thì lượt sau của `svp-frontend` không đẩy được.
 
 **Kiểm:** hai dòng `anon svp-frontend/…` của "Kiểm tra nhanh" in `200`. Repo gắn với package (cần `read:packages`):
 
 ```sh
-for p in svp-frontend%2Fweb svp-frontend%2Fweb-sourcemaps; do
+for p in svp-frontend%2Fweb; do
   gh api users/anhnvcoder/packages/container/$p -q '{name, visibility, repo: .repository.full_name}'
 done   # mỗi dòng "visibility":"public", "repo":"anhnvcoder/svp-frontend"
 ```
@@ -508,7 +508,7 @@ gh api 'repos/anhnvcoder/svp-frontend/deployments?environment=promote&per_page=3
   `names …, not ghcr.io/anhnvcoder/svp-frontend/web` → `web.yaml` ở `main` hay PR đang mở của `svp-gitops` mang image khác: sửa bằng PR
   ở `svp-gitops` (người học), không để bot đoán.
 
-### D2. Image, chữ ký, provenance, source map kéo ẩn danh
+### D2. Image, chữ ký, provenance kéo ẩn danh
 
 **Kiểm** (digest lấy từ `web.yaml` ở D1; cosign như A6):
 
@@ -520,17 +520,13 @@ cosign verify --certificate-oidc-issuer $iss --certificate-identity $id $img >/d
 cosign verify-attestation --type slsaprovenance1 --certificate-oidc-issuer $iss --certificate-identity $id $img |
   jq -r '.payload | @base64d | fromjson | .predicate.buildDefinition.externalParameters.workflow.repository'
 # https://github.com/anhnvcoder/svp-frontend
-# image source map: tag <arch>-<hex của digest manifest con>, mỗi kiến trúc một tag
-t=$(curl -s "https://ghcr.io/token?scope=repository:anhnvcoder/svp-frontend/web-sourcemaps:pull" | jq -r .token)
-curl -s -H "Authorization: Bearer $t" https://ghcr.io/v2/anhnvcoder/svp-frontend/web-sourcemaps/tags/list | jq -c .tags
 ```
 
 **Vì sao:** Kyverno của stg nhận image dưới prefix `svp-frontend` chỉ với identity của `svp-frontend` (ADR-0033 §2); lệnh này là cùng phép kiểm, chạy
 tay. Ký bằng identity backend, hay provenance mang repo backend, thì pod web bị từ chối khi Argo CD triển khai.
 
 **Nếu sai:** cosign báo identity không khớp → `images.yml` của `svp-frontend` chạy ký qua reusable workflow hay workflow khác tên (ADR-0033 §5:
-job ký chạy trong `images.yml` của chính `svp-frontend`). Không có tag source map → bước đẩy stage `sourcemaps` của `build-image.sh` không chạy
-ở `svp-frontend`; `drill-k8s-web-obs` trên `main` sẽ FAIL phép `errors`. Phép chéo nguồn trên cluster (ca `m` của `drill-k8s-supplychain`) và
+job ký chạy trong `images.yml` của chính `svp-frontend`). Image `web-sourcemaps` không còn ([ADR-0039](../adr/0039-mainpath-drills-scan-gate-sourcemaps.md) §3): package cũ trên GHCR xoá tay. Phép chéo nguồn trên cluster (ca `m` của `drill-k8s-supplychain`) và
 lượt `gitops` sau bản phát hành đầu: mục "Kiểm chứng sau" của ADR-0033.
 
 ### E1. Đổi tên repo: package GHCR mới public (2026-10-31)
@@ -548,10 +544,9 @@ lịch sử `envs/` của `svp-gitops` trỏ tới chúng.
 | --- | --- |
 | `svp-backend/gateway`, `svp-backend/user-service`, `svp-backend/video-service`, `svp-backend/engagement-service`, `svp-backend/feed-service`, `svp-backend/media-worker`, `svp-backend/api/gateway` | lượt `images.yml` push `main` đầu của backend sau đổi tên (bước 1; bật trước khi chạy lại job `promote`, bước 3–4) |
 | `svp-backend/drill-vulnerable`, `svp-backend/drill-unsigned`, `svp-backend/drill-no-provenance` | `gh workflow run images.yml --repo anhnvcoder/svp-backend --ref main -f drill=true` (bước 4) |
-| `svp-frontend/web`, `svp-frontend/web-sourcemaps` | lượt `images.yml` push `main` đầu của `svp-frontend` sau đổi tên (bước 5) |
+| `svp-frontend/web` | lượt `images.yml` push `main` đầu của `svp-frontend` sau đổi tên (bước 5) |
 
-**Vì sao:** check `gitops-ok` của `svp-gitops`, Kyverno, `make up IMAGES=stg`, `make generate` của `svp-frontend` (hợp đồng) và
-`gitops-sourcemaps.sh` kéo ẩn danh; package private thì PR bot của nó đỏ ở check, pod không kéo được image.
+**Vì sao:** check `gitops-ok` của `svp-gitops`, Kyverno, `make up IMAGES=stg`, `make generate` của `svp-frontend` (hợp đồng) kéo ẩn danh; package private thì PR bot của nó đỏ ở check, pod không kéo được image.
 
 **Kiểm** (chỉ đọc; `anon` như "Kiểm tra nhanh"; vòng thứ hai cần `read:packages`):
 
@@ -561,7 +556,7 @@ anon() { t=$(curl -s "https://ghcr.io/token?scope=repository:anhnvcoder/$1:pull"
   echo "$1 $(curl -s -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $t" "https://ghcr.io/v2/anhnvcoder/$1/tags/list")"; }
 pkgs="svp-backend/gateway svp-backend/user-service svp-backend/video-service svp-backend/engagement-service svp-backend/feed-service
 svp-backend/media-worker svp-backend/api/gateway svp-backend/drill-vulnerable svp-backend/drill-unsigned svp-backend/drill-no-provenance
-svp-frontend/web svp-frontend/web-sourcemaps"
+svp-frontend/web"
 for p in $pkgs; do anon "$p"; done          # mỗi dòng "<package> 200"; DENIED: private hay chưa có (chưa tới bước tạo nó)
 for p in $pkgs; do gh api "users/anhnvcoder/packages/container/$(printf %s "$p" | sed 's#/#%2F#g')" \
   -q '{name, visibility, repo: .repository.full_name}'; done

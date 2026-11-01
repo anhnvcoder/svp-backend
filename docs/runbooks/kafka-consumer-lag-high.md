@@ -99,5 +99,5 @@ phải tới `READY` hay `FAILED` (`make smoke` chứng minh luồng mới chạ
 - ADR: [ADR-0011](../adr/0011-observability-stage3.md) §8, §11; [ADR-0008](../adr/0008-async-upload-pipeline-stage2a.md)
   (pipeline upload); [ADR-0017](../adr/0017-gitops-capacity-media-worker-max2.md) (media-worker tối đa 2).
 - Diễn tập gần nhất: không có diễn tập giữ lag đủ 2 m/20 m để cảnh báo cháy. `make drill-kill-worker` (worker bị kill giữa
-  lúc transcode, video vẫn `READY` đúng một lần) và `make drill-k8s-keda N=9` (k3d: lag đỉnh, KEDA scale lên 2 rồi về 1) tạo
+  lúc transcode, video vẫn `READY` đúng một lần) và `drill-k8s-keda N=9` của bài lab `drills/` của `svp-labs` (k3d: lag đỉnh, KEDA scale lên 2 rồi về 1) tạo
   lag ngắn.

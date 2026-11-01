@@ -197,7 +197,7 @@ rescan_one() {
   echo "rescan $repo@$digest"
   scan_index "$repo" "$digest" "$dir"
   # The gate runs before anything is written, with --allow-critical: the rescan's exception covers CRITICAL only. A
-  # secret (or a broken .trivyignore.yaml) blocks as at build time: the attestation is public and Rekor keeps its whole
+  # secret (or a broken ignore file) blocks as at build time: the attestation is public and Rekor keeps its whole
   # envelope for good, so the report's secret findings would be published with it. The old attestation then ages out
   # and Kyverno refuses new pods after 72 hours; the red run mails the owner now.
   for arch in amd64 arm64; do

@@ -7,7 +7,7 @@
 
 Sự cố đã gặp ở giai đoạn 4 (roadmap, "Ghi nhận"): máy chạy pin với Low Power Mode, transcode một video 60 s 1080p mất 91–253
 s, Docker VM 8 vCPU bận 99%; probe của service cùng node quá hạn 1 s nên kubelet **restart pod còn sống** (video-service
-restart 2 lần), readiness của user-service và gateway lỗi nên pod bị rút khỏi Service; `make drill-k8s-keda` FAIL 2/2. Ở lượt
+restart 2 lần), readiness của user-service và gateway lỗi nên pod bị rút khỏi Service; `drill-k8s-keda` (bài lab `drills/` của `svp-labs`) FAIL 2/2. Ở lượt
 khác máy bị giới hạn nhiệt: API server chậm, controller mất lease và restart, Envoy trả 503, cluster tự hồi sau ~3 phút.
 
 Người dùng: 503 từ Envoy hay gateway trong lúc pod bị rút hay restart, request chậm.
@@ -86,4 +86,4 @@ make k8s-smoke                                                # LOCAL LAB ONLY
 
 - ADR: [ADR-0020](../adr/0020-reliability-stage6.md) §10 (probe), §9; [ADR-0017](../adr/0017-gitops-capacity-media-worker-max2.md);
   [ADR-0014](../adr/0014-kubernetes-local-stage4.md) (workload, PDB).
-- Diễn tập tái hiện: `make drill-k8s-keda N=9` (2 worker cùng transcode); chỉ chạy khi cần, cắm sạc, đóng bớt app.
+- Diễn tập tái hiện: `drill-k8s-keda N=9` của bài lab `drills/` của `svp-labs` (2 worker cùng transcode); chỉ chạy khi cần, cắm sạc, đóng bớt app.

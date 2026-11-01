@@ -25,10 +25,6 @@
   },
   "ignorePaths": ["deploy/ci/drill/**", "gen/**"],
   "postUpdateOptions": ["gomodTidy", "gomodUpdateImportPaths"],
-  "helm-values": {
-    "description": "Also the values files of the charts installed only on the cloud cluster (deploy/k8s/cloud/values/), which are not named values.yaml. Their image pins are repository + tag: <version>@sha256:<digest>, or an image: string with both. The values of the platform charts and of the services are in svp-gitops, whose own Renovate configuration updates them.",
-    "managerFilePatterns": ["/^deploy/k8s/cloud/values/[^/]+\\.ya?ml$/"]
-  },
   "customManagers": [
     {
       "description": "Tool versions with a '# renovate: datasource=... depName=... [registryUrl=...]' line right above a 'NAME := value' or 'NAME=value' line (Makefile *_VERSION).",
@@ -57,14 +53,6 @@
       ]
     },
     {
-      "description": "Values of the charts of the cloud cluster that only take a tag, so helm-values does not see them: the annotation, then 'tag: <version>@sha256:<digest>'.",
-      "customType": "regex",
-      "managerFilePatterns": ["/^deploy/k8s/cloud/values/[^/]+\\.ya?ml$/"],
-      "matchStrings": [
-        "#[ \\t]*renovate:[ \\t]*datasource=(?<datasource>[a-z-]+)[ \\t]+depName=(?<depName>\\S+)[ \\t]*\\n[ \\t]*tag:[ \\t]*(?<currentValue>[^@\\s\"']+)@(?<currentDigest>sha256:[0-9a-f]{64})[ \\t]*\\n"
-      ]
-    },
-    {
       "description": "Images that compose.yaml defines once as a YAML anchor (x-<name>-image: &<name>-image <image>[:<tag>]@sha256:<digest>) and services use as *<name>-image: the docker-compose manager only reads image: lines.",
       "customType": "regex",
       "managerFilePatterns": ["/^deploy/compose/compose\\.yaml$/"],
@@ -72,25 +60,6 @@
         "x-[a-z0-9-]+-image:[ \\t]*&[a-z0-9-]+[ \\t]+(?<depName>[^\\s:@]+)(?::(?<currentValue>[^\\s@]+))?@(?<currentDigest>sha256:[0-9a-f]{64})[ \\t]*\\n"
       ],
       "datasourceTemplate": "docker"
-    },
-    {
-      "description": "Charts installed only on the cloud cluster from a Helm repository: repo, chart and version of each entry of deploy/k8s/cloud/charts.json (those of the platform components, components.json, are in svp-gitops).",
-      "customType": "regex",
-      "managerFilePatterns": ["/^deploy/k8s/cloud/charts\\.json$/"],
-      "matchStrings": [
-        "\"repo\":\\s*\"(?<registryUrl>https://[^\"]+)\",\\s*\"chart\":\\s*\"(?<depName>[^\"]+)\",\\s*\"version\":\\s*\"(?<currentValue>[^\"]+)\""
-      ],
-      "datasourceTemplate": "helm"
-    },
-    {
-      "description": "Charts of deploy/k8s/cloud/charts.json from an OCI registry (repo oci://<registry>/<path>): an OCI artifact, looked up as <registry>/<path>/<chart> on the docker datasource.",
-      "customType": "regex",
-      "managerFilePatterns": ["/^deploy/k8s/cloud/charts\\.json$/"],
-      "matchStrings": [
-        "\"repo\":\\s*\"oci://(?<ociRepo>[^\"]+)\",\\s*\"chart\":\\s*\"(?<chart>[^\"]+)\",\\s*\"version\":\\s*\"(?<currentValue>[^\"]+)\""
-      ],
-      "datasourceTemplate": "docker",
-      "depNameTemplate": "{{{ociRepo}}}/{{{chart}}}"
     }
   ],
   "packageRules": [
@@ -214,15 +183,6 @@
       ],
       "groupName": "elastic stack"
     },
-    {
-      "description": "Charts of the cloud cluster only (Chaos Mesh, Velero): no local cluster runs them, so the check before merging is the schema check of the rendered manifests.",
-      "matchFileNames": ["deploy/k8s/cloud/charts.json", "deploy/k8s/cloud/values/*.yaml"],
-      "prBodyNotes": ["A chart of the cloud cluster changed: run make cloud-check before merging; it is installed only during a cloud session (stage 7)."]
-    },
-    { "matchFileNames": ["deploy/k8s/cloud/values/chaos-mesh.yaml"], "groupName": "chaos-mesh chart" },
-    { "matchFileNames": ["deploy/k8s/cloud/charts.json"], "matchDepNames": ["chaos-mesh"], "groupName": "chaos-mesh chart" },
-    { "matchFileNames": ["deploy/k8s/cloud/values/velero.yaml"], "groupName": "velero chart" },
-    { "matchFileNames": ["deploy/k8s/cloud/charts.json"], "matchDepNames": ["velero"], "groupName": "velero chart" },
     {
       "description": "k3s: the node image of deploy/k8s/k3d.yaml and K3S_IMAGE_TAG of the Makefile (k3d's default k3s) are always the same version, in one pull request. Tags are v<major>.<minor>.<patch>-k3s<build>; the -amd64/-arm64 tags are left out. A patch is a separate update from a minor (separateMinorPatch): otherwise, once a new minor is out, Renovate proposes only that minor, which waits for approval below, and the patches of the current minor never come.",
       "matchDepNames": ["rancher/k3s"],

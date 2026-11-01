@@ -45,7 +45,7 @@
 #   l  an image signed and attested vuln like a release, but without build provenance: refused with the provenance
 #      rule's message, only when the running policy checks provenance (requireProvenance of chart svp-policy: it has
 #      attestation provenance); otherwise SKIP "policy off". The image is SUPPLYCHAIN_NO_PROVENANCE when set, otherwise
-#      the newest drill-no-provenance under the prefix of release source backend on GHCR (deploy/ci/gitops-sourcemaps.sh
+#      the newest drill-no-provenance under the prefix of release source backend on GHCR (deploy/ci/ghcr-digest.sh
 #      newest, anonymous: the drill image CI signs and attests vuln and never attests provenance);
 #      SUPPLYCHAIN_NO_PROVENANCE=none leaves the case out (SKIP), for a caller that knows that image is past the
 #      maximum age. Kyverno checks provenance after every other rule, so the refusal shows the provenance rule only if
@@ -690,7 +690,7 @@ elif [[ $no_provenance == none ]]; then
 else
   rebuild=$(ci_dispatch_hint images.yml main drill=true) || exit 1
   if [[ -z $no_provenance ]]; then
-    no_provenance=$("$repo_root/deploy/ci/gitops-sourcemaps.sh" newest drill-no-provenance 2>"$work/newest.err") ||
+    no_provenance=$("$repo_root/deploy/ci/ghcr-digest.sh" newest drill-no-provenance 2>"$work/newest.err") ||
       no_provenance=
   fi
   if [[ -n $no_provenance ]]; then

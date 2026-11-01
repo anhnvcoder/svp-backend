@@ -75,7 +75,7 @@ dc exec -T redpanda rpk group describe feed-service
 
 Trên k3d cùng bước với `kubectl --context k3d-svp -n svp scale deployment/feed-service --replicas=0`, `rpk` qua
 `kubectl --context k3d-svp -n svp-data exec -i redpanda-0 -c redpanda -- rpk …`, rồi scale lại số replica cũ (media-worker do
-KEDA quản: ghim bằng annotation `autoscaling.keda.sh/paused-replicas` như `deploy/k8s/drills/keda.sh`, nhớ bỏ ghim). Các lệnh
+KEDA quản: ghim bằng annotation `autoscaling.keda.sh/paused-replicas` như diễn tập `drill-k8s-keda` của bài lab `drills/` của `svp-labs`, nhớ bỏ ghim). Các lệnh
 seek trên k3d chưa chạy thử.
 
 **Không áp dụng cho group `engagement-service`** (topic `engagement.views.v1`): handler đếm lượt xem bỏ qua mọi record dưới
