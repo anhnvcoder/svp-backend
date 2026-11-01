@@ -116,7 +116,9 @@ không token; thời gian CLI ở trên.
 Kiểm sau merge, ở lượt phát hành đầu (điều kiện giữ của mục 6, chưa đo): lượt `verify.yml` kịch bản `gitops` đầu tiên sau khi bản phát hành
 đầu ở định dạng bundle đã promote stg (k3d trên runner, Kyverno v1.19.1 và `svp-policy` thật, digest của `envs/stg/images/` ở `svp-gitops`),
 đo thời gian admission lần không cache và lần có cache, so với 20 s và 30 s. Nguồn: histogram
-`apiserver_admission_webhook_admission_duration_seconds` của webhook `svp-policy` (và metric admission của Kyverno) trong lượt sync đầu, khi mọi
+`apiserver_admission_webhook_admission_duration_seconds` của webhook Kyverno dành cho ImageValidatingPolicy `svp-images` (tên bắt đầu `ivpol.`,
+ví dụ `ivpol.validate.kyverno.svc-fail-finegrained-svp-images`) và metric admission của Kyverno, do bước `gitops-admission-metrics` của kịch bản
+`gitops` in ra trong lượt sync đầu, khi mọi
 service đổi digest cùng lúc (đây cũng là phép kiểm dưới tải); event của pod không mang thời gian admission, và dry-run trên digest pod đang chạy
 chỉ cho số có cache;
 số và id lượt ghi ở đây.
@@ -143,7 +145,8 @@ Repo `svp-backend` (đường dẫn từ gốc repo):
 - `.github/workflows/images.yml` (job `sign`, `rescan`), `.github/workflows/ci.yml`, `deploy/ci/sign-image.sh`, `deploy/ci/rescan.sh`,
   `deploy/ci/provenance-predicate.sh` và `provenance-predicate-test.sh` (đã xoá), `deploy/ci/common.sh`, `changed-services.sh`, `platform.sh`
   (mục 1, 2, 3); test `deploy/ci/platform-test.sh`, `verify-collect-test.sh`, `ghcr-digest-test.sh`.
-- `deploy/ci/verify-release.sh`, `deploy/ci/verify/gitops.sh`, `deploy/ci/ghcr-digest.sh` (mục 4); `deploy/helm/svp-policy/templates/imagevalidatingpolicy.yaml`
+- `deploy/ci/verify-release.sh`, `deploy/ci/verify/gitops.sh`, `deploy/ci/ghcr-digest.sh` (mục 4); `deploy/ci/verify/gitops.sh` bước
+  `gitops-admission-metrics` (mục 6); `deploy/helm/svp-policy/templates/imagevalidatingpolicy.yaml`
   (mục 2, 7); `deploy/k8s/drills/supplychain.sh`, `deploy/k8s/k8s.mk` (ca b, c, f, l).
 
 Repo `svp-frontend`: `.backend-commit`, `.github/workflows/images.yml` (job ký, `rescan`) (mục 1, 3).

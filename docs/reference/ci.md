@@ -148,6 +148,12 @@ Loại tài liệu (Diátaxis): **reference**, tra cứu khi cần một lệnh 
       gateway), `gitops-external-secrets` (ExternalSecret của cluster đúng bằng danh sách của chart, mỗi cái `Ready`, Secret đích đúng
       type và đúng tên key, không đọc giá trị), `gitops-argocd-metrics` (trong 180 s Prometheus thấy `argocd_app_info` của mọi Application,
       đều Synced và Healthy, không cảnh báo `ArgoCDApplication*` nào cháy; chart stg đang chạy chưa có PodMonitor của Argo CD thì nói vậy và qua),
+      `gitops-admission-metrics` (số đo thời gian admission của lượt sync đầu, chạy trước smoke và diễn tập để histogram chỉ chứa lượt sync đầu; điều kiện của
+      [ADR-0040](../adr/0040-sigstore-bundle-actions-attest.md) mục 6: 20 s lần không cache, hạn webhook 30 s. In ra `logs/NN-gitops-admission-metrics.log` chỉ dòng
+      tóm tắt: từ apiserver, histogram `apiserver_admission_webhook_admission_duration_seconds` của webhook `ivpol.*` trong
+      `kyverno-resource-validating-webhook-cfg` (bucket chỉ có 10, 25, +Inf: `_count`, `_sum`, trung bình, số ≤ 10, ≤ 25, > 25); từ Kyverno (port-forward
+      `kyverno-svc-metrics`:8000) `kyverno_admission_review_duration_seconds` và `kyverno_image_validating_policy_execution_duration_seconds` của
+      policy `svp-images` (bucket 20, 30). Thiếu metric thì dòng `NOTE`, bước không đỏ: phép đo là bằng chứng, không phải cổng),
       `make k8s-smoke` (chặt, không biến chuyển tiếp), `make drill-k8s-supplychain` (ảnh chưa ký của ca (b), (h), (i) là digest mới nhất của
       `drill-unsigned` (không chữ ký, không attestation nên không có hạn 72 giờ); ca (l) là digest mới nhất của `drill-no-provenance` dưới
       prefix của `backend`, lấy như ca (c) lấy `drill-vulnerable`; cả ba do `deploy/ci/ghcr-digest.sh` đọc ẩn danh từ GHCR, không đọc được thì ca SKIP (trừ `drill-unsigned`: drill tự tra lại) và bước đỏ sau drill; chỉ ở lượt lịch, `SVP_VERIFY_SCHEDULED=true`,

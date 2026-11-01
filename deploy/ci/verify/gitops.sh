@@ -26,6 +26,16 @@
 #                          Read through a port-forward of Prometheus on 127.0.0.1:19091. When the charts stg runs
 #                          (envs/stg/charts.yaml of svp-gitops) predate that PodMonitor, it says so and passes: the
 #                          check starts with the first promote that brings it
+#   gitops-admission-metrics the admission time of the first sync, kept as evidence (the condition of ADR-0040 §6: 20 s
+#                          without cache, the webhook's timeout 30 s). It runs before k8s-smoke and the drills, so the
+#                          histograms hold the first sync only. Prints, from the apiserver, the summary of
+#                          apiserver_admission_webhook_admission_duration_seconds for the webhooks of the image policies
+#                          in kyverno-resource-validating-webhook-cfg (buckets 10, 25, +Inf only: _count, _sum, mean,
+#                          <= 10, <= 25, > 25), and from Kyverno (a port-forward of Service kyverno-svc-metrics on a free
+#                          port of 127.0.0.1, as the namespace's default-deny NetworkPolicy shuts the apiserver's proxy)
+#                          the same for kyverno_admission_review_duration_seconds and, of policy svp-images,
+#                          kyverno_image_validating_policy_execution_duration_seconds (<= 20, <= 30). A metric that
+#                          is missing is a NOTE line; the step never fails
 #   drill-k8s-supplychain  make drill-k8s-supplychain with the images it needs, read from GHCR without credentials
 #                          (deploy/ci/ghcr-digest.sh): the newest drill-unsigned as the unsigned image of cases b, h
 #                          and i (no signature or attestation names it), the newest drill-vulnerable, and for case l
@@ -149,6 +159,100 @@ gitops_argocd_metrics() {
   echo "ok    Prometheus sees every Application of Argo CD, all Synced and Healthy"
 }
 
+# gitops_histogram METRIC LABEL PAIRS LE...: reads Prometheus text on stdin and prints one line for the histogram METRIC
+# named LABEL: _count, _sum, the mean, the number of observations <= each LE, and the number above the last LE
+# (_count less its bucket). The series are added up over every label set that holds one of PAIRS (name="value" pairs
+# separated by |; empty: every series), as a histogram is split by labels the question does not ask about. A NOTE line
+# instead, never a failure, when the histogram has no series for PAIRS or lacks one of the buckets: the measurement is
+# evidence, not a gate.
+gitops_histogram() {
+  awk -v metric="$1" -v label="$2" -v pairs="$3" -v les="${*:4}" '
+    BEGIN { np = split(pairs, pr, "|"); nl = split(les, want, " ") }
+    /^#/ || NF < 2 { next }
+    {
+      b = index($0, "{")
+      if (b == 0) next
+      name = substr($0, 1, b - 1)
+      rest = substr($0, b + 1)
+      lbl = substr(rest, 1, index(rest, "}") - 1)
+      ok = (pairs == "")
+      for (i = 1; i <= np; i++) if (index("," lbl ",", "," pr[i] ",") > 0) ok = 1
+      if (!ok) next
+      if (name == metric "_count") { count += $NF; has_count = 1 }
+      else if (name == metric "_sum") { sum += $NF; has_sum = 1 }
+      else if (name == metric "_bucket" && match(lbl, /le="[^"]*"/)) {
+        le = substr(lbl, RSTART + 4, RLENGTH - 5)
+        if (le != "+Inf") { bk[le + 0] += $NF; has_bk[le + 0] = 1 }
+      }
+    }
+    END {
+      if (!has_count || !has_sum) {
+        print "NOTE  " label ": no " metric "_count and _sum series" (pairs == "" ? "" : " for " pairs) " in what was read"
+        exit
+      }
+      for (i = 1; i <= nl; i++) if (!((want[i] + 0) in has_bk)) miss = miss " " want[i]
+      if (miss != "") {
+        print "NOTE  " label ": _count " count ", _sum " sprintf("%.3f", sum) " s, but no bucket le=" miss
+        exit
+      }
+      line = sprintf("%s: _count %d, _sum %.3f s, mean %.3f s", label, count, sum, count > 0 ? sum / count : 0)
+      for (i = 1; i <= nl; i++) line = line sprintf(", <= %s s: %d", want[i], bk[want[i] + 0])
+      line = line sprintf(", > %s s: %d", want[nl], count - bk[want[nl] + 0])
+      print line
+    }'
+}
+
+# gitops_admission_apiserver NAMES: reads the apiserver's /metrics on stdin and prints the admission time of the webhooks
+# NAMES (one per line: those of the image policies in Kyverno's webhook configuration), from apiserver's histogram.
+gitops_admission_apiserver() {
+  local pairs
+  pairs=$(sed '/^$/d; s/.*/name="&"/' <<<"$1" | paste -sd '|' -)
+  if [ -z "$pairs" ]; then
+    echo "NOTE  apiserver: no webhook of an image policy (ivpol.*) in kyverno-resource-validating-webhook-cfg"
+    return 0
+  fi
+  gitops_histogram apiserver_admission_webhook_admission_duration_seconds \
+    "apiserver_admission_webhook_admission_duration_seconds{name=$(paste -sd ' ' - <<<"$1" | sed 's/ *$//')}" "$pairs" 10 25
+  echo "NOTE  that histogram has buckets up to 2.5, then 10, 25 and +Inf only: 20 s lies between le=10 and le=25, the 30 s timeout of the webhook between le=25 and +Inf; the mean is the only exact figure"
+}
+
+# gitops_admission_kyverno: reads Kyverno's /metrics on stdin and prints its own view of the admission: the whole review,
+# and the execution of the image policy svp-images (label policy_name; svp-policy is the chart and webhook name).
+# The buckets of the chart at the pinned version are 0.005 ... 10, 15, 20, 25, 30.
+gitops_admission_kyverno() {
+  local text
+  text=$(cat)
+  gitops_histogram kyverno_admission_review_duration_seconds kyverno_admission_review_duration_seconds "" 20 30 \
+    <<<"$text"
+  gitops_histogram kyverno_image_validating_policy_execution_duration_seconds \
+    'kyverno_image_validating_policy_execution_duration_seconds{policy_name="svp-images"}' 'policy_name="svp-images"' \
+    20 30 <<<"$text"
+}
+
+# gitops_admission_metrics: see gitops-admission-metrics in the header.
+gitops_admission_metrics() {
+  local names port=19100 pid text= i
+  names=$(kc get validatingwebhookconfiguration kyverno-resource-validating-webhook-cfg -o json 2>/dev/null |
+    jq -r '.webhooks[].name | select(startswith("ivpol."))') || names=
+  kc get --raw /metrics 2>/dev/null | gitops_admission_apiserver "$names"
+  while nc -z -w 1 127.0.0.1 "$port" >/dev/null 2>&1 && [ "$port" -lt 19120 ]; do port=$((port + 1)); done
+  if nc -z -w 1 127.0.0.1 "$port" >/dev/null 2>&1; then
+    echo "NOTE  kyverno: no free port on 127.0.0.1 between 19100 and 19120 for a port-forward"
+    return 0
+  fi
+  kc -n kyverno port-forward --address 127.0.0.1 service/kyverno-svc-metrics "$port:8000" \
+    >/dev/null 2>&1 &
+  pid=$!
+  for i in 1 2 3 4 5 6 7 8 9 10; do
+    text=$(curl -sf --max-time 10 "http://127.0.0.1:$port/metrics") && break
+    sleep 1
+  done
+  kill "$pid" 2>/dev/null
+  wait "$pid" 2>/dev/null
+  gitops_admission_kyverno <<<"$text"
+  return 0
+}
+
 # gitops_external_secrets: see gitops-external-secrets in the header.
 gitops_external_secrets() {
   local file=deploy/helm/svp-cluster/files/external-secrets.yaml rev list want have es secrets report ns
@@ -254,13 +358,14 @@ gitops_supplychain() {
 }
 
 export -f gitops_up gitops_charts_rev gitops_env gitops_external_secrets gitops_argocd_metrics gitops_stale \
-  gitops_supplychain
+  gitops_supplychain gitops_histogram gitops_admission_apiserver gitops_admission_kyverno gitops_admission_metrics
 
 scenario_targets() {
   step k8s-gitops-up 60 bash -c gitops_up
   step gitops-env 2 bash -c gitops_env
   step gitops-external-secrets 2 bash -c gitops_external_secrets
   step gitops-argocd-metrics 5 bash -c gitops_argocd_metrics
+  step gitops-admission-metrics 3 bash -c gitops_admission_metrics
   step k8s-smoke 15 make k8s-smoke
   step drill-k8s-supplychain 40 bash -c gitops_supplychain
   step drill-k8s-threats 30 make drill-k8s-threats
