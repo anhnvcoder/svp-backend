@@ -12,17 +12,16 @@
 # verify-run.sh and the scenario files under deploy/ci/verify/ it sources, verify-sample.sh, verify-mask.sh,
 # verify-collect.sh and its test, verify-tempo.sh, gitops-sourcemaps.sh and its test), platform-test.sh, the test of
 # platform.sh, provenance-predicate-test.sh, the test of provenance-predicate.sh, and
-# promote-test.sh, the test of promote.sh and rescan.sh's list of releases (all three run by job config of ci.yml and on
-# a machine), the scripts of the other workflows and of svp-gitops's check: record-stg.sh (job record-stg of verify.yml),
-# gitops-check.sh (svp-gitops's check and make helm-check) with values-check.sh and verify-release.sh, which only it,
-# make k8s-gitops-up and the drills run, and the tests gitops-check-test.sh,
-# release-set-test.sh and promote-prd-test.sh (job config of ci.yml), contract.sh (the version rule and
+# promote-test.sh, the test of the promote guards of common.sh and rescan.sh's list of releases (all three run by job
+# config of ci.yml and on a machine), the scripts of svp-gitops's check:
+# gitops-check.sh (svp-gitops's check and make helm-check) with values-check.sh and verify-release.sh,
+# which only it, make k8s-gitops-up and the drills run, its Kyverno policies gitops-policies/, the test gitops-check-test.sh
+# (job config of ci.yml), contract.sh (the version rule and
 # the publishing of the gateway's API contract: job contract of images.yml runs it, but it builds and promotes no image), contract-test.sh
 # and sources-test.sh (the release source table, job config of ci.yml), sourcemaps-image.sh and its test (the image of
 # the source maps of another source's web, pushed by that source's CI; no job of this repository runs it, the test runs
-# in job config of ci.yml); release-set.sh and promote-prd.sh
-# still count, as job promote-prd of images.yml runs them (platform.sh itself counts: common.sh sources it, and so does
-# provenance-predicate.sh: sign-image.sh runs it), the helpers deploy/ci/ sources from deploy/k8s/lib.sh (docker_, values_field,
+# in job config of ci.yml); platform.sh still counts (common.sh sources it), and so does
+# provenance-predicate.sh (sign-image.sh runs it), as do the helpers deploy/ci/ sources from deploy/k8s/lib.sh (docker_, values_field,
 # values_set_image, ghcr_prefix), and the lines of the Makefile pinning the images the gate runs (TRIVY_IMAGE,
 # SYFT_IMAGE, GRYPE_IMAGE, COSIGN_IMAGE); other Makefile changes do not count. So the weekly Renovate pull request that
 # bumps those tools builds and scans every image with the new trivy or grype before it merges, instead of the next
@@ -81,11 +80,11 @@ while IFS= read -r path; do
     deploy/ci/verify-sample.sh | deploy/ci/verify-mask.sh | deploy/ci/verify-collect.sh | \
     deploy/ci/verify-collect-test.sh | deploy/ci/verify-tempo.sh | deploy/ci/gitops-sourcemaps.sh | \
     deploy/ci/gitops-sourcemaps-test.sh | deploy/ci/verify/* | deploy/ci/platform-test.sh | \
-    deploy/ci/provenance-predicate-test.sh | deploy/ci/promote-test.sh | deploy/ci/record-stg.sh | \
+    deploy/ci/provenance-predicate-test.sh | deploy/ci/promote-test.sh | \
     deploy/ci/gitops-check.sh | deploy/ci/gitops-check-test.sh | \
-    deploy/ci/values-check.sh | deploy/ci/verify-release.sh | deploy/ci/release-set-test.sh | \
-    deploy/ci/promote-prd-test.sh | deploy/ci/contract.sh | deploy/ci/contract-test.sh | deploy/ci/sources-test.sh | \
-    deploy/ci/sourcemaps-image.sh | deploy/ci/sourcemaps-image-test.sh)
+    deploy/ci/values-check.sh | deploy/ci/verify-release.sh | \
+    deploy/ci/contract.sh | deploy/ci/contract-test.sh | deploy/ci/sources-test.sh | \
+    deploy/ci/sourcemaps-image.sh | deploy/ci/sourcemaps-image-test.sh | deploy/ci/gitops-policies/*)
     continue
     ;;
   esac

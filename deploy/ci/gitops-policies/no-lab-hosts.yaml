@@ -1,0 +1,46 @@
+# A render for a platform whose renders may not name the lab's *.svp.localhost (no localHosts in key platforms of
+# argocd/apps/components.json of svp-gitops) names a real host where traffic comes in and where a service is told its
+# own address: deploy/ci/gitops-check.sh gives the Kyverno CLI (kyverno apply, no cluster) the renders of those
+# platforms alone, after its grep of their whole text for svp.localhost.
+#
+# Read: spec.hostnames of HTTPRoute, GRPCRoute, TLSRoute; spec.listeners[].hostname of Gateway; spec.rules[].host and
+# spec.tls[].hosts of Ingress; the env values of each container of a pod template (Pod, CronJob, and every kind with
+# spec.template.spec), which the values of a chart turn into a service's settings (APP_ORIGIN, MEDIA_ORIGIN).
+apiVersion: policies.kyverno.io/v1
+kind: ValidatingPolicy
+metadata:
+  name: no-lab-hosts
+spec:
+  validationActions: [Deny]
+  matchConstraints:
+    resourceRules:
+      - apiGroups: ["*"]
+        apiVersions: ["*"]
+        operations: [CREATE, UPDATE]
+        resources: ["*"]
+  matchConditions:
+    - name: not-a-crd
+      expression: object.kind != 'CustomResourceDefinition'
+  variables:
+    - name: podSpec
+      expression: >-
+        object.kind == 'Pod' ? object.?spec.orValue({}) :
+        object.kind == 'CronJob' ? object.?spec.?jobTemplate.?spec.?template.?spec.orValue({}) :
+        object.?spec.?template.?spec.orValue({})
+    - name: containers
+      expression: >-
+        variables.podSpec.?containers.orValue([]) + variables.podSpec.?initContainers.orValue([]) +
+        variables.podSpec.?ephemeralContainers.orValue([])
+    - name: hosts
+      expression: >-
+        (object.kind in ['HTTPRoute', 'GRPCRoute', 'TLSRoute'] ? object.?spec.?hostnames.orValue([]) : [])
+        + (object.kind == 'Gateway' ? object.?spec.?listeners.orValue([]).map(l, l.?hostname.orValue('')) : [])
+        + (object.kind == 'Ingress' ? object.?spec.?rules.orValue([]).map(r, r.?host.orValue(''))
+          + object.?spec.?tls.orValue([]).map(t, t.?hosts.orValue([])).flatten() : [])
+        + variables.containers.map(c, c.?env.orValue([]).filter(e, type(e.?value.orValue(0)) == string)
+          .map(e, e.value)).flatten()
+    - name: lab
+      expression: variables.hosts.filter(h, h.contains('svp.localhost'))
+  validations:
+    - expression: size(variables.lab) == 0
+      messageExpression: "'names the lab host svp.localhost: ' + variables.lab.join(' ')"

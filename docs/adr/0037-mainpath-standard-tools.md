@@ -1,6 +1,6 @@
 # 0037. Đường chính theo công cụ chuẩn, một đường thẳng: DORA và CI trung lập nền tảng rời đường chính, promote bằng bước Actions `yq` + `gh pr`, bỏ bản ghi stg, check của `svp-gitops` rút gọn, khác biệt nền tảng là dữ liệu
 
-- Trạng thái: Chấp nhận (người học duyệt 2026-10-31); §1, §2, §4 (smoke, `gitops.sh`) hiện thực ở PR-A 2026-11-01; phần còn lại chưa hiện thực
+- Trạng thái: Chấp nhận (người học duyệt 2026-10-31); §1, §2, §4 (smoke, `gitops.sh`) hiện thực ở PR-A 2026-11-01; §4–§6 (promote, check rút gọn, policy Kyverno CLI) ở PR-B 2026-11-01; §3 (allowlist action), Argo CD Notifications và `actions/attest` chưa
 - Ngày: 2026-11-01
 
 ## Bối cảnh
@@ -118,33 +118,38 @@ allowlist (mục 3).
    - **prd:** dispatch `promote_prd` nhận `stg_ref` (`main` hay SHA đủ 40 hex của một commit trên `main` `svp-gitops`; commit cũ hơn là rollback),
      chép giá trị khối `image` của cả bảy file và ba khoá của `charts.yaml` ở `envs/stg/` của commit đó sang `envs/prd/`, mở PR không auto-merge;
      Code Owner duyệt.
-   - **Bỏ:** bản ghi stg tự dựng (`release-set.sh`, `record-stg.sh`, job `record-stg`), phép "bộ prd = payload một bản ghi" (bước 1b), luật tác giả
-     PR (bước 1c), luật tổ tiên của check (tag image là tổ tiên của `revision`; tag nguồn khác là commit trên `main` repo nguồn). Bản ghi trạng thái
+   - **Bỏ:** bản ghi stg tự dựng (`release-set.sh`, `record-stg.sh`, job `record-stg`), phép "bộ prd = payload một bản ghi" (bước 1b), dạng cũ của luật tác giả
+     PR (bước 1c: tiếp quản, đọc qua adapter), luật tổ tiên của check (tag image là tổ tiên của `revision`; tag nguồn khác là commit trên `main` repo nguồn). Bản ghi trạng thái
      triển khai sau này là Argo CD Notifications theo [0032](0032-argocd-deploy-status.md) A, B, khi có EKS stg chạy suốt buổi.
+   - **Giữ luật tác giả hẹp viết từ dữ liệu** (sửa sau review của bước rút gọn, 2026-11-01): PR của `<promoter>[bot]` một nguồn chỉ đổi file
+     image của chính service của nguồn đó (`envs/{stg,prd}/images/`), bot của `backend` thêm `envs/{stg,prd}/charts.yaml`; bot khác không đổi gì dưới
+     `envs/`. Lý do: `/envs/stg/` không Code Owner nên PR bot tự merge; bỏ hẳn luật thì khoá App lộ (GIT-6, Cao) đổi được `charts.yaml` về commit cũ
+     hay overlay stg mà không ai duyệt.
    - **`gitops-check.sh` còn:** hình dạng cây, `charts.yaml` (khoá, hai giá trị dẫn xuất, `revision` trên `main` repo code), render root, render
      chart + kubeconform, luật khai báo bằng Kyverno CLI trên manifest đã render (image bên thứ ba ghim digest, `svp.localhost` theo khoá
      `platforms`; ref image nào ngoài tầm policy thì giữ phép quét của script), kiểm bản phát hành (chữ ký, attestation, nguồn). Check của
      `svp-gitops` thêm argocd-diff-preview (chỉ báo, ngoài `gitops-ok`, diff vào tóm tắt job). Kyverno CLI và argocd-diff-preview chạy bằng image
      ghim digest, không cần action.
    - Kargo (6B) là bài lab của `svp-labs`; Image Updater (6C) giữ loại vì lý do chữ ký.
-   - Provenance bằng `actions/attest` thay predicate tự dựng: ADR riêng sau spike Kyverno, không quyết ở đây.
+   - Provenance bằng `actions/attest` thay predicate tự dựng: chưa làm. Spike `svp-labs/attest-spike` (Kyverno v1.19.1): policy nhận được hai
+     định dạng giữa các image, nhưng một image có Sigstore bundle thì Kyverno và cosign bỏ `.sig`/`.att` cũ; chuyển phải gồm chữ ký, `vuln`,
+     provenance trong một bản phát hành, và rescan `--replace` với bundle chưa kiểm. ADR riêng khi làm.
 
    Thay [0025](0025-gitops-config-repo.md) §6 (job promote, bản ghi stg, quyền `deployments` của App) và [0024](0024-multi-environment.md) §8
    (promote prd từ bản ghi, check prd so bản ghi).
 
 ## Hệ quả
 
-- Được: bớt khoảng 1 025 dòng DORA, ~2 500 dòng promote và bản ghi, phần lớn độ phức tạp của `gitops-check.sh` (ước lượng còn 150–250 dòng);
+- Được: bớt khoảng 1 025 dòng DORA, ~2 500 dòng promote và bản ghi, phần lớn độ phức tạp của `gitops-check.sh` (ước lượng lúc quyết 150–250 dòng; thực tế còn ~1 130 dòng cộng ~170 dòng policy, phần lớn là render và kiểm External Secrets giữ nguyên);
   không còn hàm `ci_*` mới; thêm nền tảng hay env là sửa `components.json`; công cụ của đường chính là thứ người học gặp ở công ty.
 - Phải trả (nói thẳng):
   - **Không còn bản ghi stg và cổng tự động "prd = bộ stg đã kiểm"** cho tới khi có Argo CD Notifications. Cổng tạm là duyệt của Code Owner trên
     PR prd (PR do bot mở, nên người học duyệt được). `stg_ref` chỉ bảo đảm bộ prd từng nằm trên `main` của `envs/stg/`, không bảo đảm stg đã
     đồng bộ và smoke qua với đúng bộ đó.
-  - **Bot của một nguồn về kỹ thuật sửa được file image của nguồn khác dưới `envs/stg/`** (trước đây bước 1c chặn) và PR đó tự merge.
-    Lớp còn lại: kiểm bản phát hành (repository thuộc nguồn có service đó, chữ ký đúng identity của nguồn) và admission Kyverno; nên bot chỉ đổi
-    được sang một bản phát hành đã ký khác của đúng nguồn kia (ví dụ bản cũ hơn).
-  - **Dispatch hay chạy lại một commit cũ có thể kéo stg lùi** ở chỗ không có guard: web của `svp-frontend` không có guard tổ tiên, và check của
-    `svp-gitops` không còn chặn tag lùi ở nguồn nào.
+  - **Bot của một nguồn đổi được file image của chính nó sang một bản phát hành đã ký cũ hơn** (luật tổ tiên đã bỏ) và PR đó tự merge; lớp còn
+    lại: chữ ký đúng identity của nguồn, admission Kyverno, guard tổ tiên của bước promote.
+  - **Dispatch hay chạy lại một commit cũ có thể kéo stg lùi** ở chỗ không có guard: guard tổ tiên chỉ ở bước promote (backend và web của `svp-frontend`), check của
+    `svp-gitops` không còn chặn tag lùi ở nguồn nào (PR do người mở).
   - Bài lab `dora/` không theo `main`: chỉ chạy được ở commit ghim của `svp-backend`, không ai sửa khi script chung đổi.
   - Đợt chuyển: checker cũ của `svp-gitops` (còn 1b) làm PR prd đỏ cho tới khi `CHECKER_COMMIT` được nâng.
 - Xem lại khi: có EKS stg chạy suốt buổi (bật Notifications A, B; cân nhắc lại cổng prd tự động từ commit status); có prd chạy lâu dài (DevLake);
@@ -159,11 +164,12 @@ Repo `svp-backend` (đường dẫn từ gốc repo):
   job `config` của `.github/workflows/ci.yml`, `deploy/ci/changed-services.sh` (mục 2).
 - `deploy/compose/smoke.sh` (bỏ `SVP_SMOKE_LEGACY_MEDIA`), `deploy/k8s/gitops.sh` (đòi `platforms/`),
   `release_sources` của `deploy/k8s/lib.sh`, `deploy/ci/sources-test.sh` (mục 4).
-- `.github/workflows/images.yml` job `promote`, `promote-prd` (input `stg_ref`) và guard `stg_ref` + tổ tiên có test ở job `config`;
-  `deploy/ci/promote.sh`, `promote-test.sh`, `promote-prd.sh`, `promote-prd-test.sh`: xoá (mục 6).
+- `.github/workflows/images.yml` job `promote`, `promote-prd` (input `stg_ref`, `yq` bằng `YQ_IMAGE` ghim của `Makefile`) và guard `stg_ref` + tổ tiên,
+  `promote_open_pr` ở `deploy/ci/common.sh` có test ở job `config`;
+  `deploy/ci/promote.sh`, `promote-prd.sh`, `promote-prd-test.sh`: xoá; `promote-test.sh` thành test của guard (mục 6).
 - `.github/workflows/verify.yml` (job `record-stg`), `deploy/ci/verify/gitops.sh` (bước `release-set-before`, `release-set`),
   `deploy/ci/verify-collect.sh`, `verify-collect-test.sh`; `deploy/ci/record-stg.sh`, `release-set.sh`, `release-set-test.sh`: xoá (mục 6).
-- `deploy/ci/gitops-check.sh`, `gitops-check-test.sh` (bỏ 1b, 1c, luật tổ tiên, cây cũ; ma trận từ `platforms`), `deploy/ci/gitops-policies/`
+- `deploy/ci/gitops-check.sh`, `gitops-check-test.sh` (bỏ 1b, dạng cũ của 1c, luật tổ tiên, cây cũ; luật tác giả hẹp từ `sources.json`; ma trận từ `platforms`), `deploy/ci/gitops-policies/`
   (policy Kyverno CLI và `kyverno test`), `KYVERNO_CLI_IMAGE` của `Makefile` (mục 5, 6).
 
 Repo khác:

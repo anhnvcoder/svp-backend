@@ -42,8 +42,8 @@ flowchart LR
 
 - Khoá riêng, thu hồi riêng: lộ khoá của repo web không promote được image backend, và suspend App web không dừng promote của backend.
 - Tác giả PR là `svp-web-promoter[bot]`, khác bot backend, nên check của `svp-gitops` giới hạn được bot nào sửa file nào: bot web chỉ được
-  đổi `envs/stg/images/web.yaml` với image dưới prefix `ghcr.io/anhnvcoder/svp-frontend/` (ADR-0033 §3, mục "Tác giả PR").
-- Không quyền `deployments`: bản ghi stg vẫn chỉ do App backend tạo, nên token web lộ không giả được bản ghi mà promote prd chép.
+  đổi file image của `web` (`envs/{stg,prd}/images/web.yaml`; luật tác giả hẹp, ADR-0033 §3, [ADR-0037](../adr/0037-mainpath-standard-tools.md) §6).
+- Không quyền `deployments`: không job nào cần (bản ghi stg đã bỏ, [ADR-0037](../adr/0037-mainpath-standard-tools.md) §6).
 - Lý do chung của App so với PAT hay `GITHUB_TOKEN` như ở [svp-gitops-setup.md](svp-gitops-setup.md#ý-nghĩa-và-tác-động-tới-người-dùng).
 
 Cài sai thì người dùng của nền tảng không thấy gì ngay (stg giữ web đang chạy), nhưng: bản phát hành web không tới stg (promote đỏ,
@@ -172,7 +172,7 @@ Dựng từ đầu theo thứ tự phụ thuộc của ADR-0033 §9:
 - **B. Sau push lịch sử và commit thêm CI** (bước 3 của §9 và commit kế tiếp của §8: CI, `Makefile`, `renovate.json`, `README.md`): kiểm
   lịch sử, CodeQL, Renovate.
 - **C. Sau lượt CI đầu trên `main`** (`ci.yml`, `images.yml` của commit thêm CI): package image public, ruleset.
-- **D. Sau bản phát hành đầu** (bước 5 của §9): PR tiếp quản của bot web tự merge, image và source map kéo ẩn danh, chữ ký đúng identity.
+- **D. Sau bản phát hành đầu** (bước 5 của §9): PR đầu của bot web tự merge, image và source map kéo ẩn danh, chữ ký đúng identity.
 
 ### A1. Tạo repo rỗng
 
@@ -219,8 +219,9 @@ Làm trước khi bất kỳ commit nào có `.github/workflows/` được push 
 
 **Vì sao** (ADR-0033 §10: như `svp-gitops` ở điểm khác backend, còn lại như backend):
 
-- Chỉ squash, auto-merge: mỗi PR là đúng một commit trên `main`, tức một tag image (12 hex của commit) và một ứng viên phát hành; luật
-  không lùi của promote web so tổ tiên trên `main` của `svp-frontend` (ADR-0033 §4), lịch sử thẳng thì tổ tiên trùng thứ tự merge; rollback
+- Chỉ squash, auto-merge: mỗi PR là đúng một commit trên `main`, tức một tag image (12 hex của commit) và một ứng viên phát hành; guard
+  không lùi của job `promote` web so tổ tiên trên `main` của `svp-frontend` (lượt cũ hơn tag web ở `main` hay ở PR đang mở của
+  `svp-gitops` thì đỏ), lịch sử thẳng thì tổ tiên trùng thứ tự merge; rollback
   một thay đổi là revert một commit. Auto-merge: Renovate tự bật trên PR bản `patch`, `digest` của danh sách cho phép (gói npm, Node,
   base image, image dịch vụ của CI; ADR-0035); người học bật trên PR của mình hay PR Renovate còn lại (sau khi đọc) để PR tự merge khi
   `ci-ok`, `images-ok` xanh; không mở đường nào qua ruleset (C2).
@@ -261,8 +262,7 @@ permissions. `approval_policy` khác `all_external_contributors` → chọn lạ
 
 - Contents write: đẩy nhánh `bot/promote-stg-web` của `svp-gitops`, merge bằng auto-merge. Pull requests write: mở, sửa PR, bật
   auto-merge. Hai quyền đó là đủ (ADR-0033 §4).
-- Không Deployments (khác `svp-gitops-promoter`): bản ghi stg chỉ do App backend tạo (`record-stg`), và `release-set.sh records` chỉ nhận
-  bản ghi của App đó; token web lộ không giả được bằng chứng mà promote prd dựa vào.
+- Không Deployments: không job nào ghi bản ghi triển khai (bản ghi stg đã bỏ, [ADR-0037](../adr/0037-mainpath-standard-tools.md) §6).
 - Không Workflows: GitHub từ chối mọi push đổi `.github/workflows/` của token không có quyền này, bot không sửa được check đang chặn nó.
   Không Administration: bot không đổi được ruleset, cài đặt repo.
 - Webhook tắt, Only on this account: như A2 của [svp-gitops-setup.md](svp-gitops-setup.md#a2-tạo-github-app-svp-gitops-promoter). Client
@@ -472,7 +472,7 @@ gh api repos/anhnvcoder/svp-frontend/rulesets/$id -q '{bypass_actors, include: .
 **Nếu sai:** `disabled`/`evaluate` → mở ruleset → **Enforcement status** → Active. Hai ruleset cùng tên → xoá bản thừa ở UI. Thiếu một
 check hay `integration_id` khác → sửa file bằng PR rồi `PUT` như trên.
 
-### D1. PR tiếp quản của bot web (bản phát hành đầu)
+### D1. PR đầu của bot web (bản phát hành đầu)
 
 **Trước đó** (ADR-0033 §9 bước 4, [ADR-0036](../adr/0036-repo-rename.md) §4 bước 2): `check.yml` của `svp-gitops` đã ghim
 `CHECKER_COMMIT` lên một commit của backend có bảng nguồn hiện tại (bump theo C5 của
@@ -484,18 +484,18 @@ gh api -H 'Accept: application/vnd.github.raw' repos/anhnvcoder/svp-gitops/conte
   grep -n 'CHECKER_COMMIT:\|repository: anhnvcoder/\|SVP_SOURCE_DIR_[A-Z]*:'   # CHECKER_COMMIT, repository: anhnvcoder/svp-backend; không SVP_SOURCE_DIR_*
 ```
 
-**Làm gì:** không làm gì. Lượt `images.yml` trên `main` của `svp-frontend` ký xong thì job `promote` (environment `promote`) chạy
-`promote.sh --source web` của backend ở `BACKEND_COMMIT`: dựng nhánh `bot/promote-stg-web` của `svp-gitops`, chỉ ghi
-`envs/stg/images/web.yaml`, mở PR, bật auto-merge; PR tự merge khi `gitops-ok` xanh (`envs/stg/` không Code Owner). Lần đầu, `web.yaml`
-trên `main` còn là image của backend: log job in dòng `takeover: …` thay vì đỏ (ADR-0033 §4). Lần đầu sau đổi tên (2026-10-31), `web.yaml`
-là bản của nguồn nghỉ hưu `oldweb` (prefix `ghcr.io/anhnvcoder/svp-web/`) và log có dòng `takeover … (source oldweb, retired)` (ADR-0036 §3);
-nguồn đó đã gỡ ngày 2026-11-01, nay file dưới prefix không thuộc nguồn nào thì promote đỏ.
+**Làm gì:** không làm gì. Lượt `images.yml` trên `main` của `svp-frontend` ký xong thì job `promote` (environment `promote`; bước shell
+`yq` + `gh pr` của chính `svp-frontend` từ 2026-11-01, [ADR-0037](../adr/0037-mainpath-standard-tools.md) §6, thay `promote.sh --source web` của backend) dựng nhánh
+`bot/promote-stg-web` của `svp-gitops` một commit trên `main`, `yq -i` khối `image` của `envs/stg/images/web.yaml`, mở hay cập nhật PR,
+bật auto-merge; PR tự merge khi `gitops-ok` xanh (`envs/stg/` không Code Owner). Ghi lại lượt đầu (với `promote.sh` cũ): `web.yaml` trên
+`main` còn là image của backend, log in dòng `takeover: …` (ADR-0033 §4); lượt đầu sau đổi tên (2026-10-31) log có dòng `takeover …
+(source oldweb, retired)` (ADR-0036 §3). Bước mới không tiếp quản: `web.yaml` ở `main` hay ở PR đang mở mà không phải
+`ghcr.io/anhnvcoder/svp-frontend/web` thì job đỏ (`not guessing whose it is`).
 
 **Kiểm:**
 
 ```sh
 gh run list --repo anhnvcoder/svp-frontend --workflow images.yml --branch main --limit 1 --json databaseId,conclusion,url
-gh run view <databaseId> --repo anhnvcoder/svp-frontend --log | grep -m1 'takeover:'          # chỉ lượt đầu
 gh pr list --repo anhnvcoder/svp-gitops --author 'app/svp-web-promoter' --state all --limit 1 \
   --json number,headRefName,state,mergedAt                                                # headRefName bot/promote-stg-web
 gh pr view <số PR> --repo anhnvcoder/svp-gitops --json files -q '.files[].path'          # chỉ envs/stg/images/web.yaml
@@ -508,10 +508,11 @@ gh api 'repos/anhnvcoder/svp-frontend/deployments?environment=promote&per_page=3
 
 - Job `promote` đỏ ở bước tạo token → A5 (tên biến, khoá), rồi A3, A4.
 - PR mở mà `gitops-ok` đỏ: đọc message. Kéo ẩn danh hay chữ ký → C1 rồi chạy lại check. Tác giả hay file không được phép → checker chưa
-  bump (bước "Trước đó") hay bot đổi file ngoài `web.yaml` (lỗi script, báo lại ở repo backend). PR xanh mà không tự merge →
+  bump (bước "Trước đó") hay bot đổi file ngoài `web.yaml` (lỗi bước `promote` của `svp-frontend`). PR xanh mà không tự merge →
   `allow_auto_merge` của `svp-gitops` (A1 của trang đó).
-- Job đỏ vì tag không phải commit của `main` `svp-frontend` hay `repository` không thuộc nguồn nào → `sources.json` ở `BACKEND_COMMIT` chưa có
-  nguồn `web`, hay `.backend-commit` của `svp-frontend` còn ghim commit trước PR-1: bump bằng PR ở `svp-frontend`.
+- Job đỏ `is older than …, which … of svp-gitops names` → lượt của commit cũ (chạy lại hay dispatch): chạy ở HEAD của `main`. Đỏ
+  `names …, not ghcr.io/anhnvcoder/svp-frontend/web` → `web.yaml` ở `main` hay PR đang mở của `svp-gitops` mang image khác: sửa bằng PR
+  ở `svp-gitops` (người học), không để bot đoán.
 
 ### D2. Image, chữ ký, provenance, source map kéo ẩn danh
 
@@ -543,7 +544,7 @@ lượt `gitops` sau bản phát hành đầu: mục "Kiểm chứng sau" của 
 **Bối cảnh** ([ADR-0036](../adr/0036-repo-rename.md)): ngày 2026-10-31 `anhnvcoder/svp-web` đổi tên thành `anhnvcoder/svp-frontend`,
 `anhnvcoder/short-video-platform` thành `anhnvcoder/svp-backend`. Image mới đẩy dưới prefix mang tên mới; package mới do lần đẩy đầu tạo,
 mặc định private, không kế thừa visibility của package cũ. Package cũ (`svp-web/…`, `short-video-platform/…`) giữ nguyên, không xoá:
-bản ghi stg cũ và lịch sử trỏ tới chúng.
+lịch sử `envs/` của `svp-gitops` trỏ tới chúng.
 
 **Làm gì:** người học bật public 12 package, mỗi package khi nó xuất hiện (thứ tự theo ADR-0036 §4), ở
 `https://github.com/users/anhnvcoder/packages/container/package/<tên, / viết thành %2F>` → **Package settings** → **Change visibility** →
@@ -593,8 +594,8 @@ làm gián đoạn:
 - Bước tạo token vẫn đỏ sau khi đã kiểm đủ A3–A5: so input của bước tạo token trong `.github/workflows/images.yml` của `svp-frontend` với tên
   ở đây (`client-id` đọc `vars.SVP_WEB_APP_CLIENT_ID`, `private-key` đọc `secrets.SVP_WEB_APP_PRIVATE_KEY`, `owner`, `repositories:
   svp-gitops`); lệch tên thì sửa bằng PR ở `svp-frontend`.
-- PR của bot web đổi file khác `envs/stg/images/web.yaml`, hay `gitops-ok` cho qua PR như vậy: lỗi ở `promote.sh --source` hay luật tác
-  giả của `gitops-check.sh` (repo backend). Đóng PR, suspend bản cài như "Giảm thiểu" bước 1, sửa ở repo backend.
+- PR của bot web đổi file khác `envs/stg/images/web.yaml`, hay `gitops-ok` cho qua PR như vậy: lỗi ở bước `promote` của `svp-frontend` hay
+  luật tác giả hẹp của `gitops-check.sh` (repo backend). Đóng PR, suspend bản cài như "Giảm thiểu" bước 1, sửa ở repo tương ứng.
 - Nghi lộ mà `web.yaml` của stg đã đổi sang bản lạ, hay bot đã tạo tag, release trong `svp-gitops`: revert bằng PR, dọn như bước 3, ghi
   mốc thời gian và mở postmortem ([mẫu](../postmortems/README.md)).
 

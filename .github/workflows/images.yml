@@ -12,8 +12,7 @@
 #     id-token, security-events) or read the Actions API run only on main, outside pull_request.
 #   - Only jobs promote and promote-prd write to another repository: environment promote (deployment branch main only)
 #     holds the key of the GitHub App installed on svp-gitops alone, and each job turns it into a token of one hour for
-#     svp-gitops with contents and pull-requests write only (promote-prd also reads its deployment records). No job of a
-#     pull request names that environment.
+#     svp-gitops with contents and pull-requests write only. No job of a pull request names that environment.
 #   - Every action is pinned to a full commit SHA (the tag in the comment is for people and Renovate); only GitHub's
 #     own actions and sigstore/cosign-installer.
 #   - Untrusted values (inputs, branch names, matrix values from plan) reach scripts through env:, never ${{ }} inside
@@ -48,13 +47,13 @@ on:
         type: boolean
         default: false
       promote_prd:
-        description: "Open the pull request that promotes to prd the whole set of a record of stg in svp-gitops (no build)"
+        description: "Open the pull request that promotes to prd envs/stg/ of svp-gitops at stg_ref (no build)"
         type: boolean
         default: false
-      record:
-        description: "With promote_prd: the id of the record of stg (a deployment of svp-gitops); empty is the newest, an older one a rollback"
+      stg_ref:
+        description: "With promote_prd: main or a full commit (40 hex) on main of svp-gitops; an older one is a rollback"
         type: string
-        default: ""
+        default: main
 
 permissions: {}
 
@@ -338,13 +337,16 @@ jobs:
           retention-days: 7
 
   promote:
-    # Promotes to stg in svp-gitops (deploy/ci/promote.sh): rebuilds its branch bot/promote-stg from main there with the
-    # newest signed release of every service stg does not run yet, never an older one, and the charts of this commit
-    # (envs/stg/charts.yaml), opens or updates its pull request and turns on auto-merge; svp-gitops merges it once its
-    # check gitops-ok is green, with no review (no code owner owns envs/stg/). Runs when signing an image failed too:
-    # every image signed in this run is promoted, the failed one is red in sign. Runs with no image too when the charts
-    # changed (plan's promote_charts): only envs/stg/charts.yaml moves. The token is the app's, for svp-gitops alone;
-    # GITHUB_TOKEN only reads this repository. No id-token, no packages.
+    # Promotes to stg in svp-gitops: rebuilds its branch bot/promote-stg as one commit of the app's bot on top of main
+    # there, with the image block of envs/stg/images/<service>.yaml for every image signed in this run and
+    # envs/stg/charts.yaml at this commit, opens or updates its pull request and turns on auto-merge; svp-gitops merges
+    # it once its check gitops-ok is green, with no review (no code owner owns envs/stg/). Runs when signing an image
+    # failed too: every image signed in this run is promoted, the failed one is red in sign. Runs with no image too when
+    # the charts changed (plan's promote_charts): only charts.yaml moves. Runs of main follow each other (the
+    # concurrency group of builds never cancels), so a later run never promotes before an earlier one; the guard
+    # promote_not_behind of deploy/ci/common.sh refuses a run of a commit older than the charts stg runs (a run started
+    # again, a dispatch of an old commit). The token is the app's, for svp-gitops alone; GITHUB_TOKEN only reads this
+    # repository. No id-token, no packages.
     needs: [plan, sign]
     if: >-
       ${{ !cancelled() && needs.plan.outputs.mode == 'build'
@@ -358,7 +360,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          # The whole history: a release's commit and the charts' revision are compared by ancestry with main's.
+          # The whole history: the guard compares this commit with stg's revision by ancestry.
           fetch-depth: 0
           persist-credentials: false
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
@@ -366,8 +368,7 @@ jobs:
           pattern: release-*
           path: ${{ runner.temp }}/releases
       - id: app
-        # Revoked when the job ends. The permissions here narrow the token below the app's own (which also holds
-        # deployments: write for the record of stg).
+        # Revoked when the job ends. The permissions here narrow the token below the app's own.
         uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
         with:
           client-id: ${{ vars.SVP_GITOPS_APP_CLIENT_ID }}
@@ -379,15 +380,91 @@ jobs:
       - name: Rebuild bot/promote-stg in svp-gitops, open or update its pull request, turn on auto-merge
         env:
           GH_TOKEN: ${{ steps.app.outputs.token }}
-        run: deploy/ci/promote.sh "$RUNNER_TEMP/releases"
+          RUN_COMMIT: ${{ github.sha }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          . deploy/ci/common.sh
+          code=$PWD repo=anhnvcoder/svp-gitops branch=bot/promote-stg app=svp-gitops-promoter
+          # Cloned anonymously: the token reaches only gh and, through gh's credential helper, the push.
+          git -c credential.helper= clone --quiet --no-tags "https://github.com/$repo.git" "$RUNNER_TEMP/gitops"
+          cd "$RUNNER_TEMP/gitops"
+          lease=$(git rev-parse --verify --quiet "refs/remotes/origin/$branch") || lease=
+          pr=$(promote_open_pr "$repo" "$branch" "$app")
+          git checkout --quiet -B "$branch" origin/main
+          # The releases of the open pull request not merged yet stay in: the files it changes, as it has them.
+          if [ -n "$lease" ] && [ -n "$pr" ]; then
+            git diff --name-only --diff-filter=AM "$(git merge-base origin/main "$lease")" "$lease" -- envs/stg/ |
+              xargs -r git checkout "$lease" --
+          fi
+          promote_not_behind "$RUN_COMMIT" "$(git show origin/main:envs/stg/charts.yaml | yq_ .revision)"
+          promote_not_behind "$RUN_COMMIT" "$(yq_ .revision envs/stg/charts.yaml)"
+          # Each list on fd 3: yq_ hands its stdin to docker.
+          seen=" "
+          while IFS= read -r f <&3; do
+            dir=$(dirname "$f") R=$(cat "$dir/repository") T=$(cat "$dir/tag") D=$(cat "$dir/digest")
+            svc=${R#"$ghcr_prefix/"}
+            if [[ " ${built_services[*]} " != *" $svc "* || $R != "$ghcr_prefix/$svc" || $T != "${RUN_COMMIT:0:12}" ||
+              $seen == *" $svc "* ]] || ! is_digest "$D"; then
+              fail "$dir is no release of a service of this repository at this commit, or a second one ($R:$T@$D)"
+            fi
+            yq_ R="$R" T="$T" D="$D" -i \
+              '.image.repository = strenv(R) | .image.tag = strenv(T) | .image.digest = strenv(D)' "envs/stg/images/$svc.yaml"
+            seen+="$svc "
+          done 3< <(find "$RUNNER_TEMP/releases" -type f -name digest 2>/dev/null | sort)
+          # The two values derived from the charts' commit, as the check of svp-gitops computes them again.
+          psv=$(yq_ -e .podSecurityVersion <"$code/deploy/helm/svp-cluster/values.yaml")
+          sum=$(sha256sum "$code/deploy/observability/otelcol/k8s-config.yaml" | cut -d' ' -f1)
+          yq_ REV="$RUN_COMMIT" PSV="$psv" SUM="$sum" -i \
+            '.revision = strenv(REV) | .podSecurityVersion = strenv(PSV) | .collectorConfigSha256 = strenv(SUM)' \
+            envs/stg/charts.yaml
+          if git diff --quiet origin/main; then
+            echo "Nothing differs from main of svp-gitops: no push, no pull request."
+            exit 0
+          fi
+          # Every release the branch holds, this run's and those its open pull request already had.
+          names='' list=''
+          while IFS= read -r f <&3; do
+            svc=$(basename "$f" .yaml) names+=" $svc"
+            list+="- $svc: $(yq_ '.image.repository + ":" + .image.tag + "@" + .image.digest' "$f")"$'\n'
+          done 3< <(git diff --name-only origin/main -- envs/stg/images/)
+          git diff --quiet origin/main -- envs/stg/charts.yaml || list+="- charts: $RUN_COMMIT"$'\n'
+          title="chore(stg): chart ${RUN_COMMIT:0:12}"
+          [ -z "$names" ] || title="chore(stg): phát hành$names ${RUN_COMMIT:0:12}"
+          msg="${list}
+          Code: https://github.com/$GITHUB_REPOSITORY/commit/$RUN_COMMIT
+          Run: $RUN_URL"
+          body="Promote lên stg do job \`promote\` của \`images.yml\` ghi: chỉ \`envs/stg/\`. Nhánh dựng lại trên \`main\`
+          mỗi lượt, giữ mọi bản chưa merge của PR này. Auto-merge khi \`gitops-ok\` xanh, không cần duyệt.
+
+          $msg"
+          id=$(gh api "users/${app}%5Bbot%5D" --jq .id)
+          git -c user.name="${app}[bot]" -c user.email="$id+${app}[bot]@users.noreply.github.com" \
+            commit --quiet -am "$title" -m "$msg"
+          # The lease is the branch as cloned (empty: it must not exist): a change since fails the push, never lost.
+          gh auth setup-git
+          git push --quiet --force-with-lease="refs/heads/$branch:$lease" origin "HEAD:refs/heads/$branch"
+          # Read again after the push. The pull request read before, merged or closed meanwhile, no longer holds the
+          # branch, and a new one would carry again what was merged or what its owner dropped.
+          now=$(promote_open_pr "$repo" "$branch" "$app")
+          [ -z "$pr" ] || [ "$now" = "$pr" ] ||
+            fail "pull request #$pr of $branch was merged or closed during this run: run the job again (from main as is)"
+          if [ -n "$now" ]; then
+            gh pr edit "$now" --repo "$repo" --title "$title" --body "$body"
+          else
+            now=$(gh pr create --repo "$repo" --base main --head "$branch" --title "$title" --body "$body")
+            now=${now##*/}
+          fi
+          gh pr merge "$now" --repo "$repo" --auto --squash --match-head-commit "$(git rev-parse HEAD)"
 
   promote-prd:
-    # Promotes to prd in svp-gitops (deploy/ci/promote-prd.sh): the whole set of a record of stg (the input record, the
-    # newest when empty), the seven releases and the charts that ran together through the checks of a run of scenario
-    # gitops, onto branch bot/promote-prd there, and opens or updates its pull request. No auto-merge: a code owner
-    # approves it, and the check of svp-gitops compares the set with the records again. A rollback is the same with an
-    # older record. Runs alone: plan skips every other job of a dispatch with promote_prd, and this job refuses one
-    # that also asks to build, rescan or drill, so one run does one thing.
+    # Promotes to prd in svp-gitops what envs/stg/ held at a commit of its main (input stg_ref, main when empty; an
+    # older commit is a rollback): the image block of the seven envs/stg/images/*.yaml and the three values of
+    # envs/stg/charts.yaml go into the same files of envs/prd/, every other line of them (the comments) kept, on branch
+    # bot/promote-prd, one commit of the app's bot on top of main there, and its pull request is opened or updated. No
+    # auto-merge: a code owner approves it. The guard promote_stg_ref of deploy/ci/common.sh takes main or a full commit
+    # on main of svp-gitops only. Runs alone: plan skips every other job of a dispatch with promote_prd, and this job
+    # refuses one that also asks to build, rescan or drill, so one run does one thing.
     # The token is the app's, for svp-gitops alone; GITHUB_TOKEN only reads this repository. No id-token, no packages.
     if: >-
       ${{ github.event_name == 'workflow_dispatch' && inputs.promote_prd && github.ref == 'refs/heads/main' }}
@@ -421,12 +498,55 @@ jobs:
           repositories: svp-gitops
           permission-contents: write
           permission-pull-requests: write
-          permission-deployments: read
-      - name: Rebuild bot/promote-prd in svp-gitops from a record of stg, open or update its pull request
+      - name: Rebuild bot/promote-prd in svp-gitops from envs/stg/ at stg_ref, open or update its pull request
         env:
           GH_TOKEN: ${{ steps.app.outputs.token }}
-          RECORD: ${{ inputs.record }}
-        run: deploy/ci/promote-prd.sh "$RECORD"
+          STG_REF: ${{ inputs.stg_ref }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          . deploy/ci/common.sh
+          repo=anhnvcoder/svp-gitops branch=bot/promote-prd app=svp-gitops-promoter
+          git -c credential.helper= clone --quiet --no-tags "https://github.com/$repo.git" "$RUNNER_TEMP/gitops"
+          cd "$RUNNER_TEMP/gitops"
+          ref=$(promote_stg_ref "${STG_REF:-main}" .)
+          lease=$(git rev-parse --verify --quiet "refs/remotes/origin/$branch") || lease=
+          git checkout --quiet -B "$branch" origin/main
+          # Read into a variable, not through a pipe into read: a file missing at stg_ref fails the step.
+          for svc in "${svp_services[@]}"; do
+            line=$(git show "$ref:envs/stg/images/$svc.yaml" | yq_ '.image | [.repository, .tag, .digest] | join("|")')
+            IFS='|' read -r R T D <<<"$line"
+            yq_ R="$R" T="$T" D="$D" -i \
+              '.image.repository = strenv(R) | .image.tag = strenv(T) | .image.digest = strenv(D)' "envs/prd/images/$svc.yaml"
+          done
+          line=$(git show "$ref:envs/stg/charts.yaml" |
+            yq_ '[.revision, .podSecurityVersion, .collectorConfigSha256] | join("|")')
+          IFS='|' read -r REV PSV SUM <<<"$line"
+          yq_ REV="$REV" PSV="$PSV" SUM="$SUM" -i \
+            '.revision = strenv(REV) | .podSecurityVersion = strenv(PSV) | .collectorConfigSha256 = strenv(SUM)' \
+            envs/prd/charts.yaml
+          if git diff --quiet origin/main; then
+            echo "prd on main of svp-gitops already runs envs/stg/ of ${ref:0:12}: no push, no pull request."
+            exit 0
+          fi
+          title="chore(prd): phát hành bộ stg của svp-gitops ${ref:0:12}"
+          body="Promote lên prd do job \`promote-prd\` của \`images.yml\` ghi: giá trị \`image\` của bảy file và ba khoá
+          \`charts.yaml\` của \`envs/stg/\` ở commit $ref của \`svp-gitops\`, chép vào \`envs/prd/\`. Không auto-merge:
+          code owner duyệt. Check đỏ vì attestation \`vuln\` quá hạn (bộ cũ, rollback): quét lại rồi chạy lại check:
+          \`gh workflow run images.yml --repo $GITHUB_REPOSITORY --ref main -f rescan=true -f values_ref=$ref\`
+
+          Run: $RUN_URL"
+          id=$(gh api "users/${app}%5Bbot%5D" --jq .id)
+          git -c user.name="${app}[bot]" -c user.email="$id+${app}[bot]@users.noreply.github.com" \
+            commit --quiet -am "$title" -m "$body"
+          gh auth setup-git
+          git push --quiet --force-with-lease="refs/heads/$branch:$lease" origin "HEAD:refs/heads/$branch"
+          pr=$(promote_open_pr "$repo" "$branch" "$app")
+          if [ -n "$pr" ]; then
+            gh pr edit "$pr" --repo "$repo" --title "$title" --body "$body"
+          else
+            gh pr create --repo "$repo" --base main --head "$branch" --title "$title" --body "$body"
+          fi
 
   contract:
     # Publishes info.version of services/gateway/openapi.yaml as an OCI artifact (deploy/ci/contract.sh publish):

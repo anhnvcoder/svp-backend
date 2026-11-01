@@ -1064,8 +1064,8 @@ release_sources_file=deploy/helm/svp-policy/files/sources.json
 # naming WHERE and the first problem otherwise.
 # A source without promoter is still read because release_sources REV reads the table at the revision an environment
 # of svp-gitops pins (envs/<env>/charts.yaml), and a commit from before the retired sources were dropped may still be
-# pinned there, or be copied to prd from a stg record. Drop that, here and in the template, once no environment pins
-# such a commit and no stg record a promote to prd may copy names one.
+# pinned there, or be copied to prd from envs/stg/ of an older commit of svp-gitops. Drop that, here and in the
+# template, once no environment pins such a commit and no commit of envs/stg/ a promote to prd may copy names one.
 # The jq program of _release_sources_check, kept out of $(...), which bash 3.2 misreads with these quotes inside.
 _release_sources_jq='
     def plain: type == "string" and test("^[^\u0027\"\\\\\\s]+$");
@@ -1102,30 +1102,17 @@ _release_sources_check() {
 }
 
 # release_sources [REV]: prints the table of release sources ({"sources": [...]}, compact JSON, checked by
-# _release_sources_check) of this repository at commit REV, or of the working tree when REV is empty. A commit from
-# before the table (an environment of svp-gitops may still pin one, and a rollback of prd may go back to one) gets the
-# one source its policy knew, read from that commit as the scripts read it then: name backend; imagePrefix, issuer,
-# subject, repository and provenanceRef from the lines imagePrefix, issuer, subject, provenanceRepository and
-# provenanceRef of the policy's values.yaml; services from svp_services of deploy/k8s/lib.sh; drillImages from
-# drill_images of deploy/ci/common.sh; promoter svp-gitops-promoter. Fails when REV is no commit of this clone, or
-# when neither form can be read.
+# _release_sources_check) of this repository at commit REV, or of the working tree when REV is empty. Fails when REV is
+# no commit of this clone, or a commit from before the table: no environment pins one any more, so its one source is
+# not rebuilt from the policy's values of then; pin a newer commit.
 release_sources() {
-  local rev=${1:-} table values services drills
+  local rev=${1:-} table
   if [ -z "$rev" ]; then
     table=$(cat "$repo_root/$release_sources_file") || fail "read $release_sources_file"
   elif ! git -C "$repo_root" cat-file -e "$rev^{commit}" 2>/dev/null; then
     fail "$rev is not a commit of this clone, so its release sources cannot be read"
   elif ! table=$(git -C "$repo_root" show "$rev:$release_sources_file" 2>/dev/null); then
-    values=$(git -C "$repo_root" show "$rev:deploy/helm/svp-policy/values.yaml" 2>/dev/null) || values=
-    services=$(git -C "$repo_root" show "$rev:deploy/k8s/lib.sh" 2>/dev/null | sed -n 's/^svp_services=(\(.*\))$/\1/p')
-    drills=$(git -C "$repo_root" show "$rev:deploy/ci/common.sh" 2>/dev/null | sed -n 's/^drill_images=(\(.*\))$/\1/p')
-    table=$(jq -n --arg values "$values" --arg services "$services" --arg drills "$drills" '
-      def line($k): [$values | split("\n")[] | select(startswith("  \($k): ")) | ltrimstr("  \($k): ")] | first // "";
-      def words: split(" ") | map(select(length > 0));
-      {sources: [{name: "backend", repository: line("provenanceRepository"), imagePrefix: line("imagePrefix"),
-        services: ($services | words), drillImages: ($drills | words), issuer: line("issuer"), subject: line("subject"),
-        provenanceRef: line("provenanceRef"), promoter: "svp-gitops-promoter"}]}') ||
-      fail "build the release source of ${rev:0:12}, which has no $release_sources_file"
+    fail "commit ${rev:0:12} has no $release_sources_file: it is from before the table of release sources, which every script reads; pin a newer commit"
   fi
   _release_sources_check "${rev:+${rev:0:12} }${rev:-the working tree}" <<<"$table"
 }

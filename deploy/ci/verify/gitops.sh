@@ -5,12 +5,9 @@
 # (job gitops of .github/workflows/verify.yml). The scripts of this run's checkout drive it (the bootstrap, the drills).
 # make k8s-gitops-up at the commit of main of svp-gitops the clone holds (the cluster runs as staging, and stays at
 # that commit through every check, so a release merged meanwhile changes nothing the checks read), the staging overlay
-# seen applied, the set of releases stg runs read, make k8s-smoke, RAM at rest, the supply chain drill (Kyverno
-# enforcing), the threat model drill, the source maps of the image CI built, the web's e2e tests with GlitchTip, its
-# observability drill, KEDA with two workers transcoding twice (each with the RAM peak of it), RAM at rest again, and
-# the set of releases stg ran through all of it, which job record-stg of verify.yml records in svp-gitops on a run of
-# main whose scenario step passed with release-set.json in the artifact, whatever the wait for a release after it
-# gives. Dispatched, or weekly on main with the other scenarios (SVP_VERIFY_SCHEDULED=true, set by the job on a
+# seen applied, make k8s-smoke, RAM at rest, the supply chain drill (Kyverno enforcing), the threat model drill, the
+# source maps of the image CI built, the web's e2e tests with GlitchTip, its observability drill, KEDA with two workers
+# transcoding twice (each with the RAM peak of it), and RAM at rest again. Dispatched, or weekly on main with the other scenarios (SVP_VERIFY_SCHEDULED=true, set by the job on a
 # scheduled run only; any other value is a dispatch): on a scheduled run there is no wait for a release (both its
 # targets are skipped, with the reason), and drill-k8s-supplychain leaves out cases c and l when their image is too old
 # (below). ram-rest-<label> and ram-peak-<n> are described in verify-run.sh.
@@ -27,8 +24,7 @@
 #               measure-gitops (a release that reached main while the cluster stayed at the commit of the checks is
 #               named, never measured); on a run of another branch of this repository, or on a scheduled run, it only says why
 #               it waits for nothing. Both names are in the scenario's list, so the dispatch's targets can name them (or leave them
-#               out) as any other; they get no line in results.tsv, the step's result is theirs, and it never decides
-#               whether the set is recorded.
+#               out) as any other; they get no line in results.tsv, and the step's result is theirs.
 #
 # Steps that are not a make target of their own:
 #   gitops-env             the overlays of envs/stg of svp-gitops reached the cluster: Application gateway reads
@@ -46,22 +42,6 @@
 #                          Read through a port-forward of Prometheus on 127.0.0.1:19091. When the charts stg runs
 #                          (envs/stg/charts.yaml of svp-gitops) predate that PodMonitor, it says so and passes: the
 #                          check starts with the first promote that brings it
-#   release-set-before     deploy/ci/release-set.sh snapshot --settle: first waits, for up to 300 s, until every Application
-#                          is Synced and Healthy on two reads in a row (a service's autoscaler is briefly Degraded
-#                          until metrics-server has a sample of its new pods), then records what stg runs right before k8s-smoke (the revision of
-#                          svp-gitops and of the charts every Application synced, its last history entry, the image of
-#                          every pod of each service) into $SVP_VERIFY_OUT/release-set/before.json; fails when that could
-#                          not be recorded now (a sync running, a rollout not over, two digests for a service)
-#   release-set            after the last check (ram-rest-end), before the wait for a release:
-#                          deploy/ci/release-set.sh snapshot again, then verify, which writes
-#                          $SVP_VERIFY_OUT/release-set.json (into the artifact) only when nothing of the first snapshot
-#                          moved and the set is exactly envs/stg/images/ and envs/stg/charts.yaml of svp-gitops at the
-#                          revision stg synced, k8s-smoke passed in between; the steps of the window go into it. Skipped,
-#                          with the reason (which fails the run), when the dispatch's targets leave out any target of
-#                          the scenario but wait-release and measure-gitops (the set was not checked by every step), or
-#                          when k8s-smoke or release-set-before did not pass or
-#                          was not chosen. The release the wait after the scenario may roll out is never recorded here:
-#                          the record is of the set the checks passed on, and a later run records that release
 #   drill-k8s-supplychain  make drill-k8s-supplychain with the images it needs, read from GHCR without credentials
 #                          (deploy/ci/gitops-sourcemaps.sh): the linux/amd64 manifest of the web release the cluster runs
 #                          as the unsigned image (no signature or attestation names it, they name its index), the newest
@@ -329,7 +309,7 @@ export -f gitops_up gitops_charts_rev gitops_env gitops_external_secrets gitops_
   gitops_supplychain gitops_sourcemaps
 
 scenario_targets() {
-  local round maps maps_status maps_reason no_maps before_status smoke_status listed unchecked=
+  local round maps maps_status maps_reason no_maps
   # Where deploy/ci/gitops-sourcemaps.sh fetch left its result.
   maps=$(ci_temp_dir)/gitops-sourcemaps || maps=
   maps_status=$(cat "$maps/status" 2>/dev/null) || maps_status=
@@ -337,13 +317,8 @@ scenario_targets() {
   step k8s-gitops-up 60 bash -c gitops_up
   step gitops-env 2 bash -c gitops_env
   step gitops-external-secrets 2 bash -c gitops_external_secrets
-  # Up to 300 s of waiting for the Applications to settle (see settle in release-set.sh), then the snapshot: the limit
-  # leaves the script time to name the Application that did not settle before the step is cut.
-  step release-set-before 8 "$here/release-set.sh" snapshot --settle "$SVP_VERIFY_OUT/release-set/before.json"
-  before_status=$last_status
   step gitops-argocd-metrics 5 bash -c gitops_argocd_metrics
   step k8s-smoke 15 make k8s-smoke
-  smoke_status=$last_status
   step ram-rest-start 15 bash -c 'ram_rest start'
   step drill-k8s-supplychain 40 bash -c gitops_supplychain
   step drill-k8s-threats 30 make drill-k8s-threats
@@ -370,31 +345,6 @@ scenario_targets() {
     fi
   done
   step ram-rest-end 15 bash -c 'ram_rest end'
-  # A set is recorded only once every check of the scenario ran on it: the dispatch's targets leaving one out (the two
-  # of the job's step after this one aside, which run after the last snapshot) checked part of it. names is the list
-  # verify-run.sh made of this function's targets, chosen its choice of them.
-  if [ -z "${listing:-}" ] && [ -n "${targets:-}" ]; then
-    # shellcheck disable=SC2086,SC2154 # names: target names split on spaces, set by verify-run.sh
-    for listed in $names; do
-      case $listed in
-      release-set | wait-release | measure-gitops) ;;
-      *) chosen "$listed" || unchecked="$unchecked $listed" ;;
-      esac
-    done
-  fi
-  # Whatever ran since release-set-before is in the window; listing (no step has run) keeps the name in the list.
-  if [ -n "$unchecked" ]; then
-    skip release-set "targets leave out$unchecked: the set of releases stg ran was not checked by every step"
-  elif [ -z "${listing:-}" ] && [ "$smoke_status" != ok ]; then
-    skip release-set "k8s-smoke did not pass or was not chosen: the set of releases stg ran was not checked"
-  elif [ -z "${listing:-}" ] && [ "$before_status" != ok ]; then
-    skip release-set "release-set-before did not pass or was not chosen: there is nothing to compare the set with"
-  else
-    # verify says why after a snapshot that could not be recorded too, with what moved since the first.
-    step release-set 3 bash -c '"$1" snapshot "$2/release-set/after.json"
-      "$1" verify "$2/release-set/before.json" "$2/release-set/after.json" "$2/release-set.json" "$2/results.tsv"' \
-      _ "$here/release-set.sh" "$SVP_VERIFY_OUT"
-  fi
   # The two targets of the job's step after this one (release_wait), named only while verify-run.sh lists the names it
   # checks the dispatch's targets against: run here, they would hold the job's token in this step.
   if [ -n "${listing:-}" ]; then

@@ -1,0 +1,124 @@
+# Resources of the test of policy no-lab-hosts: one that fails per kind and field it reads, each naming the lab's
+# svp.localhost, then resources with real hosts that pass. Names: fail-<kind>-<field>, pass-<kind>.
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: fail-httproute-hostnames
+  namespace: t
+spec:
+  hostnames: [api.example.com, api.svp.localhost]
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: GRPCRoute
+metadata:
+  name: fail-grpcroute-hostnames
+  namespace: t
+spec:
+  hostnames: [grpc.svp.localhost]
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: fail-gateway-listeners-hostname
+  namespace: t
+spec:
+  gatewayClassName: envoy
+  listeners:
+    - name: https
+      hostname: "*.svp.localhost"
+      port: 443
+      protocol: HTTPS
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: fail-ingress-rules-host
+  namespace: t
+spec:
+  rules:
+    - host: svp.localhost
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: fail-ingress-tls-hosts
+  namespace: t
+spec:
+  tls:
+    - hosts: [svp.example.com, s3.svp.localhost]
+  rules:
+    - host: svp.example.com
+---
+# The env value a chart's values give a service (its public origin)
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: fail-deployment-env-value
+  namespace: t
+spec:
+  template:
+    spec:
+      containers:
+        - name: web
+          image: busybox@sha256:1111111111111111111111111111111111111111111111111111111111111111
+          env:
+            - name: APP_ORIGIN
+              value: https://svp.localhost:8443
+---
+apiVersion: argoproj.io/v1alpha1
+kind: Rollout
+metadata:
+  name: fail-rollout-env-value
+  namespace: t
+spec:
+  template:
+    spec:
+      containers:
+        - name: gateway
+          image: busybox@sha256:1111111111111111111111111111111111111111111111111111111111111111
+          env:
+            - name: MEDIA_ORIGIN
+              value: https://s3.svp.localhost:8443
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: pass-httproute
+  namespace: t
+spec:
+  hostnames: [api.example.com]
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: pass-gateway
+  namespace: t
+spec:
+  gatewayClassName: envoy
+  listeners:
+    - name: https
+      hostname: "*.example.com"
+      port: 443
+      protocol: HTTPS
+    - name: http
+      port: 80
+      protocol: HTTP
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: pass-deployment
+  namespace: t
+spec:
+  template:
+    spec:
+      containers:
+        - name: web
+          image: busybox@sha256:1111111111111111111111111111111111111111111111111111111111111111
+          env:
+            - name: APP_ORIGIN
+              value: https://svp.example.com
+            - name: POD_IP
+              valueFrom:
+                fieldRef:
+                  fieldPath: status.podIP

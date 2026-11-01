@@ -1,0 +1,106 @@
+# kyverno test of policy images-pinned (from backend/: make kyverno-test): each resource of resources.yaml named fail-…
+# fails, each named pass-… passes.
+apiVersion: cli.kyverno.io/v1alpha1
+kind: Test
+metadata:
+  name: images-pinned
+policies:
+  - ../../images-pinned.yaml
+resources:
+  - resources.yaml
+results:
+  - policy: images-pinned
+    isValidatingPolicy: true
+    kind: Pod
+    result: fail
+    resources:
+      - fail-pod-containers-image
+      - fail-pod-ephemeralcontainers-image
+  - policy: images-pinned
+    isValidatingPolicy: true
+    kind: Deployment
+    result: fail
+    resources:
+      - fail-deployment-containers-image
+      - fail-deployment-initcontainers-image
+      - fail-deployment-env-image-name
+      - fail-deployment-env-bare-name
+      - fail-deployment-args-image-flag
+      - fail-deployment-args-registry-ref
+      - fail-deployment-command-registry-ref
+      - fail-deployment-containers-image-two-digests
+      - fail-deployment-containers-image-short-digest
+  - policy: images-pinned
+    isValidatingPolicy: true
+    kind: StatefulSet
+    result: fail
+    resources:
+      - fail-statefulset-containers-image
+      - fail-statefulset-initcontainers-image
+  - policy: images-pinned
+    isValidatingPolicy: true
+    kind: Job
+    result: fail
+    resources:
+      - fail-job-containers-image
+  - policy: images-pinned
+    isValidatingPolicy: true
+    kind: CronJob
+    result: fail
+    resources:
+      - fail-cronjob-containers-image
+  - policy: images-pinned
+    isValidatingPolicy: true
+    kind: Rollout
+    result: fail
+    resources:
+      - fail-rollout-containers-image
+  - policy: images-pinned
+    isValidatingPolicy: true
+    kind: Prometheus
+    result: fail
+    resources:
+      - fail-prometheus-spec-image
+  - policy: images-pinned
+    isValidatingPolicy: true
+    kind: Alertmanager
+    result: fail
+    resources:
+      - fail-alertmanager-spec-image
+  - policy: images-pinned
+    isValidatingPolicy: true
+    kind: Cluster
+    result: fail
+    resources:
+      - fail-cluster-spec-imagename
+  - policy: images-pinned
+    isValidatingPolicy: true
+    kind: ConfigMap
+    result: fail
+    resources:
+      - fail-configmap-data-image-key
+      - fail-configmap-data-image-line
+  - policy: images-pinned
+    isValidatingPolicy: true
+    kind: Deployment
+    result: pass
+    resources:
+      - pass-deployment
+  - policy: images-pinned
+    isValidatingPolicy: true
+    kind: Prometheus
+    result: pass
+    resources:
+      - pass-prometheus
+  - policy: images-pinned
+    isValidatingPolicy: true
+    kind: Cluster
+    result: pass
+    resources:
+      - pass-cluster
+  - policy: images-pinned
+    isValidatingPolicy: true
+    kind: ConfigMap
+    result: pass
+    resources:
+      - pass-configmap
