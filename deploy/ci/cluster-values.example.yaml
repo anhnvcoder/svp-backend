@@ -18,8 +18,8 @@ domain: stg.svp.example
 hostedZoneId: Z00000000000000000000
 acmeEmail: acme@svp.example
 rdsAddress: svp-stg.000000000000.ap-southeast-1.rds.amazonaws.com
-uploadsBucket: svp-stg-uploads-000000000000
-mediaBucket: svp-stg-media-000000000000
+uploadsBucket: svp-stg-uploads-000000000000-ap-southeast-1
+mediaBucket: svp-stg-media-000000000000-ap-southeast-1
 mediaDomain: d000000000000.cloudfront.net
 s3Cidrs:
   - 198.51.100.0/24

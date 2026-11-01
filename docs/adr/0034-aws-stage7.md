@@ -2,7 +2,8 @@
 
 - Trạng thái: Chấp nhận. Người học trả lời ngày 2026-10-31 các dòng 2, 4, 5, 8 và mức chuẩn theo env (mục 20); các dòng còn lại
   theo đề xuất, người học duyệt kế hoạch ngày 2026-10-31. Chưa hiện thực; số đo của buổi AWS stg ghi vào cột Kết quả của mục Kiểm
-  chứng sau. Chỉnh [0024](0024-multi-environment.md) §9 (nơi và tên thư mục Terraform; cách mô tả lớp nền tảng)
+  chứng sau. Chỉnh [0024](0024-multi-environment.md) §9 (nơi và tên thư mục Terraform; cách mô tả lớp nền tảng). Tên bucket (Quyết định §2
+  "Biến cá nhân", §9 "S3") chỉnh bởi [0038](0038-s3-bucket-names.md)
 - Ngày: 2026-10-31
 
 ## Bối cảnh
