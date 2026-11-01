@@ -29,6 +29,7 @@ import (
 
 	videov1 "github.com/anhnvcoder/svp-backend/gen/go/svp/video/v1"
 	"github.com/anhnvcoder/svp-backend/internal/callerid"
+	"github.com/anhnvcoder/svp-backend/internal/callerid/calleridtest"
 	"github.com/anhnvcoder/svp-backend/internal/grpcerr"
 	"github.com/anhnvcoder/svp-backend/internal/ids"
 	"github.com/anhnvcoder/svp-backend/internal/logx"
@@ -250,13 +251,13 @@ func newServerWithStorage() (*Server, *fakeStorage, *logBuffer) {
 	return New(testPool, storage, logger), storage, logs
 }
 
-// call runs handler the way the gRPC server does: through CallerInterceptor, with caller as
-// x-user-id metadata (none when caller is "").
+// call runs handler the way the gRPC server does: through CallerInterceptor, with an access
+// token for caller in the authorization metadata (none when caller is "").
 func call[Req, Resp any](ctx context.Context, caller, method string, req Req, handler func(context.Context, Req) (Resp, error)) (Resp, error) {
 	if caller != "" {
-		ctx = metadata.NewIncomingContext(ctx, metadata.Pairs(callerid.MetadataKey, caller))
+		ctx = calleridtest.IncomingContext(ctx, caller)
 	}
-	resp, err := CallerInterceptor()(ctx, req, &grpc.UnaryServerInfo{FullMethod: method},
+	resp, err := CallerInterceptor(calleridtest.Verifier())(ctx, req, &grpc.UnaryServerInfo{FullMethod: method},
 		func(ctx context.Context, req any) (any, error) { return handler(ctx, req.(Req)) })
 	if err != nil {
 		var zero Resp
@@ -430,23 +431,6 @@ func TestInitUploadReturnsPresignedForm(t *testing.T) {
 		if strings.Contains(all, secret) {
 			t.Errorf("logs contain the form (%.20q...)", secret)
 		}
-	}
-}
-
-func TestInitUploadIsNotIdempotent(t *testing.T) {
-	needDB(t)
-	s, _ := newServer()
-	caller := ids.New()
-	first, err := initUpload(t, s, caller, validRequest())
-	if err != nil {
-		t.Fatal(err)
-	}
-	second, err := initUpload(t, s, caller, validRequest())
-	if err != nil {
-		t.Fatal(err)
-	}
-	if first.GetVideoId() == second.GetVideoId() {
-		t.Errorf("two calls returned the same video_id %s", first.GetVideoId())
 	}
 }
 
@@ -703,7 +687,7 @@ func TestDatabaseErrorIsGenericInternal(t *testing.T) {
 func TestOverGRPC(t *testing.T) {
 	s, _ := newServer()
 	lis := bufconn.Listen(1 << 20)
-	srv := grpc.NewServer(grpc.ChainUnaryInterceptor(CallerInterceptor()))
+	srv := grpc.NewServer(grpc.ChainUnaryInterceptor(CallerInterceptor(calleridtest.Verifier())))
 	healthpb.RegisterHealthServer(srv, health.NewServer())
 	videov1.RegisterVideoServiceServer(srv, s)
 	go func() { _ = srv.Serve(lis) }()
@@ -728,32 +712,51 @@ func TestOverGRPC(t *testing.T) {
 			"InitUpload": initErr, "GetVideo": getErr, "CompleteUpload": completeErr, "ListAuthorVideos": listErr,
 		} {
 			if status.Code(err) != codes.Unauthenticated || grpcerr.Reason(err) != callerid.ReasonUnauthenticatedCaller {
-				t.Errorf("%s without x-user-id = %v, want UNAUTHENTICATED", name, err)
+				t.Errorf("%s without a token = %v, want UNAUTHENTICATED", name, err)
 			}
+		}
+	})
+
+	// A forged x-user-id is no caller, and next to a valid token it changes nothing.
+	t.Run("forged x-user-id", func(t *testing.T) {
+		ctx := metadata.AppendToOutgoingContext(t.Context(), "x-user-id", ids.New())
+		_, err := client.InitUpload(ctx, validRequest())
+		wantError(t, err, codes.Unauthenticated, callerid.ReasonUnauthenticatedCaller)
+
+		needDB(t)
+		author := ids.New()
+		ctx = metadata.AppendToOutgoingContext(calleridtest.OutgoingContext(t.Context(), author), "x-user-id", ids.New())
+		created, err := client.InitUpload(ctx, validRequest())
+		if err != nil {
+			t.Fatal(err)
+		}
+		got, err := client.GetVideo(calleridtest.OutgoingContext(t.Context(), author), &videov1.GetVideoRequest{VideoId: created.GetVideoId()})
+		if err != nil || got.GetVideo().GetAuthorId() != author {
+			t.Errorf("GetVideo = (%v, %v), want the video of the token's user %s", got.GetVideo(), err, author)
 		}
 	})
 
 	t.Run("health check needs no caller", func(t *testing.T) {
 		resp, err := healthpb.NewHealthClient(conn).Check(t.Context(), &healthpb.HealthCheckRequest{})
 		if err != nil || resp.GetStatus() != healthpb.HealthCheckResponse_SERVING {
-			t.Errorf("Health/Check without x-user-id = (%v, %v), want SERVING", resp, err)
+			t.Errorf("Health/Check without a token = (%v, %v), want SERVING", resp, err)
 		}
 	})
 
-	// GetPublicVideo is public: without x-user-id, and with a malformed one, it reaches the handler,
+	// GetPublicVideo is public: without a token, and with a broken one, it reaches the handler,
 	// which answers NOT_FOUND for a missing video instead of UNAUTHENTICATED.
 	t.Run("GetPublicVideo needs no caller", func(t *testing.T) {
 		needDB(t)
 		_, err := client.GetPublicVideo(t.Context(), &videov1.GetPublicVideoRequest{VideoId: ids.New()})
 		wantError(t, err, codes.NotFound, ReasonVideoNotFound)
-		ctx := metadata.AppendToOutgoingContext(t.Context(), callerid.MetadataKey, "not-a-uuid")
+		ctx := metadata.AppendToOutgoingContext(t.Context(), callerid.AuthorizationKey, "Bearer not.a.token")
 		_, err = client.GetPublicVideo(ctx, &videov1.GetPublicVideoRequest{VideoId: ids.New()})
 		wantError(t, err, codes.NotFound, ReasonVideoNotFound)
 	})
 
 	t.Run("CompleteUpload of a missing video", func(t *testing.T) {
 		needDB(t)
-		ctx := metadata.AppendToOutgoingContext(t.Context(), callerid.MetadataKey, ids.New())
+		ctx := calleridtest.OutgoingContext(t.Context(), ids.New())
 		_, err := client.CompleteUpload(ctx, &videov1.CompleteUploadRequest{VideoId: ids.New()})
 		wantError(t, err, codes.NotFound, ReasonVideoNotFound)
 	})
@@ -761,7 +764,7 @@ func TestOverGRPC(t *testing.T) {
 	t.Run("InitUpload then GetVideo", func(t *testing.T) {
 		needDB(t)
 		author := ids.New()
-		ctx := metadata.AppendToOutgoingContext(t.Context(), callerid.MetadataKey, author)
+		ctx := calleridtest.OutgoingContext(t.Context(), author)
 		created, err := client.InitUpload(ctx, validRequest())
 		if err != nil {
 			t.Fatal(err)

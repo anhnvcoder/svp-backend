@@ -29,11 +29,17 @@ const ViewsGroup = "engagement-service"
 // commit included, so a stuck lock or a slow broker fails the attempt and kafkax retries it.
 const viewsHandlerTimeout = 30 * time.Second
 
+// viewsRetryBudget is how long a failing batch of views is retried before it goes to the
+// dead-letter topic: longer than a database restart or primary switch, short enough that a batch
+// that can never succeed holds its partitions for minutes, not for good.
+const viewsRetryBudget = 5 * time.Minute
+
 // ViewsConsumerConfig returns the batch consumer of TopicViews in ViewsGroup, with the batch
-// size and retry settings of kafkax: up to 5,000 records or 1 s a batch, few transactions at
-// 10,000 views a second, and retries without limit, since a batch sent to the dead-letter topic
-// for a database outage would lose its views. A batch attempt past
-// viewsHandlerTimeout is retried like any other failure.
+// size and backoff of kafkax: up to 5,000 records or 1 s a batch, few transactions at 10,000
+// views a second. A failed batch, including an attempt past viewsHandlerTimeout, is retried for
+// viewsRetryBudget, then copied whole to the dead-letter topic and committed. Its views are not
+// lost: replayed from the dead-letter topic to TopicViews, its records get new offsets past the
+// stored next_offset, so each is counted exactly once.
 func (s *Server) ViewsConsumerConfig(brokers string) kafkax.BatchConsumerConfig {
 	return kafkax.BatchConsumerConfig{
 		Brokers:        brokers,
@@ -43,6 +49,7 @@ func (s *Server) ViewsConsumerConfig(brokers string) kafkax.BatchConsumerConfig 
 		Handler:        s.HandleViews,
 		Logger:         s.logger,
 		HandlerTimeout: viewsHandlerTimeout,
+		RetryBudget:    viewsRetryBudget,
 	}
 }
 

@@ -32,7 +32,9 @@ Loại tài liệu (Diátaxis): **reference**, tra cứu khi cần một lệnh 
   khởi động sau; `make k8s-up` từ chối cluster tạo khi chưa có cấu hình này, hay khi nguồn mount không còn là file, khác
   file của repo hiện tại, hay version lệch `podSecurityVersion`. Probe của chart `svp-service` (ADR-0020 §10, cùng cho mọi
   release): liveness `timeoutSeconds: 5` (chu kỳ 10 s, 3 lần), readiness 2 (chu kỳ 5 s), startup của service gRPC 2 (chu kỳ
-  2 s × 30 lần); media-worker không có probe.
+  2 s × 30 lần); media-worker không có probe. Probe gRPC: startup và liveness hỏi health tổng `""` (không phụ thuộc database),
+  readiness hỏi tên health `readiness` (`grpc.service: readiness`), NOT_SERVING khi ping Postgres của service lỗi 3 lần liên tiếp
+  ([ADR-0044](../adr/0044-grpc-readiness.md)): database của một service không tới được thì pod của nó NotReady, không restart.
 
 ## Kyverno và nguồn phát hành
 
@@ -107,7 +109,9 @@ Loại tài liệu (Diátaxis): **reference**, tra cứu khi cần một lệnh 
   native không bị đụng). `k8s-status` in container, node và pod mọi namespace trừ `kube-system`.
 - `make k8s-secrets`, `make k8s-glitchtip-init`, `make k8s-ca`: `k8s-secrets` tạo/cập nhật Secret từ `.env` bằng
   `kubectl apply` qua stdin, không in giá trị (gồm `svp/web-env` chỉ chứa `NEXT_SERVER_ACTIONS_ENCRYPTION_KEY`, phải là base64
-  chuẩn của 32 byte, sai dạng thì dừng; `svp-data/pg-backup-s3` là đăng nhập của user `svp-pg-backup` của object store, chỉ sidecar của
+  chuẩn của 32 byte, sai dạng thì dừng; `svp/<service>-env` của gateway và bốn service gRPC có `JWT_VERIFY_KEYS` (khoá công khai,
+  [ADR-0042](../adr/0042-caller-identity-grpc.md)), khoá ký chỉ ở `user-service-env`; ExternalSecret của đường GitOps dựng cùng
+  key từ nguồn `jwt-verify`; `svp-data/pg-backup-s3` là đăng nhập của user `svp-pg-backup` của object store, chỉ sidecar của
   plugin Barman Cloud trong pod Postgres đọc); mật khẩu superuser Redpanda đổi thì đặt vào broker đang chạy trước khi apply
   (cần `redpanda-0` chạy; Admin API không trả lời hay không nhận mật khẩu nào thì dừng, không đổi Secret nào), object store
   (Secret `s3-root`, `s3-users`) hay Redpanda chạy với mật khẩu khác `.env` thì restart; sau đó `make k8s-up` để Job init đặt mật khẩu mới và restart service

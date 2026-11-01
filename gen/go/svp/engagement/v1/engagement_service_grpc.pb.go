@@ -31,12 +31,13 @@ const (
 //
 // EngagementService owns likes and the view and like counters.
 //
-// Caller identity: the gateway passes the authenticated user id in the gRPC
-// metadata key `x-user-id`; requests never carry the caller's own id. Every
-// RPC but GetStats requires it and returns UNAUTHENTICATED when it is missing
-// or not a valid UUID. For GetStats the caller is optional: without
-// `x-user-id` there is no caller, but a present `x-user-id` must still be
-// exactly one valid UUID, or the call fails with UNAUTHENTICATED.
+// Caller identity: the gateway forwards the caller's access token in the gRPC
+// metadata key `authorization` as `Bearer <token>`; the service verifies it
+// and takes the caller from its `sub`. Requests never carry the caller's own
+// id. Every RPC but GetStats requires it and returns UNAUTHENTICATED when it
+// is missing or invalid. For GetStats the caller is optional: without
+// `authorization` there is no caller, but a present one must still be exactly
+// one valid token, or the call fails with UNAUTHENTICATED.
 //
 // All ids are UUIDv7 strings in canonical lowercase form (36 chars).
 // engagement-service does not own videos and does not check that video_id
@@ -72,7 +73,8 @@ type EngagementServiceClient interface {
 	// read.
 	//
 	// Errors:
-	// - UNAUTHENTICATED: `x-user-id` is present but not exactly one valid UUID.
+	// - UNAUTHENTICATED: `authorization` is present but not exactly one valid
+	//   access token.
 	// - INVALID_ARGUMENT: more than 50 ids, or an id that is not a UUID.
 	GetStats(ctx context.Context, in *GetStatsRequest, opts ...grpc.CallOption) (*GetStatsResponse, error)
 }
@@ -131,12 +133,13 @@ func (c *engagementServiceClient) GetStats(ctx context.Context, in *GetStatsRequ
 //
 // EngagementService owns likes and the view and like counters.
 //
-// Caller identity: the gateway passes the authenticated user id in the gRPC
-// metadata key `x-user-id`; requests never carry the caller's own id. Every
-// RPC but GetStats requires it and returns UNAUTHENTICATED when it is missing
-// or not a valid UUID. For GetStats the caller is optional: without
-// `x-user-id` there is no caller, but a present `x-user-id` must still be
-// exactly one valid UUID, or the call fails with UNAUTHENTICATED.
+// Caller identity: the gateway forwards the caller's access token in the gRPC
+// metadata key `authorization` as `Bearer <token>`; the service verifies it
+// and takes the caller from its `sub`. Requests never carry the caller's own
+// id. Every RPC but GetStats requires it and returns UNAUTHENTICATED when it
+// is missing or invalid. For GetStats the caller is optional: without
+// `authorization` there is no caller, but a present one must still be exactly
+// one valid token, or the call fails with UNAUTHENTICATED.
 //
 // All ids are UUIDv7 strings in canonical lowercase form (36 chars).
 // engagement-service does not own videos and does not check that video_id
@@ -172,7 +175,8 @@ type EngagementServiceServer interface {
 	// read.
 	//
 	// Errors:
-	// - UNAUTHENTICATED: `x-user-id` is present but not exactly one valid UUID.
+	// - UNAUTHENTICATED: `authorization` is present but not exactly one valid
+	//   access token.
 	// - INVALID_ARGUMENT: more than 50 ids, or an id that is not a UUID.
 	GetStats(context.Context, *GetStatsRequest) (*GetStatsResponse, error)
 	mustEmbedUnimplementedEngagementServiceServer()

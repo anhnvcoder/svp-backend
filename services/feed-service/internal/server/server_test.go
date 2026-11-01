@@ -21,6 +21,7 @@ import (
 
 	feedv1 "github.com/anhnvcoder/svp-backend/gen/go/svp/feed/v1"
 	"github.com/anhnvcoder/svp-backend/internal/callerid"
+	"github.com/anhnvcoder/svp-backend/internal/callerid/calleridtest"
 	"github.com/anhnvcoder/svp-backend/internal/grpcerr"
 	"github.com/anhnvcoder/svp-backend/internal/ids"
 	"github.com/anhnvcoder/svp-backend/internal/pagetoken"
@@ -87,13 +88,18 @@ func closedRedis() *redis.Client {
 	return c
 }
 
-// call runs handler the way the gRPC server does: through the callerid interceptor, with caller
-// as x-user-id metadata (none when caller is "").
+// call runs handler the way the gRPC server does: through the callerid interceptor, with an
+// access token for caller in the authorization metadata (none when caller is "").
 func call[Req, Resp any](ctx context.Context, caller, method string, req Req, handler func(context.Context, Req) (Resp, error)) (Resp, error) {
 	if caller != "" {
-		ctx = metadata.NewIncomingContext(ctx, metadata.Pairs(callerid.MetadataKey, caller))
+		ctx = calleridtest.IncomingContext(ctx, caller)
 	}
-	resp, err := CallerInterceptor()(ctx, req, &grpc.UnaryServerInfo{FullMethod: method},
+	return callWith(ctx, method, req, handler)
+}
+
+// callWith is call with the incoming metadata already in ctx.
+func callWith[Req, Resp any](ctx context.Context, method string, req Req, handler func(context.Context, Req) (Resp, error)) (Resp, error) {
+	resp, err := CallerInterceptor(calleridtest.Verifier())(ctx, req, &grpc.UnaryServerInfo{FullMethod: method},
 		func(ctx context.Context, req any) (any, error) { return handler(ctx, req.(Req)) })
 	if err != nil {
 		var zero Resp
@@ -247,6 +253,22 @@ func TestEveryRPCRequiresCaller(t *testing.T) {
 		wantError(t, err, codes.Unauthenticated, callerid.ReasonUnauthenticatedCaller)
 		_, err = explore(t, s, caller, 0, "")
 		wantError(t, err, codes.Unauthenticated, callerid.ReasonUnauthenticatedCaller)
+	}
+}
+
+// A forged x-user-id without a token is refused, and next to a valid token it changes nothing.
+func TestForgedUserIDIsNotACaller(t *testing.T) {
+	s := newServer()
+	forged := metadata.NewIncomingContext(t.Context(), metadata.Pairs("x-user-id", ids.New()))
+	_, err := callWith(forged, methodFollowing, &feedv1.GetFollowingFeedRequest{}, s.GetFollowingFeed)
+	wantError(t, err, codes.Unauthenticated, callerid.ReasonUnauthenticatedCaller)
+
+	user, _ := timelineOf(t, 1)
+	both := metadata.NewIncomingContext(t.Context(), metadata.Pairs(
+		callerid.AuthorizationKey, calleridtest.Authorization(user), "x-user-id", ids.New()))
+	resp, err := callWith(both, methodFollowing, &feedv1.GetFollowingFeedRequest{}, s.GetFollowingFeed)
+	if err != nil || len(resp.GetItems()) != 1 {
+		t.Errorf("token with a forged x-user-id = (%v, %v), want the token owner's one item", resp, err)
 	}
 }
 

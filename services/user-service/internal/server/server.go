@@ -34,7 +34,7 @@ import (
 
 // PublicMethods are the RPCs that need no caller; pass them to callerid.UnaryServerInterceptor.
 // The health check is among them: grpcserver serves it next to UserService, and the healthcheck
-// subcommand and container probes call it without x-user-id.
+// subcommand and container probes call it without an access token.
 var PublicMethods = []string{
 	userv1.UserService_Register_FullMethodName,
 	userv1.UserService_Login_FullMethodName,

@@ -1,10 +1,13 @@
 package kafkax
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
 	"log/slog"
+	"slices"
+	"strings"
 	"time"
 
 	"github.com/twmb/franz-go/pkg/kerr"
@@ -18,9 +21,14 @@ import (
 // Defaults for the zero fields of BatchConsumerConfig. At 10,000 events a second a batch of 5,000
 // fills in about half a second, so the handler runs about twice a second instead of once per
 // record, and the wait a record adds stays at or under a second.
+//
+// DefaultRetryBudget outlasts the short outages a database usually has (a restart, a primary
+// switch), and leaves the consumer lag alert, which fires after two minutes, time to reach
+// someone before the batch goes to the dead-letter topic.
 const (
 	DefaultMaxBatchRecords = 5000
 	DefaultMaxBatchWait    = time.Second
+	DefaultRetryBudget     = 5 * time.Minute
 )
 
 // TopicPartition names one partition of a topic.
@@ -53,7 +61,8 @@ type Rejected struct {
 // BatchHandler processes a batch. Returning a nil error settles the whole batch: the rejected
 // records go to their dead-letter topic with dlq-reason=permanent, then the highest offset of
 // every partition in the batch is committed. Any error retries the whole batch, unchanged, with
-// backoff and no limit on attempts.
+// backoff, until the next attempt would start past RetryBudget; then every record of the batch
+// goes to its dead-letter topic with dlq-reason=retries-exhausted and the batch is committed.
 //
 // ctx is canceled when the consumer stops; a handler that returns an error after that leaves the
 // batch uncommitted, so it is delivered again.
@@ -79,6 +88,12 @@ type BatchConsumerConfig struct {
 	// BackoffBase and BackoffMax shape the waits between attempts, as in ConsumerConfig.
 	BackoffBase time.Duration
 	BackoffMax  time.Duration
+	// RetryBudget bounds the retries of a failing batch, from the start of its first attempt:
+	// no attempt starts once the time passed plus the next backoff would exceed it. A batch
+	// still failing then goes to the dead-letter topic whole. Zero takes DefaultRetryBudget,
+	// 5 minutes; with HandlerTimeout bounding the last attempt, a batch holds its partitions
+	// for at most RetryBudget plus HandlerTimeout.
+	RetryBudget time.Duration
 
 	// SessionTimeout and RebalanceTimeout are the Kafka group settings of the same names.
 	// Rebalances wait while a batch is collected and handled, so RebalanceTimeout should cover
@@ -92,11 +107,15 @@ type BatchConsumerConfig struct {
 	opts []kgo.Opt
 	// deadLetterTimeout replaces the package's deadLetterTimeout in tests when set.
 	deadLetterTimeout time.Duration
+	// now and sleep replace time.Now and the package's sleep in the retry loop of settle in tests
+	// when set, so a test measures the retry budget on a clock it controls.
+	now   func() time.Time
+	sleep func(ctx context.Context, d time.Duration) bool
 }
 
 // BatchConsumer runs a BatchHandler over the records of a consumer group and commits each batch
-// once it is settled: delivery is at-least-once, and a batch can be delivered again in part or
-// whole.
+// once it is settled (handled, or copied whole to the dead-letter topic once its retry budget
+// runs out): delivery is at-least-once, and a batch can be delivered again in part or whole.
 //
 // Rebalances are held from the poll that starts a batch until the batch is settled, so the commit
 // usually lands while this member still owns the partitions. Exact counting must not rely on it:
@@ -119,6 +138,15 @@ func NewBatchConsumer(cfg BatchConsumerConfig) (*BatchConsumer, error) {
 	}
 	if cfg.MaxBatchWait <= 0 {
 		cfg.MaxBatchWait = DefaultMaxBatchWait
+	}
+	if cfg.RetryBudget <= 0 {
+		cfg.RetryBudget = DefaultRetryBudget
+	}
+	if cfg.now == nil {
+		cfg.now = time.Now
+	}
+	if cfg.sleep == nil {
+		cfg.sleep = sleep
 	}
 	c, err := newConsumer(ConsumerConfig{
 		Brokers:           cfg.Brokers,
@@ -198,8 +226,10 @@ func (b *BatchConsumer) collect(ctx context.Context) *Batch {
 }
 
 // settle runs the handler on batch until it succeeds, sends the records it rejected to the
-// dead-letter topic, and commits the batch.
+// dead-letter topic, and commits the batch. A batch still failing when its retry budget runs out
+// goes whole to the dead-letter topic instead.
 func (b *BatchConsumer) settle(ctx context.Context, batch *Batch) error {
+	start := b.cfg.now()
 	for n := 1; ; n++ {
 		hctx, rejected, err := b.handle(ctx, batch)
 		if err == nil {
@@ -221,13 +251,64 @@ func (b *BatchConsumer) settle(ctx context.Context, batch *Batch) error {
 			return errStopped
 		}
 		wait := b.c.backoff(n)
+		if b.cfg.now().Sub(start)+wait > b.cfg.RetryBudget {
+			return b.exhaust(ctx, hctx, batch, n, err)
+		}
 		b.c.cfg.Logger.LogAttrs(hctx, slog.LevelWarn, "kafka batch handler failed, retrying",
 			slog.Int("records", len(batch.Records)), slog.Int("attempt", n), slog.Duration("backoff", wait),
 			slog.String("error", err.Error()))
-		if !sleep(ctx, wait) {
+		if !b.cfg.sleep(ctx, wait) {
 			return errStopped
 		}
 	}
+}
+
+// exhaust copies every record of batch to its dead-letter topic with dlq-reason=retries-exhausted,
+// commits the batch, and only then logs it: a batch that has a log line was never counted, so
+// the records it names are the ones safe to replay. A stop or failure before the commit leaves
+// the batch uncommitted; some of its records may be in the dead-letter topic already, and get
+// copied again when the batch is redelivered.
+func (b *BatchConsumer) exhaust(ctx, hctx context.Context, batch *Batch, attempts int, cause error) error {
+	dctx := trace.ContextWithSpanContext(ctx, trace.SpanContextFromContext(hctx))
+	for _, r := range batch.Records {
+		if err := b.c.deadLetter(dctx, r, ReasonRetriesExhausted, cause); err != nil {
+			return err
+		}
+	}
+	if err := b.commit(ctx, batch); err != nil {
+		return err
+	}
+	b.c.cfg.Logger.LogAttrs(hctx, slog.LevelError, "kafka batch sent to dead-letter topic",
+		slog.Int("records", len(batch.Records)), slog.Int("attempts", attempts),
+		slog.String("offsets", offsetRanges(batch)), slog.String("reason", ReasonRetriesExhausted),
+		slog.String("error", cause.Error()))
+	return nil
+}
+
+// offsetRanges lists the first and last offset of every partition in batch, as
+// "topic/partition:first-last" separated by spaces, in topic and partition order.
+func offsetRanges(batch *Batch) string {
+	spans := map[TopicPartition][2]int64{}
+	for _, r := range batch.Records {
+		tp := TopicPartition{Topic: r.Topic, Partition: r.Partition}
+		if sp, ok := spans[tp]; ok {
+			spans[tp] = [2]int64{min(sp[0], r.Offset), max(sp[1], r.Offset)}
+		} else {
+			spans[tp] = [2]int64{r.Offset, r.Offset}
+		}
+	}
+	tps := make([]TopicPartition, 0, len(spans))
+	for tp := range spans {
+		tps = append(tps, tp)
+	}
+	slices.SortFunc(tps, func(a, b TopicPartition) int {
+		return cmp.Or(strings.Compare(a.Topic, b.Topic), cmp.Compare(a.Partition, b.Partition))
+	})
+	parts := make([]string, 0, len(tps))
+	for _, tp := range tps {
+		parts = append(parts, fmt.Sprintf("%s/%d:%d-%d", tp.Topic, tp.Partition, spans[tp][0], spans[tp][1]))
+	}
+	return strings.Join(parts, " ")
 }
 
 func (b *BatchConsumer) handle(ctx context.Context, batch *Batch) (context.Context, []Rejected, error) {

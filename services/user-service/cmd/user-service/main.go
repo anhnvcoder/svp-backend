@@ -115,6 +115,16 @@ func serve(ctx context.Context, logger *slog.Logger) (err error) {
 	}
 	defer kafka.Close()
 
+	verifyKeys, err := envcfg.Required("JWT_VERIFY_KEYS")
+	if err != nil {
+		return err
+	}
+	keys, err := authtoken.ParseVerifyKeys(verifyKeys)
+	if err != nil {
+		return fmt.Errorf("JWT_VERIFY_KEYS: %w", err)
+	}
+	verifier := authtoken.NewVerifier(keys)
+
 	shutdownTelemetry, err := telemetry.Setup(ctx, serviceName)
 	if err != nil {
 		return fmt.Errorf("set up telemetry: %w", err)
@@ -161,7 +171,8 @@ func serve(ctx context.Context, logger *slog.Logger) (err error) {
 	srv := server.New(pool, password.NewHasher(), authtoken.NewIssuer(kid, key), logger)
 	return grpcserver.Run(ctx, addr, logger,
 		func(s *grpc.Server) { userv1.RegisterUserServiceServer(s, srv) },
-		callerid.UnaryServerInterceptor(server.PublicMethods...),
+		pool.Ping,
+		callerid.UnaryServerInterceptor(verifier, server.PublicMethods...),
 	)
 }
 

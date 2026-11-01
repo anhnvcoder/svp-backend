@@ -9,8 +9,8 @@ Loại tài liệu (Diátaxis): **reference**, tra cứu khi cần một lệnh 
   bucket, user, policy, CORS, migrate, gateway, user-service, video-service, media-worker, engagement-service,
   feed-service, web client `web`), chạy luồng đầu-cuối qua gateway ở `127.0.0.1:8080` (gồm refresh token, dùng lại token
   cũ thì cả họ bị thu hồi, logout, follow, hồ sơ: handle tự chọn, trùng handle 409, handle sinh `u_…`, `GET`/`PATCH /me`
-  không có email, `followed_by_me`, danh sách video theo tác giả chỉ tác giả thấy video chưa `READY`, upload video bằng
-  presigned POST lên object store, chờ `READY`, tải HLS và thumbnail, output HLS bất biến
+  không có email, `followed_by_me`, danh sách video theo tác giả chỉ tác giả thấy video chưa `READY`, tạo video với
+  `Idempotency-Key` rồi gọi lặp cùng khoá nhận lại đúng `video_id` đó, upload video bằng presigned POST lên object store, chờ `READY`, tải HLS và thumbnail, output HLS bất biến
   ([ADR-0029](../adr/0029-immutable-media-versions.md): master ở `media/<id>/<version>/master.m3u8`, version là `event_id` của
   `video.uploaded`, biến thể và thumbnail dưới thư mục lần thử `<version>/<attempt>/`; master, một playlist biến thể, một segment
   và thumbnail mang `Cache-Control: max-age=31536000, immutable`), `GET /public/videos/{id}` không token 200 với video `READY`

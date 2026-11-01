@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"log/slog"
+	"reflect"
 	"slices"
 	"strings"
 	"sync"
@@ -204,6 +205,49 @@ func TestTranscodeCompletedTwiceEmitsOnce(t *testing.T) {
 		t.Errorf("got %d outbox rows, want 1", len(rows))
 	}
 	wantDeletes(t, storage)
+}
+
+// The same record (same event_id, same payload) handled twice leaves the state as the first
+// delivery left it: the whole videos row, the outbox rows of the video, and the objects deleted
+// (a redelivered transcode.failed runs its deletes again, which removes nothing more).
+func TestSameTranscodeRecordTwiceChangesNothing(t *testing.T) {
+	needDB(t)
+	for name, event := range map[string]func(string) *mediav1.TranscodeEvent{
+		"transcode.completed": completedEvent,
+		"transcode.failed":    failedEvent,
+	} {
+		t.Run(name, func(t *testing.T) {
+			s, storage, _ := newServerWithStorage()
+			id := newVideo(t, "PROCESSING")
+			r := transcodeRecord(id, event(id))
+			deleted := func() []string {
+				d := storage.deletes()
+				slices.Sort(d)
+				return slices.Compact(d)
+			}
+
+			if err := handleTranscode(t.Context(), s, r); err != nil {
+				t.Fatal(err)
+			}
+			video, rows, files := loadVideo(t, id), outboxRows(t, id), deleted()
+			if video.Status == "PROCESSING" {
+				t.Fatal("first delivery left the video PROCESSING")
+			}
+
+			if err := handleTranscode(t.Context(), s, r); err != nil {
+				t.Fatal(err)
+			}
+			if again := loadVideo(t, id); !reflect.DeepEqual(again, video) {
+				t.Errorf("video after the second delivery = %+v, want %+v", again, video)
+			}
+			if again := outboxRows(t, id); !reflect.DeepEqual(again, rows) {
+				t.Errorf("outbox after the second delivery = %v, want %v", again, rows)
+			}
+			if again := deleted(); !slices.Equal(again, files) {
+				t.Errorf("objects deleted after the second delivery = %q, want %q", again, files)
+			}
+		})
+	}
 }
 
 func TestTranscodeFailedMarksFailedAndDeletesFiles(t *testing.T) {

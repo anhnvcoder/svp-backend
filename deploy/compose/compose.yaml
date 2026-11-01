@@ -29,8 +29,9 @@
 # with `obs`, GlitchTip and the Collector only: the Next server renders every page on behalf of
 # browsers, so code run in it (the React Server Components remote code execution class,
 # CVE-2025-55182) reaches the gateway's HTTP API, the error tracker it reports to and the Collector it
-# sends telemetry to and nothing else in the stack: not the gRPC services, which take x-user-id as given (threat model IN-2), not
-# Redpanda (no authentication in compose) or the object store by their compose names. It is not internal,
+# sends telemetry to and nothing else in the stack: not the gRPC services, which check the caller's access token but not
+# which container calls them (ADR-0042), so code in web holding a session's token would call them as that user past the
+# gateway's rate limits and input checks (threat model IN-2), not Redpanda (no authentication in compose) or the object store by their compose names. It is not internal,
 # because web reaches its Redis db on the host through
 # host.docker.internal; that same name opens every port of the host's loopback to it, so code run
 # in web still reaches what is published there (Redpanda's host listener 19092 without
@@ -275,6 +276,8 @@ services:
       # Only user-service holds the signing key (threat model JWT-10).
       JWT_SIGNING_KID: ${JWT_SIGNING_KID:?run make env}
       JWT_SIGNING_KEY: ${JWT_SIGNING_KEY:?run make env}
+      # Public keys: it verifies the caller's access token the gateway forwards, like the other gRPC services.
+      JWT_VERIFY_KEYS: ${JWT_VERIFY_KEYS:?run make env}
       # Follow events go out through the outbox: the follow and its event commit together, so a
       # follow is not lost when Kafka is down.
       KAFKA_BROKERS: redpanda:9092
@@ -302,6 +305,8 @@ services:
       <<: *telemetry-app-env
       LISTEN_ADDR: ":9102"
       DATABASE_URL: postgres://svp_video_app:${SVP_VIDEO_APP_DB_PASSWORD:?run make env}@host.docker.internal:5432/svp_video?sslmode=disable
+      # Public keys only: it verifies the caller's access token the gateway forwards, it cannot sign one.
+      JWT_VERIFY_KEYS: ${JWT_VERIFY_KEYS:?run make env}
       KAFKA_BROKERS: redpanda:9092
       # Service-to-store calls use the compose name; upload URLs handed to clients use the host
       # address.
@@ -341,6 +346,8 @@ services:
       <<: *telemetry-app-env
       LISTEN_ADDR: ":9103"
       DATABASE_URL: postgres://svp_engagement_app:${SVP_ENGAGEMENT_APP_DB_PASSWORD:?run make env}@host.docker.internal:5432/svp_engagement?sslmode=disable
+      # Public keys only: it verifies the caller's access token the gateway forwards, it cannot sign one.
+      JWT_VERIFY_KEYS: ${JWT_VERIFY_KEYS:?run make env}
       # Produces to and consumes engagement.views.v1: a view only produces an event on the request,
       # and the counts are written in batches, so no request waits on a counter row.
       KAFKA_BROKERS: redpanda:9092
@@ -370,6 +377,8 @@ services:
       <<: *telemetry-app-env
       LISTEN_ADDR: ":9104"
       DATABASE_URL: postgres://svp_feed_app:${SVP_FEED_APP_DB_PASSWORD:?run make env}@host.docker.internal:5432/svp_feed?sslmode=disable
+      # Public keys only: it verifies the caller's access token the gateway forwards, it cannot sign one.
+      JWT_VERIFY_KEYS: ${JWT_VERIFY_KEYS:?run make env}
       # Consumes user.follows.v1 and video.lifecycle.v1: the timeline is built on write, so a follow
       # backfills the followee's last 30 days and a ready video fans out to its followers.
       KAFKA_BROKERS: redpanda:9092

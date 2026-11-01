@@ -557,7 +557,11 @@ giai đoạn 6b (runner CI 16 GB hay VM thuê theo giờ, không dịch vụ AWS
   không leo sang plugin ([`threat-model.md`](threat-model.md) BAK-1).
 - **Khởi động và probe:** service có Postgres thử lại kết nối lúc khởi động 30 s chỉ với lỗi mạng, nên pod mới trên k3d (bị từ
   chối một lần ngay sau khi lên) không còn restart; probe của chart nới thời hạn (liveness 5 s, readiness 2 s) để node bận CPU
-  không làm kubelet giết pod còn sống.
+  không làm kubelet giết pod còn sống. Readiness của bốn service gRPC hỏi tên health `readiness`: một vòng nền ping pool
+  Postgres của service mỗi 2 s (timeout 1 s), 3 lần lỗi liên tiếp thì NOT_SERVING, một lần qua là SERVING, nên pod không tới
+  được database rời Service và pod mới chỉ vào Service khi database trả lời. Liveness, startup, healthcheck của compose và
+  `/readyz` của gateway giữ health tổng `""`, không phụ thuộc database: restart không chữa được database chết
+  ([ADR-0044](adr/0044-grpc-readiness.md)).
 - **Vận hành:** `docs/runbooks/` có một runbook cho mỗi cảnh báo page (`runbook_url` trên rule, link đi kèm thông báo) và
   runbook cho các sự cố đã gặp; `docs/postmortems/` theo mẫu không đổ lỗi. Game day trên compose (`make gameday`: tắt
   engagement-service dưới tải k6, người trực chỉ theo runbook) lần đầu ngày 2026-10-24: cảnh báo sau 75 s, hồi phục sau 184 s,
@@ -835,7 +839,7 @@ sequenceDiagram
     participant MW as media-worker
     participant FS as feed-service
 
-    C->>GW: POST /videos (title, size, content_type)
+    C->>GW: POST /videos (title, size, content_type), Idempotency-Key tuỳ chọn
     GW->>VS: InitUpload
     VS->>VS: INSERT video, trạng thái UPLOADING
     VS-->>C: video_id, URL và field của presigned POST (hết hạn 15 phút)
@@ -875,12 +879,12 @@ sequenceDiagram
 
     C->>GW: GET /feed/following hoặc /feed/explore?cursor=...&page_size=...
     GW->>GW: kiểm JWT, rate limit lớp read theo user_id (Redis db 10)
-    GW->>FS: GetFollowingFeed / GetExploreFeed(page_size, page_token), metadata x-user-id
+    GW->>FS: GetFollowingFeed / GetExploreFeed(page_size, page_token), metadata authorization (token đã kiểm)
     FS->>FS: trang đầu feed khám phá: đọc cache Redis db 14, trống thì singleflight đọc Postgres rồi ghi cache 5 s
     FS-->>GW: 10 video kèm metadata và object key, next_page_token
     GW->>GW: ghép URL HLS từ object key
     par song song, mỗi lời gọi timeout 100 ms, không retry
-        GW->>ES: GetStats(video_ids), metadata x-user-id
+        GW->>ES: GetStats(video_ids), metadata authorization (token đã kiểm)
         ES-->>GW: lượt xem, số like, đã like chưa
     and
         GW->>US: GetProfiles(author_ids đã khử trùng)
@@ -927,15 +931,21 @@ cộng dồn theo `video_id` trong bộ nhớ, rồi ghi cả lô bằng **một
 `video_id` sắp tăng dần) vào `view_counts`. Chống đếm trùng bằng offset lưu trong Postgres: bảng `consumer_offsets` giữ
 `next_offset` của từng partition, khoá `FOR UPDATE` và cập nhật trong **cùng transaction** với bộ đếm, nên lô giao lại
 chỉ cộng phần chưa cộng; commit offset Kafka chỉ còn để đỡ đọc lại. Record hỏng vào `engagement.views.v1.dlq`; lỗi tạm
-thời thì thử lại cả lô không giới hạn. Redpanda vừa là hàng đệm chống dồn tải, vừa giữ lượt xem nếu consumer chết giữa
+thời thì thử lại cả lô với backoff trong ngân sách 5 phút tính từ lần thử đầu; hết ngân sách thì chép mọi record của lô sang
+`engagement.views.v1.dlq` (`dlq-reason=retries-exhausted`), commit, rồi ghi một dòng log ERROR có khoảng offset của từng
+partition. Phát lại từ DLQ đếm đúng một lần theo [runbook](runbooks/kafka-dlq-records.md); consumer của feed-service vẫn thử
+lại không giới hạn để giữ thứ tự follow, unfollow ([ADR-0045](adr/0045-bounded-batch-retry.md)). Redpanda vừa là hàng đệm chống dồn tải, vừa giữ lượt xem nếu consumer chết giữa
 chừng. Like đi đường khác: bảng `likes` và bộ đếm `like_counts` đổi trong cùng transaction, nên like của chính mình thấy
 ngay. Chi tiết và lý do ở [ADR-0009](adr/0009-engagement-feed-stage2b.md) mục 2–5.
 
 ### 7.4 Xác thực
 
 user-service cấp JWT ký bằng khoá riêng; gateway kiểm chữ ký bằng khoá công khai, không gọi user-service mỗi request.
-Gateway chuyển `user_id` xuống các service qua gRPC metadata. Bên trong cluster tạm thời tin nhau qua mạng; mTLS giữa
-các service để giai đoạn 6. Threat model đã xét lại điểm này ở
+Gateway chuyển tiếp chính access token đã kiểm xuống service trong gRPC metadata `authorization: Bearer <token>`; mỗi
+service gRPC kiểm lại bằng cùng khoá công khai (`JWT_VERIFY_KEYS`) và lấy người gọi từ `sub`, nên gọi thẳng được cổng gRPC
+vẫn không giả được người dùng nếu không có khoá ký hay token của chính người đó ([ADR-0042](adr/0042-caller-identity-grpc.md)).
+Kênh gateway → service vẫn là gRPC plaintext và service không xác thực service gọi: NetworkPolicy chặn đường đi, mTLS bằng
+Istio ambient dựng ở EKS, không dựng ở k3d. Threat model đã xét lại điểm này ở
 [mục 4.5 của `threat-model.md`](threat-model.md#45-mức-tin-cậy-giữa-các-service).
 
 Từ giai đoạn 5b ([ADR-0016](adr/0016-web-client.md) §2–5), login trả thêm **refresh token** mờ (32 byte ngẫu nhiên,
@@ -994,7 +1004,8 @@ proto/svp/
   Sinh code Go theo [ADR-0007](adr/0007-go-monorepo-toolchain-and-stage1-scope.md): managed mode trong `buf.gen.yaml` (không
   ghi tay `go_package`), code ra ở `gen/go`, và code sinh ra được commit (`make generate`).
 - ID là UUIDv7, trong proto là `string` 36 ký tự chữ thường, trong Postgres là `uuid`, sinh ở code Go.
-- Người gọi không nằm trong request: gateway đặt `user_id` đã xác thực vào gRPC metadata `x-user-id` ([§7.4](#74-xác-thực)).
+- Người gọi không nằm trong request: gateway chuyển tiếp access token đã kiểm trong gRPC metadata `authorization`, service
+  kiểm lại rồi lấy người gọi từ `sub` ([§7.4](#74-xác-thực)).
 - API và event mang object key (`uploads/<video_id>`, `media/<video_id>/<version>/master.m3u8`; video `READY` trước khi có
   version giữ key `media/<video_id>/master.m3u8`), không mang URL; mọi object HLS và thumbnail mang
   `Cache-Control: max-age=31536000, immutable` ([ADR-0029](adr/0029-immutable-media-versions.md)); gateway ghép URL
@@ -1033,7 +1044,7 @@ Field theo Google AIP-158: request có `page_size`, `page_token`; response có `
 - Token dài quá **64 ký tự** bị từ chối trước khi giải mã. Token hỏng (không phải base64url, giải mã lỗi, thiếu field,
   sai kiểu wire, `video_id` không đủ 16 byte) thì `INVALID_ARGUMENT`, reason `INVALID_PAGE_TOKEN`; field lạ bỏ qua.
   `page_size` âm thì reason `INVALID_PAGE_SIZE`.
-- **Không ký HMAC.** Token chỉ lọc trong timeline của chính người gọi (`user_id` lấy từ metadata, không từ token), hoặc
+- **Không ký HMAC.** Token chỉ lọc trong timeline của chính người gọi (`user_id` lấy từ access token đã kiểm, không từ page token), hoặc
   trong feed khám phá vốn công khai; sửa token chỉ đổi vị trí đọc trong dữ liệu mình vốn được xem. Lựa chọn khác: ký HMAC
   để phát hiện sửa (thêm quản lý khoá, không chặn được gì thêm); dùng `OFFSET` (bị lệch trang khi có video mới, ADR-0005).
 - **Danh sách video theo tác giả** (`ListAuthorVideos` của video-service, từ 5b,
@@ -1095,6 +1106,8 @@ Thân lỗi theo RFC 9457 (`Content-Type: application/problem+json`):
   `detail` `"too many requests"`, header `Retry-After` tính bằng giây (làm tròn lên, tối thiểu 1). Khác với 429 do service
   trả qua `RESOURCE_EXHAUSTED` (`TOO_MANY_UPLOADS` của `POST /videos`, `SERVER_BUSY` của login): những lỗi đó không có
   `Retry-After`.
+- Hai reason có mã HTTP riêng thay mã theo bảng: `IDEMPOTENCY_KEY_MISMATCH` (`INVALID_ARGUMENT`) là 422, `VIDEO_NOT_UPLOADING`
+  (`FAILED_PRECONDITION`) là 409 ([ADR-0043](adr/0043-idempotency-key.md)).
 - Circuit breaker của service đích đang mở ([§7.2](#72-đọc-feed)): gateway không gọi mạng mà trả ngay `UNAVAILABLE`, tức
   503 với `code` `UNAVAILABLE`, `detail` rỗng, như mọi 5xx. Service báo phụ thuộc của nó chết (`UNAVAILABLE` kèm reason
   `DEPENDENCY_UNAVAILABLE`, ví dụ `RecordView` khi Redpanda chết, `CompleteUpload` khi object store chết) cũng là 503 không lộ
@@ -1114,7 +1127,7 @@ phát hành có chữ ký trên GHCR ([§5.6](#56-ba-repo-và-hợp-đồng-api-
 | --- | --- | --- |
 | `POST /auth/register`, `POST /auth/login` | không | đăng ký; đổi email và mật khẩu lấy access token |
 | `PUT` / `DELETE /me/following/{user_id}` | Bearer JWT | follow, unfollow |
-| `POST /videos` | Bearer JWT | tạo video `UPLOADING`, trả form presigned POST: `upload_url`, `form_fields`, `expires_at` (15 phút) |
+| `POST /videos` | Bearer JWT | tạo video `UPLOADING`, trả form presigned POST: `upload_url`, `form_fields`, `expires_at` (15 phút); header `Idempotency-Key` tuỳ chọn (một UUID chữ thường trong Structured Field String, sai dạng thì 400 `INVALID_IDEMPOTENCY_KEY`): gọi lặp cùng khoá, cùng `title`, `size_bytes`, `content_type` trả cùng `video_id` với form ký mới, khác thân thì 422 `IDEMPOTENCY_KEY_MISMATCH`, video đã rời `UPLOADING` thì 409 `VIDEO_NOT_UPLOADING`; khoá có phạm vi tác giả, lưu cùng transaction với video, sống bằng đời của video ([ADR-0043](adr/0043-idempotency-key.md)) |
 | `POST /videos/{video_id}/complete` | Bearer JWT | báo upload xong: video-service `HEAD` object, chuyển `PROCESSING`, trả 202; gọi lại khi đã `PROCESSING` hay `READY` thì trả video hiện tại |
 | `GET /videos/{video_id}` | Bearer JWT | đọc một video; có `playlist_url`, `thumbnail_url` khi video đã `READY` |
 | `GET /feed/following` | Bearer JWT | feed đang theo dõi (30 ngày); query `cursor`, `page_size`; trả `items` (kèm `stats` nếu engagement-service trả kịp 100 ms) và `next_cursor` |

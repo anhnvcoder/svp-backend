@@ -677,6 +677,14 @@ func TestViewsConsumerConfigBoundsEachAttempt(t *testing.T) {
 	}
 }
 
+// A failing batch of views is retried for 5 minutes before it goes to the dead-letter topic.
+func TestViewsConsumerConfigBoundsRetries(t *testing.T) {
+	s, _ := newServerWithoutDB(nil)
+	if cfg := s.ViewsConsumerConfig("127.0.0.1:19092"); cfg.RetryBudget != 5*time.Minute {
+		t.Errorf("RetryBudget = %s, want 5m", cfg.RetryBudget)
+	}
+}
+
 // A batch attempt waiting on the offset row that another transaction locks ends at the
 // attempt's deadline, its transaction rolled back: nothing is counted, and the batch counts once
 // when retried after the lock is free.

@@ -19,7 +19,8 @@
   phần 4 thay vì giai đoạn 7; đường dev giữ `secrets.sh`; store AWS ở giai đoạn 7) chỉnh bởi [0026](0026-secrets-gitops.md); §12
   (Argo CD đọc repo cấu hình `svp-gitops` cho root và values, repo code ở commit ghim của `envs/<env>/charts.yaml` cho chart của
   repo; `sourceRepos` thêm `svp-gitops`; version và values của Argo CD ở `argocd/bootstrap.json`, `base/argo-cd.yaml` của `svp-gitops`;
-  đường dev đọc `components.json`, `base/` từ bản clone) chỉnh bởi [0025](0025-gitops-config-repo.md), từ 2026-10-30
+  đường dev đọc `components.json`, `base/` từ bản clone) chỉnh bởi [0025](0025-gitops-config-repo.md), từ 2026-10-30; §10 (readiness
+  gRPC: tên health `readiness` theo Postgres của service, liveness và startup giữ health tổng) chỉnh bởi [0044](0044-grpc-readiness.md)
 - Ngày: 2026-10-18
 
 ## Bối cảnh
