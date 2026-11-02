@@ -34,6 +34,7 @@ import (
 	"google.golang.org/grpc"
 
 	videov1 "github.com/anhnvcoder/svp-backend/gen/go/svp/video/v1"
+	"github.com/anhnvcoder/svp-backend/internal/authtoken"
 	"github.com/anhnvcoder/svp-backend/internal/dbmigrate"
 	"github.com/anhnvcoder/svp-backend/internal/envcfg"
 	"github.com/anhnvcoder/svp-backend/internal/grpcserver"
@@ -119,6 +120,16 @@ func serve(ctx context.Context, logger *slog.Logger) (err error) {
 		return err
 	}
 
+	verifyKeys, err := envcfg.Required("JWT_VERIFY_KEYS")
+	if err != nil {
+		return err
+	}
+	keys, err := authtoken.ParseVerifyKeys(verifyKeys)
+	if err != nil {
+		return fmt.Errorf("JWT_VERIFY_KEYS: %w", err)
+	}
+	verifier := authtoken.NewVerifier(keys)
+
 	// Providers first, so the clients below report to them.
 	shutdownTelemetry, err := telemetry.Setup(ctx, serviceName)
 	if err != nil {
@@ -198,8 +209,8 @@ func serve(ctx context.Context, logger *slog.Logger) (err error) {
 	}()
 
 	register := func(s *grpc.Server) { videov1.RegisterVideoServiceServer(s, srv) }
-	err = grpcserver.Run(ctx, envcfg.String("LISTEN_ADDR", defaultListenAddr), logger, register,
-		server.CallerInterceptor())
+	err = grpcserver.Run(ctx, envcfg.String("LISTEN_ADDR", defaultListenAddr), logger, register, pool.Ping,
+		server.CallerInterceptor(verifier))
 	cancel()
 	<-sweepDone
 	if cerr := <-consumerErr; cerr != nil {

@@ -36,6 +36,7 @@ import (
 	"google.golang.org/grpc"
 
 	engagementv1 "github.com/anhnvcoder/svp-backend/gen/go/svp/engagement/v1"
+	"github.com/anhnvcoder/svp-backend/internal/authtoken"
 	"github.com/anhnvcoder/svp-backend/internal/dbmigrate"
 	"github.com/anhnvcoder/svp-backend/internal/envcfg"
 	"github.com/anhnvcoder/svp-backend/internal/grpcserver"
@@ -117,6 +118,16 @@ func serve(ctx context.Context, logger *slog.Logger) (err error) {
 	}
 	defer kafka.Close()
 
+	verifyKeys, err := envcfg.Required("JWT_VERIFY_KEYS")
+	if err != nil {
+		return err
+	}
+	keys, err := authtoken.ParseVerifyKeys(verifyKeys)
+	if err != nil {
+		return fmt.Errorf("JWT_VERIFY_KEYS: %w", err)
+	}
+	verifier := authtoken.NewVerifier(keys)
+
 	shutdownTelemetry, err := telemetry.Setup(ctx, serviceName)
 	if err != nil {
 		return fmt.Errorf("set up telemetry: %w", err)
@@ -169,8 +180,8 @@ func serve(ctx context.Context, logger *slog.Logger) (err error) {
 	}()
 
 	register := func(s *grpc.Server) { engagementv1.RegisterEngagementServiceServer(s, srv) }
-	err = grpcserver.Run(ctx, envcfg.String("LISTEN_ADDR", defaultListenAddr), logger, register,
-		server.CallerInterceptor())
+	err = grpcserver.Run(ctx, envcfg.String("LISTEN_ADDR", defaultListenAddr), logger, register, writePool.Ping,
+		server.CallerInterceptor(verifier))
 	cancel()
 	if cerr := <-consumerErr; cerr != nil {
 		err = errors.Join(err, fmt.Errorf("views consumer: %w", cerr))

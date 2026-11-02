@@ -400,14 +400,14 @@ func TestGetProfilesNeedsNoCaller(t *testing.T) {
 	if !slices.Contains(PublicMethods, userv1.UserService_GetProfiles_FullMethodName) {
 		t.Fatal("GetProfiles is not in PublicMethods")
 	}
-	// t.Context() carries no x-user-id, and a malformed one is ignored on a public RPC.
+	// t.Context() carries no token, and one with a malformed subject is ignored on a public RPC.
 	e := newEnv(t, password.NewHasher())
 	alice := e.register(t, newEmail())
 	if p := e.profile(t, alice); p.GetUserId() != alice {
 		t.Errorf("profile = %v", p)
 	}
 	if _, err := e.client.GetProfiles(asCaller(t.Context(), "garbage"), &userv1.GetProfilesRequest{UserIds: []string{alice}}); err != nil {
-		t.Errorf("GetProfiles with a malformed x-user-id: %v", err)
+		t.Errorf("GetProfiles with a malformed caller: %v", err)
 	}
 }
 

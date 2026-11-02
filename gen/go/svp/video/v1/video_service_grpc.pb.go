@@ -33,10 +33,11 @@ const (
 // VideoService owns video metadata and the video lifecycle
 // (UPLOADING -> PROCESSING -> READY or FAILED), and drives the upload saga.
 //
-// Caller identity: the gateway passes the authenticated user id in the gRPC
-// metadata key `x-user-id`; requests never carry the caller's own id. Every
-// RPC but GetPublicVideo requires it and returns UNAUTHENTICATED when it is
-// missing or not a valid UUID.
+// Caller identity: the gateway forwards the caller's access token in the gRPC
+// metadata key `authorization` as `Bearer <token>`; the service verifies it
+// and takes the caller from its `sub`. Requests never carry the caller's own
+// id. Every RPC but GetPublicVideo requires it and returns UNAUTHENTICATED
+// when it is missing or invalid.
 //
 // All ids are UUIDv7 strings in canonical lowercase form (36 chars). Media
 // locations are object keys (for example
@@ -47,11 +48,30 @@ type VideoServiceClient interface {
 	// InitUpload creates a video in UPLOADING owned by the caller and returns a
 	// presigned POST for the object key `uploads/<video_id>`. The policy limits
 	// the object to size_bytes (at most 500 MB) and content_type, and expires
-	// after 15 minutes. Not idempotent: each call creates a new video.
+	// after 15 minutes.
+	//
+	// Without request_id each call creates a new video. With request_id
+	// (Google AIP-155) a repeated call is answered from the video the first
+	// call created: when the caller already has a video with this request_id
+	// and the same title, size_bytes and content_type (compared after the same
+	// normalization as on creation) still UPLOADING, the call returns that
+	// video_id with a newly signed form and creates nothing. The new form
+	// expires with the first one, 15 minutes after the video was created.
+	// Repeated calls do not count against the open upload limit. Concurrent
+	// calls with one request_id create one video and all return it. A
+	// request_id is bound to its video for as long as the video exists: it
+	// does not expire.
 	//
 	// Errors:
-	// - INVALID_ARGUMENT: empty title, size_bytes not in (0, 500 MB], or
-	//   content_type not a `video/*` type.
+	// - INVALID_ARGUMENT: empty title, size_bytes not in (0, 500 MB],
+	//   content_type not a `video/*` type, request_id not a canonical lowercase
+	//   UUID (`INVALID_REQUEST_ID`), or request_id already used by the caller
+	//   with another title, size_bytes or content_type
+	//   (`IDEMPOTENCY_KEY_MISMATCH`).
+	// - FAILED_PRECONDITION: the first call of request_id cannot be answered
+	//   again: its video has left UPLOADING, or its upload window has ended
+	//   (the first form has expired or has less than a minute left)
+	//   (`VIDEO_NOT_UPLOADING`); a new upload needs a new request_id.
 	// - RESOURCE_EXHAUSTED: the caller already has 3 videos in UPLOADING
 	//   created within the last 15 minutes, while their upload forms may still
 	//   be valid (`TOO_MANY_UPLOADS`).
@@ -81,7 +101,7 @@ type VideoServiceClient interface {
 	//   exists.
 	GetVideo(ctx context.Context, in *GetVideoRequest, opts ...grpc.CallOption) (*GetVideoResponse, error)
 	// GetPublicVideo returns a READY video to anyone, for the public share
-	// page. Does not require caller, and ignores `x-user-id`: the answer is the
+	// page. Does not require caller, and ignores `authorization`: the answer is the
 	// same for everyone.
 	//
 	// Errors:
@@ -175,10 +195,11 @@ func (c *videoServiceClient) ListAuthorVideos(ctx context.Context, in *ListAutho
 // VideoService owns video metadata and the video lifecycle
 // (UPLOADING -> PROCESSING -> READY or FAILED), and drives the upload saga.
 //
-// Caller identity: the gateway passes the authenticated user id in the gRPC
-// metadata key `x-user-id`; requests never carry the caller's own id. Every
-// RPC but GetPublicVideo requires it and returns UNAUTHENTICATED when it is
-// missing or not a valid UUID.
+// Caller identity: the gateway forwards the caller's access token in the gRPC
+// metadata key `authorization` as `Bearer <token>`; the service verifies it
+// and takes the caller from its `sub`. Requests never carry the caller's own
+// id. Every RPC but GetPublicVideo requires it and returns UNAUTHENTICATED
+// when it is missing or invalid.
 //
 // All ids are UUIDv7 strings in canonical lowercase form (36 chars). Media
 // locations are object keys (for example
@@ -189,11 +210,30 @@ type VideoServiceServer interface {
 	// InitUpload creates a video in UPLOADING owned by the caller and returns a
 	// presigned POST for the object key `uploads/<video_id>`. The policy limits
 	// the object to size_bytes (at most 500 MB) and content_type, and expires
-	// after 15 minutes. Not idempotent: each call creates a new video.
+	// after 15 minutes.
+	//
+	// Without request_id each call creates a new video. With request_id
+	// (Google AIP-155) a repeated call is answered from the video the first
+	// call created: when the caller already has a video with this request_id
+	// and the same title, size_bytes and content_type (compared after the same
+	// normalization as on creation) still UPLOADING, the call returns that
+	// video_id with a newly signed form and creates nothing. The new form
+	// expires with the first one, 15 minutes after the video was created.
+	// Repeated calls do not count against the open upload limit. Concurrent
+	// calls with one request_id create one video and all return it. A
+	// request_id is bound to its video for as long as the video exists: it
+	// does not expire.
 	//
 	// Errors:
-	// - INVALID_ARGUMENT: empty title, size_bytes not in (0, 500 MB], or
-	//   content_type not a `video/*` type.
+	// - INVALID_ARGUMENT: empty title, size_bytes not in (0, 500 MB],
+	//   content_type not a `video/*` type, request_id not a canonical lowercase
+	//   UUID (`INVALID_REQUEST_ID`), or request_id already used by the caller
+	//   with another title, size_bytes or content_type
+	//   (`IDEMPOTENCY_KEY_MISMATCH`).
+	// - FAILED_PRECONDITION: the first call of request_id cannot be answered
+	//   again: its video has left UPLOADING, or its upload window has ended
+	//   (the first form has expired or has less than a minute left)
+	//   (`VIDEO_NOT_UPLOADING`); a new upload needs a new request_id.
 	// - RESOURCE_EXHAUSTED: the caller already has 3 videos in UPLOADING
 	//   created within the last 15 minutes, while their upload forms may still
 	//   be valid (`TOO_MANY_UPLOADS`).
@@ -223,7 +263,7 @@ type VideoServiceServer interface {
 	//   exists.
 	GetVideo(context.Context, *GetVideoRequest) (*GetVideoResponse, error)
 	// GetPublicVideo returns a READY video to anyone, for the public share
-	// page. Does not require caller, and ignores `x-user-id`: the answer is the
+	// page. Does not require caller, and ignores `authorization`: the answer is the
 	// same for everyone.
 	//
 	// Errors:

@@ -102,7 +102,8 @@ func TestNewServerRejectsDefaultHandlers(t *testing.T) {
 
 func TestOutgoingContextReplacesExistingMetadata(t *testing.T) {
 	ctx := metadata.NewOutgoingContext(context.Background(), metadata.Pairs(
-		callerid.MetadataKey, "01928c6e-7b3a-7cde-8f01-000000000000",
+		callerid.AuthorizationKey, "Bearer stale.outgoing.token",
+		"x-user-id", "01928c6e-7b3a-7cde-8f01-000000000000",
 		"x-foo", "bar",
 		"traceparent", clientTraceparent,
 	))
@@ -115,12 +116,12 @@ func TestOutgoingContextReplacesExistingMetadata(t *testing.T) {
 		t.Errorf("unauthenticated metadata = %v, want none", md)
 	}
 
-	const userID = "01928c6e-7b3a-7cde-8f01-23456789abcd"
-	md, _ = metadata.FromOutgoingContext(OutgoingContext(context.WithValue(ctx, userIDKey, userID)))
-	if got := md.Get(callerid.MetadataKey); len(got) != 1 || got[0] != userID {
-		t.Errorf("x-user-id = %v, want [%s]", got, userID)
+	const token = "verified.access.token"
+	md, _ = metadata.FromOutgoingContext(OutgoingContext(context.WithValue(ctx, tokenKey, token)))
+	if got := md.Get(callerid.AuthorizationKey); len(got) != 1 || got[0] != "Bearer "+token {
+		t.Errorf("authorization = %v, want [Bearer %s]", got, token)
 	}
 	if len(md) != 1 {
-		t.Errorf("authenticated metadata = %v, want only x-user-id", md)
+		t.Errorf("authenticated metadata = %v, want only authorization", md)
 	}
 }

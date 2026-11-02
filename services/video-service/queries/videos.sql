@@ -1,6 +1,13 @@
 -- name: CreateVideo :exec
-INSERT INTO videos (id, author_id, title, status, size_bytes, content_type)
-VALUES ($1, $2, $3, 'UPLOADING', $4, $5);
+-- request_id is NULL for a call without an idempotency key.
+INSERT INTO videos (id, author_id, title, status, size_bytes, content_type, request_id)
+VALUES ($1, $2, $3, 'UPLOADING', $4, $5, sqlc.narg(request_id));
+
+-- name: GetVideoByRequestID :one
+-- The video an earlier InitUpload of the author created with this idempotency key. Runs on
+-- videos_author_request_idx.
+SELECT * FROM videos
+WHERE author_id = $1 AND request_id = $2;
 
 -- name: GetVideo :one
 SELECT * FROM videos

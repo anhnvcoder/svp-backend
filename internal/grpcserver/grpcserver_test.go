@@ -4,16 +4,19 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"log/slog"
 	"net"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials/insecure"
+	healthpb "google.golang.org/grpc/health/grpc_health_v1"
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
 	"google.golang.org/grpc/test/bufconn"
@@ -144,8 +147,22 @@ type harness struct {
 	svc      *testService
 }
 
+// alwaysReady is a readiness check that always passes, for tests about anything else.
+var alwaysReady = readiness{
+	check:    func(context.Context) error { return nil },
+	interval: time.Hour,
+	timeout:  time.Second,
+	failures: readinessFailures,
+}
+
 // start serves on a TCP port of 127.0.0.1, which Healthcheck needs.
 func start(t *testing.T, interceptors ...grpc.UnaryServerInterceptor) *harness {
+	t.Helper()
+	return startReady(t, alwaysReady, interceptors...)
+}
+
+// startReady is start with the given readiness check.
+func startReady(t *testing.T, ready readiness, interceptors ...grpc.UnaryServerInterceptor) *harness {
 	t.Helper()
 	var lc net.ListenConfig
 	lis, err := lc.Listen(t.Context(), "tcp", "127.0.0.1:0")
@@ -156,7 +173,7 @@ func start(t *testing.T, interceptors ...grpc.UnaryServerInterceptor) *harness {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return startOn(t, lis, conn, interceptors...)
+	return startOn(t, lis, conn, ready, interceptors...)
 }
 
 // startBufconn serves on an in-memory listener.
@@ -169,10 +186,10 @@ func startBufconn(t *testing.T, interceptors ...grpc.UnaryServerInterceptor) *ha
 	if err != nil {
 		t.Fatal(err)
 	}
-	return startOn(t, lis, conn, interceptors...)
+	return startOn(t, lis, conn, alwaysReady, interceptors...)
 }
 
-func startOn(t *testing.T, lis net.Listener, conn *grpc.ClientConn, interceptors ...grpc.UnaryServerInterceptor) *harness {
+func startOn(t *testing.T, lis net.Listener, conn *grpc.ClientConn, ready readiness, interceptors ...grpc.UnaryServerInterceptor) *harness {
 	t.Helper()
 	logs := &lockedBuffer{}
 	logger := slog.New(logx.NewHandler(slog.NewJSONHandler(logs, nil)))
@@ -181,7 +198,7 @@ func startOn(t *testing.T, lis net.Listener, conn *grpc.ClientConn, interceptors
 	ctx, cancel := context.WithCancel(context.Background())
 	h := &harness{addr: lis.Addr().String(), logs: logs, conn: conn, cancel: cancel, stopped: make(chan struct{}), svc: svc}
 	go func() {
-		h.serveErr = serve(ctx, lis, logger, svc.register, interceptors...)
+		h.serveErr = serve(ctx, lis, logger, svc.register, ready, interceptors...)
 		close(h.stopped)
 	}()
 	t.Cleanup(func() {
@@ -469,7 +486,7 @@ func TestRunPortInUse(t *testing.T) {
 	defer func() { _ = lis.Close() }()
 
 	logger := slog.New(slog.DiscardHandler)
-	err = Run(t.Context(), lis.Addr().String(), logger, func(*grpc.Server) {})
+	err = Run(t.Context(), lis.Addr().String(), logger, func(*grpc.Server) {}, alwaysReady.check)
 	if err == nil {
 		t.Fatal("Run() = nil on a busy port, want an error")
 	}
@@ -478,7 +495,9 @@ func TestRunPortInUse(t *testing.T) {
 func TestRunReturnsNilOnCancel(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
 	done := make(chan error, 1)
-	go func() { done <- Run(ctx, "127.0.0.1:0", slog.New(slog.DiscardHandler), func(*grpc.Server) {}) }()
+	go func() {
+		done <- Run(ctx, "127.0.0.1:0", slog.New(slog.DiscardHandler), func(*grpc.Server) {}, alwaysReady.check)
+	}()
 
 	time.Sleep(100 * time.Millisecond)
 	cancel()
@@ -490,4 +509,160 @@ func TestRunReturnsNilOnCancel(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("Run() did not return after ctx cancel")
 	}
+}
+
+// scriptedCheck is a readiness check the test answers one call at a time.
+type scriptedCheck struct{ calls chan chan error }
+
+func (c *scriptedCheck) check(ctx context.Context) error {
+	reply := make(chan error, 1)
+	select {
+	case c.calls <- reply:
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+	select {
+	case err := <-reply:
+		return err
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+// next waits for the next call of the check and returns the channel that answers it. The loop
+// runs one check at a time, so it has applied the result of every earlier call by then.
+func (c *scriptedCheck) next(t *testing.T) chan<- error {
+	t.Helper()
+	select {
+	case reply := <-c.calls:
+		return reply
+	case <-time.After(5 * time.Second):
+		t.Fatal("readiness check was not called")
+		return nil
+	}
+}
+
+func healthStatus(t *testing.T, h *harness, service string) healthpb.HealthCheckResponse_ServingStatus {
+	t.Helper()
+	resp, err := healthpb.NewHealthClient(h.conn).Check(timeout(t), &healthpb.HealthCheckRequest{Service: service})
+	if err != nil {
+		t.Fatalf("health check of %q = %v, want a status", service, err)
+	}
+	return resp.GetStatus()
+}
+
+// watchUntil reads the health stream until it reports want.
+func watchUntil(t *testing.T, stream healthpb.Health_WatchClient, want healthpb.HealthCheckResponse_ServingStatus) {
+	t.Helper()
+	for {
+		resp, err := stream.Recv()
+		if err != nil {
+			t.Fatalf("health watch ended before %v: %v", want, err)
+		}
+		if resp.GetStatus() == want {
+			return
+		}
+	}
+}
+
+func TestReadinessFollowsCheck(t *testing.T) {
+	const (
+		serving    = healthpb.HealthCheckResponse_SERVING
+		notServing = healthpb.HealthCheckResponse_NOT_SERVING
+	)
+	c := &scriptedCheck{calls: make(chan chan error)}
+	h := startReady(t, readiness{check: c.check, interval: time.Millisecond, timeout: time.Minute, failures: 3})
+	assertStatus := func(step int, want healthpb.HealthCheckResponse_ServingStatus) {
+		t.Helper()
+		if got := healthStatus(t, h, readinessService); got != want {
+			t.Errorf("step %d: readiness = %v, want %v", step, got, want)
+		}
+		if got := healthStatus(t, h, ""); got != serving {
+			t.Errorf("step %d: overall health = %v, want SERVING whatever the check returns", step, got)
+		}
+	}
+
+	reply := c.next(t)
+	assertStatus(0, notServing)
+	down := errors.New("database down")
+	steps := []struct {
+		err  error
+		want healthpb.HealthCheckResponse_ServingStatus
+	}{
+		{nil, serving},
+		// Only failures in a row count.
+		{down, serving}, {down, serving}, {nil, serving},
+		{down, serving}, {down, serving}, {down, notServing},
+		{down, notServing},
+		{nil, serving},
+	}
+	for i, st := range steps {
+		reply <- st.err
+		reply = c.next(t)
+		assertStatus(i+1, st.want)
+	}
+
+	if recs := h.logs.records(t, "grpc readiness serving"); len(recs) != 2 || recs[0]["level"] != "INFO" {
+		t.Errorf("serving log lines = %v, want two at INFO, one per change", recs)
+	}
+	recs := h.logs.records(t, "grpc readiness not serving")
+	if len(recs) != 1 || recs[0]["level"] != "WARN" || recs[0]["error"] != down.Error() || recs[0]["failed_checks"] != float64(3) {
+		t.Errorf("not serving log lines = %v, want one at WARN with the error after 3 failed checks", recs)
+	}
+}
+
+func TestReadinessCheckTimesOut(t *testing.T) {
+	var calls, timedOut atomic.Int32
+	hang := func(ctx context.Context) error {
+		if calls.Add(1) == 1 {
+			return nil
+		}
+		<-ctx.Done()
+		if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+			timedOut.Add(1)
+		}
+		return ctx.Err()
+	}
+	h := startReady(t, readiness{check: hang, interval: time.Millisecond, timeout: 20 * time.Millisecond, failures: 3})
+
+	stream, err := healthpb.NewHealthClient(h.conn).Watch(timeout(t), &healthpb.HealthCheckRequest{Service: readinessService})
+	if err != nil {
+		t.Fatal(err)
+	}
+	watchUntil(t, stream, healthpb.HealthCheckResponse_SERVING)
+	watchUntil(t, stream, healthpb.HealthCheckResponse_NOT_SERVING)
+	if n := timedOut.Load(); n < 3 {
+		t.Errorf("%d checks ended by their timeout, want at least 3", n)
+	}
+	if got := healthStatus(t, h, ""); got != healthpb.HealthCheckResponse_SERVING {
+		t.Errorf("overall health = %v, want SERVING", got)
+	}
+}
+
+func TestShutdownSetsHealthNotServing(t *testing.T) {
+	h := start(t)
+	// Watch streams opened before shutdown see the change: a new RPC is refused once the
+	// graceful stop has begun.
+	watchCtx, stopWatch := context.WithCancel(timeout(t))
+	defer stopWatch()
+	streams := map[string]healthpb.Health_WatchClient{}
+	for _, name := range []string{"", readinessService} {
+		stream, err := healthpb.NewHealthClient(h.conn).Watch(watchCtx, &healthpb.HealthCheckRequest{Service: name})
+		if err != nil {
+			t.Fatal(err)
+		}
+		watchUntil(t, stream, healthpb.HealthCheckResponse_SERVING)
+		streams[name] = stream
+	}
+
+	h.cancel()
+	for name, stream := range streams {
+		resp, err := stream.Recv()
+		if err != nil || resp.GetStatus() != healthpb.HealthCheckResponse_NOT_SERVING {
+			t.Errorf("health of %q after shutdown = %v, %v, want NOT_SERVING", name, resp.GetStatus(), err)
+		}
+	}
+	// The open streams hold the graceful stop; ending them lets the server stop.
+	stopWatch()
+	h.stop(t)
 }

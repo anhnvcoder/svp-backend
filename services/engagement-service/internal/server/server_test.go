@@ -21,6 +21,7 @@ import (
 
 	engagementv1 "github.com/anhnvcoder/svp-backend/gen/go/svp/engagement/v1"
 	"github.com/anhnvcoder/svp-backend/internal/callerid"
+	"github.com/anhnvcoder/svp-backend/internal/callerid/calleridtest"
 	"github.com/anhnvcoder/svp-backend/internal/grpcerr"
 	"github.com/anhnvcoder/svp-backend/internal/ids"
 	"github.com/anhnvcoder/svp-backend/internal/logx"
@@ -119,13 +120,18 @@ func newServerWithoutDB(producer *kgo.Client) (*Server, *logBuffer) {
 	return New(nil, nil, producer, logger), logs
 }
 
-// call runs handler the way the gRPC server does: through the callerid interceptor, with caller
-// as x-user-id metadata (none when caller is "").
+// call runs handler the way the gRPC server does: through the callerid interceptor, with an
+// access token for caller in the authorization metadata (none when caller is "").
 func call[Req, Resp any](ctx context.Context, caller, method string, req Req, handler func(context.Context, Req) (Resp, error)) (Resp, error) {
 	if caller != "" {
-		ctx = metadata.NewIncomingContext(ctx, metadata.Pairs(callerid.MetadataKey, caller))
+		ctx = calleridtest.IncomingContext(ctx, caller)
 	}
-	resp, err := CallerInterceptor()(ctx, req, &grpc.UnaryServerInfo{FullMethod: method},
+	return callWith(ctx, method, req, handler)
+}
+
+// callWith is call with the incoming metadata already in ctx.
+func callWith[Req, Resp any](ctx context.Context, method string, req Req, handler func(context.Context, Req) (Resp, error)) (Resp, error) {
+	resp, err := CallerInterceptor(calleridtest.Verifier())(ctx, req, &grpc.UnaryServerInfo{FullMethod: method},
 		func(ctx context.Context, req any) (any, error) { return handler(ctx, req.(Req)) })
 	if err != nil {
 		var zero Resp
@@ -205,6 +211,25 @@ func TestEveryRPCRequiresCaller(t *testing.T) {
 		}
 		_, err = call(t.Context(), caller, methodGetStats, &engagementv1.GetStatsRequest{VideoIds: []string{videoID}}, s.GetStats)
 		wantError(t, err, codes.Unauthenticated, callerid.ReasonUnauthenticatedCaller)
+	}
+}
+
+// A forged x-user-id is no caller: Like refuses it, and GetStats answers it as a call without
+// caller, so the forged user's likes stay unread.
+func TestForgedUserIDIsNotACaller(t *testing.T) {
+	needDB(t)
+	s, _ := newServer(nil)
+	caller, videoID := ids.New(), ids.New()
+	forged := metadata.NewIncomingContext(t.Context(), metadata.Pairs("x-user-id", caller))
+	_, err := callWith(forged, methodLike, &engagementv1.LikeRequest{VideoId: videoID}, s.Like)
+	wantError(t, err, codes.Unauthenticated, callerid.ReasonUnauthenticatedCaller)
+
+	if err := like(t, s, caller, videoID); err != nil {
+		t.Fatal(err)
+	}
+	resp, err := callWith(forged, methodGetStats, &engagementv1.GetStatsRequest{VideoIds: []string{videoID}}, s.GetStats)
+	if err != nil || len(resp.GetStats()) != 1 || resp.GetStats()[0].GetLikedByMe() {
+		t.Errorf("GetStats with a forged x-user-id = (%v, %v), want the counters without liked_by_me", resp, err)
 	}
 }
 

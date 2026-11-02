@@ -16,6 +16,8 @@ import (
 	"uuid"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
+	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/metric"
@@ -28,6 +30,7 @@ import (
 	"google.golang.org/protobuf/types/known/timestamppb"
 
 	videov1 "github.com/anhnvcoder/svp-backend/gen/go/svp/video/v1"
+	"github.com/anhnvcoder/svp-backend/internal/authtoken"
 	"github.com/anhnvcoder/svp-backend/internal/callerid"
 	"github.com/anhnvcoder/svp-backend/internal/grpcerr"
 	"github.com/anhnvcoder/svp-backend/internal/ids"
@@ -54,6 +57,11 @@ const (
 	// one account holds at most 1.5 GB of open upload forms
 	// (UP-7).
 	MaxOpenUploads = 3
+	// minRepeatFormTTL is the shortest form a repeated InitUpload signs: a shorter one is of no use
+	// for a 500 MiB file, so the call is refused instead.
+	minRepeatFormTTL = time.Minute
+	// constraintAuthorRequest is the unique index of (author_id, request_id).
+	constraintAuthorRequest = "videos_author_request_idx"
 	// TopicVideoLifecycle carries svp.video.v1.VideoEvent, keyed by video_id.
 	TopicVideoLifecycle = "video.lifecycle.v1"
 	// rollbackTimeout bounds the rollback of a transcode or sweep transaction, which runs after
@@ -86,6 +94,13 @@ const (
 	ReasonInvalidAuthorID    = "INVALID_AUTHOR_ID"
 	ReasonInvalidPageSize    = "INVALID_PAGE_SIZE"
 	ReasonInvalidPageToken   = "INVALID_PAGE_TOKEN"
+	ReasonInvalidRequestID   = "INVALID_REQUEST_ID"
+	// ReasonIdempotencyKeyMismatch goes with INVALID_ARGUMENT when the caller reuses a request_id
+	// with another title, size or content type.
+	ReasonIdempotencyKeyMismatch = "IDEMPOTENCY_KEY_MISMATCH"
+	// ReasonVideoNotUploading goes with FAILED_PRECONDITION when the first call of a request_id can
+	// no longer be answered again: its video has left UPLOADING or its upload window has ended.
+	ReasonVideoNotUploading = "VIDEO_NOT_UPLOADING"
 	// ReasonDependencyUnavailable goes with UNAVAILABLE when a dependency of the service (object
 	// storage) is down while the service itself runs: the gateway's breaker does not count it.
 	ReasonDependencyUnavailable = "DEPENDENCY_UNAVAILABLE"
@@ -141,11 +156,12 @@ func New(pool *pgxpool.Pool, storage Storage, logger *slog.Logger) *Server {
 	}
 }
 
-// CallerInterceptor requires the caller's x-user-id on every VideoService RPC but the public ones:
-// the health check, which the healthcheck subcommand and probes call without a user, and
-// GetPublicVideo, which answers the same for everyone and so ignores x-user-id.
-func CallerInterceptor() grpc.UnaryServerInterceptor {
-	return callerid.UnaryServerInterceptor(
+// CallerInterceptor requires on every VideoService RPC but the public ones a caller's access
+// token that verifier accepts. The public ones are the health check, which the healthcheck
+// subcommand and probes call without a user, and GetPublicVideo, which answers the same for
+// everyone and so ignores the token.
+func CallerInterceptor(verifier *authtoken.Verifier) grpc.UnaryServerInterceptor {
+	return callerid.UnaryServerInterceptor(verifier,
 		healthpb.Health_Check_FullMethodName,
 		videov1.VideoService_GetPublicVideo_FullMethodName,
 	)
@@ -156,6 +172,10 @@ func CallerInterceptor() grpc.UnaryServerInterceptor {
 // minutes (UP-1). The form is a credential: it is never logged (UP-2). A caller who already has
 // MaxOpenUploads videos UPLOADING created within the form's lifetime gets RESOURCE_EXHAUSTED
 // (UP-7).
+//
+// A call with a request_id the caller has used before creates nothing: it returns the video of
+// that request_id with a newly signed form when the request matches, the video is still UPLOADING
+// and the window of its first form has not ended, and an error otherwise (see repeated).
 func (s *Server) InitUpload(ctx context.Context, req *videov1.InitUploadRequest) (*videov1.InitUploadResponse, error) {
 	caller, err := callerID(ctx)
 	if err != nil {
@@ -172,6 +192,14 @@ func (s *Server) InitUpload(ctx context.Context, req *videov1.InitUploadRequest)
 	if err != nil {
 		return nil, err
 	}
+	var requestID pgtype.UUID
+	if r := req.GetRequestId(); r != "" {
+		u, err := ids.Parse(r)
+		if err != nil {
+			return nil, grpcerr.New(codes.InvalidArgument, ReasonInvalidRequestID, "request_id must be a canonical lowercase UUID")
+		}
+		requestID = pgtype.UUID{Bytes: u, Valid: true}
+	}
 
 	id := ids.New()
 	// Signed before the video is stored: signing can fetch a credential over the network, and a
@@ -182,19 +210,24 @@ func (s *Server) InitUpload(ctx context.Context, req *videov1.InitUploadRequest)
 	if err != nil {
 		return nil, s.internal(ctx, "presign upload form", err)
 	}
-	err = s.createVideo(ctx, store.CreateVideoParams{
+	p := store.CreateVideoParams{
 		ID:          uuid.MustParse(id),
 		AuthorID:    caller,
 		Title:       title,
 		SizeBytes:   req.GetSizeBytes(),
 		ContentType: contentType,
-	})
+		RequestID:   requestID,
+	}
+	earlier, err := s.createVideo(ctx, p)
 	if errors.Is(err, errTooManyUploads) {
 		s.logger.InfoContext(ctx, "too many uploads in progress")
 		return nil, grpcerr.New(codes.ResourceExhausted, ReasonTooManyUploads, "too many uploads in progress")
 	}
 	if err != nil {
 		return nil, s.internal(ctx, "insert video", err)
+	}
+	if earlier != nil {
+		return s.repeated(ctx, *earlier, p)
 	}
 	// user_id and trace_id are already in the context; video_id joins them on every later log
 	// (UP-8), only now that the video is stored, so no log names a video that does not exist.
@@ -209,23 +242,93 @@ func (s *Server) InitUpload(ctx context.Context, req *videov1.InitUploadRequest)
 	}, nil
 }
 
+// repeated answers a call whose request_id already belongs to v, the video an earlier call
+// created: with v and a form signed anew when p asks for the same title, size and content type
+// and v is still UPLOADING. The form of the first call is not stored, so it cannot be returned;
+// the new one ends with the window of the first, created_at + uploadFormTTL. Open uploads are
+// counted (UP-7) and swept by created_at, so a later end would let one account hold more than
+// MaxOpenUploads valid forms and upload to a video the sweep has already failed. With less than
+// minRepeatFormTTL left the first call can no longer be answered again.
+func (s *Server) repeated(ctx context.Context, v store.Video, p store.CreateVideoParams) (*videov1.InitUploadResponse, error) {
+	if v.Title != p.Title || v.SizeBytes != p.SizeBytes || v.ContentType != p.ContentType {
+		return nil, grpcerr.New(codes.InvalidArgument, ReasonIdempotencyKeyMismatch,
+			"request_id was already used with another title, size_bytes or content_type")
+	}
+	if v.Status != statusUploading {
+		return nil, grpcerr.New(codes.FailedPrecondition, ReasonVideoNotUploading,
+			"the video of this request_id is no longer uploading")
+	}
+	// created_at is Postgres's clock, compared with this one as in createVideoTx. The end is cut to
+	// the second, the precision of the policy's expiration, so the signed form never ends later.
+	// Capped at uploadFormTTL: a database clock ahead of this one must not sign a longer form.
+	ttl := min(time.Until(v.CreatedAt.Add(uploadFormTTL).Truncate(time.Second)), uploadFormTTL)
+	if ttl < minRepeatFormTTL {
+		return nil, grpcerr.New(codes.FailedPrecondition, ReasonVideoNotUploading,
+			"the upload window of this request_id has ended")
+	}
+	id := v.ID.String()
+	ctx = logx.With(ctx, slog.String("video_id", id))
+	form, err := s.storage.PresignPost(ctx, objstore.UploadsPrefix+id, v.SizeBytes, v.ContentType, ttl)
+	if err != nil {
+		return nil, s.internal(ctx, "presign upload form", err)
+	}
+	s.logger.InfoContext(ctx, "video creation repeated")
+	return &videov1.InitUploadResponse{
+		VideoId:    id,
+		UploadUrl:  form.URL,
+		FormFields: form.Fields,
+		ExpiresAt:  timestamppb.New(form.ExpiresAt),
+	}, nil
+}
+
 // errTooManyUploads is returned by createVideo when the author has MaxOpenUploads open uploads.
 var errTooManyUploads = errors.New("too many uploads in progress")
 
 // createVideo inserts the video unless its author already has MaxOpenUploads videos UPLOADING
 // created within uploadFormTTL. The count and the insert run in one transaction under a lock per
 // author, so concurrent calls of one author are counted one after the other.
-func (s *Server) createVideo(ctx context.Context, p store.CreateVideoParams) error {
+//
+// When p has a request_id the author has already used, createVideo inserts nothing and returns
+// the video of that request_id. It looks before counting, so a repeated call never counts against
+// the limit, and under the lock, so of concurrent calls with one request_id the later ones find
+// the video of the first. The unique index on (author_id, request_id) settles any call that
+// inserts without the lock: the insert that loses reads the winner's video back.
+func (s *Server) createVideo(ctx context.Context, p store.CreateVideoParams) (*store.Video, error) {
+	earlier, err := s.createVideoTx(ctx, p)
+	if pgErr, ok := errors.AsType[*pgconn.PgError](err); ok && pgErr.ConstraintName == constraintAuthorRequest {
+		// Read after the failed transaction has rolled back: the row that won is committed, or the
+		// insert would still be waiting for it.
+		v, err := s.queries.GetVideoByRequestID(ctx, store.GetVideoByRequestIDParams{AuthorID: p.AuthorID, RequestID: p.RequestID})
+		if err != nil {
+			return nil, err
+		}
+		return &v, nil
+	}
+	return earlier, err
+}
+
+// createVideoTx is the transaction of createVideo; it returns the video already holding
+// p.RequestID, or nil when it inserted p.
+func (s *Server) createVideoTx(ctx context.Context, p store.CreateVideoParams) (*store.Video, error) {
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	// After Commit this is a no-op; on ctx cancellation it still reaches the server.
 	defer func() { _ = tx.Rollback(context.WithoutCancel(ctx)) }()
 	q := s.queries.WithTx(tx)
 
 	if err := q.LockAuthorUploads(ctx, p.AuthorID); err != nil {
-		return err
+		return nil, err
+	}
+	if p.RequestID.Valid {
+		v, err := q.GetVideoByRequestID(ctx, store.GetVideoByRequestIDParams{AuthorID: p.AuthorID, RequestID: p.RequestID})
+		if err == nil {
+			return &v, nil
+		}
+		if !errors.Is(err, pgx.ErrNoRows) {
+			return nil, err
+		}
 	}
 	// The cutoff uses this clock, like the form's expiry: a video created before it has an
 	// expired form.
@@ -234,15 +337,15 @@ func (s *Server) createVideo(ctx context.Context, p store.CreateVideoParams) err
 		CreatedAfter: time.Now().Add(-uploadFormTTL),
 	})
 	if err != nil {
-		return err
+		return nil, err
 	}
 	if open >= MaxOpenUploads {
-		return errTooManyUploads
+		return nil, errTooManyUploads
 	}
 	if err := q.CreateVideo(ctx, p); err != nil {
-		return err
+		return nil, err
 	}
-	return tx.Commit(ctx)
+	return nil, tx.Commit(ctx)
 }
 
 // CompleteUpload checks that uploads/<video_id> holds the declared size and content type, then

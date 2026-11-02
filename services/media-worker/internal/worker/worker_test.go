@@ -662,6 +662,62 @@ func TestHandleSourceMissing(t *testing.T) {
 	e.requireCleanWorkDir(t)
 }
 
+// A video.uploaded answered with transcode.failed, delivered twice, writes nothing to the store
+// either time and publishes the same failure again; video-service settles the second one as a
+// redelivery.
+func TestHandleFailedUploadTwiceGivesSameResult(t *testing.T) {
+	t.Parallel()
+	e := newEnv(t)
+	id := ids.New()
+	r := uploaded(t, id, 1000, nil)
+
+	e.handle(t, r)
+	e.handle(t, r)
+	if uploads, downloads := e.store.snapshot(); len(uploads) != 0 || downloads != 2 {
+		t.Errorf("uploads %v, downloads %d; want none and the missing source tried twice", uploads, downloads)
+	}
+	outs := e.read(t, OutputTopic, 2)
+	f1, f2 := decodeOut(t, outs[0]).GetTranscodeFailed(), decodeOut(t, outs[1]).GetTranscodeFailed()
+	if f1.GetReason() != mediav1.TranscodeFailureReason_TRANSCODE_FAILURE_REASON_SOURCE_MISSING || f1.GetVideoId() != id {
+		t.Errorf("first result = %v, want SOURCE_MISSING for %s", f1, id)
+	}
+	if !proto.Equal(f1, f2) || string(outs[0].Key) != string(outs[1].Key) {
+		t.Errorf("redelivery gave another result:\n%s %v\n%s %v", outs[0].Key, f1, outs[1].Key, f2)
+	}
+	e.requireCleanWorkDir(t)
+}
+
+// Every other event of video.lifecycle.v1, delivered twice, is skipped both times: nothing read,
+// written or published.
+func TestHandleOtherLifecycleEventsTwiceDoNothing(t *testing.T) {
+	t.Parallel()
+	e := newEnv(t)
+	id := ids.New()
+	unknownBranch, err := proto.Marshal(&videov1.VideoEvent{Meta: &eventv1.EventMeta{EventId: ids.New()}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// An unknown oneof field: number 15 as a length-delimited field, which VideoEvent lacks.
+	unknownBranch = append(unknownBranch, 15<<3|2, 2, 'h', 'i')
+	for _, r := range []*kgo.Record{
+		record(t, id, &videov1.VideoEvent{
+			Meta:  &eventv1.EventMeta{EventId: ids.New()},
+			Event: &videov1.VideoEvent_VideoReady{VideoReady: &videov1.VideoReady{VideoId: id}},
+		}),
+		{Topic: InputTopic, Key: []byte(id), Value: unknownBranch},
+	} {
+		e.handle(t, r)
+		e.handle(t, r)
+	}
+	if uploads, downloads := e.store.snapshot(); len(uploads) != 0 || downloads != 0 {
+		t.Errorf("uploads %v, downloads %d; want none", uploads, downloads)
+	}
+	if n := e.count(t, OutputTopic); n != 0 {
+		t.Errorf("published %d results, want none", n)
+	}
+	e.requireCleanWorkDir(t)
+}
+
 func TestHandleNotAVideo(t *testing.T) {
 	t.Parallel()
 	requireFFmpeg(t)

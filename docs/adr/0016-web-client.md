@@ -8,7 +8,7 @@
   210 kB) và
   §11 (cơ chế tin `traceparent`) chỉnh bởi 0019; phần C hiện thực và đã kiểm trên máy ngày 2026-10-24 (mục "Kết quả phần C"
   của 0019), phần cần cluster GitOps và RAM lớn hơn dời giai đoạn 7 (0019 §12); §11 (CORS MinIO toàn cục, MinIO community
-  để ADR riêng) bị thay một phần bởi [0022](0022-local-object-store-minio-replacement.md) (RustFS, CORS theo bucket); từ 2026-10-31 vị trí `web/` và các target `web-*` (mã ở repo `svp-frontend`, backend giữ wrapper chạy trên stack của nó), §8 (`gen/api.d.ts` sinh từ hợp đồng đã phát hành, không từ file trong repo) và §10 (danh sách gói npm, Renovate của web ở `svp-frontend`) chỉnh bởi [0033](0033-svp-web-repo.md)
+  để ADR riêng) bị thay một phần bởi [0022](0022-local-object-store-minio-replacement.md) (RustFS, CORS theo bucket); từ 2026-10-31 vị trí `web/` và các target `web-*` (mã ở repo `svp-frontend`, backend giữ wrapper chạy trên stack của nó), §8 (`gen/api.d.ts` sinh từ hợp đồng đã phát hành, không từ file trong repo) và §10 (danh sách gói npm, Renovate của web ở `svp-frontend`) chỉnh bởi [0033](0033-svp-web-repo.md); thời hạn session (§5: idle, absolute, `Max-Age` của cookie) chỉnh bởi [0046](0046-web-session-lifetime.md)
 - Ngày: 2026-10-21
 
 ## Bối cảnh
