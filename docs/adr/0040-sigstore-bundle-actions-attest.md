@@ -1,6 +1,6 @@
 # 0040. Chữ ký, `vuln`, SBOM và provenance của image phát hành sang Sigstore bundle trong một bản phát hành mỗi nguồn; provenance bằng `actions/attest`; rescan gỡ bundle `vuln` cũ; revert nếu admission thật vượt hạn
 
-- Trạng thái: Chấp nhận (người học duyệt 2026-11-01); hiện thực ở `svp-backend`, `svp-frontend` chờ ghim commit này; số đo admission ở mục Xác nhận (điều kiện giữ của mục 6)
+- Trạng thái: Chấp nhận (người học duyệt 2026-11-01); hiện thực ở `svp-backend` (#72) và `svp-frontend` (#17); kiểm ở lượt phát hành đầu và số đo admission đạt (mục Xác nhận)
 - Ngày: 2026-11-01
 - Người quyết: người học (duyệt), AI (đề xuất)
 
@@ -113,7 +113,7 @@ Kyverno v1.19.1.
 GHCR rồi Kyverno và cosign đọc đúng bundle còn lại; `cosign verify`, `verify-attestation` (cả `--certificate-github-workflow-sha`) trên bundle
 không token; thời gian CLI ở trên.
 
-Kiểm sau merge, ở lượt phát hành đầu (điều kiện giữ của mục 6, chưa đo): lượt `verify.yml` kịch bản `gitops` đầu tiên sau khi bản phát hành
+Kiểm sau merge, ở lượt phát hành đầu (điều kiện giữ của mục 6, **đạt**): lượt `verify.yml` kịch bản `gitops` đầu tiên sau khi bản phát hành
 đầu ở định dạng bundle đã promote stg (k3d trên runner, Kyverno v1.19.1 và `svp-policy` thật, digest của `envs/stg/images/` ở `svp-gitops`),
 đo thời gian admission lần không cache và lần có cache, so với 20 s và 30 s. Nguồn: histogram
 `apiserver_admission_webhook_admission_duration_seconds` của webhook Kyverno dành cho ImageValidatingPolicy `svp-images` (tên bắt đầu `ivpol.`,
@@ -121,9 +121,14 @@ ví dụ `ivpol.validate.kyverno.svc-fail-finegrained-svp-images`) và metric ad
 `gitops` in ra trong lượt sync đầu, khi mọi
 service đổi digest cùng lúc (đây cũng là phép kiểm dưới tải); event của pod không mang thời gian admission, và dry-run trên digest pod đang chạy
 chỉ cho số có cache;
-số và id lượt ghi ở đây.
+số và id lượt ghi ở đây. Lượt `verify.yml` `gitops` run 41334373082 (svp-backend `86627ec`, bản phát hành bundle đầu của mọi service):
+webhook `ivpol.validate.kyverno.svc-fail-finegrained-svp-images` 18 lần, trung bình 5,4 s, 18/18 ≤ 10 s, 0 > 25 s;
+`kyverno_admission_review_duration_seconds` 20/20 ≤ 20 s; `kyverno_image_validating_policy_execution_duration_seconds{policy_name="svp-images"}`
+trung bình 5,4 s, 18/18 ≤ 20 s. Có cache (ca (a) của `drill-k8s-supplychain`): 536 ms. Rescan bundle (backend run 41330733964, frontend run
+41330736595): mỗi image giữ đúng một bundle `vuln`, `scanFinishedOn` mới.
 
-Kiểm ở lượt phát hành đầu (chưa kiểm): lượt `images.yml` của mỗi repo xanh; một image mỗi repo qua `verify-release.sh` (chữ ký, `vuln`,
+Kiểm ở lượt phát hành đầu (**đạt**: `images.yml` run 41326534756 backend, 41329548993 frontend; rescan 41330733964, 41330736595;
+image diễn tập 41330755152; `verify.yml gitops` 41334373082): lượt `images.yml` của mỗi repo xanh; một image mỗi repo qua `verify-release.sh` (chữ ký, `vuln`,
 provenance của `actions/attest`, identity đúng nguồn); `oras discover` chỉ thấy bundle referrer, không `.sig`/`.att` mới; PR promote stg qua
 `gitops-ok`; sau một lượt rescan dispatch, `verify-release.sh` vẫn qua và đọc `scanFinishedOn` mới; `drill-k8s-supplychain` trong 72 giờ sau
 dispatch image diễn tập: ca (a) nhận bản bundle, (b), (c) (CRITICAL trong `vuln` bundle, chưa thử ở spike), (l) từ chối đúng message. Thời
