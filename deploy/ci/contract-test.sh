@@ -83,7 +83,7 @@ cp "$spec" "$original"
 # The check runs real Docker, so it keeps this shell's HOME (docker's context lives there) and DOCKER_* variables.
 check() {
   local rc=0 out
-  out=$(env -i PATH="$PATH" HOME="$HOME" ${DOCKER_HOST:+DOCKER_HOST="$DOCKER_HOST"} \
+  out=$(env -i PATH="$PATH" HOME="$HOME" AWS_CONFIG_FILE=/dev/null AWS_SHARED_CREDENTIALS_FILE=/dev/null ${DOCKER_HOST:+DOCKER_HOST="$DOCKER_HOST"} \
     ${DOCKER_CONTEXT:+DOCKER_CONTEXT="$DOCKER_CONTEXT"} ${DOCKER_CONFIG:+DOCKER_CONFIG="$DOCKER_CONFIG"} \
     GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 "$tree/deploy/ci/contract.sh" check "$1" 2>&1) || rc=$?
   printf '%s\n' "$rc" "$out"
