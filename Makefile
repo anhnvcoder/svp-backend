@@ -93,9 +93,10 @@ ORAS_IMAGE := ghcr.io/oras-project/oras:v1.3.6@sha256:9cfb578be975b762fd898b9d00
 # renovate: datasource=docker depName=mikefarah/yq
 YQ_IMAGE := mikefarah/yq:4.54.1@sha256:4b3d9475d65571d28cbb19544d3820ec2945e4c8b2f18279394282b8dc3a592e
 # The rules of the scan gate's ignore files (.trivyignore.yaml, .grype.yaml, deploy/ci/trivy-config-ignore.yaml) as Rego
-# policies of deploy/ci/ignorefile-policies/, applied by deploy/ci/scan-gate.sh and tested by make conftest-verify: conftest
-# from its official image pinned by digest, without network. yq above finds a key written twice, which conftest's parser
-# hides.
+# policies of deploy/ci/ignorefile-policies/, applied by deploy/ci/scan-gate.sh, and those of a tree of svp-gitops as the
+# policies of deploy/ci/gitops-tree-policies/, applied by deploy/ci/gitops-check.sh, both tested by make conftest-verify:
+# conftest from its official image pinned by digest, without network. yq above finds a key written twice, which
+# conftest's parser hides.
 # renovate: datasource=docker depName=openpolicyagent/conftest
 CONFTEST_IMAGE := openpolicyagent/conftest:v0.71.1@sha256:0e77cdf7c1fcde035f3c579e4aaa6664ee2a8be5777eaa9af9f520cdd02280c0
 
@@ -308,12 +309,18 @@ kyverno-test: ## kyverno test of the policies on rendered manifests (deploy/ci/g
 	env -u DOCKER_DEFAULT_PLATFORM docker run --rm --user "$$(id -u):$$(id -g)" --network none \
 	  -v "$(CURDIR)/deploy/ci/gitops-policies:/p:ro" '$(KYVERNO_CLI_IMAGE)' test /p --remove-color
 
-# The unit tests of the policies deploy/ci/scan-gate.sh applies to the ignore files (deploy/ci/ignorefile-policies/
-# *_test.rego): every file shape and rule that must fail, and those that must pass, on inputs written in the tests, with
-# today fixed. No network; the policies are mounted read-only and conftest runs as the caller.
-conftest-verify: ## conftest verify of the ignore-file policies (deploy/ci/ignorefile-policies/, conftest in CONFTEST_IMAGE, no network)
-	env -u DOCKER_DEFAULT_PLATFORM docker run --rm --user "$$(id -u):$$(id -g)" --network none \
-	  -v "$(CURDIR)/deploy/ci/ignorefile-policies:/p:ro" -w /p '$(CONFTEST_IMAGE)' verify --policy . --no-color
+# The unit tests of the conftest policies (*_test.rego beside them), one run per folder: those deploy/ci/scan-gate.sh
+# applies to the ignore files (deploy/ci/ignorefile-policies/; every file shape and rule that must fail, and those that
+# must pass, with today fixed) and those deploy/ci/gitops-check.sh applies to a tree of svp-gitops
+# (deploy/ci/gitops-tree-policies/; every rule that must fail and pass, on a tree written in the tests). No network;
+# the policies are mounted read-only and conftest runs as the caller.
+CONFTEST_POLICIES := deploy/ci/ignorefile-policies deploy/ci/gitops-tree-policies
+conftest-verify: ## conftest verify of the ignore-file and svp-gitops tree policies (deploy/ci/*-policies/ of Rego, conftest in CONFTEST_IMAGE, no network)
+	@set -e; for dir in $(CONFTEST_POLICIES); do \
+	  echo "conftest verify $$dir"; \
+	  env -u DOCKER_DEFAULT_PLATFORM docker run --rm --user "$$(id -u):$$(id -g)" --network none \
+	    -v "$(CURDIR)/$$dir:/p:ro" -w /p '$(CONFTEST_IMAGE)' verify --policy . --no-color; \
+	done
 
 # Misconfiguration scan of the Dockerfiles, charts and manifests with the pinned trivy. It only
 # reports: exit 0 whatever it finds. The findings that are deliberate choices are left out by

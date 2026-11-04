@@ -108,6 +108,13 @@ Chọn phương án A ở cả bốn mục. Ngoài ra:
   bằng `CONFTEST_IMAGE` ghim của `Makefile`, cộng hai phép kiểm policy không làm được (khoá viết hai lần, qua yq `YQ_IMAGE`; path là file
   có thật); `make conftest-verify` ở job `config`; `deploy/ci/scan-gate-test.sh` còn các ca của phần bash; đổi policy không build image
   (`deploy/ci/changed-services.sh`).
+- Kiểm cấu hình (mục 3), check của `svp-gitops` (B1 của phụ lục), luật trên file của cây: policy Rego ở `deploy/ci/gitops-tree-policies/`
+  (`layout.rego` file của root chart và bootstrap, `argocd/apps/values.yaml` không đặt `cluster`; `envs.rego` thư mục env, `charts.yaml`
+  với giá trị dẫn xuất, `images/` với nguồn phát hành; `platforms.rego` lớp nền tảng và luật overlay của file nền tảng; `author.rego` luật
+  tác giả hẹp; input và helper ở `lib.rego`; ca âm ở `*_test.rego`, chạy bằng `make conftest-verify`). Bước 1 của
+  `deploy/ci/gitops-check.sh` chỉ dựng input JSON (mục và nội dung file của cây; `revision` trên `main`, giá trị dẫn xuất và bảng nguồn
+  đọc bằng git; tác giả, người gửi, file đổi của PR) rồi chạy `conftest test` bằng `CONFTEST_IMAGE`, không trả lời là đỏ; render, kubeconform,
+  Kyverno CLI và kiểm bản phát hành ở lại script; `deploy/ci/gitops-check-test.sh` còn ca của phần bash, render và một ca mỗi phần input.
 - Một bản luật bảng nguồn (B3 của phụ lục): luật chỉ ở `fail` của `deploy/helm/svp-policy/templates/imagevalidatingpolicy.yaml`;
   `deploy/k8s/lib.sh` bỏ `_release_sources_check`, `release_sources` đọc bảng và chỉ giữ bất biến prefix (đường dẫn registry kết thúc bằng `/`, không prefix nào là
   đầu prefix khác) mà mọi script dựa vào trước khi chọn nguồn; `deploy/ci/sources-test.sh` kiểm luật bằng render (không thêm công cụ), cùng hai hàm chọn nguồn đó.

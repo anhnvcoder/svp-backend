@@ -237,7 +237,15 @@ Loại tài liệu (Diátaxis): **reference**, tra cứu khi cần một lệnh 
     chép cả bộ, gồm web); không bot nào xoá file; bot `[bot]` không phải promoter (Renovate) không đổi gì dưới `envs/`; người gửi là bot
     khác tác giả thì đỏ; tác giả hay người gửi không đọc được thì đỏ; PR của người không bị giới hạn; không base hay không phải PR thì
     một dòng `skip`. Lý do: `/envs/stg/` không Code Owner nên PR bot tự merge, bỏ hẳn luật thì khoá App lộ đổi được `charts.yaml` hay
-    overlay stg mà không ai duyệt (GIT-6). **Policy Kyverno CLI** (`deploy/ci/gitops-policies/`: `images-pinned.yaml`,
+    overlay stg mà không ai duyệt (GIT-6). **Policy conftest của cây** (`deploy/ci/gitops-tree-policies/`, Rego, một package mỗi
+    file: `layout.rego` file của root chart và bootstrap, `argocd/apps/values.yaml` không đặt `cluster`; `envs.rego` thư mục env,
+    `charts.yaml`, `images/`; `platforms.rego` lớp nền tảng và luật overlay của file nền tảng; `author.rego` luật tác giả hẹp; input và
+    helper ở `lib.rego`; ca âm ở `*_test.rego`): luật của bước 1 viết một lần ở đây. Bước 1 của `gitops-check.sh` chỉ dựng input, một tài
+    liệu JSON: mục và nội dung file của cây; với mỗi env, `revision` có là commit trên `main` repo này không (không thì một dòng `FAIL`),
+    hai giá trị commit đó dẫn xuất và bảng nguồn ở commit đó (git đọc); tác giả, người gửi và file đổi từ base của PR. Rồi nó chạy
+    `conftest test` bằng `CONFTEST_IMAGE` ghim (`--network none`, `--read-only`, uid của người gọi, policy và input mount chỉ đọc);
+    conftest không trả lời, hay một package không có kết quả nào (policy không biên dịch, package đổi tên), là đỏ. `gitops-check.sh
+    --tree <cây> [<base>]` chạy riêng bước 1. **Policy Kyverno CLI** (`deploy/ci/gitops-policies/`: `images-pinned.yaml`,
     `no-lab-hosts.yaml`, `ValidatingPolicy` CEL; fixture đạt và hỏng ở `test/<policy>/`): `gitops-check.sh` render rồi đưa manifest cho
     `kyverno apply` bằng `KYVERNO_CLI_IMAGE` ghim của `Makefile` (cùng minor với Kyverno của cluster, `--network none`), message
     `<file>: <Kind> <ns>/<name>: <message>`; `make kyverno-test` chạy `kyverno test` của thư mục đó; `gitops-check.sh --policy
@@ -277,7 +285,7 @@ Loại tài liệu (Diátaxis): **reference**, tra cứu khi cần một lệnh 
     `verify-release-test.sh`, `changed-services-test.sh`, `make slo-check`,
     `deploy/ci/promote-test.sh`,
     `make otelcol-validate`, `make compose-config`, `deploy/observability/glitchtip/dotenv-test.sh`, `make helm-check`, `make kyverno-test`, `deploy/ci/sources-test.sh`,
-    `deploy/ci/gitops-check-test.sh ../gitops`, `make k6-check`,
+    `deploy/ci/gitops-check-test.sh ../gitops` (test của policy cây qua `make conftest-verify`, rồi ca của phần bash và render), `make k6-check`,
     `make cloud-check`; check của `svp-gitops` trên bản clone: `deploy/ci/gitops-check.sh ../gitops` (cần mạng tới repo chart, GHCR;
     ~5 phút); `gitleaks git --redact --no-banner`; `make trivy-config`; một chân image (build, quét, cổng, không push):
     `deploy/ci/build-image.sh <svc> arm64 "$(mktemp -d)"`; riêng cổng grype của một chân: `make grype IMAGE=<ref>@sha256:<digest>
@@ -327,7 +335,8 @@ Loại tài liệu (Diátaxis): **reference**, tra cứu khi cần một lệnh 
     kiểm tệp ngoại lệ), không cài;
     `make kyverno-test`: `kyverno test` của `deploy/ci/gitops-policies/` (fixture đạt, hỏng mỗi policy; `gitops-check-test.sh` gọi nó);
     `make conftest-verify`: `conftest verify` của `deploy/ci/ignorefile-policies/` (mỗi ca âm của luật tệp ngoại lệ là một test `*_test.rego`,
-    hôm nay cố định);
+    hôm nay cố định) và của `deploy/ci/gitops-tree-policies/` (mỗi ca âm của luật cây `svp-gitops`, trên một cây viết trong test;
+    `gitops-check-test.sh` gọi nó);
     govulncheck là công cụ Go ghim `GOVULNCHECK_VERSION`, cài bằng `make tools`. Riêng cosign, script (`cosign_` của `deploy/ci/common.sh`) dùng `cosign`
     trên PATH trước nếu có (CI cài bằng `sigstore/cosign-installer`), không có thì `COSIGN_IMAGE`.
   - `.trivyignore.yaml` và `.grype.yaml` ở gốc repo ([ADR-0039](../adr/0039-mainpath-drills-scan-gate-sourcemaps.md) §2; cổng của image và `make grype` đọc; mỗi
