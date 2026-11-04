@@ -33,10 +33,43 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
+  # Whether a pull request changes anything but documentation. A pull request whose every file is Markdown (a chart's
+  # README.md excepted: helm-docs writes it and job generate checks it) or under docs/ skips the jobs that build, test
+  # and scan code; gitleaks, docs and dependency-review still run, and ci-ok accepts those skips. The list comes from
+  # GitHub's API for the pull request, not from git, so no history is fetched. A push or a dispatch always runs
+  # everything.
+  changes:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      pull-requests: read
+    outputs:
+      code: ${{ steps.files.outputs.code }}
+    steps:
+      - id: files
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVENT: ${{ github.event_name }}
+          REPO: ${{ github.repository }}
+          PR: ${{ github.event.pull_request.number }}
+        run: |
+          if [ "$EVENT" != pull_request ]; then
+            echo "code=true" >>"$GITHUB_OUTPUT"
+            exit 0
+          fi
+          files=$(gh api --paginate "repos/$REPO/pulls/$PR/files" --jq '.[].filename')
+          printf '%s\n' "$files"
+          code=$(printf '%s\n' "$files" | grep -v -e '^docs/' -e '\.md$' -e '^$' | grep -c . || true)
+          generated=$(printf '%s\n' "$files" | grep -c -E '^deploy/helm/[^/]+/README\.md$' || true)
+          if [ "$code" -gt 0 ] || [ "$generated" -gt 0 ]; then echo "code=true"; else echo "code=false"; fi >>"$GITHUB_OUTPUT"
+          [ "$code" -gt 0 ] || [ "$generated" -gt 0 ] || echo "::notice::documentation only: build, test and scan jobs skip"
+
   # make check-go: gofmt, go vet, golangci-lint (gosec included), actionlint, buf lint and build, go test -race. The
   # integration tests reach Postgres and Redis on the same 127.0.0.1 addresses as on a dev machine, the only ones
   # internal/pgtest and internal/redistest accept, through the two service containers below.
   check:
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
     runs-on: ubuntu-24.04
     permissions:
       contents: read
@@ -121,6 +154,8 @@ jobs:
 
   # make generate in a scratch copy, compared with the files as committed (the working tree is never written).
   generate:
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
     runs-on: ubuntu-24.04
     permissions:
       contents: read
@@ -144,6 +179,8 @@ jobs:
 
   # Breaking changes of the proto contracts. buf lint and buf build already run in make check.
   buf:
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
     runs-on: ubuntu-24.04
     permissions:
       contents: read
@@ -191,6 +228,8 @@ jobs:
   # pin by version: the file changed means info.version went up, and enough (oasdiff, pinned in the Makefile, no
   # network). Then the tests of deploy/ci/contract.sh, its publishing included, against a fake registry and cosign.
   api-contract:
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
     runs-on: ubuntu-24.04
     permissions:
       contents: read
@@ -220,6 +259,8 @@ jobs:
   # Prometheus rules and their tests, the three Collector configs, the compose file of every profile, every chart of the
   # repository, the digests of third-party images, the k6 scripts with each profile and the cloud cluster's manifests.
   config:
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
     runs-on: ubuntu-24.04
     permissions:
       contents: read
@@ -357,6 +398,8 @@ jobs:
   # deploy/ci/trivy-config-ignore.yaml leaves out until their expired_at. Report only: it never fails the job on a
   # finding.
   trivy-config:
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
     runs-on: ubuntu-24.04
     permissions:
       contents: read
@@ -385,6 +428,8 @@ jobs:
   # condition: ci-ok is red when this job is red or skipped. The SARIF report beside it is for the code scanning
   # upload of job sarif and never fails.
   zizmor:
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     permissions:
@@ -453,6 +498,8 @@ jobs:
   # below, which belongs to this run.
   stack:
     name: stack (end-to-end, report only)
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
     runs-on: ubuntu-24.04
     # Six image builds, the pull of the web release, the e2e seed (21 READY videos), two browsers: about 15 to 25
     # minutes. The limit leaves room for a slow runner and stops a hung step long before GitHub's default of 6 hours.
@@ -686,11 +733,11 @@ jobs:
 
   # The required check. It runs whatever happened before it (always()) and fails unless every check job succeeded:
   # GitHub counts a skipped required check as passed, and a job that failed or was cancelled does not fail the jobs
-  # that need it by itself. Of the ten, only dependency-review has a condition (pull requests only): its skip is
-  # accepted on any other event, and nowhere else. Any other skip can only mean a wrong if: and is red too. No
-  # condition may ever skip ci-ok itself.
+  # that need it by itself. Two skips are part of a run: dependency-review outside pull requests, and the code jobs
+  # of a documentation-only pull request (changes said code=false, and changes itself succeeded). Any other skip can
+  # only mean a wrong if: and is red too. No condition may ever skip ci-ok itself.
   ci-ok:
-    needs: [check, generate, buf, api-contract, config, gitleaks, trivy-config, zizmor, dependency-review, docs]
+    needs: [changes, check, generate, buf, api-contract, config, gitleaks, trivy-config, zizmor, dependency-review, docs]
     if: always()
     runs-on: ubuntu-24.04
     permissions: {}
@@ -701,8 +748,9 @@ jobs:
           EVENT: ${{ github.event_name }}
         run: |
           jq -r 'to_entries[] | "\(.key): \(.value.result)"' <<< "$NEEDS"
-          # skip_ok: the one skip that is part of a run, as in images-ok: dependency-review outside pull requests.
           jq -e --arg event "$EVENT" '
-            def skip_ok: .key == "dependency-review" and $event != "pull_request";
-            length == 10 and all(to_entries[]; .value.result == "success" or (.value.result == "skipped" and skip_ok))
+            (.changes.result == "success" and .changes.outputs.code == "false") as $docs_only
+            | def skip_ok: (.key == "dependency-review" and $event != "pull_request")
+                or ($docs_only and (.key | IN("check", "generate", "buf", "api-contract", "config", "trivy-config", "zizmor")));
+            length == 11 and all(to_entries[]; .value.result == "success" or (.value.result == "skipped" and skip_ok))
           ' <<< "$NEEDS" > /dev/null
