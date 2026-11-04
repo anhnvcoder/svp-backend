@@ -264,6 +264,7 @@ func TestRecover(t *testing.T) {
 }
 
 func TestValidUTF8(t *testing.T) {
+	t.Parallel()
 	ran := false
 	h := ValidUTF8(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { ran = true }))
 

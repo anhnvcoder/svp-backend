@@ -82,6 +82,7 @@ func containerConfig(t *testing.T, endpoint string, agent *fakeAgent) (Config, s
 // A form signed with a short-lived credential carries its session token as a field and in the
 // signed policy, since storage checks the token against the policy; a static key has no token.
 func TestPresignPostSessionToken(t *testing.T) {
+	t.Parallel()
 	agent := newFakeAgent(t, time.Hour)
 	cfg, _ := containerConfig(t, "http://s3:9000", agent)
 	post, err := newTestStore(t, cfg).PresignPost(t.Context(), "uploads/v1", 10, "video/mp4", 15*time.Minute)
@@ -114,6 +115,7 @@ func TestPresignPostSessionToken(t *testing.T) {
 // A credential is reused only while it outlives the longest form by the refresh window: one that
 // expires sooner is fetched again before the next form, with the token the file holds by then.
 func TestContainerCredentialsRefreshBeforeFormsOutliveThem(t *testing.T) {
+	t.Parallel()
 	if credentialRefreshWindow <= maxPresignTTL {
 		t.Fatalf("refresh window %s is not longer than the longest form %s", credentialRefreshWindow, maxPresignTTL)
 	}
@@ -128,6 +130,7 @@ func TestContainerCredentialsRefreshBeforeFormsOutliveThem(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 			agent := newFakeAgent(t, tt.lifetime)
 			cfg, tokenFile := containerConfig(t, "http://s3:9000", agent)
 			s := newTestStore(t, cfg)
@@ -159,6 +162,7 @@ func TestContainerCredentialsRefreshBeforeFormsOutliveThem(t *testing.T) {
 }
 
 func TestPresignPostRejectsFormsLongerThanTheLimit(t *testing.T) {
+	t.Parallel()
 	s := newTestStore(t, testConfig("http://s3:9000"))
 	if _, err := s.PresignPost(t.Context(), "uploads/v1", 10, "video/mp4", maxPresignTTL+time.Second); err == nil {
 		t.Errorf("PresignPost() with a ttl over %s succeeded", maxPresignTTL)
@@ -168,6 +172,7 @@ func TestPresignPostRejectsFormsLongerThanTheLimit(t *testing.T) {
 // Calls to storage are signed with the fetched credential and carry its session token, and each
 // cached credential is fetched once: once for calls, once for forms.
 func TestContainerCredentialsSignRequests(t *testing.T) {
+	t.Parallel()
 	agent := newFakeAgent(t, time.Hour)
 	var auth, token string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -198,6 +203,7 @@ func TestContainerCredentialsSignRequests(t *testing.T) {
 // A credential too close to its expiry to sign a form still signs calls: only forms need one that
 // outlives them, so calls neither fetch again nor fail while the agent is down.
 func TestContainerCredentialsCallsKeepACredentialFormsReplace(t *testing.T) {
+	t.Parallel()
 	if callCredentialWindow >= credentialRefreshWindow {
 		t.Fatalf("call window %s is not shorter than the form window %s", callCredentialWindow, credentialRefreshWindow)
 	}
@@ -241,6 +247,7 @@ func TestContainerCredentialsCallsKeepACredentialFormsReplace(t *testing.T) {
 
 // A credential that cannot be fetched fails the call, and the error carries no token.
 func TestContainerCredentialsFetchFailure(t *testing.T) {
+	t.Parallel()
 	agent := newFakeAgent(t, time.Hour)
 	cfg, tokenFile := containerConfig(t, "http://s3:9000", agent)
 	if err := os.Remove(tokenFile); err != nil {
@@ -272,6 +279,7 @@ func TestContainerCredentialsFetchFailure(t *testing.T) {
 }
 
 func TestNewRejectsMixedCredentials(t *testing.T) {
+	t.Parallel()
 	agent := newFakeAgent(t, time.Hour)
 	tests := []struct {
 		name   string
@@ -287,6 +295,7 @@ func TestNewRejectsMixedCredentials(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 			cfg, _ := containerConfig(t, "http://s3:9000", agent)
 			tt.change(&cfg)
 			_, err := New(cfg)
@@ -298,6 +307,7 @@ func TestNewRejectsMixedCredentials(t *testing.T) {
 }
 
 func TestCheckContainerURI(t *testing.T) {
+	t.Parallel()
 	for _, tt := range []struct {
 		uri string
 		ok  bool
@@ -426,6 +436,7 @@ func (rt *hostRecorder) RoundTrip(r *http.Request) (*http.Response, error) {
 // Virtual-hosted puts the bucket into the host of both the requests and the form URL, so the
 // form posts to the bucket's own origin; path-style keeps it in the path (the other tests).
 func TestVirtualHosted(t *testing.T) {
+	t.Parallel()
 	cfg := testConfig("https://s3.ap-southeast-1.amazonaws.com")
 	cfg.Region = "ap-southeast-1"
 	cfg.VirtualHosted = true

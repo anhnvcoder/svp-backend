@@ -26,6 +26,7 @@ func objectOfSize(n int) string {
 }
 
 func TestDecodeJSONAccepts(t *testing.T) {
+	t.Parallel()
 	for _, payload := range []string{`{"name":"x"}`, "{\"name\":\"x\"}\n", objectOfSize(maxBodyBytes)} {
 		rec, dst, ok := decode(t, payload)
 		if !ok || dst.Name == "" || rec.Body.Len() != 0 {
@@ -35,6 +36,7 @@ func TestDecodeJSONAccepts(t *testing.T) {
 }
 
 func TestDecodeJSONRejects(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name    string
 		payload string
@@ -58,6 +60,7 @@ func TestDecodeJSONRejects(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 			rec, _, ok := decode(t, tt.payload)
 			if ok {
 				t.Fatal("DecodeJSON() = true, want false")

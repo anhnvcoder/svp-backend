@@ -40,6 +40,10 @@ liệt kê target):
   repo gắn chỉ đọc) với `--persona=regular` trên cả repo; mọi finding làm lệnh thoát khác 0. Có `GH_TOKEN` thì chạy thêm audit online (impostor
   commit, action có lỗ hổng), không thì offline (mặc định trên máy). `ZIZMOR_FORMAT=github` in annotation của Actions, `ZIZMOR_SARIF=<đường dẫn>`
   ghi SARIF (không chặn). Ngoại lệ ở `.github/zizmor.yml`, mỗi mục một comment lý do. Không thuộc `make check`; CI chạy nó ở job `zizmor` của `ci.yml`.
+- `make helm-docs`, `make helm-docs-check`: `deploy/helm/svp-service/README.md` (bảng values của chart dùng chung bởi bảy release) sinh bởi
+  helm-docs `HELM_DOCS_IMAGE` (image chính thức ghim `tag@sha256`, không mạng, chạy bằng uid của người gọi) từ `Chart.yaml`, comment `# --` của
+  `values.yaml` và `README.md.gotmpl`. `make helm-docs` ghi file; `make helm-docs-check` gắn repo chỉ đọc, in thứ helm-docs sẽ ghi và đỏ khi
+  `README.md` lệch (sửa mô tả ở `values.yaml` rồi chạy `make helm-docs`). `make helm-check` chạy `helm-docs-check` trước, nên job CI của nó kiểm luôn.
 
 ## Kiểm tra bổ sung của code Go
 

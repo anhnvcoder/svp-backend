@@ -1,0 +1,10 @@
+# {{ template "chart.name" . }}
+
+{{ template "chart.versionBadge" . }}{{ template "chart.typeBadge" . }}
+
+{{ template "chart.description" . }}
+
+Sinh bằng helm-docs từ `Chart.yaml` và comment `# --` của `values.yaml`: sửa hai file đó rồi chạy `make helm-docs`.
+Giá trị của từng bản phát hành nằm ở `base/services/<service>.yaml` của `svp-gitops`.
+
+{{ template "chart.valuesSection" . }}

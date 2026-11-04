@@ -616,6 +616,7 @@ func videoNotFound() error {
 // internal logs err with what failed and returns a generic INTERNAL error, so database details
 // never reach the caller.
 func (s *Server) internal(ctx context.Context, what string, err error) error {
+	//nolint:sloglint // wrapper: every caller passes a constant message
 	s.logger.ErrorContext(ctx, what, slog.Any("error", err))
 	return status.Error(codes.Internal, "internal error")
 }

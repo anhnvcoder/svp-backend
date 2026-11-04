@@ -145,6 +145,7 @@ func committed(t *testing.T, brokers, group string) map[TopicPartition]int64 {
 }
 
 func TestNewBatchConsumerRequiresFields(t *testing.T) {
+	t.Parallel()
 	ok := BatchConsumerConfig{Brokers: "127.0.0.1:1", Group: "g", Topics: []string{"t"},
 		Handler: func(context.Context, *Batch) ([]Rejected, error) { return nil, nil }, Logger: slog.New(slog.DiscardHandler)}
 	tests := map[string]func(*BatchConsumerConfig){
@@ -156,6 +157,7 @@ func TestNewBatchConsumerRequiresFields(t *testing.T) {
 	}
 	for name, mutate := range tests {
 		t.Run(name, func(t *testing.T) {
+			t.Parallel()
 			cfg := ok
 			mutate(&cfg)
 			if _, err := NewBatchConsumer(cfg); err == nil {

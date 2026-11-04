@@ -907,7 +907,7 @@ type tailReader struct {
 func (r *tailReader) Read(b []byte) (int, error) {
 	n, err := r.ReadCloser.Read(b)
 	r.mu.Lock()
-	tail := append(r.part.tail, b[:n]...)
+	tail := append(bytes.Clone(r.part.tail), b[:n]...)
 	r.part.tail = bytes.Clone(tail[max(0, len(tail)-tailSize):])
 	r.mu.Unlock()
 	return n, err

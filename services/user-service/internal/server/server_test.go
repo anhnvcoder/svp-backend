@@ -218,6 +218,7 @@ func wantError(t *testing.T, err error, code codes.Code, reason string) {
 }
 
 func TestNormalizeEmail(t *testing.T) {
+	t.Parallel()
 	long := strings.Repeat("a", MaxEmailBytes-len("@example.io")) + "@example.io"
 	valid := map[string]string{
 		"a@x.io":           "a@x.io",

@@ -155,8 +155,10 @@ func TestOpensAfterConsecutiveFailures(t *testing.T) {
 }
 
 func TestServiceAnswersDoNotOpen(t *testing.T) {
+	t.Parallel()
 	for _, code := range []codes.Code{codes.NotFound, codes.InvalidArgument, codes.ResourceExhausted, codes.FailedPrecondition, codes.Internal} {
 		t.Run(code.String(), func(t *testing.T) {
+			t.Parallel()
 			f, conn := start(t, New("test-service"))
 			f.fail(code)
 			callN(t, conn, testMethod, 30, code)
@@ -170,6 +172,7 @@ func TestServiceAnswersDoNotOpen(t *testing.T) {
 // TestSuccessResetsConsecutiveFailures: four failures, a success, four failures never make five
 // in a row, and stay under the 20-call minimum of the ratio rule.
 func TestSuccessResetsConsecutiveFailures(t *testing.T) {
+	t.Parallel()
 	f, conn := start(t, New("test-service"))
 	f.fail(codes.Unavailable)
 	callN(t, conn, testMethod, 4, codes.Unavailable)
@@ -266,6 +269,7 @@ func TestOpensOnFailureRatio(t *testing.T) {
 }
 
 func TestStaysClosedUnderFailureRatio(t *testing.T) {
+	t.Parallel()
 	f, conn := start(t, New("test-service"))
 	// One failure in three.
 	for i := range 60 {
@@ -386,6 +390,7 @@ func TestStateChangesLogged(t *testing.T) {
 }
 
 func TestConcurrentCalls(t *testing.T) {
+	t.Parallel()
 	f, conn := start(t, newInterceptor(fast, "test-service", nil))
 	var n sync.Mutex
 	i := 0

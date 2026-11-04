@@ -152,7 +152,7 @@ func TestSetupUnavailableCollectorDoesNotBlock(t *testing.T) {
 	}
 	t.Setenv("OTEL_EXPORTER_OTLP_ENDPOINT", "http://"+address)
 	t.Setenv("OTEL_EXPORTER_OTLP_INSECURE", "true")
-	slog.SetDefault(slog.New(slog.NewJSONHandler(io.Discard, nil)))
+	slog.SetDefault(slog.New(slog.DiscardHandler))
 	start := time.Now()
 	shutdown, err := Setup(context.Background(), "unavailable")
 	if err != nil {
@@ -237,6 +237,7 @@ func TestTracerProviderExportsAndReadsSampler(t *testing.T) {
 }
 
 func TestDurationViewsAndRuntimeMetrics(t *testing.T) {
+	t.Parallel()
 	reader := sdkmetric.NewManualReader()
 	mp := newMeterProvider(resource.Empty(), reader)
 	defer func() {
@@ -393,6 +394,7 @@ func TestStopAllSharesDeadline(t *testing.T) {
 }
 
 func TestProfilerClientKeepsBodyReadableAndCancelsUploads(t *testing.T) {
+	t.Parallel()
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = w.Write([]byte("profile accepted"))
 	}))

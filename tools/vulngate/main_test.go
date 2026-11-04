@@ -114,6 +114,7 @@ func wantLines(t *testing.T, out string, want ...string) {
 }
 
 func TestClean(t *testing.T) {
+	t.Parallel()
 	code, out := runGate(t, setup{stdin: cleanStream()})
 	if code != 0 {
 		t.Fatalf("exit = %d, want 0:\n%s", code, out)
@@ -127,6 +128,7 @@ func TestClean(t *testing.T) {
 }
 
 func TestCalledWithoutException(t *testing.T) {
+	t.Parallel()
 	code, out := runGate(t, setup{stdin: calledStream()})
 	if code != 1 {
 		t.Fatalf("exit = %d, want 1:\n%s", code, out)
@@ -146,6 +148,7 @@ func TestCalledWithoutException(t *testing.T) {
 }
 
 func TestCalledWithFixShowsFixedVersion(t *testing.T) {
+	t.Parallel()
 	code, out := runGate(t, setup{stdin: stream(configMsg, fixedSymbolMsg)})
 	if code != 1 {
 		t.Fatalf("exit = %d, want 1:\n%s", code, out)
@@ -155,6 +158,7 @@ func TestCalledWithFixShowsFixedVersion(t *testing.T) {
 }
 
 func TestValidException(t *testing.T) {
+	t.Parallel()
 	code, out := runGate(t, setup{stdin: calledStream(), ignore: ptr(ignoreJSON(entry()))})
 	if code != 0 {
 		t.Fatalf("exit = %d, want 0:\n%s", code, out)
@@ -164,6 +168,7 @@ func TestValidException(t *testing.T) {
 
 // TestExceptionFileErrors: every rule of the exception file fails the run, and an invalid entry silences nothing.
 func TestExceptionFileErrors(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name   string
 		stdin  string
@@ -207,6 +212,7 @@ func TestExceptionFileErrors(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 			code, out := runGate(t, setup{stdin: tt.stdin, ignore: ptr(tt.ignore)})
 			if code != 1 {
 				t.Fatalf("exit = %d, want 1:\n%s", code, out)
@@ -217,6 +223,7 @@ func TestExceptionFileErrors(t *testing.T) {
 }
 
 func TestInvalidEntryDoesNotSilence(t *testing.T) {
+	t.Parallel()
 	code, out := runGate(t, setup{stdin: calledStream(), ignore: ptr(ignoreJSON(entry("expired_at", `"2026-10-01"`)))})
 	if code != 1 {
 		t.Fatalf("exit = %d, want 1:\n%s", code, out)
@@ -225,6 +232,7 @@ func TestInvalidEntryDoesNotSilence(t *testing.T) {
 }
 
 func TestExpiryBoundaries(t *testing.T) {
+	t.Parallel()
 	// The entry stops working at 00:00 UTC of expired_at; the last valid date is today + 30 days.
 	for _, tt := range []struct {
 		date string
@@ -238,6 +246,7 @@ func TestExpiryBoundaries(t *testing.T) {
 }
 
 func TestDockerfiles(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name  string
 		files map[string]string
@@ -262,6 +271,7 @@ func TestDockerfiles(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 			code, out := runGate(t, setup{stdin: cleanStream(), dockerfiles: tt.files})
 			if code != tt.code {
 				t.Fatalf("exit = %d, want %d:\n%s", code, tt.code, out)
@@ -272,6 +282,7 @@ func TestDockerfiles(t *testing.T) {
 }
 
 func TestNoDockerfileGiven(t *testing.T) {
+	t.Parallel()
 	var out strings.Builder
 	if code := run(strings.NewReader(cleanStream()), &out, filepath.Join(t.TempDir(), "absent.json"), nil, now); code != 1 {
 		t.Fatalf("exit = %d, want 1:\n%s", code, out.String())
@@ -280,6 +291,7 @@ func TestNoDockerfileGiven(t *testing.T) {
 }
 
 func TestMissingDockerfile(t *testing.T) {
+	t.Parallel()
 	var out strings.Builder
 	dir := t.TempDir()
 	code := run(strings.NewReader(cleanStream()), &out, filepath.Join(dir, "absent.json"),
@@ -291,6 +303,7 @@ func TestMissingDockerfile(t *testing.T) {
 }
 
 func TestUnexpectedStream(t *testing.T) {
+	t.Parallel()
 	tests := []struct{ name, stdin, want string }{
 		{"empty", "", "no config message"},
 		{"no config", stream(progressMsg, moduleMsg), "no config message"},
@@ -301,6 +314,7 @@ func TestUnexpectedStream(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 			code, out := runGate(t, setup{stdin: tt.stdin})
 			if code != 1 {
 				t.Fatalf("exit = %d, want 1:\n%s", code, out)

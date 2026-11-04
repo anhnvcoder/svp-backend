@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"io"
 	"log/slog"
 	"net"
 	"net/http"
@@ -316,7 +315,7 @@ func TestUnreachableTelemetryDoesNotSlowRequests(t *testing.T) {
 	prevLogger := slog.Default()
 	// The gateway's logger, writing nowhere: logx.New writes to stdout.
 	slog.SetDefault(slog.New(logx.NewHandler(slog.NewMultiHandler(
-		slog.NewJSONHandler(io.Discard, nil), otelslog.NewHandler("gateway"), &sentryx.Handler{},
+		slog.DiscardHandler, otelslog.NewHandler("gateway"), &sentryx.Handler{},
 	))))
 	t.Cleanup(func() { slog.SetDefault(prevLogger) })
 	run := func() time.Duration {

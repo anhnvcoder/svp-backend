@@ -133,11 +133,11 @@ func serve(ctx context.Context, logger *slog.Logger) (err error) {
 	// failure is logged while the providers still take it, then they export what they recorded.
 	defer func() {
 		if err != nil {
-			logger.Error("media-worker failed", slog.Any("error", err))
+			logger.ErrorContext(ctx, "media-worker failed", slog.Any("error", err))
 			err = loggedError{err}
 		}
 		if err := shutdownTelemetry(context.WithoutCancel(ctx)); err != nil {
-			logger.Warn("telemetry shutdown failed", slog.Any("error", err))
+			logger.WarnContext(ctx, "telemetry shutdown failed", slog.Any("error", err))
 		}
 	}()
 	store, err := objstore.New(cfg.store)
@@ -158,10 +158,10 @@ func serve(ctx context.Context, logger *slog.Logger) (err error) {
 	if err != nil {
 		return err
 	}
-	logger.Info("media-worker started", slog.String("topic", worker.InputTopic), slog.String("group", worker.Group))
+	logger.InfoContext(ctx, "media-worker started", slog.String("topic", worker.InputTopic), slog.String("group", worker.Group))
 	if err := consumer.Run(ctx); err != nil {
 		return err
 	}
-	logger.Info("media-worker stopped")
+	logger.InfoContext(ctx, "media-worker stopped")
 	return nil
 }

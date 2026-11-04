@@ -108,6 +108,7 @@ func wantUnauthenticated(t *testing.T, ran bool, err error) {
 }
 
 func TestValidTokenReachesHandler(t *testing.T) {
+	t.Parallel()
 	for _, scheme := range []string{"Bearer ", "bearer "} {
 		ran, caller, err := call(t, required, followMethod, AuthorizationKey, scheme+validToken(t))
 		if err != nil || !ran {
@@ -156,6 +157,7 @@ func invalidAuthorization(t *testing.T) []struct {
 }
 
 func TestInvalidCallerIsUnauthenticated(t *testing.T) {
+	t.Parallel()
 	cases := append(invalidAuthorization(t), struct {
 		name  string
 		pairs []string
@@ -165,6 +167,7 @@ func TestInvalidCallerIsUnauthenticated(t *testing.T) {
 	}{"metadata without authorization", []string{"other", "x"}})
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			ran, _, err := call(t, required, followMethod, tc.pairs...)
 			wantUnauthenticated(t, ran, err)
 		})
@@ -173,6 +176,7 @@ func TestInvalidCallerIsUnauthenticated(t *testing.T) {
 
 // x-user-id is never read: a valid token's subject is the caller, whatever x-user-id says.
 func TestTokenWinsOverForgedUserID(t *testing.T) {
+	t.Parallel()
 	ran, caller, err := call(t, required, followMethod, AuthorizationKey, "Bearer "+validToken(t), "x-user-id", otherUserID)
 	if err != nil || !ran || caller != userID {
 		t.Errorf("ran = %v, caller = %q, err = %v; want the token's %s", ran, caller, err, userID)
@@ -180,6 +184,7 @@ func TestTokenWinsOverForgedUserID(t *testing.T) {
 }
 
 func TestPublicMethodIgnoresAuthorization(t *testing.T) {
+	t.Parallel()
 	for name, pairs := range map[string][]string{
 		"no metadata":   nil,
 		"broken token":  {AuthorizationKey, "Bearer not.a.token"},
@@ -198,6 +203,7 @@ func TestPublicMethodIgnoresAuthorization(t *testing.T) {
 }
 
 func TestOptionalCallerAbsentRunsWithoutCaller(t *testing.T) {
+	t.Parallel()
 	for name, pairs := range map[string][]string{
 		"no metadata":                    nil,
 		"metadata without authorization": {"other", "x"},
@@ -215,6 +221,7 @@ func TestOptionalCallerAbsentRunsWithoutCaller(t *testing.T) {
 }
 
 func TestOptionalCallerPresentAndValidReachesHandler(t *testing.T) {
+	t.Parallel()
 	ran, caller, err := call(t, optional, statsMethod, AuthorizationKey, "Bearer "+validToken(t))
 	if err != nil || !ran {
 		t.Fatalf("ran = %v, err = %v; want handler to run", ran, err)
@@ -226,11 +233,13 @@ func TestOptionalCallerPresentAndValidReachesHandler(t *testing.T) {
 
 // A present authorization must be valid: an invalid one is never served as an anonymous call.
 func TestOptionalCallerPresentButInvalidIsUnauthenticated(t *testing.T) {
+	t.Parallel()
 	for _, tc := range invalidAuthorization(t) {
 		if tc.pairs[0] != AuthorizationKey {
 			continue
 		}
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			ran, _, err := call(t, optional, statsMethod, tc.pairs...)
 			wantUnauthenticated(t, ran, err)
 		})
@@ -239,6 +248,7 @@ func TestOptionalCallerPresentButInvalidIsUnauthenticated(t *testing.T) {
 
 // Listing some RPCs as optional or public changes nothing for the others.
 func TestOptionalCallerLeavesOtherModesAlone(t *testing.T) {
+	t.Parallel()
 	if ran, _, err := call(t, optional, followMethod); ran || status.Code(err) != codes.Unauthenticated {
 		t.Errorf("required caller without a token: ran = %v, err = %v; want UNAUTHENTICATED", ran, err)
 	}
@@ -251,6 +261,7 @@ func TestOptionalCallerLeavesOtherModesAlone(t *testing.T) {
 }
 
 func TestUnaryServerInterceptorTakesPublicMethods(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	ran := false
 	handler := func(context.Context, any) (any, error) { ran = true; return nil, nil }
@@ -317,6 +328,7 @@ func TestRejectionLogNeverHoldsToken(t *testing.T) {
 }
 
 func TestFromContextWithoutCaller(t *testing.T) {
+	t.Parallel()
 	if id, ok := FromContext(context.Background()); ok || id != "" {
 		t.Errorf("FromContext() = (%q, %v), want (\"\", false)", id, ok)
 	}

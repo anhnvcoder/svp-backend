@@ -244,6 +244,7 @@ func headerValue(r *kgo.Record, key string) (string, bool) {
 }
 
 func TestNewMeta(t *testing.T) {
+	t.Parallel()
 	m := NewMeta()
 	if _, err := ids.Parse(m.GetEventId()); err != nil {
 		t.Errorf("event_id %q: %v", m.GetEventId(), err)
@@ -257,6 +258,7 @@ func TestNewMeta(t *testing.T) {
 }
 
 func TestWriteRejectsIncompleteEvent(t *testing.T) {
+	t.Parallel()
 	id := ids.New()
 	tests := []struct {
 		name       string
@@ -271,6 +273,7 @@ func TestWriteRejectsIncompleteEvent(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 			// The checks run before the transaction is used.
 			if err := Write(t.Context(), nil, tt.topic, tt.key, tt.ev); err == nil {
 				t.Error("Write() = nil, want an error")
@@ -640,6 +643,7 @@ func TestCleanupDeletesOnlyRowsSentOver24HoursAgo(t *testing.T) {
 }
 
 func TestRetryWait(t *testing.T) {
+	t.Parallel()
 	r := NewRelay(nil, nil, nil)
 	want := []time.Duration{500 * time.Millisecond, time.Second, 2 * time.Second, 4 * time.Second, 8 * time.Second, 10 * time.Second, 10 * time.Second}
 	for failures, w := range want {

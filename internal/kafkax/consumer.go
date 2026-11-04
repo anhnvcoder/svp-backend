@@ -180,6 +180,8 @@ func newConsumer(cfg ConsumerConfig) (*Consumer, error) {
 		return nil, fmt.Errorf("create kafka dead-letter counter: %w", err)
 	}
 	for _, topic := range cfg.Topics {
+		// The constructor takes no context and there is no cancellation scope to inherit: adding 0 only
+		// creates the series before the first dead-lettered record.
 		dlq.Add(context.Background(), 0, metric.WithAttributes(attribute.String("topic", topic), attribute.String("group", cfg.Group)))
 	}
 	return &Consumer{cl: cl, cfg: cfg, dlq: dlq}, nil

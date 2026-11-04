@@ -110,6 +110,9 @@ func (slogLogger) Log(level kgo.LogLevel, msg string, keyvals ...any) {
 	if level == kgo.LogLevelError {
 		l = slog.LevelError
 	}
+	// The kgo.Logger interface carries no context, so there is no trace to attach; the message is
+	// franz-go's own text, forwarded under a fixed prefix.
+	//nolint:sloglint // adapter: franz-go supplies the message, so it cannot be a constant
 	slog.Default().Log(context.Background(), l, "kafka client: "+msg, keyvals...)
 }
 
