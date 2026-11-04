@@ -197,7 +197,7 @@ manifests() {
 
 # pg_url SERVICE ROLE PASSWORD: the connection string of role svp_<SERVICE>_<ROLE> to database svp_<SERVICE> on
 # svp-pg. sslmode=require: the server's certificate is CloudNativePG's own, so the link is encrypted but the CA is not
-# checked (that is IN-3, stage 6). The passwords are hex, so nothing needs URL-encoding.
+# checked (that is IN-3). The passwords are hex, so nothing needs URL-encoding.
 pg_url() { printf 'postgres://svp_%s_%s:%s@svp-pg-rw.svp-data:5432/svp_%s?sslmode=require' "$1" "$2" "$3" "$1"; }
 
 # The services' Secrets in svp, one per service, each with only what that service's pods use, so one compromised

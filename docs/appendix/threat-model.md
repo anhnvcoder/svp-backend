@@ -89,7 +89,6 @@ giữ để tra ngược ai đổi dòng nào, khi nào, kiểm bằng gì. Tài
 > bề mặt mới AWS-1 tới AWS-7 ở [4.11](../threat-model.md#411-biên-aws), hàng giai đoạn 7 ở mục 5, một dòng ở mục 6. Phần chỉ kiểm được trên
 > AWS ghi "kiểm ở buổi AWS".
 > Xét lại ở giai đoạn 9 (review bảo mật).
-
 > Cập nhật ngày 2026-11-02 theo phần A, B của [ADR-0032](../adr/0032-argocd-deploy-status.md) (Argo CD Notifications trên nền tảng `eks`, khoá
 > GitHub App `svp-argocd-notifier` vào cluster qua External Secrets): SEC-5 (một Secret được ghi ở `argocd`), dòng mới SEC-8 ở 4.7. Phần chỉ
 > kiểm được trên EKS ghi "kiểm ở buổi AWS".

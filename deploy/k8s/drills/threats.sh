@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Drill: the stage 4 rows of the threat model (docs/threat-model.md, section 5) on cluster svp, the web client's rows
-# of stage 5b part C (section 4.9) and the stage 6 row of the backups of Postgres (BAK-1, section 4.10). Every item
+# Drill: the cluster rows of the threat model (docs/threat-model.md) on cluster svp, the web client's cluster rows
+# (section 4.9) and the backups of Postgres (BAK-1, section 4.10). Every item
 # prints ok and FAIL lines, and
 # "ok    control:" lines: a target a check finds closed answers a client the policy lets in, so "closed" means the
 # policy, not a service that is down. An item that fails does not stop the next ones; a table of PASS/FAIL per item
@@ -42,7 +42,7 @@
 #              host all all all scram-sha-256 (CloudNativePG's default); from GlitchTip's pod (allowed
 #              to 5432) a connection without a password, as postgres and as svp_user_app, with and without TLS, is
 #              refused with "no password supplied", a wrong password with "password authentication failed"; inside
-#              the primary, TCP to 127.0.0.1 without a password is refused too (the stage 1 hole of the host's
+#              the primary, TCP to 127.0.0.1 without a password is refused too (the old hole of the host's
 #              Postgres was trust on loopback);
 #   RL-1       after every login-ip bucket in Valkey has expired (GCRA: a key lives until its bucket is full again, at
 #              most 30 s; none is deleted), 40 wrong logins through https://api.svp.localhost:8443 over one HTTP/2

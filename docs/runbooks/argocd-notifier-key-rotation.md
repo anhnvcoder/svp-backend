@@ -38,7 +38,7 @@ kubectl --context <ctx> -n argocd get secret argocd-notifications-secret -o json
 kubectl --context <ctx> -n argocd logs deploy/argocd-notifications-controller --since=30m | grep -i -E 'github|401|403' | tail
 ```
 
-Trang App https://github.com/settings/apps/svp-argocd-notifier, mục **Private keys**, cho biết có mấy khoá và ngày tạo từng khoá.
+Trang App <https://github.com/settings/apps/svp-argocd-notifier>, mục **Private keys**, cho biết có mấy khoá và ngày tạo từng khoá.
 
 ## Nguyên nhân thường gặp
 
