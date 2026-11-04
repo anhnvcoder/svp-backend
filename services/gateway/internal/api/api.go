@@ -399,7 +399,15 @@ type initUploadResponse struct {
 
 // initUpload creates the video and returns the presigned POST. upload_url and form_fields are a
 // short-lived credential: they go to the client only and never to the log (threat model UP-2).
+// The optional Idempotency-Key goes on as the request_id of InitUpload, which answers a repeated
+// call with the video of the first.
 func (s *server) initUpload(w http.ResponseWriter, r *http.Request) {
+	key, ok := idempotencyKey(r)
+	if !ok {
+		httpx.WriteProblem(w, r, http.StatusBadRequest, "INVALID_IDEMPOTENCY_KEY",
+			`Idempotency-Key must be one quoted lowercase UUID, for example "00000000-0000-4000-8000-000000000001"`)
+		return
+	}
 	var req initUploadRequest
 	if !httpx.DecodeJSON(w, r, &req) {
 		return
@@ -410,6 +418,7 @@ func (s *server) initUpload(w http.ResponseWriter, r *http.Request) {
 		Title:       req.Title,
 		SizeBytes:   req.SizeBytes,
 		ContentType: req.ContentType,
+		RequestId:   key,
 	})
 	if err != nil {
 		httpx.WriteGRPCError(w, r, err)
@@ -426,6 +435,31 @@ func (s *server) initUpload(w http.ResponseWriter, r *http.Request) {
 		FormFields: fields,
 		ExpiresAt:  resp.GetExpiresAt().AsTime(),
 	})
+}
+
+// idempotencyKey returns the UUID of the request's Idempotency-Key, "" when it has none. The
+// header is a Structured Field String (RFC 9651 §3.3.3, draft-ietf-httpapi-idempotency-key-header
+// §2.1) holding a canonical lowercase UUID; ok is false for any other value, an empty one, or more
+// than one field line.
+func idempotencyKey(r *http.Request) (key string, ok bool) {
+	values := r.Header.Values("Idempotency-Key")
+	switch len(values) {
+	case 0:
+		return "", true
+	case 1:
+	default:
+		return "", false
+	}
+	// A UUID holds no character a String escapes, so the quotes are all there is to strip.
+	v := strings.Trim(values[0], " ")
+	if len(v) < 2 || v[0] != '"' || v[len(v)-1] != '"' {
+		return "", false
+	}
+	key = v[1 : len(v)-1]
+	if _, err := ids.Parse(key); err != nil {
+		return "", false
+	}
+	return key, true
 }
 
 type videoResponse struct {
@@ -483,7 +517,7 @@ type publicVideoStats struct {
 
 // getPublicVideo serves the public share page. It never reads the
 // Authorization header, a wrong token included, so nothing here has a caller: GetPublicVideo
-// and GetStats go out without x-user-id, and the answer is the same for everyone. The rate
+// and GetStats go out without a token, and the answer is the same for everyone. The rate
 // limit by client IP comes before any call, so a caller over it costs no service anything
 // (threat model WEB-15).
 //
@@ -770,7 +804,7 @@ func (s *server) serveFeed(w http.ResponseWriter, r *http.Request, fetch func(ct
 // nothing, and a nil map answers nil for every key. A call that fails only leaves its part out
 // (see getStats, getAuthors). An empty page makes no call.
 //
-// GetStats goes out with the caller's x-user-id when the request has one, for liked_by_me; on
+// GetStats goes out with the caller's token when the request has one, for liked_by_me; on
 // the public route there is none, and engagement-service then reads no like.
 func (s *server) addExtras(r *http.Request, videoIDs, authorIDs []string) (map[string]*videoStats, map[string]*profile) {
 	if len(videoIDs) == 0 {

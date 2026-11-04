@@ -8,8 +8,11 @@
 ## Ý nghĩa và tác động tới người dùng
 
 Access token là JWT Ed25519, hạn **1 giờ** (`TTL` của `internal/authtoken`), header mang `kid`. user-service ký bằng
-`JWT_SIGNING_KID` + `JWT_SIGNING_KEY`; gateway kiểm bằng `JWT_VERIFY_KEYS`, danh sách `kid:<public key base64>` cách nhau dấu
-phẩy, nên gateway nhận được nhiều khoá cùng lúc. Refresh token là chuỗi ngẫu nhiên lưu ở user-service, không phải JWT: đổi khoá
+`JWT_SIGNING_KID` + `JWT_SIGNING_KEY`; gateway và bốn service gRPC (user, video, engagement, feed) kiểm bằng `JWT_VERIFY_KEYS`,
+danh sách `kid:<public key base64>` cách nhau dấu phẩy, nên cả năm nhận được nhiều khoá cùng lúc. Gateway kiểm token của client,
+mỗi service kiểm lại token gateway chuyển tiếp ([ADR-0042](../adr/0042-caller-identity-grpc.md)): khoá công khai mới phải tới
+**cả năm** process trước khi user-service ký bằng `kid` mới. Service nào chưa có `kid` mới trả `UNAUTHENTICATED` cho mọi RPC có
+người gọi, client nhận 401 và web đăng xuất người dùng. Refresh token là chuỗi ngẫu nhiên lưu ở user-service, không phải JWT: đổi khoá
 đúng trình tự không làm mất phiên đăng nhập.
 
 Đổi khoá đúng trình tự thì người dùng không thấy gì. Bỏ khoá cũ quá sớm (khi access token ký bằng nó chưa hết hạn, như nhánh
@@ -17,8 +20,9 @@ phẩy, nên gateway nhận được nhiều khoá cùng lúc. Refresh token là
 mà xoá phiên và thu hồi cả họ refresh token. Chỉ client gọi API thẳng, tự giữ refresh token, mới lấy được token mới bằng
 `POST /auth/refresh` mà không đăng nhập lại.
 
-Khoá nằm ở `.env` (compose đọc thẳng; k3d chép vào Secret `svp/user-service-env` cho khoá ký và `svp/gateway-env` cho khoá
-công khai qua `make k8s-secrets`). Không in `.env`, không in khoá.
+Khoá nằm ở `.env` (compose đọc thẳng; k3d chép qua `make k8s-secrets` vào Secret `svp/user-service-env` cho khoá ký, khoá công
+khai vào `svp/gateway-env` và `svp/<service>-env` của bốn service gRPC; cluster có External Secrets, kể cả EKS, nhận nguồn
+`svp-secrets/jwt-signing`, `svp-secrets/jwt-verify` rồi ExternalSecret dựng các Secret đó). Không in `.env`, không in khoá.
 
 ## Kiểm tra nhanh (5 phút)
 
@@ -28,9 +32,10 @@ Trước khi đổi, xác nhận trạng thái hiện tại mà không in giá t
 # số khoá gateway đang nhận và các kid (kid không bí mật; phần sau dấu ':' không in)
 grep '^JWT_VERIFY_KEYS=' .env | cut -d= -f2- | tr ',' '\n' | cut -d: -f1
 grep '^JWT_SIGNING_KID=' .env
-# gateway và user-service đang chạy
+# gateway và bốn service gRPC đang chạy
 make ps                                                     # compose
-kubectl --context k3d-svp -n svp get pods -l 'app.kubernetes.io/name in (gateway,user-service)'   # k3d
+kubectl --context k3d-svp -n svp get pods \
+  -l 'app.kubernetes.io/name in (gateway,user-service,video-service,engagement-service,feed-service)'   # k3d
 ```
 
 `kid` có dạng `<ngày UTC>-<8 hex>` (`tools/jwtkey`), nên cho biết khoá đã dùng bao lâu.
@@ -54,9 +59,9 @@ umask 077; jwtnew=$(mktemp); go run ./tools/jwtkey > "$jwtnew"
 cut -d= -f1 "$jwtnew"           # chỉ in tên ba biến: JWT_SIGNING_KID, JWT_SIGNING_KEY, JWT_VERIFY_KEYS
 ```
 
-**Bước 1. Gateway nhận cả hai khoá.** Trong `.env`, nối giá trị `JWT_VERIFY_KEYS` của file tạm vào sau giá trị cũ, cách bằng dấu
-phẩy: `JWT_VERIFY_KEYS=<kid cũ>:<base64 cũ>,<kid mới>:<base64 mới>`. Áp dụng trên compose (chỉ container có biến đổi, gateway, được
-tạo lại):
+**Bước 1. Gateway và bốn service gRPC nhận cả hai khoá.** Trong `.env`, nối giá trị `JWT_VERIFY_KEYS` của file tạm vào sau giá
+trị cũ, cách bằng dấu phẩy: `JWT_VERIFY_KEYS=<kid cũ>:<base64 cũ>,<kid mới>:<base64 mới>`. Áp dụng trên compose (chỉ container có
+biến đổi, gateway và bốn service gRPC, được tạo lại):
 
 ```sh
 make up OBS=lgtm
@@ -69,26 +74,42 @@ k3d, trước hết biết cluster đi đường nào: có Application `svp-root
 kubectl --context k3d-svp -n argocd get applications.argoproj.io svp-root    # NotFound: đường dev
 ```
 
-Đường dev: `make k8s-up` thấy Secret `gateway-env` đổi thì restart gateway qua `spec.restartAt` (từng pod, không canary) và chờ
-Rollout `Healthy`.
+Đường dev: `make k8s-up` thấy Secret `<service>-env` đổi thì restart workload đó và chờ pod mới Ready: gateway qua
+`spec.restartAt` (từng pod, không canary, chờ Rollout `Healthy`), bốn service gRPC bằng rollout của Deployment.
 
 ```sh
 make k8s-secrets && make k8s-up
 ```
 
-Cluster GitOps: chép Secret rồi restart gateway như vậy bằng tay. Gateway chỉ đọc biến môi trường lúc khởi động, nên tới khi
-lệnh kiểm in `<giá trị $at> Healthy`, pod cũ (chỉ có khoá cũ) có thể vẫn còn phục vụ.
+Cluster GitOps: `make k8s-secrets` ghi nguồn `jwt-verify` và dựng lại các ExternalSecret, rồi restart bằng tay gateway và bốn
+service. Process chỉ đọc biến môi trường lúc khởi động, nên tới khi gateway in `<giá trị $at> Healthy` và cả bốn Deployment
+rollout xong, pod cũ (chỉ có khoá cũ) có thể vẫn còn phục vụ.
 
 ```sh
 make k8s-secrets
 at=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 kubectl --context k3d-svp -n svp patch rollout gateway --type merge -p "{\"spec\":{\"restartAt\":\"$at\"}}"
+for d in user-service video-service engagement-service feed-service; do
+  kubectl --context k3d-svp -n svp rollout restart "deployment/$d"
+done
+for d in user-service video-service engagement-service feed-service; do
+  kubectl --context k3d-svp -n svp rollout status "deployment/$d" --timeout=300s
+done
 # xong khi in "<giá trị $at> Healthy"; trước đó chưa sang bước 2
 kubectl --context k3d-svp -n svp get rollout gateway -o jsonpath='{.status.restartedAt} {.status.phase}{"\n"}'
 ```
 
-Gateway không khởi động khi `JWT_VERIFY_KEYS` sai dạng hay trùng `kid`: kiểm mọi pod gateway đã Ready với khoá mới trước khi
-sang bước 2.
+EKS: người vận hành chạy `make eks-secrets CONTEXT=<context EKS>` (ghi nguồn ở `svp-secrets`, dựng lại ExternalSecret), rồi đúng
+các lệnh restart và kiểm ở trên với `--context <context EKS>` thay cho `--context k3d-svp`.
+
+Gateway và service không khởi động khi `JWT_VERIFY_KEYS` sai dạng hay trùng `kid`. Trước khi sang bước 2, kiểm mọi pod của năm
+workload đã Ready và khởi động sau lúc áp dụng (cột `START` muộn hơn lệnh restart; compose: `make ps`, cột thời gian tạo):
+
+```sh
+kubectl --context k3d-svp -n svp get pods \
+  -l 'app.kubernetes.io/name in (gateway,user-service,video-service,engagement-service,feed-service)' \
+  -o custom-columns='NAME:.metadata.name,START:.status.startTime,READY:.status.containerStatuses[*].ready'
+```
 
 **Bước 2. user-service ký bằng khoá mới.** Trong `.env`, thay `JWT_SIGNING_KID` và `JWT_SIGNING_KEY` bằng hai dòng của file tạm.
 Áp dụng: compose và đường dev như bước 1 (lần này user-service được tạo lại hay restart, Secret `user-service-env`); cluster
@@ -100,7 +121,7 @@ kubectl --context k3d-svp -n svp rollout restart deployment/user-service
 kubectl --context k3d-svp -n svp rollout status deployment/user-service --timeout=300s
 ```
 
-Token mới mang `kid` mới, gateway đã nhận nó từ bước 1; token cũ còn hợp lệ tới khi hết hạn.
+Token mới mang `kid` mới, gateway và bốn service đã nhận nó từ bước 1; token cũ còn hợp lệ tới khi hết hạn.
 
 **Bước 3. Bỏ khoá cũ**, sau khi user-service cuối cùng còn khoá cũ đã dừng ít nhất **1 giờ** (hạn access token) cộng vài phút dư
 cho lệch đồng hồ: xoá mục `<kid cũ>:<base64 cũ>,` khỏi `JWT_VERIFY_KEYS`, áp dụng như bước 1. Rồi xoá file tạm:
@@ -120,22 +141,27 @@ lại thời điểm để đối chiếu log.
 
 ```sh
 grep '^JWT_VERIFY_KEYS=' .env | cut -d= -f2- | tr ',' '\n' | cut -d: -f1     # sau bước 3: chỉ còn kid mới
-make smoke         # compose: đăng ký, đăng nhập (token kid mới), refresh, feed (LOCAL LAB ONLY)
+make smoke         # compose: đăng ký, đăng nhập (token kid mới), refresh, feed, RPC có người gọi ở cả bốn service (LOCAL LAB ONLY)
 make k8s-smoke     # k3d
 ```
 
-Trong log gateway không có lỗi kiểm token tăng bất thường sau bước 3 (ngoài token cũ của client chưa refresh).
+Trong log gateway và bốn service không có lỗi kiểm token tăng bất thường sau bước 2 và bước 3 (ngoài token cũ của client chưa
+refresh); ở service đó là dòng INFO `caller token rejected`.
 
 ## Leo thang
 
-- Gateway không khởi động sau bước 1: trả `JWT_VERIFY_KEYS` về giá trị cũ, áp dụng lại; kiểm dấu phẩy, `kid` trùng, khoảng trắng.
-- Người dùng bị 401 hàng loạt sau bước 2: gateway chưa có khoá mới (bước 1 chưa áp dụng hay pod gateway cũ còn phục vụ); thêm
-  khoá mới vào `JWT_VERIFY_KEYS` trước, không quay lại khoá ký cũ khi đang nghi lộ.
+- Gateway hay một service gRPC không khởi động sau bước 1: trả `JWT_VERIFY_KEYS` về giá trị cũ, áp dụng lại; kiểm dấu phẩy, `kid`
+  trùng, khoảng trắng.
+- Người dùng bị 401 hàng loạt sau bước 2: gateway hay một trong bốn service chưa có khoá mới (bước 1 chưa áp dụng ở đó, hay pod
+  cũ còn phục vụ; service có dòng `caller token rejected`); đưa khoá mới tới workload đó trước, không quay lại khoá ký cũ khi
+  đang nghi lộ.
 - Khoá bị lộ thật: mở postmortem; xét thêm thu hồi refresh token (đăng xuất mọi phiên) nếu kẻ lộ khoá có thể đã dùng nó.
 
 ## Liên kết
 
 - [Threat model](../threat-model.md) SEC-4, JWT-10; [ADR-0020](../adr/0020-reliability-stage6.md) §12;
   [ADR-0016](../adr/0016-web-client.md) §2 (refresh token).
-- Mã: `tools/jwtkey`, `internal/authtoken` (`TTL`, `ParseVerifyKeys`), `deploy/k8s/secrets.sh`.
+- [ADR-0042](../adr/0042-caller-identity-grpc.md) (service kiểm lại token gateway chuyển tiếp).
+- Mã: `tools/jwtkey`, `internal/authtoken` (`TTL`, `ParseVerifyKeys`), `internal/callerid`, `deploy/k8s/secrets.sh`,
+  `deploy/helm/svp-cluster/files/external-secrets.yaml`.
 - Diễn tập: chưa có; diễn tập đổi khoá ở giai đoạn 7.

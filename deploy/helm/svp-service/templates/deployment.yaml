@@ -107,9 +107,14 @@ spec:
             timeoutSeconds: 5
             failureThreshold: 3
           {{- else if eq .Values.protocol "grpc" }}
-          # The standard gRPC health service, SERVING from the moment the server listens until shutdown starts; it
-          # does not depend on the database. The startup probe gives a slow start (a database or broker still coming
-          # up) 60 s before liveness may restart the container.
+          # The standard gRPC health service. Startup and liveness ask for the overall health "", SERVING from the
+          # moment the server listens until shutdown starts and independent of the database: restarting the container
+          # cannot fix a database that is down, and a database that flaps would restart every pod. Readiness asks for
+          # the service name "readiness", which follows a ping of the service's Postgres pool (every 2 s, NOT_SERVING
+          # after 3 failures in a row): every RPC needs that database, so a pod that cannot reach it leaves the
+          # Service, and a new pod enters it only once the database answers. Redis, the object store and Kafka stay
+          # out, since only part of the work needs them. The startup probe gives a slow start (a database or broker
+          # still coming up) 60 s before liveness may restart the container.
           # Timeouts: the default of 1 s is too short when the node's CPU is saturated, and a liveness probe that times
           # out makes the kubelet restart a pod that is still alive, which costs more CPU. Liveness and startup only
           # catch a hung process (startup's 2 s equals its period); readiness stays short so a slow pod leaves the
@@ -120,7 +125,7 @@ spec:
             timeoutSeconds: 2
             failureThreshold: 30
           readinessProbe:
-            grpc: {port: {{ .Values.port }}}
+            grpc: {port: {{ .Values.port }}, service: readiness}
             periodSeconds: 5
             timeoutSeconds: 2
           livenessProbe:

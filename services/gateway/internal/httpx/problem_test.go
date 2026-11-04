@@ -108,6 +108,32 @@ func TestWriteGRPCErrorUnwrapsWrappedStatus(t *testing.T) {
 	}
 }
 
+// The idempotency reasons get a finer status than their gRPC code; a 5xx keeps its own.
+func TestWriteGRPCErrorReasonStatus(t *testing.T) {
+	for _, tc := range []struct {
+		code       codes.Code
+		reason     string
+		wantStatus int
+		wantTitle  string
+		wantCode   string
+	}{
+		{codes.InvalidArgument, "IDEMPOTENCY_KEY_MISMATCH", 422, "Unprocessable Entity", "IDEMPOTENCY_KEY_MISMATCH"},
+		{codes.FailedPrecondition, "VIDEO_NOT_UPLOADING", 409, "Conflict", "VIDEO_NOT_UPLOADING"},
+		{codes.Internal, "VIDEO_NOT_UPLOADING", 500, "Internal Server Error", "INTERNAL"},
+	} {
+		t.Run(tc.reason+" "+tc.code.String(), func(t *testing.T) {
+			captureLog(t)
+			rec := httptest.NewRecorder()
+			WriteGRPCError(rec, httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/", nil),
+				grpcerr.New(tc.code, tc.reason, "message"))
+			p := decodeProblem(t, rec)
+			if rec.Code != tc.wantStatus || p.Status != tc.wantStatus || p.Title != tc.wantTitle || p.Code != tc.wantCode {
+				t.Errorf("got %d %+v, want %d %q code %q", rec.Code, p, tc.wantStatus, tc.wantTitle, tc.wantCode)
+			}
+		})
+	}
+}
+
 func TestWriteGRPCErrorNonStatusIsInternal(t *testing.T) {
 	captureLog(t)
 	rec := httptest.NewRecorder()

@@ -405,6 +405,7 @@ func TestBatchStopLeavesBatchUncommitted(t *testing.T) {
 	tests := []struct {
 		name    string
 		backoff time.Duration
+		budget  time.Duration
 		wait    time.Duration
 		handler func(started chan<- struct{}) BatchHandler
 	}{
@@ -421,10 +422,24 @@ func TestBatchStopLeavesBatchUncommitted(t *testing.T) {
 		{
 			name:    "during backoff",
 			backoff: time.Hour,
+			budget:  2 * time.Hour,
 			handler: func(started chan<- struct{}) BatchHandler {
 				return func(context.Context, *Batch) ([]Rejected, error) {
 					close(started)
 					return nil, errors.New("transient")
+				}
+			},
+		},
+		{
+			// The budget has run out when the attempt ends, but the stop comes first.
+			name:   "during an attempt past the retry budget",
+			budget: time.Millisecond,
+			handler: func(started chan<- struct{}) BatchHandler {
+				var once sync.Once
+				return func(ctx context.Context, _ *Batch) ([]Rejected, error) {
+					once.Do(func() { close(started) })
+					<-ctx.Done()
+					return nil, ctx.Err()
 				}
 			},
 		},
@@ -448,7 +463,7 @@ func TestBatchStopLeavesBatchUncommitted(t *testing.T) {
 			started := make(chan struct{})
 			polled := newFirstPolled()
 			r := startBatch(t, BatchConsumerConfig{Brokers: brokers, Group: "g", Topics: []string{"in"},
-				BackoffBase: tt.backoff, BackoffMax: tt.backoff, MaxBatchWait: tt.wait,
+				BackoffBase: tt.backoff, BackoffMax: tt.backoff, RetryBudget: tt.budget, MaxBatchWait: tt.wait,
 				opts: []kgo.Opt{kgo.WithHooks(polled)}, Handler: tt.handler(started)})
 			if tt.wait > 0 {
 				waitFor(t, polled.ch, "the first poll")
@@ -474,6 +489,9 @@ func TestBatchStopLeavesBatchUncommitted(t *testing.T) {
 			if c := committed(t, brokers, "g"); len(c) != 0 {
 				t.Errorf("committed offsets = %v, want none", c)
 			}
+			if rs := readTopic(t, brokers, "in.dlq", 1, 300*time.Millisecond); len(rs) != 0 {
+				t.Errorf("dead-letter topic has %d records, want 0", len(rs))
+			}
 			if next := nextInGroup(t, brokers, "g", "in"); string(next.Value) != "job-0" {
 				t.Errorf("next record for the group = %q, want job-0 again", next.Value)
 			}
@@ -496,6 +514,205 @@ func TestBatchDLQProduceFailureStopsWithoutCommit(t *testing.T) {
 	}
 	if c := committed(t, brokers, "g"); len(c) != 0 {
 		t.Errorf("committed offsets = %v, want none", c)
+	}
+}
+
+// fakeClock is a clock for the retry loop of settle: time moves only when the loop sleeps, so
+// the time between attempts is the sum of the backoffs, whatever the load on the machine.
+type fakeClock struct {
+	mu  sync.Mutex
+	now time.Time
+}
+
+func (c *fakeClock) Now() time.Time {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.now
+}
+
+// Sleep moves the clock d forward at once, or returns false when ctx is canceled, as sleep does.
+func (c *fakeClock) Sleep(ctx context.Context, d time.Duration) bool {
+	if ctx.Err() != nil {
+		return false
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.now = c.now.Add(d)
+	return true
+}
+
+// TestBatchRetryBudgetSendsBatchToDLQ fails the handler on every attempt: once the retry budget
+// runs out every record of the batch, from both partitions, is in the dead-letter topic with its
+// own origin, the batch is committed and counted, and one ERROR line names it. The retry loop runs
+// on a fakeClock, so the budget bounds hold exactly. It sets the global meter provider, so it does
+// not run in parallel.
+func TestBatchRetryBudgetSendsBatchToDLQ(t *testing.T) {
+	_, reader := traceTelemetry(t)
+	brokers := cluster(t, 2, "in", "in.dlq")
+	prod := manualProducer(t, brokers)
+	produce(t, prod,
+		&kgo.Record{Topic: "in", Partition: 0, Key: []byte("k0"), Value: []byte("x"), Headers: []kgo.RecordHeader{{Key: "event-type", Value: []byte("e")}}},
+		&kgo.Record{Topic: "in", Partition: 1, Value: []byte("y")},
+		&kgo.Record{Topic: "in", Partition: 1, Value: []byte("z")},
+	)
+
+	const (
+		budget     = 500 * time.Millisecond
+		backoffMax = 20 * time.Millisecond
+	)
+	logger, logs := newLogger()
+	clock := &fakeClock{now: time.Now()}
+	var (
+		mu      sync.Mutex
+		starts  []time.Time
+		commits commitCounter
+	)
+	r := startBatch(t, BatchConsumerConfig{Brokers: brokers, Group: "g", Topics: []string{"in"}, Logger: logger,
+		MaxBatchWait: 500 * time.Millisecond, RetryBudget: budget, BackoffMax: backoffMax,
+		opts: []kgo.Opt{kgo.WithHooks(&commits)}, now: clock.Now, sleep: clock.Sleep,
+		Handler: func(_ context.Context, b *Batch) ([]Rejected, error) {
+			mu.Lock()
+			defer mu.Unlock()
+			starts = append(starts, clock.Now())
+			if len(b.Records) != 3 {
+				t.Errorf("batch has %d records, want 3", len(b.Records))
+			}
+			return nil, errors.New("database unavailable")
+		}})
+	dlq := readTopic(t, brokers, "in.dlq", 3, 10*time.Second)
+	time.Sleep(300 * time.Millisecond)
+	if err := r.stop(t); err != nil {
+		t.Fatalf("Run() = %v, want nil", err)
+	}
+
+	mu.Lock()
+	attempts, first, last := len(starts), starts[0], starts[len(starts)-1]
+	mu.Unlock()
+	if attempts < 2 {
+		t.Errorf("handler calls = %d, want retries before the dead-letter topic", attempts)
+	}
+	// No attempt starts past the budget, and the batch is given up only once the next backoff, at
+	// most backoffMax, no longer fits in it. Only the backoffs move the clock, so the last attempt
+	// starts their sum after the first.
+	if d := last.Sub(first); d > budget || d <= budget-backoffMax {
+		t.Errorf("last attempt started %v after the first, want in (%v, %v]", d, budget-backoffMax, budget)
+	}
+
+	if len(dlq) != 3 {
+		t.Fatalf("dead-letter topic has %d records, want 3", len(dlq))
+	}
+	got := map[string]map[string]string{}
+	for _, d := range dlq {
+		h := headerMap(d)
+		got[string(d.Value)] = h
+		if string(d.Value) == "x" && (string(d.Key) != "k0" || h["event-type"] != "e") {
+			t.Errorf("dead-letter record x key/event-type = %q/%q, want the original", d.Key, h["event-type"])
+		}
+	}
+	origin := map[string][2]string{"x": {"0", "0"}, "y": {"1", "0"}, "z": {"1", "1"}}
+	for v, o := range origin {
+		h := got[v]
+		want := map[string]string{"dlq-reason": "retries-exhausted", "dlq-error": "database unavailable",
+			"dlq-topic": "in", "dlq-partition": o[0], "dlq-offset": o[1], "dlq-group": "g"}
+		for k, wv := range want {
+			if h[k] != wv {
+				t.Errorf("record %s: dead-letter header %s = %q, want %q", v, k, h[k], wv)
+			}
+		}
+	}
+
+	if n := commits.n.Load(); n != 1 {
+		t.Errorf("offset commits = %d, want 1", n)
+	}
+	want := map[TopicPartition]int64{{"in", 0}: 1, {"in", 1}: 2}
+	if c := committed(t, brokers, "g"); fmt.Sprint(c) != fmt.Sprint(want) {
+		t.Errorf("committed offsets = %v, want %v", c, want)
+	}
+	if n := dlqCount(t, reader, "in", "g"); n != 3 {
+		t.Errorf("dead-letter counter = %d, want 3", n)
+	}
+	recs := logs.records(t, "kafka batch sent to dead-letter topic")
+	if len(recs) != 1 {
+		t.Fatalf("batch dead-letter log lines = %d, want 1", len(recs))
+	}
+	rec := recs[0]
+	if rec["level"] != "ERROR" || rec["records"] != 3.0 || rec["attempts"] != float64(attempts) ||
+		rec["offsets"] != "in/0:0-0 in/1:0-1" || rec["reason"] != "retries-exhausted" || rec["error"] != "database unavailable" {
+		t.Errorf("batch dead-letter log = %v", rec)
+	}
+	if n := len(logs.records(t, "kafka batch handler failed, retrying")); n != attempts-1 {
+		t.Errorf("retry log lines = %d, want %d", n, attempts-1)
+	}
+}
+
+// TestBatchSucceedsWithinRetryBudget fails the handler for about half the budget: the batch is
+// then handled and committed, and nothing goes to the dead-letter topic.
+func TestBatchSucceedsWithinRetryBudget(t *testing.T) {
+	t.Parallel()
+	brokers := cluster(t, 1, "in", "in.dlq")
+	produce(t, producer(t, brokers), &kgo.Record{Topic: "in", Value: []byte("x")})
+
+	const budget = time.Second
+	var (
+		first   time.Time
+		calls   int
+		done    = make(chan struct{})
+		commits commitCounter
+	)
+	r := startBatch(t, BatchConsumerConfig{Brokers: brokers, Group: "g", Topics: []string{"in"},
+		RetryBudget: budget, BackoffMax: 20 * time.Millisecond, opts: []kgo.Opt{kgo.WithHooks(&commits)},
+		Handler: func(context.Context, *Batch) ([]Rejected, error) {
+			calls++
+			if first.IsZero() {
+				first = time.Now()
+			}
+			if time.Since(first) < budget/2 {
+				return nil, errors.New("database unavailable")
+			}
+			close(done)
+			return nil, nil
+		}})
+	waitFor(t, done, "the successful attempt")
+	time.Sleep(300 * time.Millisecond)
+	if err := r.stop(t); err != nil {
+		t.Fatalf("Run() = %v, want nil", err)
+	}
+	if calls < 2 {
+		t.Errorf("handler calls = %d, want retries", calls)
+	}
+	if n := commits.n.Load(); n != 1 {
+		t.Errorf("offset commits = %d, want 1", n)
+	}
+	if c := committed(t, brokers, "g"); c[TopicPartition{"in", 0}] != 1 {
+		t.Errorf("committed offsets = %v, want in/0 at 1", c)
+	}
+	if rs := readTopic(t, brokers, "in.dlq", 1, 500*time.Millisecond); len(rs) != 0 {
+		t.Errorf("dead-letter topic has %d records, want 0", len(rs))
+	}
+}
+
+// TestBatchRetryBudgetDLQFailureStopsWithoutCommit runs out the budget with no dead-letter topic
+// to write to: Run returns the produce error and the batch stays uncommitted.
+func TestBatchRetryBudgetDLQFailureStopsWithoutCommit(t *testing.T) {
+	t.Parallel()
+	brokers := cluster(t, 1, "in") // no in.dlq
+	produce(t, producer(t, brokers), &kgo.Record{Topic: "in", Value: []byte("x")})
+
+	logger, logs := newLogger()
+	r := startBatch(t, BatchConsumerConfig{Brokers: brokers, Group: "g", Topics: []string{"in"}, Logger: logger,
+		RetryBudget: 50 * time.Millisecond,
+		Handler: func(context.Context, *Batch) ([]Rejected, error) {
+			return nil, errors.New("database unavailable")
+		}})
+	err := r.wait(t)
+	if err == nil || !strings.Contains(err.Error(), "dead-letter topic in.dlq") {
+		t.Fatalf("Run() = %v, want a dead-letter produce error", err)
+	}
+	if c := committed(t, brokers, "g"); len(c) != 0 {
+		t.Errorf("committed offsets = %v, want none", c)
+	}
+	if n := len(logs.records(t, "kafka batch sent to dead-letter topic")); n != 0 {
+		t.Errorf("batch dead-letter log lines = %d, want 0 before a commit", n)
 	}
 }
 

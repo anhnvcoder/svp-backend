@@ -411,6 +411,145 @@ func TestReplayFollowUnfollowFollow(t *testing.T) {
 	}
 }
 
+// readModel returns, in a fixed order, every follows, videos and timeline row that names one of
+// ids, created_at included: the whole state the projector writes about them.
+func readModel(t *testing.T, ids ...string) []string {
+	t.Helper()
+	rows, err := testPool.Query(t.Context(), `
+SELECT 'follows ' || row_to_json(f)::text FROM follows f
+WHERE f.followee_id::text = ANY($1) OR f.follower_id::text = ANY($1)
+UNION ALL
+SELECT 'videos ' || row_to_json(v)::text FROM videos v
+WHERE v.video_id::text = ANY($1) OR v.author_id::text = ANY($1)
+UNION ALL
+SELECT 'timeline ' || row_to_json(l)::text FROM timeline l
+WHERE l.user_id::text = ANY($1) OR l.video_id::text = ANY($1)
+ORDER BY 1`, ids)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := pgx.CollectRows(rows, pgx.RowTo[string])
+	if err != nil {
+		t.Fatal(err)
+	}
+	return got
+}
+
+// The same record (same event_id, same payload) handled twice leaves the read model as the first
+// delivery left it, for every event type of both topics, those the feed skips included.
+func TestSameRecordTwiceChangesNothing(t *testing.T) {
+	needDB(t)
+	unknownBranch := func(topic string, empty proto.Message) *kgo.Record {
+		// An unknown oneof field: number 15 as a length-delimited field, which neither event has.
+		return &kgo.Record{Topic: topic, Value: append(mustMarshal(t, empty), 15<<3|2, 2, 'h', 'i')}
+	}
+	cases := []struct {
+		name string
+		// setup is handled first; record is then handled twice.
+		setup  func(author, b, c, old string) []*kgo.Record
+		record func(author, b, video string) *kgo.Record
+		skip   bool
+	}{
+		{
+			name: "user.followed",
+			setup: func(author, _, c, old string) []*kgo.Record {
+				return []*kgo.Record{followRecord(t, c, author), readyRecord(t, old, author, now().Add(-time.Hour))}
+			},
+			record: func(author, b, _ string) *kgo.Record { return followRecord(t, b, author) },
+		},
+		{
+			name: "user.unfollowed",
+			setup: func(author, b, c, old string) []*kgo.Record {
+				return []*kgo.Record{followRecord(t, b, author), followRecord(t, c, author),
+					readyRecord(t, old, author, now().Add(-time.Hour))}
+			},
+			record: func(author, b, _ string) *kgo.Record { return unfollowRecord(t, b, author) },
+		},
+		{
+			name: "video.ready",
+			setup: func(author, b, c, old string) []*kgo.Record {
+				return []*kgo.Record{followRecord(t, b, author), followRecord(t, c, author),
+					readyRecord(t, old, author, now().Add(-time.Hour))}
+			},
+			record: func(author, _, video string) *kgo.Record { return readyRecord(t, video, author, now()) },
+		},
+		{
+			name: "video.uploaded",
+			setup: func(author, b, _, old string) []*kgo.Record {
+				return []*kgo.Record{followRecord(t, b, author), readyRecord(t, old, author, now().Add(-time.Hour))}
+			},
+			record: func(author, _, video string) *kgo.Record {
+				return &kgo.Record{Topic: TopicVideoLifecycle, Key: []byte(video), Value: mustMarshal(t, &videov1.VideoEvent{
+					Meta:  outbox.NewMeta(),
+					Event: &videov1.VideoEvent_VideoUploaded{VideoUploaded: &videov1.VideoUploaded{VideoId: video, AuthorId: author}},
+				})}
+			},
+			skip: true,
+		},
+		{
+			name: "unknown video branch",
+			setup: func(author, b, _, old string) []*kgo.Record {
+				return []*kgo.Record{followRecord(t, b, author), readyRecord(t, old, author, now().Add(-time.Hour))}
+			},
+			record: func(string, string, string) *kgo.Record {
+				return unknownBranch(TopicVideoLifecycle, &videov1.VideoEvent{Meta: outbox.NewMeta()})
+			},
+			skip: true,
+		},
+		{
+			name: "unknown follow branch",
+			setup: func(author, b, _, old string) []*kgo.Record {
+				return []*kgo.Record{followRecord(t, b, author), readyRecord(t, old, author, now().Add(-time.Hour))}
+			},
+			record: func(string, string, string) *kgo.Record {
+				return unknownBranch(TopicUserFollows, &userv1.FollowEvent{Meta: outbox.NewMeta()})
+			},
+			skip: true,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			p := newProjector()
+			author, b, c, old, video := ids.New(), ids.New(), ids.New(), ids.New(), ids.New()
+			all := []string{author, b, c, old, video}
+			handle(t, p, tc.setup(author, b, c, old)...)
+			before := readModel(t, all...)
+			r := tc.record(author, b, video)
+
+			handle(t, p, r)
+			first := readModel(t, all...)
+			if changed := !slices.Equal(first, before); changed == tc.skip {
+				t.Fatalf("first delivery changed the read model = %v, want %v:\nbefore %v\nafter  %v", changed, !tc.skip, before, first)
+			}
+			handle(t, p, r)
+			if second := readModel(t, all...); !slices.Equal(second, first) {
+				t.Errorf("second delivery changed the read model:\nfirst  %v\nsecond %v", first, second)
+			}
+		})
+	}
+}
+
+// An old user.followed replayed alone after the edge's user.unfollowed (pushed back from the
+// dead-letter topic, say) brings the edge and its backfill back. This is the known limit of
+// ADR-0009: replays must keep partition order (TestReplayFollowUnfollowFollow); a safe lone
+// replay needs edge tombstones with occurred_at, which the feed does not have.
+func TestOldFollowReplayedAfterUnfollowRestoresEdge(t *testing.T) {
+	needDB(t)
+	p := newProjector()
+	author, b, video := ids.New(), ids.New(), ids.New()
+	follow := followRecord(t, b, author)
+	handle(t, p, readyRecord(t, video, author, now().Add(-time.Hour)), follow, unfollowRecord(t, b, author))
+	if following(t, b, author) || len(timeline(t, b)) != 0 {
+		t.Fatalf("after unfollow: following %v, timeline %v; want false and empty", following(t, b, author), timeline(t, b))
+	}
+
+	handle(t, p, follow)
+	if !following(t, b, author) || !slices.Equal(timeline(t, b), []string{video}) {
+		t.Errorf("after the old follow replayed: following %v, timeline %v; want true and [%s] (ADR-0009 known limit)",
+			following(t, b, author), timeline(t, b), video)
+	}
+}
+
 func TestBackfillTakesNewestTwentyWithinThirtyDays(t *testing.T) {
 	needDB(t)
 	p := newProjector()

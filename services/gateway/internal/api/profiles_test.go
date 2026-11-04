@@ -21,7 +21,6 @@ import (
 	engagementv1 "github.com/anhnvcoder/svp-backend/gen/go/svp/engagement/v1"
 	userv1 "github.com/anhnvcoder/svp-backend/gen/go/svp/user/v1"
 	videov1 "github.com/anhnvcoder/svp-backend/gen/go/svp/video/v1"
-	"github.com/anhnvcoder/svp-backend/internal/callerid"
 	"github.com/anhnvcoder/svp-backend/internal/grpcerr"
 	"github.com/anhnvcoder/svp-backend/services/gateway/internal/httpx"
 )
@@ -79,8 +78,8 @@ func TestGetMe(t *testing.T) {
 	if ids := c.req.(*userv1.GetProfilesRequest).GetUserIds(); !slices.Equal(ids, []string{userA}) {
 		t.Errorf("user_ids = %v, want [%s]", ids, userA)
 	}
-	if v := c.md.Get(callerid.MetadataKey); !slices.Equal(v, []string{userA}) {
-		t.Errorf("x-user-id = %v, want [%s]", v, userA)
+	if v := callers(c.md); !slices.Equal(v, []string{userA}) {
+		t.Errorf("caller = %v, want [%s]", v, userA)
 	}
 	// The profile is the answer itself, so it has the whole call deadline, not the authors' 100 ms.
 	if d := <-seen; d <= callTimeout-time.Second || d > callTimeout {
@@ -127,8 +126,8 @@ func TestUpdateMe(t *testing.T) {
 	if got := c.req.(*userv1.UpdateDisplayNameRequest).GetDisplayName(); got != name {
 		t.Errorf("display_name = %q, want %q", got, name)
 	}
-	if v := c.md.Get(callerid.MetadataKey); !slices.Equal(v, []string{userA}) {
-		t.Errorf("x-user-id = %v, want [%s]", v, userA)
+	if v := callers(c.md); !slices.Equal(v, []string{userA}) {
+		t.Errorf("caller = %v, want [%s]", v, userA)
 	}
 	// A display name may be a real name: it stays out of the log (threat model WEB-18).
 	if strings.Contains(logs.String(), "Real Name") {
@@ -197,8 +196,8 @@ func TestGetProfile(t *testing.T) {
 	if c.method != userv1.UserService_GetProfileByHandle_FullMethodName {
 		t.Errorf("method = %s", c.method)
 	}
-	if v := c.md.Get(callerid.MetadataKey); !slices.Equal(v, []string{userA}) {
-		t.Errorf("x-user-id = %v, want [%s]", v, userA)
+	if v := callers(c.md); !slices.Equal(v, []string{userA}) {
+		t.Errorf("caller = %v, want [%s]", v, userA)
 	}
 }
 
@@ -272,8 +271,8 @@ func TestAuthorVideos(t *testing.T) {
 				req.GetPageSize() != 18 || req.GetPageToken() != "abc" {
 				t.Errorf("%s request = %v", c.method, req)
 			}
-			if v := c.md.Get(callerid.MetadataKey); !slices.Equal(v, []string{userA}) {
-				t.Errorf("x-user-id = %v, want [%s]", v, userA)
+			if v := callers(c.md); !slices.Equal(v, []string{userA}) {
+				t.Errorf("caller = %v, want [%s]", v, userA)
 			}
 			if ids := e.engagement.only(t).req.(*engagementv1.GetStatsRequest).GetVideoIds(); !slices.Equal(ids, []string{videoID, videoID2}) {
 				t.Errorf("GetStats video_ids = %v", ids)
@@ -467,12 +466,12 @@ func TestFeedWithoutAuthorsWhenUserServiceSlow(t *testing.T) {
 	}
 }
 
-// wantNoCaller fails the test if any call b received carries x-user-id.
+// wantNoCaller fails the test if any call b received carries a caller.
 func wantNoCaller(t *testing.T, b *backend) {
 	t.Helper()
 	for _, c := range b.recorded() {
-		if v := c.md.Get(callerid.MetadataKey); len(v) != 0 {
-			t.Errorf("%s got x-user-id %v, want none", c.method, v)
+		if v := callers(c.md); len(v) != 0 {
+			t.Errorf("%s got caller %v, want none", c.method, v)
 		}
 	}
 }

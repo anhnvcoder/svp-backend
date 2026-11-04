@@ -34,6 +34,7 @@ import (
 	userv1 "github.com/anhnvcoder/svp-backend/gen/go/svp/user/v1"
 	"github.com/anhnvcoder/svp-backend/internal/authtoken"
 	"github.com/anhnvcoder/svp-backend/internal/callerid"
+	"github.com/anhnvcoder/svp-backend/internal/callerid/calleridtest"
 	"github.com/anhnvcoder/svp-backend/internal/grpcerr"
 	"github.com/anhnvcoder/svp-backend/internal/ids"
 	"github.com/anhnvcoder/svp-backend/internal/logx"
@@ -162,7 +163,7 @@ func newEnv(t *testing.T, hasher Hasher, db ...*pgxpool.Pool) *env {
 	logs := &lockedBuffer{}
 	logger := slog.New(logx.NewHandler(slog.NewJSONHandler(logs, nil)))
 
-	srv := grpc.NewServer(grpc.ChainUnaryInterceptor(callerid.UnaryServerInterceptor(PublicMethods...)))
+	srv := grpc.NewServer(grpc.ChainUnaryInterceptor(callerid.UnaryServerInterceptor(calleridtest.Verifier(), PublicMethods...)))
 	server := New(pool, hasher, authtoken.NewIssuer("test", key), logger)
 	userv1.RegisterUserServiceServer(srv, server)
 	healthpb.RegisterHealthServer(srv, health.NewServer())
@@ -192,8 +193,9 @@ func newEmail() string {
 	return "user-" + ids.New() + "@example.io"
 }
 
+// asCaller returns ctx carrying an access token for userID, as the gateway forwards it.
 func asCaller(ctx context.Context, userID string) context.Context {
-	return metadata.AppendToOutgoingContext(ctx, callerid.MetadataKey, userID)
+	return calleridtest.OutgoingContext(ctx, userID)
 }
 
 func (e *env) register(t *testing.T, email string) string {
@@ -693,11 +695,34 @@ func TestFollowRequiresCaller(t *testing.T) {
 	wantError(t, err, codes.Unauthenticated, callerid.ReasonUnauthenticatedCaller)
 }
 
+// A forged x-user-id is no caller, and next to a valid token it changes nothing.
+func TestForgedUserIDIsNotACaller(t *testing.T) {
+	e := newEnv(t, password.NewHasher())
+	alice := e.register(t, newEmail())
+	bob := e.register(t, newEmail())
+	carol := e.register(t, newEmail())
+
+	forged := metadata.AppendToOutgoingContext(t.Context(), "x-user-id", alice)
+	_, err := e.client.Follow(forged, &userv1.FollowRequest{FolloweeId: bob})
+	wantError(t, err, codes.Unauthenticated, callerid.ReasonUnauthenticatedCaller)
+	if n := followCount(t, alice, bob); n != 0 {
+		t.Errorf("follow rows alice -> bob = %d, want 0", n)
+	}
+
+	both := metadata.AppendToOutgoingContext(asCaller(t.Context(), carol), "x-user-id", alice)
+	if _, err := e.client.Follow(both, &userv1.FollowRequest{FolloweeId: bob}); err != nil {
+		t.Fatalf("Follow with a token and a forged x-user-id: %v", err)
+	}
+	if a, c := followCount(t, alice, bob), followCount(t, carol, bob); a != 0 || c != 1 {
+		t.Errorf("follow rows alice -> bob = %d, carol -> bob = %d; want 0 and 1", a, c)
+	}
+}
+
 func TestHealthCheckNeedsNoCaller(t *testing.T) {
 	e := newEnv(t, password.NewHasher())
 	resp, err := e.health.Check(t.Context(), &healthpb.HealthCheckRequest{})
 	if err != nil {
-		t.Fatalf("health check without x-user-id: %v", err)
+		t.Fatalf("health check without a token: %v", err)
 	}
 	if resp.GetStatus() != healthpb.HealthCheckResponse_SERVING {
 		t.Errorf("status = %v, want SERVING", resp.GetStatus())

@@ -32,7 +32,7 @@ func wantSameAsMissing(t *testing.T, what string, err error) {
 	}
 }
 
-// A READY video reaches anyone; x-user-id, valid or not, changes nothing.
+// A READY video reaches anyone; a caller, valid or not, changes nothing.
 func TestGetPublicVideoReturnsReadyVideo(t *testing.T) {
 	needDB(t)
 	s, _ := newServer()
@@ -44,14 +44,14 @@ func TestGetPublicVideoReturnsReadyVideo(t *testing.T) {
 	for _, caller := range []string{"", ids.New(), author, "not-a-uuid"} {
 		resp, err := getPublicVideo(t, s, caller, id)
 		if err != nil {
-			t.Fatalf("GetPublicVideo with x-user-id %q: %v", caller, err)
+			t.Fatalf("GetPublicVideo with caller %q: %v", caller, err)
 		}
 		v := resp.GetVideo()
 		if v.GetVideoId() != id || v.GetAuthorId() != author || v.GetStatus() != videov1.VideoStatus_VIDEO_STATUS_READY ||
 			v.GetDuration().AsDuration() != 83250*time.Millisecond ||
 			v.GetPlaylistKey() != "media/"+id+"/master.m3u8" || v.GetThumbnailKey() != "media/"+id+"/thumb.jpg" ||
 			!v.GetCreatedAt().AsTime().Equal(created) || !v.GetPublishedAt().AsTime().Equal(published) {
-			t.Errorf("GetPublicVideo with x-user-id %q = %v", caller, v)
+			t.Errorf("GetPublicVideo with caller %q = %v", caller, v)
 		}
 	}
 }
@@ -78,7 +78,7 @@ func TestGetPublicVideoHidesUnpublished(t *testing.T) {
 	for st, id := range hidden {
 		for _, caller := range []string{"", author} {
 			_, err := getPublicVideo(t, s, caller, id)
-			wantSameAsMissing(t, st+" video, x-user-id "+caller, err)
+			wantSameAsMissing(t, st+" video, caller "+caller, err)
 		}
 	}
 }

@@ -1,6 +1,7 @@
 # 0009. Giai đoạn 2 phần B: event follow, engagement-service đếm theo lô, feed-service fan-out on write
 
-- Trạng thái: Chấp nhận; §9 (ghép thêm tác giả song song với số đếm) chỉnh bởi [0018](0018-web-profiles-public-video-upload.md)
+- Trạng thái: Chấp nhận; §9 (ghép thêm tác giả song song với số đếm) chỉnh bởi [0018](0018-web-profiles-public-video-upload.md);
+  §4 (retry lượt xem: ngân sách 5 phút rồi DLQ thay thử lại không giới hạn) chỉnh bởi [0045](0045-bounded-batch-retry.md)
 - Ngày: 2026-10-11
 
 ## Bối cảnh

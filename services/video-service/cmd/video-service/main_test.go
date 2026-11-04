@@ -11,6 +11,7 @@ import (
 
 	"go.opentelemetry.io/otel"
 
+	"github.com/anhnvcoder/svp-backend/internal/callerid/calleridtest"
 	"github.com/anhnvcoder/svp-backend/internal/objstore"
 	"github.com/anhnvcoder/svp-backend/internal/sentryx"
 )
@@ -32,6 +33,7 @@ func TestServeMalformedKafkaBrokersNamesTheVariable(t *testing.T) {
 	})
 	// The broker list is checked before the database is opened, so this URL is never dialled.
 	t.Setenv("DATABASE_URL", "postgres://unused@127.0.0.1:1/unused")
+	t.Setenv("JWT_VERIFY_KEYS", calleridtest.VerifyKeys())
 	// Telemetry and error reporting off, as without the obs profile: serve gets past both.
 	for _, name := range []string{"SENTRY_DSN", "OTEL_EXPORTER_OTLP_ENDPOINT", "PYROSCOPE_SERVER_ADDRESS"} {
 		t.Setenv(name, "")
@@ -96,6 +98,7 @@ func serveEnv(t *testing.T) {
 		"S3_SECRET_ACCESS_KEY": "secret-value",
 	})
 	t.Setenv("DATABASE_URL", "postgres://unused@127.0.0.1:1/unused")
+	t.Setenv("JWT_VERIFY_KEYS", calleridtest.VerifyKeys())
 	t.Setenv("UPLOAD_ABANDON_AFTER", "")
 	t.Setenv("UPLOAD_SWEEP_INTERVAL", "")
 	// A valid DSN whose host never resolves: the probe sends no event.
@@ -346,5 +349,25 @@ func TestServeRejectsInvalidSweepSettings(t *testing.T) {
 				t.Errorf("serve() = %v, want an error naming %s", err, name)
 			}
 		})
+	}
+}
+
+// JWT_VERIFY_KEYS is required: without the public keys no caller's token can be verified.
+func TestServeRequiresVerifyKeys(t *testing.T) {
+	setStorageEnv(t, map[string]string{
+		"S3_ENDPOINT":          "http://s3:9000",
+		"S3_ACCESS_KEY_ID":     "svp-video-service",
+		"S3_SECRET_ACCESS_KEY": "secret-value",
+	})
+	t.Setenv("DATABASE_URL", "postgres://unused@127.0.0.1:1/unused")
+	t.Setenv("KAFKA_BROKERS", "redpanda:9092")
+	t.Setenv("UPLOAD_ABANDON_AFTER", "")
+	t.Setenv("UPLOAD_SWEEP_INTERVAL", "")
+	for _, keys := range []string{"", "k1:not-base64"} {
+		t.Setenv("JWT_VERIFY_KEYS", keys)
+		err := serve(t.Context(), slog.New(slog.DiscardHandler))
+		if err == nil || !strings.Contains(err.Error(), "JWT_VERIFY_KEYS") {
+			t.Errorf("JWT_VERIFY_KEYS=%q: serve() = %v, want an error naming JWT_VERIFY_KEYS", keys, err)
+		}
 	}
 }

@@ -9,9 +9,9 @@
 //	field 1  time          varint (int64)  microseconds since the Unix epoch
 //	field 2  video_id      bytes           exactly 16 bytes
 //
-// It is not signed: which items a caller may see always comes from the request and the caller in
-// x-user-id, never from the token, so an edited or borrowed token only moves where the caller
-// reads in what it may see anyway (threat model PG-1).
+// It is not signed: which items a caller may see always comes from the request and the caller of
+// the verified access token, never from the page token, so an edited or borrowed page token only
+// moves where the caller reads in what it may see anyway (threat model PG-1).
 package pagetoken
 
 import (

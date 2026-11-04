@@ -62,6 +62,20 @@ func hasAuthorIndex(t *testing.T, pool *pgxpool.Pool) bool {
 	return ok
 }
 
+// requestID returns whether videos has the request_id column and the unique index of 00006.
+func requestID(t *testing.T, pool *pgxpool.Pool) (column, index bool) {
+	t.Helper()
+	err := pool.QueryRow(t.Context(),
+		`SELECT EXISTS (SELECT 1 FROM information_schema.columns
+		   WHERE table_schema = 'public' AND table_name = 'videos' AND column_name = 'request_id'),
+		 to_regclass('public.videos_author_request_idx') IS NOT NULL`,
+	).Scan(&column, &index)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return column, index
+}
+
 // Every migration goes down and up again cleanly after pgtest applied them.
 func TestMigrationsDownAndUp(t *testing.T) {
 	pool := pgtest.New(t, "svp_video_migrations_test", migrations.FS)
@@ -77,6 +91,9 @@ func TestMigrationsDownAndUp(t *testing.T) {
 	if !hasAuthorIndex(t, pool) {
 		t.Fatal("after up: no videos_author_created_idx")
 	}
+	if column, index := requestID(t, pool); !column || !index {
+		t.Fatalf("after up: request_id column %v, index %v, want both", column, index)
+	}
 
 	db := stdlib.OpenDBFromPool(pool)
 	t.Cleanup(func() { _ = db.Close() })
@@ -89,6 +106,15 @@ func TestMigrationsDownAndUp(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	if _, err := provider.Down(t.Context()); err != nil {
+		t.Fatalf("down 00006: %v", err)
+	}
+	if column, index := requestID(t, pool); column || index {
+		t.Fatalf("after down 00006: request_id column %v, index %v, want neither", column, index)
+	}
+	if !hasAuthorIndex(t, pool) {
+		t.Fatal("after down 00006: no videos_author_created_idx")
+	}
 	if _, err := provider.Down(t.Context()); err != nil {
 		t.Fatalf("down 00005: %v", err)
 	}
@@ -142,5 +168,8 @@ func TestMigrationsDownAndUp(t *testing.T) {
 	}
 	if !hasAuthorIndex(t, pool) {
 		t.Fatal("after up again: no videos_author_created_idx")
+	}
+	if column, index := requestID(t, pool); !column || !index {
+		t.Fatalf("after up again: request_id column %v, index %v, want both", column, index)
 	}
 }

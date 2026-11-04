@@ -162,8 +162,9 @@ func TestRequireAuthRejects(t *testing.T) {
 func TestRequireAuthPassesIdentityFromTokenOnly(t *testing.T) {
 	captureLog(t)
 	e := newEdge(t)
+	token := e.validToken(t)
 	r := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/private/1", nil)
-	r.Header.Set("Authorization", "bearer "+e.validToken(t))
+	r.Header.Set("Authorization", "bearer "+token)
 	r.Header.Set("X-User-Id", otherUserID)
 	r.Header.Set("Traceparent", clientTraceparent)
 	r.Header.Set("X-Foo", "bar")
@@ -171,22 +172,26 @@ func TestRequireAuthPassesIdentityFromTokenOnly(t *testing.T) {
 	if rec.Code != http.StatusOK || !e.ran {
 		t.Fatalf("status %d, ran = %v; want 200 from the handler", rec.Code, e.ran)
 	}
-	if got := e.md.Get(callerid.MetadataKey); len(got) != 1 || got[0] != userID {
-		t.Errorf("x-user-id = %v, want [%s] from the token", got, userID)
+	if got := e.md.Get(callerid.AuthorizationKey); len(got) != 1 || got[0] != "Bearer "+token {
+		t.Errorf("authorization = %v, want [Bearer <the request's token>]", got)
+	}
+	if got := e.md.Get("x-user-id"); len(got) != 0 {
+		t.Errorf("x-user-id = %v, want the client's header dropped", got)
 	}
 	if !e.span.IsValid() || e.span.TraceID().String() == clientTraceID {
 		t.Errorf("request span = %v, want a new trace, not the client's", e.span)
 	}
 	if len(e.md) != 1 {
-		t.Errorf("metadata = %v, want only x-user-id", e.md)
+		t.Errorf("metadata = %v, want only authorization", e.md)
 	}
 }
 
-func TestPublicRouteSendsNoUserID(t *testing.T) {
+func TestPublicRouteSendsNoCaller(t *testing.T) {
 	captureLog(t)
 	e := newEdge(t)
 	r := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/public", nil)
 	r.Header.Set("X-User-Id", otherUserID)
+	r.Header.Set("Authorization", "Bearer "+e.validToken(t))
 	if rec := e.serve(r); rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200", rec.Code)
 	}

@@ -33,6 +33,7 @@ import (
 
 	engagementv1 "github.com/anhnvcoder/svp-backend/gen/go/svp/engagement/v1"
 	eventv1 "github.com/anhnvcoder/svp-backend/gen/go/svp/event/v1"
+	"github.com/anhnvcoder/svp-backend/internal/authtoken"
 	"github.com/anhnvcoder/svp-backend/internal/callerid"
 	"github.com/anhnvcoder/svp-backend/internal/grpcerr"
 	"github.com/anhnvcoder/svp-backend/internal/ids"
@@ -110,12 +111,12 @@ func New(readPool, writePool *pgxpool.Pool, producer *kgo.Client, logger *slog.L
 	}
 }
 
-// CallerInterceptor requires the caller's x-user-id on every EngagementService RPC but two. The
-// health check is public: the healthcheck subcommand and probes call it without a user. GetStats
-// takes an optional caller: the public share page reads counters without one, while a present
-// x-user-id must still be valid.
-func CallerInterceptor() grpc.UnaryServerInterceptor {
-	return callerid.NewUnaryServerInterceptor(callerid.Methods{
+// CallerInterceptor requires on every EngagementService RPC but two a caller's access token that
+// verifier accepts. The health check is public: the healthcheck subcommand and probes call it
+// without a user. GetStats takes an optional caller: the public share page reads counters
+// without one, while a present token must still be valid.
+func CallerInterceptor(verifier *authtoken.Verifier) grpc.UnaryServerInterceptor {
+	return callerid.NewUnaryServerInterceptor(verifier, callerid.Methods{
 		Public:         []string{healthpb.Health_Check_FullMethodName},
 		OptionalCaller: []string{engagementv1.EngagementService_GetStats_FullMethodName},
 	})

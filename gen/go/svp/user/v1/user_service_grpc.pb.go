@@ -37,10 +37,12 @@ const (
 // UserService owns accounts, password hashes, the follow graph and public
 // profiles (handle and display name).
 //
-// Caller identity: the gateway verifies the JWT and passes the authenticated
-// user id in the gRPC metadata key `x-user-id`. Requests never carry the
-// caller's own id, only ids of other entities. RPCs marked "requires caller"
-// return UNAUTHENTICATED when `x-user-id` is missing or not a valid UUID.
+// Caller identity: the gateway verifies the caller's access token and forwards
+// that same token in the gRPC metadata key `authorization` as
+// `Bearer <token>`; the service verifies it again and takes the caller from
+// its `sub`. Requests never carry the caller's own id, only ids of other
+// entities. RPCs marked "requires caller" return UNAUTHENTICATED when the
+// token is missing or invalid.
 //
 // All ids are UUIDv7 strings in canonical lowercase form (36 chars).
 //
@@ -254,10 +256,12 @@ func (c *userServiceClient) UpdateDisplayName(ctx context.Context, in *UpdateDis
 // UserService owns accounts, password hashes, the follow graph and public
 // profiles (handle and display name).
 //
-// Caller identity: the gateway verifies the JWT and passes the authenticated
-// user id in the gRPC metadata key `x-user-id`. Requests never carry the
-// caller's own id, only ids of other entities. RPCs marked "requires caller"
-// return UNAUTHENTICATED when `x-user-id` is missing or not a valid UUID.
+// Caller identity: the gateway verifies the caller's access token and forwards
+// that same token in the gRPC metadata key `authorization` as
+// `Bearer <token>`; the service verifies it again and takes the caller from
+// its `sub`. Requests never carry the caller's own id, only ids of other
+// entities. RPCs marked "requires caller" return UNAUTHENTICATED when the
+// token is missing or invalid.
 //
 // All ids are UUIDv7 strings in canonical lowercase form (36 chars).
 //

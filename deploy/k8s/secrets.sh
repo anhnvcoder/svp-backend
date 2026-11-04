@@ -162,10 +162,11 @@ manifests() {
 # checked (that is IN-3, stage 6). The passwords are hex, so nothing needs URL-encoding.
 pg_url() { printf 'postgres://svp_%s_%s:%s@svp-pg-rw.svp-data:5432/svp_%s?sslmode=require' "$1" "$2" "$3" "$1"; }
 
-# The services' Secrets in svp, one per pod, each with only what that pod uses, so one compromised
+# The services' Secrets in svp, one per service, each with only what that service's pods use, so one compromised
 # pod exposes no more than its own credentials. <service>-env goes to the service's container as environment variables;
 # <service>-migrate-env holds the migrator role, for the migrate Job only. The JWT signing key is in user-service-env
-# alone; the gateway gets the public keys (threat model JWT-10). web-env holds the web client's Server Action key alone,
+# alone (threat model JWT-10); the gateway and the four gRPC services get the public keys, which verify the access token
+# the gateway forwards but cannot sign one (ADR-0042). web-env holds the web client's Server Action key alone,
 # set at run time so that the key in use is never in the public image: its other settings are no secret
 # (base/services/web.yaml of svp-gitops), its DSN comes from Secret sentry, and Valkey, where it keeps sessions, has no
 # password. The Secret must exist in any case: chart
@@ -174,17 +175,21 @@ svp_manifests() {
   secret svp user-service-env Opaque \
     DATABASE_URL="$(pg_url user app "$SVP_USER_APP_DB_PASSWORD")" \
     JWT_SIGNING_KID="$JWT_SIGNING_KID" JWT_SIGNING_KEY="$JWT_SIGNING_KEY" \
-    KAFKA_SASL_USERNAME=svp-user-service KAFKA_SASL_PASSWORD="$SVP_KAFKA_USER_SERVICE_PASSWORD"
+    KAFKA_SASL_USERNAME=svp-user-service KAFKA_SASL_PASSWORD="$SVP_KAFKA_USER_SERVICE_PASSWORD" \
+    JWT_VERIFY_KEYS="$JWT_VERIFY_KEYS"
   secret svp video-service-env Opaque \
     DATABASE_URL="$(pg_url video app "$SVP_VIDEO_APP_DB_PASSWORD")" \
     KAFKA_SASL_USERNAME=svp-video-service KAFKA_SASL_PASSWORD="$SVP_KAFKA_VIDEO_SERVICE_PASSWORD" \
-    S3_SECRET_ACCESS_KEY="$SVP_VIDEO_S3_SECRET_KEY"
+    S3_SECRET_ACCESS_KEY="$SVP_VIDEO_S3_SECRET_KEY" \
+    JWT_VERIFY_KEYS="$JWT_VERIFY_KEYS"
   secret svp engagement-service-env Opaque \
     DATABASE_URL="$(pg_url engagement app "$SVP_ENGAGEMENT_APP_DB_PASSWORD")" \
-    KAFKA_SASL_USERNAME=svp-engagement-service KAFKA_SASL_PASSWORD="$SVP_KAFKA_ENGAGEMENT_SERVICE_PASSWORD"
+    KAFKA_SASL_USERNAME=svp-engagement-service KAFKA_SASL_PASSWORD="$SVP_KAFKA_ENGAGEMENT_SERVICE_PASSWORD" \
+    JWT_VERIFY_KEYS="$JWT_VERIFY_KEYS"
   secret svp feed-service-env Opaque \
     DATABASE_URL="$(pg_url feed app "$SVP_FEED_APP_DB_PASSWORD")" \
-    KAFKA_SASL_USERNAME=svp-feed-service KAFKA_SASL_PASSWORD="$SVP_KAFKA_FEED_SERVICE_PASSWORD"
+    KAFKA_SASL_USERNAME=svp-feed-service KAFKA_SASL_PASSWORD="$SVP_KAFKA_FEED_SERVICE_PASSWORD" \
+    JWT_VERIFY_KEYS="$JWT_VERIFY_KEYS"
   secret svp media-worker-env Opaque \
     KAFKA_SASL_USERNAME=svp-media-worker KAFKA_SASL_PASSWORD="$SVP_KAFKA_MEDIA_WORKER_PASSWORD" \
     S3_SECRET_ACCESS_KEY="$SVP_MEDIA_WORKER_S3_SECRET_KEY"

@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
 # End-to-end smoke test of the core stack through the gateway: register and log in user A,
-# create and read a video, check the visibility rule against user B (threat model UP-3), B
-# follows A; then upload a real video through its presigned form, complete it, wait for the
-# asynchronous transcode to make it READY, play its HLS anonymously, and check that the storage
-# refuses a file larger than declared (UP-1); then find the video in B's following feed and in
+# create a video, repeat the request with its Idempotency-Key and get the same video, read it,
+# check the visibility rule against user B (threat model UP-3), B follows A; then upload a real
+# video through its presigned form, complete it, wait for the asynchronous transcode to make it
+# READY, play its HLS anonymously, and check that the storage refuses a file larger than declared
+# (UP-1); then find the video in B's following feed and in
 # explore, like and unlike it, count views (a repeated view within 60 s is accepted but not
 # counted, RL-3), and check that unfollowing removes it from B's following feed; last, rotate
 # refresh tokens, check that replaying a used one revokes its whole family, and that logout
@@ -36,14 +37,23 @@ source "$(dirname "$0")/lib.sh"
 # 1. Wait for the gateway and the three services behind /readyz (user, video, feed) to be ready.
 wait_gateway_ready 60
 
-# 2. User A creates a video and reads it back.
+# 2. User A creates a video with an Idempotency-Key, repeats the request with the same key and gets
+# the same video back, then reads it.
 new_user a
 title="smoke video $(openssl rand -hex 4)"
 jq -n --arg t "$title" '{title: $t, size_bytes: 1048576, content_type: "video/mp4"}' >"$work/video.json"
-status=$(request POST /videos "$work/a.auth" "$work/video.json")
+# A random UUID in canonical lowercase form, sent as a Structured Field String.
+hex=$(openssl rand -hex 16)
+key="${hex:0:8}-${hex:8:4}-4${hex:13:3}-8${hex:17:3}-${hex:20:12}"
+{ cat "$work/a.auth"; printf 'Idempotency-Key: "%s"\n' "$key"; } >"$work/a-key.auth"
+status=$(request POST /videos "$work/a-key.auth" "$work/video.json")
 video_id=$(field video_id)
 [[ $status == 201 && -n $video_id ]] || fail "create video (status $status, $(problem_summary))"
 ok "create video"
+status=$(request POST /videos "$work/a-key.auth" "$work/video.json")
+[[ $status == 201 && $(field video_id) == "$video_id" ]] ||
+  fail "repeated create with the same Idempotency-Key returns the same video (status $status, $(problem_summary))"
+ok "repeated create with the same Idempotency-Key: same video_id"
 
 status=$(request GET "/videos/$video_id" "$work/a.auth")
 [[ $status == 200 ]] || fail "author reads video (status $status, $(problem_summary))"

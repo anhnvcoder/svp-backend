@@ -34,3 +34,10 @@ Loại tài liệu (Diátaxis): **reference**, tra cứu khi cần một lệnh 
   ⌊n/2⌋, pool ghi (Like, Unlike, consumer lượt xem) phần còn lại. Values k3d đặt `"10"`, compose không đặt. Like/Unlike có hạn
   Postgres 1 s phía server; hết hạn hay Postgres không tới được thì `UNAVAILABLE` + `DEPENDENCY_UNAVAILABLE`, gateway không thử lại
   (503 ngay). Service khác giữ pool mặc định của pgx.
+- **`JWT_VERIFY_KEYS` bắt buộc ở gateway và bốn service gRPC** (user, video, engagement, feed;
+  [ADR-0042](../adr/0042-caller-identity-grpc.md)): khoá công khai Ed25519 dạng `kid:<base64 của 32 byte>` cách nhau dấu phẩy, cùng
+  giá trị ở cả năm process (nguồn `jwt-verify`). Gateway kiểm access token của client bằng nó, mỗi service gRPC kiểm lại token gateway
+  chuyển tiếp trong metadata `authorization`. Thiếu, rỗng, sai dạng (mục rỗng, base64 hỏng, khoá không đủ 32 byte, `kid` lặp) thì
+  process không khởi động: log ERROR `<service> failed` nêu tên biến và lỗi, thoát mã 1 trước khi listen cổng gRPC; compose
+  từ chối dựng container khi biến trống (`${JWT_VERIFY_KEYS:?run make env}`). Chỉ user-service có `JWT_SIGNING_KID`,
+  `JWT_SIGNING_KEY`. Đổi khoá: [`jwt-key-rotation.md`](../runbooks/jwt-key-rotation.md).
