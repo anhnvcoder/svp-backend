@@ -244,7 +244,6 @@ func headerValue(r *kgo.Record, key string) (string, bool) {
 }
 
 func TestNewMeta(t *testing.T) {
-	t.Parallel()
 	m := NewMeta()
 	if _, err := ids.Parse(m.GetEventId()); err != nil {
 		t.Errorf("event_id %q: %v", m.GetEventId(), err)

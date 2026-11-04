@@ -111,7 +111,6 @@ func decodePolicy(t *testing.T, policy string) (string, []any) {
 }
 
 func TestPresignPostPolicy(t *testing.T) {
-	t.Parallel()
 	cfg := testConfig("http://s3:9000")
 	cfg.PublicEndpoint = "http://127.0.0.1:9000"
 	s := newTestStore(t, cfg)

@@ -211,7 +211,6 @@ func TestVerifyRejectsForgedTokens(t *testing.T) {
 }
 
 func TestVerifyAllowsClockSkewWithinLeeway(t *testing.T) {
-	t.Parallel()
 	key := newKey(t)
 	v := NewVerifier(map[string]ed25519.PublicKey{testKID: pub(key)})
 	userID := ids.New()
