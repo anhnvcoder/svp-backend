@@ -50,8 +50,13 @@ Chọn **A + B + C**, theo hai đợt:
    scrape (có staleness marker khi pod mất), nên dùng `for` an toàn, khác các gauge đẩy qua OTLP. Compose và đường dev không có
    Argo CD: không có series, không cảnh báo nào cháy.
 2. **A và B khi có cluster EKS chạy lâu dài**: bật Notifications, commit status `argocd/<env>` bằng token chỉ quyền
-   commit status trên `svp-gitops` (một GitHub App riêng hay quyền thêm cho App hiện có, chốt lúc làm), tin nhắn sync lỗi hay
-   Degraded qua kênh Telegram của Alertmanager.
+   commit status trên `svp-gitops`, tin nhắn sync lỗi hay Degraded qua kênh Telegram của Alertmanager. Token là của GitHub App
+   riêng `svp-argocd-notifier` (chỉ **Commit statuses: Read and write**, cài chỉ trên `svp-gitops`), không thêm quyền cho
+   `svp-gitops-promoter`: App đó ghi được nội dung `svp-gitops`, khoá của nó không được vào cluster (threat model SEC-8). Khoá vào
+   Secret `argocd/argocd-notifications-secret` (khoá `github-appID`, `github-installationID`, `github-privateKey`, `telegram-token`)
+   qua External Secrets ([ADR-0026](0026-secrets-gitops.md)), bật bằng dữ liệu (`externalSecrets.argocdNotifications` của chart
+   `svp-cluster`, mặc định tắt) chỉ trên nền tảng có cluster chạy cả buổi, nên cluster dựng tạm của runner không rắc status lên
+   commit. Values Argo CD của nền tảng ở `platforms/<platform>/argo-cd.yaml` của `svp-gitops`, đọc sau `base/argo-cd.yaml`.
 
 Không chọn D vì phá mô hình pull; không chọn E vì thay cả luồng promote.
 
@@ -71,6 +76,9 @@ Không chọn D vì phá mô hình pull; không chọn E vì thay cả luồng p
 - Prometheus thấy mọi Application qua PodMonitor và policy mới: bước `gitops-argocd-metrics` của kịch bản `gitops` (`verify.yml`); chưa có
   lượt `gitops` nào kiểm.
 - Cảnh báo cháy thật khi một Application hỏng trên cluster: chưa có diễn tập.
+- Secret `argocd/argocd-notifications-secret` dựng được từ nguồn, controller ESO chỉ ghi được Secret đó ở `argocd`: `make eks-secrets`, rồi
+  `make drill-k8s-threats` SEC-5 (ba ca của `argocd`) trên cluster có entry bật; chưa kiểm.
+- Commit status `argocd/stg` trên commit của `svp-gitops` và tin nhắn Telegram khi sync lỗi hay `Degraded`: buổi EKS stg; chưa kiểm.
 
 Bảng đầy đủ ở [phụ lục](appendix/0032-argocd-deploy-status.md#kiểm-chứng-bảng-đầy-đủ).
 
@@ -82,7 +90,19 @@ Bảng đầy đủ ở [phụ lục](appendix/0032-argocd-deploy-status.md#ki�
 - `deploy/observability/prometheus/rules/svp-alerts.yaml` (nhóm `argocd`), `svp-alerts.test.yaml`: hai cảnh báo và test.
 - `docs/runbooks/argocd-application-degraded.md`: runbook của cả hai cảnh báo.
 - `deploy/ci/verify/gitops.sh` (`gitops_argocd_metrics`, bước `gitops-argocd-metrics`).
-- A và B: chưa có (cluster EKS chạy lâu dài); `base/argo-cd.yaml` của repo `svp-gitops` vẫn `notifications.enabled: false`.
+- A và B, phần repo code:
+  - `deploy/helm/svp-cluster/files/external-secrets.yaml` (entry `argocd/argocd-notifications-secret`, `enabledBy:
+    argocdNotifications`, `sharedNamespace: true`), `values.yaml` (`externalSecrets.argocdNotifications`),
+    `templates/external-secrets.yaml` (ValidatingAdmissionPolicy `svp-external-secrets-writes`: ở `argocd` chỉ Secret đó, Opaque).
+  - `deploy/k8s/secrets.sh` (nguồn `svp-secrets/argocd-notifications` từ ba biến `SVP_ARGOCD_NOTIFY_*` của `.env` khi entry bật),
+    `.env.example`.
+  - `deploy/k8s/gitops.sh` (Argo CD với `platforms/<platform>/argo-cd.yaml` sau `base/argo-cd.yaml`; bật nguồn theo values của
+    `svp-cluster`), `deploy/ci/gitops-check.sh` (render Argo CD với file đó, đếm ExternalSecret theo `enabledBy`).
+  - `deploy/ci/verify/gitops.sh` (`gitops-external-secrets`: entry `enabledBy` chỉ khi Argo CD render nó),
+    `deploy/k8s/drills/threats.sh` (SEC-5, ba ca của `argocd`).
+  - `docs/runbooks/argocd-notifier-key-rotation.md`: xoay khoá App, nghi khoá lộ.
+- A và B, phần `svp-gitops`: chưa có; `base/argo-cd.yaml` vẫn `notifications.enabled: false`, chưa có
+  `platforms/eks/argo-cd.yaml`.
 
 ## Thông tin thêm
 

@@ -15,9 +15,12 @@
 #     no boolean, a key besides envs and localHosts, a platform that is no map, envs that is no list (each named, not
 #     a jq error), a platform of the map without its folder, a tree without
 #     platforms/, a file of a platform setting a release's image, a template rendering one, a file naming no
-#     component, a file of k3d for a component of eks alone, cluster set in argocd/apps/values.yaml or in a file of a
-#     platform, an unknown platform directory, a component on an unknown platform, a root chart making Applications of
-#     another platform and one reading a platform's values after the environment's each fail with their own message;
+#     component, a template of Argo CD's values (argo-cd.values.tpl), Argo CD's values of a platform (argo-cd.yaml)
+#     setting cluster, a file of k3d for a component of eks alone, cluster set in argocd/apps/values.yaml or in a file
+#     of a platform, an unknown platform directory, a component on an unknown platform, a root chart making
+#     Applications of another platform and one reading a platform's values after the environment's each fail with
+#     their own message, while argo-cd.yaml of a platform passes the check's rules and the root's render (a root
+#     chart that refuses the file made to leave it out);
 #     k3d without localHosts fails the whole check on the render of stg there naming svp.localhost (step 3, charts of
 #     this repository, no network);
 #   - the Kyverno policies on rendered manifests (deploy/ci/gitops-policies/, the CLI of KYVERNO_CLI_IMAGE, no
@@ -298,6 +301,23 @@ t=$(copy)
 echo 'replicas: 2' >"$t/platforms/eks/nope.yaml"
 check_root "platforms: a file of a platform that names no component" 1 \
   "platforms/eks/nope.yaml: a file of a platform is README.md, <name>.yaml or <name>.values.tpl, <name> a component of components.json" "$t"
+# Argo CD's values of a platform (deploy/k8s/gitops.sh installs Argo CD with them after argocd/bootstrap.json's): the
+# file argo-cd.yaml only, held to the rules of a platform's file.
+# A root chart from before the file refuses it itself: the copy's leaves it out as it leaves README.md out, as one that
+# lets it through does, so the check's rules and the root's render must both pass.
+t=$(copy)
+printf 'notifications:\n  enabled: true\n' >"$t/platforms/eks/argo-cd.yaml"
+replace_once "$t/argocd/apps/templates/applications.yaml" '(ne $base "README.md")' \
+  '(ne $base "README.md") (ne $base "argo-cd.yaml")' || :
+check_root "platforms: Argo CD's values of a platform, argo-cd.yaml" 0 \
+  "ok    argocd/apps for prd on eks on arm64 and amd64 nodes: one Application per component that runs there" "$t"
+t=$(copy)
+printf 'cluster:\n  name: svp-stg\n' >"$t/platforms/eks/argo-cd.yaml"
+check_root "platforms: Argo CD's values of a platform set cluster" 1 "platforms/eks/argo-cd.yaml sets cluster" "$t"
+t=$(copy)
+printf 'notifications:\n  enabled: true\n' >"$t/platforms/eks/argo-cd.values.tpl"
+check_root "platforms: a template of Argo CD's values, which nothing renders" 1 \
+  "platforms/eks/argo-cd.values.tpl: a file of a platform is README.md, <name>.yaml or <name>.values.tpl, <name> a component of components.json" "$t"
 eks_only=$(jq -r '.components[] | select(.platforms == ["eks"]) | .name' "$components_json" | head -n 1)
 if [ -n "$eks_only" ]; then
   t=$(copy)

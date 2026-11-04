@@ -7,7 +7,8 @@
 # output is one of the fake results, as is a migrate Job's log marked by mark_log of the same file. verify-mask.sh
 # cluster on a binary value of 200 KiB, timed, and on small ones against the cut it made before.
 # Then deploy/ci/verify-run.sh with a fake make: the scenarios compose-obs and gitops, and made-up scenario files for
-# what a scenario file can get wrong. Then gitops_stale of deploy/ci/verify/gitops.sh with a fake cosign.
+# what a scenario file can get wrong. Then gitops_stale of deploy/ci/verify/gitops.sh with a fake cosign, and its
+# gitops_external_secrets with a fake kubectl, against this checkout's files/external-secrets.yaml of chart svp-cluster.
 # Last, that deploy/ci/changed-services.sh builds no image for a change of these scripts, in a throwaway git repository
 # holding a copy of it. Runs on macOS and Linux, no network, no Docker, no cluster.
 #
@@ -1295,6 +1296,94 @@ has admission-kyverno-empty "no Kyverno metrics is a NOTE for the review histogr
   "NOTE  kyverno_admission_review_duration_seconds: no kyverno_admission_review_duration_seconds_count and _sum series in what was read"
 has admission-kyverno-empty "and for the policy histogram" \
   'NOTE  kyverno_image_validating_policy_execution_duration_seconds{policy_name="svp-images"}: no'
+
+# --- gitops_external_secrets of deploy/ci/verify/gitops.sh, over this checkout's files/external-secrets.yaml of chart
+# svp-cluster committed into a throwaway repository, at the commit envs/stg/charts.yaml of a fake clone of svp-gitops
+# pins. A fake kubectl first on PATH lists an ExternalSecret per line NAMESPACE/NAME of file FAKE_ES, each Ready with one
+# key, and its Secret, and has Application svp-cluster render the ExternalSecrets of file FAKE_RENDERED (NAMESPACE/NAME,
+# then prune for one with requiresPruning), or fails with FAKE_APP_FAIL=1. An entry with enabledBy is wanted only where
+# that Application renders it: the cluster of the runner, where externalSecrets.argocdNotifications stays off, passes.
+mkdir -p "$work/es-bin"
+cat >"$work/es-bin/kubectl" <<'EOF'
+#!/usr/bin/env bash
+[ "$1 $2" = "--context k3d-svp" ] || exit 1
+shift 2
+ns=
+if [ "$1" = -n ]; then ns=$2 && shift 2; fi
+case "$*" in
+"get externalsecrets.external-secrets.io -A -o json")
+  jq -Rn '[inputs | select(. != "") | split("/") | {metadata: {namespace: .[0], name: .[1]},
+    spec: {target: {template: {type: "Opaque", data: {key: ""}}}},
+    status: {conditions: [{type: "Ready", status: "True"}]}}] | {items: .}' "$FAKE_ES" ;;
+"get secrets -o json")
+  jq -Rn --arg ns "$ns" '[inputs | select(. != "") | split("/") | select(.[0] == $ns)
+    | {metadata: {name: .[1]}, type: "Opaque", data: {key: "dmFsdWU="}}] | {items: .}' "$FAKE_ES" ;;
+"get applications.argoproj.io svp-cluster -o json")
+  [ "$ns" = argocd ] && [ "${FAKE_APP_FAIL:-}" != 1 ] || exit 1
+  jq -Rn '[inputs | select(. != "") | split(" ") | (.[0] | split("/")) as $id
+    | {group: "external-secrets.io", kind: "ExternalSecret", namespace: $id[0], name: $id[1]}
+      + (if .[1] == "prune" then {requiresPruning: true} else {} end)]
+    + [{kind: "SecretStore", namespace: "argocd", name: "svp-store"}] | {status: {resources: .}}' "$FAKE_RENDERED" ;;
+*) exit 1 ;;
+esac
+EOF
+chmod 755 "$work/es-bin/kubectl"
+es_file=deploy/helm/svp-cluster/files/external-secrets.yaml
+es_repo=$work/es-repo
+es_clone=$work/es-gitops
+gq() { git -c user.name=test -c user.email=test@example.invalid -c commit.gpgsign=false -c core.hooksPath=/dev/null "$@"; }
+mkdir -p "$es_repo/${es_file%/*}" "$es_clone/envs/stg"
+cp "$here/../../$es_file" "$es_repo/$es_file"
+git init -q "$es_repo" && gq -C "$es_repo" add -A && gq -C "$es_repo" commit -qm base
+echo "revision: $(git -C "$es_repo" rev-parse HEAD)" >"$es_clone/envs/stg/charts.yaml"
+git init -q "$es_clone" && gq -C "$es_clone" add -A && gq -C "$es_clone" commit -qm base &&
+  git -C "$es_clone" update-ref refs/remotes/origin/main HEAD
+# external NAME ES RENDERED [VAR=VALUE...]: gitops_external_secrets with the cluster of the lines ES and the render of
+# the lines RENDERED; its output in $work/external-NAME.log, prints its status.
+external() {
+  local name=$1 rc=0
+  printf '%s\n' "$2" >"$work/external-$name.es"
+  printf '%s\n' "$3" >"$work/external-$name.rendered"
+  shift 3
+  env -u GITHUB_ACTIONS -u CI -u GITLAB_CI -u JENKINS_URL -u TF_BUILD PATH="$work/es-bin:$PATH" repo="$es_repo" \
+    SVP_GITOPS_DIR="$es_clone" FAKE_ES="$work/external-$name.es" FAKE_RENDERED="$work/external-$name.rendered" "$@" \
+    bash -c '. "$1/verify/gitops.sh" && kc() { kubectl --context k3d-svp "$@"; } && gitops_external_secrets' _ "$here" \
+    >"$work/external-$name.log" 2>&1 </dev/null || rc=$?
+  echo "$rc"
+}
+notify_es=argocd/argocd-notifications-secret
+# An empty cluster: the diff's < lines are what is wanted.
+same "gitops_external_secrets: an empty cluster fails" 1 "$(external empty "" "")"
+base_es=$(sed -n 's/^< //p' "$work/external-empty.log")
+same "gitops_external_secrets: an entry without enabledBy is wanted whatever Application svp-cluster renders" \
+  "$(($(grep -c '^- namespace: ' "$es_repo/$es_file") - $(grep -c '^  enabledBy: ' "$es_repo/$es_file")))" \
+  "$(grep -c . <<<"$base_es")"
+grep -qx "$notify_es" <<<"$base_es" &&
+  fail "gitops_external_secrets: $notify_es is not wanted where Application svp-cluster does not render it" ||
+  ok "gitops_external_secrets: $notify_es is not wanted where Application svp-cluster does not render it"
+has external-empty "an entry left out is named with its key" \
+  "not wanted: $notify_es (enabledBy argocdNotifications), as Application svp-cluster renders no ExternalSecret of it"
+base_count=$(grep -c . <<<"$base_es" || true)
+same "gitops_external_secrets: a cluster with argocdNotifications off passes" 0 "$(external off "$base_es" "$base_es")"
+has external-off "every ExternalSecret is counted" "ok    $base_count ExternalSecrets Ready, each Secret with its type and keys"
+same "gitops_external_secrets: a cluster with argocdNotifications on passes" 0 \
+  "$(external on "$base_es"$'\n'"$notify_es" "$base_es"$'\n'"$notify_es")"
+has external-on "with one ExternalSecret more" "ok    $((base_count + 1)) ExternalSecrets Ready, each Secret with its type and keys"
+lacks external-on "nothing is left out" "not wanted:"
+same "gitops_external_secrets: an ExternalSecret Application svp-cluster renders and the cluster lacks fails" 1 \
+  "$(external missing "$base_es" "$base_es"$'\n'"$notify_es")"
+has external-missing "it is named as wanted" "< $notify_es"
+same "gitops_external_secrets: an ExternalSecret in the cluster that Application svp-cluster prunes fails" 1 \
+  "$(external pruned "$base_es"$'\n'"$notify_es" "$base_es"$'\n'"$notify_es prune")"
+has external-pruned "it is named as the cluster's" "> $notify_es"
+same "gitops_external_secrets: an entry without enabledBy that the cluster lacks fails, rendered or not" 1 \
+  "$(external lacks "$(sed 1d <<<"$base_es")" "")"
+has external-lacks "it is named as wanted" "< $(head -n 1 <<<"$base_es")"
+same "gitops_external_secrets: Application svp-cluster that cannot be read fails" 1 \
+  "$(external no-app "$base_es" "$base_es" FAKE_APP_FAIL=1)"
+has external-no-app "it says what it could not read" \
+  "FAIL  gitops-external-secrets: read the ExternalSecrets Application svp-cluster renders"
+lacks external-on "no value of a Secret is printed" dmFsdWU=
 
 # --- changed-services.sh: a change of a verification script builds no image; one of verify-release.sh, which the image
 # jobs run, still builds all seven. GIT_DIR is set for the throwaway repository, so git can never reach another one.

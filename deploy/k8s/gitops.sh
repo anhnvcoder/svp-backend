@@ -17,7 +17,10 @@
 #   3. the Secrets from .env (deploy/k8s/secrets.sh), which never go to git: with externalSecrets of chart svp-cluster
 #      on in envs/stg (every revision of svp-gitops), only their source, the Secrets of namespace svp-secrets, from
 #      which External Secrets Operator (component external-secrets) builds every Secret once Argo CD has installed it;
-#   4. Argo CD (argocd/bootstrap.json: chart, version and values file base/argo-cd.yaml) in namespace argocd with Pod
+#      the source of Argo CD Notifications' Secret only when the values Argo CD gives chart svp-cluster turn on
+#      externalSecrets.argocdNotifications (SVP_ARGOCD_NOTIFICATIONS of secrets.sh);
+#   4. Argo CD (argocd/bootstrap.json: chart, version and values file base/argo-cd.yaml, then the platform's values of
+#      it, platforms/<platform>/argo-cd.yaml, when the revision has that file) in namespace argocd with Pod
 #      Security "restricted", AppProject svp and the emptied AppProject default (argocd/project.yaml) and root
 #      Application svp-root (chart argocd/apps at that same commit, told the architecture of the nodes, the
 #      environment, stg: this cluster runs as staging, and the platform, k3d). No repository Secret: both
@@ -312,6 +315,9 @@ mkdir -p "$work/charts" && git -C "$repo_root" archive "$chart_rev" "$cluster_ch
   fail "unpack $cluster_chart of ${chart_rev:0:12} with git archive"
 overlay_args=()
 object_store=
+# The values files of svp-cluster in the order Argo CD reads them, the chart's own first: whether they turn on
+# Argo CD Notifications' Secret (below).
+cluster_values=("$work/charts/$cluster_chart/values.yaml")
 if cloud_context; then
   # On EKS, the values of svp-cluster are those of its Application in a render of the root with the values the root
   # gets above, read as Argo CD reads them: the values files of its source with helm ($values/<path>, in svp-gitops at
@@ -359,6 +365,7 @@ if cloud_context; then
     value_files+=("$work/svp-cluster-object.json")
   fi
   for f in ${value_files[@]+"${value_files[@]}"}; do overlay_args+=(--values "$f"); done
+  cluster_values+=(${value_files[@]+"${value_files[@]}"})
   # The object store of those values: the source Secrets of its users only while it runs in the cluster.
   object_store=$(values_json ${value_files[@]+"${value_files[@]}"} | jq -r '.s3.mode // "cluster"') ||
     fail "read s3.mode of the values of svp-cluster"
@@ -370,10 +377,12 @@ else
     at "platforms/$platform/svp-cluster.yaml" >"$work/platform-svp-cluster.yaml" ||
       fail "read platforms/$platform/svp-cluster.yaml at ${sha:0:12} of svp-gitops"
     overlay_args=(--values "$work/platform-svp-cluster.yaml")
+    cluster_values+=("$work/platform-svp-cluster.yaml")
   fi
   if git -C "$gitops" cat-file -e "$sha:$cluster_overlay" 2>/dev/null; then
     at "$cluster_overlay" >"$work/svp-cluster.yaml" || fail "read $cluster_overlay at ${sha:0:12} of svp-gitops"
     overlay_args+=(--values "$work/svp-cluster.yaml")
+    cluster_values+=("$work/svp-cluster.yaml")
   fi
   project_ns=$(hc template svp-cluster "$work/charts/$cluster_chart" --show-only templates/namespaces.yaml \
     ${overlay_args[@]+"${overlay_args[@]}"} --set-json 'platformNamespaces=[]') ||
@@ -382,14 +391,24 @@ fi
 kc apply --server-side --field-manager=svp-pod-security -f - <<<"$project_ns" >/dev/null ||
   fail "create the project's namespaces with Pod Security restricted"
 ok "the project's namespaces ($(sed -n 's/^  name: //p' <<<"$project_ns" | paste -sd ' ' -)) enforce Pod Security restricted"
+# Argo CD Notifications' Secret: its ExternalSecret exists only with externalSecrets on and argocdNotifications on
+# (a chart from before the key: off), so secrets.sh writes its source, and requires its variables in .env, only then.
+# Namespace argocd, where it lives, is made below, before Argo CD; the ExternalSecret comes later still, with chart
+# svp-cluster (wave 1), which Argo CD syncs once installed.
+notify=$(values_json "${cluster_values[@]}" |
+  jq -r 'if .externalSecrets.enabled == true and .externalSecrets.argocdNotifications == true then "on" else "off" end') &&
+  [ -n "$notify" ] || fail "read externalSecrets of the values of svp-cluster"
 if [ -n "$object_store" ]; then
-  SVP_OBJECT_STORE=$object_store SVP_RDS_MASTER_PASSWORD=$rds_master_password "$repo_root/deploy/k8s/secrets.sh"
+  SVP_OBJECT_STORE=$object_store SVP_RDS_MASTER_PASSWORD=$rds_master_password SVP_ARGOCD_NOTIFICATIONS=$notify \
+    "$repo_root/deploy/k8s/secrets.sh"
 else
-  "$repo_root/deploy/k8s/secrets.sh"
+  SVP_ARGOCD_NOTIFICATIONS=$notify "$repo_root/deploy/k8s/secrets.sh"
 fi
 
 # --- Argo CD, as argocd/bootstrap.json at the revision names it: one object of the form of a component of
-# components.json (repo, chart, version, values).
+# components.json (repo, chart, version, values), then the platform's values of it when the revision has them, as a
+# component's platforms/<platform>/<name>.yaml comes after its base/ file (the platform layer is data: Argo CD
+# Notifications only where a cluster runs for a whole session).
 # Pod Security "restricted" on namespace argocd before Argo CD's first pod (every pod of its chart meets it): the
 # Namespace of chart svp-cluster's template, as deploy/k8s/install.sh makes those of wave 0. It exists before helm, so
 # helm gets no --create-namespace, whose apply would leave the labels out.
@@ -404,9 +423,16 @@ read -r argocd_repo argocd_chart argocd_version argocd_values <<<"$bootstrap"
 [ -n "$argocd_values" ] && [ "$argocd_repo $argocd_chart" = "https://argoproj.github.io/argo-helm argo-cd" ] ||
   fail "argocd/bootstrap.json at ${sha:0:12} of svp-gitops must install chart argo-cd of https://argoproj.github.io/argo-helm with a values file"
 at "$argocd_values" >"$work/argo-cd.yaml" || fail "read $argocd_values at ${sha:0:12} of svp-gitops"
-echo "helm upgrade --install argocd (argo-cd $argocd_version, namespace argocd)"
+argocd_args=(--values "$work/argo-cd.yaml")
+argocd_platform=platforms/$platform/argo-cd.yaml
+if git -C "$gitops" cat-file -e "$sha:$argocd_platform" 2>/dev/null; then
+  at "$argocd_platform" >"$work/argo-cd-platform.yaml" || fail "read $argocd_platform at ${sha:0:12} of svp-gitops"
+  argocd_args+=(--values "$work/argo-cd-platform.yaml")
+  argocd_values+=", $argocd_platform"
+fi
+echo "helm upgrade --install argocd (argo-cd $argocd_version, namespace argocd, values $argocd_values)"
 hc upgrade --install argocd "$argocd_chart" --repo "$argocd_repo" --version "$argocd_version" \
-  --values "$work/argo-cd.yaml" --namespace argocd --wait --timeout 10m >/dev/null || fail "install Argo CD"
+  "${argocd_args[@]}" --namespace argocd --wait --timeout 10m >/dev/null || fail "install Argo CD"
 ok "Argo CD installed"
 
 # No repository Secret: Argo CD reads $gitops_url and $chart_repo_url over HTTPS without credentials.

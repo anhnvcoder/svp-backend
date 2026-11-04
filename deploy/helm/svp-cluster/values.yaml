@@ -166,3 +166,7 @@ externalSecrets:
   # Host and port of Postgres in the connection strings the ExternalSecrets build (written ${postgres} in
   # files/external-secrets.yaml): svp-pg of chart svp-data.
   postgres: svp-pg-rw.svp-data:5432
+  # Secret argocd/argocd-notifications-secret of Argo CD Notifications (commit statuses on svp-gitops, Telegram), from
+  # source entry argocd-notifications; on only where the platform turns Argo CD's notifications on (a cluster that runs
+  # for a whole session, not one of the runner). Its store in argocd needs a role in aws.roles with store aws.
+  argocdNotifications: false
