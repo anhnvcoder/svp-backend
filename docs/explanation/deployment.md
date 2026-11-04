@@ -22,8 +22,8 @@ CPU của từng container ở [`deploy/compose/compose.yaml`](../../deploy/comp
   bucket do `s3-init` đặt, chỉ nhận origin của web (`http://localhost:3001`, `web-dev` `http://localhost:3002`): `POST` vào
   `uploads`, `GET`/`HEAD` ở `media`; bucket khác không có header CORS (threat model WEB-10); web đặt `MEDIA_ORIGIN` và
   `UPLOAD_ORIGIN` là `http://127.0.0.1:9000`. Compose có thêm user thử `svp-objstore-probe` chỉ cho bucket `objstore-probe` của
-  test tích hợp. MinIO là đường quay lại: dữ liệu của nó ở volume `svp_minio-data`, chép hai chiều bằng
-  `make object-store-copy TO=s3|minio`.
+  test tích hợp. Không có đường quay lại MinIO ([ADR-0050](../adr/0050-bash-to-standard-tools.md)): đổi store thì chép bằng
+  công cụ S3 chuẩn (`mc mirror`, `rclone`).
 - **Redpanda:** một broker; topic và `.dlq` do container init tạo, broker tắt tự tạo topic. Trong compose là
   `redpanda:9092`, từ máy host là `127.0.0.1:19092`.
 - **engagement-service và feed-service** ([ADR-0009](../adr/0009-engagement-feed-stage2b.md) mục 12): gRPC ở `:9103` và
@@ -120,8 +120,7 @@ flowchart LR
   CloudNativePG quản, cùng tên database `svp_<svc>` và cặp role migrator/app như compose, đăng nhập `scram-sha-256`;
   Valkey không persistence, gateway db 10, feed-service db 14, web db 9 (session); Redpanda một broker, SASL SCRAM mỗi service
   một user, ACL theo bảng của ADR-0014 §5 (compose không SASL); object store `s3` (StatefulSet một replica, `s3.svp-data:9000`)
-  cùng bucket, user, policy và script init như compose, không user thử. Cluster còn object store MinIO cũ bị `make k8s-up` từ chối
-  (dựng lại cluster, không nâng tại chỗ). Mật khẩu sinh bằng `make env`, đưa vào Secret bằng `deploy/k8s/secrets.sh`, không nằm
+  cùng bucket, user, policy và script init như compose, không user thử. Mật khẩu sinh bằng `make env`, đưa vào Secret bằng `deploy/k8s/secrets.sh`, không nằm
   trong git. Trên đường GitOps ([ADR-0026](../adr/0026-secrets-gitops.md)) `secrets.sh` chỉ ghi nguồn vào namespace
   `svp-secrets`; External Secrets Operator (component `external-secrets`, wave 0, chỉ đường GitOps) dựng Secret từ ExternalSecret
   của chart `svp-cluster` (`deploy/helm/svp-cluster/templates/external-secrets.yaml`), mỗi namespace một SecretStore chỉ đọc đúng

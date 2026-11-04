@@ -78,19 +78,7 @@ Loại tài liệu (Diátaxis): **reference**, tra cứu khi cần một lệnh 
   `Makefile`. Thu hẹp bằng `PKGS=` như `make test`, `TESTFLAGS` thêm cờ.
 - `make clean-data`: gỡ stack (mọi profile) và xoá volume của nó (topic Redpanda, bucket của object store `s3-data`, thư mục
   tạm của media-worker, dữ liệu LGTM, silence của Alertmanager, chỉ mục Elasticsearch); Postgres native (cả `svp_glitchtip`)
-  không bị đụng; volume của project mà compose không còn khai (`svp_minio-data`, dữ liệu MinIO trước khi đổi store, đường
-  quay lại) được giữ và in ra. Chỉ chạy khi cần làm lại dữ liệu từ đầu.
-- `make object-store-copy TO=s3|minio` (script `deploy/compose/object-store-copy.sh`, [ADR-0022](../adr/0022-local-object-store-minio-replacement.md)
-  mục Cách chuyển): chép bucket `uploads`, `media` từ volume MinIO `svp_minio-data` sang volume RustFS `svp_s3-data` (`s3`)
-  hay ngược lại (`minio`, đường quay lại), dựng tạm hai store trên network nội bộ không publish cổng (MinIO bằng image
-  Chainguard ghim digest trong script, mật khẩu root ngẫu nhiên mỗi lượt), chép bằng `mc mirror` của image đó không
-  `--remove`, không `--overwrite`, rồi kiểm key, kích thước, `Content-Type` hai phía. Từ chối khi stack compose hay cluster
-  k3d đang chạy, container nào đang dùng một trong hai volume, còn video `PROCESSING` (`SELECT` trên `svp_video`), hay đích có
-  key mà nguồn không có hoặc cùng key khác kích thước (không ghi gì); in key của video `READY` đã mất từ trước ở cả hai phía
-  (không chặn). Không bao giờ xoá hay ghi đè object, không xoá volume nào; xoá ở đích hay xoá volume cũ là việc của người học.
-
-## Diễn tập trên stack compose
-
+  không bị đụng; volume của project mà compose không còn khai được giữ và in ra. Chỉ chạy khi cần làm lại dữ liệu từ đầu.
 - `make drill-kill-worker`, `make drill-duplicates`, `make measure-ready N=5`: diễn tập trên stack đang chạy, script ở
   `deploy/compose/drills/`. Lần lượt: kill media-worker giữa lúc transcode rồi kiểm video vẫn `READY` đúng một lần và master
   trỏ đúng một thư mục lần thử (thư mục của thumbnail); phát lại event bằng `rpk group seek` rồi kiểm không gì đổi: media-worker

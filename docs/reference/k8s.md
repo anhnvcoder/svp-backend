@@ -101,8 +101,7 @@ Loại tài liệu (Diátaxis): **reference**, tra cứu khi cần một lệnh 
   chối nâng `svp-data` khi `svp-pg` đang phục hồi (`bootstrap.recovery` có mà chưa Ready) hay đã mất mà còn Backup của nó;
   sau `svp-data` chờ WAL lưu liên tục và thế hệ đang chạy có backup cơ sở (chưa có thì chụp một bản; cluster mới chờ thêm vài
   phút); idempotent, cần `.env` (`make env`), từ chối cluster do Argo CD quản (có Application
-  `svp-root`) và cluster tạo khi object store còn là MinIO (StatefulSet `svp-data/minio`: in lệnh dựng lại `make k8s-down`,
-  `make k8s-up`, không nâng tại chỗ). Khi pod template của gateway hay web (Argo Rollout) đổi, tức có canary, `k8s-up` tự chạy traffic diễn tập
+  `svp-root`). Khi pod template của gateway hay web (Argo Rollout) đổi, tức có canary, `k8s-up` tự chạy traffic diễn tập
   trong lúc
   canary rồi dừng, chờ Rollout `Healthy` có hạn; abort hay inconclusive thì FAIL kèm lệnh gỡ (**LOCAL LAB ONLY**: traffic
   xoá khoá rate limit đăng ký ở Valkey db 10 của cluster). `k8s-down` xoá cluster và registry (volume compose và Postgres

@@ -37,14 +37,6 @@ kc get --raw /readyz >/dev/null 2>&1 || fail "cluster svp is not reachable (cont
 if kc -n argocd get applications.argoproj.io svp-root >/dev/null 2>&1; then
   fail "cluster svp is managed by Argo CD (Application argocd/svp-root): change it through git, or start over on the dev path with make k8s-down && make k8s-up"
 fi
-# A cluster made while the object store was MinIO (StatefulSet svp-data/minio) is made again, never upgraded in place:
-# the upgrade would leave MinIO's volume behind and move ObjectStore svp-pg-backup to a new, empty store while WAL is
-# being archived, some backups on each side. The cluster made again has a new Postgres too, so nothing points at the
-# old objects.
-old_store=$(kc -n svp-data get statefulset minio --ignore-not-found -o name) || fail "read StatefulSet svp-data/minio"
-if [ -n "$old_store" ]; then
-  fail "cluster svp still runs MinIO (StatefulSet svp-data/minio), from before the object store became s3: it is not upgraded in place; start over with make k8s-down && make k8s-up"
-fi
 
 # The services' images first, so a build that fails stops the run before anything is installed. Each release of
 # chart svp-service then gets its image with --set (never written to a file): the local registry, the service's dev

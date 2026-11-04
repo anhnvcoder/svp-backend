@@ -52,7 +52,7 @@ DB_PASSWORD_VARS := SVP_USER_MIGRATOR_DB_PASSWORD SVP_USER_APP_DB_PASSWORD SVP_V
 	SVP_GLITCHTIP_MIGRATOR_DB_PASSWORD SVP_GLITCHTIP_APP_DB_PASSWORD
 # Root password of the object store and the secret keys of its users (deploy/s3/init.sh): the two
 # services and the probe user of the integration tests. 20 random bytes in hex, 40 characters, the
-# length of an AWS secret key and the cap of MinIO, the store to go back to.
+# length of an AWS secret key.
 S3_SECRET_VARS := SVP_S3_ROOT_PASSWORD SVP_VIDEO_S3_SECRET_KEY SVP_MEDIA_WORKER_S3_SECRET_KEY SVP_S3_PROBE_SECRET_KEY
 # GlitchTip's Django secret key and its admin password: random per clone like the S3 secrets above, so no fixed
 # credential is committed.
@@ -77,7 +77,7 @@ WEB_KEY_VARS := NEXT_SERVER_ACTIONS_ENCRYPTION_KEY
 
 .PHONY: env env-required obs-valid obs-exclusive k3d-exclusive ci-bridge-check db-bootstrap glitchtip-init up down clean-data ps logs compose-config compose-hash slo-check smoke test-stack drill-kill-worker drill-duplicates measure-ready \
 	drill-duplicates-feed drill-engagement-down measure-freshness drill-rate-limit measure-explore-cache drill-upload-cleanup \
-	drill-alert-to-sentry drill-obs-threats gameday gameday-mark gameday-end object-store-copy
+	drill-alert-to-sentry drill-obs-threats gameday gameday-mark gameday-end
 
 # .env is read with the strict rule of deploy/observability/glitchtip/dotenv.sh, the same as
 # glitchtip-init: a line it refuses stops make env, naming the variable, before anything is written.
@@ -165,7 +165,7 @@ down: ## Stop and remove the containers of every profile and the network (no vol
 	$(COMPOSE_ALL) down
 
 # down -v removes only the volumes the compose file declares. A volume of the project that it no longer declares stays
-# and is named as kept: svp_minio-data, the MinIO data from before the store became RustFS, is the way back to MinIO.
+# and is named as kept.
 clean-data: ## Stop every profile and delete the stack's volumes (Redpanda topics, object store buckets, media-worker scratch, LGTM data, Alertmanager silences, Elasticsearch indices); a volume no longer in the compose file is kept
 	@declared=$$($(COMPOSE_ALL) config --volumes | sed 's/^/svp_/'); \
 	  existing=$$(env -u DOCKER_DEFAULT_PLATFORM docker volume ls -q --filter label=com.docker.compose.project=svp); \
@@ -176,14 +176,6 @@ clean-data: ## Stop every profile and delete the stack's volumes (Redpanda topic
 	  if [ -n "$$kept" ]; then echo "Keeping these volumes of the project, which the compose file no longer declares:"; \
 	    for v in $$kept; do echo "  $$v"; done; fi
 	$(COMPOSE_ALL) down -v
-
-# Moves the object store's data between MinIO (volume svp_minio-data, the store to go back to) and RustFS
-# (svp_s3-data), so that every object a row of svp_video points to is on the store that runs next. The script never
-# deletes or overwrites an object and removes no volume: a target holding a key the source lacks, or of another size,
-# is refused before anything is written.
-TO ?=
-object-store-copy: env-required ## TO=s3|minio: copy buckets uploads and media from MinIO's volume svp_minio-data to RustFS's svp_s3-data (s3) or back (minio), then check keys, sizes and Content-Type match; refuses while the compose stack or k3d runs, a video is PROCESSING, or the target has a key the source lacks or of another size; never deletes or overwrites an object, removes no volume
-	deploy/compose/object-store-copy.sh '$(TO)'
 
 ps: ## Show the containers of every profile
 	$(COMPOSE_ALL) ps -a
