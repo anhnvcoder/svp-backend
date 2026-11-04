@@ -57,6 +57,10 @@ Chọn **A + B + C**, theo hai đợt:
    qua External Secrets ([ADR-0026](0026-secrets-gitops.md)), bật bằng dữ liệu (`externalSecrets.argocdNotifications` của chart
    `svp-cluster`, mặc định tắt) chỉ trên nền tảng có cluster chạy cả buổi, nên cluster dựng tạm của runner không rắc status lên
    commit. Values Argo CD của nền tảng ở `platforms/<platform>/argo-cd.yaml` của `svp-gitops`, đọc sau `base/argo-cd.yaml`.
+   Chỉ root `svp-root` báo (nhãn `svp.io/notify=root`, subscription ở values đó): root `Healthy` khi mọi wave con đã sync và
+   `Healthy`, nên mỗi commit của `svp-gitops` có một status `argocd/<env>` cho cả môi trường, không một status mỗi Application.
+   Chat Telegram không vào repo public: bootstrap gắn subscription Telegram lên root bằng annotation khi `.env` có token và chat
+   id hợp lệ (cùng luật receiver của Alertmanager); thiếu thì chỉ có commit status.
 
 Không chọn D vì phá mô hình pull; không chọn E vì thay cả luồng promote.
 
@@ -97,12 +101,13 @@ Bảng đầy đủ ở [phụ lục](appendix/0032-argocd-deploy-status.md#ki�
   - `deploy/k8s/secrets.sh` (nguồn `svp-secrets/argocd-notifications` từ ba biến `SVP_ARGOCD_NOTIFY_*` của `.env` khi entry bật),
     `.env.example`.
   - `deploy/k8s/gitops.sh` (Argo CD với `platforms/<platform>/argo-cd.yaml` sau `base/argo-cd.yaml`; bật nguồn theo values của
-    `svp-cluster`), `deploy/ci/gitops-check.sh` (render Argo CD với file đó, đếm ExternalSecret theo `enabledBy`).
+    `svp-cluster`; chat Telegram lên root), `deploy/k8s/lib.sh` (`argocd_root_app`: nhãn `svp.io/notify=root`;
+    `argocd_root_telegram`), `deploy/ci/gitops-check.sh` (render Argo CD với file đó, đếm ExternalSecret theo `enabledBy`).
   - `deploy/ci/verify/gitops.sh` (`gitops-external-secrets`: entry `enabledBy` chỉ khi Argo CD render nó),
     `deploy/k8s/drills/threats.sh` (SEC-5, ba ca của `argocd`).
   - `docs/runbooks/argocd-notifier-key-rotation.md`: xoay khoá App, nghi khoá lộ.
-- A và B, phần `svp-gitops`: chưa có; `base/argo-cd.yaml` vẫn `notifications.enabled: false`, chưa có
-  `platforms/eks/argo-cd.yaml`.
+- A và B, phần `svp-gitops`: `platforms/eks/argo-cd.yaml` (service, template, trigger, subscription theo nhãn của root),
+  `platforms/eks/svp-cluster.yaml` (`externalSecrets.argocdNotifications: true`); `base/argo-cd.yaml` giữ notifications tắt cho k3d.
 
 ## Thông tin thêm
 
