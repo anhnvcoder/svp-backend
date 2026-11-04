@@ -10,6 +10,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -307,9 +308,11 @@ func TestNoProfilingOrMetricsRoutes(t *testing.T) {
 	}
 }
 
-// TestUnreachableTelemetryDoesNotSlowRequests: with the Collector and the error tracker on a
-// closed port, failing requests (each an ERROR line, so an error event) take no longer than with
-// telemetry off.
+// TestUnreachableTelemetryDoesNotSlowRequests: with the Collector and the error tracker on an
+// address that accepts connections and never answers, failing requests (each an ERROR line, so an
+// error event) are not held up by telemetry. A request that waited on an export once would take at
+// least an exporter's timeout (seconds); the extra work of building the events is milliseconds on any
+// machine, so the bound below tells the two apart without depending on the machine's speed.
 func TestUnreachableTelemetryDoesNotSlowRequests(t *testing.T) {
 	const requests = 50
 	prevLogger := slog.Default()
@@ -318,13 +321,31 @@ func TestUnreachableTelemetryDoesNotSlowRequests(t *testing.T) {
 		slog.DiscardHandler, otelslog.NewHandler("gateway"), &sentryx.Handler{},
 	))))
 	t.Cleanup(func() { slog.SetDefault(prevLogger) })
-	run := func() time.Duration {
+	// Well under the shortest export timeout of the SDKs (seconds), well over the cost of the events.
+	const blocked = 2 * time.Second
+	// run sends the requests from a goroutine and fails as soon as they take longer than limit, so a
+	// telemetry path that blocks fails the test in seconds instead of hanging it until go test's timeout.
+	run := func(limit time.Duration) time.Duration {
 		e := newEnv(t)
 		e.videos.fail(status.Error(codes.Unavailable, "db down"))
 		token := e.token(t, userA)
+		got := make(chan int, requests)
 		start := time.Now()
-		for range requests {
-			wantStatus(t, e.do(t, http.MethodGet, "/videos/"+videoID, "", token), http.StatusServiceUnavailable)
+		go func() {
+			for range requests {
+				got <- e.do(t, http.MethodGet, "/videos/"+videoID, "", token).Code
+			}
+		}()
+		deadline := time.After(limit)
+		for i := range requests {
+			select {
+			case code := <-got:
+				if code != http.StatusServiceUnavailable {
+					t.Fatalf("request %d: status = %d, want %d", i, code, http.StatusServiceUnavailable)
+				}
+			case <-deadline:
+				t.Fatalf("%d of %d requests answered after %v: telemetry held them up", i, requests, limit)
+			}
 		}
 		return time.Since(start)
 	}
@@ -334,17 +355,37 @@ func TestUnreachableTelemetryDoesNotSlowRequests(t *testing.T) {
 	}
 	t.Setenv("OTEL_EXPORTER_OTLP_ENDPOINT", "")
 	t.Setenv("SENTRY_DSN", "")
-	off := run()
+	off := run(time.Minute)
 
+	// A black hole: every connection is accepted and held open without a byte answered, so an
+	// exporter that sent synchronously would wait for its timeout.
 	var lc net.ListenConfig
 	lis, err := lc.Listen(t.Context(), "tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
 	}
+	var held []net.Conn
+	var heldMu sync.Mutex
+	go func() {
+		for {
+			conn, err := lis.Accept()
+			if err != nil {
+				return
+			}
+			heldMu.Lock()
+			held = append(held, conn)
+			heldMu.Unlock()
+		}
+	}()
+	t.Cleanup(func() {
+		_ = lis.Close()
+		heldMu.Lock()
+		defer heldMu.Unlock()
+		for _, conn := range held {
+			_ = conn.Close()
+		}
+	})
 	addr := lis.Addr().String()
-	if err := lis.Close(); err != nil {
-		t.Fatal(err)
-	}
 	t.Setenv("OTEL_EXPORTER_OTLP_ENDPOINT", "http://"+addr)
 	t.Setenv("OTEL_EXPORTER_OTLP_INSECURE", "true")
 	t.Setenv("SENTRY_DSN", "http://public@"+addr+"/1")
@@ -368,9 +409,9 @@ func TestUnreachableTelemetryDoesNotSlowRequests(t *testing.T) {
 		otel.SetTextMapPropagator(prop)
 		otel.SetErrorHandler(eh)
 	})
-	on := run()
-	if on > 2*off+200*time.Millisecond {
-		t.Errorf("%d requests took %v with telemetry unreachable, %v with it off", requests, on, off)
+	on := run(off + blocked)
+	if on-off > blocked {
+		t.Errorf("%d requests took %v with telemetry unreachable, %v with it off: telemetry held them up", requests, on, off)
 	}
 	t.Logf("%d requests: telemetry off %v, unreachable %v", requests, off, on)
 }
