@@ -52,10 +52,10 @@ Loại tài liệu (Diátaxis): **reference**, tra cứu khi cần một lệnh 
   mọi nguồn của bảng working tree có `promoter` (`deploy/ci/sources-test.sh`). Hai **nguồn nghỉ hưu** của lượt đổi tên repo
   ([ADR-0036](../adr/0036-repo-rename.md) §3; `oldbackend` dưới tên `short-video-platform`, `oldweb` dưới tên `svp-web`, không `promoter`)
   đã gỡ khỏi bảng ngày 2026-11-01 (§4 bước 8), khi mọi file `envs/*/images/` của `svp-gitops` đã dưới hai prefix mới: bản trước đổi tên
-  bị phép 1 từ chối (prefix không thuộc nguồn nào), không bot nào tiếp quản file của nguồn nghỉ hưu nữa. `promoter` vẫn tuỳ chọn ở hai nơi
-  viết luật (template, `_release_sources_jq` của `lib.sh`) vì script đọc bảng ở `revision` mà env ghim (`envs/prd/charts.yaml` còn ở
-  commit merge của PR đổi tên, bảng bốn nguồn); bỏ khi không env nào, không commit `envs/stg/` nào mà promote prd còn chép, trỏ commit có
-  nguồn không `promoter`. `promoter` không trùng giữa các nguồn có nó. Repo này chỉ build, ký, promote sáu image của nó
+  bị phép 1 từ chối (prefix không thuộc nguồn nào), không bot nào tiếp quản file của nguồn nghỉ hưu nữa. `promoter` vẫn tuỳ chọn ở
+  template; bảng ở `revision` mà env ghim còn có thể có nguồn không `promoter` (`envs/prd/charts.yaml` còn ở commit merge của PR đổi
+  tên, bảng bốn nguồn): template của chính commit đó render nó, script đọc nguồn đó là nguồn nghỉ hưu. `promoter` không trùng giữa các
+  nguồn có nó. Repo này chỉ build, ký, promote sáu image của nó
   (`built_services` của `deploy/k8s/lib.sh`); `svp_services` vẫn là bảy bản triển khai (gồm `web`), mà rescan, promote prd,
   check `svp-gitops`, `k8s/gitops.sh` đọc. Stg chạy web của repo `svp-frontend` từ 2026-10-30, prd từ 2026-10-31 (PR #22, #29 của `svp-gitops`). Policy: một glob mỗi tên được phát hành
   (`<imagePrefix><tên>@*`, `<imagePrefix><tên>:*`; không glob cả prefix: Kyverno kéo từ registry mọi image khớp glob trước mọi phép,
@@ -65,9 +65,13 @@ Loại tài liệu (Diátaxis): **reference**, tra cứu khi cần một lệnh 
   của image, message nêu tên nguồn. Template từ chối lúc render bảng sai (prefix lồng nhau hay thiếu `/`, tên hay `promoter` trùng,
   `promoter` rỗng hay sai kiểu, một service ở hơn hai nguồn, giá trị có nháy, `\`, khoảng trắng). Script đọc cùng bảng: `release_sources [REV]` của
   `deploy/k8s/lib.sh` (commit chưa có bảng thì dừng, nêu commit; [ADR-0037](../adr/0037-mainpath-standard-tools.md) §4),
-  `sign_identity`, `provenance_source`, `release_source_in` của `deploy/ci/common.sh`. Luật bảng viết hai nơi (template,
-  `_release_sources_check` của `lib.sh`): `deploy/ci/sources-test.sh` (job `config`) đưa từng bảng hỏng qua cả hai, phải bị cả hai
-  từ chối đúng message, bảng của working tree qua cả hai. Kyverno thật chọn attestor
+  `sign_identity`, `provenance_source`, `release_source_in` của `deploy/ci/common.sh`. Luật bảng chỉ viết một nơi, template
+  ([ADR-0050](../adr/0050-bash-to-standard-tools.md)): `deploy/ci/sources-test.sh` (job `config`) đưa từng bảng hỏng qua render, phải
+  bị từ chối đúng message, bảng của working tree render được. Script đọc bảng mà không kiểm lại luật, vì mọi bảng đường phát hành đọc
+  đã render trước: bảng working tree ở job `config` (bắt buộc trước khi vào `main`), bảng ở `revision` env ghim (commit trên `main`) ở
+  bước 3 của `gitops-check.sh` và ở Argo CD. Script chỉ giữ một luật, ở hai hàm chọn nguồn theo prefix của image (`source_of_repository`,
+  `release_source_of` của `lib.sh`): hơn một nguồn khớp thì dừng, để identity được chọn không tuỳ vào việc render đã chạy hay chưa
+  (diễn tập, check trên máy đọc working tree như đang có). Kyverno thật chọn attestor
   theo prefix: lượt `verify.yml` `gitops` trên `main` 41112757906 (trước đổi tên, stg chạy web của nguồn `web` khi đó, dưới tên `svp-web`): ca (m)
   hai chiều identity bị từ chối đúng message nêu nguồn, bản web đang chạy được nhận. **Build provenance**
   ([ADR-0027](../adr/0027-slsa-build-provenance.md) §4): giá trị `imageVerification.requireProvenance` của chart (mặc định `false`,

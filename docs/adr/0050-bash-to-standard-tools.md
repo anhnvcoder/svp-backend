@@ -102,6 +102,9 @@ Chọn phương án A ở cả bốn mục. Ngoài ra:
   `deploy/ci/common.sh`; ca test chuyển sang `deploy/ci/plan-test.sh`, `scan-gate-test.sh`, `vuln-predicate-test.sh`,
   `sign-image-test.sh`, `rescan-test.sh`, `verify-release-test.sh`, `changed-services-test.sh`, `verify-collect-test.sh`,
   `sources-test.sh`; job `config` của `.github/workflows/ci.yml`; `deploy/ci/changed-services.sh` (mọi `*-test.sh` không build image).
+- Một bản luật bảng nguồn (B3 của phụ lục): luật chỉ ở `fail` của `deploy/helm/svp-policy/templates/imagevalidatingpolicy.yaml`;
+  `deploy/k8s/lib.sh` bỏ `_release_sources_check`, `release_sources` chỉ đọc bảng, `source_of_repository` và `release_source_of` dừng
+  khi hơn một nguồn khớp prefix; `deploy/ci/sources-test.sh` kiểm luật bằng render (không thêm công cụ), cùng hai hàm chọn nguồn đó.
 
 ## Thông tin thêm
 

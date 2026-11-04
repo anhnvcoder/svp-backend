@@ -1062,66 +1062,24 @@ ghcr_prefix=ghcr.io/anhnvcoder/svp-backend
 # keyless identity of its images.yml on main (issuer, subject), the ref its build provenance names, and the GitHub App
 # that promotes its releases (promoter). They are written once, in this file of chart svp-policy, whose policy admits
 # exactly these images with these identities; the scripts read the same file, so what they check is what admission
-# checks. Every source of the working tree's table has a promoter (deploy/ci/sources-test.sh). A table of an older
-# commit may hold a retired source, one without promoter: a repository renamed, its successor another source, whose
-# releases signed under the old name stayed admitted while an environment ran them, but nothing built, promoted or
-# rescanned for it.
+# checks. The rules on the table are written once too, in the template of the chart, which fails the render of a
+# table the policy would get wrong (deploy/ci/sources-test.sh). The scripts read the table without checking those rules
+# again, since every table they read on the release path has rendered first: the working tree's in job config of CI
+# (make helm-check, sources-test.sh), required before a change reaches main; the one at the revision an environment
+# pins, a commit on main, in gitops-check.sh (step 3 renders the charts of that revision) and in Argo CD, which syncs
+# no policy that does not render. Every source of the working tree's table has a promoter (deploy/ci/sources-test.sh).
+# A table of an older commit may hold a retired source, one without promoter: a repository renamed, its successor
+# another source, whose releases signed under the old name stayed admitted while an environment ran them, but nothing
+# built, promoted or rescanned for it.
 release_sources_file=deploy/helm/svp-policy/files/sources.json
 
-# _release_sources_check WHERE: reads a table of release sources on stdin and prints it as compact JSON when it holds
-# what the template of chart svp-policy accepts: at least one source; every field a non-empty string without a quote,
-# backslash or white space (they go into CEL string literals), promoter the one field a source may leave out (a
-# retired source of a table of an older commit) but never give empty or of another type; a name of a lowercase letter
-# then letters and digits;
-# repository, issuer and subject https:// URLs, provenanceRef a refs/... ref, imagePrefix ending in /; no two sources
-# with one name, no two with one promoter; services a non-empty list and drillImages a list of image names; no service
-# in more than two sources; no prefix the start of another's (an image under both could not be told apart). Fails
-# naming WHERE and the first problem otherwise.
-# A source without promoter is still read because release_sources REV reads the table at the revision an environment
-# of svp-gitops pins (envs/<env>/charts.yaml), and a commit from before the retired sources were dropped may still be
-# pinned there, or be copied to prd from envs/stg/ of an older commit of svp-gitops. Drop that, here and in the
-# template, once no environment pins such a commit and no commit of envs/stg/ a promote to prd may copy names one.
-# The jq program of _release_sources_check, kept out of $(...), which bash 3.2 misreads with these quotes inside.
-_release_sources_jq='
-    def plain: type == "string" and test("^[^\u0027\"\\\\\\s]+$");
-    def names: type == "array" and all(.[]; type == "string" and test("^[a-z0-9][a-z0-9._-]*$"));
-    if (.sources | type) != "array" or (.sources | length) == 0 then "sources lists no release source"
-    else .sources as $s
-    | ([$s[] | select(type != "object"
-        or ([.name, .repository, .imagePrefix, .issuer, .subject, .provenanceRef] | all(plain) | not))
-        | (.name? // "?" | tostring)] | first) as $bad
-    | ([$s[] | select(type == "object" and has("promoter") and (.promoter | plain | not)) | (.name | tostring)] | first) as $badpromoter
-    | if $bad != null then
-        "source \($bad): name, repository, imagePrefix, issuer, subject and provenanceRef must each be a string without quote, backslash or white space"
-      elif $badpromoter != null then
-        "source \($badpromoter): promoter, when given, must be a string without quote, backslash or white space (leave it out for a retired source)"
-      elif any($s[]; .name | test("^[a-z][a-z0-9]*$") | not) then "a source name is not a lowercase letter then letters and digits"
-      elif any($s[]; [.repository, .issuer, .subject] | all(startswith("https://")) | not)
-        then "repository, issuer and subject of every source must be https:// URLs"
-      elif any($s[]; .provenanceRef | startswith("refs/") | not) then "provenanceRef of every source must be a refs/... ref"
-      elif any($s[]; .imagePrefix | test("^[a-z0-9.:_/-]+/$") | not) then "imagePrefix of every source must end in /"
-      elif ([$s[].name] | unique | length) != ($s | length) then "two sources share a name"
-      elif ([$s[] | select(has("promoter")) | .promoter] | (unique | length) != length) then "two sources share a promoter"
-      elif any($s[]; ((.services | names) and (.services | length) > 0 and (.drillImages | names)) | not)
-        then "every source needs a non-empty list services and a list drillImages, of image names"
-      elif ([$s[].services[]] | group_by(.) | any(length > 2)) then "a service is in more than two sources"
-      elif any($s[] as $a | $s[] as $b | $a.name != $b.name and ($b.imagePrefix | startswith($a.imagePrefix)); .)
-        then "the imagePrefix of one source starts with the imagePrefix of another"
-      else "ok" end end'
-_release_sources_check() {
-  local table verdict
-  table=$(cat)
-  verdict=$(jq -r "$_release_sources_jq" <<<"$table" 2>/dev/null) || verdict="is not readable JSON"
-  [ "$verdict" = ok ] || fail "release sources of $1: $verdict"
-  jq -c . <<<"$table"
-}
-
-# release_sources [REV]: prints the table of release sources ({"sources": [...]}, compact JSON, checked by
-# _release_sources_check) of this repository at commit REV, or of the working tree when REV is empty. Fails when REV is
-# no commit of this clone, or a commit from before the table: no environment pins one any more, so its one source is
-# not rebuilt from the policy's values of then; pin a newer commit.
+# release_sources [REV]: prints the table of release sources ({"sources": [...]}, compact JSON) of this repository at
+# commit REV, or of the working tree when REV is empty; fails when it is not JSON (its rules are the template's, above).
+# Fails too when REV is no commit of this clone, or a commit from before the table: no environment pins one any more,
+# so its one source is not rebuilt from the policy's values of then; pin a newer commit.
 release_sources() {
-  local rev=${1:-} table
+  local rev=${1:-} table where="the working tree"
+  [ -z "$rev" ] || where="commit ${rev:0:12}"
   if [ -z "$rev" ]; then
     table=$(cat "$repo_root/$release_sources_file") || fail "read $release_sources_file"
   elif ! git -C "$repo_root" cat-file -e "$rev^{commit}" 2>/dev/null; then
@@ -1129,7 +1087,7 @@ release_sources() {
   elif ! table=$(git -C "$repo_root" show "$rev:$release_sources_file" 2>/dev/null); then
     fail "commit ${rev:0:12} has no $release_sources_file: it is from before the table of release sources, which every script reads; pin a newer commit"
   fi
-  _release_sources_check "${rev:+${rev:0:12} }${rev:-the working tree}" <<<"$table"
+  jq -c . <<<"$table" 2>/dev/null || fail "release sources of $where: $release_sources_file is not readable JSON"
 }
 
 # release_source NAME [REV]: prints source NAME of the table at REV (release_sources) as compact JSON; fails without
@@ -1142,27 +1100,39 @@ release_source() {
   echo "$src"
 }
 
+# The two lookups below pick a source by the prefix of an image, and with it the identity a signature of the image is
+# checked against, as Kyverno picks its attestor. The template refuses a table in which one prefix starts another, so
+# at most one source matches; each lookup still fails when more than one does, the one rule a script needs to pick,
+# so that a pick never depends on a render having run first (a drill or a check on a machine reads the working tree as
+# it is).
+
 # source_of_repository REPOSITORY [REV]: prints the name of the release source whose imagePrefix REPOSITORY lies
-# under, in the table at REV (at most one: no prefix starts another); fails without one.
+# under, in the table at REV; fails unless exactly one source has such a prefix.
 source_of_repository() {
-  local table name
+  local table names
   table=$(release_sources "${2:-}") || exit 1
-  name=$(jq -r --arg r "$1" '.sources[] | .imagePrefix as $p | select($r | startswith($p)) | .name' <<<"$table")
-  [ -n "$name" ] || fail "$1 is under the prefix of no release source of $release_sources_file${2:+ at ${2:0:12}}"
-  echo "$name"
+  names=$(jq -r --arg r "$1" '[.sources[] | .imagePrefix as $p | select($r | startswith($p)) | .name] | join(" ")' \
+    <<<"$table")
+  [ -n "$names" ] || fail "$1 is under the prefix of no release source of $release_sources_file${2:+ at ${2:0:12}}"
+  [[ $names != *" "* ]] ||
+    fail "$1 is under the prefixes of release sources $names of $release_sources_file${2:+ at ${2:0:12}}: it is of no one source"
+  echo "$names"
 }
 
 # release_source_of SERVICE REPOSITORY [REV]: prints, as compact JSON, the release source in the table at REV of
 # which REPOSITORY is SERVICE's image: <imagePrefix>SERVICE of a source whose services name SERVICE, what the policy
 # admits for that service. Status 1, printing nothing, when REPOSITORY is none of them (release_repositories names
-# what would be).
+# what would be); fails when it is the image of more than one.
 release_source_of() {
-  local table src
+  local table found
   table=$(release_sources "${3:-}") || exit 1
-  src=$(jq -c --arg s "$1" --arg r "$2" '.sources[] | select((.services | index($s)) and .imagePrefix + $s == $r)' \
-    <<<"$table")
-  [ -n "$src" ] || return 1
-  echo "$src"
+  found=$(jq -c --arg s "$1" --arg r "$2" '[.sources[] | select((.services | index($s)) and .imagePrefix + $s == $r)]' \
+    <<<"$table") || fail "read the release sources of $release_sources_file${3:+ at ${3:0:12}}"
+  case $(jq length <<<"$found") in
+  0) return 1 ;;
+  1) jq -c '.[0]' <<<"$found" ;;
+  *) fail "$2 is $1 of release sources $(jq -r 'map(.name) | join(" ")' <<<"$found") of $release_sources_file${3:+ at ${3:0:12}}: it is of no one source" ;;
+  esac
 }
 
 # release_repositories SERVICE [REV]: prints the repositories SERVICE's releases may come from in the table at REV,
