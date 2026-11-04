@@ -136,6 +136,7 @@ Phụ lục: [`appendix/NNNN-<slug>.md`](appendix/NNNN-<slug>.md) (chỉ khi có
 | [0044](0044-grpc-readiness.md) | Readiness của service gRPC là tên health `readiness`, do vòng nền ping Postgres của service đặt; liveness, startup giữ health tổng | Chấp nhận |
 | [0045](0045-bounded-batch-retry.md) | Consumer theo lô thử lại trong ngân sách 5 phút rồi chép cả lô sang DLQ; consumer feed giữ thử lại không giới hạn | Chấp nhận |
 | [0046](0046-web-session-lifetime.md) | Session BFF của web có idle timeout 7 ngày và absolute timeout 30 ngày tường minh, không chỉ dựa vào hạn refresh token | Chấp nhận |
+| [0047](0047-pr-title-required-condition.md) | `pr-title` thành check bắt buộc ở một repo khi `pr-title.yml` đã trên `main` và đã xanh ở ít nhất một PR, không đòi PR bot | Chấp nhận |
 
 ## Chuẩn áp dụng
 

@@ -164,3 +164,7 @@ Thứ tự áp: cài đặt repo, ruleset (chưa có `pr-title`), environment `p
 
 Phụ lục: [`appendix/0041-github-hardening.md`](appendix/0041-github-hardening.md) (dòng trạng thái lúc chốt, ưu nhược từng phương án với bảng
 công cụ lint bảo mật workflow tính đến 2026-11-01).
+
+### Chỉnh bởi
+
+- (h): [0047](0047-pr-title-required-condition.md): điều kiện để pr-title thành bắt buộc
