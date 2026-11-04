@@ -33,11 +33,18 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
-  # Whether a pull request changes anything but documentation. A pull request whose every file is Markdown (a chart's
-  # README.md excepted: helm-docs writes it and job generate checks it) or under docs/ skips the jobs that build, test
-  # and scan code; gitleaks, docs and dependency-review still run, and ci-ok accepts those skips. The list comes from
-  # GitHub's API for the pull request, not from git, so no history is fetched. A push or a dispatch always runs
-  # everything.
+  # Which areas a pull request changes, so a job whose area it leaves alone skips and ci-ok accepts that skip. Each
+  # output is true or false:
+  #   code       any file but documentation: Markdown (a chart's README.md excepted: helm-docs writes it and job
+  #              generate checks it), docs/, LICENSE. Jobs check, generate, config, trivy-config;
+  #   proto      proto/ or buf's own files: job buf;
+  #   api        the REST contract services/gateway/openapi.yaml or the scripts that check it: job api-contract;
+  #   workflows  .github/: job zizmor;
+  #   stack      anything the compose stack runs from: every file but documentation, deploy/helm/, deploy/ci/ and the
+  #              cluster drills (deploy/k8s/drills/, deploy/k8s/cloud/), which no target of job stack reads.
+  # gitleaks, docs and dependency-review always run. A change of the Makefile, of a *.mk file or of this workflow,
+  # a push and a dispatch turn every output true: when in doubt, run. The list comes from GitHub's API for the pull
+  # request, not from git, so no history is fetched.
   changes:
     runs-on: ubuntu-24.04
     timeout-minutes: 5
@@ -45,6 +52,10 @@ jobs:
       pull-requests: read
     outputs:
       code: ${{ steps.files.outputs.code }}
+      proto: ${{ steps.files.outputs.proto }}
+      api: ${{ steps.files.outputs.api }}
+      workflows: ${{ steps.files.outputs.workflows }}
+      stack: ${{ steps.files.outputs.stack }}
     steps:
       - id: files
         env:
@@ -53,16 +64,32 @@ jobs:
           REPO: ${{ github.repository }}
           PR: ${{ github.event.pull_request.number }}
         run: |
-          if [ "$EVENT" != pull_request ]; then
-            echo "code=true" >>"$GITHUB_OUTPUT"
-            exit 0
+          docs='^docs/|^LICENSE$|\.md$'
+          generated='^deploy/helm/[^/]+/README\.md$'
+          if [ "$EVENT" = pull_request ]; then
+            files=$(gh api --paginate "repos/$REPO/pulls/$PR/files" --jq '.[].filename')
+          else
+            files=Makefile
           fi
-          files=$(gh api --paginate "repos/$REPO/pulls/$PR/files" --jq '.[].filename')
           printf '%s\n' "$files"
-          code=$(printf '%s\n' "$files" | grep -v -e '^docs/' -e '\.md$' -e '^$' | grep -c . || true)
-          generated=$(printf '%s\n' "$files" | grep -c -E '^deploy/helm/[^/]+/README\.md$' || true)
-          if [ "$code" -gt 0 ] || [ "$generated" -gt 0 ]; then echo "code=true"; else echo "code=false"; fi >>"$GITHUB_OUTPUT"
-          [ "$code" -gt 0 ] || [ "$generated" -gt 0 ] || echo "::notice::documentation only: build, test and scan jobs skip"
+          # any REGEX [EXCLUDE]: true when a file matches REGEX and not EXCLUDE.
+          any() {
+            if printf '%s\n' "$files" | grep -E -- "$1" | grep -v -E -e "${2:-^$}" | grep -q .; then echo true; else echo false; fi
+          }
+          everything=$(any '^Makefile$|\.mk$|^\.github/workflows/ci\.yml$')
+          {
+            if [ "$everything" = true ]; then
+              printf '%s=true\n' code proto api workflows stack
+            else
+              # A generated README is code: job generate checks it.
+              code=$(any '.' "$docs"); [ "$(any "$generated")" = false ] || code=true
+              echo "code=$code"
+              echo "proto=$(any '^proto/|^buf(\.gen)?\.yaml$|^buf\.lock$')"
+              echo "api=$(any '^services/gateway/openapi\.yaml$|^deploy/ci/(contract|contract-test|common|platform)\.sh$')"
+              echo "workflows=$(any '^\.github/')"
+              echo "stack=$(any '.' "$docs|^deploy/helm/|^deploy/ci/|^deploy/k8s/(drills|cloud)/|^\.github/")"
+            fi
+          } | tee -a "$GITHUB_OUTPUT"
 
   # make check-go: gofmt, go vet, golangci-lint (gosec included), actionlint, buf lint and build, go test -race. The
   # integration tests reach Postgres and Redis on the same 127.0.0.1 addresses as on a dev machine, the only ones
@@ -180,7 +207,7 @@ jobs:
   # Breaking changes of the proto contracts. buf lint and buf build already run in make check.
   buf:
     needs: changes
-    if: needs.changes.outputs.code == 'true'
+    if: needs.changes.outputs.proto == 'true'
     runs-on: ubuntu-24.04
     permissions:
       contents: read
@@ -229,7 +256,7 @@ jobs:
   # network). Then the tests of deploy/ci/contract.sh, its publishing included, against a fake registry and cosign.
   api-contract:
     needs: changes
-    if: needs.changes.outputs.code == 'true'
+    if: needs.changes.outputs.api == 'true'
     runs-on: ubuntu-24.04
     permissions:
       contents: read
@@ -436,7 +463,7 @@ jobs:
   # upload of job sarif and never fails.
   zizmor:
     needs: changes
-    if: needs.changes.outputs.code == 'true'
+    if: needs.changes.outputs.workflows == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     permissions:
@@ -506,7 +533,7 @@ jobs:
   stack:
     name: stack (end-to-end, report only)
     needs: changes
-    if: needs.changes.outputs.code == 'true'
+    if: needs.changes.outputs.stack == 'true'
     runs-on: ubuntu-24.04
     # Six image builds, the pull of the web release, the e2e seed (21 READY videos), two browsers: about 15 to 25
     # minutes. The limit leaves room for a slow runner and stops a hung step long before GitHub's default of 6 hours.
@@ -740,8 +767,8 @@ jobs:
 
   # The required check. It runs whatever happened before it (always()) and fails unless every check job succeeded:
   # GitHub counts a skipped required check as passed, and a job that failed or was cancelled does not fail the jobs
-  # that need it by itself. Two skips are part of a run: dependency-review outside pull requests, and the code jobs
-  # of a documentation-only pull request (changes said code=false, and changes itself succeeded). Any other skip can
+  # that need it by itself. Two kinds of skip are part of a run: dependency-review outside pull requests, and a job
+  # whose area job changes found untouched (changes succeeded and set that job's output to false). Any other skip can
   # only mean a wrong if: and is red too. No condition may ever skip ci-ok itself.
   ci-ok:
     needs: [changes, check, generate, buf, api-contract, config, gitleaks, trivy-config, zizmor, dependency-review, docs]
@@ -756,8 +783,10 @@ jobs:
         run: |
           jq -r 'to_entries[] | "\(.key): \(.value.result)"' <<< "$NEEDS"
           jq -e --arg event "$EVENT" '
-            (.changes.result == "success" and .changes.outputs.code == "false") as $docs_only
+            .changes as $changes
+            | {"check": "code", "generate": "code", "config": "code", "trivy-config": "code", "buf": "proto",
+               "api-contract": "api", "zizmor": "workflows"} as $area
             | def skip_ok: (.key == "dependency-review" and $event != "pull_request")
-                or ($docs_only and (.key | IN("check", "generate", "buf", "api-contract", "config", "trivy-config", "zizmor")));
+                or ($changes.result == "success" and $area[.key] != null and $changes.outputs[$area[.key]] == "false");
             length == 11 and all(to_entries[]; .value.result == "success" or (.value.result == "skipped" and skip_ok))
           ' <<< "$NEEDS" > /dev/null

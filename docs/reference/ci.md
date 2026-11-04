@@ -37,9 +37,9 @@ Loại tài liệu (Diátaxis): **reference**, tra cứu khi cần một lệnh 
     `fail-on-severity: high`, không `allow-licenses`; chặn dependency có lỗ hổng ngay lúc PR thêm vào,
     [ADR-0041](../adr/0041-github-hardening.md) (k)), `docs` (`make docs-check`: markdownlint-cli2 và lychee offline, image ghim digest,
     không mạng), `sarif` (chỉ `main`), check tổng `ci-ok` (cần đủ 11 job,
-    trừ `sarif` và `stack`; `dependency-review` `skipped` ngoài lượt `pull_request` vẫn xanh; PR chỉ tài liệu (job `changes`: mọi
-    file là `.md` trừ README chart do helm-docs sinh, hay dưới `docs/`) bỏ qua `check`, `generate`, `buf`, `api-contract`, `config`,
-    `trivy-config`, `zizmor`, `stack` và `ci-ok` nhận các skip đó; job khác `skipped` thì đỏ; job `web` cũ ở CI của
+    trừ `sarif` và `stack`; `dependency-review` `skipped` ngoài lượt `pull_request` vẫn xanh; job `changes` chia PR theo vùng
+    (tài liệu, `proto/`, hợp đồng REST, `.github/`, thứ stack compose chạy; `Makefile`, `*.mk`, `ci.yml` đổi thì chạy hết) và job
+    nào PR không đụng vùng của nó thì skip, `ci-ok` nhận các skip đó; job khác `skipped` thì đỏ; job `web` cũ ở CI của
     `svp-frontend` từ khi web tách repo). Job `stack` (ADR-0020 §15; **chỉ báo, ngoài `ci-ok`**, không chặn merge; xem lại
     khi 20 lượt liên tiếp xanh, không lượt đỏ do môi trường, thì đưa vào `ci-ok`): `ubuntu-24.04`, tối đa 45 phút,
     `contents: read`, không secret; Postgres, Redis là service container publish trên `127.0.0.1` và IP bridge `172.17.0.1`
