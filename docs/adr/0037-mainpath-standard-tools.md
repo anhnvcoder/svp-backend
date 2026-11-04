@@ -102,7 +102,7 @@ Hiện thực và kiểm: mục 1, 2, 4 (smoke, `gitops.sh`), 5 và 6 (promote, 
 Repo `svp-backend` (đường dẫn từ gốc repo):
 
 - `.github/workflows/dora.yml`, `deploy/ci/dora.sh`, `deploy/ci/dora-test.sh`: xoá (mục 1).
-- `deploy/ci/platform.sh`, `deploy/ci/platform-test.sh`, `deploy/ci/platform-guard.sh`: xoá (mục 2; hàm cuối của adapter hết người dùng ngày 2026-11-05). Script trong `deploy/ci/`, `deploy/k8s/` đọc biến `GITHUB_*` và gọi `gh` trực tiếp, helper chung `step_output`, `step_summary`, `step_summary_tee`, `run_repo_url`, `run_builder_id` ở `deploy/ci/common.sh`; ca test của các script chuyển sang `deploy/ci/plan-test.sh`, `scan-gate-test.sh`, `vuln-predicate-test.sh`, `sign-image-test.sh`, `rescan-test.sh`, `verify-release-test.sh`, `changed-services-test.sh`, `verify-collect-test.sh`, `sources-test.sh`; job `config` của `.github/workflows/ci.yml`, `deploy/ci/changed-services.sh` (mục 2).
+- `deploy/ci/platform-guard.sh` (xoá), job `config` của `.github/workflows/ci.yml`, `deploy/ci/changed-services.sh` (mục 2); `deploy/ci/platform.sh`, `deploy/ci/platform-test.sh` xoá theo [0050](0050-bash-to-standard-tools.md) mục 1.
 - `deploy/compose/smoke.sh` (bỏ `SVP_SMOKE_LEGACY_MEDIA`), `deploy/k8s/gitops.sh` (đòi `platforms/`), `release_sources` của `deploy/k8s/lib.sh`, `deploy/ci/sources-test.sh` (mục 4).
 - `.github/workflows/images.yml` job `promote`, `promote-prd` (input `stg_ref`, `yq` bằng `YQ_IMAGE` ghim của `Makefile`) và guard `stg_ref` + tổ tiên, `promote_open_pr` ở `deploy/ci/common.sh` có test ở job `config`; `deploy/ci/promote.sh`, `promote-prd.sh`, `promote-prd-test.sh`: xoá; `promote-test.sh` thành test của guard (mục 6).
 - `.github/workflows/verify.yml` (job `record-stg`), `deploy/ci/verify/gitops.sh` (bước `release-set-before`, `release-set`), `deploy/ci/verify-collect.sh`, `verify-collect-test.sh`; `deploy/ci/record-stg.sh`, `release-set.sh`, `release-set-test.sh`: xoá (mục 6).
@@ -128,3 +128,4 @@ Phụ lục: [`appendix/0037-mainpath-standard-tools.md`](appendix/0037-mainpath
 ### Chỉnh bởi
 
 - §6: [0040](0040-sigstore-bundle-actions-attest.md): chữ ký, `vuln`, SBOM và provenance của image phát hành sang Sigstore bundle, provenance bằng `actions/attest`.
+- §2: [0050](0050-bash-to-standard-tools.md): bỏ hẳn adapter `platform.sh`, không còn "đóng băng, xoá dần".

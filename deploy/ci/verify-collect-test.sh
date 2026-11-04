@@ -560,6 +560,23 @@ grep -qF 'argocd_root_app "$gitops_url" "$sha" "$env" "$chart_repo_url"' "$here/
   ok "gitops.sh: the root is applied at the commit checked, follows the branch after the wait" ||
   fail "gitops.sh: the root is applied at the commit checked, follows the branch after the wait"
 
+# The root carries the label the subscriptions of Argo CD Notifications select, and gets a Telegram chat only through
+# argocd_root_telegram, as a string, beside the annotations it had.
+root=$(. "$here/../k8s/lib.sh" && argocd_root_app https://github.com/o/svp-gitops "$built" stg https://github.com/o/c)
+root_tg=$(. "$here/../k8s/lib.sh" && argocd_root_telegram -1001234 <<<"$root")
+[ "$(jq -r '.metadata.labels["svp.io/notify"]' <<<"$root")" = root ] &&
+  [ "$(jq -c '.metadata.annotations | keys' <<<"$root")" = '["argocd.argoproj.io/compare-options"]' ] &&
+  [ "$(jq -c '.metadata.annotations' <<<"$root_tg")" = '{"argocd.argoproj.io/compare-options":"ServerSideDiff=false","notifications.argoproj.io/subscribe.on-sync-failed.telegram":"-1001234","notifications.argoproj.io/subscribe.on-health-degraded.telegram":"-1001234"}' ] &&
+  [ "$(jq -c 'del(.metadata.annotations)' <<<"$root_tg")" = "$(jq -c 'del(.metadata.annotations)' <<<"$root")" ] &&
+  ok "argocd_root_app labels the root svp.io/notify=root; argocd_root_telegram adds only the chat's two subscriptions" ||
+  fail "argocd_root_app labels the root svp.io/notify=root; argocd_root_telegram adds only the chat's two subscriptions ($root_tg)"
+# gitops.sh subscribes the chat only with notifications on, and before it applies the root.
+[ "$(grep -n -e '^if \[ "$notify" = on \]; then$' -e 'root_app=$(argocd_root_telegram "$telegram_chat"' \
+  -e '^kc apply --server-side --field-manager=svp-gitops -f - <<<"$root_app"' "$here/../k8s/gitops.sh" |
+  cut -d: -f1 | awk 'NR > 1 && $1 <= p { bad = 1 } { p = $1; n++ } END { print (n == 3 && !bad) }')" = 1 ] &&
+  ok "gitops.sh: the Telegram chat is added with notifications on, before the root is applied" ||
+  fail "gitops.sh: the Telegram chat is added with notifications on, before the root is applied"
+
 # --- The fake results of a k3d run.
 out=$work/out
 mkdir -p "$out/logs"

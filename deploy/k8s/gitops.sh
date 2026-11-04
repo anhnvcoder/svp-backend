@@ -401,6 +401,22 @@ if [ -n "$object_store" ]; then
 else
   SVP_ARGOCD_NOTIFICATIONS=$notify "$repo_root/deploy/k8s/secrets.sh"
 fi
+# With notifications on, the root's failed syncs and Degraded health also go to Telegram under the rule of
+# Alertmanager's receiver (secrets.sh): .env holds the bot token and an integer chat id. The token reaches Argo CD
+# through its Secret; the chat, which the public svp-gitops does not hold, through the root's annotations
+# (argocd_root_telegram). Without them only the commit status is written.
+if [ "$notify" = on ]; then
+  # shellcheck source=deploy/observability/glitchtip/dotenv.sh
+  . "$repo_root/deploy/observability/glitchtip/dotenv.sh"
+  telegram_token=$(dotenv_value "$repo_root/.env" SVP_ALERT_TELEGRAM_BOT_TOKEN) &&
+    telegram_chat=$(dotenv_value "$repo_root/.env" SVP_ALERT_TELEGRAM_CHAT_ID) || fail "read $repo_root/.env"
+  if [ -n "$telegram_token" ] && [[ $telegram_chat =~ ^-?[0-9]+$ ]]; then
+    root_app=$(argocd_root_telegram "$telegram_chat" <<<"$root_app") || fail "subscribe Application svp-root to Telegram"
+    ok "Argo CD Notifications: commit status argocd/$env, and the root's failed syncs and Degraded health to Telegram"
+  else
+    ok "Argo CD Notifications: commit status argocd/$env only (SVP_ALERT_TELEGRAM_BOT_TOKEN or SVP_ALERT_TELEGRAM_CHAT_ID empty or invalid)"
+  fi
+fi
 
 # --- Argo CD, as argocd/bootstrap.json at the revision names it: one object of the form of a component of
 # components.json (repo, chart, version, values), then the platform's values of it when the revision has them, as a
