@@ -14,7 +14,7 @@
 # Elasticsearch, Kibana (127.0.0.1:5601), APM Server and its own Collector under the name otelcol.
 #
 # Postgres and Redis are the native ones on the host (127.0.0.1:5432, 127.0.0.1:6379), reached
-# as host.docker.internal; each service has its own Redis db (CLAUDE.md).
+# as host.docker.internal; each service has its own Redis db, so no service reads another one's keys.
 # Published ports are on the host's loopback only: the gateway, the web client (3001), the object
 # store's S3 API (9000), Redpanda's host listener, and with `obs` Grafana (3000), Alertmanager (9093)
 # and GlitchTip (8000). gRPC ports stay inside the compose network (threat model IN-2); so do
@@ -472,7 +472,7 @@ services:
       <<: *telemetry-env
       # The only host the BFF calls.
       GATEWAY_URL: http://gateway:8080
-      # Sessions and refresh locks in Redis db 9 of the host (CLAUDE.md).
+      # Sessions and refresh locks in Redis db 9 of the host, the web client's own db.
       REDIS_URL: redis://host.docker.internal:6379/9
       # What the browser uses: the CSRF check, the cookie's form (no Secure on plain http) and
       # the post-login redirect check compare against it.

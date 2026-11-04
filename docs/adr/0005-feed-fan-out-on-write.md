@@ -7,7 +7,7 @@
 
 - Feed "đang theo dõi": video `READY` mới nhất của những người mình follow, 10 video mỗi trang, phân trang bằng cursor.
 - Mục tiêu tải 1.000 req/s, p99 < 150 ms tính cả phần gateway ghép số đếm. Video mới phải vào feed follower trong p95 < 10 s.
-- Số liệu ([architecture.md §3](../architecture.md#3-ước-lượng-quy-mô)): mỗi tài khoản follow trung bình 50 người; mỗi video upload có trung
+- Số liệu ([ước lượng quy mô](../explanation/capacity.md)): mỗi tài khoản follow trung bình 50 người; mỗi video upload có trung
   bình 2.000 follower, tức ~2 triệu dòng timeline mỗi ngày; tài khoản lớn nhất ~200k follower.
 - feed-service không được đọc database của user-service hay video-service ([ADR-0001](0001-service-boundaries-and-data-ownership.md)), nên dù chọn
   cách nào cũng phải giữ bản sao follow và video, cập nhật bằng event.
@@ -58,7 +58,7 @@ vẫn trong SLO 10 s. C chỉ đáng khi có tài khoản cỡ triệu follower.
    - Feed khám phá là **một danh sách chung**, mọi người dùng mới cùng đọc: một key nóng. Cache-aside trong Redis với TTL
      vài giây, kèm singleflight để khi cache hết hạn chỉ một request đi xuống Postgres thay vì cả nghìn (lab `cache-stampede`).
 7. **Số đếm và "đã like chưa" không nằm trong read model:** chúng đổi liên tục và khác nhau theo từng người xem. Gateway
-   lấy từ engagement-service lúc đọc ([architecture.md §7.2](../architecture.md#72-đọc-feed)).
+   lấy từ engagement-service lúc đọc ([architecture.md §6.2](../architecture.md#62-đọc-feed)).
 
 ## Hệ quả
 

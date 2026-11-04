@@ -1,7 +1,7 @@
 # RFC
 
 RFC (Request for Comments) là tài liệu **một trang** cho người quyết định tiền, thời gian và rủi ro mà không làm kỹ thuật:
-quản lý, người đặt hàng. Mỗi giai đoạn lớn của dự án có một RFC, viết trước hoặc cùng lúc với ADR của giai đoạn đó.
+quản lý, người đặt hàng. Mỗi quyết định lớn cần người không làm kỹ thuật duyệt có một RFC, viết trước hoặc cùng lúc với ADR của quyết định đó.
 
 ## Khác ADR thế nào
 
@@ -21,7 +21,7 @@ RFC sửa theo.
 - Tên file `NNNN-<slug>.md`, số tăng dần, không dùng lại số. Viết tiếng Việt.
 - Trạng thái: **Đề xuất** (chờ người đọc quyết) → **Chấp nhận** hoặc **Từ chối**, kèm ngày và quyết định cụ thể.
 - Số về chi phí ghi nguồn (địa chỉ trang, ngày tra) và giả định (số giờ, loại máy, vùng); giá thay đổi nên ghi cả ngày tra.
-- Số về hệ thống của dự án lấy từ ADR và roadmap, không ước lượng lại.
+- Số về hệ thống của dự án lấy từ ADR, không ước lượng lại.
 
 ## Mẫu
 
@@ -52,6 +52,6 @@ Câu hỏi cụ thể, trả lời được bằng có/không hoặc một lựa
 
 ## Danh sách
 
-| Số | Tên | Giai đoạn | Trạng thái |
+| Số | Tên | ADR | Trạng thái |
 | --- | --- | --- | --- |
-| [0001](0001-reliability.md) | Đầu tư vào độ tin cậy của hệ thống | 6 | Đề xuất |
+| [0001](0001-reliability.md) | Đầu tư vào độ tin cậy của hệ thống | [0020](../adr/0020-reliability-stage6.md) | Đề xuất |

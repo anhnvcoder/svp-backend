@@ -1,7 +1,8 @@
 # 0035. Renovate tự merge bản patch và digest của Go module, gói npm, base image và image dịch vụ khi `ci-ok`, `images-ok` xanh, ở repo backend và `svp-web`; action, công cụ ghim, commit backend, hợp đồng API, minor, major giữ duyệt tay
 
-- Trạng thái: Chấp nhận (người học chốt 2026-10-31); phạm vi tự merge chỉnh bởi [0041](0041-github-hardening.md)
+- Trạng thái: Chấp nhận
 - Ngày: 2026-10-31
+- Người quyết: người học
 
 ## Bối cảnh
 
@@ -103,3 +104,9 @@ trong image `RENOVATE_IMAGE` (`/usr/local/renovate/dist/`: `workers/repository/u
 - `renovate.json`: khoá automerge ở gốc, bốn `packageRule` tự merge, `automerge: false` của nhóm `github actions`, `tools`, `cosign`.
 - `renovate.json` của `svp-frontend`: khoá automerge ở gốc, hai `packageRule` tự merge, `automerge: false` của nhóm `github actions`,
   `backend commit`, `api contract`.
+
+## Thông tin thêm
+
+### Chỉnh bởi
+
+- Quyết định (phạm vi tự merge): [0041](0041-github-hardening.md) (i): hẹp lại, chỉ tự merge `digest`, `pinDigest` của image và `patch` của thứ chỉ dùng lúc dev.

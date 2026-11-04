@@ -11,7 +11,7 @@
 #   --domain         the web's host; the API is api.<domain> (default svp.invalid, for the static check only)
 #   --envoy-ip       ClusterIP of Envoy's Service, which the public names resolve to inside the pods (default
 #                    192.0.2.1, a documentation address, for the static check only)
-#   --forwarded-for  each pod writes its own IP in X-Forwarded-For: only when stage 7 trusts two hops (threat model RL-7)
+#   --forwarded-for  each pod writes its own IP in X-Forwarded-For: only when the cluster trusts 2 hops (threat model RL-7)
 #   --ca-file        PEM file of the CA that signs Envoy's certificate, when a private CA does (job.yaml.in, lines
 #                    marked @CA@): a ConfigMap svp-k6-ca holds it, and the pods trust it in addition to whatever
 #                    roots the image holds in /etc/ssl/certs (SSL_CERT_FILE replaces only the bundle file, not that

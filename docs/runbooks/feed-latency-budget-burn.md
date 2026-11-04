@@ -54,7 +54,7 @@ dài. `svp-use`: pool Postgres (chờ kết nối), pool Redis.
    100 ms.
 4. **Postgres chậm** (`svp_feed`): truy vấn timeline, pool chờ kết nối.
 5. **Lần đầu sau khởi động**: kết nối gRPC lười, cache trống; lượt đầu của mỗi buổi đo luôn chậm nhất (sóng 1 p50 141–238 ms
-   so với 47–106 ms các lượt sau, `measure-explore-cache` giai đoạn 3, roadmap).
+   so với 47–106 ms các lượt sau, `measure-explore-cache`).
 
 ## Giảm thiểu
 
@@ -71,15 +71,15 @@ curl -sG "$PROM/api/v1/query" --data-urlencode 'query=slo:sli_error:ratio_rate5m
 make measure-explore-cache N=100    # compose: p50/p95 hai sóng, số lần đọc Postgres (LOCAL LAB ONLY: xoá svp:feed:explore:* ở db 14)
 ```
 
-Tỉ lệ request chậm 5 phút dưới 1% và page hết trong tối đa ~30 phút. Số tham chiếu `measure-explore-cache` (compose `core`,
-giai đoạn 3): sóng 1 p50 181,3 / p95 203,0 ms, sóng 2 p50 97,1 / p95 118,6 ms.
+Tỉ lệ request chậm 5 phút dưới 1% và page hết trong tối đa ~30 phút. Số tham chiếu `measure-explore-cache` (compose `core`):
+sóng 1 p50 181,3 / p95 203,0 ms, sóng 2 p50 97,1 / p95 118,6 ms.
 
 ## Leo thang
 
 - p99 cao kéo dài khi máy yên, Redis và Postgres khoẻ: lấy profile CPU của gateway và feed-service ở Pyroscope (`make up
   OBS=lgtm`), mở postmortem.
 - Chậm chỉ khi có tải: ghi số và xem lại bằng k6 (`make load-local`, [ADR-0020](../adr/0020-reliability-stage6.md) §2);
-  số đo năng lực thật để giai đoạn 7 trên cluster cloud.
+  số đo năng lực thật chỉ có trên cluster cloud.
 
 ## Liên kết
 

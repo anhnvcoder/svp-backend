@@ -95,7 +95,7 @@ spec:
               valueFrom:
                 fieldRef:
                   fieldPath: status.podIP
-            # Empty, or this pod's IP when stage 7 trusts two hops (render.sh --forwarded-for; threat model RL-7).
+            # Empty, or this pod's IP when the cluster trusts two hops (render.sh --forwarded-for; threat model RL-7).
             - name: SVP_K6_FORWARDED_FOR
               value: "@FORWARDED_FOR@"
             - name: K6_NO_USAGE_REPORT

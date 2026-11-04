@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Drill: deliver the stage 2B events twice and check the counters and the feed read model do not
+# Drill: deliver the view, follow and video events twice and check the counters and the feed read model do not
 # change. With fresh users A and B, B following A and A's video READY
 # in B's feed, liked by B and viewed 5 times by B (counted once: the gateway forwards one view per
 # user and video every 60 s, RL-3):

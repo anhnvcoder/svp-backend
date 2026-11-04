@@ -12,7 +12,7 @@ set -euo pipefail
 env_file=${1:?usage: bootstrap.sh <env-file>}
 sql="$(dirname "$0")/bootstrap.sql"
 . "$(dirname "$0")/../observability/glitchtip/dotenv.sh"
-# Local dev superuser password (CLAUDE.md); ignored while pg_hba trusts loopback.
+# Superuser password of the native dev Postgres on the machine; ignored while pg_hba trusts loopback.
 export PGPASSWORD=${PGPASSWORD:-postgres}
 
 # value prints NAME's value in the env file and fails when the file breaks the rule or NAME is

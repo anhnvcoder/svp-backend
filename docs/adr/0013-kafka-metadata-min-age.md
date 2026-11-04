@@ -53,8 +53,8 @@ của người gọi để test hay một service cần giá trị khác vẫn �
 khác ADR-0011 §11 đã liệt kê. Chỉnh câu "Giữ các timeout/retry mặc định franz-go" của ADR-0011 §11 ở đúng một tham số này;
 [README](README.md) ghi ADR-0011 "§11 chỉnh bởi 0013".
 
-Cận trên của test in-flight đi theo giá trị mới: test "kết nối chết" của `internal/kafkax` dùng deadline + `MetadataMinAge`
-+ 2 s (từ 8 s xuống 4 s); test "broker giữ ACK" của `internal/outbox` giữ cận hạn produce + 2 s vì đường đó không chờ
+Cận trên của test in-flight đi theo giá trị mới: test "kết nối chết" của `internal/kafkax` dùng deadline + `MetadataMinAge` +
+2 s (từ 8 s xuống 4 s); test "broker giữ ACK" của `internal/outbox` giữ cận hạn produce + 2 s vì đường đó không chờ
 làm mới metadata.
 
 ## Hệ quả

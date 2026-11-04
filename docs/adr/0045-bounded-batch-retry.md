@@ -31,8 +31,8 @@ Trạng thái ngành đọc ngày 2026-11-02 từ nguồn ở mục Nguồn.
 | Phương án | Trạng thái | Nguồn | Ghi chú |
 | --- | --- | --- | --- |
 | A. Thử lại cả lô không giới hạn (như hiện nay) | hiện hành ("stop on error") | [N3] | Lô độc chặn partition mãi |
-| B. Thử lại trong ngân sách, hết thì chép cả lô sang DLQ, commit, phát lại tay về topic gốc | hiện hành | [N3][N4] | Partition tiến; phát lại là việc tay |
-| C. Retry topic không chặn (Uber 2018, Spring `@RetryableTopic`) rồi DLQ | hiện hành | [N1][N2] | Spring: "Non-blocking retries are not supported with Batch Listeners"; mất thứ tự |
+| B. Thử lại trong ngân sách, hết thì chép cả lô sang DLQ, commit, phát lại tay về topic gốc | hiện hành | [N3], [N4] | Partition tiến; phát lại là việc tay |
+| C. Retry topic không chặn (Uber 2018, Spring `@RetryableTopic`) rồi DLQ | hiện hành | [N1], [N2] | Spring: "Non-blocking retries are not supported with Batch Listeners"; mất thứ tự |
 | D. Hết ngân sách thì commit bỏ lô, không DLQ | cũ, không chấp nhận | — | Mất lượt xem |
 
 ## Kết quả quyết định

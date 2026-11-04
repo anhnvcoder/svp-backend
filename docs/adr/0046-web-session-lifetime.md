@@ -39,7 +39,7 @@ như hệ quả của hạn refresh token; web không có dòng code hay test n�
 
 ## Phương án đã cân nhắc
 
-**Nơi áp thời hạn**
+### Nơi áp thời hạn
 
 | Phương án | Được | Mất |
 | --- | --- | --- |
@@ -47,7 +47,7 @@ như hệ quả của hạn refresh token; web không có dòng code hay test n�
 | **B. Tường minh trong session store của BFF (chọn)** | Con số nằm ở web, có test; không phụ thuộc hằng số repo khác; vẫn bị chặn trên bởi hạn refresh token | Thêm một field, một script Redis, mỗi giờ tối đa một lệnh ghi mỗi session |
 | C. Hạ `RefreshTTL` của user-service xuống bằng idle | Một chỗ cho mọi client | Đổi hợp đồng chung cho một nhu cầu của web; idle vẫn tính từ lần xoay; mobile hay client khác sau này chịu chung idle của web |
 
-**Idle timeout**
+### Idle timeout
 
 | Con số | Được | Mất |
 | --- | --- | --- |
@@ -56,7 +56,7 @@ như hệ quả của hạn refresh token; web không có dòng code hay test n�
 | **7 ngày (chọn)** | Người dùng hằng tuần không phải đăng nhập lại; cửa sổ của session bỏ quên trên máy dùng chung còn một nửa so với hiện trạng; dưới `RefreshTTL` một tuần nên web quyết định, không phải user-service | Người dùng thưa hơn một tuần đăng nhập lại |
 | 14 ngày (bằng `RefreshTTL`) | Không đổi trải nghiệm hiện tại | Idle web trùng hằng số repo khác, đổi bên đó là lệch; cửa sổ bỏ quên dài gấp đôi |
 
-**Ghi lần dùng gần nhất**
+### Ghi lần dùng gần nhất
 
 | Cách | Được | Mất |
 | --- | --- | --- |

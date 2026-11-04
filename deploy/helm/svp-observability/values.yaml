@@ -31,7 +31,7 @@ services:
 # probes) on 10250.
 nodeSubnet: 10.200.0.0/24
 
-# GlitchTip, the error tracker of stage 3 in the cluster: the image
+# GlitchTip, the error tracker, in the cluster: the image
 # of compose (same digest), one pod running web and task worker, its database svp_glitchtip on Postgres svp-pg (roles
 # made by the pg-bootstrap Job of chart svp-data). Its Secrets glitchtip-env and glitchtip-admin come from .env
 # (deploy/k8s/secrets.sh); the DSN and the drills' API token go into Secrets by deploy/k8s/glitchtip-init.sh.

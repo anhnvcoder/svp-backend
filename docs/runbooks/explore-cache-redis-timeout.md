@@ -12,10 +12,10 @@ Hạn ngắn là có chủ đích: đường Redis phải thất bại nhanh đ�
 
 Người dùng: không thấy lỗi; request khám phá đọc Postgres nên chậm hơn một chút, Postgres nhận thêm truy vấn.
 
-Sự cố đã gặp (roadmap, giai đoạn 3): ở trạng thái stack `core` có SDK telemetry bật mà không có Collector, 2 trong 7 lượt
+Sự cố đã gặp: ở trạng thái stack `core` có SDK telemetry bật mà không có Collector, 2 trong 7 lượt
 `measure-explore-cache` FAIL vì một lần GET cache quá hạn 50 ms (WARN `read explore cache ... i/o timeout`), feed-service đọc
-Postgres theo đường dự phòng nên đếm 2 lần đọc thay vì 1; hai trạng thái khác 0 trong 19 lượt. Nguyên nhân chưa kết luận. Từ
-giai đoạn 4 bài đo đếm riêng lần đọc do Redis quá hạn: mỗi dòng `explore page loaded from database` có `cache=` (`miss`,
+Postgres theo đường dự phòng nên đếm 2 lần đọc thay vì 1; hai trạng thái khác 0 trong 19 lượt. Nguyên nhân chưa kết luận. Bài đo
+nay đếm riêng lần đọc do Redis quá hạn: mỗi dòng `explore page loaded from database` có `cache=` (`miss`,
 `timeout`, `error`) và `cache_write=`; đạt khi mọi lần đọc trừ một là do Redis quá hạn.
 
 ## Kiểm tra nhanh (5 phút)
@@ -51,7 +51,7 @@ Dashboard `svp-use` → "Redis pool (redisotel)": "Connection use time p95", "Po
    đủ vượt 50 ms. Hay gặp ở lượt đầu của buổi đo, khi máy chạy pin hay Low Power Mode.
 2. **Redis native bận vì dự án khác** (Redis dùng chung, db 0, 5, 7 không phải của dự án này).
 3. **Telemetry không có Collector** (stack `core` không `OBS`): exporter của mỗi service phân giải lại DNS `otelcol` và chờ hết
-   hạn 5 s mỗi kỳ (roadmap giai đoạn 3); trùng thời điểm với lỗi ở trên nhưng chưa chứng minh là nguyên nhân.
+   hạn 5 s mỗi kỳ; trùng thời điểm với lỗi ở trên nhưng chưa chứng minh là nguyên nhân.
 4. **Thật sự có stampede** (lỗi code): lần đọc thừa có `cache=miss` mà không có `cache_write=timeout` ngay trước; bài đo FAIL
    đúng.
 
@@ -68,15 +68,14 @@ Dashboard `svp-use` → "Redis pool (redisotel)": "Connection use time p95", "Po
 make measure-explore-cache N=100     # compose; in tổng lần đọc, số do timeout/miss/error, p50/p95 hai sóng (LOCAL LAB ONLY)
 ```
 
-Đạt: tổng ≥ 1 và tổng − `timeout` − số dòng sau SET quá hạn ≤ 1. Số tham chiếu (compose `core`, giai đoạn 3): sóng 1 p50 181,3 /
+Đạt: tổng ≥ 1 và tổng − `timeout` − số dòng sau SET quá hạn ≤ 1. Số tham chiếu (compose `core`): sóng 1 p50 181,3 /
 p95 203,0 ms, 1 lần đọc; sóng 2 p50 97,1 / p95 118,6 ms.
 
 ## Leo thang
 
 - Lần đọc thừa không do Redis quá hạn (nguyên nhân 4): lỗi singleflight hay TTL; sửa code, thêm test.
 - Lệnh Redis quá hạn khi máy yên, hay p99 lệnh Redis ≥ 25 ms dưới tải k6: theo quy tắc của
-  [ADR-0020](../adr/0020-reliability-stage6.md) §4 ghi số và quyết lại hạn 50 ms ở giai đoạn 7 trên ElastiCache; không đổi code ở
-  giai đoạn 6.
+  [ADR-0020](../adr/0020-reliability-stage6.md) §4 ghi số và quyết lại hạn 50 ms trên ElastiCache; không đổi code khi chưa có số đo đó.
 
 ## Liên kết
 

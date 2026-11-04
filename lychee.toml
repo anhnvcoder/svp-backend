@@ -1,0 +1,5 @@
+# Read by lychee from the working directory (make docs-check mounts the repository there).
+# --offline and --include-fragments are flags of the target, so the command line shows what is checked.
+
+# The log of a run is read in CI and in a terminal that is not a TTY; a progress bar only adds noise there.
+no_progress = true

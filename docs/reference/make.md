@@ -40,6 +40,11 @@ liệt kê target):
   repo gắn chỉ đọc) với `--persona=regular` trên cả repo; mọi finding làm lệnh thoát khác 0. Có `GH_TOKEN` thì chạy thêm audit online (impostor
   commit, action có lỗ hổng), không thì offline (mặc định trên máy). `ZIZMOR_FORMAT=github` in annotation của Actions, `ZIZMOR_SARIF=<đường dẫn>`
   ghi SARIF (không chặn). Ngoại lệ ở `.github/zizmor.yml`, mỗi mục một comment lý do. Không thuộc `make check`; CI chạy nó ở job `zizmor` của `ci.yml`.
+- `make docs-check [DOCS='<file hay glob>']`: kiểm tĩnh mọi file Markdown. Chạy lần lượt markdownlint-cli2 (`MARKDOWNLINT_IMAGE`, luật
+  ở `.markdownlint.yaml`, mỗi luật tắt hay chỉnh có comment lý do) và lychee `--offline --include-fragments` (`LYCHEE_IMAGE`, cấu hình ở
+  `lychee.toml`; link nội bộ và anchor heading, link ra site khác không kiểm). Hai image chính thức ghim `tag@sha256`, chạy
+  `--network none`, repo gắn chỉ đọc; link tương đối ra ngoài repo (tới `plans/`) báo lỗi. Cả hai công cụ luôn chạy; lệnh thoát khác 0 khi
+  một trong hai báo lỗi. Mặc định là mọi `.md` git theo dõi và file mới chưa theo dõi; `DOCS` thu hẹp (đường dẫn tương đối gốc repo).
 - `make helm-docs`, `make helm-docs-check`: `deploy/helm/svp-service/README.md` (bảng values của chart dùng chung bởi bảy release) sinh bởi
   helm-docs `HELM_DOCS_IMAGE` (image chính thức ghim `tag@sha256`, không mạng, chạy bằng uid của người gọi) từ `Chart.yaml`, comment `# --` của
   `values.yaml` và `README.md.gotmpl`. `make helm-docs` ghi file; `make helm-docs-check` gắn repo chỉ đọc, in thứ helm-docs sẽ ghi và đỏ khi

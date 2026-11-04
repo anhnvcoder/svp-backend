@@ -11,5 +11,6 @@ vì sao (vì sao: ADR ở [`../adr/`](../adr/)) và không hướng dẫn từng
 | [`compose.md`](compose.md) | Stack compose (`make up`, `OBS`, `IMAGES`, `WEB_FROM`), diễn tập, tải k6, DAST, game day |
 | [`k8s.md`](k8s.md) | Cluster k3d, Kyverno và nguồn phát hành, thư mục cấu hình và thư mục web, đường GitOps, diễn tập trên cluster, `cloud-check` |
 | [`eks.md`](eks.md) | Target `eks-*`, biến S3 của service trên EKS, lớp nền tảng của `svp-gitops` |
+| [`contracts.md`](contracts.md) | Contract giữa các service và với client: bố cục `proto/`, topic event, phân trang feed, mã lỗi gRPC sang HTTP, route REST |
 | [`ci.md`](ci.md) | Workflow GitHub Actions, check của `svp-gitops`, ruleset, CodeQL, chạy lại job trên máy, file ignore, Renovate |
 | [`testing.md`](testing.md) | Quy ước test |
