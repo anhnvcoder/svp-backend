@@ -1,22 +1,22 @@
 #!/usr/bin/env bash
 # Tests for deploy/ci/scan-gate.sh, in a throwaway copy of what it reads (deploy/ci/, deploy/k8s/lib.sh, the policy's
 # values, the tree's .trivyignore.yaml and .grype.yaml) and a checkout of svp-frontend beside it; the variables of a
-# GitHub Actions job are made up. A fake docker first on PATH stands in for trivy and grype. Checked:
+# GitHub Actions job are made up. A fake docker first on PATH stands in for trivy and grype, and hands the pinned
+# conftest and yq of the ignore-file check to the real docker. Checked:
 #   - the flags each pass gets (trivy convert of the secrets with no --severity and no ignore file, of the
 #     vulnerabilities with --severity CRITICAL and the tree's .trivyignore.yaml, each reading only its own findings;
 #     grype with --fail-on critical and the tree's .grype.yaml);
 #   - a secret blocks even with --allow-critical, a CRITICAL blocks unless --allow-critical, a scanner that fails or a
 #     report that is not trivy's exits 2; one summary line per scan, in the job's summary (and the log) in a job, in
 #     the log on a machine;
-#   - --check-ignorefile holds .trivyignore.yaml to vulnerabilities with a statement, purls with a version and at most
-#     30 days, refuses an expired entry, and holds .grype.yaml to ignore rules of vulnerability, include-aliases: true,
-#     package name and version, each exactly one entry in force of .trivyignore.yaml (the purl's name as grype names
-#     the package, with its namespace unless it is a distribution's, a %40 scope decoded), refusing any other key
-#     (only-notfixed, fix-state, package.type) and a plain value YAML reads as a null, a bool, a number or a date; the
-#     image gates refuse a broken file but leave an expired entry to trivy and job config;
+#   - the check of the ignore files around their conftest policies (each rule is a case of make conftest-verify):
+#     conftest and yq without network, as the caller, on the files read-only; a policy's message in the output; job
+#     config refuses an expired entry and its grype rule, the image gates refuse a broken file but leave an expired
+#     entry to trivy and job config; a key written twice, a file YAML cannot read, a misconfiguration for a path that is
+#     no file fail;
 #   - another repository's tree (SVP_CODE_ROOT, svp-frontend's checkout): its own .trivyignore.yaml and .grype.yaml
 #     are read, and the gate stops, naming the file, when the tree has either not.
-# Runs on macOS and Linux: no network, no Docker, no cluster.
+# Runs on macOS and Linux: Docker for conftest and yq (pulled once, then no network), no cluster.
 #
 # Usage, from anywhere: deploy/ci/scan-gate-test.sh
 set -euo pipefail
@@ -81,8 +81,24 @@ digest_b=sha256:$(printf 'b%.0s' $(seq 64))
 # grype, which also gets FAKE_GRYPE_JSON as its report. Each convert input is kept in fake/ to check what each pass
 # reads. What the scanners do with these flags (an entry covering exactly its package version, a HIGH secret found
 # without --severity, include-aliases) was run with the pinned images, not here.
+# The pinned conftest and yq run for real (their calls in tools.log).
+conftest_image=$(sed -n 's/^CONFTEST_IMAGE[[:space:]]*:=[[:space:]]*//p' "$src/Makefile")
+yq_image=$(sed -n 's/^YQ_IMAGE[[:space:]]*:=[[:space:]]*//p' "$src/Makefile")
+real_docker=$(command -v docker)
 cat >"$work/bin/docker" <<'EOF'
 #!/usr/bin/env bash
+case " $* " in
+*" $CONFTEST_IMAGE "* | *" $YQ_IMAGE "*)
+  printf '%s\n' "$*" >>"$FAKE_TOOLS_LOG"
+  # FAKE_CONFTEST_EMPTY=1: conftest answers an empty result and exits 0; FAKE_YQ_PATHS_FAIL=1: the yq that lists the
+  # paths of trivy-config-ignore.yaml fails.
+  case " $* " in
+  *" $CONFTEST_IMAGE "*) if [ "${FAKE_CONFTEST_EMPTY:-}" = 1 ]; then echo '[]' && exit 0; fi ;;
+  *".misconfigurations[]"*) if [ "${FAKE_YQ_PATHS_FAIL:-}" = 1 ]; then echo "yq: broken" >&2 && exit 1; fi ;;
+  esac
+  exec "$FAKE_REAL_DOCKER" "$@"
+  ;;
+esac
 printf '%s\n' "$*" >>"$FAKE_DOCKER_LOG"
 in= out= file= convert= severity=
 for a in "$@"; do
@@ -110,7 +126,8 @@ EOF
 chmod 755 "$work/bin/docker"
 mkdir -p "$work/fake"
 # gate WHERE NAME WANT_EXIT [VAR=VALUE...] -- ARGS...: scan-gate.sh ARGS (on WHERE) with the fake scanners; ok
-# when it exits WANT_EXIT. Output in gate.out and gate.err, the fake's calls in docker.log.
+# when it exits WANT_EXIT. Output in gate.out and gate.err, the fake's calls in docker.log, conftest's and yq's in
+# tools.log.
 gate() {
   local where=$1 name=$2 want=$3 vars=() rc=0
   shift 3
@@ -118,9 +135,12 @@ gate() {
   shift
   fresh
   : >"$work/docker.log"
+  : >"$work/tools.log"
   rm -f "$work/fake/"*
-  on "$where" env TRIVY_IMAGE=trivy@sha256:1 GRYPE_IMAGE=grype@sha256:1 SVP_TRIVY_CACHE="$work/cache/trivy" \
-    SVP_GRYPE_CACHE="$work/cache/grype" FAKE_DOCKER_LOG="$work/docker.log" FAKE_DOCKER_DIR="$work/fake" \
+  on "$where" env TRIVY_IMAGE=trivy@sha256:1 GRYPE_IMAGE=grype@sha256:1 CONFTEST_IMAGE="$conftest_image" \
+    YQ_IMAGE="$yq_image" SVP_TRIVY_CACHE="$work/cache/trivy" SVP_GRYPE_CACHE="$work/cache/grype" \
+    FAKE_DOCKER_LOG="$work/docker.log" FAKE_TOOLS_LOG="$work/tools.log" FAKE_REAL_DOCKER="$real_docker" \
+    FAKE_DOCKER_DIR="$work/fake" \
     ${vars[@]+"${vars[@]}"} "$tree/deploy/ci/scan-gate.sh" "$@" >"$work/gate.out" 2>"$work/gate.err" || rc=$?
   same "$name (exit code)" "$want" "$rc"
 }
@@ -234,161 +254,97 @@ grype_gate local "scan-gate.sh --grype: grype failing (a DB it cannot fetch) is 
   "web linux/arm64" "$work/leg"
 check "scan-gate.sh --grype: grype failing is said" has "$work/gate.err" "FAIL  web linux/arm64: grype could not scan"
 
-# The rules of the ignore files: --check-ignorefile (job config), and the image gates, which refuse a broken file but
-# leave an expired entry to trivy (it drops the entry) and to job config.
+# The ignore files. Their rules are conftest policies, each case of them a test of deploy/ci/ignorefile-policies/
+# (make conftest-verify); here what scan-gate.sh does around them: the pinned conftest and yq run without network, as the
+# caller, on the files mounted read-only, the three files together; a policy's message reaches the output; job config
+# (--check-ignorefile) checks with today, so an expired entry fails, the image gates do not and refuse a broken file;
+# a key written twice and a file YAML cannot read fail; each path of trivy-config-ignore.yaml must be a file.
 # ignorefiles NAME WANT_EXIT [WANT_LINE]: --check-ignorefile on the tree's files; ok when it exits WANT_EXIT and, when
-# given, prints WANT_LINE. The copy's trivy-config-ignore.yaml names files the copy does not have, so it is set aside
-# meanwhile (its rules are checked on this repository by job config).
+# given, prints WANT_LINE.
 ignorefiles() {
   gate local "scan-gate.sh --check-ignorefile: $1" "$2" -- --check-ignorefile
   [ -z "${3:-}" ] || check "scan-gate.sh --check-ignorefile: $1, says why" has "$work/gate.out" "$3"
 }
-mv "$tree/deploy/ci/trivy-config-ignore.yaml" "$work/trivy-config-ignore.yaml"
+# config_ignore PATH: a trivy-config-ignore.yaml of the copy with one entry, for PATH.
+config_ignore() {
+  printf 'misconfigurations:\n  - id: DS-0026\n    paths:\n      - %s\n    statement: a reason\n    expired_at: %s\n' \
+    "$1" "$soon" >"$tree/deploy/ci/trivy-config-ignore.yaml"
+}
+config_ignore deploy/ci/common.sh
 ignore_files
-ignorefiles "an entry and its grype rule" 0
+ignorefiles "an entry, its grype rule and a misconfiguration" 0 \
+  "ok    .trivyignore.yaml .grype.yaml deploy/ci/trivy-config-ignore.yaml keep their rules"
 check "scan-gate.sh --check-ignorefile: no scanner runs" test ! -s "$work/docker.log"
-printf 'vulnerabilities: []\n' >"$tree/.trivyignore.yaml"
-printf 'ignore: []\n' >"$tree/.grype.yaml"
-ignorefiles "nothing to except" 0
-{
-  echo "vulnerabilities:"
-  ignore_entry CVE-2026-3333 "$soon" pkg:npm/%40scope/pkg@1.0.0
-} >"$tree/.trivyignore.yaml"
-{ echo "ignore:" && grype_rule CVE-2026-3333 '"@scope/pkg"' 1.0.0; } >"$tree/.grype.yaml"
-ignorefiles "a scoped npm package, quoted in .grype.yaml, %40 in the purl" 0
+check "scan-gate.sh --check-ignorefile: conftest runs without network, read-only, as the caller, on the files read-only" grep -qF -- \
+  "run --rm --network none --read-only --user $(id -u):$(id -g) -v $tree/.trivyignore.yaml:/in/.trivyignore.yaml:ro -v $tree/.grype.yaml:/in/.grype.yaml:ro -v $tree/deploy/ci/trivy-config-ignore.yaml:/in/deploy/ci/trivy-config-ignore.yaml:ro -v $tree/deploy/ci/ignorefile-policies:/policy:ro" \
+  "$work/tools.log"
+check "scan-gate.sh --check-ignorefile: the pinned conftest on the three files together" grep -qF -- \
+  "$conftest_image test --combine --policy /policy --data /data/scan-gate.json --namespace trivyignore --namespace grypeignore --namespace configignore --output json --no-color .trivyignore.yaml .grype.yaml deploy/ci/trivy-config-ignore.yaml" \
+  "$work/tools.log"
+check "scan-gate.sh --check-ignorefile: the pinned yq looks for a key written twice" grep -qF -- "$yq_image eval-all" \
+  "$work/tools.log"
+# A conftest that ran no policy, or a yq that cannot list the paths, is no answer: the check fails, never passes.
+FAKE_CONFTEST_EMPTY=1 ignorefiles "conftest answers no result" 1 "FAIL  conftest could not check the ignore files"
+FAKE_YQ_PATHS_FAIL=1 ignorefiles "yq cannot list the paths of trivy-config-ignore.yaml" 1 \
+  "FAIL  yq could not list the paths of deploy/ci/trivy-config-ignore.yaml"
+gate local "scan-gate.sh: the image gate checks .trivyignore.yaml and .grype.yaml only" 0 -- "gw linux/amd64" \
+  "$work/report.json"
+check "scan-gate.sh: the image gate leaves trivy-config-ignore.yaml to job config" lacks "$work/tools.log" \
+  trivy-config-ignore.yaml
 
-ignore_files
-{ echo "vulnerabilities:" && ignore_entry CVE-2026-1111 "$late" pkg:npm/left-pad@1.0.0; } >"$tree/.trivyignore.yaml"
-ignorefiles "an entry for more than 30 days" 1 "entry CVE-2026-1111 expires $late, more than 30 days from today"
-{ echo "vulnerabilities:" && ignore_entry CVE-2026-1111 "$soon" pkg:npm/left-pad; } >"$tree/.trivyignore.yaml"
-ignorefiles "a purl without its version" 1 "purl pkg:npm/left-pad is not pkg:<type>/<name>@<version>"
-printf 'vulnerabilities:\n  - id: CVE-2026-1111\n    statement: Accepted.\n    expired_at: %s\n' "$soon" \
-  >"$tree/.trivyignore.yaml"
-ignorefiles "an entry without purls" 1 "entry CVE-2026-1111 has no purls"
-{
-  echo "vulnerabilities:"
-  ignore_entry CVE-2026-1111 "$soon" pkg:npm/left-pad@1.0.0
-  printf 'secrets:\n  - id: aws-access-key-id\n'
-} >"$tree/.trivyignore.yaml"
-ignorefiles "a secrets section" 1 "only vulnerabilities may be ignored, never secrets or anything else: secrets:"
+# A broken file: the policy's message, in job config and in each image gate.
+printf 'secrets:\n  - id: aws-access-key-id\n' >>"$tree/.trivyignore.yaml"
+ignorefiles "a secrets section" 1 \
+  "FAIL  .trivyignore.yaml: only vulnerabilities may be ignored, never secrets or anything else: secrets"
+check "scan-gate.sh --check-ignorefile: a broken file says so last" has "$work/gate.err" \
+  "an ignore file breaks its rules"
 gate local "scan-gate.sh: the image gate refuses a secrets section of .trivyignore.yaml" 1 -- "gw linux/amd64" \
   "$work/report.json"
 check "scan-gate.sh: the image gate says the ignore file breaks its rules" has "$work/gate.err" \
   "FAIL  an ignore file breaks its rules: fix it before anything is pushed"
-
-ignore_files
-{ echo "only-notfixed: true" && echo "ignore:" && grype_rule CVE-2026-1111 left-pad 1.0.0; } >"$tree/.grype.yaml"
-ignorefiles "a root key of .grype.yaml other than ignore (only-notfixed)" 1 \
-  ".grype.yaml:1: only the key ignore may be set"
-grype_report "$work/grype.json" 0
-grype_gate local "scan-gate.sh --grype: the image gate refuses only-notfixed in .grype.yaml" 1 -- --grype \
-  "web linux/arm64" "$work/leg"
-printf 'ignore:\n  - vulnerability: CVE-2026-1111\n    package:\n      name: left-pad\n      version: 1.0.0\n' \
-  >"$tree/.grype.yaml"
-ignorefiles "a rule without include-aliases" 1 "rule CVE-2026-1111 needs include-aliases: true once"
-printf 'ignore:\n  - vulnerability: CVE-2026-1111\n    include-aliases: true\n    fix-state: fixed\n' >"$tree/.grype.yaml"
-ignorefiles "a rule with fix-state and no package" 1 \
-  "unexpected line (a rule has only vulnerability, include-aliases, package.name, package.version):     fix-state: fixed"
-check "scan-gate.sh --check-ignorefile: a rule with no package, says why" has "$work/gate.out" \
-  "rule CVE-2026-1111 needs one package with a plain name and version"
-{ echo "ignore:" && grype_rule CVE-2026-1111 left-pad 1.0.0 && echo "      type: npm"; } >"$tree/.grype.yaml"
-ignorefiles "a rule with package.type" 1 "unexpected line"
-{ echo "ignore:" && grype_rule CVE-2026-1111 left-pad 1.0.1; } >"$tree/.grype.yaml"
-ignorefiles "a rule for another version than the entry's" 1 \
-  "rule CVE-2026-1111 left-pad@1.0.1 is 0 entries of .trivyignore.yaml in force, not exactly one"
-{ echo "ignore:" && grype_rule CVE-2026-9999 left-pad 1.0.0; } >"$tree/.grype.yaml"
-ignorefiles "a rule whose id no entry has" 1 "rule CVE-2026-9999 left-pad@1.0.0 is 0 entries"
-# grype reads package.name as a regex anchored at both ends: a name must be the purl's name with each metacharacter
-# escaped by a backslash. Written any other way it is refused even when an entry with that very name exists (.* would
-# cover every package at the version, mini.* and minimis[t] cover minimist), and is not matched against the entries.
-for name in '.*' '"mini.*"' 'minimis.' 'minimis[t]' 'libstdc++' 'socket.io-parser' 'mini\st'; do
-  plain=${name//\"/}
-  { echo "vulnerabilities:" && ignore_entry CVE-2021-44906 "$soon" "pkg:npm/$plain@1.2.5"; } >"$tree/.trivyignore.yaml"
-  { echo "ignore:" && grype_rule CVE-2021-44906 "$name" 1.2.5; } >"$tree/.grype.yaml"
-  ignorefiles "a rule whose package.name is $name" 1 "package.name $plain is not a purl name with each of"
-  check "scan-gate.sh --check-ignorefile: the rule for $name is not matched against the entries" lacks "$work/gate.out" \
-    "entries of .trivyignore.yaml"
-done
-check "scan-gate.sh --check-ignorefile: the refusal gives the name to write" has "$work/gate.out" 'write minist'
-# The purl's name escaped, plain or in single quotes, matches its entry; in double quotes YAML would read the escapes.
-for case in 'socket\.io-parser pkg:npm/socket.io-parser' "'libstdc\+\+' pkg:apk/alpine/libstdc++" \
-  'golang\.org/x/net pkg:golang/golang.org/x/net'; do
-  name=${case% *} purl=${case#* }
-  { echo "vulnerabilities:" && ignore_entry CVE-2021-44906 "$soon" "$purl@1.2.5"; } >"$tree/.trivyignore.yaml"
-  { echo "ignore:" && grype_rule CVE-2021-44906 "$name" 1.2.5; } >"$tree/.grype.yaml"
-  ignorefiles "a rule whose package.name is $name, the escaped name of $purl" 0
-done
-{ echo "vulnerabilities:" && ignore_entry CVE-2021-44906 "$soon" pkg:npm/socket.io-parser@1.2.5; } >"$tree/.trivyignore.yaml"
-{ echo "ignore:" && grype_rule CVE-2021-44906 'socket\.io-parsers' 1.2.5; } >"$tree/.grype.yaml"
-ignorefiles "an escaped name that is not the entry's" 1 "rule CVE-2021-44906 socket.io-parsers@1.2.5 is 0 entries"
-{ echo "ignore:" && grype_rule CVE-2021-44906 '"socket\.io-parser"' 1.2.5; } >"$tree/.grype.yaml"
-ignorefiles "an escaped name in double quotes" 1 "where YAML reads \\ as an escape"
-# The name of a purl is the one grype gives its package: with its namespace (an npm scope, a Go module path), except
-# for a distribution's package (apk, deb, rpm), whose namespace is the distribution. A rule for foo would cover the
-# unscoped foo too, one for net any package named net.
-for case in 'foo pkg:npm/%40scope/foo' 'net pkg:golang/golang.org/x/net' 'alpine/glib pkg:apk/alpine/glib'; do
-  name=${case% *} purl=${case#* }
-  { echo "vulnerabilities:" && ignore_entry CVE-2026-1111 "$soon" "$purl@1.0.0"; } >"$tree/.trivyignore.yaml"
-  { echo "ignore:" && grype_rule CVE-2026-1111 "$name" 1.0.0; } >"$tree/.grype.yaml"
-  ignorefiles "a rule for $name, an entry for $purl" 1 "rule CVE-2026-1111 $name@1.0.0 is 0 entries"
-done
-for case in 'glib 2.88.1-r1 pkg:apk/alpine/glib@2.88.1-r1?arch=aarch64&distro=3.24.0' \
-  'libc6 2.36-9+deb12u4 pkg:deb/debian/libc6@2.36-9%2Bdeb12u4?arch=amd64&distro=debian-12'; do
-  read -r name version purl <<<"$case"
-  { echo "vulnerabilities:" && ignore_entry CVE-2026-1111 "$soon" "$purl"; } >"$tree/.trivyignore.yaml"
-  { echo "ignore:" && grype_rule CVE-2026-1111 "$name" "$version"; } >"$tree/.grype.yaml"
-  ignorefiles "a rule for $name $version, an entry for $purl (a distribution's package, qualifiers, %2B)" 0
-done
-# A plain value YAML reads as a null, a bool, a number or a date is not the text it shows: grype drops a null or a date
-# from the rule (null as the version covers every version of the package, as the name every package) and reads 1.10
-# as 1.1. Refused in vulnerability, name and version even with an entry of that very text; in quotes it is text.
-for value in null NULL true False 1.10 017 0x1F 0o17 0b101 1e5 1_000 2026-1-2 2001-12-14T21:59:43Z; do
-  { echo "vulnerabilities:" && ignore_entry CVE-2021-44906 "$soon" "pkg:npm/minimist@$value"; } >"$tree/.trivyignore.yaml"
-  { echo "ignore:" && grype_rule CVE-2021-44906 minimist "$value"; } >"$tree/.grype.yaml"
-  ignorefiles "a rule whose package.version is $value, plain" 1 \
-    "package.version $value is a null, a bool, a number or a date to YAML, not text"
-  check "scan-gate.sh --check-ignorefile: the rule for version $value is not matched against the entries" lacks \
-    "$work/gate.out" "entries of .trivyignore.yaml"
-  { echo "ignore:" && grype_rule CVE-2021-44906 minimist "'$value'"; } >"$tree/.grype.yaml"
-  ignorefiles "a rule whose package.version is '$value', in quotes" 0
-done
-for value in null true 017; do
-  { echo "vulnerabilities:" && ignore_entry CVE-2021-44906 "$soon" "pkg:npm/$value@1.2.5"; } >"$tree/.trivyignore.yaml"
-  { echo "ignore:" && grype_rule CVE-2021-44906 "$value" 1.2.5; } >"$tree/.grype.yaml"
-  ignorefiles "a rule whose package.name is $value, plain" 1 \
-    "package.name $value is a null, a bool, a number or a date to YAML, not text"
-  { echo "ignore:" && grype_rule CVE-2021-44906 "'$value'" 1.2.5; } >"$tree/.grype.yaml"
-  ignorefiles "a rule whose package.name is '$value', in quotes" 0
-done
-for value in null False; do
-  { echo "vulnerabilities:" && ignore_entry "$value" "$soon" pkg:npm/lodash@4.17.15; } >"$tree/.trivyignore.yaml"
-  { echo "ignore:" && grype_rule "$value" lodash 4.17.15; } >"$tree/.grype.yaml"
-  ignorefiles "a rule whose vulnerability is $value, plain" 1 \
-    "vulnerability $value is a null, a bool, a number or a date to YAML, not text"
-done
-# yes and 1:20 are text to the YAML grype reads (1.2: no yes/no bools, no base 60).
-{ echo "vulnerabilities:" && ignore_entry CVE-2021-44906 "$soon" pkg:deb/debian/yes@1:20; } >"$tree/.trivyignore.yaml"
-{ echo "ignore:" && grype_rule CVE-2021-44906 yes 1:20; } >"$tree/.grype.yaml"
-ignorefiles "a rule whose name is yes and version 1:20, plain" 0
+check "scan-gate.sh: the image gate gives the policy's message" has "$work/gate.out" \
+  "FAIL  .trivyignore.yaml: only vulnerabilities may be ignored"
 { echo "vulnerabilities:" && ignore_entry CVE-2021-44906 "$soon" pkg:npm/mini.st@1.2.5; } >"$tree/.trivyignore.yaml"
 { echo "ignore:" && grype_rule CVE-2021-44906 mini.st 1.2.5; } >"$tree/.grype.yaml"
+grype_report "$work/grype.json" 0
 grype_gate local "scan-gate.sh --grype: the image gate refuses a package.name with a regex metacharacter" 1 -- --grype \
   "web linux/arm64" "$work/leg"
 check "scan-gate.sh --grype: the image gate says the regex name breaks the rules" has "$work/gate.err" \
   "FAIL  an ignore file breaks its rules: fix it before anything is pushed"
 
+# What conftest's parser cannot show: a key written twice (it keeps the last one; trivy and grype refuse the file), at
+# the root or in a rule; and a file YAML cannot read at all (\. is no escape in double quotes).
+ignore_files
+echo "vulnerabilities: []" >>"$tree/.trivyignore.yaml"
+ignorefiles "vulnerabilities twice" 1 "FAIL  .trivyignore.yaml: key vulnerabilities twice (trivy and grype refuse the file)"
+gate local "scan-gate.sh: the image gate refuses a key written twice" 1 -- "gw linux/amd64" "$work/report.json"
+ignore_files
+{ echo "ignore:" && grype_rule CVE-2026-1111 '.*' 1.0.0 && echo "      name: left-pad"; } >"$tree/.grype.yaml"
+ignorefiles "package.name twice in a rule" 1 "FAIL  .grype.yaml: key name twice in ignore.0.package"
+{ echo "ignore:" && grype_rule CVE-2026-1111 '"left\.pad"' 1.0.0; } >"$tree/.grype.yaml"
+ignorefiles "a file YAML cannot read" 1 "FAIL  yq could not read the ignore files:"
+
 # An expired entry: job config fails, on the entry and on the grype rule that would go on covering its match; the image
-# gate does not (trivy drops the entry, so its match blocks again if CRITICAL).
+# gates do not (trivy drops the entry, so its match blocks again if CRITICAL).
 ignore_files
 { echo "vulnerabilities:" && ignore_entry CVE-2026-1111 "$today" pkg:npm/left-pad@1.0.0; } >"$tree/.trivyignore.yaml"
-ignorefiles "an expired entry" 1 ".trivyignore.yaml:2: entry CVE-2026-1111 expired on $today"
+ignorefiles "an expired entry" 1 "FAIL  .trivyignore.yaml: entry CVE-2026-1111 expired on $today"
 check "scan-gate.sh --check-ignorefile: the grype rule of an expired entry fails too" has "$work/gate.out" \
   "rule CVE-2026-1111 left-pad@1.0.0 is 0 entries of .trivyignore.yaml in force"
 gate local "scan-gate.sh: the image gate leaves an expired entry to trivy" 0 -- "gw linux/amd64" "$work/report.json"
 grype_gate local "scan-gate.sh --grype: the image gate leaves an expired entry to job config" 0 -- --grype \
   "web linux/arm64" "$work/leg"
+
+# Each path of trivy-config-ignore.yaml is a file of the repository: not a file gone, not a directory (a whole tree).
+ignore_files
+config_ignore deploy/ci/gone.sh
+ignorefiles "a misconfiguration for a file gone" 1 \
+  "FAIL  deploy/ci/trivy-config-ignore.yaml: path deploy/ci/gone.sh is not a file of the repository"
+config_ignore deploy/ci
+ignorefiles "a misconfiguration for a directory" 1 \
+  "FAIL  deploy/ci/trivy-config-ignore.yaml: path deploy/ci is not a file of the repository"
+config_ignore deploy/ci/common.sh
 rm -f "$tree/.trivyignore.yaml" "$tree/.grype.yaml"
-mv "$work/trivy-config-ignore.yaml" "$tree/deploy/ci/trivy-config-ignore.yaml"
 
 # Another repository's tree (SVP_CODE_ROOT): its own .trivyignore.yaml and .grype.yaml, which must both be there.
 { echo "vulnerabilities:" && ignore_entry CVE-2026-1111 "$soon" pkg:npm/left-pad@1.0.0; } >"$webtree/.trivyignore.yaml"
@@ -397,10 +353,10 @@ grype_gate local "scan-gate.sh --grype, svp-frontend's tree: its files pass" 0 S
   "web linux/arm64" "$work/leg"
 check "scan-gate.sh --grype, svp-frontend's tree: grype reads its .grype.yaml" grep -qF -- \
   "-v $webtree/.grype.yaml:/ignore/grype.yaml:ro" "$work/docker.log"
-mv "$tree/deploy/ci/trivy-config-ignore.yaml" "$work/trivy-config-ignore.yaml"
 gate local "scan-gate.sh --check-ignorefile, svp-frontend's tree: its files pass" 0 SVP_CODE_ROOT="$webtree" -- \
   --check-ignorefile
-mv "$work/trivy-config-ignore.yaml" "$tree/deploy/ci/trivy-config-ignore.yaml"
+check "scan-gate.sh --check-ignorefile, svp-frontend's tree: conftest reads its .grype.yaml" grep -qF -- \
+  "-v $webtree/.grype.yaml:/in/.grype.yaml:ro" "$work/tools.log"
 for file in .trivyignore.yaml .grype.yaml; do
   mv "$webtree/$file" "$work/web-ignore"
   gate local "scan-gate.sh, svp-frontend's tree without $file" 1 SVP_CODE_ROOT="$webtree" -- "web linux/arm64" \

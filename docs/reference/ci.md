@@ -23,7 +23,7 @@ Loại tài liệu (Diátaxis): **reference**, tra cứu khi cần một lệnh 
     merge-base của PR, `main` trước push, hay merge-base với `origin/main` khi dispatch), `api-contract` (luật version của hợp đồng
     REST, [ADR-0033](../adr/0033-svp-web-repo.md) §1: `make api-contract-check BASE=<base>` với base tính như job `buf`, rồi
     `deploy/ci/contract-test.sh`), `config`
-    (đủ lịch sử, `make gitops-clone` và `SVP_GITOPS_DIR` ở `env` của job; `deploy/ci/scan-gate.sh --check-ignorefile`,
+    (đủ lịch sử, `make gitops-clone` và `SVP_GITOPS_DIR` ở `env` của job; `make conftest-verify`, `deploy/ci/scan-gate.sh --check-ignorefile`,
     test của script pipeline image trong job giả của Actions và trên máy (`deploy/ci/plan-test.sh`, `scan-gate-test.sh`,
     `vuln-predicate-test.sh`, `sign-image-test.sh` cùng hàm bundle của `common.sh` trên registry giả, `rescan-test.sh`,
     `verify-release-test.sh` cùng `values-check.sh`, `changed-services-test.sh`), `deploy/ci/promote-test.sh`
@@ -272,7 +272,7 @@ Loại tài liệu (Diátaxis): **reference**, tra cứu khi cần một lệnh 
     Lệnh bật, tắt và đọc kết quả (người học chạy) ở [`docs/ci-cd.md`](../ci-cd.md) mục 7.
   - Chạy lại một job trên máy, từ gốc repo: `make check-go TESTFLAGS=-count=1`; `make generate-check`;
     `buf breaking --against '.git#ref=<base>'`; `make api-contract-check BASE=<base>`, `deploy/ci/contract-test.sh`;
-    `deploy/ci/scan-gate.sh --check-ignorefile`,
+    `make conftest-verify`, `deploy/ci/scan-gate.sh --check-ignorefile`,
     `deploy/ci/plan-test.sh`, `scan-gate-test.sh`, `vuln-predicate-test.sh`, `sign-image-test.sh`, `rescan-test.sh`,
     `verify-release-test.sh`, `changed-services-test.sh`, `make slo-check`,
     `deploy/ci/promote-test.sh`,
@@ -321,10 +321,13 @@ Loại tài liệu (Diátaxis): **reference**, tra cứu khi cần một lệnh 
     trừ các mục của `deploy/ci/trivy-config-ignore.yaml` (dưới đây). Cổng `--fs` của lockfile không còn trong `scan-gate.sh`
     ([ADR-0039](../adr/0039-mainpath-drills-scan-gate-sourcemaps.md) §2): `svp-frontend` chạy `trivy fs` rồi `trivy convert --exit-code 1 --severity CRITICAL --ignorefile`
     trong `Makefile` của nó. `make renovate-check`: `renovate-config-validator --strict` trong `RENOVATE_IMAGE` ghim, không mạng. trivy, syft,
-    grype, cosign, Renovate, k6, Schemathesis, kubeconform, Kyverno CLI, oasdiff, ORAS, yq chạy trên máy chỉ bằng image ghim digest của
-    `Makefile` (`TRIVY_IMAGE`, `SYFT_IMAGE`, `GRYPE_IMAGE`, `COSIGN_IMAGE`, `RENOVATE_IMAGE`, `K6_IMAGE`, `SCHEMATHESIS_IMAGE`,
-    `KUBECONFORM_IMAGE`, `KYVERNO_CLI_IMAGE`, `OASDIFF_IMAGE`, `ORAS_IMAGE`, `YQ_IMAGE`; yq của bước promote), không cài;
+    grype, cosign, Renovate, k6, Schemathesis, kubeconform, Kyverno CLI, conftest, oasdiff, ORAS, yq chạy trên máy chỉ bằng image ghim
+    digest của `Makefile` (`TRIVY_IMAGE`, `SYFT_IMAGE`, `GRYPE_IMAGE`, `COSIGN_IMAGE`, `RENOVATE_IMAGE`, `K6_IMAGE`, `SCHEMATHESIS_IMAGE`,
+    `KUBECONFORM_IMAGE`, `KYVERNO_CLI_IMAGE`, `CONFTEST_IMAGE`, `OASDIFF_IMAGE`, `ORAS_IMAGE`, `YQ_IMAGE`; yq của bước promote và của phép
+    kiểm tệp ngoại lệ), không cài;
     `make kyverno-test`: `kyverno test` của `deploy/ci/gitops-policies/` (fixture đạt, hỏng mỗi policy; `gitops-check-test.sh` gọi nó);
+    `make conftest-verify`: `conftest verify` của `deploy/ci/ignorefile-policies/` (mỗi ca âm của luật tệp ngoại lệ là một test `*_test.rego`,
+    hôm nay cố định);
     govulncheck là công cụ Go ghim `GOVULNCHECK_VERSION`, cài bằng `make tools`. Riêng cosign, script (`cosign_` của `deploy/ci/common.sh`) dùng `cosign`
     trên PATH trước nếu có (CI cài bằng `sigstore/cosign-installer`), không có thì `COSIGN_IMAGE`.
   - `.trivyignore.yaml` và `.grype.yaml` ở gốc repo ([ADR-0039](../adr/0039-mainpath-drills-scan-gate-sourcemaps.md) §2; cổng của image và `make grype` đọc; mỗi
@@ -336,15 +339,21 @@ Loại tài liệu (Diátaxis): **reference**, tra cứu khi cần một lệnh 
     đủ và chỉ có `vulnerability`, `include-aliases: true` (che match grype báo bằng GHSA khi rule ghi CVE), `package.name`, `package.version`, và
     ứng đúng một mục còn hạn của `.trivyignore.yaml` (cùng id, cùng version, `package.name` là tên của purl như grype gọi gói, kể cả namespace
     như scope npm hay đường dẫn module Go, trừ apk, deb, rpm chỉ lấy đoạn cuối; mỗi ký tự `.*+?[](){}|^$\` của tên thoát bằng `\`, ví dụ
-    `socket\.io-parser`, vì grype đọc tên có ký tự meta là regex neo hai đầu). Giá trị YAML thường mà grype đọc thành null, bool, số hay ngày
-    (`1.10`, `null`, `2026-1-2`) phải đặt trong dấu nháy đơn; gói mà tên grype bỏ namespace (maven) không có ngoại lệ grype, CRITICAL của nó vẫn chặn.
+    `socket\.io-parser`, vì grype đọc tên có ký tự meta là regex neo hai đầu). Giá trị YAML thường mà grype đọc thành null, bool hay số
+    (`1.10`, `null`, `017`) phải đặt trong dấu nháy đơn, cả `yes`, `no`, `on`, `off` (parser của conftest đọc YAML 1.1); giá trị dạng ngày
+    (`2026-1-2`) bị từ chối kể cả trong nháy, vì file đã parse không còn dấu nháy; gói mà tên grype bỏ namespace (maven) không có ngoại lệ grype, CRITICAL của nó vẫn chặn.
     Khoá nào khác bị từ chối (`only-notfixed`, `ignore-wontfix`, rule thiếu `package`…: che CRITICAL không cần mục ngoại lệ, không hạn).
     Vì grype không đọc hạn, mục hết hạn (từ đúng ngày `expired_at`) làm job `config` đỏ ở mọi PR thay vì cổng grype của từng chân; cổng của image chạy
     cùng phép kiểm file nhưng không kiểm hạn. `deploy/ci/trivy-config-ignore.yaml` (chỉ `make trivy-config` đọc,
     [ADR-0021](../adr/0021-deferred-verification-stage6b.md) §9): chỉ phần `misconfigurations`, mỗi mục có `id` (`DS-…`,
     `KSV-…`), `paths` bắt buộc (file có thật, không pattern, thư mục hay `..`), `statement` có nội dung và `expired_at` không
     quá 90 ngày; chỉ lựa chọn có chủ đích vào đây, cảnh báo sửa được thì sửa. `scan-gate.sh --check-ignorefile` kiểm cả ba
-    file ở job `config`: file sai quy tắc làm job đỏ ở mọi PR.
+    file ở job `config`: file sai quy tắc làm job đỏ ở mọi PR. Luật viết bằng Rego ở `deploy/ci/ignorefile-policies/` (một package mỗi file,
+    `lib.rego` dùng chung), `conftest test --combine` chạy chúng trên ba file đã parse cùng lúc (luật chéo `.grype.yaml` với
+    `.trivyignore.yaml`), ngày hôm nay (UTC) và chế độ (job `config` hay cổng image) truyền vào làm `data.scan_gate`. Hai phép kiểm ở lại
+    trong bash vì policy không làm được: khoá viết hai lần trong một mapping (parser của conftest giữ khoá sau, trivy và grype từ chối file;
+    yq thấy đủ khoá) và mỗi path của `trivy-config-ignore.yaml` là file có thật. conftest và yq chạy bằng image ghim, `--network none`,
+    người gọi, file mount chỉ đọc.
   - Renovate: GitHub App Mend, repo này và `svp-gitops` (người học cài, **kiểm sau push**); `renovate.json`: sáng thứ Bảy giờ Việt
     Nam, `minimumReleaseAge` 3 ngày (trừ cảnh báo lỗ hổng); tự merge hẹp ([ADR-0041](../adr/0041-github-hardening.md) (i), thay một phần
     [ADR-0035](../adr/0035-renovate-automerge.md); auto-merge của GitHub, squash, khi `ci-ok`, `images-ok` xanh; repo phải bật "Allow

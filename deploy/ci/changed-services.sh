@@ -16,7 +16,8 @@
 # which only it, make k8s-gitops-up and the drills run, its Kyverno policies gitops-policies/,
 # contract.sh (the version rule and
 # the publishing of the gateway's API contract: job contract of images.yml runs it, but it builds and promotes no
-# image); the helpers deploy/ci/ sources from deploy/k8s/lib.sh still count (docker_, values_field,
+# image), the conftest policies on the ignore files ignorefile-policies/ (the gate applies them, but job config checks
+# the files with them on every pull request, as it does a change of the files themselves); the helpers deploy/ci/ sources from deploy/k8s/lib.sh still count (docker_, values_field,
 # values_set_image, ghcr_prefix), and the lines of the Makefile pinning the images the gate runs (TRIVY_IMAGE,
 # SYFT_IMAGE, GRYPE_IMAGE, COSIGN_IMAGE); other Makefile changes do not count. So the weekly Renovate pull request that
 # bumps those tools builds and scans every image with the new trivy or grype before it merges, instead of the next
@@ -75,7 +76,7 @@ while IFS= read -r path; do
     deploy/ci/verify-mask.sh | deploy/ci/verify-collect.sh | deploy/ci/ghcr-digest.sh | \
     deploy/ci/verify/* | deploy/ci/*-test.sh | \
     deploy/ci/gitops-check.sh | deploy/ci/values-check.sh | deploy/ci/verify-release.sh | \
-    deploy/ci/contract.sh | deploy/ci/gitops-policies/*)
+    deploy/ci/contract.sh | deploy/ci/gitops-policies/* | deploy/ci/ignorefile-policies/*)
     continue
     ;;
   esac
