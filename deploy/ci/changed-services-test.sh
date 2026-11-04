@@ -64,7 +64,7 @@ same "changed-services: the removal of web/ builds nothing" "" "$(changed)"
 # docs/.
 for f in changed-services-test.sh plan-test.sh promote-test.sh rescan-test.sh scan-gate-test.sh sign-image-test.sh \
   verify-release-test.sh vuln-predicate-test.sh ghcr-digest.sh ghcr-digest-test.sh verify/gitops.sh gitops-check.sh \
-  gitops-check-test.sh values-check.sh verify-release.sh; do
+  gitops-check-test.sh values-check.sh verify-release.sh ignorefile-policies/grypeignore.rego; do
   same "changed-services: a change of $f builds nothing" "" "$(changed_by "deploy/ci/$f")"
 done
 same "changed-services: a change of the policy's values builds nothing" "" \
