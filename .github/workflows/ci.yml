@@ -63,11 +63,21 @@ jobs:
           EVENT: ${{ github.event_name }}
           REPO: ${{ github.repository }}
           PR: ${{ github.event.pull_request.number }}
+          CHANGED: ${{ github.event.pull_request.changed_files }}
         run: |
           docs='^docs/|^LICENSE$|\.md$'
           generated='^deploy/helm/[^/]+/README\.md$'
           if [ "$EVENT" = pull_request ]; then
-            files=$(gh api --paginate "repos/$REPO/pulls/$PR/files" --jq '.[].filename')
+            # Both names of a renamed file. The API lists at most 3000 files of a pull request: a list shorter than the
+            # pull request's count of changed files is incomplete, and then every job runs.
+            listed=$(gh api --paginate "repos/$REPO/pulls/$PR/files" --jq '.[] | [.filename, (.previous_filename // "")] | @tsv')
+            count=$(printf '%s\n' "$listed" | grep -c . || true)
+            if [ "$count" -eq "$CHANGED" ]; then
+              files=$(printf '%s\n' "$listed" | tr '\t' '\n' | grep -v '^$' || true)
+            else
+              echo "::notice::the API listed $count of the $CHANGED changed files: every job runs"
+              files=Makefile
+            fi
           else
             files=Makefile
           fi
