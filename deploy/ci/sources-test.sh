@@ -200,14 +200,20 @@ lookup "release_sources: a file that is not JSON" 'raw:{"sources": [' 1 \
   "release sources of the working tree: deploy/helm/svp-policy/files/sources.json is not readable JSON" release_sources
 lookup "source_of_repository: web's image is of source web" . 0 web \
   source_of_repository ghcr.io/anhnvcoder/svp-frontend/web
-lookup "source_of_repository: a repository under the prefixes of two sources" "$web_under_backend" 1 \
-  "ghcr.io/anhnvcoder/svp-backend/web/web is under the prefixes of release sources backend web" \
+# A table in which one prefix starts another is refused as it is read, before any lookup can pick from it.
+lookup "source_of_repository: a table in which one prefix starts another" "$web_under_backend" 1 \
+  "imagePrefix ghcr.io/anhnvcoder/svp-backend/web/ starts with imagePrefix ghcr.io/anhnvcoder/svp-backend/" \
   source_of_repository ghcr.io/anhnvcoder/svp-backend/web/web
+lookup "release_source_of: a table in which one prefix starts another" "$web_under_backend" 1 \
+  "imagePrefix ghcr.io/anhnvcoder/svp-backend/web/ starts with imagePrefix ghcr.io/anhnvcoder/svp-backend/" \
+  release_source_of web ghcr.io/anhnvcoder/svp-backend/web/web
+lookup "release_sources: an imagePrefix that does not end in /" '.sources[1].imagePrefix = "ghcr.io/anhnvcoder/svp-frontend"' 1 \
+  "is not a registry path ending in /" release_sources
 lookup "release_source_of: web's image is of source web" . 0 '"name":"web"' \
   release_source_of web ghcr.io/anhnvcoder/svp-frontend/web
-lookup "release_source_of: an image of two sources with one prefix" \
+lookup "release_source_of: two sources with one prefix" \
   '.sources[1].imagePrefix = .sources[0].imagePrefix | .sources[0].services += ["web"]' 1 \
-  "ghcr.io/anhnvcoder/svp-backend/web is web of release sources backend web" \
+  "imagePrefix ghcr.io/anhnvcoder/svp-backend/ starts with imagePrefix ghcr.io/anhnvcoder/svp-backend/" \
   release_source_of web ghcr.io/anhnvcoder/svp-backend/web
 
 # --- web_clone of deploy/k8s/lib.sh without WEB_REF: the commit of the web release stg runs, when that release is

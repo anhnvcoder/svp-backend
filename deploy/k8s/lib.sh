@@ -1074,7 +1074,10 @@ ghcr_prefix=ghcr.io/anhnvcoder/svp-backend
 release_sources_file=deploy/helm/svp-policy/files/sources.json
 
 # release_sources [REV]: prints the table of release sources ({"sources": [...]}, compact JSON) of this repository at
-# commit REV, or of the working tree when REV is empty; fails when it is not JSON (its rules are the template's, above).
+# commit REV, or of the working tree when REV is empty; fails when it is not JSON. The template above holds every rule
+# of the table; this checks the one every script relies on before it builds, pushes, signs or verifies under a prefix,
+# on a table no render may have read yet (an image job, a drill on a machine): each imagePrefix is a registry path
+# ending in /, and none starts another, so an image is under the prefix of at most one source.
 # Fails too when REV is no commit of this clone, or a commit from before the table: no environment pins one any more,
 # so its one source is not rebuilt from the policy's values of then; pin a newer commit.
 release_sources() {
@@ -1087,7 +1090,17 @@ release_sources() {
   elif ! table=$(git -C "$repo_root" show "$rev:$release_sources_file" 2>/dev/null); then
     fail "commit ${rev:0:12} has no $release_sources_file: it is from before the table of release sources, which every script reads; pin a newer commit"
   fi
-  jq -c . <<<"$table" 2>/dev/null || fail "release sources of $where: $release_sources_file is not readable JSON"
+  table=$(jq -c . <<<"$table" 2>/dev/null) || fail "release sources of $where: $release_sources_file is not readable JSON"
+  local bad
+  bad=$(jq -r '[.sources[]?.imagePrefix] as $p
+    | ($p[] | select(type != "string" or (test("^[a-z0-9.-]+(:[0-9]+)?/[a-z0-9._/-]+/$") | not))
+      | "imagePrefix \(tojson) is not a registry path ending in /"),
+      ([range(0; $p | length) as $i | range(0; $p | length) as $j
+        | select($i != $j and ($p[$i] | type) == "string" and ($p[$j] | type) == "string" and ($p[$j] | startswith($p[$i])))
+        | "imagePrefix \($p[$j]) starts with imagePrefix \($p[$i])"] | .[])' <<<"$table") ||
+    fail "release sources of $where: read the imagePrefix of every source"
+  [ -z "$bad" ] || fail "release sources of $where: $(head -n 1 <<<"$bad") (every source's images must lie under its prefix alone)"
+  echo "$table"
 }
 
 # release_source NAME [REV]: prints source NAME of the table at REV (release_sources) as compact JSON; fails without
