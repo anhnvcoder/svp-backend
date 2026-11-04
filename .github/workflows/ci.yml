@@ -341,8 +341,8 @@ jobs:
       # would use otherwise: a pull request that breaks one of their rules fails here. Fake secrets, kubectl, docker and
       # make in a temporary directory; bash, git, jq and openssl, no network.
       - run: deploy/ci/verify-collect-test.sh
-      # The digest ghcr-digest.sh reads from GHCR for the supply chain drill (the newest drill image): a fake ghcr_get
-      # and a throwaway repository; bash, git and jq, no network.
+      # The digest ghcr-digest.sh reads from GHCR for the supply chain drill (the newest drill image): a fake ghcr_oras
+      # (the pinned ORAS) and a throwaway repository; bash and git, no network.
       - run: deploy/ci/ghcr-digest-test.sh
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:

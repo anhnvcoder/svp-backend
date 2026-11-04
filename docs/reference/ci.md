@@ -298,7 +298,7 @@ Loại tài liệu (Diátaxis): **reference**, tra cứu khi cần một lệnh 
     `SVP_CODE_ROOT=<checkout svp-frontend> deploy/ci/build-image.sh web arm64 "$(mktemp -d)"`.
     Image source map `web-sourcemaps` không còn ([ADR-0039](../adr/0039-mainpath-drills-scan-gate-sourcemaps.md) §3): `build-image.sh` không có
     `--sourcemaps-artifact`; tải source map lúc build vào tracker chạy lâu dài làm khi có tracker đó. Digest mới nhất của image diễn tập
-    lấy bằng `deploy/ci/ghcr-digest.sh newest IMAGE` (đọc GHCR ẩn danh).
+    lấy bằng `deploy/ci/ghcr-digest.sh newest IMAGE` (đọc GHCR ẩn danh bằng ORAS ghim `ORAS_IMAGE`: `oras repo tags`, `oras resolve`).
   - `make helm-check` (`deploy/ci/gitops-check.sh --worktree`, cùng script với check của `svp-gitops`; cần bản clone `../gitops`
     hay `SVP_GITOPS_DIR`): `helm lint` và `helm template` mọi chart của working tree với `base/` của bản clone (`HELM_*_HOME` trong
     thư mục tạm), cộng overlay và file image của từng môi trường `envs/<stg|prd>/` ([ADR-0024](../adr/0024-multi-environment.md);
