@@ -1,6 +1,6 @@
 # 0035. Renovate tự merge bản patch và digest của Go module, gói npm, base image và image dịch vụ khi `ci-ok`, `images-ok` xanh, ở repo backend và `svp-web`; action, công cụ ghim, commit backend, hợp đồng API, minor, major giữ duyệt tay
 
-- Trạng thái: Chấp nhận (người học chốt 2026-10-31)
+- Trạng thái: Chấp nhận (người học chốt 2026-10-31); phạm vi tự merge chỉnh bởi [0041](0041-github-hardening.md)
 - Ngày: 2026-10-31
 
 ## Bối cảnh

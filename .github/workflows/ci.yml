@@ -1,7 +1,8 @@
 # Checks of every pull request and of every push to main: the whole check list of CLAUDE.md (make check-go, generated
 # code, buf breaking, the version rule of the API contract, compose, Collector, Prometheus rules, charts) plus the
-# secret scan of the whole git history and the misconfiguration scan. Job ci-ok is the only check the ruleset of main
-# requires from this workflow, so the other jobs can be renamed or added without touching it. Job stack runs the whole
+# secret scan of the whole git history, the misconfiguration scan, the security lint of the workflows (zizmor) and, on
+# pull requests, the review of the dependencies they change. Job ci-ok is the only check the ruleset of main requires
+# from this workflow, so the other jobs can be renamed or added without touching it. Job stack runs the whole
 # compose stack end to end as a report outside ci-ok, so a flaky run on a shared runner never blocks a merge.
 #
 # The repository is public and a pull request from a fork runs this workflow with the fork's code, so:
@@ -378,6 +379,53 @@ jobs:
           path: ${{ runner.temp }}/trivy-config.sarif
           if-no-files-found: ignore
 
+  # Security lint of every workflow with the pinned zizmor (make zizmor, ADR-0041 (g)): any finding not left out in
+  # .github/zizmor.yml fails the job, shown as annotations on the lines. GITHUB_TOKEN, read-only here, turns on the
+  # online audits (impostor commits, actions with known vulnerabilities); zizmor only reads public data with it. No
+  # condition: ci-ok is red when this job is red or skipped. The SARIF report beside it is for the code scanning
+  # upload of job sarif and never fails.
+  zizmor:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: make zizmor
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: make zizmor ZIZMOR_FORMAT=github
+      - name: zizmor SARIF report
+        if: always() && github.event_name != 'pull_request'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: make zizmor ZIZMOR_SARIF="$RUNNER_TEMP/zizmor.sarif"
+      - name: Keep the zizmor report
+        if: always() && github.event_name != 'pull_request'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: sarif-zizmor
+          path: ${{ runner.temp }}/zizmor.sarif
+          if-no-files-found: ignore
+
+  # The dependencies a pull request adds or changes (go.mod, and every other manifest GitHub's dependency graph reads),
+  # against the GitHub Advisory Database: a known vulnerability of severity high or critical fails the job before
+  # trivy and grype see it in an image (ADR-0041 (k)). Licenses only show in the job summary. Pull requests only:
+  # the action compares the pull request's base and head, so on any other event the job is skipped, and ci-ok takes
+  # that skip for this job alone.
+  dependency-review:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/dependency-review-action@a1d282b36b6f3519aa1f3fc636f609c47dddb294 # v5.0.0
+        with:
+          fail-on-severity: high
+
   # The whole compose stack of make up on the runner, driven as on a dev machine: make smoke, the web client's
   # end-to-end tests, the k6 profile ci (error thresholds only: a shared runner says nothing about latency), Lighthouse
   # and Schemathesis against the gateway's OpenAPI contract. The six backend services are built from the pull
@@ -586,7 +634,7 @@ jobs:
   # history and dismissal): it runs nothing of the repository. It is a report, not a check: ci-ok does not need it,
   # and a failed upload still turns the run red.
   sarif:
-    needs: [check, gitleaks, trivy-config]
+    needs: [check, gitleaks, trivy-config, zizmor]
     if: always() && github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-24.04
     permissions:
@@ -617,13 +665,19 @@ jobs:
         with:
           sarif_file: sarif/sarif-trivy-config/trivy-config.sarif
           category: trivy-config
+      - if: hashFiles('sarif/sarif-zizmor/zizmor.sarif') != ''
+        uses: github/codeql-action/upload-sarif@9b3254085494b55a0f7c4c2b3d2d52cc712ce370 # v4.39.1
+        with:
+          sarif_file: sarif/sarif-zizmor/zizmor.sarif
+          category: zizmor
 
   # The required check. It runs whatever happened before it (always()) and fails unless every check job succeeded:
   # GitHub counts a skipped required check as passed, and a job that failed or was cancelled does not fail the jobs
-  # that need it by itself. None of the seven has a condition, so skipped here can only mean a wrong if: and is red too.
-  # No condition may ever skip ci-ok itself.
+  # that need it by itself. Of the nine, only dependency-review has a condition (pull requests only): its skip is
+  # accepted on any other event, and nowhere else. Any other skip can only mean a wrong if: and is red too. No
+  # condition may ever skip ci-ok itself.
   ci-ok:
-    needs: [check, generate, buf, api-contract, config, gitleaks, trivy-config]
+    needs: [check, generate, buf, api-contract, config, gitleaks, trivy-config, zizmor, dependency-review]
     if: always()
     runs-on: ubuntu-24.04
     permissions: {}
@@ -631,6 +685,11 @@ jobs:
       - name: Every check job succeeded
         env:
           NEEDS: ${{ toJSON(needs) }}
+          EVENT: ${{ github.event_name }}
         run: |
           jq -r 'to_entries[] | "\(.key): \(.value.result)"' <<< "$NEEDS"
-          jq -e 'length == 7 and all(.[]; .result == "success")' <<< "$NEEDS" > /dev/null
+          # skip_ok: the one skip that is part of a run, as in images-ok: dependency-review outside pull requests.
+          jq -e --arg event "$EVENT" '
+            def skip_ok: .key == "dependency-review" and $event != "pull_request";
+            length == 9 and all(to_entries[]; .value.result == "success" or (.value.result == "skipped" and skip_ok))
+          ' <<< "$NEEDS" > /dev/null

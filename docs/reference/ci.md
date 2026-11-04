@@ -5,7 +5,8 @@ Loại tài liệu (Diátaxis): **reference**, tra cứu khi cần một lệnh 
 ## Workflow và cổng
 
 - CI trên GitHub Actions ([ADR-0015](../adr/0015-cicd-devsecops-stage5.md)); workflow
-  thứ ba `verify.yml` kiểm chứng trên runner ([ADR-0021](../adr/0021-deferred-verification-stage6b.md)). Ba workflow (DORA không còn workflow riêng:
+  `verify.yml` kiểm chứng trên runner ([ADR-0021](../adr/0021-deferred-verification-stage6b.md)); `scorecard.yml` và `pr-title.yml` do
+  [ADR-0041](../adr/0041-github-hardening.md) thêm. Năm workflow (DORA không còn workflow riêng:
   bài lab `dora/` của `svp-labs`, [ADR-0037](../adr/0037-mainpath-standard-tools.md) §1), mọi action
   ghim SHA commit, `permissions: {}` ở đầu file và quyền khai theo job; mọi job của lượt `pull_request` (cả PR từ fork)
   chỉ có `contents: read` và không secret; không `pull_request_target`, `workflow_run`. CI trung lập nền tảng
@@ -27,8 +28,12 @@ Loại tài liệu (Diátaxis): **reference**, tra cứu khi cần một lệnh 
     rồi `make compose-config`, `deploy/observability/glitchtip/dotenv-test.sh`,
     `make helm-check`, `deploy/ci/sources-test.sh`, `deploy/ci/gitops-check-test.sh "$SVP_GITOPS_DIR"`, `make k6-check`,
     `make cloud-check`),
-    `gitleaks` (toàn lịch sử, `--redact`), `trivy-config` (chỉ báo), `sarif` (chỉ `main`), check tổng `ci-ok` (cần đủ 7 job,
-    trừ `sarif` và `stack`; job `web` cũ ở CI của `svp-frontend` từ khi web tách repo). Job `stack` (ADR-0020 §15; **chỉ báo, ngoài `ci-ok`**, không chặn merge; xem lại
+    `gitleaks` (toàn lịch sử, `--redact`), `trivy-config` (chỉ báo), `zizmor` (lint bảo mật workflow, mục dưới),
+    `dependency-review` (chỉ lượt `pull_request`: `actions/dependency-review-action` ghim SHA, `contents: read`,
+    `fail-on-severity: high`, không `allow-licenses`; chặn dependency có lỗ hổng ngay lúc PR thêm vào,
+    [ADR-0041](../adr/0041-github-hardening.md) (k)), `sarif` (chỉ `main`), check tổng `ci-ok` (cần đủ 9 job,
+    trừ `sarif` và `stack`; `dependency-review` `skipped` ngoài lượt `pull_request` vẫn xanh, job khác `skipped` thì đỏ; job `web` cũ ở CI của
+    `svp-frontend` từ khi web tách repo). Job `stack` (ADR-0020 §15; **chỉ báo, ngoài `ci-ok`**, không chặn merge; xem lại
     khi 20 lượt liên tiếp xanh, không lượt đỏ do môi trường, thì đưa vào `ci-ok`): `ubuntu-24.04`, tối đa 45 phút,
     `contents: read`, không secret; Postgres, Redis là service container publish trên `127.0.0.1` và IP bridge `172.17.0.1`
     (`make ci-bridge-check` dừng job khi gateway của network `bridge` khác địa chỉ đó; chỉ cho CI), gói apt
@@ -123,18 +128,34 @@ Loại tài liệu (Diátaxis): **reference**, tra cứu khi cần một lệnh 
     layer thì để nguyên (thiếu chữ ký thì ký bù), tag có nội dung khác thì đỏ, không ghi đè. `contract.sh publish --dry-run` đọc
     registry ẩn danh và chỉ in việc sẽ làm. Lượt phát hành thật đầu và package `api/gateway` public: **kiểm sau push**. **Promote prd** ([ADR-0037](../adr/0037-mainpath-standard-tools.md) §6): dispatch
     `-f promote_prd=true [-f stg_ref=<main|SHA đủ 40 hex>]` trên `main` (một mình, không kèm `services`, `rescan`, `values_ref`, `drill`;
-    `plan` bỏ qua mọi job khác) chạy job `promote-prd` (environment `promote`, token App `contents`, `pull_requests` write): bước shell
+    `plan` bỏ qua mọi job khác) chạy job `promote-prd` (environment `promote-prd`, người học duyệt trước khi job chạy, token App `contents`, `pull_requests` write): bước shell
     chép giá trị khối `image` của cả bảy `envs/stg/images/*.yaml` và ba khoá của `envs/stg/charts.yaml` ở commit `stg_ref` của
     `svp-gitops` (mặc định `main`; commit cũ hơn là rollback) vào cùng file dưới `envs/prd/` bằng `yq -i` (comment của file prd giữ nguyên),
-    nhánh `bot/promote-prd`, mở PR không auto-merge (Code Owner duyệt), mô tả nêu `stg_ref`. Guard `promote_stg_ref` của `common.sh` chỉ
+    nhánh `bot/promote-prd`, mở PR không auto-merge (Code Owner duyệt), mô tả nêu `stg_ref`. Environment `promote-prd` ([ADR-0041](../adr/0041-github-hardening.md) (d)): người duyệt là
+    người học, `prevent_self_review = false` (người dispatch là người duyệt duy nhất), admin không bypass, chỉ nhánh `main`; khoá App ở đây là khoá
+    riêng thứ hai của `svp-gitops-promoter`, `promote` của stg giữ nguyên. Reject thì không PR prd nào mở. Guard `promote_stg_ref` của `common.sh` chỉ
     nhận `main` hay SHA đủ 40 hex của một commit trên `main` của `svp-gitops` (nhánh, SHA ngắn, commit ngoài `main` bị từ chối trước mọi
     lệnh `gh`). Không còn bản ghi stg: `stg_ref` chỉ bảo đảm bộ từng nằm trên `main` của `envs/stg/`, không bảo đảm stg đã chạy và smoke
-    qua với đúng bộ đó; cổng là duyệt của Code Owner. Check tổng `images-ok` (gồm `contract`; dispatch promote prd: `plan` skipped vẫn xanh). Provenance định dạng cũ trên bản phát hành
+    qua với đúng bộ đó; cổng là duyệt environment `promote-prd` rồi duyệt của Code Owner trên PR prd. Check tổng `images-ok` (gồm `contract`; dispatch promote prd: `plan` skipped vẫn xanh). Provenance định dạng cũ trên bản phát hành
     đang chạy ở stg, prd đã kiểm (bảy bản của `6ca2d8a`, `cosign verify-attestation --type slsaprovenance1` và lượt `gitops` 40954609229);
     bản phát hành bundle: **kiểm sau push**, gồm đo admission thật (ADR-0040 mục 6). Đã kiểm ngày
     2026-10-30 với `promote.sh`, `promote-prd.sh` cũ: lần promote stg đầu và auto-merge của PR bot (PR #4, #5, #6 của `svp-gitops`, lượt
     `images.yml` 40984668411 trên `2d9dab0`), promote prd (lượt 41022346853, PR #7 `523ba34`, người học duyệt); bước shell thay chúng:
     **kiểm sau push**. Rescan đọc `svp-gitops` (lượt 41018158008: 14 digest của stg và prd, 28/28 qua cổng quét).
+  - **zizmor** ([ADR-0041](../adr/0041-github-hardening.md) (g)): `make zizmor` chạy zizmor `ZIZMOR_IMAGE` (image chính thức ghim `tag@sha256`,
+    `# renovate:` ngay trên dòng) với `--persona=regular` trên cả repo, repo gắn chỉ đọc; mọi finding chặn (mã thoát 11–14). Có `GH_TOKEN` thì
+    thêm audit online (impostor commit, action có lỗ hổng), không thì offline; CI truyền `GITHUB_TOKEN` của job, chỉ `contents: read`.
+    `ZIZMOR_FORMAT=github` cho annotation, `ZIZMOR_SARIF=<đường dẫn>` ghi SARIF (không chặn; job `zizmor` đẩy artifact cho job `sarif`, category
+    `zizmor`). Ngoại lệ ở `.github/zizmor.yml` (`rules.<id>.ignore`), mỗi mục một comment lý do. Job nằm trong `ci-ok`, không thêm check bắt buộc.
+  - `.github/workflows/scorecard.yml` ([ADR-0041](../adr/0041-github-hardening.md) (g)): OpenSSF Scorecard khi push `main`, hằng tuần và khi đổi
+    branch protection cổ điển; `publish_results: true` (kết quả công khai ở API Scorecard), SARIF lên code scanning; không `repo_token`
+    (Branch-Protection đọc ruleset bằng `GITHUB_TOKEN`). Không phải check của PR. Luật workflow của Scorecard (không `env` mức workflow, chỉ job
+    Scorecard có `id-token: write`, chỉ gồm action được duyệt) nằm ở đầu file. `ossf/scorecard-action` có trong pattern Actions của repo
+    (`github/repositories.tf` của `svp-infra`). Lượt đầu trên `main` xanh và có kết quả ở API Scorecard: **kiểm sau áp**.
+  - `.github/workflows/pr-title.yml` ([ADR-0041](../adr/0041-github-hardening.md) (h)): job `pr-title` kiểm tiêu đề PR theo Conventional Commits
+    bằng `[[ =~ ]]` của bash (tiêu đề vào script qua `env`, `permissions: {}`), chạy khi `opened`, `edited`, `reopened`, `synchronize`; chạy trước
+    bộ tiêu đề thử của ADR (đạt, không đạt) để regex hỏng đỏ mọi PR chứ không chỉ vài PR. Tiêu đề thành tiêu đề commit squash. `pr-title`
+    thành check bắt buộc của ruleset `main` chỉ sau khi xanh trên một PR người và một PR bot: **kiểm sau áp**.
   - `.github/workflows/verify.yml` ([ADR-0021](../adr/0021-deferred-verification-stage6b.md), thu gọn ở
     [ADR-0039](../adr/0039-mainpath-drills-scan-gate-sourcemaps.md) §1; không check bắt buộc nào, không chạy ở PR): kiểm trên runner `ubuntu-24.04`
     những gì máy 16 GB không chạy nổi, bằng đúng target `make` như trên máy. Trigger: `workflow_dispatch` (chỉ người có quyền ghi; ref
@@ -198,7 +219,7 @@ Loại tài liệu (Diátaxis): **reference**, tra cứu khi cần một lệnh 
     render và policy `no-lab-hosts`); (4) mọi image ghim digest bằng policy `images-pinned` (dưới đây; ref ngoài tầm policy vẫn qua phép
     quét của script), render có overlay không đổi version image của render nó chồng lên; (5) `values-check.sh --gitops` cho file image đổi
     (chữ ký, `vuln`, provenance env đòi; provenance có thì tag là 12 hex của commit nó nêu). Check tổng `gitops-ok`. Tag image không còn
-    phải là tổ tiên của `revision`, PR prd không còn so bản ghi (cổng prd là duyệt của Code Owner). `CHECKER_COMMIT` là một commit trên
+    phải là tổ tiên của `revision`, PR prd không còn so bản ghi (cổng prd là duyệt environment `promote-prd` ở repo code rồi duyệt của Code Owner). `CHECKER_COMMIT` là một commit trên
     `main` repo này; `check.yml` của commit checker cũ còn `deployments: read` và `GH_TOKEN` cho bước 1b: PR prd đỏ cho tới khi nâng
     `CHECKER_COMMIT` lên commit có bản rút gọn, cùng PR bỏ hai thứ đó. **Luật tác giả hẹp** (bước 1 khi có base; tác giả
     `pull_request.user.login` và người gửi `sender.login` đọc thẳng từ `GITHUB_EVENT_PATH`, trên máy `SVP_CHANGE_REQUEST_AUTHOR` đóng vai
@@ -211,7 +232,7 @@ Loại tài liệu (Diátaxis): **reference**, tra cứu khi cần một lệnh 
     `no-lab-hosts.yaml`, `ValidatingPolicy` CEL; fixture đạt và hỏng ở `test/<policy>/`): `gitops-check.sh` render rồi đưa manifest cho
     `kyverno apply` bằng `KYVERNO_CLI_IMAGE` ghim của `Makefile` (cùng minor với Kyverno của cluster, `--network none`), message
     `<file>: <Kind> <ns>/<name>: <message>`; `make kyverno-test` chạy `kyverno test` của thư mục đó; `gitops-check.sh --policy
-    images-pinned|no-lab-hosts FILE...` áp một policy lên manifest có sẵn. Ba ruleset (Terraform ở `github/rulesets.tf` của `svp-infra`): `main` (PR, `gitops-ok` bắt buộc, cấm xoá và force push, không ai
+    images-pinned|no-lab-hosts FILE...` áp một policy lên manifest có sẵn. Ba ruleset (Terraform ở `github/rulesets.tf` của `svp-infra`): `main` (PR chỉ squash, lịch sử thẳng, `gitops-ok` bắt buộc, cấm xoá và force push, không ai
     bypass), `owners` (duyệt của Code Owner; vai admin bypass chỉ ở chế độ `pull_request`, có bản ghi), `tags` (cấm tạo, sửa, xoá tag;
     chỉ admin bypass), cộng dồn: PR bot chỉ đổi `envs/stg/` tự merge, PR prd và Renovate cần người học duyệt, PR của người học trên file
     có chủ merge bằng bypass `owners` mà vẫn cần `gitops-ok`. Đã kiểm: commit khởi tạo `55258e1`, commit thêm check `a84e26d`, lượt
@@ -219,13 +240,21 @@ Loại tài liệu (Diátaxis): **reference**, tra cứu khi cần một lệnh 
     cần duyệt và không có bản ghi bypass (PR thử #8 ở trạng thái `CLEAN`, PR #3 có rule suite `pass`): GitHub coi tác giả PR kiêm Code Owner duy nhất là
     đã thoả `require_code_owner_review`, nên người học không tự kiểm mình bằng duyệt, kiểm tự động `gitops-ok` là lớp chặn còn lại; luật vẫn áp lên PR của người
     khác, ca âm cho PR của bot chưa có (việc mở: App thứ hai).
-  - Check bắt buộc của ruleset `main`: `ci-ok`, `images-ok`, chỉ nhận từ app GitHub Actions. Ruleset, năm cài đặt repo
-    của ADR-0015 §11 (quyền mặc định của `GITHUB_TOKEN` chỉ đọc kèm "Allow GitHub Actions to create and approve pull
-    requests"; Actions chỉ cho action của GitHub và `sigstore/cosign-installer`, ghim SHA bắt buộc; duyệt workflow của PR
-    fork cho mọi người ngoài; secret scanning + push protection; Dependabot alerts) và package GHCR public do người học bật
-    (ADR-0015 §5, §11): **kiểm sau push**. Quyền deploy không còn ở repo này: push vào `main` không đổi cluster nào, chỉ PR vào
-    `svp-gitops` đổi được thứ đang chạy; environment `promote` của repo này giữ khoá App, chỉ hai job trên `main` khai nó
-    (`promote`, `promote-prd` của `images.yml`), không job `pull_request` nào.
+  - Cài đặt GitHub của repo là code ở `github/` của `svp-infra` ([ADR-0041](../adr/0041-github-hardening.md)). Ruleset `main`: PR (0 approval: tác
+    giả không tự duyệt PR của mình, lab một người), check bắt buộc `ci-ok`, `images-ok` chỉ nhận từ app GitHub Actions (`pr-title` thêm vào sau khi
+    xanh trên một PR người và một PR bot), chỉ squash (`allowed_merge_methods = ["squash"]`, chặn cả khi cài đặt repo bị mở lại; commit lấy
+    `PR_TITLE` + `PR_BODY`), `required_linear_history`; `strict_required_status_checks_policy` giữ `false` (bật thì mỗi PR, cả PR bot tự merge, phải
+    cập nhật nhánh và build lại image sau mỗi merge; merge queue chỉ có ở repo của organization; lượt CI trên `main` sau merge bắt xung đột ngữ nghĩa).
+    Ruleset `owners` đòi duyệt Code Owner (`require_code_owner_review`; vai admin bypass chỉ ở chế độ `pull_request`, có bản ghi) trên file có chủ ở
+    `CODEOWNERS` (`/CODEOWNERS`, `/.github/`, `/renovate.json`, `/Makefile`, `/.trivyignore.yaml`, `/.grype.yaml`, `/deploy/ci/`,
+    `/deploy/helm/svp-policy/`); file khác không chủ để PR Renovate tự merge vẫn chạy, và không file nào vừa được tự merge vừa có Code Owner. Cài
+    đặt của ADR-0015 §11: quyền mặc định của `GITHUB_TOKEN` chỉ đọc và **không** "Allow GitHub Actions to create and approve pull requests"
+    (không workflow nào mở hay duyệt PR bằng `GITHUB_TOKEN`; PR promote dùng token App); Actions chỉ cho action của GitHub, `sigstore/cosign-installer`
+    và `ossf/scorecard-action`, ghim SHA bắt buộc; duyệt workflow của PR fork cho mọi người ngoài; secret scanning + push protection; Dependabot
+    alerts. Package GHCR public do người học bật (ADR-0015 §5, §11). Áp theo thứ tự cài đặt repo, ruleset (chưa có `pr-title`), environment
+    `promote-prd` với khoá thứ hai, rồi merge `CODEOWNERS`, workflow, `renovate.json`: **kiểm sau áp**. Quyền deploy không còn ở repo này: push vào
+    `main` không đổi cluster nào, chỉ PR vào `svp-gitops` đổi được thứ đang chạy; environment `promote` (stg) và `promote-prd` (prd) của repo này
+    giữ khoá App, chỉ job trên `main` khai chúng (`promote` và `promote-prd` của `images.yml`), không job `pull_request` nào.
   - CodeQL **default setup** ([ADR-0030](../adr/0030-devsecops-supplement.md) §4): bật bằng cài đặt repo, không file workflow
     trong repo (GitHub dựng và giữ workflow động "CodeQL"); ngôn ngữ `actions`, `go`, `javascript-typescript`, query suite
     `default`, threat model `remote`; quét mỗi push `main`, PR từ nhánh của repo (không PR từ fork) và hằng tuần. **Chỉ báo:**
@@ -305,9 +334,12 @@ Loại tài liệu (Diátaxis): **reference**, tra cứu khi cần một lệnh 
     quá 90 ngày; chỉ lựa chọn có chủ đích vào đây, cảnh báo sửa được thì sửa. `scan-gate.sh --check-ignorefile` kiểm cả ba
     file ở job `config`: file sai quy tắc làm job đỏ ở mọi PR.
   - Renovate: GitHub App Mend, repo này và `svp-gitops` (người học cài, **kiểm sau push**); `renovate.json`: sáng thứ Bảy giờ Việt
-    Nam, `minimumReleaseAge` 3 ngày (trừ cảnh báo lỗ hổng), bản `patch`, `digest` của Go module, base image, image của compose, CI và
-    chart của repo tự merge (auto-merge của GitHub, squash) khi `ci-ok`, `images-ok` xanh, action, nhóm `tools`, `cosign`, minor, major
-    giữ duyệt tay ([ADR-0035](../adr/0035-renovate-automerge.md); repo phải bật "Allow auto-merge"), không đụng `deploy/ci/drill/`, `gen/`; luật npm, Node, Sentry của web ở
+    Nam, `minimumReleaseAge` 3 ngày (trừ cảnh báo lỗ hổng); tự merge hẹp ([ADR-0041](../adr/0041-github-hardening.md) (i), thay một phần
+    [ADR-0035](../adr/0035-renovate-automerge.md); auto-merge của GitHub, squash, khi `ci-ok`, `images-ok` xanh; repo phải bật "Allow
+    auto-merge"): `digest`, `pinDigest` của base image và image của chart (cùng tag, digest mới) và `patch`, `digest` của image compose. Duyệt tay: mọi
+    cập nhật Go module (cả `digest` và directive `go`), patch tag của base image và image chạy trong cluster, action và image của
+    workflow (`.github/` có chủ), image công cụ ghim trong `Makefile` (`/Makefile` có chủ), nhóm `tools`, `cosign`, minor, major; không đụng
+    `deploy/ci/drill/`, `gen/`; luật npm, Node, Sentry của web ở
     `renovate.json` của `svp-frontend` (cùng lịch); values của
     chart nền tảng, version chart trong `components.json`, bản cài Argo CD và digest phát hành ở `svp-gitops`, do `renovate.json` của
     repo đó quản (bỏ qua `envs/**`). Ghim mới trong `Makefile`, `lib.sh` hay values bên thứ ba theo dạng của

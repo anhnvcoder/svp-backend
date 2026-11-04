@@ -60,7 +60,7 @@ repo public riêng [`anhnvcoder/svp-gitops`](https://github.com/anhnvcoder/svp-g
 | `argocd/` | AppProject, bản cài Argo CD, chart app-of-apps với `components.json`. |
 
 Bản phát hành tới stg bằng PR do GitHub App mở trong `svp-gitops`, tự merge khi check `gitops-ok` xanh; tới prd bằng PR chép cả bộ
-đã chạy ở stg, có người duyệt. Push vào `main` của repo này không đổi cluster nào. Đường dev (`make k8s-up`, `make helm-check`)
+đã chạy ở stg, qua environment `promote-prd` có người duyệt rồi Code Owner duyệt PR. Push vào `main` của repo này không đổi cluster nào. Đường dev (`make k8s-up`, `make helm-check`)
 đọc bản clone `svp-gitops` ở thư mục `gitops/` cạnh repo này (hay `SVP_GITOPS_DIR`):
 
 ```sh
@@ -95,7 +95,7 @@ Sổ lệnh đầy đủ (kiểm tra gồm `make vulncheck`, `make fuzz`, `make 
 | `deploy/dast/` | DAST của gateway theo `openapi.yaml` bằng Schemathesis (`make dast`, image ghim), chạy trên stack `make up` và ở job `stack` của CI. |
 | `deploy/ci/` | Script của pipeline: build, quét, ký, attest, guard của bước promote sang `svp-gitops` (bước promote nằm trong `images.yml`), check của `svp-gitops` (`gitops-check.sh`, policy Kyverno CLI ở `gitops-policies/`); `verify/` là trình tự từng kịch bản của `verify.yml`. Phần lớn logic CI nằm ở đây, không nằm trong YAML. |
 | `.githooks/` | Git hook `pre-commit` (gofmt, golangci-lint, buf lint, gitleaks); bật một lần bằng `make hooks`. |
-| `.github/workflows/` | `ci.yml` (kiểm tra, luật version của hợp đồng REST, stack), `images.yml` (sáu image, chuỗi cung ứng, phát hành hợp đồng, promote), `verify.yml` (kiểm chứng trên runner, hai kịch bản `compose-obs` và `gitops`, chạy tay và hằng tuần). DORA là bài lab `dora/` của `svp-labs` ([ADR-0037](docs/adr/0037-mainpath-standard-tools.md)). |
+| `.github/workflows/` | `ci.yml` (kiểm tra, luật version của hợp đồng REST, zizmor, dependency review, stack), `images.yml` (sáu image, chuỗi cung ứng, phát hành hợp đồng, promote), `scorecard.yml` (OpenSSF Scorecard), `pr-title.yml` (tiêu đề PR theo Conventional Commits), `verify.yml` (kiểm chứng trên runner, hai kịch bản `compose-obs` và `gitops`, chạy tay và hằng tuần). DORA là bài lab `dora/` của `svp-labs` ([ADR-0037](docs/adr/0037-mainpath-standard-tools.md)). |
 | `docs/architecture.md` | Thiết kế hiện tại: yêu cầu, ước lượng quy mô, C4, luồng chính, contract. |
 | `docs/adr/` | Quyết định kiến trúc, mỗi quyết định một file (mục lục ở `docs/adr/README.md`). |
 | `docs/runbooks/` | Một runbook cho mỗi cảnh báo mức page và các sự cố đã gặp. Mở khi có cảnh báo. |

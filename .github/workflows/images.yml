@@ -10,9 +10,11 @@
 #   - permissions: {} here, and each job declares only what it needs. Every job that runs on a pull request has only
 #     contents: read: a pull request runs its own scripts before anyone has read them. Jobs that can write (packages,
 #     id-token, security-events) or read the Actions API run only on main, outside pull_request.
-#   - Only jobs promote and promote-prd write to another repository: environment promote (deployment branch main only)
-#     holds the key of the GitHub App installed on svp-gitops alone, and each job turns it into a token of one hour for
-#     svp-gitops with contents and pull-requests write only. No job of a pull request names that environment.
+#   - Only jobs promote and promote-prd write to another repository, each from an environment of its own that holds a
+#     key of the GitHub App installed on svp-gitops alone (deployment branch main only): promote (stg) and promote-prd,
+#     whose required reviewer approves every run before the job gets its key, with no admin bypass. Each job turns its
+#     key into a token of one hour for svp-gitops with contents and pull-requests write only. No job of a pull request
+#     names either environment.
 #   - Every action is pinned to a full commit SHA (the tag in the comment is for people and Renovate); only GitHub's
 #     own actions and sigstore/cosign-installer.
 #   - Untrusted values (inputs, branch names, matrix values from plan) reach scripts through env:, never ${{ }} inside
@@ -155,19 +157,19 @@ jobs:
       - &day
         id: day
         run: echo "day=$(date -u +%F)" >>"$GITHUB_OUTPUT"
+      # The trivy DB, one cache entry per day (trivy's advice against download limits); trivy still downloads a newer
+      # DB when the cached one is stale. A pull request's cache stays in its own ref and never replaces main's.
       - &trivy-cache
-        # The trivy DB, one cache entry per day (trivy's advice against download limits); trivy still downloads a newer
-        # DB when the cached one is stale. A pull request's cache stays in its own ref and never replaces main's.
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ${{ runner.temp }}/trivy-cache/db
           key: trivy-db-${{ steps.day.outputs.day }}
           restore-keys: trivy-db-
+      # The grype DB, the same way: one entry per day (about 200 MB to download, 3 GB unpacked, about 480 MB as a cache
+      # entry). With main's entry and one per pull request ref that is about 0.5 to 1 GB a day of the repository's
+      # 10 GB cache quota, so the other caches are evicted sooner. grype checks for a newer DB on every scan that has
+      # not checked in the last two hours, and refuses one built more than five days ago.
       - &grype-cache
-        # The grype DB, the same way: one entry per day (about 200 MB to download, 3 GB unpacked, about 480 MB as a cache
-        # entry). With main's entry and one per pull request ref that is about 0.5 to 1 GB a day of the repository's
-        # 10 GB cache quota, so the other caches are evicted sooner. grype checks for a newer DB on every scan that has
-        # not checked in the last two hours, and refuses one built more than five days ago.
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ${{ runner.temp }}/grype-cache
@@ -523,15 +525,18 @@ jobs:
     # older commit is a rollback): the image block of the seven envs/stg/images/*.yaml and the three values of
     # envs/stg/charts.yaml go into the same files of envs/prd/, every other line of them (the comments) kept, on branch
     # bot/promote-prd, one commit of the app's bot on top of main there, and its pull request is opened or updated. No
-    # auto-merge: a code owner approves it. The guard promote_stg_ref of deploy/ci/common.sh takes main or a full commit
-    # on main of svp-gitops only. Runs alone: plan skips every other job of a dispatch with promote_prd, and this job
-    # refuses one that also asks to build, rescan or drill, so one run does one thing.
-    # The token is the app's, for svp-gitops alone; GITHUB_TOKEN only reads this repository. No id-token, no packages.
+    # auto-merge: a code owner approves it. Two stops on the way to prd: environment promote-prd waits for its
+    # required reviewer before the job starts (no admin bypass), so no key and no token exist until someone approves
+    # the run, and the pull request waits for its code owner. The guard promote_stg_ref of deploy/ci/common.sh takes
+    # main or a full commit on main of svp-gitops only. Runs alone: plan skips every other job of a dispatch with
+    # promote_prd, and this job refuses one that also asks to build, rescan or drill, so one run does one thing.
+    # The token is the app's, for svp-gitops alone, from the second key of the app that only promote-prd holds;
+    # GITHUB_TOKEN only reads this repository. No id-token, no packages.
     if: >-
       ${{ github.event_name == 'workflow_dispatch' && inputs.promote_prd && github.ref == 'refs/heads/main' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 10
-    environment: promote
+    environment: promote-prd
     permissions:
       contents: read
     steps:

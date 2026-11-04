@@ -36,6 +36,10 @@ liệt kê target):
   `Makefile`). Thu hẹp bằng `make test PKGS=./services/user-service/...`; `TESTFLAGS` thêm cờ cho `go test` của
   `make test`, `make cover`, `make check` (`make test TESTFLAGS=-count=1` chạy lại không dùng cache, như CI), `LINTFLAGS`
   thêm cờ cho golangci-lint của `make lint`.
+- `make zizmor` ([ADR-0041](../adr/0041-github-hardening.md) (g)): lint bảo mật workflow bằng zizmor `ZIZMOR_IMAGE` (image chính thức ghim `tag@sha256`,
+  repo gắn chỉ đọc) với `--persona=regular` trên cả repo; mọi finding làm lệnh thoát khác 0. Có `GH_TOKEN` thì chạy thêm audit online (impostor
+  commit, action có lỗ hổng), không thì offline (mặc định trên máy). `ZIZMOR_FORMAT=github` in annotation của Actions, `ZIZMOR_SARIF=<đường dẫn>`
+  ghi SARIF (không chặn). Ngoại lệ ở `.github/zizmor.yml`, mỗi mục một comment lý do. Không thuộc `make check`; CI chạy nó ở job `zizmor` của `ci.yml`.
 
 ## Kiểm tra bổ sung của code Go
 

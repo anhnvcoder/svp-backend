@@ -1,0 +1,12 @@
+# Findings of zizmor (make zizmor, job zizmor of ci.yml) kept on purpose, each with its reason. An entry names the
+# narrowest place zizmor's configuration allows (a file, a line, a column: https://docs.zizmor.sh/configuration/);
+# a line entry would break at every edit above it, so a file entry is used where the file is edited often.
+rules:
+  adhoc-packages:
+    ignore:
+      # Job stack installs pnpm with npm install -g at the exact version of the packageManager field of svp-frontend's
+      # package.json, at the commit of the web release of staging, as svp-frontend's own CI and Dockerfile do: Node 25
+      # and later ship no Corepack, the repository allows no third-party action (pnpm/action-setup), and a global
+      # tool has no lockfile. The job has contents: read and no secret. zizmor no longer reports another ad-hoc install
+      # added to ci.yml: the code owner of .github/ reads it in review.
+      - ci.yml
