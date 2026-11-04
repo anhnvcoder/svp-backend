@@ -211,3 +211,20 @@ test_without_the_table_the_shape_alone if count(deny(with_image(
 	json.remove(fx.tree_input, ["sources/stg"]),
 	"stg", "web", fx.image_text("ghcr.io/anhnvcoder/svp-web/web"),
 ))) == 0
+
+# A key without its colon or its value counts among the keys but gives the rules no value: refused, so the revision and
+# the derived values are always checked.
+test_a_revision_without_its_colon if fx.says(
+	deny(with_charts(fx.tree_input, "stg", replace(fx.charts_text, concat("", ["revision: ", fx.revision]), "revision"))),
+	"envs/stg/charts.yaml: line 'revision' is not 'key: value' with a value",
+)
+
+test_a_revision_without_a_value if fx.says(
+	deny(with_charts(fx.tree_input, "prd", replace(fx.charts_text, concat("", ["revision: ", fx.revision]), "revision:"))),
+	"envs/prd/charts.yaml: line 'revision:' is not 'key: value' with a value",
+)
+
+test_a_derived_value_without_its_colon if fx.says(
+	deny(with_charts(fx.tree_input, "stg", replace(fx.charts_text, "podSecurityVersion: v1.36", "podSecurityVersion"))),
+	"envs/stg/charts.yaml: line 'podSecurityVersion' is not 'key: value' with a value",
+)

@@ -45,6 +45,19 @@ deny contains msg if {
 	)
 }
 
+# Every line that is neither blank nor a comment is `key: value`, the value not empty: a key without its colon or value
+# would count among the keys above yet give no value to the rules below, which would then check nothing. Not on a working
+# tree, whose charts.yaml these rules never read.
+deny contains msg if {
+	not input.worktree
+	some env in gitops.environments
+	gitops.is_file(charts_path(env))
+	some line in gitops.lines(charts_path(env))
+	not regex.match(`^\s*(#.*)?$`, line)
+	not regex.match(`^[A-Za-z0-9]+: *\S`, line)
+	msg := sprintf("%s: line '%s' is not 'key: value' with a value", [charts_path(env), line])
+}
+
 # field(env, key): the value of key in envs/<env>/charts.yaml, once its keys are those of the file.
 field(env, key) := regex.replace(line, `^[^:]*: *`, "") if {
 	keys(env) == charts_keys

@@ -98,3 +98,14 @@ test_the_roots_values_that_are_no_yaml if fx.says(
 	deny(fx.with_file(fx.tree_input, "argocd/apps/values.yaml", "cluster: [\n")),
 	"argocd/apps/values.yaml is no YAML map",
 )
+
+# A link to a folder anywhere else hides its files from every rule: refused.
+test_a_platform_that_is_a_link_to_a_folder if fx.says(
+	deny(fx.with_entry(fx.tree_input, "platforms/eks", {"type": "dir", "link": "../base"})),
+	"platforms/eks is a link to the folder ../base: write the files where they are",
+)
+
+test_an_environment_that_is_a_link_to_a_folder if fx.says(
+	deny(fx.with_entry(fx.tree_input, "envs/stg/images", {"type": "dir", "link": "../prd/images"})),
+	"envs/stg/images is a link to the folder ../prd/images",
+)

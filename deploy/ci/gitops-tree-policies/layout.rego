@@ -27,6 +27,19 @@ deny contains sprintf("%s is missing", [path]) if {
 	not gitops.is_file(path)
 }
 
+# The bash that lists the tree does not walk into a link to a folder, so what lies behind one would be checked by no
+# rule (an overlay of platforms/<platform> linked to another folder). The two links the root chart needs are the only
+# links to a folder the tree may hold; their targets, envs/ and platforms/, are listed where they are.
+folder_links := {"argocd/apps/files/envs", "argocd/apps/files/platforms"}
+
+deny contains msg if {
+	some path, entry in input.tree
+	entry.type == "dir"
+	entry.link
+	not path in folder_links
+	msg := sprintf("%s is a link to the folder %s: write the files where they are, no rule of this check reads behind such a link", [path, entry.link])
+}
+
 deny contains "argocd/apps/files/envs must be a symlink to ../../../envs, through which the root chart reads envs/" if {
 	not gitops.links_to("argocd/apps/files/envs", "../../../envs")
 }

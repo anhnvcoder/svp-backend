@@ -272,6 +272,16 @@ check_root "platforms: the tree, each environment on each platform of components
 check_root "platforms: an environment left out of a platform is not rendered there, and says why" 0 \
   "skip  prd on k3d: prd is not in envs of platform k3d (key platforms of components.json)" "$(copy)"
 platforms_case "no key platforms, read by the policies" "argocd/apps/components.json: has no key platforms" 'del(.platforms)'
+# A platform whose folder is a link to another folder, behind which an overlay sets an image: the lister of the tree
+# does not walk into the link, so the check refuses the link itself rather than pass what lies behind it.
+t=$(copy)
+mkdir -p "$t/hidden"
+cp -R "$t/platforms/eks/." "$t/hidden/"
+printf 'image:\n  tag: "000000000000"\n' >"$t/hidden/gateway.yaml"
+rm -rf "$t/platforms/eks"
+ln -s ../hidden "$t/platforms/eks"
+check_root "platforms: a platform's folder that is a link to another folder" 1 \
+  "platforms/eks is a link to the folder ../hidden" "$t"
 t=$(copy)
 printf 'image:\n  tag: "000000000000"\n' >"$t/platforms/eks/gateway.values.tpl"
 check_root "platforms: a template of a platform that renders the image of a release" 1 \
