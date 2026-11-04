@@ -5,7 +5,7 @@
 - Mọi thao tác ghi (UI Settings, ruleset qua `apply` của `svp-infra`, cài Renovate, push đầu) do **người học chạy** với quyền admin. Mọi lệnh "Kiểm" ở đây chỉ
   `GET`, chạy bằng đăng nhập `gh` của người học (scope `repo` là đủ).
 - Thiết kế và lý do ở [ADR-0034](../adr/0034-aws-stage7.md) §2 (repo, bố cục, CI không credential) và threat model
-  [AWS-6](../threat-model.md#411-biên-aws-giai-đoạn-7); cài đặt theo cùng mẫu với [svp-frontend-setup.md](svp-frontend-setup.md) và
+  [AWS-6](../threat-model.md#411-biên-aws); cài đặt theo cùng mẫu với [svp-frontend-setup.md](svp-frontend-setup.md) và
   [svp-gitops-setup.md](svp-gitops-setup.md). Trang này chỉ nói làm gì, vì sao từng ô, kiểm thế nào.
 - **Repo không có** secret, variable, environment, GitHub App hay role OIDC nào: CI chỉ kiểm tĩnh, mọi lệnh chạm tài khoản
   AWS do người học chạy từ máy. **Không ghi** account ID, IP, email, tên miền thật vào repo, issue, PR hay chat: repo public.
@@ -285,7 +285,7 @@ check (nguyên nhân 4) → so tên job tổng của `check.yml` với `context`
 ## Liên kết
 
 - [ADR-0034](../adr/0034-aws-stage7.md) §2 (repo, bố cục, state, CI không credential), §14 (buổi AWS); threat model
-  [AWS-6](../threat-model.md#411-biên-aws-giai-đoạn-7).
+  [AWS-6](../threat-model.md#411-biên-aws).
 - [svp-frontend-setup.md](svp-frontend-setup.md), [svp-gitops-setup.md](svp-gitops-setup.md): cùng mẫu cài đặt, ruleset, Renovate.
 - Trình tự buổi AWS và gỡ tài nguyên: `docs/runbooks/session-stg.md` của repo `svp-infra`.
 - Không có diễn tập; phép kiểm là lượt `check.yml` đầu (B1) và ruleset (C1).

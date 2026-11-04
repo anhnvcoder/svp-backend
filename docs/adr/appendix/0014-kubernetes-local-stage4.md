@@ -38,7 +38,7 @@ bảng version và digest, số đo, lệnh đã chạy, các lần sửa có ng
   ([ADR-0013](../0013-kafka-metadata-min-age.md)); `internal/kafkax` đọc `KAFKA_SASL_USERNAME`/`KAFKA_SASL_PASSWORD`
   (SCRAM-SHA-256, cả hai rỗng thì không SASL, một trong hai rỗng thì lỗi khởi động); gateway đọc `TRUSTED_PROXY_HOPS`
   (mặc định 0) và `TRUSTED_PROXY_CIDRS`.
-- [Threat model §5](../../threat-model.md#5-tổng-hợp-theo-giai-đoạn), hàng giai đoạn 4: FF-3, FF-4, FF-5, FF-6, IN-2, IN-4,
+- [Threat model §5](../../appendix/threat-model.md#tổng-hợp-theo-giai-đoạn-mục-5-cũ), hàng giai đoạn 4: FF-3, FF-4, FF-5, FF-6, IN-2, IN-4,
   IN-9, RL-1, OPS-2. Kiểm bằng: pod thử ở namespace khác không gọi được gRPC và Redpanda; worker không ra được internet;
   service không ghi được topic không phải của mình.
 - Máy Apple M2 16 GB; Docker Desktop khoảng **9,7 GiB**, 8 CPU. `kubectl` 1.37.1, `helm` 4.3.0 (Homebrew, có sẵn); chưa có

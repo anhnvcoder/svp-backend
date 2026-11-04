@@ -7,7 +7,7 @@
 
 - Bước viết Go đầu tiên làm `gateway`, `user-service`, `video-service` chạy local, mỗi service một database có migration, có unit test và integration test, lint, Docker multi-stage và compose. Module, cách sinh code, dependency, tên biến môi trường, cổng, cách nối database và image là nền của mọi service: đổi về sau là sửa tất cả cùng lúc. Code của bước này lấy tên biến, cổng, đường dẫn và version từ ADR này.
 - Các quyết định trước để lại: cách đặt `go_package` ([ADR-0006](0006-contract-ids-and-event-envelope.md) mục 1), thư viện sinh UUIDv7 (ADR-0006 mục 2), OpenAPI viết tay hay sinh từ code ([ADR-0002](0002-sync-rest-edge-grpc-internal.md)).
-- Ràng buộc: Go 1.27.2 (Homebrew), `buf` 1.73.0; Postgres 15 native ở `127.0.0.1:5432`, Redis native ở `6379`; máy 16 GB, compose chạy theo profile; các biện pháp của [threat model §5](../threat-model.md#5-tổng-hợp-theo-giai-đoạn) cho bước này (JWT-1 tới JWT-3, JWT-5, JWT-7 tới JWT-10, UP-3, UP-8, RL-4, RL-5, IN-1, IN-2, IN-6, IN-8, SEC-1, SEC-2, OPS-1, OPS-3). Phạm vi lệch danh sách "Làm" của plan ở ba chỗ (Redis, outbox, presigned upload); §8 ghi lý do.
+- Ràng buộc: Go 1.27.2 (Homebrew), `buf` 1.73.0; Postgres 15 native ở `127.0.0.1:5432`, Redis native ở `6379`; máy 16 GB, compose chạy theo profile; các biện pháp của [threat model §5](../appendix/threat-model.md#tổng-hợp-theo-giai-đoạn-mục-5-cũ) cho bước này (JWT-1 tới JWT-3, JWT-5, JWT-7 tới JWT-10, UP-3, UP-8, RL-4, RL-5, IN-1, IN-2, IN-6, IN-8, SEC-1, SEC-2, OPS-1, OPS-3). Phạm vi lệch danh sách "Làm" của plan ở ba chỗ (Redis, outbox, presigned upload); §8 ghi lý do.
 
 ## Yếu tố quyết định
 

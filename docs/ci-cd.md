@@ -207,9 +207,10 @@ Trigger: `pull_request`, `push` vào `main`, `workflow_dispatch`. Không trigger
 | `trivy-config` | Quét misconfig, chỉ báo (phát hiện không làm job đỏ; trừ các mục có hạn của `deploy/ci/trivy-config-ignore.yaml`) | Mọi lượt | Không bao giờ | Có (chỉ khi lệnh lỗi, không khi có phát hiện) |
 | `zizmor` | `make zizmor`: lint bảo mật workflow (zizmor ghim, `--persona=regular`, audit online bằng `GITHUB_TOKEN` chỉ đọc; ngoại lệ ở `.github/zizmor.yml`), SARIF chỉ báo cho `sarif` | Mọi lượt | Không bao giờ | Có |
 | `dependency-review` | `actions/dependency-review-action`: dependency PR thêm vào có lỗ hổng từ mức high thì đỏ; không kiểm license | `pull_request` | Mọi sự kiện khác: chỉ so được với base của PR (`ci-ok` nhận `skipped`) | Có |
+| `docs` | `make docs-check`: markdownlint-cli2 (luật ở `.markdownlint.yaml`, file sinh bỏ qua ở `.markdownlint-cli2.yaml`) và lychee `--offline` (link nội bộ, anchor), image ghim digest, không mạng | Mọi lượt | Không bao giờ | Tài liệu đi cùng code: link gãy hay sai định dạng chặn merge như lỗi code |
 | `stack` | Stack compose đầu-cuối, web là bản phát hành stg theo digest: `make gitops-clone`, `make web-clone` (commit của web stg), smoke, e2e Chromium và WebKit của bản clone `svp-frontend` (`make web-e2e`), k6 `ci`, Lighthouse, rồi `make dast` cuối cùng (Schemathesis theo `services/gateway/openapi.yaml`, bước `continue-on-error`, hạn 15 phút; artifact `dast` chỉ `report.json`, `summary.json` đã dò bí mật) | Mọi lượt | Không bao giờ | Không |
 | `sarif` | Tải SARIF lên tab Security | `always() && github.event_name != 'pull_request' && github.ref == 'refs/heads/main'` | PR và nhánh khác `main`: quyền `security-events: write` chỉ cho code đã qua review | Không |
-| `ci-ok` | Đỏ trừ khi đủ chín job trên `success` (`dependency-review` được `skipped` ngoài `pull_request`) | `always()` | Không bao giờ | Là check bắt buộc |
+| `ci-ok` | Đỏ trừ khi đủ mười job trên `success` (`dependency-review` được `skipped` ngoài `pull_request`) | `always()` | Không bao giờ | Là check bắt buộc |
 
 ### `images.yml`
 

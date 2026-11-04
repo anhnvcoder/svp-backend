@@ -7,7 +7,7 @@
 
 - Chạy cả hệ thống trên Kubernetes local: k3d, Helm chart, Gateway API + Envoy Gateway + cert-manager, observability tách deployment, probe/resource/ PDB/HPA, KEDA theo lag, NetworkPolicy, RBAC, Argo CD app-of-apps, Argo Rollouts canary. **Xong khi:** đẩy code lên git thì Argo CD tự đồng bộ, và bản canary lỗi tự rollback.
 - Đã chốt từ trước: Gateway API + Envoy Gateway (ingress-nginx ngừng bảo trì), Argo CD, KEDA, cert-manager; số hop proxy tin cậy RL-1 = 1 trên k3d; `MetadataMinAge` 1 s ([ADR-0013](0013-kafka-metadata-min-age.md)); `internal/kafkax` đọc `KAFKA_SASL_USERNAME`/`KAFKA_SASL_PASSWORD` (SCRAM-SHA-256); gateway đọc `TRUSTED_PROXY_HOPS` (mặc định 0) và `TRUSTED_PROXY_CIDRS`.
-- Máy Apple M2 16 GB; Docker Desktop khoảng **9,7 GiB**, 8 CPU; `kubectl` 1.37.1, `helm` 4.3.0, Go 1.27.2, Postgres native 15.18; compose `core` + `obs` lúc nghỉ 1,71–2,61 GiB. ADR này chốt version, digest, tên namespace, Secret, cổng, biến môi trường và tên metric mà mọi phần hạ tầng của k3d dùng; bối cảnh đầy đủ ở [phụ lục](appendix/0014-kubernetes-local-stage4.md). Threat model ([mục 5](../threat-model.md#5-tổng-hợp-theo-giai-đoạn)) cho k3d: FF-3, FF-4, FF-5, FF-6, IN-2, IN-4, IN-9, RL-1, OPS-2.
+- Máy Apple M2 16 GB; Docker Desktop khoảng **9,7 GiB**, 8 CPU; `kubectl` 1.37.1, `helm` 4.3.0, Go 1.27.2, Postgres native 15.18; compose `core` + `obs` lúc nghỉ 1,71–2,61 GiB. ADR này chốt version, digest, tên namespace, Secret, cổng, biến môi trường và tên metric mà mọi phần hạ tầng của k3d dùng; bối cảnh đầy đủ ở [phụ lục](appendix/0014-kubernetes-local-stage4.md). Threat model ([mục 5](../appendix/threat-model.md#tổng-hợp-theo-giai-đoạn-mục-5-cũ)) cho k3d: FF-3, FF-4, FF-5, FF-6, IN-2, IN-4, IN-9, RL-1, OPS-2.
 
 ## Yếu tố quyết định
 

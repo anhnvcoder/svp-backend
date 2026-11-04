@@ -6,7 +6,7 @@
 ## Bối cảnh và vấn đề
 
 - Luồng upload, follow, feed, like, lượt xem đã chạy đầu-cuối ([ADR-0008](0008-async-upload-pipeline-stage2a.md), [ADR-0009](0009-engagement-feed-stage2b.md)); còn Redis, cache feed khám phá + singleflight ([ADR-0005](0005-feed-fan-out-on-write.md) luật 6), rate limit ở gateway (RL-3, RL-6), timeout/retry/circuit breaker giữa service, job dọn upload bỏ dở ([ADR-0004](0004-direct-upload-and-hls.md) luật 4) và UP-7.
-- Biện pháp [threat model](../threat-model.md#5-tổng-hợp-theo-giai-đoạn) còn mở: JWT-4, JWT-6, JWT-9, UP-7, RL-1 tới RL-3, RL-6; hành vi khi Redis lỗi đã chốt theo loại route ở [§4.4](../threat-model.md#44-rate-limit-ở-gateway), ADR này chốt ngưỡng và cách làm. Lab `rate-limiter`, `cache-stampede`, `distributed-cron-lock` không làm: ngưỡng chọn bằng lập luận, xem lại bằng k6.
+- Biện pháp [threat model](../appendix/threat-model.md#tổng-hợp-theo-giai-đoạn-mục-5-cũ) còn mở: JWT-4, JWT-6, JWT-9, UP-7, RL-1 tới RL-3, RL-6; hành vi khi Redis lỗi đã chốt theo loại route ở [§4.4](../threat-model.md#44-rate-limit-ở-gateway), ADR này chốt ngưỡng và cách làm. Lab `rate-limiter`, `cache-stampede`, `distributed-cron-lock` không làm: ngưỡng chọn bằng lập luận, xem lại bằng k6.
 - NFR: feed p99 < 150 ms tại 1.000 req/s; khởi tạo upload thành công 99,9%; cache chống key nóng (feed khám phá), không vì tổng tải ([capacity](../explanation/capacity.md#rút-ra-gì)). Hiện trạng: tắt engagement-service thì like treo tới timeout 3 s của gateway rồi 504.
 - Ràng buộc máy: Redis 8.8.0 native `127.0.0.1:6379` dùng chung với dự án khác (gateway db 10, feed-service db 14); không thêm container.
 

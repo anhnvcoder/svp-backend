@@ -603,7 +603,7 @@ Chưa hiện thực (2026-10-31). Nơi sẽ hiện thực:
 - Repo `svp-gitops`: `platforms/k3d/`, `platforms/eks/`, `argocd/apps/` (`platform`, `cluster`, trường `platforms`), `argocd/project.yaml`,
   `base/aws-load-balancer-controller.yaml`, `base/external-dns.yaml` (mục 7, 8).
 - Tài liệu: [explanation/deployment.md, AWS](../../explanation/deployment.md#aws), [threat model](../../threat-model.md) RL-1 và
-  [4.11](../../threat-model.md#411-biên-aws-giai-đoạn-7), [runbook `svp-infra-setup.md`](../../runbooks/svp-infra-setup.md).
+  [4.11](../../threat-model.md#411-biên-aws), [runbook `svp-infra-setup.md`](../../runbooks/svp-infra-setup.md).
 
 ## Nguồn
 
