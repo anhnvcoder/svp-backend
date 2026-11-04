@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
-# Tests for deploy/ci/ghcr-digest.sh. Each case sources the script in a subshell and replaces ghcr_get (GHCR) with a
-# fake that serves made-up answers, so nothing reaches the network. A throwaway git repository stands for the code
+# Tests for deploy/ci/ghcr-digest.sh. Each case sources the script in a subshell and replaces ghcr_oras (the pinned ORAS
+# against GHCR) with a fake that serves made-up answers, so nothing reaches the network. A throwaway git repository stands for the code
 # repository, with a build commit and a later one. Checked:
 #   - newest picks the tag of the newest commit of the clone, past tags that are no commit of it, and prints the
-#     digest of the bytes GHCR answers its manifest with;
+#     digest oras resolve answers for it;
+#   - an answer of oras resolve that is no sha256 digest fails;
 #   - newest of a name that is no image name fails.
 # Runs on macOS and Linux: no network, no Docker, no cluster.
 #
@@ -41,33 +42,36 @@ g commit -q --allow-empty -m later
 release=$(g rev-parse HEAD)
 
 # Tags of an image: the build commit (older), the release commit (newer), tags that are no commit of the clone.
-jq -nc --arg old "${build:0:12}" --arg new "${release:0:12}" \
-  '{tags: [$old, ($new + "-amd64"), $new, "0123456789ab", "sha256-abc.att"]}' >"$work/tags.json"
+printf '%s\n' "${build:0:12}" "${release:0:12}-amd64" "${release:0:12}" 0123456789ab sha256-abc.att >"$work/tags"
+digest=sha256:$(sha 'newest index')
 
-# run IMAGE: runs newest IMAGE of the script in a subshell with a fake ghcr_get, prints its output and exit status
+# run IMAGE [RESOLVED]: runs newest IMAGE of the script in a subshell with a fake ghcr_oras (oras resolve of the newest
+# tag answers RESOLVED, by default $digest), prints its output and exit status
 # ("<output> rc=<n>").
 # Into a file, not a command substitution: bash 3.2 misreads the case patterns of a function inside one.
 run() {
-  local rc=0
+  local rc=0 image=$1 resolved=${2:-$digest}
   mkdir -p "$work/dir"
   (
     . "$here/ghcr-digest.sh"
     repo_root=$repo
-    ghcr_get() {
-      case $2 in
-      "tags/list?n=1000") cp "$work/tags.json" "$3" ;;
-      "manifests/${release:0:12}") printf '%s' "newest index" >"$3" ;;
+    ghcr_oras() {
+      case "$*" in
+      "repo tags ghcr.io/anhnvcoder/svp-backend/$image") cat "$work/tags" ;;
+      "resolve ghcr.io/anhnvcoder/svp-backend/$image:${release:0:12}") echo "$resolved" ;;
       *) return 1 ;;
       esac
     }
-    newest "$1" "$work/dir"
+    newest "$image" "$work/dir"
   ) >"$work/run.out" 2>&1 || rc=$?
   echo "$(cat "$work/run.out") rc=$rc"
 }
 
 got=$(run drill-vulnerable)
-same "newest: the index of the newest commit's tag, by the digest of its bytes" \
-  "ghcr.io/anhnvcoder/svp-backend/drill-vulnerable@sha256:$(sha 'newest index') rc=0" "$got"
+same "newest: the index of the newest commit's tag, by the digest oras resolve answers" \
+  "ghcr.io/anhnvcoder/svp-backend/drill-vulnerable@$digest rc=0" "$got"
+got=$(run drill-vulnerable "not a digest")
+has "newest: an answer of oras resolve that is no sha256 digest fails" "$got" "does not serve"
 got=$(run 'bad/name')
 has "newest: a name that is no image name fails" "$got" "is not an image name"
 
