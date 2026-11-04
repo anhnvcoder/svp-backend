@@ -644,7 +644,7 @@ for f in "$t"/envs/*/images/*.yaml; do sed -i.bak 's/^  digest: .*/  digest: ""/
 printf 'image:\n  repository: ghcr.io/anhnvcoder/svp-backend/user-service\n  tag: "%s"\n  digest: "sha256:%064d"\n' \
   "${k0:0:12}" 0 >"$t/envs/stg/images/gateway.yaml"
 rc=0
-out=$(env -i PATH="$PATH" HOME="$HOME" TMPDIR="${TMPDIR:-/tmp}" "$code/deploy/ci/values-check.sh" --gitops "$t" "" 2>&1) ||
+out=$(env -i PATH="$PATH" HOME="$HOME" AWS_CONFIG_FILE=/dev/null AWS_SHARED_CREDENTIALS_FILE=/dev/null TMPDIR="${TMPDIR:-/tmp}" "$code/deploy/ci/values-check.sh" --gitops "$t" "" 2>&1) ||
   rc=$?
 want="FAIL  envs/stg/images/gateway.yaml: image.repository is ghcr.io/anhnvcoder/svp-backend/user-service, a repository of user-service, not of gateway"
 if [ "$rc" = 1 ] && [[ $out == *"$want"* ]] && [[ $out != *"check envs/"* ]]; then
@@ -685,7 +685,7 @@ author_case() {
   local name=$1 want=$2 msg=$3 out rc=0
   shift 3
   ag add -A && ag commit -q -m "$name" --allow-empty
-  out=$(env -i PATH="$PATH" HOME="$HOME" TMPDIR="${TMPDIR:-/tmp}" GIT_ALLOW_PROTOCOL=file "$@" \
+  out=$(env -i PATH="$PATH" HOME="$HOME" AWS_CONFIG_FILE=/dev/null AWS_SHARED_CREDENTIALS_FILE=/dev/null TMPDIR="${TMPDIR:-/tmp}" GIT_ALLOW_PROTOCOL=file "$@" \
     "$code/deploy/ci/gitops-check.sh" --tree "$at" "$a0" 2>&1) || rc=$?
   if [ "$want" = 0 ] && [ "$rc" != 0 ]; then
     fail "author: $name: gitops-check.sh --tree failed:"$'\n'"$(sed 's/^/      /' <<<"$out")"

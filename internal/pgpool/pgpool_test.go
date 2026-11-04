@@ -31,6 +31,7 @@ import (
 )
 
 func TestParseConfigConnectTimeout(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name string
 		url  string
@@ -43,6 +44,7 @@ func TestParseConfigConnectTimeout(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 			cfg, err := parseConfig(tt.url, options{})
 			if err != nil {
 				t.Fatalf("parseConfig() error = %v", err)
@@ -60,6 +62,7 @@ func TestParseConfigConnectTimeout(t *testing.T) {
 // WithMaxConns sets the pool's size; without it the size is pgx's own, from the URL or the
 // default.
 func TestParseConfigMaxConns(t *testing.T) {
+	t.Parallel()
 	for _, u := range []string{
 		"postgres://svp@127.0.0.1:5432/svp_user",
 		"postgres://svp@127.0.0.1:5432/svp_user?pool_max_conns=7",
@@ -149,6 +152,7 @@ func TestNewNamesPoolStats(t *testing.T) {
 }
 
 func TestNewInvalidURLHidesIt(t *testing.T) {
+	t.Parallel()
 	const secret = "s3cret-pw"
 	for _, u := range []string{
 		"postgres://svp:" + secret + "@127.0.0.1:5432/svp_user?connect_timeout=soon",
@@ -156,6 +160,7 @@ func TestNewInvalidURLHidesIt(t *testing.T) {
 		"postgres://svp:" + secret + "@127.0.0.1:5432/svp_user?sslmode=bogus",
 	} {
 		t.Run(u, func(t *testing.T) {
+			t.Parallel()
 			pool, err := New(t.Context(), u)
 			if err == nil {
 				pool.Close()
@@ -213,6 +218,7 @@ func TestNewUnreachableFailsWithinBudget(t *testing.T) {
 }
 
 func TestRedact(t *testing.T) {
+	t.Parallel()
 	const secret = "probe-secret@example.com"
 	pgErr := &pgconn.PgError{
 		Severity: "ERROR",
@@ -232,6 +238,7 @@ func TestRedact(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 			got := redact(tt.err)
 			if got.Error() != tt.want {
 				t.Errorf("redact().Error() = %q, want %q", got, tt.want)

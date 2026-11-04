@@ -45,6 +45,10 @@ liệt kê target):
   `lychee.toml`; link nội bộ và anchor heading, link ra site khác không kiểm). Hai image chính thức ghim `tag@sha256`, chạy
   `--network none`, repo gắn chỉ đọc; link tương đối ra ngoài repo (tới `plans/`) báo lỗi. Cả hai công cụ luôn chạy; lệnh thoát khác 0 khi
   một trong hai báo lỗi. Mặc định là mọi `.md` git theo dõi và file mới chưa theo dõi; `DOCS` thu hẹp (đường dẫn tương đối gốc repo).
+- `make helm-docs`, `make helm-docs-check`: `deploy/helm/svp-service/README.md` (bảng values của chart dùng chung bởi bảy release) sinh bởi
+  helm-docs `HELM_DOCS_IMAGE` (image chính thức ghim `tag@sha256`, không mạng, chạy bằng uid của người gọi) từ `Chart.yaml`, comment `# --` của
+  `values.yaml` và `README.md.gotmpl`. `make helm-docs` ghi file; `make helm-docs-check` gắn repo chỉ đọc, in thứ helm-docs sẽ ghi và đỏ khi
+  `README.md` lệch (sửa mô tả ở `values.yaml` rồi chạy `make helm-docs`). `make helm-check` chạy `helm-docs-check` trước, nên job CI của nó kiểm luôn.
 
 ## Kiểm tra bổ sung của code Go
 

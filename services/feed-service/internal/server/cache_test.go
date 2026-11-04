@@ -150,6 +150,7 @@ func cachedServer(t *testing.T) (*Server, *redis.Client, string, *loadLog) {
 // little before the Postgres read, and pages cached 5 s, the most a new video waits to reach the
 // explore feed.
 func TestCacheDefaults(t *testing.T) {
+	t.Parallel()
 	s := New(nil, nil, "svp:feed:", slog.New(slog.DiscardHandler))
 	if s.cacheTimeout != 50*time.Millisecond || s.exploreCacheTTL != 5*time.Second {
 		t.Errorf("cache timeout %s, TTL %s; want 50ms and 5s", s.cacheTimeout, s.exploreCacheTTL)

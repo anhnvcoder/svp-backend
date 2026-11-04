@@ -237,6 +237,7 @@ func timeout(t *testing.T) context.Context {
 }
 
 func TestHealthServing(t *testing.T) {
+	t.Parallel()
 	h := start(t)
 	if err := Healthcheck(timeout(t), h.addr); err != nil {
 		t.Fatalf("Healthcheck() = %v, want nil", err)
@@ -360,6 +361,7 @@ func failWith(code codes.Code) grpc.UnaryServerInterceptor {
 }
 
 func TestRPCLogLevelByCode(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		code codes.Code
 		want string
@@ -376,6 +378,7 @@ func TestRPCLogLevelByCode(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.code.String(), func(t *testing.T) {
+			t.Parallel()
 			h := startBufconn(t, failWith(tt.code))
 			if got := status.Code(h.invoke(timeout(t), "Echo")); got != tt.code {
 				t.Fatalf("code = %v, want %v", got, tt.code)
@@ -477,7 +480,33 @@ func TestServiceInterceptorsRunInsideBuiltins(t *testing.T) {
 	}
 }
 
+func TestRequestSizeLimit(t *testing.T) {
+	t.Parallel()
+	h := startBufconn(t)
+	health := healthpb.NewHealthClient(h.conn)
+	tests := []struct {
+		name string
+		size int
+		// An unknown service name that reaches the health service answers NOT_FOUND.
+		want codes.Code
+	}{
+		{name: "under the limit", size: maxRecvMsgSize / 2, want: codes.NotFound},
+		{name: "over the limit", size: 2 * maxRecvMsgSize, want: codes.ResourceExhausted},
+	}
+	for _, tt := range tests {
+		_, err := health.Check(timeout(t), &healthpb.HealthCheckRequest{Service: strings.Repeat("x", tt.size)})
+		if got := status.Code(err); got != tt.want {
+			t.Errorf("%s: health check with a %d-byte service name = %v, want %v", tt.name, tt.size, err, tt.want)
+		}
+	}
+	// A request over the limit fails that RPC only: the connection keeps serving.
+	if err := h.invoke(timeout(t), "Echo"); err != nil {
+		t.Errorf("Echo after an oversized request = %v, want nil", err)
+	}
+}
+
 func TestRunPortInUse(t *testing.T) {
+	t.Parallel()
 	var lc net.ListenConfig
 	lis, err := lc.Listen(t.Context(), "tcp", "127.0.0.1:0")
 	if err != nil {
@@ -640,6 +669,7 @@ func TestReadinessCheckTimesOut(t *testing.T) {
 }
 
 func TestShutdownSetsHealthNotServing(t *testing.T) {
+	t.Parallel()
 	h := start(t)
 	// Watch streams opened before shutdown see the change: a new RPC is refused once the
 	// graceful stop has begun.

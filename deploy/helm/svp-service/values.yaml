@@ -4,98 +4,101 @@
 # Installed by deploy/k8s/install.sh as wave 7 of argocd/apps/components.json of svp-gitops, once every dependency runs.
 
 image:
-  # GitOps path: ghcr.io/anhnvcoder/svp-backend/<service>, from the release's values file. Dev path: `make
+  # -- GitOps path: ghcr.io/anhnvcoder/svp-backend/<service>, from the release's values file. Dev path: `make
   # k8s-up` passes k3d-svp-registry:5111/svp/<service>, the local registry under the name the nodes resolve on network
   # k3d-svp.
   repository: ""
-  # Empty on purpose. Dev path: `make k8s-up` passes the dev tag of the image it has just built (--set image.tag=...)
+  # -- Empty on purpose. Dev path: `make k8s-up` passes the dev tag of the image it has just built (--set image.tag=...)
   # and an empty digest. GitOps path: the promote pull request writes the release's commit (tag, for people) and its
   # signed index digest (what the pod runs) into the values file. Both empty fails the render naming the release.
   tag: ""
+  # -- Signed index digest of the image the pod runs; see `image.tag`.
   digest: ""
 
-# http: the gateway and the web client (probes on /healthz). grpc: the four gRPC services (Kubernetes' own grpc probe
+# -- http: the gateway and the web client (probes on /healthz). grpc: the four gRPC services (Kubernetes' own grpc probe
 # on the standard health service). none: media-worker (no port, no probe, no Service).
 protocol: none
-# Port the process listens on (LISTEN_ADDR) and the Service exposes; unused with protocol none.
+# -- Port the process listens on (LISTEN_ADDR) and the Service exposes; unused with protocol none.
 port: 0
 
-# Replica count of a workload without an autoscaler. With hpa or keda set the chart renders no spec.replicas at all:
+# -- Replica count of a workload without an autoscaler. With hpa or keda set the chart renders no spec.replicas at all:
 # a count in the manifest would be put back by every helm upgrade and by Argo CD's selfHeal each time the autoscaler
 # changes it, the two fighting over the field. Such a workload starts with Kubernetes' default of 1
 # and its autoscaler raises it to its minimum.
 replicas: 1
 
-# HorizontalPodAutoscaler on CPU (metrics-server of k3s): {minReplicas, maxReplicas, cpuUtilization}. The utilization
+# -- HorizontalPodAutoscaler on CPU (metrics-server of k3s): {minReplicas, maxReplicas, cpuUtilization}. The utilization
 # is a percentage of the container's CPU request, so resources.requests.cpu must be set (it always is, see below).
 hpa: {}
-# PodDisruptionBudget {minAvailable}: only for a workload that always runs at least two replicas: hpa.minReplicas >= 2,
+# -- PodDisruptionBudget {minAvailable}: only for a workload that always runs at least two replicas: hpa.minReplicas >= 2,
 # or no autoscaler at all (neither hpa nor keda) and replicas >= 2. With one replica a budget either blocks every node
 # drain for good (minAvailable: 1) or allows everything (0), so a single-replica service has none.
 pdb: {}
-# Spread the replicas over the nodes (topologySpreadConstraints on kubernetes.io/hostname, ScheduleAnyway): with two
+# -- Spread the replicas over the nodes (topologySpreadConstraints on kubernetes.io/hostname, ScheduleAnyway): with two
 # replicas on two nodes, losing one node leaves one replica serving. Soft, so a one-node cluster still schedules them.
 spreadAcrossNodes: false
-# KEDA ScaledObject on the consumer lag of a Kafka group, logged in through ClusterTriggerAuthentication keda-kafka
+# -- KEDA ScaledObject on the consumer lag of a Kafka group, logged in through ClusterTriggerAuthentication keda-kafka
 # (chart svp-data; Redpanda user svp-keda): {minReplicas, maxReplicas, kafka: {topic, consumerGroup, lagThreshold}}.
 # The broker is env.KAFKA_BROKERS, the one the service consumes from.
 keda: {}
 
-# Run the service as an Argo Rollouts Rollout with an analysed canary instead of a Deployment: Service
+# -- Run the service as an Argo Rollouts Rollout with an analysed canary instead of a Deployment: Service
 # <release>-canary beside the stable one, the release's HTTPRoute split between the two, AnalysisTemplate
 # <release>-canary on Envoy's metrics of the canary backend. Only a release with an HTTPRoute can set it (the gateway,
 # the web client): Envoy measures the canary on that route.
 canary: false
-# Limits of the canary's analysis, per release since what a good response time is depends on the service: p99Ms, the
+# -- Limits of the canary's analysis, per release since what a good response time is depends on the service: p99Ms, the
 # p99 in ms the canary must stay under; errorRatio, the share of 5xx among its responses that are not 4xx it must stay
 # under. Required with canary set; the release's values file says why its numbers.
 canaryLimits: {}
 
-# Annotations of the pod template. A changed value makes a new revision without a new image: the canary drill of the
+# -- Annotations of the pod template. A changed value makes a new revision without a new image: the canary drill of the
 # lab changes one to run a canary of the code already running.
 podAnnotations: {}
 
-# A service with a database runs `migrate` with its migrator role in a Job before each install and upgrade.
+# -- A service with a database runs `migrate` with its migrator role in a Job before each install and upgrade.
 migrate: false
 
-# Every container of the project has requests and limits (threat model FF-3); the values file sets them per service.
+# -- Every container of the project has requests and limits (threat model FF-3); the values file sets them per service.
 resources: {}
+# -- Requests and limits of the migrate Job container.
 migrateResources:
   requests: {cpu: 50m, memory: 32Mi}
   limits: {cpu: 500m, memory: 128Mi}
 
-# Environment of every service; a values file adds its own. Secrets are never here: they come from Secret
+# -- Environment of every service; a values file adds its own. Secrets are never here: they come from Secret
 # <service>-env (deploy/k8s/secrets.sh, from .env).
 env:
-  # Traces, metrics and logs go to the Collector in svp-obs; until it runs, export fails with a rate-limited WARN and
+  # -- Traces, metrics and logs go to the Collector in svp-obs; until it runs, export fails with a rate-limited WARN and
   # the service works as before.
   OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector.svp-obs:4317
   OTEL_EXPORTER_OTLP_INSECURE: "true"
 
-# Report errors to GlitchTip (internal/sentryx): SENTRY_DSN comes from Secret sentry, which
+# -- Report errors to GlitchTip (internal/sentryx): SENTRY_DSN comes from Secret sentry, which
 # deploy/k8s/glitchtip-init.sh writes once GlitchTip runs (the DSN is GlitchTip's own, never in .env). The reference
 # is optional: a pod started before that Secret exists runs with error reporting off, and glitchtip-init.sh restarts
 # it once the DSN is there. media-worker reports no errors, as in compose.
 errorTracking: false
 
-# Writable directories of a container whose root filesystem is read-only: name -> {mountPath, sizeLimit, medium}.
+# -- Writable directories of a container whose root filesystem is read-only: name -> {mountPath, sizeLimit, medium}.
 scratch: {}
 
-# terminationGracePeriodSeconds of the pod; empty keeps Kubernetes' 30 s.
+# -- terminationGracePeriodSeconds of the pod; empty keeps Kubernetes' 30 s.
 terminationGracePeriodSeconds: null
-# Seconds the container waits in a preStop sleep before it gets SIGTERM, for a process that exits at once on SIGTERM
+# -- Seconds the container waits in a preStop sleep before it gets SIGTERM, for a process that exits at once on SIGTERM
 # while Envoy may still send it requests: Envoy routes to pod addresses from the EndpointSlices, and needs a moment to
 # drop a terminating pod. Kubernetes' own sleep action, so it needs no shell in the image. Empty: no preStop.
 preStopSleepSeconds: null
 
-# Pods each release may be reached from (ingressFrom) and may reach (egressTo), by name of the peers below; DNS is
+# -- Pods each release may be reached from (ingressFrom) and may reach (egressTo), by name of the peers below; DNS is
 # open to every pod of svp already (chart svp-cluster). The namespace denies everything else in both directions, so
 # the lists are the whole of a service's traffic (IN-2, FF-5). Ingress is opened on
 # the service's own port only.
 ingressFrom: []
+# -- Peers each release may reach, by name; see `ingressFrom`.
 egressTo: []
 
-# The pods of each peer, by namespace and labels, and the pod ports a client reaches them on (NetworkPolicy sees the
+# -- The pods of each peer, by namespace and labels, and the pod ports a client reaches them on (NetworkPolicy sees the
 # packet after a Service has been translated to a pod). The labels of svp-data are the ones its chart sets; those of
 # svp-obs are the labels of the pinned upstream charts there (helm template).
 peers:
@@ -157,7 +160,7 @@ peers:
     labels: {app.kubernetes.io/name: glitchtip, app.kubernetes.io/component: server}
     ports: [8000]
 
-# Peers that are not pods of the cluster where the cluster uses a managed service instead (EKS: Postgres on Amazon RDS,
+# -- Peers that are not pods of the cluster where the cluster uses a managed service instead (EKS: Postgres on Amazon RDS,
 # objects on Amazon S3), by address: name of a peer above -> list of {cidr, ports}, each one rule of the egress of
 # every release whose egressTo names that peer, and of the migrate Job for postgres. Such an entry takes the place of
 # the peer's pods. Empty: every peer is the pods above. On EKS, postgres is the database subnets' CIDRs on 5432; s3 is
@@ -168,7 +171,7 @@ peers:
 # an AWS role) get their credentials. An entry of 0.0.0.0/0 or ::/0 fails the render.
 externalPeers: {}
 
-# HTTPRoute on Gateway svp (svp-edge) to this release's Service, for a release that sets a host (the gateway, the web
+# -- HTTPRoute on Gateway svp (svp-edge) to this release's Service, for a release that sets a host (the gateway, the web
 # client); no other service is reached from outside the cluster. name: the route's name, empty for the release's name
 # (the canary's Envoy cluster and the Rollout's traffic routing follow it). sectionName: the listener of Gateway svp it
 # attaches to (chart svp-cluster): https for *.svp.localhost, https-apex for svp.localhost alone.

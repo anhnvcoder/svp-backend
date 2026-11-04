@@ -63,6 +63,7 @@ func runTool(t *testing.T, args ...string) error {
 }
 
 func TestFollowThenUnfollowProducesEventsForTheSameIDs(t *testing.T) {
+	t.Parallel()
 	brokers := cluster(t)
 	followee := ids.New()
 	file := filepath.Join(t.TempDir(), "ids")
@@ -136,6 +137,7 @@ func TestFollowThenUnfollowProducesEventsForTheSameIDs(t *testing.T) {
 }
 
 func TestRejectsBadArguments(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	good := filepath.Join(dir, "good")
 	if err := os.WriteFile(good, []byte(ids.New()+"\n"), 0o600); err != nil {

@@ -29,6 +29,7 @@ import (
 )
 
 func TestParseMediaBaseURL(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		name, in, want string
 		wantErr        bool
@@ -50,6 +51,7 @@ func TestParseMediaBaseURL(t *testing.T) {
 		{name: "user only", in: "http://user@127.0.0.1:9000/media", wantErr: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			got, err := parseMediaBaseURL(tc.in)
 			if (err != nil) != tc.wantErr {
 				t.Fatalf("error = %v, wantErr %v", err, tc.wantErr)
@@ -117,6 +119,7 @@ func invoke(ctx context.Context, conn *grpc.ClientConn, method string) error {
 var backends = []backend{userBackend, videoBackend, feedBackend, engagementBackend}
 
 func TestServiceConfig(t *testing.T) {
+	t.Parallel()
 	type name struct{ Service, Method string }
 	// Only the methods a second try cannot change are retried: Follow, Unfollow, Logout,
 	// UpdateDisplayName, CompleteUpload, Like, Unlike and the reads. A second try of any other
@@ -147,6 +150,7 @@ func TestServiceConfig(t *testing.T) {
 	fullName := regexp.MustCompile(`^/svp\.[a-z]+\.v1\.[A-Za-z]+Service/[A-Za-z]+$`)
 	for _, b := range backends {
 		t.Run(b.name, func(t *testing.T) {
+			t.Parallel()
 			for _, m := range b.retry {
 				if !fullName.MatchString(m) {
 					t.Errorf("retry method %q is not a full method name", m)
@@ -207,6 +211,7 @@ func TestServiceConfig(t *testing.T) {
 // TestServiceConfigStructure pins the whole service config of a small backend against the JSON
 // written by hand, so a changed number, code or key shows up here and not as a silent retry change.
 func TestServiceConfigStructure(t *testing.T) {
+	t.Parallel()
 	b := backend{retry: []string{"/svp.a.v1.AService/One", "/svp.a.v1.AService/Two"}}
 	const want = `{
 	  "methodConfig": [{
@@ -292,6 +297,7 @@ func TestRetry(t *testing.T) {
 	}
 	for _, c := range notIdempotent {
 		t.Run("not retried "+c.method, func(t *testing.T) {
+			t.Parallel()
 			f, conn := connect(t, c.b, unavailableOnce)
 			if err := invoke(t.Context(), conn, c.method); status.Code(err) != codes.Unavailable {
 				t.Fatalf("error = %v, want UNAVAILABLE", err)
@@ -302,6 +308,7 @@ func TestRetry(t *testing.T) {
 		})
 	}
 	t.Run("at most three attempts", func(t *testing.T) {
+		t.Parallel()
 		method := userv1.UserService_Follow_FullMethodName
 		f, conn := connect(t, userBackend, func(context.Context, string, int) error {
 			return status.Error(codes.Unavailable, "down")
@@ -388,6 +395,7 @@ func TestSlowStatsDoNotOpenBreaker(t *testing.T) {
 // slow) and a negative retry pushback is neither retried, though Like is in the retry policy, nor
 // counted by the breaker: after many such answers likes still reach the service.
 func TestDependencyUnavailableLikeNotRetried(t *testing.T) {
+	t.Parallel()
 	like := engagementv1.EngagementService_Like_FullMethodName
 	f, conn := connect(t, engagementBackend, func(ctx context.Context, _ string, n int) error {
 		if n > 25 {

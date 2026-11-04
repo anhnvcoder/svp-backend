@@ -144,6 +144,8 @@ func New(client *redis.Client, prefix string, opts ...Option) *Limiter {
 	for _, c := range classes {
 		for _, allowed := range []bool{true, false} {
 			for _, store := range []string{storeRedis, storeFallback} {
+				// New takes no context and there is no cancellation scope to inherit: adding 0 only creates the
+				// series before the first request.
 				l.count(context.Background(), c, allowed, store, 0)
 			}
 		}

@@ -181,10 +181,11 @@ func main() {
 		cmd = os.Args[1]
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer stop()
 
-	if err := run(ctx, logger, cmd); err != nil {
-		stop()
+	err := run(ctx, logger, cmd)
+	// Not deferred: os.Exit below would skip a deferred call.
+	stop()
+	if err != nil {
 		os.Exit(1)
 	}
 }
@@ -211,7 +212,7 @@ func run(ctx context.Context, logger *slog.Logger, cmd string) error {
 	}
 	if err != nil {
 		// A constant message, so the error tracker groups it.
-		logger.Error("gateway failed", slog.Any("error", err))
+		logger.ErrorContext(ctx, "gateway failed", slog.Any("error", err))
 	}
 	stopTelemetry()
 	return err
@@ -232,7 +233,7 @@ func startTelemetry(ctx context.Context, logger *slog.Logger) (stop func(), err 
 	return func() {
 		// Setup bounds the shutdown itself; ctx is already cancelled by then.
 		if err := shutdownTelemetry(context.WithoutCancel(ctx)); err != nil {
-			logger.Warn("telemetry shutdown failed", slog.Any("error", err))
+			logger.WarnContext(ctx, "telemetry shutdown failed", slog.Any("error", err))
 		}
 		flushErrors()
 	}, nil
@@ -331,7 +332,7 @@ func serve(ctx context.Context, logger *slog.Logger) error {
 	case <-ctx.Done():
 	}
 
-	logger.Info("http server stopping")
+	logger.InfoContext(ctx, "http server stopping")
 	shutdownCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), shutdownTimeout)
 	defer cancel()
 	if err := srv.Shutdown(shutdownCtx); err != nil {
@@ -340,7 +341,7 @@ func serve(ctx context.Context, logger *slog.Logger) error {
 	if err := <-errCh; !errors.Is(err, http.ErrServerClosed) {
 		return fmt.Errorf("serve http: %w", err)
 	}
-	logger.Info("http server stopped")
+	logger.InfoContext(ctx, "http server stopped")
 	return nil
 }
 

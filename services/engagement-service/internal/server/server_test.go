@@ -252,6 +252,7 @@ func TestHandlersFailClosedWithoutInterceptor(t *testing.T) {
 }
 
 func TestInvalidVideoIDIsRejected(t *testing.T) {
+	t.Parallel()
 	// No database and no producer: validation runs before either is used.
 	s, _ := newServerWithoutDB(nil)
 	caller := ids.New()
@@ -375,6 +376,7 @@ func TestConcurrentLikesKeepCountExact(t *testing.T) {
 }
 
 func TestGetStatsWithNoIDs(t *testing.T) {
+	t.Parallel()
 	// No database: zero ids never reach it.
 	s, _ := newServerWithoutDB(nil)
 	resp, err := getStats(t, s, ids.New())

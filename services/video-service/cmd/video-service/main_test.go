@@ -303,6 +303,7 @@ func TestRunConsumerStopsWhileWaitingToRestart(t *testing.T) {
 }
 
 func TestRunConsumerReturnsCreateError(t *testing.T) {
+	t.Parallel()
 	want := errors.New("bad config")
 	newConsumer := func() (runner, error) { return nil, want }
 	err := runConsumer(context.Background(), slog.New(slog.DiscardHandler), time.Millisecond, newConsumer)

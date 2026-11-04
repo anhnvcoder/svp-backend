@@ -40,7 +40,7 @@
       ]
     },
     {
-      "description": "Images pinned as <image>:<tag>@sha256:<digest> with a '# renovate: datasource=docker depName=<image>' line right above (TRIVY_IMAGE, SYFT_IMAGE, COSIGN_IMAGE, OTELCOL_IMAGE, LGTM_IMAGE, k3d's helper images and registry, the k3s node image).",
+      "description": "Images pinned as <image>:<tag>@sha256:<digest> with a '# renovate: datasource=docker depName=<image>' line right above (TRIVY_IMAGE, SYFT_IMAGE, COSIGN_IMAGE, HELM_DOCS_IMAGE, OTELCOL_IMAGE, LGTM_IMAGE, k3d's helper images and registry, the k3s node image).",
       "customType": "regex",
       "managerFilePatterns": [
         "/^Makefile$/",

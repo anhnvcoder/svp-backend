@@ -62,7 +62,7 @@ func isProbe(r *http.Request) bool {
 	return r.URL.Path == "/healthz" || r.URL.Path == "/readyz"
 }
 
-// TrustTraceContext, in front of Trace, makes the gateway's server span a child of the W3C
+// TrustTraceContext makes the gateway's server span a child of the W3C
 // traceparent and tracestate of the request, so a trace started by the web server continues
 // through the gateway into the services. Baggage is never read. A traceparent that does not parse
 // (version ff or not hex, all-zero trace or span id) leaves the context as it is, and Trace starts
@@ -77,7 +77,7 @@ func isProbe(r *http.Request) bool {
 // branch for it too, so every request carrying a traceparent is recorded whatever the ratio;
 // compose and the k3d cluster set no sampler today.
 //
-// It is safe only where every path into the gateway has already removed the client's trace
+// Put it in front of Trace. It is safe only where every path into the gateway has already removed the client's trace
 // context, or reaches it on loopback only; the caller decides that.
 func TrustTraceContext(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

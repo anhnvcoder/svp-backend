@@ -197,8 +197,10 @@ func TestPermanentAfterDeadlineGoesToDLQAtOnce(t *testing.T) {
 // A handler that finishes its work and returns nil just as the consumer stops gets its record or
 // batch committed, as Handler and BatchHandler say: only an error leaves it uncommitted.
 func TestNilReturnedAtStopCommits(t *testing.T) {
+	t.Parallel()
 	for _, batch := range []bool{false, true} {
 		t.Run(map[bool]string{false: "record", true: "batch"}[batch], func(t *testing.T) {
+			t.Parallel()
 			brokers := cluster(t, 1, "in")
 			produce(t, producer(t, brokers), &kgo.Record{Topic: "in", Value: []byte("job")})
 			started := make(chan struct{})

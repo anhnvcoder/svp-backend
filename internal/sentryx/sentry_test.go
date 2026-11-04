@@ -151,6 +151,7 @@ func TestArbitraryMessageErrorsAndPanicNeverLeaveMachine(t *testing.T) {
 				message = "panic in http handler"
 				attrs = append(attrs, "panic", "bad password "+password, "stack", string(debug.Stack()))
 			}
+			//nolint:sloglint // the message carries the secrets the test checks never leave the process
 			logger.Error(message, attrs...)
 			events := captured(t, tr)
 			if len(events) != 1 {
@@ -194,6 +195,7 @@ func TestHandlerDoesNotEvaluateErrorText(t *testing.T) {
 }
 
 func TestSafeAttributeDomains(t *testing.T) {
+	t.Parallel()
 	const id = "0192f0c4-0000-7000-8000-00000000000a"
 	valid := []slog.Attr{
 		slog.String("video_id", id), slog.String("user_id", id), slog.String("event_id", id),
@@ -229,6 +231,7 @@ func TestSafeAttributeDomains(t *testing.T) {
 // Frames of dependencies keep their place in a panic's stack: their files are under the module
 // cache, path@version, with or without -trimpath.
 func TestStackKeepsModuleCacheFrames(t *testing.T) {
+	t.Parallel()
 	const raw = "goroutine 7 [running]:\n" +
 		"google.golang.org/grpc.(*Server).processUnaryRPC(0xc000123400, {0x1, 0x2})\n" +
 		"\t/root/go/pkg/mod/google.golang.org/grpc@v1.75.0/server.go:1405 +0x1c4\n" +
@@ -272,6 +275,7 @@ func TestHandlerGroupsAndBoundAttributes(t *testing.T) {
 }
 
 func TestBeforeSendRedactsEveryNestedSurface(t *testing.T) {
+	t.Parallel()
 	const email = "alice@example.com"
 	const jwt = "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxIn0.signature"
 	value := email + " " + jwt
@@ -339,6 +343,7 @@ func TestRateLimitsConcurrentDuplicatesAndProcessBudget(t *testing.T) {
 // the first report is over, even when no event comes after the burst; the next report starts a
 // new minute.
 func TestDropWarningCountsTheTailOfABurst(t *testing.T) {
+	t.Parallel()
 	var l limiter
 	now := time.Unix(100, 0)
 	key := fingerprint{"service", "internal error", "", "string"}
@@ -376,6 +381,7 @@ func TestDropWarningCountsTheTailOfABurst(t *testing.T) {
 // earlier than the warning another caller recorded meanwhile. Its flush is still due within a
 // minute: the delay never counts the time it spent waiting for the lock.
 func TestFlushDelayStaysWithinAMinuteWhenNowPrecedesTheWarning(t *testing.T) {
+	t.Parallel()
 	var l limiter
 	now := time.Unix(100, 0)
 	key := fingerprint{"service", "internal error", "", "string"}
@@ -391,6 +397,7 @@ func TestFlushDelayStaysWithinAMinuteWhenNowPrecedesTheWarning(t *testing.T) {
 }
 
 func TestRateLimitSlidingWindowsAndDropCounts(t *testing.T) {
+	t.Parallel()
 	var l limiter
 	now := time.Unix(100, 0)
 	key := fingerprint{"service", "internal error", "", "string"}
@@ -427,6 +434,7 @@ func TestRateLimitSlidingWindowsAndDropCounts(t *testing.T) {
 }
 
 func TestFingerprintIncludesServiceMessageRouteAndErrorType(t *testing.T) {
+	t.Parallel()
 	var l limiter
 	now := time.Unix(100, 0)
 	for _, key := range []fingerprint{
@@ -570,6 +578,7 @@ func TestFlushStopsWaitingAfterTwoSeconds(t *testing.T) {
 }
 
 func TestAllowedMessagesMatchErrorLogs(t *testing.T) {
+	t.Parallel()
 	// The AST scan is the equivalent of grepping ERROR calls, including static
 	// messages passed through the services' internal error helpers.
 	belowError := []string{"LevelDebug", "LevelInfo", "LevelWarn"}

@@ -63,6 +63,7 @@ func decodeProblem(t *testing.T, rec *httptest.ResponseRecorder) problem {
 }
 
 func TestNewServerLimits(t *testing.T) {
+	t.Parallel()
 	h := http.NewServeMux()
 	s := NewServer("127.0.0.1:8080", h)
 	if s.Addr != "127.0.0.1:8080" || s.Handler != h {
@@ -88,6 +89,7 @@ func TestNewServerLimits(t *testing.T) {
 }
 
 func TestNewServerRejectsDefaultHandlers(t *testing.T) {
+	t.Parallel()
 	for _, h := range []http.Handler{nil, http.DefaultServeMux} {
 		func() {
 			defer func() {

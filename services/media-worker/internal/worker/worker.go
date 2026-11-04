@@ -505,6 +505,7 @@ func (j *job) log(ctx context.Context, level slog.Level, msg string, a kafkax.At
 		slog.Duration("transcode", j.transcode),
 		slog.Duration("upload", j.upload),
 	}, extra...)
+	//nolint:sloglint // wrapper: every caller passes a constant message
 	j.w.logger.LogAttrs(ctx, level, msg, attrs...)
 }
 

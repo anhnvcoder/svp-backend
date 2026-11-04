@@ -16,6 +16,7 @@ import (
 )
 
 func TestNewValid(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name     string
 		url      string
@@ -31,6 +32,7 @@ func TestNewValid(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 			c, err := New(tt.url)
 			if err != nil {
 				t.Fatalf("New() error = %v", err)
@@ -61,6 +63,7 @@ func TestNewValid(t *testing.T) {
 // TestOptionsFresh checks Options returns options not yet read by a client: "no retries" is
 // still -1, which a client built from them keeps as one attempt.
 func TestOptionsFresh(t *testing.T) {
+	t.Parallel()
 	o, err := Options("redis://127.0.0.1:6379/10?max_retries=7")
 	if err != nil {
 		t.Fatalf("Options() error = %v", err)
@@ -75,6 +78,7 @@ func TestOptionsFresh(t *testing.T) {
 }
 
 func TestNewInvalidHidesURL(t *testing.T) {
+	t.Parallel()
 	const secret = "s3cret-pw"
 	tests := []struct {
 		name string
@@ -88,6 +92,7 @@ func TestNewInvalidHidesURL(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 			c, err := New(tt.url)
 			if err == nil {
 				_ = c.Close()
@@ -132,6 +137,7 @@ func TestDownFailsFast(t *testing.T) {
 // does, for no maintenance notifications: that Redis rejects CLIENT MAINT_NOTIFICATIONS, and
 // go-redis would send it on every new connection.
 func TestNoMaintenanceNotifications(t *testing.T) {
+	t.Parallel()
 	srv := newFakeRedis(t)
 	o, err := Options("redis://" + srv.addr + "/15")
 	if err != nil {

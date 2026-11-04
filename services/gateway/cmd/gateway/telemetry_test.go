@@ -19,6 +19,7 @@ import (
 // TestNoPprofOnDefaultMux is threat model OPS-1: no package of the gateway registers
 // net/http/pprof, whose import alone would serve it on http.DefaultServeMux.
 func TestNoPprofOnDefaultMux(t *testing.T) {
+	t.Parallel()
 	for _, path := range []string{"/debug/pprof/", "/debug/pprof/heap"} {
 		_, pattern := http.DefaultServeMux.Handler(httptest.NewRequestWithContext(t.Context(), http.MethodGet, path, nil))
 		if pattern != "" {

@@ -12,6 +12,7 @@ import (
 )
 
 func TestClientIP(t *testing.T) {
+	t.Parallel()
 	for _, tt := range []struct{ remote, want string }{
 		{"192.0.2.1:5000", "192.0.2.1"},
 		{"192.0.2.2:5000", "192.0.2.2"},
@@ -30,6 +31,7 @@ func TestClientIP(t *testing.T) {
 }
 
 func TestClientIPIgnoresHeaders(t *testing.T) {
+	t.Parallel()
 	r := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/auth/login", nil)
 	r.RemoteAddr = "192.0.2.1:5000"
 	r.Header.Set("X-Forwarded-For", "203.0.113.7")
@@ -44,6 +46,7 @@ func TestClientIPIgnoresHeaders(t *testing.T) {
 // the same whatever the client wrote before it; a client reaching the gateway directly keeps the
 // id of its connection whatever it writes. An IPv6 client still counts as its /64.
 func TestClientIPBehindProxy(t *testing.T) {
+	t.Parallel()
 	from := httpx.NewClientAddr(1, []netip.Prefix{netip.MustParsePrefix("10.42.0.0/16")})
 	for _, tt := range []struct{ remote, real, want string }{
 		{"10.42.0.7:5000", "198.51.100.9", "198.51.100.9"},
@@ -62,6 +65,7 @@ func TestClientIPBehindProxy(t *testing.T) {
 }
 
 func TestLoginEmailID(t *testing.T) {
+	t.Parallel()
 	id := LoginEmailID("192.0.2.1", "a@example.com")
 	ip, hash, _ := strings.Cut(id, ":")
 	if ip != "192.0.2.1" || len(hash) != 32 || strings.Contains(id, "example") {

@@ -7,3 +7,6 @@ description: >-
   values file (base/services/<service>.yaml of svp-gitops) each.
 type: application
 version: 0.1.0
+# No appVersion: the chart is shared by seven releases, each running its own image (tag and digest in the release's
+# values file of svp-gitops), and it is never packaged or published on its own, so no single version of an application
+# belongs to it.

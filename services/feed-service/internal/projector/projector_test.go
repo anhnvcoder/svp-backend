@@ -186,6 +186,7 @@ func addFollowers(t *testing.T, author string, n int) {
 }
 
 func TestConsumerConfigRetriesWithoutLimit(t *testing.T) {
+	t.Parallel()
 	cfg := New(nil, slog.New(slog.DiscardHandler)).ConsumerConfig("127.0.0.1:19092")
 	if cfg.Group != "feed-service" || !slices.Equal(cfg.Topics, []string{"user.follows.v1", "video.lifecycle.v1"}) {
 		t.Errorf("group %q topics %q, want feed-service on user.follows.v1 and video.lifecycle.v1", cfg.Group, cfg.Topics)
@@ -198,6 +199,7 @@ func TestConsumerConfigRetriesWithoutLimit(t *testing.T) {
 // Each attempt has a deadline of its own: long enough for a fan-out to
 // 200k followers, about a second, and short enough that a stuck lock does not hold the consumer.
 func TestConsumerConfigBoundsEachAttempt(t *testing.T) {
+	t.Parallel()
 	cfg := New(nil, slog.New(slog.DiscardHandler)).ConsumerConfig("127.0.0.1:19092")
 	if cfg.HandlerTimeout != 30*time.Second {
 		t.Errorf("HandlerTimeout = %s, want 30s", cfg.HandlerTimeout)
@@ -252,6 +254,7 @@ func TestAttemptWaitingOnAuthorLockEndsAtDeadline(t *testing.T) {
 // A rebalance waits for the records in hand, for longer than a short Postgres outage, so a
 // partition does not move while an old event is still being retried.
 func TestConsumerConfigBlocksRebalance(t *testing.T) {
+	t.Parallel()
 	cfg := New(nil, slog.New(slog.DiscardHandler)).ConsumerConfig("127.0.0.1:19092")
 	if !cfg.BlockRebalance || cfg.RebalanceTimeout < time.Minute || cfg.MaxPollRecords <= 0 {
 		t.Errorf("BlockRebalance %v, RebalanceTimeout %s, MaxPollRecords %d; want blocking, at least a minute, a bounded poll",
@@ -819,6 +822,7 @@ func TestInvalidEventsGoToDeadLetter(t *testing.T) {
 // The title rule matches video-service's checkTitle: NUL, invalid UTF-8, blank and over 200
 // characters are rejected; surrounding spaces do not count.
 func TestValidTitle(t *testing.T) {
+	t.Parallel()
 	cases := map[string]bool{
 		"a video":                              true,
 		strings.Repeat("é", 200):               true,
