@@ -169,7 +169,7 @@ tên được dùng lại [W1]; repo mới mang tên cũ ký được đúng sub
 ## Hiện thực ở
 
 - Bảng nguồn (mục 3): `deploy/helm/svp-policy/files/sources.json`, `deploy/helm/svp-policy/templates/imagevalidatingpolicy.yaml`;
-  `deploy/k8s/lib.sh` (`_release_sources_jq`, `ghcr_prefix`, `web_url`); `deploy/ci/common.sh`; `deploy/ci/sources-test.sh`.
+  `deploy/k8s/lib.sh` (`release_sources`, `ghcr_prefix`, `web_url`; luật bảng chỉ ở template từ [ADR-0050](0050-bash-to-standard-tools.md)); `deploy/ci/common.sh`; `deploy/ci/sources-test.sh`.
 - Tên repo code (mục 7, 8): `run_repo_url` của `deploy/ci/common.sh` (trên máy), lệnh `gh workflow run` mà script trong `deploy/ci/`,
   `deploy/k8s/` in ra, `deploy/k8s/gitops.sh` (`chart_repo_url`).
 - Script phát hành (mục 3, 8): `deploy/ci/gitops-check.sh`, `promote.sh`, `promote-prd.sh`, `rescan.sh`, `contract.sh`, `dora.sh`, `deploy/ci/verify/`.

@@ -1,22 +1,27 @@
 #!/usr/bin/env bash
-# Tests for the rules on the table of release sources (deploy/helm/svp-policy/files/sources.json), which are written
-# twice: in the template of chart svp-policy, which fails the render of a table the policy would get wrong, and in
-# _release_sources_check of deploy/k8s/lib.sh, which every script reading the table goes through. Each broken table
-# below must be refused by both, each with its own message, so that a rule changed on one side only fails here:
+# Tests for the rules on the table of release sources (deploy/helm/svp-policy/files/sources.json), written once, in the
+# template of chart svp-policy, which fails the render of a table the policy would get wrong; the scripts read the
+# table (release_sources of deploy/k8s/lib.sh) without checking those rules again. Each broken table below must fail
+# the render with the template's own message:
 #   - an imagePrefix that starts with another source's, or equals it;
 #   - a service in three sources (one of them a retired source too);
 #   - a quote, a backslash or white space in a value (they go into CEL string literals);
 #   - two sources with one name, or one promoter (a retired source given another's promoter too);
 #   - a promoter that is empty, a number or null (a retired source leaves the key out);
-#   - a file that is not JSON;
-#   - an imagePrefix that does not end in /, a provenanceRef that is not a refs/... ref.
-# The table of the working tree passes both, every source of it has a promoter (the retired sources, without one, were
+#   - a file that is not JSON, a list sources that is empty, an entry that is not an object, a field left out;
+#   - an imagePrefix that does not end in /, a provenanceRef that is not a refs/... ref, an issuer that is not an
+#     https:// URL, a name that is not a lowercase letter then letters and digits;
+#   - an empty list services, an image name with a /.
+# The table of the working tree renders, every source of it has a promoter (the retired sources, without one, were
 # dropped from it), and its render selects exactly two globs per published name (matchImageReferences) and has one
-# attestor per source, named after it. A source without promoter, retired, is still accepted by both, since the scripts
-# read the tables of older commits, which have such sources (an environment may pin one). Each case renders a copy of the chart with its own table, under Helm
-# homes in a temporary directory, so no cache or repository of the machine is read or written.
-# Last, web_clone of deploy/k8s/lib.sh, which reads the table: without WEB_REF it checks out the commit of the web
-# release stg runs when it is a release of source web, and refuses one under another prefix before anything is cloned.
+# attestor per source, named after it. A source without promoter, retired, still renders, as the tables of older
+# commits an environment may pin have such sources. Each case renders a copy of the chart with its own table, under
+# Helm homes in a temporary directory, so no cache or repository of the machine is read or written.
+# Then the lookups of deploy/k8s/lib.sh that pick a source by the prefix of an image, the one rule the scripts keep:
+# source_of_repository and release_source_of fail when more than one source matches, and release_sources fails on a
+# file that is not JSON. Last, web_clone of deploy/k8s/lib.sh, which reads the table: without WEB_REF it checks out the
+# commit of the web release stg runs when it is a release of source web, and refuses one under another prefix before
+# anything is cloned.
 # Needs bash, git, jq and helm: no network, no cluster.
 #
 # Usage, from anywhere: deploy/ci/sources-test.sh
@@ -44,21 +49,20 @@ render() {
     helm template svp-policy "$work/chart" >"$work/out" 2>&1
 }
 
-# check FILE: _release_sources_check of deploy/k8s/lib.sh on FILE, in a shell of its own (its fail exits);
-# output and errors in $work/out.
-check() {
-  bash -c '. "$1/deploy/k8s/lib.sh" && _release_sources_check test <"$2"' check "$src" "$1" >"$work/out" 2>&1
+# case_table JQ FILE: writes to FILE the table of the working tree changed by the jq filter JQ (raw text, not JSON,
+# when JQ starts with "raw:").
+case_table() {
+  if [[ $1 == raw:* ]]; then
+    printf '%s\n' "${1#raw:}" >"$2"
+  else
+    jq "$1" "$table" >"$2"
+  fi
 }
 
-# refused NAME JQ HELM_MESSAGE LIB_MESSAGE: the table of the working tree changed by the jq filter JQ (raw text, not
-# JSON, when JQ starts with "raw:") fails the render with HELM_MESSAGE and the check with LIB_MESSAGE.
+# refused NAME JQ MESSAGE: the table of the working tree changed by JQ (case_table) fails the render with MESSAGE.
 refused() {
-  local name=$1 filter=$2 file=$work/case.json
-  if [[ $filter == raw:* ]]; then
-    printf '%s\n' "${filter#raw:}" >"$file"
-  else
-    jq "$filter" "$table" >"$file"
-  fi
+  local name=$1 file=$work/case.json
+  case_table "$2" "$file"
   if render "$file"; then
     fail "$name: helm template renders the table"
   elif grep -qF -- "$3" "$work/out"; then
@@ -66,16 +70,9 @@ refused() {
   else
     fail "$name: helm template fails without \"$3\": $(tail -n 1 "$work/out")"
   fi
-  if check "$file"; then
-    fail "$name: _release_sources_check accepts the table"
-  elif grep -F -- "release sources of test: " "$work/out" | grep -qF -- "$4"; then
-    ok "$name: _release_sources_check refuses it ($4)"
-  else
-    fail "$name: _release_sources_check fails without \"$4\": $(tail -n 1 "$work/out")"
-  fi
 }
 
-# --- The table of the working tree: both accept it, the check prints it back unchanged.
+# --- The table of the working tree renders the policy.
 if render "$table" && grep -q 'kind: ImageValidatingPolicy' "$work/out"; then
   ok "the table of the working tree renders the policy"
 else
@@ -91,16 +88,9 @@ if [ -n "$got" ] && [ "$got" = "$want" ] && ! grep -q '/\*$' <<<"$got"; then
 else
   fail "matchImageReferences: want $(tr '\n' ' ' <<<"$want")got $(tr '\n' ' ' <<<"$got")"
 fi
-if check "$table" && [ "$(cat "$work/out")" = "$(jq -c . "$table")" ]; then
-  ok "_release_sources_check accepts the table of the working tree and prints it"
-else
-  fail "_release_sources_check on the table of the working tree: $(tail -n 1 "$work/out")"
-fi
 
-# attestors: one per source, named after it, with that source's identity (rendered again: the check above wrote
-# $work/out).
+# attestors: one per source, named after it, with that source's identity.
 want=$(jq -r '.sources[] | "\(.name) \(.issuer) \(.subject)"' "$table")
-render "$table" || true
 got=$(sed -n '/^  attestors:$/,/^  [^ ]/p' "$work/out" | awk '
   /^    - name: / { name = $3 } /- issuer: / { issuer = $3 } /^ *subject: / { gsub(/"/, "", issuer); gsub(/"/, "", $2)
     print name, issuer, $2 }')
@@ -116,19 +106,14 @@ else
   fail "the table of the working tree has sources without promoter (retired: nothing would build or promote for them): $retired"
 fi
 
-# accepted NAME JQ: the table of the working tree changed by the jq filter JQ renders the policy and passes the check.
+# accepted NAME JQ: the table of the working tree changed by the jq filter JQ renders the policy.
 accepted() {
   local file=$work/case.json
-  jq "$2" "$table" >"$file"
+  case_table "$2" "$file"
   if render "$file" && grep -q 'kind: ImageValidatingPolicy' "$work/out"; then
     ok "$1: helm template renders the policy"
   else
     fail "$1: helm template fails: $(tail -n 1 "$work/out")"
-  fi
-  if check "$file"; then
-    ok "$1: _release_sources_check accepts it"
-  else
-    fail "$1: _release_sources_check refuses it: $(tail -n 1 "$work/out")"
   fi
 }
 accepted "a source without promoter (retired)" 'del(.sources[1].promoter)'
@@ -139,61 +124,97 @@ accepted "a retired source next to the source that took its services over" "$ret
 # --- Broken tables, each from the working tree's (source 0 backend, 1 web).
 web_under_backend='.sources[1].imagePrefix = .sources[0].imagePrefix + "web/"'
 refused "imagePrefix under another source's" "$web_under_backend" \
-  "starts with ghcr.io/anhnvcoder/svp-backend/ of source backend" \
-  "the imagePrefix of one source starts with the imagePrefix of another"
+  "starts with ghcr.io/anhnvcoder/svp-backend/ of source backend"
 refused "imagePrefix equal to another source's" '.sources[1].imagePrefix = .sources[0].imagePrefix' \
-  "starts with ghcr.io/anhnvcoder/svp-backend/ of source" \
-  "the imagePrefix of one source starts with the imagePrefix of another"
+  "starts with ghcr.io/anhnvcoder/svp-backend/ of source"
 third='.sources += [.sources[1] | .name = "third" | .imagePrefix = "ghcr.io/anhnvcoder/third/" | .promoter = "third-promoter"]'
 fourth='.sources += [.sources[1] | .name = "fourth" | .imagePrefix = "ghcr.io/anhnvcoder/fourth/" | .promoter = "fourth-promoter"]'
 refused "a service in three sources" "$third | $fourth" \
-  "service web is in more than two sources" \
-  "a service is in more than two sources"
+  "service web is in more than two sources"
 refused "web in three sources, one of them retired" "$retired_web | $third" \
-  "service web is in more than two sources" \
-  "a service is in more than two sources"
+  "service web is in more than two sources"
 refused "a quote in a value" '.sources[1].subject += "\""' \
-  "subject of source web goes into CEL string literals" \
-  "must each be a string without quote, backslash or white space"
+  "subject of source web goes into CEL string literals"
 refused "a single quote in a value" '.sources[1].issuer += "'"'"'"' \
-  "issuer of source web goes into CEL string literals" \
-  "must each be a string without quote, backslash or white space"
+  "issuer of source web goes into CEL string literals"
 refused "a backslash in a value" '.sources[0].provenanceRef += "\\x"' \
-  "provenanceRef of source backend goes into CEL string literals" \
-  "must each be a string without quote, backslash or white space"
+  "provenanceRef of source backend goes into CEL string literals"
 refused "white space in a value" '.sources[1].repository = "https://github.com/anhnvcoder/svp web"' \
-  "repository of source web goes into CEL string literals" \
-  "must each be a string without quote, backslash or white space"
+  "repository of source web goes into CEL string literals"
 refused "two sources with one name" '.sources[1].name = "backend"' \
-  "two sources are named backend" \
-  "two sources share a name"
+  "two sources are named backend"
 refused "two sources with one promoter" '.sources[1].promoter = .sources[0].promoter' \
-  "two sources are promoted by svp-gitops-promoter" \
-  "two sources share a promoter"
+  "two sources are promoted by svp-gitops-promoter"
 refused "a retired source given the promoter of another" "$retired_web | .sources[2].promoter = .sources[1].promoter" \
-  "two sources are promoted by svp-web-promoter" \
-  "two sources share a promoter"
+  "two sources are promoted by svp-web-promoter"
 refused "an empty promoter" '.sources[1].promoter = ""' \
-  "source web has no promoter string" \
-  "source web: promoter, when given, must be a string"
+  "source web has no promoter string"
 refused "a promoter that is a number" '.sources[1].promoter = 5' \
-  "source web has no promoter string" \
-  "source web: promoter, when given, must be a string"
+  "source web has no promoter string"
 refused "a promoter that is null" '.sources[1].promoter = null' \
-  "source web has no promoter string" \
-  "source web: promoter, when given, must be a string"
+  "source web has no promoter string"
 refused "white space in a promoter" '.sources[1].promoter = "svp web"' \
-  "promoter of source web goes into CEL string literals" \
-  "source web: promoter, when given, must be a string without quote, backslash or white space"
+  "promoter of source web goes into CEL string literals"
 refused "a file that is not JSON" 'raw:{"sources": [' \
-  "files/sources.json must be a JSON object whose key sources lists at least one release source" \
-  "is not readable JSON"
+  "files/sources.json must be a JSON object whose key sources lists at least one release source"
+refused "an empty list sources" '.sources = []' \
+  "files/sources.json must be a JSON object whose key sources lists at least one release source"
+refused "an entry of sources that is not an object" '.sources += ["web"]' \
+  "files/sources.json: every entry of sources is an object"
+refused "a field left out" 'del(.sources[1].subject)' \
+  "source web has no subject string"
 refused "an imagePrefix without the trailing /" '.sources[1].imagePrefix |= rtrimstr("/")' \
-  "imagePrefix of source web must end in /" \
-  "imagePrefix of every source must end in /"
+  "imagePrefix of source web must end in /"
 refused "a provenanceRef that is not a refs/... ref" '.sources[1].provenanceRef = "heads/main"' \
-  "provenanceRef of source web must be a refs/... ref" \
-  "provenanceRef of every source must be a refs/... ref"
+  "provenanceRef of source web must be a refs/... ref"
+refused "an issuer that is not an https:// URL" '.sources[1].issuer = "http://token.actions.githubusercontent.com"' \
+  "issuer of source web must be an https:// URL"
+refused "a name with a capital letter" '.sources[1].name = "Web"' \
+  'source name "Web" must be a lowercase letter then letters and digits'
+refused "an empty list services" '.sources[1].services = []' \
+  "source web needs a non-empty list services and a list drillImages"
+refused "an image name with a /" '.sources[1].drillImages = ["drill/x"]' \
+  "source web lists drill/x, not an image name"
+
+# --- The lookups of deploy/k8s/lib.sh that pick a source by the prefix of an image, in a copy of lib.sh beside a table
+# of each case's own: exactly one source, or a failure that names every source that matched.
+lk=$work/lookup
+mkdir -p "$lk/deploy/k8s" "$lk/deploy/helm/svp-policy/files"
+cp "$src/deploy/k8s/lib.sh" "$lk/deploy/k8s/"
+# lookup NAME JQ WANT_RC WANT FUNCTION ARGS...: FUNCTION of lib.sh with ARGS on the table of the working tree changed
+# by JQ (case_table) exits WANT_RC and prints WANT (stdout and stderr).
+lookup() {
+  local name=$1 filter=$2 want_rc=$3 want=$4 rc=0
+  shift 4
+  case_table "$filter" "$lk/deploy/helm/svp-policy/files/sources.json"
+  # shellcheck disable=SC2016 # expanded by the inner shell
+  bash -c '. "$1/deploy/k8s/lib.sh" && shift && "$@"' _ "$lk" "$@" >"$work/out" 2>&1 || rc=$?
+  if [ "$rc" = "$want_rc" ] && grep -qF -- "$want" "$work/out"; then
+    ok "$name (exit $rc)"
+  else
+    fail "$name (exit $rc, want $want_rc and \"$want\"): $(tail -n 1 "$work/out")"
+  fi
+}
+lookup "release_sources prints the table of the working tree" . 0 "$(jq -c . "$table")" release_sources
+lookup "release_sources: a file that is not JSON" 'raw:{"sources": [' 1 \
+  "release sources of the working tree: deploy/helm/svp-policy/files/sources.json is not readable JSON" release_sources
+lookup "source_of_repository: web's image is of source web" . 0 web \
+  source_of_repository ghcr.io/anhnvcoder/svp-frontend/web
+# A table in which one prefix starts another is refused as it is read, before any lookup can pick from it.
+lookup "source_of_repository: a table in which one prefix starts another" "$web_under_backend" 1 \
+  "imagePrefix ghcr.io/anhnvcoder/svp-backend/web/ starts with imagePrefix ghcr.io/anhnvcoder/svp-backend/" \
+  source_of_repository ghcr.io/anhnvcoder/svp-backend/web/web
+lookup "release_source_of: a table in which one prefix starts another" "$web_under_backend" 1 \
+  "imagePrefix ghcr.io/anhnvcoder/svp-backend/web/ starts with imagePrefix ghcr.io/anhnvcoder/svp-backend/" \
+  release_source_of web ghcr.io/anhnvcoder/svp-backend/web/web
+lookup "release_sources: an imagePrefix that does not end in /" '.sources[1].imagePrefix = "ghcr.io/anhnvcoder/svp-frontend"' 1 \
+  "is not a registry path ending in /" release_sources
+lookup "release_source_of: web's image is of source web" . 0 '"name":"web"' \
+  release_source_of web ghcr.io/anhnvcoder/svp-frontend/web
+lookup "release_source_of: two sources with one prefix" \
+  '.sources[1].imagePrefix = .sources[0].imagePrefix | .sources[0].services += ["web"]' 1 \
+  "imagePrefix ghcr.io/anhnvcoder/svp-backend/ starts with imagePrefix ghcr.io/anhnvcoder/svp-backend/" \
+  release_source_of web ghcr.io/anhnvcoder/svp-backend/web
 
 # --- web_clone of deploy/k8s/lib.sh without WEB_REF: the commit of the web release stg runs, when that release is
 # <imagePrefix>web of a source of the table: web. A release under another prefix is refused before anything is cloned.

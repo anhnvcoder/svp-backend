@@ -108,6 +108,9 @@ Chọn phương án A ở cả bốn mục. Ngoài ra:
   bằng `CONFTEST_IMAGE` ghim của `Makefile`, cộng hai phép kiểm policy không làm được (khoá viết hai lần, qua yq `YQ_IMAGE`; path là file
   có thật); `make conftest-verify` ở job `config`; `deploy/ci/scan-gate-test.sh` còn các ca của phần bash; đổi policy không build image
   (`deploy/ci/changed-services.sh`).
+- Một bản luật bảng nguồn (B3 của phụ lục): luật chỉ ở `fail` của `deploy/helm/svp-policy/templates/imagevalidatingpolicy.yaml`;
+  `deploy/k8s/lib.sh` bỏ `_release_sources_check`, `release_sources` đọc bảng và chỉ giữ bất biến prefix (đường dẫn registry kết thúc bằng `/`, không prefix nào là
+  đầu prefix khác) mà mọi script dựa vào trước khi chọn nguồn; `deploy/ci/sources-test.sh` kiểm luật bằng render (không thêm công cụ), cùng hai hàm chọn nguồn đó.
 
 ## Thông tin thêm
 
