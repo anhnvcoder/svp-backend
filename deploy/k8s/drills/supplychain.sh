@@ -654,7 +654,7 @@ if [[ -n $unsigned ]]; then
       result b FAIL "deployment svp/$deploy_name has no pod (got $pods)"
   fi
 else
-  result b SKIP "SUPPLYCHAIN_UNSIGNED is not set and no drill-unsigned was found on GHCR ($(tail -n 1 "$work/unsigned.err")); build the drill images ($(ci_dispatch_hint images.yml main drill=true))"
+  result b SKIP "SUPPLYCHAIN_UNSIGNED is not set and no drill-unsigned was found on GHCR ($(tail -n 1 "$work/unsigned.err")); build the drill images (gh workflow run images.yml --repo anhnvcoder/svp-backend --ref main -f drill=true)"
 fi
 
 # --- c: CRITICAL, once the drill image's attestation is shown to be within the maximum age (the header says why).
@@ -674,7 +674,7 @@ if [[ -n $vulnerable ]]; then
   elif [[ ! $age =~ ^-?[0-9]+$ ]]; then
     result c FAIL "$vulnerable: read scanFinishedOn of its vuln attestation as RFC 3339 (got '$scanned')"
   elif ((age > max_age_s)); then
-    rebuild=$(ci_dispatch_hint images.yml main drill=true) || exit 1
+    rebuild="gh workflow run images.yml --repo anhnvcoder/svp-backend --ref main -f drill=true"
     result c FAIL "$vulnerable: its vuln attestation was scanned at $scanned, more than $max_age ago, so a refusal for CRITICAL would not show the age rule holds; build the drill images again ($rebuild) and once that run is green run this with SUPPLYCHAIN_VULNERABLE set to the digest it pushed for drill-vulnerable"
   else
     dry_run drill-supplychain-c svp "$vulnerable"
@@ -690,7 +690,7 @@ if [[ $checks_provenance != yes ]]; then
 elif [[ $no_provenance == none ]]; then
   result l SKIP "SUPPLYCHAIN_NO_PROVENANCE=none: the caller left the case out"
 else
-  rebuild=$(ci_dispatch_hint images.yml main drill=true) || exit 1
+  rebuild="gh workflow run images.yml --repo anhnvcoder/svp-backend --ref main -f drill=true"
   if [[ -z $no_provenance ]]; then
     no_provenance=$("$repo_root/deploy/ci/ghcr-digest.sh" newest drill-no-provenance 2>"$work/newest.err") ||
       no_provenance=

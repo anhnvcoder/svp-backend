@@ -171,7 +171,7 @@ Chọn các phương án in đậm ở "Phương án đã cân nhắc" và tri�
 
 ## Hiện thực ở
 
-- Workflow, tiêu chí "runner đủ", bộ lọc (§2–§5): `.github/workflows/verify.yml`, `deploy/ci/verify-host.sh`, `verify-run.sh`, `verify-sample.sh`, `verify-mask.sh`, `verify-collect.sh`, `verify-collect-test.sh`, `deploy/ci/verify/<kịch bản>.sh`; `log_tail_namespaces`, `unready_report` của `deploy/k8s/lib.sh`; adapter `ci_hosted_runner` ở `deploy/ci/platform.sh` ([0023](0023-ci-platform-neutral.md)).
+- Workflow, tiêu chí "runner đủ", bộ lọc (§2–§5): `.github/workflows/verify.yml`, `deploy/ci/verify-host.sh`, `verify-run.sh`, `verify-sample.sh`, `verify-mask.sh`, `verify-collect.sh`, `verify-collect-test.sh`, `deploy/ci/verify/<kịch bản>.sh`; `log_tail_namespaces`, `unready_report` của `deploy/k8s/lib.sh`.
 - Đường GitOps (§6): `deploy/argocd/apps/values.yaml`, `deploy/argocd/project.yaml`, `deploy/k8s/gitops.sh`, `deploy/ci/gitops-sourcemaps.sh`, `deploy/ci/build-image.sh`, `.github/workflows/images.yml`, `deploy/k8s/drills/{gitops,keda,supplychain,web-obs,web-canary}.sh`; từ phần 4 cấu hình ở repo `svp-gitops`, `deploy/ci/record-stg.sh`, `deploy/ci/release-set.sh`.
 - Chaos Mesh, Velero, k6 (§7, §8): `deploy/k8s/cloud/runner/`, `deploy/k8s/cloud/chaos/`, `deploy/k8s/cloud/velero/drill-restore.sh`, `deploy/k6/cloud/{render,run}.sh`, `deploy/k8s/cloud/charts.json`.
 - Cổng CI và cảnh báo (§9–§11): `deploy/ci/trivy-config-ignore.yaml`, `deploy/ci/scan-gate.sh`, `Makefile`, `deploy/observability/prometheus/rules/svp-alerts.yaml`, `svp-alerts.test.yaml`; cổng lockfile nay là `make lockfile-scan` của `svp-frontend`.

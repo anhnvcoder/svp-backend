@@ -53,7 +53,7 @@ if [ ${#predicate_flags[@]} -gt 0 ] && { [ "$image" != drill-vulnerable ] || [ "
 fi
 if [ "$release" = true ]; then
   sign_identity "$build_source_name"
-  builder=$(ci_builder_id) || fail "read the workflow of this run"
+  builder=$(run_builder_id)
   [ "$builder" = "$sign_subject" ] ||
     fail "this run is the workflow '$builder', but releases of source $build_source_name are signed only as $sign_subject"
 fi
@@ -102,7 +102,7 @@ if [ "$release" = true ]; then
     provenance=true
   fi
 fi
-ci_output repository "$repo" && ci_output digest "$digest" && ci_output provenance "$provenance" ||
+step_output repository "$repo" && step_output digest "$digest" && step_output provenance "$provenance" ||
   fail "hand the subject of the provenance to the next step"
 if [ "$release" = true ]; then
   echo "ok    $repo@$digest signed; SBOM on both manifests, vuln on the index; provenance next (actions/attest): $provenance"

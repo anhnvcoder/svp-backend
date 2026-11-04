@@ -24,7 +24,7 @@
 #     svp-gitops under the former prefix of this repository is under the prefix of no source, so it is listed (and the
 #     run fails on it); a commit of this repository from before svp-gitops is read as values_ref, its releases (under
 #     the former prefix) listed.
-# Every run is a machine's (the local platform of platform.sh): env -i leaves none of a CI job's variables to the
+# Every run is a machine's: env -i leaves none of a CI job's variables to the
 # scripts. Runs on macOS and Linux: no network, no Docker, no cluster.
 #
 # Usage, from anywhere: deploy/ci/promote-test.sh

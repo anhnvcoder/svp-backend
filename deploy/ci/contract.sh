@@ -22,7 +22,7 @@
 #       sign_identity of common.sh, the one Kyverno and every verifier read). A version is never published twice: a
 #       tag that already holds this very file (same layer digest) is left as it is, only signed if its signature is
 #       missing; a tag holding anything else fails and nothing is written (the next version has to be published
-#       instead). Before anything is pushed, the run must be one that signs as that identity (ci_builder_id), so a
+#       instead). Before anything is pushed, the run must be one that signs as that identity (run_builder_id), so a
 #       run of another workflow, a branch or a machine never pushes a version it cannot sign. --dry-run reads the
 #       registry without credentials and only says what it would do. Needs `docker login` to the registry and the
 #       id-token of the job (cosign on PATH) when not a dry run.
@@ -89,18 +89,18 @@ oasdiff_() {
 check() {
   local base=$1 base_v head_v level changelog counts checks problems=() n_err n_warn n_info entries line
   if [ -z "${base//0/}" ]; then
-    ci_summary_tee <<<"API contract: not compared, there is no base commit (the push created the branch)."
+    step_summary_tee <<<"API contract: not compared, there is no base commit (the push created the branch)."
     return 0
   fi
   base=$(git -C "$repo_root" rev-parse --quiet --verify "$base^{commit}") || fail "$1 is not a commit of this clone"
   if ! git -C "$repo_root" cat-file -e "$base:$spec_path" 2>/dev/null; then
-    ci_summary_tee <<<"API contract: not compared, ${base:0:12} has no $spec_path."
+    step_summary_tee <<<"API contract: not compared, ${base:0:12} has no $spec_path."
     return 0
   fi
   git -C "$repo_root" show "$base:$spec_path" >"$work/base.yaml" || fail "read $spec_path at $base"
   cp "$spec" "$work/head.yaml" || fail "read $spec_path"
   if cmp -s "$work/base.yaml" "$work/head.yaml"; then
-    ci_summary_tee <<<"API contract: $spec_path is the same as at ${base:0:12}."
+    step_summary_tee <<<"API contract: $spec_path is the same as at ${base:0:12}."
     return 0
   fi
   base_v=$(spec_version "$work/base.yaml" "$spec_path at ${base:0:12}") || return 1
@@ -134,12 +134,12 @@ check() {
     echo "API contract: $spec_path changed since ${base:0:12}, info.version $base_v -> $head_v ($level)."
     echo "Changelog: $entries entries ($n_err breaking, $n_warn warnings, $n_info info)."
     [ -z "$changelog" ] || printf '    %s\n' "$changelog"
-  } | ci_summary_tee
+  } | step_summary_tee
   if [ ${#problems[@]} -gt 0 ]; then
-    printf 'FAIL  %s\n' "${problems[@]}" | ci_summary_tee >&2
+    printf 'FAIL  %s\n' "${problems[@]}" | step_summary_tee >&2
     return 1
   fi
-  echo "ok    the version rule holds" | ci_summary_tee
+  echo "ok    the version rule holds" | step_summary_tee
 }
 
 # oras_ [--auth] ARGS...: the pinned ORAS, as the calling user, seeing $work as its working directory. With --auth it
@@ -199,7 +199,7 @@ publish() {
   want=sha256:$(shasum -a 256 "$work/openapi.yaml" | cut -d' ' -f1)
   sign_identity
   if [ "$dry" = false ]; then
-    builder=$(ci_builder_id) || fail "read the workflow of this run"
+    builder=$(run_builder_id)
     [ "$builder" = "$sign_subject" ] ||
       fail "this run is $builder, but a contract is published only by $sign_subject (it signs as that identity)"
   fi
@@ -210,22 +210,22 @@ publish() {
     [ "$layer" = "$want" ] ||
       fail "$ref is already published with other content ($layer, this tree $want): raise info.version, a version is never published twice"
     if verify_signature "$contract_repository" "$digest" 2>/dev/null; then
-      echo "ok    $ref is already published with this content and signed ($digest): nothing to do" | ci_summary_tee
+      echo "ok    $ref is already published with this content and signed ($digest): nothing to do" | step_summary_tee
       return 0
     fi
     if [ "$dry" = true ]; then
-      echo "dry run: $ref holds this content ($digest) but no signature of $sign_subject: would sign it" | ci_summary_tee
+      echo "dry run: $ref holds this content ($digest) but no signature of $sign_subject: would sign it" | step_summary_tee
       return 0
     fi
     echo "note  $ref holds this content ($digest) without a signature: signing it" >&2
   else
     if [ "$dry" = true ]; then
-      echo "dry run: $ref is not published: would push $spec_path ($want) and sign it" | ci_summary_tee
+      echo "dry run: $ref is not published: would push $spec_path ($want) and sign it" | step_summary_tee
       return 0
     fi
     oras_ --auth push "$ref" --artifact-type "$contract_artifact_type" \
-      --annotation "org.opencontainers.image.source=$(ci_repo_url)" \
-      --annotation "org.opencontainers.image.revision=$(ci_commit)" \
+      --annotation "org.opencontainers.image.source=$(run_repo_url)" \
+      --annotation "org.opencontainers.image.revision=${GITHUB_SHA:-$(git -C "$code_root" rev-parse --verify HEAD)}" \
       --annotation "org.opencontainers.image.version=$version" \
       "openapi.yaml:$contract_media_type" >/dev/null || fail "push $ref"
     digest=$(published true "$ref")
@@ -235,7 +235,7 @@ publish() {
   cosign_ sign --yes --new-bundle-format=false --use-signing-config=false "$contract_repository@$digest" ||
     fail "sign $contract_repository@$digest"
   verify_signature "$contract_repository" "$digest" || fail "the signature of $contract_repository@$digest does not verify"
-  echo "ok    $ref published and signed: $contract_repository@$digest" | ci_summary_tee
+  echo "ok    $ref published and signed: $contract_repository@$digest" | step_summary_tee
 }
 
 case ${1:-} in

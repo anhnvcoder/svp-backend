@@ -91,11 +91,11 @@ while IFS= read -r file; do
 done <<<"$files"
 
 if [ "$failed" -ne 0 ]; then
-  refresh=$(ci_dispatch_hint images.yml main rescan=true) || exit 1
+  refresh="gh workflow run images.yml --repo anhnvcoder/svp-backend --ref main -f rescan=true"
   echo "Refresh the vuln attestations of these releases, then run this check again:" >&2
   echo "  $refresh" >&2
   echo "A missing provenance needs a new release instead, as named above: a rescan does not add one." >&2
   echo "A release of another source (svp-frontend) is rescanned by the images.yml of that repository, dispatched there." >&2
-  ci_summary "values-check failed: refresh the vuln attestations with \`$refresh\`; a missing provenance needs a new release (above)"
+  step_summary "values-check failed: refresh the vuln attestations with \`$refresh\`; a missing provenance needs a new release (above)"
 fi
 exit "$failed"

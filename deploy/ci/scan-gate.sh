@@ -404,8 +404,8 @@ fi
 
 # summary LINE: one line of the job summary per scan; where the summary is a page of its own, in the log too.
 summary() {
-  ci_summary "- $1"
-  if ci_has_summary; then echo "$1"; fi
+  step_summary "- $1"
+  [ -z "${GITHUB_STEP_SUMMARY:-}" ] || echo "$1"
 }
 
 if [ "$mode" = grype ]; then
@@ -426,7 +426,7 @@ if [ "$mode" = grype ]; then
     jq -r '.matches[] | select(.vulnerability.severity == "Critical")
       | "critical  \(.vulnerability.id) \(.artifact.name)@\(.artifact.version) \(.artifact.purl // "no purl")"
         + " (fixed: \(.vulnerability.fix.versions // [] | join(", ") | if . == "" then "none" else . end))"' \
-      "$input/grype.json" | ci_summary_tee >&2
+      "$input/grype.json" | step_summary_tee >&2
   fi
   if [ "$rc" -eq 2 ]; then
     echo "FAIL  $label (grype): Critical vulnerabilities; nothing is pushed, signed or attested" >&2
@@ -473,7 +473,7 @@ if [ "$rc" -ne 0 ]; then
   echo "FAIL  $label: secrets found; nothing is pushed, signed or attested" >&2
   # Rule, file and line only: the matched text stays out of logs and summaries of a public repository.
   jq -r '.Results[]? | .Target as $t | .Secrets[]? | "secret  \(.RuleID) (\(.Severity)) in \($t) line \(.StartLine)"' \
-    "$report" | ci_summary_tee >&2
+    "$report" | step_summary_tee >&2
   blocked=1
 fi
 convert --format table --table-mode detailed --severity CRITICAL "${ignore[@]}" /in/vulnerabilities.json

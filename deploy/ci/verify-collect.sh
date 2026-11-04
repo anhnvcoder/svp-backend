@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
 # Builds the public artifact of a verification run: copies
-# the files of an allow list into $SVP_VERIFY_ARTIFACT (default verify-artifact in ci_temp_dir of
-# deploy/ci/platform.sh: $RUNNER_TEMP on GitHub), each only after a scan, and prints to the job's log a summary taken
+# the files of an allow list into $SVP_VERIFY_ARTIFACT (default verify-artifact in $RUNNER_TEMP, /tmp on a machine),
+# each only after a scan, and prints to the job's log a summary taken
 # from the copies alone. Anyone can read the artifact and the log of a public repository, so it fails closed: a file
-# it is unsure of is left out, with a warning (ci_warning of platform.sh, an annotation on GitHub) naming the file and
+# it is unsure of is left out, with a warning (an annotation on GitHub) naming the file and
 # the rule, never the text that matched.
 #
-# The allow list. From the run's results ($SVP_VERIFY_OUT, default verify in ci_temp_dir; never uploaded as a whole):
+# The allow list. From the run's results ($SVP_VERIFY_OUT, default verify in $RUNNER_TEMP; never uploaded as a whole):
 #   written on the runner itself  results.tsv, scenario, df-before.txt (deploy/ci/verify-run.sh, verify-host.sh)
 #   read from the stack/cluster   logs/*.log (each make target's own output; of the two threat model drills, whose
 #                                 output holds what their probes got back, only the verdict lines, ok, PASS, FAIL,
@@ -50,10 +50,13 @@ set -uo pipefail
 
 here=$(cd "$(dirname "$0")" && pwd)
 repo=${SVP_VERIFY_REPO:-$(cd "$here/../.." && pwd)}
-# ci_temp_dir, ci_warning: what depends on the CI platform.
-# shellcheck source=deploy/ci/platform.sh
-. "$here/platform.sh"
-tmp_root=$(ci_temp_dir) || exit 1
+# The job's own temp directory on GitHub Actions, emptied when the job ends; /tmp on a machine.
+tmp_root=${RUNNER_TEMP:-/tmp}
+# warning MESSAGE: a warning the run's page shows beside the log line (an annotation on GitHub Actions); a plain line
+# on a machine.
+warning() {
+  if [ "${GITHUB_ACTIONS:-}" = true ]; then printf '::warning::%s\n' "$1"; else printf 'warning: %s\n' "$1"; fi
+}
 out=${SVP_VERIFY_OUT:-$tmp_root/verify}
 art=${SVP_VERIFY_ARTIFACT:-$tmp_root/verify-artifact}
 secrets=${SVP_VERIFY_SECRETS:-$tmp_root/verify-secrets}
@@ -95,18 +98,18 @@ cat "$secrets/env.values" "$secrets/cluster.values" 2>/dev/null >"$work/values"
 if [ "$lists_ok" = 1 ]; then
   echo "verify-collect: secret lists read; files from the stack or cluster are scanned and copied"
 else
-  ci_warning "verify-collect: a secret list could not be read; only the files written on the runner itself are copied"
+  warning "verify-collect: a secret list could not be read; only the files written on the runner itself are copied"
 fi
 
 : >"$work/files"
 kept=0
 dropped=0
 
-# drop SRC RULE: records SRC as dropped; a rule other than not-allowed also gets a warning in the log (ci_warning).
+# drop SRC RULE: records SRC as dropped; a rule other than not-allowed also gets a warning in the log.
 drop() {
   printf 'dropped\t%s\t%s\n' "$1" "$2" >>"$work/files"
   dropped=$((dropped + 1))
-  [ "$2" = not-allowed ] || ci_warning "$1: $2"
+  [ "$2" = not-allowed ] || warning "$1: $2"
 }
 
 # rule FILE [KIND]: prints the first scan rule FILE breaks, nothing when it is clean. KIND verdicts (the verdict lines
@@ -216,7 +219,7 @@ fi
 # files.txt holds only paths this script chose and rule names; scanned all the same before it is published.
 cp "$work/files" "$work/files.txt"
 if [ -n "$(rule "$work/files.txt")" ]; then
-  ci_warning "files.txt: a file name matched a scan rule; files.txt left out"
+  warning "files.txt: a file name matched a scan rule; files.txt left out"
 else
   cp "$work/files.txt" "$art/files.txt"
 fi

@@ -7,8 +7,9 @@
 # output is one of the fake results, as is a migrate Job's log marked by mark_log of the same file. verify-mask.sh
 # cluster on a binary value of 200 KiB, timed, and on small ones against the cut it made before.
 # Then deploy/ci/verify-run.sh with a fake make: the scenarios compose-obs and gitops, and made-up scenario files for
-# what a scenario file can get wrong. Then gitops_stale of deploy/ci/verify/gitops.sh with a fake cosign, and its
-# gitops_external_secrets with a fake kubectl, against this checkout's files/external-secrets.yaml of chart svp-cluster.
+# what a scenario file can get wrong. Then gitops_stale of deploy/ci/verify/gitops.sh with a fake cosign, its
+# gitops_supplychain with a stub of ghcr-digest.sh and a fake make, and its gitops_external_secrets with a fake kubectl,
+# against this checkout's files/external-secrets.yaml of chart svp-cluster.
 # Last, that deploy/ci/changed-services.sh builds no image for a change of these scripts, in a throwaway git repository
 # holding a copy of it. Runs on macOS and Linux, no network, no Docker, no cluster.
 #
@@ -680,8 +681,8 @@ echo "CA" >"$repo/.k8s/ca.crt"
 echo '{"metrics":{"http_reqs":{"count":10}}}' >"$repo/.k6/local-1/summary.json"
 echo '{"audits":{}}' >"$repo/.web/svp-frontend/test-results/lighthouse/b.report.json"
 
-# job: the variables a GitHub Actions job runs the two scripts with (deploy/ci/platform.sh prints masks and warnings
-# as the runner's commands only there), with the job's temp directory in $work.
+# job: the variables a GitHub Actions job runs the two scripts with (they print masks and warnings as the runner's
+# commands only there), with the job's temp directory in $work.
 job=(GITHUB_ACTIONS=true RUNNER_TEMP="$work")
 # collect NAME SECRETS_DIR [VAR=VALUE...]: runs verify-collect.sh into $work/art-NAME, its stdout and stderr in
 # $work/NAME.log.
@@ -996,7 +997,7 @@ cp "$work/env.good" "$repo/.env"
 vr=$work/verify-run
 vb=$work/verify-run-bin
 mkdir -p "$vr/deploy/ci" "$vr/deploy/k8s" "$vr/deploy/observability/glitchtip" "$vb"
-cp "$here/verify-run.sh" "$here/verify-mask.sh" "$here/platform.sh" "$vr/deploy/ci/"
+cp "$here/verify-run.sh" "$here/verify-mask.sh" "$vr/deploy/ci/"
 cp "$here/../k8s/lib.sh" "$vr/deploy/k8s/"
 cp -R "$here/verify" "$vr/deploy/ci/"
 cp "$here/../observability/glitchtip/dotenv.sh" "$vr/deploy/observability/glitchtip/"
@@ -1026,8 +1027,7 @@ git init -q "$fake_clone" &&
 fake_clone_sha=$(git -C "$fake_clone" rev-parse HEAD)
 # run_verify NAME SCENARIO [VAR=VALUE...]: the copy of verify-run.sh (in run_tree, default $vr) for SCENARIO; its
 # output in $work/run-NAME.log, the make calls in $work/run-NAME.make, its results in $work/run-NAME.out; prints its
-# exit status. It runs as on a machine, without the variables of any CI: a runner sets CI=true, which alone makes
-# platform.sh refuse to run.
+# exit status. It runs as on a machine, without the variables of any CI.
 run_verify() {
   local name=$1 scenario=$2 rc=0
   shift 2
@@ -1244,6 +1244,48 @@ lacks stale-fresh "nothing is noted for a case kept" NOTE
 same "gitops_stale: cosign without an answer keeps the case (the drill fails it)" 1 \
   "$(stale no-cosign c FAKE_COSIGN_FAIL=1 FAKE_SCAN_HOURS=100)"
 
+# --- gitops_supplychain of deploy/ci/verify/gitops.sh: it hands the drill the newest drill-unsigned as the unsigned
+# image and the newest drill-no-provenance for case l, and none (never empty, which the drill reads as "look it up
+# yourself") when GHCR did not give it, the step then failing. A stub ghcr-digest.sh answers for GHCR and a fake make
+# records its arguments in supplychain-make.log.
+sc=$work/supplychain
+mkdir -p "$sc/bin"
+cat >"$sc/ghcr-digest.sh" <<'STUB'
+#!/usr/bin/env bash
+# Test stub: answers newest IMAGE the way GHCR would, failing for the image in FAKE_GHCR_MISSING.
+case $1 in
+newest)
+  [ "$2" != "${FAKE_GHCR_MISSING:-}" ] || { echo "ghcr.io/anhnvcoder/svp-backend/$2 is not on GHCR" >&2; exit 1; }
+  echo "ghcr.io/anhnvcoder/svp-backend/$2@sha256:$(printf 'd%.0s' $(seq 64))"
+  ;;
+esac
+STUB
+printf '#!/usr/bin/env bash\nprintf "%%s\\n" "$@" >"%s"\n' "$work/supplychain-make.log" >"$sc/bin/make"
+chmod 755 "$sc/ghcr-digest.sh" "$sc/bin/make"
+dnp=ghcr.io/anhnvcoder/svp-backend/drill-no-provenance@sha256:$(printf 'd%.0s' $(seq 64))
+dun=ghcr.io/anhnvcoder/svp-backend/drill-unsigned@sha256:$(printf 'd%.0s' $(seq 64))
+# supplychain [VAR=VALUE...]: gitops_supplychain with the stubs, its output in $work/supplychain.log; prints its status.
+supplychain() {
+  local rc=0
+  rm -f "$work/supplychain-make.log"
+  # The file as $1: with it as $0, it would take itself for run as a script.
+  # shellcheck disable=SC2016 # expanded by the inner shell
+  env -u GITHUB_ACTIONS -u SVP_VERIFY_SCHEDULED repo="$(cd "$here/../.." && pwd)" here="$sc" "$@" \
+    bash -c 'PATH="$2:$PATH"; . "$1"; gitops_supplychain' bash "$here/verify/gitops.sh" "$sc/bin" \
+    >"$work/supplychain.log" 2>&1 </dev/null || rc=$?
+  echo "$rc"
+}
+same "gitops_supplychain: every image on GHCR" 0 "$(supplychain)"
+has supplychain-make "the unsigned image is the newest drill-unsigned" "SUPPLYCHAIN_UNSIGNED=$dun"
+has supplychain-make "case l gets the newest drill-no-provenance" "SUPPLYCHAIN_NO_PROVENANCE=$dnp"
+same "gitops_supplychain: drill-no-provenance not on GHCR fails" 1 "$(supplychain FAKE_GHCR_MISSING=drill-no-provenance)"
+has supplychain-make "drill-no-provenance not on GHCR: case l left out with none" "SUPPLYCHAIN_NO_PROVENANCE=none"
+has supplychain "drill-no-provenance not on GHCR: the step fails naming it" \
+  "without what GHCR did not give (above): drill-no-provenance;"
+same "gitops_supplychain: drill-unsigned not on GHCR fails" 1 "$(supplychain FAKE_GHCR_MISSING=drill-unsigned)"
+has supplychain "drill-unsigned not on GHCR: the step fails naming it" \
+  "without what GHCR did not give (above): drill-unsigned;"
+
 # --- The summaries of gitops-admission-metrics (gitops_admission_apiserver, gitops_admission_kyverno) over a sample of
 # /metrics with the real buckets: the apiserver's 10, 25 and +Inf (two series of the Kyverno webhook, rejected false and
 # true, and one of another webhook that must not count), Kyverno's 20 and 30 (policy svp-images, and another policy).
@@ -1406,7 +1448,7 @@ lacks external-on "no value of a Secret is printed" dmFsdWU=
 # jobs run, still builds all seven. GIT_DIR is set for the throwaway repository, so git can never reach another one.
 cs=$work/changed-services
 mkdir -p "$cs/deploy/ci" "$cs/deploy/k8s"
-cp "$here/changed-services.sh" "$here/common.sh" "$here/platform.sh" "$here/verify-run.sh" "$here/verify-release.sh" \
+cp "$here/changed-services.sh" "$here/common.sh" "$here/verify-run.sh" "$here/verify-release.sh" \
   "$cs/deploy/ci/"
 cp -R "$here/verify" "$cs/deploy/ci/"
 cp "$here/../k8s/lib.sh" "$cs/deploy/k8s/"

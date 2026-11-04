@@ -11,9 +11,60 @@
 ci_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 # shellcheck source=deploy/k8s/lib.sh
 . "$ci_dir/../k8s/lib.sh"
-# Everything that depends on the CI platform (outputs, job summary, run links, pull requests): ci_* functions.
-# shellcheck source=deploy/ci/platform.sh
-. "$ci_dir/platform.sh"
+
+# The scripts run in GitHub Actions and read its variables directly. On a machine, where none is set, an output or a
+# summary line is printed instead, and the run is one of the repository of code_root at its HEAD, by the workflow
+# "local".
+# step_output KEY VALUE: hands VALUE (one line) to the steps and jobs after this one under KEY ($GITHUB_OUTPUT). Not
+# >>/dev/stdout on a machine: on Linux that opens anew the file stdout goes to, and the next line the script prints
+# would write over the one appended.
+step_output() {
+  if [ -n "${GITHUB_OUTPUT:-}" ]; then printf '%s=%s\n' "$1" "$2" >>"$GITHUB_OUTPUT"; else printf '%s=%s\n' "$1" "$2"; fi
+}
+# step_summary [LINE...]: adds LINEs (stdin when none) to the summary page of the job ($GITHUB_STEP_SUMMARY).
+step_summary() {
+  if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
+    if [ $# -gt 0 ]; then printf '%s\n' "$@" >>"$GITHUB_STEP_SUMMARY"; else cat >>"$GITHUB_STEP_SUMMARY"; fi
+  elif [ $# -gt 0 ]; then
+    printf '%s\n' "$@"
+  else
+    cat
+  fi
+}
+# step_summary_tee: copies stdin to stdout and, in a job, to its summary page too.
+step_summary_tee() { if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then tee -a "$GITHUB_STEP_SUMMARY"; else cat; fi; }
+# run_repo_url: the web address of the repository this run is of. On a machine, this repository's on GitHub, or, when
+# SVP_CODE_ROOT names the checkout of another repository, that checkout's, read from its remote origin on github.com as
+# a job of that repository would see it; a checkout without such an origin fails, as its repository cannot be named
+# without a guess. The error shows the origin without its userinfo: a URL may carry a credential
+# (https://user:token@host/...).
+run_repo_url() {
+  local url shown
+  if [ -n "${GITHUB_REPOSITORY:-}" ]; then
+    echo "${GITHUB_SERVER_URL:-https://github.com}/$GITHUB_REPOSITORY"
+  elif [ -z "${SVP_CODE_ROOT:-}" ]; then
+    echo https://github.com/anhnvcoder/svp-backend
+  else
+    url=$(git -C "$SVP_CODE_ROOT" remote get-url origin 2>/dev/null) || url=
+    if [[ $url =~ ^(https://github\.com/|git@github\.com:|ssh://git@github\.com/)([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)$ ]]; then
+      url=${BASH_REMATCH[2]}
+      echo "https://github.com/${url%.git}"
+    else
+      shown=$url
+      [[ ! $url =~ ^([A-Za-z][A-Za-z0-9+.-]*://)[^/]*@(.*)$ ]] || shown=${BASH_REMATCH[1]}${BASH_REMATCH[2]}
+      fail "SVP_CODE_ROOT=$SVP_CODE_ROOT has no remote origin on github.com (got '${shown:-none}'): its repository cannot be named"
+    fi
+  fi
+}
+# run_builder_id: the workflow file running this job at the ref it ran from, as a URL: the builder an attestation
+# names, and the subject of the keyless certificate the job gets.
+run_builder_id() {
+  if [ -n "${GITHUB_WORKFLOW_REF:-}" ]; then
+    echo "${GITHUB_SERVER_URL:-https://github.com}/$GITHUB_WORKFLOW_REF"
+  else
+    echo local
+  fi
+}
 
 # Two roots, the same folder unless this repository's scripts build another repository's code:
 #   script_root  the checkout of this repository whose deploy/ci/ runs: deploy/k8s/lib.sh, the Makefile's pinned
@@ -44,13 +95,13 @@ require_code_files() {
 
 # use_build_source [IMAGE]: sets, for the release source this CI run builds for, build_source (compact JSON),
 # build_source_name and build_prefix (its imagePrefix, ending in /). That source is the one whose repository is the
-# repository of this run (ci_repo_url of platform.sh: the job's own on CI, the repository of code_root on a machine),
-# read from the table of this checkout, so a run of a repository the table does not name builds, pushes and signs
-# nothing. With IMAGE, also fails unless IMAGE is one of the services or drillImages of that source: its image can only
-# go under that source's prefix, where the policy admits it with that source's identity.
+# repository of this run (run_repo_url), read from the table of this checkout, so a run of a repository the table does
+# not name builds, pushes and signs nothing. With IMAGE, also fails unless IMAGE is one of the services or drillImages
+# of that source: its image can only go under that source's prefix, where the policy admits it with that source's
+# identity.
 use_build_source() {
   local url table found
-  url=$(ci_repo_url) || fail "read the repository of this run"
+  url=$(run_repo_url) || exit 1
   table=$(release_sources) || exit 1
   found=$(jq -c --arg u "$url" '[.sources[] | select(.repository == $u)]' <<<"$table")
   [ "$(jq length <<<"$found")" = 1 ] ||
@@ -64,21 +115,22 @@ use_build_source() {
   fi
 }
 
-# check_code_tree: fails unless HEAD of code_root is the commit this run builds (ci_commit): a job of another
-# repository that forgot SVP_CODE_ROOT would otherwise build, tag and label this checkout as that repository's commit.
+# check_code_tree: fails unless HEAD of code_root is the commit this run builds ($GITHUB_SHA; HEAD on a machine): a
+# job of another repository that forgot SVP_CODE_ROOT would otherwise build, tag and label this checkout as that
+# repository's commit.
 check_code_tree() {
   local commit head
-  commit=$(ci_commit) || fail "read the commit of this run"
   head=$(git -C "$code_root" rev-parse --verify HEAD) || fail "read the commit at HEAD of $code_root"
+  commit=${GITHUB_SHA:-$head}
   [ "$head" = "$commit" ] ||
-    fail "HEAD of $code_root is $head, but this run builds $commit of $(ci_repo_url): set SVP_CODE_ROOT to the checkout of that commit"
+    fail "HEAD of $code_root is $head, but this run builds $commit of $(run_repo_url): set SVP_CODE_ROOT to the checkout of that commit"
 }
 
 # The images of this repository live under ghcr_prefix (deploy/k8s/lib.sh), those of every release source under its
 # imagePrefix (release_sources of deploy/k8s/lib.sh).
 # The images built only to drill admission: never run by any chart, and named by no image file of svp-gitops, so the
 # daily rescan never attests them again. The same list is drillImages of release source backend, which the policy
-# admits under its prefix (deploy/ci/platform-test.sh checks the two agree).
+# admits under its prefix (deploy/ci/verify-release-test.sh checks the two agree).
 # shellcheck disable=SC2034 # read by the scripts that source this file
 drill_images=(drill-vulnerable drill-unsigned drill-no-provenance)
 # use_release_source SOURCE: sets, from SOURCE (one release source as compact JSON, release_source of

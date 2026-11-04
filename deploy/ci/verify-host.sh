@@ -24,10 +24,8 @@ set -euo pipefail
 
 here=$(cd "$(dirname "$0")" && pwd)
 repo=$(cd "$here/../.." && pwd)
-# ci_temp_dir and the other ci_* functions: what depends on the CI platform.
-# shellcheck source=deploy/ci/platform.sh
-. "$here/platform.sh"
-tmp_root=$(ci_temp_dir) || exit 1
+# The job's own temp directory on GitHub Actions, emptied when the job ends; /tmp on a machine.
+tmp_root=${RUNNER_TEMP:-/tmp}
 out=${SVP_VERIFY_OUT:-$tmp_root/verify}
 gib=$((1024 * 1024 * 1024))
 hosts_line='127.0.0.1 svp.localhost api.svp.localhost s3.svp.localhost'

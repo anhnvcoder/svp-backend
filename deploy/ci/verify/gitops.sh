@@ -350,7 +350,7 @@ gitops_stale() (
   age=$(jq -nr --arg t "$scanned" 'now - ($t | fromdateiso8601) | floor') && [[ $age =~ ^[0-9]+$ ]] || exit 1
   # An hour short of the maximum: the drill and Kyverno read the age again minutes later, after the cases before c.
   [ "$age" -gt "$((max_s - 3600))" ] || exit 1
-  hint=$(ci_dispatch_hint images.yml main drill=true) || exit 1
+  hint="gh workflow run images.yml --repo anhnvcoder/svp-backend --ref main -f drill=true"
   echo "NOTE  case $1 left out on this scheduled run (it SKIPs): $2 was scanned at $scanned, $((age / 3600)) h ago," \
     "within an hour of $max_age or more; nobody rescans it before a scheduled run, so it is checked on a dispatch run within $max_age" \
     "of: $hint"

@@ -97,6 +97,11 @@ Chọn phương án A ở cả bốn mục. Ngoài ra:
 ## Hiện thực ở
 
 - Kế hoạch theo bước và kiểm kê: [phụ lục](appendix/0050-bash-to-standard-tools.md). Từng bước thêm file hiện thực vào đây khi merge.
+- Bỏ adapter CI (mục 1): `deploy/ci/platform.sh`, `platform-test.sh` (xoá); script của `deploy/ci/`, `deploy/k8s/` đọc biến `GITHUB_*`
+  và gọi `gh` trực tiếp, helper chung `step_output`, `step_summary`, `step_summary_tee`, `run_repo_url`, `run_builder_id` ở
+  `deploy/ci/common.sh`; ca test chuyển sang `deploy/ci/plan-test.sh`, `scan-gate-test.sh`, `vuln-predicate-test.sh`,
+  `sign-image-test.sh`, `rescan-test.sh`, `verify-release-test.sh`, `changed-services-test.sh`, `verify-collect-test.sh`,
+  `sources-test.sh`; job `config` của `.github/workflows/ci.yml`; `deploy/ci/changed-services.sh` (mọi `*-test.sh` không build image).
 
 ## Thông tin thêm
 

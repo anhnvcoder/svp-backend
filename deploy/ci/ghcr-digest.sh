@@ -11,9 +11,6 @@ set -euo pipefail
 
 # shellcheck source=deploy/k8s/lib.sh
 . "$(dirname "${BASH_SOURCE[0]}")/../k8s/lib.sh"
-# ci_dispatch_hint: what depends on the CI platform.
-# shellcheck source=deploy/ci/platform.sh
-. "$(dirname "${BASH_SOURCE[0]}")/platform.sh"
 
 # ghcr_get NAME PATH OUT: GET https://ghcr.io/v2/NAME/PATH (NAME without ghcr.io/) into OUT with an anonymous pull
 # token, asking for an index or a manifest of either format. The token goes to curl on stdin, never on a command line.
@@ -49,7 +46,7 @@ newest() {
     commits="$commits $commit"
   done
   [ -n "$commits" ] ||
-    fail "ghcr.io/$name has no tag that is a commit of this clone: build it ($(ci_dispatch_hint images.yml main drill=true))"
+    fail "ghcr.io/$name has no tag that is a commit of this clone: build it (gh workflow run images.yml --repo anhnvcoder/svp-backend --ref main -f drill=true)"
   # The first of the commits in topological order is one that none of the others descends from: on main, where CI
   # builds them, the newest (two commits of the same second still in their order).
   # shellcheck disable=SC2086 # full SHAs, split on spaces

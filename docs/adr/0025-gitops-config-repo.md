@@ -155,7 +155,7 @@ Bảng file đổi của repo code (`lib.sh`, `install.sh`, `gitops.sh`, `promot
 - Thư mục cấu hình: `gitops_dir`, `gitops_clone` của `deploy/k8s/lib.sh`, target `gitops-clone` của `deploy/k8s/k8s.mk`, `deploy/k8s/install.sh`.
 - Check: `deploy/ci/gitops-check.sh` (+ `gitops-check-test.sh`), `deploy/ci/values-check.sh`, `deploy/ci/verify-release.sh`, `deploy/ci/common.sh`.
 - Argo CD: `argocd_root_app`, `follow_branch` của `deploy/k8s/lib.sh`, `deploy/k8s/gitops.sh`, `deploy/ci/verify/gitops.sh`.
-- Promote, bản ghi, rescan: `deploy/ci/promote.sh`, `deploy/ci/release-set.sh`, `deploy/ci/record-stg.sh`, `deploy/ci/promote-prd.sh`, `deploy/ci/rescan.sh`, `deploy/ci/platform.sh` (+ test), job `promote`, `promote-prd`, `rescan` của `.github/workflows/images.yml`, `record-stg` của `.github/workflows/verify.yml`, job `config` của `ci.yml`.
+- Promote, bản ghi, rescan: `deploy/ci/promote.sh`, `deploy/ci/release-set.sh`, `deploy/ci/record-stg.sh`, `deploy/ci/promote-prd.sh`, `deploy/ci/rescan.sh` (+ test), job `promote`, `promote-prd`, `rescan` của `.github/workflows/images.yml`, `record-stg` của `.github/workflows/verify.yml`, job `config` của `ci.yml`.
 - Cài đặt GitHub (người học): [`docs/runbooks/svp-gitops-setup.md`](../runbooks/svp-gitops-setup.md). Danh sách file đầy đủ theo mục: phụ lục, mục "Hiện thực ở".
 
 ## Nguồn

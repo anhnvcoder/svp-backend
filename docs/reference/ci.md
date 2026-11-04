@@ -10,19 +10,23 @@ Loại tài liệu (Diátaxis): **reference**, tra cứu khi cần một lệnh 
   bài lab `dora/` của `svp-labs`, [ADR-0037](../adr/0037-mainpath-standard-tools.md) §1), mọi action
   ghim SHA commit, `permissions: {}` ở đầu file và quyền khai theo job; mọi job của lượt `pull_request` (cả PR từ fork)
   chỉ có `contents: read` và không secret; không `pull_request_target`, `workflow_run`. CI trung lập nền tảng
-  ([ADR-0023](../adr/0023-ci-platform-neutral.md)): YAML chỉ nối bước, logic ở `Makefile` và `deploy/ci/`; script có sẵn đọc
-  ngữ cảnh CI hay gọi API của nền tảng (output, summary, mask, link lượt chạy, PR, dispatch) qua hàm `ci_*` của adapter
-  `deploy/ci/platform.sh` (chế độ `github` trong Actions, `local` khi chạy script trên máy; CI khác thì dừng). Adapter
-  **đóng băng** ([ADR-0037](../adr/0037-mainpath-standard-tools.md) §2): không thêm hàm `ci_*`; script mới đọc biến `GITHUB_*` và gọi `gh`
-  trực tiếp; hàm bị xoá khi không còn script nào (ở cả hai repo) gọi nó; không còn `platform-guard.sh` kiểm điều này. CI trên GitLab là bài lab
-  của `svp-labs`:
+  ([ADR-0023](../adr/0023-ci-platform-neutral.md)): YAML chỉ nối bước, logic ở `Makefile` và `deploy/ci/`. Script đọc thẳng biến
+  của GitHub Actions và gọi `gh` ([ADR-0037](../adr/0037-mainpath-standard-tools.md) §2): output vào
+  `$GITHUB_OUTPUT`, tóm tắt vào `$GITHUB_STEP_SUMMARY` (helper `step_output`, `step_summary`, `step_summary_tee` của
+  `deploy/ci/common.sh`), mask `::add-mask::`, cảnh báo `::warning::`, file tạm ở `$RUNNER_TEMP`, repo, commit và workflow của
+  lượt từ `GITHUB_SERVER_URL`, `GITHUB_REPOSITORY`, `GITHUB_SHA`, `GITHUB_WORKFLOW_REF` (`run_repo_url`, `run_builder_id`). Chạy
+  trên máy (không có biến nào) thì output và tóm tắt in ra stdout, không mask, file tạm ở `/tmp`, lượt là của repo của `code_root`
+  (mục "Script CI cho cây của nguồn khác" dưới đây) ở `HEAD` với workflow `local`; lệnh ghi qua API của GitHub (dispatch) chỉ
+  được in ra. CI trên GitLab là bài lab của `svp-labs`:
   - `.github/workflows/ci.yml` (PR, push `main`, dispatch): `check` (`make check-go TESTFLAGS=-count=1`, Postgres và
     Redis là service container trên `127.0.0.1`, ffmpeg), `generate` (`make generate-check`), `buf` (`buf breaking` so với
     merge-base của PR, `main` trước push, hay merge-base với `origin/main` khi dispatch), `api-contract` (luật version của hợp đồng
     REST, [ADR-0033](../adr/0033-svp-web-repo.md) §1: `make api-contract-check BASE=<base>` với base tính như job `buf`, rồi
     `deploy/ci/contract-test.sh`), `config`
     (đủ lịch sử, `make gitops-clone` và `SVP_GITOPS_DIR` ở `env` của job; `deploy/ci/scan-gate.sh --check-ignorefile`,
-    `deploy/ci/platform-test.sh` (cả `sign-image.sh` và hàm bundle của `common.sh`, trên registry giả), `deploy/ci/promote-test.sh`
+    test của script pipeline image trong job giả của Actions và trên máy (`deploy/ci/plan-test.sh`, `scan-gate-test.sh`,
+    `vuln-predicate-test.sh`, `sign-image-test.sh` cùng hàm bundle của `common.sh` trên registry giả, `rescan-test.sh`,
+    `verify-release-test.sh` cùng `values-check.sh`, `changed-services-test.sh`), `deploy/ci/promote-test.sh`
     (guard của hai job promote, danh sách bản phát hành của rescan),
     `deploy/ci/verify-collect-test.sh`, `make slo-check`, `make otelcol-validate`, `make env`
     rồi `make compose-config`, `deploy/observability/glitchtip/dotenv-test.sh`,
@@ -53,9 +57,9 @@ Loại tài liệu (Diátaxis): **reference**, tra cứu khi cần một lệnh 
   - `.github/workflows/images.yml` (PR, push `main`, dispatch, lịch hằng ngày): build sáu image service Go của repo này
     (`built_services`; image `web` build, ký, promote ở `images.yml` của `svp-frontend`), chỉ service đổi so với base
     (`deploy/ci/changed-services.sh`; đổi `images.yml`, `deploy/ci/` (trừ `trivy-config-ignore.yaml`, script và test của
-    `verify.yml`, `platform-test.sh`, `promote-test.sh`, `gitops-check.sh` cùng `values-check.sh`, `verify-release.sh`, policy `gitops-policies/` (chỉ check `svp-gitops`,
+    `verify.yml`, mọi test `*-test.sh`, `gitops-check.sh` cùng `values-check.sh`, `verify-release.sh`, policy `gitops-policies/` (chỉ check `svp-gitops`,
     `make k8s-gitops-up` và diễn tập chạy hai script này),
-    `gitops-check-test.sh`, `sources-test.sh`, `ghcr-digest.sh`: không job image nào đọc chúng), `deploy/k8s/lib.sh` hay dòng
+    `contract.sh`, `ghcr-digest.sh`: không job image nào đọc chúng), `deploy/k8s/lib.sh` hay dòng
     `TRIVY_IMAGE`/`SYFT_IMAGE`/`GRYPE_IMAGE`/`COSIGN_IMAGE` của `Makefile` thì cả sáu; `build-image.sh web` trong checkout này bị từ
     chối trước khi build). Base: push `main` so với lượt
     push `main` thành
@@ -113,7 +117,7 @@ Loại tài liệu (Diátaxis): **reference**, tra cứu khi cần một lệnh 
     repo này chỉ quét và attest bản của nguồn `backend` (bảng nguồn của checkout); file ghi bản của nguồn khác bị bỏ khỏi tập, một dòng
     stderr (CI của nguồn đó rescan nó, `rescan.sh run|list --source <tên>`, nhánh bot `bot/promote-stg-<tên>`), file dưới prefix không
     thuộc nguồn nào vẫn vào tập nên lượt đỏ; không repo nào attest bản của repo khác. `rescan.sh run` đòi `--source` (mặc định
-    `backend`) bằng nguồn của repo của lượt (`use_build_source`) và `ci_builder_id` bằng `subject` của nguồn đó, kiểm trước khi đọc gì
+    `backend`) bằng nguồn của repo của lượt (`use_build_source`) và `run_builder_id` bằng `subject` của nguồn đó, kiểm trước khi đọc gì
     (rescan thay attestation `vuln` bất kể ai ký bản cũ: CI của `svp-frontend` quên `--source web` sẽ thay attestation của
     bản backend bằng identity `svp-frontend`). Rescan theo định dạng đang có trên digest (`release_format` của `common.sh`):
     digest định dạng cũ (`.sig`, `.att`; stg và prd tới bản phát hành bundle đầu) `cosign attest --replace` như khi build; digest bundle
@@ -127,7 +131,7 @@ Loại tài liệu (Diátaxis): **reference**, tra cứu khi cần một lệnh 
     `packages: write`, `id-token: write`) chạy `deploy/ci/contract.sh publish`: đẩy spec thành OCI artifact
     `ghcr.io/anhnvcoder/svp-backend/api/gateway:<info.version>` bằng ORAS (`ORAS_IMAGE` ghim; `artifactType`
     `application/vnd.anhnvcoder.svp.api-contract.v1`, một layer `application/vnd.oai.openapi`), ký keyless digest đó bằng cosign
-    định dạng cũ với identity của nguồn `backend`; trước khi đẩy đòi lượt ký được bằng identity đó (`ci_builder_id`). Tag đã có cùng
+    định dạng cũ với identity của nguồn `backend`; trước khi đẩy đòi lượt ký được bằng identity đó (`run_builder_id`). Tag đã có cùng
     layer thì để nguyên (thiếu chữ ký thì ký bù), tag có nội dung khác thì đỏ, không ghi đè. `contract.sh publish --dry-run` đọc
     registry ẩn danh và chỉ in việc sẽ làm. Lượt phát hành thật đầu và package `api/gateway` public: **kiểm sau push**. **Promote prd** ([ADR-0037](../adr/0037-mainpath-standard-tools.md) §6): dispatch
     `-f promote_prd=true [-f stg_ref=<main|SHA đủ 40 hex>]` trên `main` (một mình, không kèm `services`, `rescan`, `values_ref`, `drill`;
@@ -269,7 +273,8 @@ Loại tài liệu (Diátaxis): **reference**, tra cứu khi cần một lệnh 
   - Chạy lại một job trên máy, từ gốc repo: `make check-go TESTFLAGS=-count=1`; `make generate-check`;
     `buf breaking --against '.git#ref=<base>'`; `make api-contract-check BASE=<base>`, `deploy/ci/contract-test.sh`;
     `deploy/ci/scan-gate.sh --check-ignorefile`,
-    `deploy/ci/platform-test.sh`, `make slo-check`,
+    `deploy/ci/plan-test.sh`, `scan-gate-test.sh`, `vuln-predicate-test.sh`, `sign-image-test.sh`, `rescan-test.sh`,
+    `verify-release-test.sh`, `changed-services-test.sh`, `make slo-check`,
     `deploy/ci/promote-test.sh`,
     `make otelcol-validate`, `make compose-config`, `deploy/observability/glitchtip/dotenv-test.sh`, `make helm-check`, `make kyverno-test`, `deploy/ci/sources-test.sh`,
     `deploy/ci/gitops-check-test.sh ../gitops`, `make k6-check`,
@@ -284,12 +289,12 @@ Loại tài liệu (Diátaxis): **reference**, tra cứu khi cần một lệnh 
   - **Script CI cho cây của nguồn khác** ([ADR-0033](../adr/0033-svp-web-repo.md) §5): CI của một nguồn phát hành khác (`svp-frontend`)
     chạy `deploy/ci/*.sh` từ checkout ghim của repo này với `SVP_CODE_ROOT` trỏ checkout của chính nó. `common.sh` có hai gốc:
     `script_root` (checkout này: `lib.sh`, image ghim của `Makefile`, bảng nguồn) và `code_root` (`SVP_CODE_ROOT` nếu đặt, phải là
-    thư mục; không thì checkout này). Nguồn của lượt là nguồn có `repository` bằng `ci_repo_url` (`use_build_source`; repo không có
+    thư mục; không thì checkout này). Nguồn của lượt là nguồn có `repository` bằng `run_repo_url` (`use_build_source`; repo không có
     trong bảng thì không build, đẩy hay ký gì); image phải thuộc `services`/`drillImages` của nguồn đó, đẩy dưới prefix của nó, nhãn
     OCI theo nguồn; HEAD của `code_root` phải bằng commit của lượt (`check_code_tree`). Cây repo khác: `Dockerfile` và context ở gốc,
     phải có `Dockerfile`, `pnpm-lock.yaml`, `.trivyignore.yaml`, `.grype.yaml` (cổng quét đọc file của cây đang build; thiếu một file là cây sai, không phải cây không ngoại lệ); `plan.sh` build mọi service
-    của nguồn mỗi lượt, không base, `promote_charts=false`. Trên máy (chế độ `local`), `ci_repo`, `ci_repo_url`, `ci_commit` đọc origin
-    github.com và HEAD của `SVP_CODE_ROOT` (không có origin đó thì lỗi). Thử một chân web từ cây khác:
+    của nguồn mỗi lượt, không base, `promote_charts=false`. Trên máy, repo của lượt (`run_repo_url`) đọc từ origin
+    github.com của `SVP_CODE_ROOT` (không có origin đó thì lỗi), commit là HEAD của nó. Thử một chân web từ cây khác:
     `SVP_CODE_ROOT=<checkout svp-frontend> deploy/ci/build-image.sh web arm64 "$(mktemp -d)"`.
     Image source map `web-sourcemaps` không còn ([ADR-0039](../adr/0039-mainpath-drills-scan-gate-sourcemaps.md) §3): `build-image.sh` không có
     `--sourcemaps-artifact`; tải source map lúc build vào tracker chạy lâu dài làm khi có tracker đó. Digest mới nhất của image diễn tập

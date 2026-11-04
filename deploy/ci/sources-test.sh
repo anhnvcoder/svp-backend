@@ -15,7 +15,9 @@
 # attestor per source, named after it. A source without promoter, retired, is still accepted by both, since the scripts
 # read the tables of older commits, which have such sources (an environment may pin one). Each case renders a copy of the chart with its own table, under Helm
 # homes in a temporary directory, so no cache or repository of the machine is read or written.
-# Needs bash, jq and helm: no network, no cluster.
+# Last, web_clone of deploy/k8s/lib.sh, which reads the table: without WEB_REF it checks out the commit of the web
+# release stg runs when it is a release of source web, and refuses one under another prefix before anything is cloned.
+# Needs bash, git, jq and helm: no network, no cluster.
 #
 # Usage, from anywhere: deploy/ci/sources-test.sh
 set -euo pipefail
@@ -192,6 +194,48 @@ refused "an imagePrefix without the trailing /" '.sources[1].imagePrefix |= rtri
 refused "a provenanceRef that is not a refs/... ref" '.sources[1].provenanceRef = "heads/main"' \
   "provenanceRef of source web must be a refs/... ref" \
   "provenanceRef of every source must be a refs/... ref"
+
+# --- web_clone of deploy/k8s/lib.sh without WEB_REF: the commit of the web release stg runs, when that release is
+# <imagePrefix>web of a source of the table: web. A release under another prefix is refused before anything is cloned.
+# In a copy of lib.sh and the policy's chart files; the clone of svp-frontend comes from a repository on disk
+# (url.insteadOf of a git config of its own), the clone of svp-gitops is a repository on disk too.
+wc=$work/webclone
+mkdir -p "$wc/deploy/k8s" "$wc/deploy/helm/svp-policy"
+cp "$src/deploy/k8s/lib.sh" "$wc/deploy/k8s/"
+cp -R "$src/deploy/helm/svp-policy/values.yaml" "$src/deploy/helm/svp-policy/files" "$wc/deploy/helm/svp-policy/"
+wg=$work/webclone-gitops
+fe=$work/frontend
+mkdir -p "$wg/envs/stg/images"
+git_() {
+  env -u GIT_DIR -u GIT_WORK_TREE GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 git -c user.name=test \
+    -c user.email=test@example.invalid -c commit.gpgsign=false -c core.hooksPath=/dev/null "$@"
+}
+git_ init -q -b main "$wg" && git_ -C "$wg" remote add origin https://github.com/anhnvcoder/svp-gitops.git
+git_ init -q -b main "$fe" && git_ -C "$fe" commit -q --allow-empty -m web
+fe_head=$(git_ -C "$fe" rev-parse HEAD)
+printf '[url "%s"]\n\tinsteadOf = https://github.com/anhnvcoder/svp-frontend.git\n' "$fe/.git" >"$work/webclone.gitconfig"
+digest=sha256:$(printf 'a%.0s' $(seq 64))
+# web_clone_case NAME WANT_RC REPOSITORY: web_clone with envs/stg/images/web.yaml naming REPOSITORY at the commit of
+# $fe, its output in wc.out; the clone is removed first.
+web_clone_case() {
+  local rc=0
+  rm -rf "$wc/.web"
+  printf 'image:\n  repository: %s\n  tag: "%s"\n  digest: "%s"\n' "$3" "${fe_head:0:12}" "$digest" \
+    >"$wg/envs/stg/images/web.yaml"
+  # shellcheck disable=SC2016 # expanded by the inner shell
+  env -u GIT_DIR -u GIT_WORK_TREE -u WEB_REF GIT_CONFIG_GLOBAL="$work/webclone.gitconfig" GIT_CONFIG_NOSYSTEM=1 \
+    SVP_GITOPS_DIR="$wg" bash -c '. "$1/deploy/k8s/lib.sh" && web_clone' _ "$wc" >"$work/wc.out" 2>&1 || rc=$?
+  if [ "$rc" = "$2" ]; then ok "web_clone: $1 (exit $2)"; else fail "web_clone: $1 (exit $rc, want $2): $(cat "$work/wc.out")"; fi
+}
+# wc_has NAME TEXT: ok when the output of the last case holds TEXT.
+wc_has() { if grep -qF -- "$2" "$work/wc.out"; then ok "web_clone: $1"; else fail "web_clone: $1: $(cat "$work/wc.out")"; fi; }
+web_clone_case "stg runs a release of source web" 0 ghcr.io/anhnvcoder/svp-frontend/web
+wc_has "a release of web: its commit checked out" "svp-frontend at ${fe_head:0:12} (${fe_head:0:12}) in .web/svp-frontend"
+web_clone_case "stg runs web under a prefix no source publishes it under" 1 ghcr.io/anhnvcoder/svp-backend/web
+wc_has "under another prefix: names the admitted repositories" \
+  "staging runs web from ghcr.io/anhnvcoder/svp-backend/web (envs/stg/images/web.yaml), not a release of a source that publishes web (ghcr.io/anhnvcoder/svp-frontend/web): set WEB_REF"
+[ ! -e "$wc/.web" ] && ok "web_clone: under another prefix: nothing cloned" ||
+  fail "web_clone: under another prefix: nothing cloned"
 
 if [ "$failures" -gt 0 ]; then
   echo "$failures check(s) failed" >&2

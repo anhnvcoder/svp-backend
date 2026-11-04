@@ -129,7 +129,7 @@ Repo `svp-backend` (đường dẫn từ gốc repo):
 
 - `deploy/k8s/drills/` (xoá `keda.sh`, `pdb.sh`, `canary.sh`, `web-canary.sh`, `backup.sh`, `gitops.sh`, `web-obs.sh`), target của chúng ở `deploy/k8s/k8s.mk`, `deploy/k8s/cloud/` (còn `check.sh` cho Job k6), `deploy/k8s/install.sh`, `deploy/k8s/lib.sh`, `deploy/helm/svp-data/`, `deploy/helm/svp-service/`, `renovate.json`, `Makefile` (mục 1).
 - `.github/workflows/verify.yml`, `deploy/ci/verify/gitops.sh`, `deploy/ci/verify/compose-obs.sh` (thu gọn), `deploy/ci/verify/` (xoá năm kịch bản), `deploy/ci/verify-run.sh`, `verify-host.sh`, `verify-mask.sh`, `verify-collect.sh`; `deploy/ci/verify-sample.sh`, `verify-tempo.sh` (xoá); `deploy/k6/cloud/run.sh` (bỏ chế độ runner), `deploy/k6/cloud/render.sh` (mục 1).
-- `deploy/ci/scan-gate.sh` (viết lại gọn), `deploy/ci/build-image.sh`, `deploy/ci/rescan.sh`, `deploy/ci/changed-services.sh`, `deploy/ci/platform.sh`, `grype_sbom` của `deploy/ci/common.sh`, `.trivyignore.yaml`, `.grype.yaml`, `deploy/ci/trivy-config-ignore.yaml`, job `config` của `.github/workflows/ci.yml` (mục 2).
+- `deploy/ci/scan-gate.sh` (viết lại gọn), `deploy/ci/build-image.sh`, `deploy/ci/rescan.sh`, `deploy/ci/changed-services.sh`, `grype_sbom` của `deploy/ci/common.sh`, `deploy/ci/scan-gate-test.sh`, `.trivyignore.yaml`, `.grype.yaml`, `deploy/ci/trivy-config-ignore.yaml`, job `config` của `.github/workflows/ci.yml` (mục 2).
 - `deploy/ci/sourcemaps-image.sh`, `gitops-sourcemaps.sh` (+ test, xoá), `deploy/ci/ghcr-digest.sh` (+ test), `deploy/k8s/drills/supplychain.sh`, `deploy/observability/glitchtip/sourcemaps.sh` (bỏ `SOURCEMAPS_DIR`) (mục 3).
 
 Repo khác:
