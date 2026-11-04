@@ -80,18 +80,17 @@ jobs:
     permissions:
       actions: read
     outputs:
-      runs: ${{ steps.api.outputs.runs }}
+      sha: ${{ steps.api.outputs.sha }}
     steps:
       - id: api
         env:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
         run: |
-          # Only the fields plan reads, so the output stays small.
-          runs_url="repos/$REPO/actions/workflows/images.yml/runs?branch=main&event=push&status=success&per_page=5"
-          if runs=$(gh api "$runs_url" \
-            --jq '{workflow_runs: [.workflow_runs[] | {head_sha, conclusion, event, head_branch}]}'); then
-            echo "runs=$runs" >>"$GITHUB_OUTPUT"
+          # The API filters by branch, event and status; plan.sh takes the answer only when it is a full commit SHA.
+          runs_url="repos/$REPO/actions/workflows/images.yml/runs?branch=main&event=push&status=success&per_page=1"
+          if sha=$(gh api "$runs_url" --jq '.workflow_runs[0].head_sha // ""'); then
+            echo "sha=$sha" >>"$GITHUB_OUTPUT"
           else
             echo "::warning::The Actions API did not answer: this run builds every service."
           fi
@@ -131,7 +130,7 @@ jobs:
           INPUT_RESCAN: ${{ inputs.rescan }}
           INPUT_DRILL: ${{ inputs.drill }}
           INPUT_VALUES_REF: ${{ inputs.values_ref }}
-          LAST_SUCCESS_JSON: ${{ needs.last-success.outputs.runs }}
+          LAST_SUCCESS_SHA: ${{ needs.last-success.outputs.sha }}
         run: deploy/ci/plan.sh
 
   build-nopush:

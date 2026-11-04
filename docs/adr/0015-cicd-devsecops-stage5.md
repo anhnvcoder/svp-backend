@@ -169,7 +169,7 @@ Chưa làm: đăng nhập AWS bằng OIDC và ECR, kiểm chữ ký nhà cung c�
 ## Hiện thực ở
 
 - Workflow, quyền, job của `ci.yml` (§1, §2): `.github/workflows/ci.yml`, `.github/workflows/images.yml`, target `check`, `generate-check` của `Makefile`.
-- Chỉ build service đổi (§3): `deploy/ci/changed-services.sh`, `deploy/ci/last-success.sh`, `deploy/ci/plan.sh`.
+- Chỉ build service đổi (§3): `deploy/ci/changed-services.sh`, `deploy/ci/plan.sh`, job `last-success` của `.github/workflows/images.yml`.
 - Image đa kiến trúc, quét trước khi push (§4–§6): `deploy/ci/build-image.sh`, `deploy/ci/push-image.sh`, `deploy/ci/merge-index.sh`, `deploy/ci/scan-gate.sh`, `deploy/ci/common.sh`, `deploy/docker/service.Dockerfile`, `deploy/docker/web.Dockerfile`, `.trivyignore.yaml`, image diễn tập `deploy/ci/drill/vulnerable.Dockerfile`.
 - SBOM, chữ ký, attestation, rescan (§7): `deploy/ci/sign-image.sh`, `deploy/ci/vuln-predicate.sh`, `deploy/ci/rescan.sh`, `deploy/ci/verify-release.sh`.
 - Kyverno (§8): `deploy/helm/svp-policy/` (`templates/imagevalidatingpolicy.yaml`, `values.yaml`), `deploy/k8s/values/kyverno.yaml`, namespace và NetworkPolicy của Kyverno ở `deploy/helm/svp-cluster/` (`values.yaml`, `templates/networkpolicies.yaml`), cách cài Audit/Enforce ở `deploy/k8s/install.sh`, `deploy/k8s/lib.sh`; diễn tập `deploy/k8s/drills/supplychain.sh`, `deploy/k8s/drills/threats.sh`.

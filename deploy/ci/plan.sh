@@ -14,14 +14,14 @@
 #                   repository from before svp-gitops held the releases
 #
 # Inputs come from the environment only, never interpolated into a script: EVENT_NAME, GIT_REF (github.ref),
-# PR_BASE_REF (github.base_ref), INPUT_SERVICES, INPUT_RESCAN, INPUT_DRILL, INPUT_VALUES_REF, LAST_SUCCESS_JSON (the
-# answer of the job last-success, possibly empty).
+# PR_BASE_REF (github.base_ref), INPUT_SERVICES, INPUT_RESCAN, INPUT_DRILL, INPUT_VALUES_REF, LAST_SUCCESS_SHA (the
+# head_sha job last-success read from the Actions API, possibly empty).
 #
 # Mode: rescan on schedule or dispatch rescan=true; drill on dispatch drill=true; otherwise build. Both inputs at once,
 # rescan or drill off main, services outside build or values_ref outside rescan: refused (the run fails), never
 # guessed. Base of the build (never github.event.before, which loses the changes of a queued run that was
 # replaced and of a run that failed):
-#   push to main       head_sha of the newest successful push run of images.yml on main (last-success.sh); none →
+#   push to main       head_sha of the newest successful push run of images.yml on main (LAST_SUCCESS_SHA); none or not a full SHA →
 #                      all six
 #   pull request       merge-base of HEAD with the PR's base branch
 #   workflow_dispatch  merge-base of HEAD with origin/main; input services (all, or names from the six this repository
@@ -92,7 +92,9 @@ drill) images=("${drill_images[@]}") ;;
 rescan) ;;
 build)
   if [ "$event" = push ] && [ "$on_main" = true ]; then
-    base=$(printf '%s' "${LAST_SUCCESS_JSON:-}" | "$ci_dir/last-success.sh")
+    # Anything but a full commit SHA is no base: a bad answer from the API makes the run build too much, never too little.
+    base=${LAST_SUCCESS_SHA:-}
+    [[ $base =~ ^[0-9a-f]{40}$ ]] || base=
     [ -n "$base" ] || step_summary "No successful push run of images.yml on main to compare with: every service is built."
   elif [ "$event" = pull_request ]; then
     base=$(git -C "$repo_root" merge-base HEAD "origin/${PR_BASE_REF:?}") ||

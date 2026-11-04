@@ -226,12 +226,9 @@ check "build-image.sh in this checkout: web is refused, not an image of its rele
 # read changed (a file under deploy/helm/, or the file a symbolic link there points to), not for docs/.
 # plan_charts NAME WANT: plan.sh of a push to main after one commit hands on promote_charts=WANT.
 plan_charts() {
-  local last
-  last=$(jq -nc --arg sha "$(g rev-parse HEAD~1)" \
-    '{workflow_runs: [{head_sha: $sha, conclusion: "success", event: "push", head_branch: "main"}]}')
   fresh
   on github env "${backend_run[@]}" GITHUB_SHA="$(g rev-parse HEAD)" EVENT_NAME=push GIT_REF=refs/heads/main \
-    LAST_SUCCESS_JSON="$last" "$tree/deploy/ci/plan.sh" \
+    LAST_SUCCESS_SHA="$(g rev-parse HEAD~1)" "$tree/deploy/ci/plan.sh" \
     >/dev/null 2>&1 || fail "plan.sh: $1: exits 0"
   same "plan.sh: $1" "promote_charts=$2 has_images=false" \
     "$(grep '^promote_charts=' "$work/output") $(grep '^has_images=' "$work/output")"
@@ -246,6 +243,14 @@ check "plan.sh: the summary names the chart's file" has "$work/summary" "- deplo
 echo "exporters: {}" >>"$tree/deploy/observability/otelcol/k8s-config.yaml"
 g commit -qam "the collector's config"
 plan_charts "a push that changes the file a chart's link points to promotes the charts" true
+# A base that is not a full SHA (an API that answered nothing or something else) is no base: every service is built.
+for bad in "" "$(g rev-parse --short HEAD~1)" "not-a-sha"; do
+  fresh
+  on github env "${backend_run[@]}" GITHUB_SHA="$(g rev-parse HEAD)" EVENT_NAME=push GIT_REF=refs/heads/main \
+    LAST_SUCCESS_SHA="$bad" "$tree/deploy/ci/plan.sh" >/dev/null 2>&1 || fail "plan.sh: base '$bad': exits 0"
+  check "plan.sh: base '$bad' is no base, every service is built" has "$work/summary" \
+    "No successful push run of images.yml on main to compare with: every service is built."
+done
 
 if ((failures)); then
   echo "$failures check(s) failed" >&2
