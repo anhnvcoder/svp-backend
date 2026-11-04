@@ -1,7 +1,7 @@
 # Checks of every pull request and of every push to main: the whole local check list (make check-go, generated
 # code, buf breaking, the version rule of the API contract, compose, Collector, Prometheus rules, charts) plus the
-# secret scan of the whole git history, the misconfiguration scan, the security lint of the workflows (zizmor) and, on
-# pull requests, the review of the dependencies they change. Job ci-ok is the only check the ruleset of main requires
+# secret scan of the whole git history, the misconfiguration scan, the security lint of the workflows (zizmor), the Markdown
+# lint and internal links (make docs-check) and, on pull requests, the review of the dependencies they change. Job ci-ok is the only check the ruleset of main requires
 # from this workflow, so the other jobs can be renamed or added without touching it. Job stack runs the whole
 # compose stack end to end as a report outside ci-ok, so a flaky run on a shared runner never blocks a merge.
 #
@@ -410,6 +410,19 @@ jobs:
           path: ${{ runner.temp }}/zizmor.sarif
           if-no-files-found: ignore
 
+  # Style of every Markdown file and its relative links and heading anchors (make docs-check): markdownlint-cli2 and
+  # lychee --offline from images pinned by digest in the Makefile, run without network.
+  docs:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - run: make docs-check
+
   # The dependencies a pull request adds or changes (go.mod, and every other manifest GitHub's dependency graph reads),
   # against the GitHub Advisory Database: a known vulnerability of severity high or critical fails the job before
   # trivy and grype see it in an image (ADR-0041 (k)). Licenses only show in the job summary. Pull requests only:
@@ -673,11 +686,11 @@ jobs:
 
   # The required check. It runs whatever happened before it (always()) and fails unless every check job succeeded:
   # GitHub counts a skipped required check as passed, and a job that failed or was cancelled does not fail the jobs
-  # that need it by itself. Of the nine, only dependency-review has a condition (pull requests only): its skip is
+  # that need it by itself. Of the ten, only dependency-review has a condition (pull requests only): its skip is
   # accepted on any other event, and nowhere else. Any other skip can only mean a wrong if: and is red too. No
   # condition may ever skip ci-ok itself.
   ci-ok:
-    needs: [check, generate, buf, api-contract, config, gitleaks, trivy-config, zizmor, dependency-review]
+    needs: [check, generate, buf, api-contract, config, gitleaks, trivy-config, zizmor, dependency-review, docs]
     if: always()
     runs-on: ubuntu-24.04
     permissions: {}
@@ -691,5 +704,5 @@ jobs:
           # skip_ok: the one skip that is part of a run, as in images-ok: dependency-review outside pull requests.
           jq -e --arg event "$EVENT" '
             def skip_ok: .key == "dependency-review" and $event != "pull_request";
-            length == 9 and all(to_entries[]; .value.result == "success" or (.value.result == "skipped" and skip_ok))
+            length == 10 and all(to_entries[]; .value.result == "success" or (.value.result == "skipped" and skip_ok))
           ' <<< "$NEEDS" > /dev/null

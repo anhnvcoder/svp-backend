@@ -31,7 +31,8 @@ Loại tài liệu (Diátaxis): **reference**, tra cứu khi cần một lệnh 
     `gitleaks` (toàn lịch sử, `--redact`), `trivy-config` (chỉ báo), `zizmor` (lint bảo mật workflow, mục dưới),
     `dependency-review` (chỉ lượt `pull_request`: `actions/dependency-review-action` ghim SHA, `contents: read`,
     `fail-on-severity: high`, không `allow-licenses`; chặn dependency có lỗ hổng ngay lúc PR thêm vào,
-    [ADR-0041](../adr/0041-github-hardening.md) (k)), `sarif` (chỉ `main`), check tổng `ci-ok` (cần đủ 9 job,
+    [ADR-0041](../adr/0041-github-hardening.md) (k)), `docs` (`make docs-check`: markdownlint-cli2 và lychee offline, image ghim digest,
+    không mạng), `sarif` (chỉ `main`), check tổng `ci-ok` (cần đủ 10 job,
     trừ `sarif` và `stack`; `dependency-review` `skipped` ngoài lượt `pull_request` vẫn xanh, job khác `skipped` thì đỏ; job `web` cũ ở CI của
     `svp-frontend` từ khi web tách repo). Job `stack` (ADR-0020 §15; **chỉ báo, ngoài `ci-ok`**, không chặn merge; xem lại
     khi 20 lượt liên tiếp xanh, không lượt đỏ do môi trường, thì đưa vào `ci-ok`): `ubuntu-24.04`, tối đa 45 phút,
@@ -196,7 +197,7 @@ Loại tài liệu (Diátaxis): **reference**, tra cứu khi cần một lệnh 
     (`::add-mask::` giá trị bí mật của `.env` sau mỗi target và của Secret trong cluster, ở namespace `svp`, `svp-data`, `svp-obs`, `argocd`,
     `svp-secrets`), `verify-collect.sh` (artifact `verify-<kịch bản>`, giữ 30 ngày: chỉ file theo danh sách cho phép, gồm `results.tsv`,
     `scenario`, `df-before.txt`, `logs/*.log` và `.k8s/drills/{*.json,traffic-*.log}`; quét theo giá trị bí mật đã biết và theo mẫu, file nghi bị bỏ
-    kèm `::warning::`, `files.txt` liệt kê file giữ và bỏ; đầu ra target bỏ dòng log JSON, access log và dòng log container `    [<namespace>] …`
+    kèm `::warning::`, `files.txt` liệt kê file giữ và bỏ; đầu ra target bỏ dòng log JSON, access log và dòng log container `[<namespace>] …` thụt bốn khoảng trắng
     ngoài `log_tail_namespaces` của `deploy/k8s/lib.sh`: chỉ đuôi log hạ tầng bên thứ ba mà `make k8s-up` in khi release không Ready, không bao giờ
     `svp`). `deploy/ci/verify-collect-test.sh` chạy trên máy và ở job `config` (giá trị giả, `docker`/`kubectl` giả, không mạng).
   - DORA là bài lab `dora/` của `svp-labs` ([ADR-0037](../adr/0037-mainpath-standard-tools.md) §1, thay [ADR-0028](../adr/0028-dora-metrics.md)):

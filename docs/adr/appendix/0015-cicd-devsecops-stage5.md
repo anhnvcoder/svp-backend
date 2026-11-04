@@ -39,7 +39,7 @@ Tiêu đề gốc: Giai đoạn 5: CI/CD và chuỗi cung ứng image với GitH
   phải có: GitHub Actions chỉ build service có thay đổi; image đa kiến trúc lên GHCR; quét bảo mật bằng trivy, gosec,
   gitleaks; SBOM bằng syft, ký image bằng cosign; Kyverno chỉ cho chạy image đã ký và đạt policy cơ bản; Renovate; đánh
   version; promote image qua pull request GitOps. **Xong khi:** cluster từ chối image chưa ký hoặc có lỗ hổng nghiêm trọng.
-- [Threat model §5](../../threat-model.md#5-tổng-hợp-theo-giai-đoạn), hàng giai đoạn 5: FF-8 (ffmpeg có lỗ hổng đã công bố),
+- [Threat model §5](../../appendix/threat-model.md#tổng-hợp-theo-giai-đoạn-mục-5-cũ), hàng giai đoạn 5: FF-8 (ffmpeg có lỗ hổng đã công bố),
   SC-1 (image bị thay hay không rõ nguồn), SC-2 (action bên thứ ba bị chiếm, đọc được secret của CI), SEC-1 (gitleaks),
   SEC-2 (trivy quét bí mật trong image), JWT-10 (khoá ký nằm trong repo hay image); xét lại threat model theo bề mặt mới.
 - Repo `anhnvcoder/short-video-platform` **public từ 2026-10-20**: runner chuẩn không tính phút, runner Linux arm64 dùng

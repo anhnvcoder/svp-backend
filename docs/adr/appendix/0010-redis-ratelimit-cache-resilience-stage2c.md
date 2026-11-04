@@ -22,7 +22,7 @@ Tiêu đề gốc: 0010. Giai đoạn 2 phần C: Redis cho rate limit và cache
   cho phần C: Redis; cache feed khám phá + singleflight ([ADR-0005](../0005-feed-fan-out-on-write.md) luật 6); rate limit ở
   gateway gồm RL-3 và RL-6; timeout, retry, circuit breaker giữa service; job dọn upload bỏ dở
   ([ADR-0004](../0004-direct-upload-and-hls.md) luật 4) và UP-7 (ADR-0008 mục 13, ADR-0009 mục 14).
-- Biện pháp giai đoạn 2 của [threat model §5](../../threat-model.md#5-tổng-hợp-theo-giai-đoạn) còn mở: JWT-4, JWT-6, JWT-9
+- Biện pháp giai đoạn 2 của [threat model §5](../../appendix/threat-model.md#tổng-hợp-theo-giai-đoạn-mục-5-cũ) còn mở: JWT-4, JWT-6, JWT-9
   (rate limit login/register), UP-7, RL-1 tới RL-3, RL-6. Hành vi khi Redis lỗi đã chốt theo loại route ở
   [§4.4](../../threat-model.md#44-rate-limit-ở-gateway); ADR này chốt ngưỡng và cách làm.
 - [§4.4](../../threat-model.md#44-rate-limit-ở-gateway) hẹn chốt ngưỡng bằng lab `rate-limiter`. Phần C không làm lab đó: ngưỡng ở mục 2 chọn bằng lập luận và xem lại bằng k6 ở giai đoạn 6. Lab

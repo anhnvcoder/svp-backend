@@ -7,7 +7,7 @@
 
 - Luồng upload thật của [architecture §6.1](../architecture.md#61-upload-tới-khi-vào-feed): `InitUpload` trả presigned POST, client đẩy file lên MinIO, `CompleteUpload` `HEAD` rồi ghi outbox, relay phát `video.uploaded`, media-worker transcode ra HLS, phát `transcode.completed` / `transcode.failed`, video-service chuyển `READY` hoặc `FAILED` (bước bù). Redis, rate limit, engagement-service và feed-service thuộc các ADR sau.
 - Các ADR trước đã chốt hướng: Redpanda, outbox, at-least-once, DLQ ([ADR-0003](0003-async-events-outbox.md)); presigned POST, HLS, hai bucket ([ADR-0004](0004-direct-upload-and-hls.md)); topic theo luồng thực thể, envelope, bỏ qua nhánh `oneof` chưa biết ([ADR-0006](0006-contract-ids-and-event-envelope.md)); cấu hình bằng biến môi trường, image distroless ([ADR-0007](0007-go-monorepo-toolchain-and-stage1-scope.md)). ADR này chọn thư viện, image, cấu hình hạ tầng và chi tiết hiện thực mà code luồng upload dùng; tên biến, version, cổng, đường dẫn lấy từ đây.
-- Biện pháp bắt buộc của [threat model §5](../threat-model.md#5-tổng-hợp-theo-giai-đoạn) cho phần này: UP-1 tới UP-6, FF-1 tới FF-4, FF-6, FF-7, IN-5. Ràng buộc máy: Apple M2, 16 GB; Docker VM có 7,65 GiB và 8 CPU (`docker info`, 2026-10-11); compose profile `core` gồm service + Redpanda + MinIO (plan, mục Ràng buộc máy); chạy native arm64.
+- Biện pháp bắt buộc của [threat model §5](../appendix/threat-model.md#tổng-hợp-theo-giai-đoạn-mục-5-cũ) cho phần này: UP-1 tới UP-6, FF-1 tới FF-4, FF-6, FF-7, IN-5. Ràng buộc máy: Apple M2, 16 GB; Docker VM có 7,65 GiB và 8 CPU (`docker info`, 2026-10-11); compose profile `core` gồm service + Redpanda + MinIO (plan, mục Ràng buộc máy); chạy native arm64.
 
 ## Yếu tố quyết định
 
