@@ -36,6 +36,7 @@ func newTestStore(t *testing.T, cfg Config) *Store {
 }
 
 func TestNewRejectsMissingConfig(t *testing.T) {
+	t.Parallel()
 	for _, field := range []string{"Endpoint", "Region", "AccessKeyID", "SecretAccessKey", "UploadsBucket", "MediaBucket"} {
 		cfg := testConfig("http://s3:9000")
 		switch field {
@@ -60,6 +61,7 @@ func TestNewRejectsMissingConfig(t *testing.T) {
 }
 
 func TestBucketByPrefix(t *testing.T) {
+	t.Parallel()
 	cfg := testConfig("http://s3:9000")
 	cfg.UploadsBucket, cfg.MediaBucket = "up-bucket", "media-bucket"
 	s := newTestStore(t, cfg)
@@ -177,6 +179,7 @@ func TestPresignPostPolicy(t *testing.T) {
 }
 
 func TestPresignPostRejects(t *testing.T) {
+	t.Parallel()
 	s := newTestStore(t, testConfig("http://s3:9000"))
 	tests := []struct {
 		name, key, contentType string
@@ -199,6 +202,7 @@ func TestPresignPostRejects(t *testing.T) {
 }
 
 func TestHeadClassifiesErrors(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		status    int
 		want      error
@@ -271,6 +275,7 @@ func staleFile(t *testing.T) string {
 }
 
 func TestDownload(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name    string
 		chunked bool
@@ -284,6 +289,7 @@ func TestDownload(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 			srv := fakeGet(t, "0123456789", tt.chunked)
 			s := newTestStore(t, testConfig(srv.URL))
 			path := staleFile(t)
@@ -305,6 +311,7 @@ func TestDownload(t *testing.T) {
 	}
 
 	t.Run("not found", func(t *testing.T) {
+		t.Parallel()
 		srv := fakeGet(t, "0123456789", false)
 		s := newTestStore(t, testConfig(srv.URL))
 		path := staleFile(t)
@@ -318,6 +325,7 @@ func TestDownload(t *testing.T) {
 }
 
 func TestDeletePrefixRejects(t *testing.T) {
+	t.Parallel()
 	s := newTestStore(t, testConfig("http://svp-unreachable.invalid:9000"))
 	for _, p := range []string{"media/", "media/0192", "other/0192/", ""} {
 		if err := s.DeletePrefix(t.Context(), p); !errors.Is(err, ErrInvalidKey) {
@@ -329,6 +337,7 @@ func TestDeletePrefixRejects(t *testing.T) {
 // The keys media-worker writes pass; anything a storage or a URL parser could read as another
 // path, or naming another video, does not (FF-6).
 func TestIsMediaKey(t *testing.T) {
+	t.Parallel()
 	const id = "0190a6e4-7b2c-7d3e-9f40-123456789abc"
 	const prefix = "media/" + id + "/"
 	tests := []struct {
@@ -379,6 +388,7 @@ func TestIsMediaKey(t *testing.T) {
 // Upload sends Cache-Control only when it is given; Create adds If-None-Match: * and turns the
 // 412 of a key that is taken into ErrExists, which is neither ErrAccessDenied nor ErrNotFound.
 func TestPutHeaders(t *testing.T) {
+	t.Parallel()
 	type sent struct{ method, path, contentType, cacheControl, ifNoneMatch string }
 	var got []sent
 	taken := "/media/media/v1/master.m3u8"
@@ -427,6 +437,7 @@ func TestPutHeaders(t *testing.T) {
 // Exists lists with the key as prefix and one key at most: an empty list or another key is
 // "no", and a refused list is an error, never "no".
 func TestExists(t *testing.T) {
+	t.Parallel()
 	const key = "media/v1/e1/master.m3u8"
 	tests := []struct {
 		name    string
@@ -442,6 +453,7 @@ func TestExists(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 			var query url.Values
 			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				if r.URL.Path != "/media" && r.URL.Path != "/media/" {

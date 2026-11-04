@@ -1,0 +1,59 @@
+# The title of every pull request follows Conventional Commits 1.0.0 (https://www.conventionalcommits.org/en/v1.0.0/;
+# ADR-0041 (h)): main takes squash merges only, and the title becomes the commit's title. The grammar, not a list of
+# scopes, so the bots' titles pass as they are (chore(stg): and chore(prd): of the promote app, chore(deps): and
+# fix(deps): of Renovate), and so does GitHub's Revert button (Revert "<title>"). The same pattern and test set run in
+# the four repositories with CI (svp-backend, svp-frontend, svp-gitops, svp-infra).
+#
+# A workflow of its own, not a job of ci.yml: editing a title runs this alone, not the whole CI. No permission, no
+# checkout, no code of the pull request: the title reaches the script through env only, never through ${{ }} in run:.
+name: pr-title
+
+on:
+  pull_request:
+    types: [opened, edited, reopened, synchronize]
+
+permissions: {}
+
+concurrency:
+  group: pr-title-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  pr-title:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Title follows Conventional Commits
+        env:
+          TITLE: ${{ github.event.pull_request.title }}
+        run: |
+          re='^(feat|fix|chore|docs|refactor|test|ci|build|perf|revert)(\([^)]+\))?!?: .+|^Revert ".+"$'
+          # The shared test set of ADR-0041 (h) first: a pattern broken here fails every pull request, not a lucky few.
+          good=(
+            'feat(feed): thêm phân trang explore'
+            'feat(api)!: bỏ trường cũ'
+            'fix(deps): update module golang.org/x/net to v0.47.1 [security]'
+            'chore(deps): lock file maintenance'
+            'chore(config): migrate config renovate.json'
+            'chore(stg): phát hành feed-service ở 0a1b2c3d4e5f'
+            'chore(prd): phát hành bộ stg của svp-gitops 0a1b2c3d4e5f'
+            'Revert "feat(feed): thêm phân trang explore"'
+          )
+          bad=(
+            'Update README.md'
+            'style: format'
+            'feat:thiếu dấu cách'
+            'feat(): scope rỗng'
+            'Feat(feed): chữ hoa'
+            'chore(deps):'
+            'fix(deps) : dấu cách trước hai chấm'
+            'Revert feat(feed): thiếu ngoặc kép'
+          )
+          for t in "${good[@]}"; do [[ $t =~ $re ]] || { echo "::error::pattern rejects a valid title: $t"; exit 1; }; done
+          for t in "${bad[@]}"; do [[ ! $t =~ $re ]] || { echo "::error::pattern accepts an invalid title: $t"; exit 1; }; done
+          if [[ ! $TITLE =~ $re ]]; then
+            echo "::error::The title is not a Conventional Commits title: <type>[(<scope>)][!]: <description>," \
+              "type one of feat fix chore docs refactor test ci build perf revert (or Revert \"<title>\")"
+            exit 1
+          fi
+          echo "ok: $TITLE"

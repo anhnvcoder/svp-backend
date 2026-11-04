@@ -1,4 +1,4 @@
-# Deferred verification of stage 6b, on a fresh GitHub-hosted runner
+# Deferred verification on a fresh GitHub-hosted runner
 # of the public repository: one scenario per run dispatched by hand, and once a week compose-obs and gitops side by
 # side on main, every target. It builds the compose stack or the k3d cluster with the same make targets as a dev
 # machine and runs what that machine cannot hold (16 GB): the threat model drills, the object store's tests against the
@@ -106,7 +106,7 @@ jobs:
           --health-timeout 5s
           --health-retries 20
     steps:
-      # Before anything else: a dispatch of another branch (an old one without the fixes of this stage) stops here, and
+      # Before anything else: a dispatch of another branch (an old one, perhaps without the fixes of main) stops here, and
       # so does a scheduled run anywhere but main (GitHub runs it on the default branch, which is main). An accident
       # guard, not a security boundary: whoever can dispatch can also push a branch of that name.
       - name: Check the ref and note the job's start

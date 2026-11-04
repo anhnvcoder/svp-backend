@@ -54,17 +54,20 @@ type ctxKey int
 
 const (
 	userIDKey ctxKey = iota
+	tokenKey
 	logStateKey
 )
 
 // OutgoingContext returns ctx with gRPC outgoing metadata built from scratch (threat model
-// IN-1): x-user-id when the request is authenticated. Any outgoing metadata already in ctx is
-// replaced, and no client header is ever copied. The traceparent of the request's span is added
-// later, by the stats handler of ClientTelemetry.
+// IN-1): when the request is authenticated, authorization "Bearer <token>" with the very token
+// RequireAuth verified, which the service verifies again to find the caller. Any outgoing
+// metadata already in ctx is replaced, and no client header is ever copied: an X-User-Id or a
+// second Authorization the client sent never reaches a service. The traceparent of the request's
+// span is added later, by the stats handler of ClientTelemetry.
 func OutgoingContext(ctx context.Context) context.Context {
 	md := metadata.MD{}
-	if id, ok := ctx.Value(userIDKey).(string); ok {
-		md.Set(callerid.MetadataKey, id)
+	if token, ok := ctx.Value(tokenKey).(string); ok {
+		md.Set(callerid.AuthorizationKey, "Bearer "+token)
 	}
 	return metadata.NewOutgoingContext(ctx, md)
 }

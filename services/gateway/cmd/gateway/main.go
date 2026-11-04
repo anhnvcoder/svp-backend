@@ -46,7 +46,7 @@ const (
 	defaultVideoServiceAddr = "127.0.0.1:9102"
 	defaultEngagementAddr   = "127.0.0.1:9103"
 	defaultFeedServiceAddr  = "127.0.0.1:9104"
-	// defaultRedisURL is the gateway's Redis db (CLAUDE.md); it holds the rate limits.
+	// defaultRedisURL is the gateway's own Redis db (each service has its own); it holds the rate limits.
 	defaultRedisURL = "redis://127.0.0.1:6379/10"
 	// redisKeyPrefix starts every key the gateway writes, so its keys are told apart from other
 	// services' and an ACL by prefix can be added on the cloud.
@@ -158,8 +158,8 @@ func (b backend) serviceConfig() string {
 	return string(cfg)
 }
 
-// dialOptions are the options of every connection to b: plain text until mTLS arrives in stage
-// 6, client spans and metrics, b's own circuit breaker, and b's service config. A service config
+// dialOptions are the options of every connection to b: plain text (no mTLS between services:
+// threat model IN-3), client spans and metrics, b's own circuit breaker, and b's service config. A service config
 // from the resolver (a DNS TXT record) is ignored, so the retry policy is always this one.
 func (b backend) dialOptions() []grpc.DialOption {
 	return []grpc.DialOption{
@@ -181,10 +181,11 @@ func main() {
 		cmd = os.Args[1]
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer stop()
 
-	if err := run(ctx, logger, cmd); err != nil {
-		stop()
+	err := run(ctx, logger, cmd)
+	// Not deferred: os.Exit below would skip a deferred call.
+	stop()
+	if err != nil {
 		os.Exit(1)
 	}
 }
@@ -211,7 +212,7 @@ func run(ctx context.Context, logger *slog.Logger, cmd string) error {
 	}
 	if err != nil {
 		// A constant message, so the error tracker groups it.
-		logger.Error("gateway failed", slog.Any("error", err))
+		logger.ErrorContext(ctx, "gateway failed", slog.Any("error", err))
 	}
 	stopTelemetry()
 	return err
@@ -232,7 +233,7 @@ func startTelemetry(ctx context.Context, logger *slog.Logger) (stop func(), err 
 	return func() {
 		// Setup bounds the shutdown itself; ctx is already cancelled by then.
 		if err := shutdownTelemetry(context.WithoutCancel(ctx)); err != nil {
-			logger.Warn("telemetry shutdown failed", slog.Any("error", err))
+			logger.WarnContext(ctx, "telemetry shutdown failed", slog.Any("error", err))
 		}
 		flushErrors()
 	}, nil
@@ -331,7 +332,7 @@ func serve(ctx context.Context, logger *slog.Logger) error {
 	case <-ctx.Done():
 	}
 
-	logger.Info("http server stopping")
+	logger.InfoContext(ctx, "http server stopping")
 	shutdownCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), shutdownTimeout)
 	defer cancel()
 	if err := srv.Shutdown(shutdownCtx); err != nil {
@@ -340,7 +341,7 @@ func serve(ctx context.Context, logger *slog.Logger) error {
 	if err := <-errCh; !errors.Is(err, http.ErrServerClosed) {
 		return fmt.Errorf("serve http: %w", err)
 	}
-	logger.Info("http server stopped")
+	logger.InfoContext(ctx, "http server stopped")
 	return nil
 }
 

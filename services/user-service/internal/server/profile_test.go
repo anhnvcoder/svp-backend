@@ -18,9 +18,10 @@ import (
 )
 
 func TestPickedHandleRules(t *testing.T) {
+	t.Parallel()
 	valid := map[string]string{
 		"Alice":                          "alice",
-		" \tbob \n":                      "bob",
+		" \tbob \n":                      "bob", //nolint:gocritic // the surrounding whitespace is what the rule must trim
 		"abc":                            "abc",
 		"u_bob":                          "u_bob",
 		"u_0123456789abc":                "u_0123456789abc", // 13 hex digits: not the generated form
@@ -65,6 +66,7 @@ func TestPickedHandleRules(t *testing.T) {
 }
 
 func TestGeneratedHandle(t *testing.T) {
+	t.Parallel()
 	id, err := ids.Parse("01928c6e-7b3a-7cde-8f01-23456789abcd")
 	if err != nil {
 		t.Fatal(err)
@@ -79,6 +81,7 @@ func TestGeneratedHandle(t *testing.T) {
 }
 
 func TestDisplayNameRules(t *testing.T) {
+	t.Parallel()
 	// 50 runes of NFC Vietnamese with diacritics: "Phương" is 6 runes, 8 bytes per rune at most.
 	vi50 := strings.Repeat("Phương", 8) + "ễ" + "ộ"
 	if n := len([]rune(vi50)); n != 50 {
@@ -400,14 +403,14 @@ func TestGetProfilesNeedsNoCaller(t *testing.T) {
 	if !slices.Contains(PublicMethods, userv1.UserService_GetProfiles_FullMethodName) {
 		t.Fatal("GetProfiles is not in PublicMethods")
 	}
-	// t.Context() carries no x-user-id, and a malformed one is ignored on a public RPC.
+	// t.Context() carries no token, and one with a malformed subject is ignored on a public RPC.
 	e := newEnv(t, password.NewHasher())
 	alice := e.register(t, newEmail())
 	if p := e.profile(t, alice); p.GetUserId() != alice {
 		t.Errorf("profile = %v", p)
 	}
 	if _, err := e.client.GetProfiles(asCaller(t.Context(), "garbage"), &userv1.GetProfilesRequest{UserIds: []string{alice}}); err != nil {
-		t.Errorf("GetProfiles with a malformed x-user-id: %v", err)
+		t.Errorf("GetProfiles with a malformed caller: %v", err)
 	}
 }
 

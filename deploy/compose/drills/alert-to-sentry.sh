@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Drill: from a page alert to the error in under five minutes (the "done when" of stage 3). On the
+# Drill: from a page alert to the error in under five minutes (the drill's target). On the
 # stack of `make up OBS=lgtm`:
 #   1. the observability stack answers (Grafana, Prometheus, Tempo, Loki, Alertmanager, the
 #      GlitchTip API with the drill token from .env); a fresh user reads GET /feed/following and
@@ -22,7 +22,7 @@
 #      back, the one of the next error trace in order, whose client span and log line are then
 #      checked the same way, so that trace, log line and event share one trace_id; within
 #      sentry_timeout seconds;
-#   8. prints T1 - T0 and T4 - T1 (under 5 minutes: the stage's target), links to Grafana Explore,
+#   8. prints T1 - T0 and T4 - T1 (under 5 minutes: the drill's target), links to Grafana Explore,
 #      Alertmanager and GlitchTip to go over the steps by hand, and how many GlitchTip events the
 #      run produced;
 #   9. when the config Alertmanager runs has a Telegram receiver (GET /api/v2/status; its
@@ -46,7 +46,7 @@ load_interval=${load_interval:-0.5}
 resolve_timeout=${resolve_timeout:-2400}
 alert_timeout=600
 sentry_timeout=120
-# The stage's target for T4 - T1.
+# The drill's target for T4 - T1.
 target_seconds=300
 quiet_seconds=31
 

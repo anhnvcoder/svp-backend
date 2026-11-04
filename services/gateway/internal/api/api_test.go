@@ -15,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/golang-jwt/jwt/v5"
 	"github.com/redis/go-redis/v9"
 	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
 	"go.opentelemetry.io/otel/propagation"
@@ -256,7 +257,7 @@ func (fakeUsers) UpdateDisplayName(ctx context.Context, req *userv1.UpdateDispla
 		return nil, grpcerr.New(codes.InvalidArgument, "INVALID_DISPLAY_NAME", "display_name must be 1 to 50 characters")
 	}
 	md, _ := metadata.FromIncomingContext(ctx)
-	ids := md.Get(callerid.MetadataKey)
+	ids := callers(md)
 	if len(ids) != 1 || profiles[ids[0]] == nil {
 		return nil, grpcerr.New(codes.NotFound, "USER_NOT_FOUND", "user not found")
 	}
@@ -541,6 +542,25 @@ func (e *env) callCount() int {
 	return len(e.users.recorded()) + len(e.videos.recorded()) + len(e.feeds.recorded()) + len(e.engagement.recorded())
 }
 
+// callers returns the subject of each access token a service received in md's authorization,
+// as its interceptor would find the caller; a value that is not "Bearer <jwt>" gives "". The
+// signature is not checked here: the gateway forwards the request's token unchanged, which the
+// tests of httpx check value for value.
+func callers(md metadata.MD) []string {
+	var out []string
+	for _, v := range md.Get(callerid.AuthorizationKey) {
+		var c jwt.RegisteredClaims
+		sub := ""
+		if tok, ok := strings.CutPrefix(v, "Bearer "); ok {
+			if _, _, err := jwt.NewParser().ParseUnverified(tok, &c); err == nil {
+				sub = c.Subject
+			}
+		}
+		out = append(out, sub)
+	}
+	return out
+}
+
 // token returns a valid access token for userID.
 func (e *env) token(t *testing.T, userID string) string {
 	t.Helper()
@@ -804,8 +824,8 @@ func TestPublicRoutesSendNoUserID(t *testing.T) {
 		}
 	}
 	for _, c := range e.users.recorded() {
-		if v := c.md.Get(callerid.MetadataKey); len(v) != 0 {
-			t.Errorf("%s got x-user-id %v", c.method, v)
+		if v := callers(c.md); len(v) != 0 {
+			t.Errorf("%s got caller %v", c.method, v)
 		}
 		if v := c.md.Get(traceparentKey); len(v) != 1 || !traceOf(c.md).IsValid() {
 			t.Errorf("%s got traceparent %v, want one valid value", c.method, v)
@@ -841,8 +861,8 @@ func TestFollowAndUnfollow(t *testing.T) {
 			if followee != userB {
 				t.Errorf("followee_id = %q, want %q", followee, userB)
 			}
-			if v := c.md.Get(callerid.MetadataKey); !slices.Equal(v, []string{userA}) {
-				t.Errorf("x-user-id = %v, want [%s]", v, userA)
+			if v := callers(c.md); !slices.Equal(v, []string{userA}) {
+				t.Errorf("caller = %v, want [%s]", v, userA)
 			}
 		})
 	}
@@ -873,8 +893,8 @@ func TestInitUpload(t *testing.T) {
 	if req.GetTitle() != "first clip" || req.GetSizeBytes() != 1048576 || req.GetContentType() != "video/mp4" {
 		t.Errorf("request = %v", req)
 	}
-	if v := c.md.Get(callerid.MetadataKey); !slices.Equal(v, []string{userA}) {
-		t.Errorf("x-user-id = %v, want [%s]", v, userA)
+	if v := callers(c.md); !slices.Equal(v, []string{userA}) {
+		t.Errorf("caller = %v, want [%s]", v, userA)
 	}
 }
 
@@ -902,6 +922,93 @@ func TestInitUploadKeepsCredentialOutOfLog(t *testing.T) {
 		if strings.Contains(logs.String(), s) {
 			t.Errorf("log contains %q:\n%s", s, logs.String())
 		}
+	}
+}
+
+// sendKeys posts a valid POST /videos as userA with one Idempotency-Key field line per key.
+func (e *env) sendKeys(t *testing.T, keys ...string) *httptest.ResponseRecorder {
+	t.Helper()
+	r := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/videos",
+		strings.NewReader(`{"title":"first clip","size_bytes":1048576,"content_type":"video/mp4"}`))
+	r.Header.Set("Content-Type", "application/json")
+	r.Header.Set("Authorization", "Bearer "+e.token(t, userA))
+	for _, k := range keys {
+		r.Header.Add("Idempotency-Key", k)
+	}
+	rec := httptest.NewRecorder()
+	e.handler.ServeHTTP(rec, r)
+	return rec
+}
+
+func TestInitUploadForwardsIdempotencyKey(t *testing.T) {
+	const key = "00000000-0000-4000-8000-000000000001"
+	for name, header := range map[string]string{"string": `"` + key + `"`, "with spaces": ` "` + key + `" `} {
+		t.Run(name, func(t *testing.T) {
+			e := newEnv(t)
+			rec := e.sendKeys(t, header)
+			wantStatus(t, rec, http.StatusCreated)
+			if got := e.videos.only(t).req.(*videov1.InitUploadRequest).GetRequestId(); got != key {
+				t.Errorf("request_id = %q, want %q", got, key)
+			}
+		})
+	}
+	t.Run("absent", func(t *testing.T) {
+		e := newEnv(t)
+		wantStatus(t, e.sendKeys(t), http.StatusCreated)
+		if got := e.videos.only(t).req.(*videov1.InitUploadRequest).GetRequestId(); got != "" {
+			t.Errorf("request_id = %q, want empty", got)
+		}
+	})
+}
+
+// A key that is not exactly one Structured Field String of a canonical lowercase UUID is refused
+// before video-service is called.
+func TestInitUploadRejectsBadIdempotencyKey(t *testing.T) {
+	const key = "00000000-0000-4000-8000-000000000001"
+	for name, keys := range map[string][]string{
+		"empty":           {""},
+		"bare token":      {key},
+		"upper case":      {`"8E03978E-40D5-43E8-BC93-6894A57F9324"`},
+		"not a uuid":      {`"retry-1"`},
+		"braces":          {`"{` + key + `}"`},
+		"one quote":       {`"` + key},
+		"list in a line":  {`"` + key + `", "` + key + `"`},
+		"two field lines": {`"` + key + `"`, `"` + key + `"`},
+		"parameter":       {`"` + key + `";a=1`},
+	} {
+		t.Run(name, func(t *testing.T) {
+			e := newEnv(t)
+			rec := e.sendKeys(t, keys...)
+			wantStatus(t, rec, http.StatusBadRequest)
+			if p := decodeProblem(t, rec); p.Code != "INVALID_IDEMPOTENCY_KEY" {
+				t.Errorf("code = %q, want INVALID_IDEMPOTENCY_KEY", p.Code)
+			}
+			if n := len(e.videos.recorded()); n != 0 {
+				t.Errorf("video-service got %d calls, want 0", n)
+			}
+		})
+	}
+}
+
+func TestInitUploadIdempotencyErrors(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		err        error
+		wantStatus int
+		wantCode   string
+	}{
+		{"other request", grpcerr.New(codes.InvalidArgument, "IDEMPOTENCY_KEY_MISMATCH", "request_id was already used"), http.StatusUnprocessableEntity, "IDEMPOTENCY_KEY_MISMATCH"},
+		{"video moved on", grpcerr.New(codes.FailedPrecondition, "VIDEO_NOT_UPLOADING", "no longer uploading"), http.StatusConflict, "VIDEO_NOT_UPLOADING"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			e := newEnv(t)
+			e.videos.fail(tc.err)
+			rec := e.sendKeys(t, `"00000000-0000-4000-8000-000000000001"`)
+			wantStatus(t, rec, tc.wantStatus)
+			if p := decodeProblem(t, rec); p.Code != tc.wantCode {
+				t.Errorf("code = %q, want %q", p.Code, tc.wantCode)
+			}
+		})
 	}
 }
 
@@ -984,8 +1091,8 @@ func TestGetVideo(t *testing.T) {
 			if c.method != b.method {
 				t.Errorf("method = %s, want %s", c.method, b.method)
 			}
-			if v := c.md.Get(callerid.MetadataKey); !slices.Equal(v, []string{userA}) {
-				t.Errorf("%s x-user-id = %v, want [%s]", c.method, v, userA)
+			if v := callers(c.md); !slices.Equal(v, []string{userA}) {
+				t.Errorf("%s caller = %v, want [%s]", c.method, v, userA)
 			}
 		}
 		if n := len(b.backend.recorded()); n != 2 {
@@ -1038,8 +1145,8 @@ func TestCompleteUpload(t *testing.T) {
 	if got := calls[0].req.(*videov1.CompleteUploadRequest).GetVideoId(); got != videoID {
 		t.Errorf("video_id = %q, want %q", got, videoID)
 	}
-	if v := calls[0].md.Get(callerid.MetadataKey); !slices.Equal(v, []string{userA}) {
-		t.Errorf("x-user-id = %v, want [%s]", v, userA)
+	if v := callers(calls[0].md); !slices.Equal(v, []string{userA}) {
+		t.Errorf("caller = %v, want [%s]", v, userA)
 	}
 }
 
@@ -1175,8 +1282,8 @@ func TestOutgoingMetadataFromTokenOnly(t *testing.T) {
 	wantStatus(t, rec, http.StatusOK)
 
 	md := e.videos.only(t).md
-	if v := md.Get(callerid.MetadataKey); !slices.Equal(v, []string{userA}) {
-		t.Errorf("x-user-id = %v, want [%s]", v, userA)
+	if v := callers(md); !slices.Equal(v, []string{userA}) {
+		t.Errorf("caller = %v, want [%s]", v, userA)
 	}
 	tp := md.Get(traceparentKey)
 	if len(tp) != 1 || tp[0] == clientTraceparent {
@@ -1205,8 +1312,8 @@ func TestCompleteUploadIgnoresClientUserID(t *testing.T) {
 	rec := httptest.NewRecorder()
 	e.handler.ServeHTTP(rec, r)
 	wantStatus(t, rec, http.StatusAccepted)
-	if v := e.videos.only(t).md.Get(callerid.MetadataKey); !slices.Equal(v, []string{userA}) {
-		t.Errorf("x-user-id = %v, want [%s]", v, userA)
+	if v := callers(e.videos.only(t).md); !slices.Equal(v, []string{userA}) {
+		t.Errorf("caller = %v, want [%s]", v, userA)
 	}
 }
 
@@ -1432,8 +1539,8 @@ func TestFeed(t *testing.T) {
 			if req.GetPageSize() != 5 || req.GetPageToken() != "abc" {
 				t.Errorf("page_size, page_token = %d, %q; want 5, abc", req.GetPageSize(), req.GetPageToken())
 			}
-			if v := c.md.Get(callerid.MetadataKey); !slices.Equal(v, []string{userA}) {
-				t.Errorf("feed x-user-id = %v, want [%s]", v, userA)
+			if v := callers(c.md); !slices.Equal(v, []string{userA}) {
+				t.Errorf("feed caller = %v, want [%s]", v, userA)
 			}
 			s := e.engagement.only(t)
 			if s.method != engagementv1.EngagementService_GetStats_FullMethodName {
@@ -1442,8 +1549,8 @@ func TestFeed(t *testing.T) {
 			if ids := s.req.(*engagementv1.GetStatsRequest).GetVideoIds(); !slices.Equal(ids, []string{videoID, videoID2}) {
 				t.Errorf("GetStats video_ids = %v", ids)
 			}
-			if v := s.md.Get(callerid.MetadataKey); !slices.Equal(v, []string{userA}) {
-				t.Errorf("engagement x-user-id = %v, want [%s]", v, userA)
+			if v := callers(s.md); !slices.Equal(v, []string{userA}) {
+				t.Errorf("engagement caller = %v, want [%s]", v, userA)
 			}
 			// Both items have one author: GetProfiles is asked for it once.
 			p := e.users.only(t)
@@ -1671,8 +1778,8 @@ func TestLikeUnlikeAndView(t *testing.T) {
 			if got := c.req.(interface{ GetVideoId() string }).GetVideoId(); got != videoID {
 				t.Errorf("video_id = %q, want %q", got, videoID)
 			}
-			if v := c.md.Get(callerid.MetadataKey); !slices.Equal(v, []string{userA}) {
-				t.Errorf("x-user-id = %v, want [%s]", v, userA)
+			if v := callers(c.md); !slices.Equal(v, []string{userA}) {
+				t.Errorf("caller = %v, want [%s]", v, userA)
 			}
 		})
 	}
@@ -1732,8 +1839,8 @@ func TestFeedIgnoresClientUserID(t *testing.T) {
 	e.handler.ServeHTTP(rec, r)
 	wantStatus(t, rec, http.StatusOK)
 	for _, c := range []call{e.feeds.only(t), e.engagement.only(t)} {
-		if v := c.md.Get(callerid.MetadataKey); !slices.Equal(v, []string{userA}) {
-			t.Errorf("%s x-user-id = %v, want [%s]", c.method, v, userA)
+		if v := callers(c.md); !slices.Equal(v, []string{userA}) {
+			t.Errorf("%s caller = %v, want [%s]", c.method, v, userA)
 		}
 		if tp := c.md.Get(traceparentKey); len(tp) != 1 || tp[0] == clientTraceparent || traceOf(c.md).TraceID().String() == clientTraceID {
 			t.Errorf("%s traceparent = %v, want one value made by the gateway", c.method, tp)

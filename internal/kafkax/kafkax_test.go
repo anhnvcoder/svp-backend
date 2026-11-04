@@ -259,6 +259,7 @@ func waitFor(t *testing.T, ch <-chan struct{}, what string) {
 }
 
 func TestNewClientEmptyBrokers(t *testing.T) {
+	t.Parallel()
 	for _, brokers := range []string{"", " , ,"} {
 		if _, err := NewClient(brokers, "svc"); err == nil {
 			t.Errorf("NewClient(%q) = nil error, want an error", brokers)
@@ -298,6 +299,7 @@ func TestNewClientLogsUnreachableBroker(t *testing.T) {
 }
 
 func TestNewConsumerRequiresFields(t *testing.T) {
+	t.Parallel()
 	ok := ConsumerConfig{Brokers: "127.0.0.1:1", Group: "g", Topics: []string{"t"},
 		Handler: func(context.Context, *kgo.Record, Attempt) error { return nil }, Logger: slog.New(slog.DiscardHandler)}
 	tests := map[string]func(*ConsumerConfig){
@@ -309,6 +311,7 @@ func TestNewConsumerRequiresFields(t *testing.T) {
 	}
 	for name, mutate := range tests {
 		t.Run(name, func(t *testing.T) {
+			t.Parallel()
 			cfg := ok
 			mutate(&cfg)
 			if _, err := NewConsumer(cfg); err == nil {
@@ -319,6 +322,7 @@ func TestNewConsumerRequiresFields(t *testing.T) {
 }
 
 func TestPermanent(t *testing.T) {
+	t.Parallel()
 	if Permanent(nil) != nil {
 		t.Error("Permanent(nil) != nil")
 	}
@@ -337,6 +341,7 @@ func TestPermanent(t *testing.T) {
 }
 
 func TestBackoff(t *testing.T) {
+	t.Parallel()
 	c := &Consumer{cfg: ConsumerConfig{BackoffBase: DefaultBackoffBase, BackoffMax: DefaultBackoffMax}}
 	want := []time.Duration{500 * time.Millisecond, time.Second, 2 * time.Second, 4 * time.Second, 8 * time.Second, 10 * time.Second, 10 * time.Second}
 	for i, ceil := range want {
@@ -421,6 +426,7 @@ func TestProduceTraceparent(t *testing.T) {
 }
 
 func TestProduceError(t *testing.T) {
+	t.Parallel()
 	brokers := cluster(t, 1, "out")
 	cl := producer(t, brokers)
 	ctx, cancel := context.WithTimeout(t.Context(), 15*time.Second)
@@ -551,6 +557,7 @@ func TestRetriesExhaustedGoesToDLQ(t *testing.T) {
 }
 
 func TestPermanentGoesToDLQAtOnce(t *testing.T) {
+	t.Parallel()
 	brokers := cluster(t, 1, "in", "in.dlq")
 	produce(t, producer(t, brokers), &kgo.Record{Topic: "in", Value: []byte("bad")})
 

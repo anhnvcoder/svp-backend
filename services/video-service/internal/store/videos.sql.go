@@ -9,6 +9,7 @@ import (
 	"context"
 	"time"
 
+	"github.com/jackc/pgx/v5/pgtype"
 	"uuid"
 )
 
@@ -45,8 +46,8 @@ func (q *Queries) CountOpenUploads(ctx context.Context, arg CountOpenUploadsPara
 }
 
 const createVideo = `-- name: CreateVideo :exec
-INSERT INTO videos (id, author_id, title, status, size_bytes, content_type)
-VALUES ($1, $2, $3, 'UPLOADING', $4, $5)
+INSERT INTO videos (id, author_id, title, status, size_bytes, content_type, request_id)
+VALUES ($1, $2, $3, 'UPLOADING', $4, $5, $6)
 `
 
 type CreateVideoParams struct {
@@ -55,8 +56,10 @@ type CreateVideoParams struct {
 	Title       string
 	SizeBytes   int64
 	ContentType string
+	RequestID   pgtype.UUID
 }
 
+// request_id is NULL for a call without an idempotency key.
 func (q *Queries) CreateVideo(ctx context.Context, arg CreateVideoParams) error {
 	_, err := q.db.Exec(ctx, createVideo,
 		arg.ID,
@@ -64,12 +67,13 @@ func (q *Queries) CreateVideo(ctx context.Context, arg CreateVideoParams) error 
 		arg.Title,
 		arg.SizeBytes,
 		arg.ContentType,
+		arg.RequestID,
 	)
 	return err
 }
 
 const getVideo = `-- name: GetVideo :one
-SELECT id, author_id, title, status, size_bytes, content_type, duration_ms, playlist_key, thumbnail_key, published_at, created_at, processing_at FROM videos
+SELECT id, author_id, title, status, size_bytes, content_type, duration_ms, playlist_key, thumbnail_key, published_at, created_at, processing_at, request_id FROM videos
 WHERE id = $1
 `
 
@@ -89,6 +93,40 @@ func (q *Queries) GetVideo(ctx context.Context, id uuid.UUID) (Video, error) {
 		&i.PublishedAt,
 		&i.CreatedAt,
 		&i.ProcessingAt,
+		&i.RequestID,
+	)
+	return i, err
+}
+
+const getVideoByRequestID = `-- name: GetVideoByRequestID :one
+SELECT id, author_id, title, status, size_bytes, content_type, duration_ms, playlist_key, thumbnail_key, published_at, created_at, processing_at, request_id FROM videos
+WHERE author_id = $1 AND request_id = $2
+`
+
+type GetVideoByRequestIDParams struct {
+	AuthorID  uuid.UUID
+	RequestID pgtype.UUID
+}
+
+// The video an earlier InitUpload of the author created with this idempotency key. Runs on
+// videos_author_request_idx.
+func (q *Queries) GetVideoByRequestID(ctx context.Context, arg GetVideoByRequestIDParams) (Video, error) {
+	row := q.db.QueryRow(ctx, getVideoByRequestID, arg.AuthorID, arg.RequestID)
+	var i Video
+	err := row.Scan(
+		&i.ID,
+		&i.AuthorID,
+		&i.Title,
+		&i.Status,
+		&i.SizeBytes,
+		&i.ContentType,
+		&i.DurationMs,
+		&i.PlaylistKey,
+		&i.ThumbnailKey,
+		&i.PublishedAt,
+		&i.CreatedAt,
+		&i.ProcessingAt,
+		&i.RequestID,
 	)
 	return i, err
 }
@@ -134,7 +172,7 @@ func (q *Queries) ListAbandonedUploads(ctx context.Context, arg ListAbandonedUpl
 }
 
 const listAuthorVideos = `-- name: ListAuthorVideos :many
-SELECT id, author_id, title, status, size_bytes, content_type, duration_ms, playlist_key, thumbnail_key, published_at, created_at, processing_at FROM videos
+SELECT id, author_id, title, status, size_bytes, content_type, duration_ms, playlist_key, thumbnail_key, published_at, created_at, processing_at, request_id FROM videos
 WHERE author_id = $1
   AND ($2::boolean OR status = 'READY')
   AND (created_at, id) < (COALESCE($3::timestamptz, 'infinity'), $4::uuid)
@@ -182,6 +220,7 @@ func (q *Queries) ListAuthorVideos(ctx context.Context, arg ListAuthorVideosPara
 			&i.PublishedAt,
 			&i.CreatedAt,
 			&i.ProcessingAt,
+			&i.RequestID,
 		); err != nil {
 			return nil, err
 		}
@@ -252,7 +291,7 @@ func (q *Queries) MarkVideoFailed(ctx context.Context, id uuid.UUID) (*time.Time
 const markVideoProcessing = `-- name: MarkVideoProcessing :one
 UPDATE videos SET status = 'PROCESSING', processing_at = now()
 WHERE id = $1 AND status = 'UPLOADING'
-RETURNING id, author_id, title, status, size_bytes, content_type, duration_ms, playlist_key, thumbnail_key, published_at, created_at, processing_at
+RETURNING id, author_id, title, status, size_bytes, content_type, duration_ms, playlist_key, thumbnail_key, published_at, created_at, processing_at, request_id
 `
 
 // Locks the row; only an UPLOADING video moves, so a concurrent call updates nothing.
@@ -272,6 +311,7 @@ func (q *Queries) MarkVideoProcessing(ctx context.Context, id uuid.UUID) (Video,
 		&i.PublishedAt,
 		&i.CreatedAt,
 		&i.ProcessingAt,
+		&i.RequestID,
 	)
 	return i, err
 }
@@ -280,7 +320,7 @@ const markVideoReady = `-- name: MarkVideoReady :one
 UPDATE videos
 SET status = 'READY', duration_ms = $2, playlist_key = $3, thumbnail_key = $4, published_at = now()
 WHERE id = $1 AND status = 'PROCESSING'
-RETURNING id, author_id, title, status, size_bytes, content_type, duration_ms, playlist_key, thumbnail_key, published_at, created_at, processing_at
+RETURNING id, author_id, title, status, size_bytes, content_type, duration_ms, playlist_key, thumbnail_key, published_at, created_at, processing_at, request_id
 `
 
 type MarkVideoReadyParams struct {
@@ -313,6 +353,7 @@ func (q *Queries) MarkVideoReady(ctx context.Context, arg MarkVideoReadyParams) 
 		&i.PublishedAt,
 		&i.CreatedAt,
 		&i.ProcessingAt,
+		&i.RequestID,
 	)
 	return i, err
 }

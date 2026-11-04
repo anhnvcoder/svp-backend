@@ -62,7 +62,7 @@ func isProbe(r *http.Request) bool {
 	return r.URL.Path == "/healthz" || r.URL.Path == "/readyz"
 }
 
-// TrustTraceContext, in front of Trace, makes the gateway's server span a child of the W3C
+// TrustTraceContext makes the gateway's server span a child of the W3C
 // traceparent and tracestate of the request, so a trace started by the web server continues
 // through the gateway into the services. Baggage is never read. A traceparent that does not parse
 // (version ff or not hex, all-zero trace or span id) leaves the context as it is, and Trace starts
@@ -77,7 +77,7 @@ func isProbe(r *http.Request) bool {
 // branch for it too, so every request carrying a traceparent is recorded whatever the ratio;
 // compose and the k3d cluster set no sampler today.
 //
-// It is safe only where every path into the gateway has already removed the client's trace
+// Put it in front of Trace. It is safe only where every path into the gateway has already removed the client's trace
 // context, or reaches it on loopback only; the caller decides that.
 func TrustTraceContext(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -224,13 +224,13 @@ const invalidTokenDetail = "missing or invalid access token"
 
 // RequireAuth lets a request through only with a valid access token in the Authorization header
 // ("Bearer <token>", scheme case-insensitive), never from the query string or a cookie (threat
-// model JWT-3). The user id then goes into the context (for OutgoingContext) and the log
-// context. Any failure is a 401 problem with code INVALID_TOKEN, a WWW-Authenticate: Bearer
+// model JWT-3). The user id then goes into the context (UserID) and the log context, and the
+// verified token into the context for OutgoingContext to forward. Any failure is a 401 problem with code INVALID_TOKEN, a WWW-Authenticate: Bearer
 // header and one detail for every reason.
 func RequireAuth(verifier *authtoken.Verifier) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			userID, err := authenticate(verifier, r)
+			userID, token, err := authenticate(verifier, r)
 			if err != nil {
 				slog.InfoContext(r.Context(), "access token rejected", slog.String("error", err.Error()))
 				w.Header().Set("WWW-Authenticate", "Bearer")
@@ -241,20 +241,26 @@ func RequireAuth(verifier *authtoken.Verifier) func(http.Handler) http.Handler {
 				state.userID = userID
 			}
 			ctx := context.WithValue(r.Context(), userIDKey, userID)
+			ctx = context.WithValue(ctx, tokenKey, token)
 			ctx = logx.With(ctx, slog.String("user_id", userID))
 			next.ServeHTTP(w, r.WithContext(ctx))
 		})
 	}
 }
 
-func authenticate(verifier *authtoken.Verifier, r *http.Request) (string, error) {
+// authenticate returns the user id and the token of the request's one valid Bearer token.
+func authenticate(verifier *authtoken.Verifier, r *http.Request) (userID, token string, err error) {
 	values := r.Header.Values("Authorization")
 	if len(values) != 1 {
-		return "", errors.New("want exactly one Authorization header")
+		return "", "", errors.New("want exactly one Authorization header")
 	}
 	scheme, token, _ := strings.Cut(values[0], " ")
 	if !strings.EqualFold(scheme, "Bearer") || token == "" {
-		return "", errors.New("authorization scheme is not Bearer")
+		return "", "", errors.New("authorization scheme is not Bearer")
 	}
-	return verifier.Verify(token)
+	userID, err = verifier.Verify(token)
+	if err != nil {
+		return "", "", err
+	}
+	return userID, token, nil
 }

@@ -54,7 +54,7 @@ lag. Log của media-worker và video-service có `video_id`, `trace_id` (UP-8).
 2. **Hàng đợi transcode dài**: burst upload; compose có 1 worker, k3d tối đa 2
    ([ADR-0017](../adr/0017-gitops-capacity-media-worker-max2.md)); lag media-worker tăng.
 3. **Transcode chậm vì CPU**: máy chạy pin, Low Power Mode, nhiệt; k3d trên pin một video 60 s 1080p mất 91–253 s thay vì
-   ~45–64 s (giai đoạn 4, roadmap).
+   ~45–64 s.
 4. **media-worker chết hay restart giữa chừng**: video được worker khác (hay lần chạy sau) làm lại, chậm thêm một lần transcode
    (diễn tập `make drill-kill-worker`: `READY` 80 s sau khi worker khởi động lại).
 5. **video-service không đọc `media.transcodes.v1`**: worker xong nhưng video không đổi trạng thái; lag group `video-service`
@@ -76,7 +76,7 @@ make measure-ready N=5           # compose: p50, p95, max CompleteUpload -> READ
 ```
 
 Lag media-worker về 0, video kẹt tới `READY` (hay `FAILED` có lý do), page hết trong tối đa ~30 phút. Số tham chiếu
-`measure-ready N=5` (giai đoạn 3): 41,5–41,7 s trên `core`, p50 54,8 s, p95 64,2 s trên `OBS=lgtm`.
+`measure-ready N=5`: 41,5–41,7 s trên `core`, p50 54,8 s, p95 64,2 s trên `OBS=lgtm`.
 
 ## Leo thang
 

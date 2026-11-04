@@ -158,9 +158,19 @@ var grpcToHTTP = map[codes.Code]grpcMapping{
 	codes.DeadlineExceeded:   {http.StatusGatewayTimeout, "DEADLINE_EXCEEDED"},
 }
 
+// reasonToHTTP gives the status of the reasons that need a finer one than their gRPC code maps
+// to. An idempotency key reused with another request is 422 and one whose resource has moved on
+// is 409 (draft-ietf-httpapi-idempotency-key-header §2.7, RFC 9110 §15.5.10); both are 400 by
+// their code alone.
+var reasonToHTTP = map[string]int{
+	"IDEMPOTENCY_KEY_MISMATCH": http.StatusUnprocessableEntity,
+	"VIDEO_NOT_UPLOADING":      http.StatusConflict,
+}
+
 // WriteGRPCError writes the problem response for err, an error returned by a gRPC call, mapped
 // by docs/architecture.md §8.4: code is the ErrorInfo reason, or the gRPC code name when there
-// is none, and detail is the service's message. A wrapped gRPC error (fmt.Errorf("...: %w", err))
+// is none, and detail is the service's message. A reason of reasonToHTTP sets the status of a
+// 4xx response. A wrapped gRPC error (fmt.Errorf("...: %w", err))
 // is unwrapped first, so the wrapping text never reaches detail.
 //
 // A 5xx response never carries the service's message or reason (threat model IN-8): detail is
@@ -191,6 +201,9 @@ func WriteGRPCError(w http.ResponseWriter, r *http.Request, err error) {
 	code := grpcerr.Reason(err)
 	if code == "" {
 		code = m.name
+	}
+	if s, ok := reasonToHTTP[code]; ok {
+		m.status = s
 	}
 	WriteProblem(w, r, m.status, code, st.Message())
 }

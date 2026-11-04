@@ -122,6 +122,7 @@ func TestRecordViewProducesViewRecorded(t *testing.T) {
 
 // Each call is one view: two calls by the same caller produce two events with distinct ids.
 func TestRecordViewIsOneEventPerCall(t *testing.T) {
+	t.Parallel()
 	_, brokers := newCluster(t)
 	s, _ := newServerWithoutDB(newProducer(t, brokers))
 	caller, videoID := ids.New(), ids.New()

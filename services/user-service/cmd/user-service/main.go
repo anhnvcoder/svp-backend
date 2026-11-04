@@ -53,7 +53,6 @@ func main() {
 		cmd = os.Args[1]
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer stop()
 
 	var err error
 	switch cmd {
@@ -70,7 +69,10 @@ func main() {
 		if _, logged := errors.AsType[loggedError](err); !logged {
 			logFailure(logger, err)
 		}
-		stop()
+	}
+	// Not deferred: os.Exit below would skip a deferred call.
+	stop()
+	if err != nil {
 		os.Exit(1)
 	}
 }
@@ -115,6 +117,16 @@ func serve(ctx context.Context, logger *slog.Logger) (err error) {
 	}
 	defer kafka.Close()
 
+	verifyKeys, err := envcfg.Required("JWT_VERIFY_KEYS")
+	if err != nil {
+		return err
+	}
+	keys, err := authtoken.ParseVerifyKeys(verifyKeys)
+	if err != nil {
+		return fmt.Errorf("JWT_VERIFY_KEYS: %w", err)
+	}
+	verifier := authtoken.NewVerifier(keys)
+
 	shutdownTelemetry, err := telemetry.Setup(ctx, serviceName)
 	if err != nil {
 		return fmt.Errorf("set up telemetry: %w", err)
@@ -133,7 +145,7 @@ func serve(ctx context.Context, logger *slog.Logger) (err error) {
 			err = loggedError{err}
 		}
 		if err := shutdownTelemetry(context.WithoutCancel(ctx)); err != nil {
-			logger.Warn("telemetry shutdown failed", slog.Any("error", err))
+			logger.WarnContext(ctx, "telemetry shutdown failed", slog.Any("error", err))
 		}
 		flushErrors()
 		if pool != nil {
@@ -161,7 +173,8 @@ func serve(ctx context.Context, logger *slog.Logger) (err error) {
 	srv := server.New(pool, password.NewHasher(), authtoken.NewIssuer(kid, key), logger)
 	return grpcserver.Run(ctx, addr, logger,
 		func(s *grpc.Server) { userv1.RegisterUserServiceServer(s, srv) },
-		callerid.UnaryServerInterceptor(server.PublicMethods...),
+		pool.Ping,
+		callerid.UnaryServerInterceptor(verifier, server.PublicMethods...),
 	)
 }
 

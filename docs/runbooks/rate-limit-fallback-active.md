@@ -68,7 +68,7 @@ timeout, thời gian dùng kết nối p95).
 ## Redis mất hay chỉ vượt hạn lẻ tẻ
 
 Đọc bước 3b và bước 4: **Redis mất** thì tỷ lệ của instance gần 1, `ping` lỗi (hay tên miền `.invalid`), log bước 2 lặp liên tục.
-**Vượt hạn lẻ tẻ** thì tỷ lệ chỉ vài phần nghìn (game day 2026-10-24: khoảng 3 trên 1 200 quyết định mỗi phút), `ping` vẫn
+**Vượt hạn lẻ tẻ** thì tỷ lệ chỉ vài phần nghìn (game day: khoảng 3 trên 1 200 quyết định mỗi phút), `ping` vẫn
 `PONG`, bước 4 có vài `context_timeout`; loại này không page.
 
 ## Vượt hạn lẻ tẻ: `RateLimitFallbackElevated` (ticket)

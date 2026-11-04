@@ -6,6 +6,7 @@ import (
 )
 
 func TestNewIsCanonicalV7(t *testing.T) {
+	t.Parallel()
 	s := New()
 	u, err := Parse(s)
 	if err != nil {
@@ -20,6 +21,7 @@ func TestNewIsCanonicalV7(t *testing.T) {
 }
 
 func TestParseRejectsNonCanonicalForms(t *testing.T) {
+	t.Parallel()
 	const canonical = "01928c6e-7b3a-7cde-8f01-23456789abcd"
 	if _, err := Parse(canonical); err != nil {
 		t.Fatalf("Parse(%q) = %v, want nil", canonical, err)

@@ -1,4 +1,4 @@
-# k3d cluster `svp` for stage 4. Created by `make k8s-up`
+# k3d cluster `svp`, the local Kubernetes cluster. Created by `make k8s-up`
 # through deploy/k8s/lib.sh (ensure_cluster), which also creates the registry this file points at.
 apiVersion: k3d.io/v1alpha5
 kind: Simple

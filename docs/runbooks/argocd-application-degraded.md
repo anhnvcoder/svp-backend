@@ -102,6 +102,7 @@ kubectl --context k3d-svp -n svp patch rollout <gateway|web> --subresource statu
 
   Sau abort, Rollout ở `Degraded` (Application `Degraded`, cảnh báo page cháy tiếp) tới khi template trở về bản stable: revert
   commit promote trong `svp-gitops` như ca 1 ở trên; Argo CD áp bản revert thì Rollout về `Healthy` không qua canary.
+
 - **Manifest sai (5)**: revert như trên, rồi sửa bằng PR mới.
 
 ## Khôi phục và xác nhận

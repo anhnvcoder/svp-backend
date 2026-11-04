@@ -130,6 +130,7 @@ func hashRefreshTokenString(v string) ([]byte, bool) {
 }
 
 func TestHashRefreshToken(t *testing.T) {
+	t.Parallel()
 	tok := newRefreshToken()
 	v := tok.value.Reveal()
 	if len(v) != refreshTokenLen {

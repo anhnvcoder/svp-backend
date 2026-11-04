@@ -13,6 +13,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/anhnvcoder/svp-backend/internal/callerid/calleridtest"
 	"github.com/anhnvcoder/svp-backend/internal/pgpool"
 	"github.com/anhnvcoder/svp-backend/internal/sentryx"
 )
@@ -45,6 +46,7 @@ func TestServeReportsAFailureBeforeTheErrorTrackerStops(t *testing.T) {
 	defer tracker.Close()
 	t.Setenv("SENTRY_DSN", "http://public@"+tracker.Listener.Addr().String()+"/1")
 	t.Setenv("OTEL_SDK_DISABLED", "true")
+	t.Setenv("JWT_VERIFY_KEYS", calleridtest.VerifyKeys())
 	t.Setenv("JWT_SIGNING_KID", "test")
 	t.Setenv("JWT_SIGNING_KEY", base64.StdEncoding.EncodeToString(make([]byte, 32)))
 	t.Setenv("KAFKA_BROKERS", "redpanda:9092")
@@ -65,5 +67,20 @@ func TestServeReportsAFailureBeforeTheErrorTrackerStops(t *testing.T) {
 	defer mu.Unlock()
 	if !slices.ContainsFunc(envelopes, func(e string) bool { return strings.Contains(e, `"message":"user-service failed"`) }) {
 		t.Errorf("tracker received %q, want an event for the failure", envelopes)
+	}
+}
+
+// JWT_VERIFY_KEYS is required: without the public keys no caller's token can be verified.
+func TestServeRequiresVerifyKeys(t *testing.T) {
+	t.Setenv("DATABASE_URL", "postgres://unused@127.0.0.1:1/unused")
+	t.Setenv("JWT_SIGNING_KID", "test")
+	t.Setenv("JWT_SIGNING_KEY", base64.StdEncoding.EncodeToString(make([]byte, 32)))
+	t.Setenv("KAFKA_BROKERS", "redpanda:9092")
+	for _, keys := range []string{"", "k1:not-base64"} {
+		t.Setenv("JWT_VERIFY_KEYS", keys)
+		err := serve(t.Context(), slog.New(slog.DiscardHandler))
+		if err == nil || !strings.Contains(err.Error(), "JWT_VERIFY_KEYS") {
+			t.Errorf("JWT_VERIFY_KEYS=%q: serve() = %v, want an error naming JWT_VERIFY_KEYS", keys, err)
+		}
 	}
 }

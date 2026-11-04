@@ -52,7 +52,7 @@ const profiles = {
     perMinute: { explore: 60, following: 60, like: 30, view: 30, upload: 2, home: 60, video: 30, login: 30 },
     latencyThresholds: false,
   },
-  // The Job of deploy/k6/cloud/ (stage 7): 20 pods (completions of job.yaml.in; render.sh --pods and SVP_K6_PODS for
+  // The Job of deploy/k6/cloud/ (a cloud cluster): 20 pods (completions of job.yaml.in; render.sh --pods and SVP_K6_PODS for
   // fewer), 12 users and 2 web sessions each; 1 000 feed requests a second at 20 pods.
   cloud: {
     executor: "ramping-arrival-rate",
@@ -145,8 +145,8 @@ export function targets() {
   return t;
 }
 
-// The address each request claims in X-Forwarded-For, or "" for none. Set only in the cloud Job when stage 7 trusts two
-// hops (a load balancer before Envoy): the Job then calls Envoy directly and plays the load balancer's part, writing
+// The address each request claims in X-Forwarded-For, or "" for none. Set only in the cloud Job when the cluster trusts
+// two hops (a load balancer before Envoy): the Job then calls Envoy directly and plays the load balancer's part, writing
 // its own pod IP and no other (threat model RL-7).
 export const forwardedForIP = forwardedFor;
 

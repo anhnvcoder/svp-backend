@@ -23,7 +23,7 @@ import (
 	"google.golang.org/grpc/test/bufconn"
 
 	engagementv1 "github.com/anhnvcoder/svp-backend/gen/go/svp/engagement/v1"
-	"github.com/anhnvcoder/svp-backend/internal/callerid"
+	"github.com/anhnvcoder/svp-backend/internal/callerid/calleridtest"
 	"github.com/anhnvcoder/svp-backend/internal/grpcerr"
 	"github.com/anhnvcoder/svp-backend/internal/ids"
 	"github.com/anhnvcoder/svp-backend/internal/pgpool"
@@ -80,7 +80,7 @@ func newTestPool(t *testing.T, host string, maxConns int32, tracer pgx.QueryTrac
 func serveGRPC(t *testing.T, s *Server) engagementv1.EngagementServiceClient {
 	t.Helper()
 	lis := bufconn.Listen(1 << 20)
-	srv := grpc.NewServer(grpc.UnaryInterceptor(CallerInterceptor()))
+	srv := grpc.NewServer(grpc.UnaryInterceptor(CallerInterceptor(calleridtest.Verifier())))
 	engagementv1.RegisterEngagementServiceServer(srv, s)
 	go func() { _ = srv.Serve(lis) }()
 	t.Cleanup(srv.Stop)
@@ -101,7 +101,7 @@ type rpc func(t *testing.T, c engagementv1.EngagementServiceClient, caller, vide
 func likeRPC(t *testing.T, c engagementv1.EngagementServiceClient, caller, videoID string) (metadata.MD, error) {
 	t.Helper()
 	var trailer metadata.MD
-	ctx := metadata.AppendToOutgoingContext(t.Context(), callerid.MetadataKey, caller)
+	ctx := calleridtest.OutgoingContext(t.Context(), caller)
 	_, err := c.Like(ctx, &engagementv1.LikeRequest{VideoId: videoID}, grpc.Trailer(&trailer))
 	return trailer, err
 }
@@ -109,7 +109,7 @@ func likeRPC(t *testing.T, c engagementv1.EngagementServiceClient, caller, video
 func unlikeRPC(t *testing.T, c engagementv1.EngagementServiceClient, caller, videoID string) (metadata.MD, error) {
 	t.Helper()
 	var trailer metadata.MD
-	ctx := metadata.AppendToOutgoingContext(t.Context(), callerid.MetadataKey, caller)
+	ctx := calleridtest.OutgoingContext(t.Context(), caller)
 	_, err := c.Unlike(ctx, &engagementv1.UnlikeRequest{VideoId: videoID}, grpc.Trailer(&trailer))
 	return trailer, err
 }

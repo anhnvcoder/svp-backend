@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Drill: the stage 3 rows of the threat model (docs/threat-model.md, section 5) on the stack of
+# Drill: the threat model rows checked on the observability stack (docs/threat-model.md) on the stack of
 # `make up OBS=lgtm`. Each item prints
 # ok or FAIL lines; an item that fails does not stop the next ones (the stack is restored first),
 # and the script exits non-zero when any failed:

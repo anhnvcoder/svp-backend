@@ -165,6 +165,7 @@ func TestVersionTableOutsidePublicSchema(t *testing.T) {
 }
 
 func TestUpRejectsBadURL(t *testing.T) {
+	t.Parallel()
 	err := dbmigrate.Up(context.Background(), "postgres://u:hunter2@127.0.0.1:notaport/db", fstest.MapFS{})
 	if err == nil {
 		t.Fatal("Up() = nil with an unparsable URL")

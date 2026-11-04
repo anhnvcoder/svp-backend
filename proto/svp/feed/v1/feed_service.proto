@@ -10,10 +10,11 @@ import "google/protobuf/timestamp.proto";
 // Counters and "liked by me" are not part of a feed item; the gateway fetches
 // them from EngagementService.GetStats.
 //
-// Caller identity: the gateway passes the authenticated user id in the gRPC
-// metadata key `x-user-id`; requests never carry the caller's own id. Every
-// RPC requires it and returns UNAUTHENTICATED when it is missing or not a
-// valid UUID.
+// Caller identity: the gateway forwards the caller's access token in the gRPC
+// metadata key `authorization` as `Bearer <token>`; the service verifies it
+// and takes the caller from its `sub`. Requests never carry the caller's own
+// id. Every RPC requires it and returns UNAUTHENTICATED when it is missing or
+// invalid.
 //
 // Pagination follows Google AIP-158. page_token is opaque to clients and to
 // the gateway: pass back next_page_token unchanged. An empty next_page_token

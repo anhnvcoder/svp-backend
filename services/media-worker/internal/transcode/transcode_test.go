@@ -404,6 +404,7 @@ func TestRunTimeoutKillsFFmpeg(t *testing.T) {
 }
 
 func TestCheckLimits(t *testing.T) {
+	t.Parallel()
 	video := probeStream{CodecType: "video", CodecName: "h264", Width: 1920, Height: 1080, AvgFrameRate: "30/1"}
 	audio := probeStream{CodecType: "audio", CodecName: "aac"}
 	mp4 := func(duration string, streams ...probeStream) probeResult {
@@ -442,6 +443,7 @@ func TestCheckLimits(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 			err := tt.p.check()
 			if tt.want == nil && err != nil {
 				t.Errorf("check() = %v, want nil", err)
@@ -454,6 +456,7 @@ func TestCheckLimits(t *testing.T) {
 }
 
 func TestLastLineStripsJobPaths(t *testing.T) {
+	t.Parallel()
 	b := &tailBuffer{max: 100}
 	_, _ = fmt.Fprintf(b, "%s\n", strings.Repeat("x", 100))
 	_, _ = fmt.Fprint(b, "file:/work/abc/source.mp4: Invalid data found when processing input\n")
@@ -483,6 +486,7 @@ func masterOf(variants ...string) string {
 // The master stored by an earlier attempt reads back to what Run reported for it; anything
 // Run cannot have written is an error, so it is never published.
 func TestParseMaster(t *testing.T) {
+	t.Parallel()
 	const a, other = testAttempt, "0190a6e4-7b2c-7d3e-9f40-123456789abd"
 	m, err := ParseMaster([]byte(strings.ReplaceAll(masterOf(a+"/720p/index.m3u8 1280x720", a+"/360p/index.m3u8 640x360"), "\n", "\r\n")))
 	if err != nil {
@@ -523,6 +527,7 @@ func TestParseMaster(t *testing.T) {
 }
 
 func TestRewriteMaster(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	path := writeFile(t, dir, MasterPlaylist, masterOf("360p/index.m3u8 640x360", "720p/index.m3u8 1280x720"))
 	m, err := rewriteMaster(path, testAttempt)
@@ -555,6 +560,7 @@ func TestRewriteMaster(t *testing.T) {
 }
 
 func TestPlaylistDuration(t *testing.T) {
+	t.Parallel()
 	d, err := PlaylistDuration([]byte("#EXTM3U\r\n#EXT-X-TARGETDURATION:4\r\n#EXTINF:4.000000,\r\nseg_000.ts\r\n#EXTINF:2.033333,\r\nseg_001.ts\r\n#EXT-X-ENDLIST\r\n"))
 	if err != nil || d != 6033*time.Millisecond {
 		t.Errorf("PlaylistDuration() = %v, %v; want 6.033s", d, err)

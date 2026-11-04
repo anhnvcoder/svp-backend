@@ -20,6 +20,7 @@ import (
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
 	"go.opentelemetry.io/otel/sdk/metric/metricdata"
 
+	"github.com/anhnvcoder/svp-backend/internal/callerid/calleridtest"
 	"github.com/anhnvcoder/svp-backend/internal/pgpool"
 	"github.com/anhnvcoder/svp-backend/internal/sentryx"
 	"github.com/anhnvcoder/svp-backend/internal/telemetry"
@@ -60,6 +61,7 @@ func TestServeReportsAFailureBeforeTheErrorTrackerStops(t *testing.T) {
 	defer tracker.Close()
 	t.Setenv("SENTRY_DSN", "http://public@"+tracker.Listener.Addr().String()+"/1")
 	t.Setenv("OTEL_SDK_DISABLED", "true")
+	t.Setenv("JWT_VERIFY_KEYS", calleridtest.VerifyKeys())
 	t.Setenv("KAFKA_BROKERS", "redpanda:9092")
 	t.Setenv("REDIS_URL", "")
 	// pgpool rejects this URL once the tracker has started. Every later failure, a malformed
@@ -90,6 +92,7 @@ func TestMigrateRequiresDatabaseURL(t *testing.T) {
 }
 
 func TestRunRejectsUnknownCommand(t *testing.T) {
+	t.Parallel()
 	if err := run(t.Context(), slog.New(slog.DiscardHandler), []string{"serv"}); err == nil {
 		t.Error("run(serv) = nil, want an error")
 	}
@@ -144,6 +147,7 @@ func TestRunConsumerStopsWhileWaitingToRestart(t *testing.T) {
 }
 
 func TestRunConsumerReturnsCreateError(t *testing.T) {
+	t.Parallel()
 	want := errors.New("bad config")
 	newConsumer := func() (runner, error) { return nil, want }
 	err := runConsumer(context.Background(), slog.New(slog.DiscardHandler), time.Millisecond, newConsumer)
@@ -184,6 +188,7 @@ func TestRunPruneRepeatsUntilCanceled(t *testing.T) {
 
 // The first run happens right away, not after the first interval.
 func TestRunPruneRunsAtStart(t *testing.T) {
+	t.Parallel()
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	ran := make(chan struct{}, 1)
@@ -329,5 +334,19 @@ func TestRunPruneReportsBatchesOfATimedOutRun(t *testing.T) {
 	}
 	if want := `"level":"WARN","msg":"prune timeline timed out"`; !strings.Contains(logs.String(), want) {
 		t.Errorf("want %s; log:\n%s", want, logs.String())
+	}
+}
+
+// JWT_VERIFY_KEYS is required: without the public keys no caller's token can be verified.
+func TestServeRequiresVerifyKeys(t *testing.T) {
+	t.Setenv("DATABASE_URL", "postgres://unused@127.0.0.1:1/unused")
+	t.Setenv("KAFKA_BROKERS", "redpanda:9092")
+	t.Setenv("REDIS_URL", "")
+	for _, keys := range []string{"", "k1:not-base64"} {
+		t.Setenv("JWT_VERIFY_KEYS", keys)
+		err := serve(t.Context(), slog.New(slog.DiscardHandler))
+		if err == nil || !strings.Contains(err.Error(), "JWT_VERIFY_KEYS") {
+			t.Errorf("JWT_VERIFY_KEYS=%q: serve() = %v, want an error naming JWT_VERIFY_KEYS", keys, err)
+		}
 	}
 }

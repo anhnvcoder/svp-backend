@@ -5,7 +5,7 @@
 
 ## Ý nghĩa và tác động tới người dùng
 
-Sự cố đã gặp ngày 2026-10-21 (roadmap, giai đoạn 5): PR #4 merge lúc 14:39:24Z thành `94c3dbe`; GitHub đang có sự cố Webhooks
+Sự cố đã gặp: PR #4 merge lúc 14:39:24Z thành `94c3dbe`; GitHub đang có sự cố Webhooks
 (githubstatus "Partially Degraded") và không chạy workflow push nào cho commit đó. Sau ~40 phút đã dispatch
 `images.yml -f services=feed-service` để phát hành: PR promote #5 mở sau 3,5 phút và được merge (`983f761`). Nhưng lượt dispatch
 không đẩy base của phép so "service nào đổi", nên lượt push của `983f761` so từ lượt push thành công cuối (`bea9954`) và build
@@ -40,7 +40,7 @@ deploy/ci/changed-services.sh <base> origin/main
 
 ## Giảm thiểu
 
-Không có tác động tới người dùng; không cần làm gấp. Cách được khuyên (roadmap, "Ghi nhận" giai đoạn 5):
+Không có tác động tới người dùng; không cần làm gấp. Cách được khuyên:
 
 1. **Không dispatch** `services=` để phát hành bù: lượt dispatch phát hành được nhưng không đẩy base, nên lượt push kế build
    lại cùng service đó, thêm một PR promote thừa.

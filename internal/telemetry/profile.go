@@ -7,6 +7,8 @@ import (
 	"github.com/grafana/pyroscope-go"
 )
 
+// startProfiler starts the continuous profiler and returns the function that stops it. The profiler
+// outlives any request, so its context is a root cancelled only by that stop function.
 func startProfiler(service, address string) (func(context.Context) error, error) {
 	ctx, cancel := context.WithCancel(context.Background())
 	client := &profileClient{ctx: ctx, client: &http.Client{

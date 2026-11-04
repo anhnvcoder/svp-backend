@@ -59,6 +59,7 @@ func sign(t testing.TB, method jwt.SigningMethod, key any, kid string, claims jw
 }
 
 func TestIssueThenVerify(t *testing.T) {
+	t.Parallel()
 	key := newKey(t)
 	userID := ids.New()
 	before := time.Now().Truncate(time.Second)
@@ -81,6 +82,7 @@ func TestIssueThenVerify(t *testing.T) {
 }
 
 func TestIssuedTokenContents(t *testing.T) {
+	t.Parallel()
 	key := newKey(t)
 	userID := ids.New()
 	tok, exp, err := NewIssuer(testKID, key).Issue(userID)
@@ -122,12 +124,14 @@ func TestIssuedTokenContents(t *testing.T) {
 }
 
 func TestIssueRejectsNonUUIDSubject(t *testing.T) {
+	t.Parallel()
 	if _, _, err := NewIssuer(testKID, newKey(t)).Issue("alice@example.com"); err == nil {
 		t.Error("Issue() with a non-UUID user id succeeded")
 	}
 }
 
 func TestVerifyRejectsForgedTokens(t *testing.T) {
+	t.Parallel()
 	key := newKey(t)
 	attacker := newKey(t)
 	pubKey := pub(key)
@@ -194,6 +198,7 @@ func TestVerifyRejectsForgedTokens(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 			got, err := v.Verify(tt.token)
 			if !errors.Is(err, ErrInvalidToken) {
 				t.Errorf("Verify() = (%q, %v), want ErrInvalidToken", got, err)
@@ -224,6 +229,7 @@ func TestVerifyAllowsClockSkewWithinLeeway(t *testing.T) {
 }
 
 func TestVerifyKeyRotation(t *testing.T) {
+	t.Parallel()
 	oldPriv, newPriv := newKey(t), newKey(t)
 	oldTok, _, err := NewIssuer("old", oldPriv).Issue(ids.New())
 	if err != nil {
@@ -251,6 +257,7 @@ func TestVerifyKeyRotation(t *testing.T) {
 }
 
 func TestParseSigningKey(t *testing.T) {
+	t.Parallel()
 	key := newKey(t)
 	seed := base64.StdEncoding.EncodeToString(key.Seed())
 
@@ -274,6 +281,7 @@ func TestParseSigningKey(t *testing.T) {
 		{"full private key instead of seed", "k", base64.StdEncoding.EncodeToString(key)},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 			if _, err := ParseSigningKey(tt.kid, tt.seed); err == nil {
 				t.Error("ParseSigningKey() succeeded, want error")
 			}
@@ -282,6 +290,7 @@ func TestParseSigningKey(t *testing.T) {
 }
 
 func TestParseVerifyKeys(t *testing.T) {
+	t.Parallel()
 	k1, k2 := pub(newKey(t)), pub(newKey(t))
 	b1, b2 := base64.StdEncoding.EncodeToString(k1), base64.StdEncoding.EncodeToString(k2)
 
@@ -305,6 +314,7 @@ func TestParseVerifyKeys(t *testing.T) {
 		{"trailing comma", "k1:" + b1 + ","},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 			if got, err := ParseVerifyKeys(tt.in); err == nil {
 				t.Errorf("ParseVerifyKeys(%q) = %v, want error", tt.in, got)
 			}

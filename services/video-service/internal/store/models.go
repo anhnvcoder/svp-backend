@@ -7,6 +7,7 @@ package store
 import (
 	"time"
 
+	"github.com/jackc/pgx/v5/pgtype"
 	"uuid"
 )
 
@@ -34,4 +35,5 @@ type Video struct {
 	PublishedAt  *time.Time
 	CreatedAt    time.Time
 	ProcessingAt *time.Time
+	RequestID    pgtype.UUID
 }

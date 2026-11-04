@@ -26,6 +26,7 @@ import (
 	"google.golang.org/protobuf/types/known/timestamppb"
 
 	feedv1 "github.com/anhnvcoder/svp-backend/gen/go/svp/feed/v1"
+	"github.com/anhnvcoder/svp-backend/internal/authtoken"
 	"github.com/anhnvcoder/svp-backend/internal/callerid"
 	"github.com/anhnvcoder/svp-backend/internal/grpcerr"
 	"github.com/anhnvcoder/svp-backend/internal/pagetoken"
@@ -105,10 +106,11 @@ func New(pool *pgxpool.Pool, cache *redis.Client, cachePrefix string, logger *sl
 	return s
 }
 
-// CallerInterceptor requires the caller's x-user-id on every FeedService RPC. Only the health
-// check is public: the healthcheck subcommand and probes call it without a user.
-func CallerInterceptor() grpc.UnaryServerInterceptor {
-	return callerid.UnaryServerInterceptor(healthpb.Health_Check_FullMethodName)
+// CallerInterceptor requires on every FeedService RPC a caller's access token that verifier
+// accepts. Only the health check is public: the healthcheck subcommand and probes call it
+// without a user.
+func CallerInterceptor(verifier *authtoken.Verifier) grpc.UnaryServerInterceptor {
+	return callerid.UnaryServerInterceptor(verifier, healthpb.Health_Check_FullMethodName)
 }
 
 // page is a parsed page request: how many rows to read and where to start.
@@ -119,7 +121,8 @@ type page struct {
 }
 
 // GetFollowingFeed returns a page of the caller's own timeline of the last 30 days. The user
-// whose timeline is read always comes from x-user-id, never from the token (threat model PG-1).
+// whose timeline is read always comes from the caller's access token, never from the page token
+// (threat model PG-1).
 func (s *Server) GetFollowingFeed(ctx context.Context, req *feedv1.GetFollowingFeedRequest) (*feedv1.GetFollowingFeedResponse, error) {
 	caller, err := callerID(ctx)
 	if err != nil {
@@ -285,6 +288,7 @@ func (s *Server) warnCache(ctx context.Context, what string, err error) {
 	if now-last < int64(cacheWarnInterval) || !s.lastCacheWarn.CompareAndSwap(last, now) {
 		return
 	}
+	//nolint:sloglint // wrapper: every caller passes a constant message
 	s.logger.WarnContext(ctx, what, slog.Any("error", err))
 }
 
@@ -374,6 +378,7 @@ func callerID(ctx context.Context) (uuid.UUID, error) {
 // internal logs err with what failed and returns a generic INTERNAL error, so database details
 // never reach the caller.
 func (s *Server) internal(ctx context.Context, what string, err error) error {
+	//nolint:sloglint // wrapper: every caller passes a constant message
 	s.logger.ErrorContext(ctx, what, slog.Any("error", err))
 	return status.Error(codes.Internal, "internal error")
 }

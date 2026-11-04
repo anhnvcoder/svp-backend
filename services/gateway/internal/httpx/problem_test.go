@@ -99,12 +99,39 @@ func TestGRPCCodeTable(t *testing.T) {
 }
 
 func TestWriteGRPCErrorUnwrapsWrappedStatus(t *testing.T) {
+	t.Parallel()
 	wrapped := fmt.Errorf("get video: %w", grpcerr.New(codes.NotFound, "VIDEO_NOT_FOUND", "video not found"))
 	rec := httptest.NewRecorder()
 	WriteGRPCError(rec, httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/", nil), wrapped)
 	p := decodeProblem(t, rec)
 	if rec.Code != 404 || p.Code != "VIDEO_NOT_FOUND" || p.Detail != "video not found" {
 		t.Errorf("got %d code %q detail %q, want 404 VIDEO_NOT_FOUND %q", rec.Code, p.Code, p.Detail, "video not found")
+	}
+}
+
+// The idempotency reasons get a finer status than their gRPC code; a 5xx keeps its own.
+func TestWriteGRPCErrorReasonStatus(t *testing.T) {
+	for _, tc := range []struct {
+		code       codes.Code
+		reason     string
+		wantStatus int
+		wantTitle  string
+		wantCode   string
+	}{
+		{codes.InvalidArgument, "IDEMPOTENCY_KEY_MISMATCH", 422, "Unprocessable Entity", "IDEMPOTENCY_KEY_MISMATCH"},
+		{codes.FailedPrecondition, "VIDEO_NOT_UPLOADING", 409, "Conflict", "VIDEO_NOT_UPLOADING"},
+		{codes.Internal, "VIDEO_NOT_UPLOADING", 500, "Internal Server Error", "INTERNAL"},
+	} {
+		t.Run(tc.reason+" "+tc.code.String(), func(t *testing.T) {
+			captureLog(t)
+			rec := httptest.NewRecorder()
+			WriteGRPCError(rec, httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/", nil),
+				grpcerr.New(tc.code, tc.reason, "message"))
+			p := decodeProblem(t, rec)
+			if rec.Code != tc.wantStatus || p.Status != tc.wantStatus || p.Title != tc.wantTitle || p.Code != tc.wantCode {
+				t.Errorf("got %d %+v, want %d %q code %q", rec.Code, p, tc.wantStatus, tc.wantTitle, tc.wantCode)
+			}
+		})
 	}
 }
 
@@ -119,6 +146,7 @@ func TestWriteGRPCErrorNonStatusIsInternal(t *testing.T) {
 }
 
 func TestWriteProblem(t *testing.T) {
+	t.Parallel()
 	r, traceID := requestWithTrace(t)
 	rec := httptest.NewRecorder()
 	WriteProblem(rec, r, http.StatusUnauthorized, "INVALID_TOKEN", "missing or invalid access token")
@@ -130,6 +158,7 @@ func TestWriteProblem(t *testing.T) {
 }
 
 func TestWriteRateLimited(t *testing.T) {
+	t.Parallel()
 	for _, tt := range []struct {
 		retryAfter time.Duration
 		want       string
@@ -141,6 +170,7 @@ func TestWriteRateLimited(t *testing.T) {
 		{time.Minute, "60"},
 	} {
 		t.Run(tt.retryAfter.String(), func(t *testing.T) {
+			t.Parallel()
 			r, id := requestWithTrace(t)
 			rec := httptest.NewRecorder()
 			WriteRateLimited(rec, r, "login-ip", tt.retryAfter)

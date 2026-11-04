@@ -1,18 +1,18 @@
 # Dựng và kiểm cài đặt GitHub của `svp-infra` (repo Terraform: cài đặt repo, nhánh mặc định, Renovate, ruleset)
 
-- Quy trình làm tay, không có cảnh báo. Mở khi dựng repo hạ tầng `anhnvcoder/svp-infra` lần đầu (giai đoạn 7), khi kiểm lại cài đặt sau
+- Quy trình làm tay, không có cảnh báo. Mở khi dựng repo hạ tầng `anhnvcoder/svp-infra` lần đầu, khi kiểm lại cài đặt sau
   một thay đổi của GitHub hay của repo, khi PR không merge được vì check bắt buộc, hay khi nghi repo đã lộ thông tin của tài khoản AWS.
 - Mọi thao tác ghi (UI Settings, ruleset qua `apply` của `svp-infra`, cài Renovate, push đầu) do **người học chạy** với quyền admin. Mọi lệnh "Kiểm" ở đây chỉ
   `GET`, chạy bằng đăng nhập `gh` của người học (scope `repo` là đủ).
 - Thiết kế và lý do ở [ADR-0034](../adr/0034-aws-stage7.md) §2 (repo, bố cục, CI không credential) và threat model
-  [AWS-6](../threat-model.md#411-biên-aws-giai-đoạn-7); cài đặt theo cùng mẫu với [svp-frontend-setup.md](svp-frontend-setup.md) và
+  [AWS-6](../threat-model.md#411-biên-aws); cài đặt theo cùng mẫu với [svp-frontend-setup.md](svp-frontend-setup.md) và
   [svp-gitops-setup.md](svp-gitops-setup.md). Trang này chỉ nói làm gì, vì sao từng ô, kiểm thế nào.
-- **Ở giai đoạn 7a repo không có** secret, variable, environment, GitHub App hay role OIDC nào: CI chỉ kiểm tĩnh, mọi lệnh chạm tài khoản
+- **Repo không có** secret, variable, environment, GitHub App hay role OIDC nào: CI chỉ kiểm tĩnh, mọi lệnh chạm tài khoản
   AWS do người học chạy từ máy. **Không ghi** account ID, IP, email, tên miền thật vào repo, issue, PR hay chat: repo public.
 
 ## Ý nghĩa và tác động tới người dùng
 
-`svp-infra` giữ Terraform của lab (AWS ở giai đoạn 7, GCP ở 8, Cloudflare ở 8b, GitHub dưới dạng code ở 7c), bản clone ở `infra/` của
+`svp-infra` giữ Terraform của lab (AWS ở `aws/`, cài đặt GitHub ở `github/`), bản clone ở `infra/` của
 workspace. Repo code giữ chart, `svp-gitops` giữ cái gì chạy ở mỗi env; `svp-infra` dựng nền (mạng, cluster, dữ liệu) mà Argo CD triển khai
 lên:
 
@@ -51,7 +51,7 @@ gh api $I/actions/permissions/workflow -q .
 gh api $I/actions/permissions/fork-pr-contributor-approval -q .
 gh api $I -q '.security_and_analysis | {secret_scanning: .secret_scanning.status, push_protection: .secret_scanning_push_protection.status}'
 gh api -i $I/vulnerability-alerts | head -1
-# A3. Không credential nào ở 7a
+# A3. Không credential nào
 gh api $I/actions/secrets -q .total_count
 gh api $I/actions/variables -q .total_count
 gh api $I/environments -q .total_count
@@ -64,18 +64,18 @@ gh api $I/rules/branches/main -q '.[] | .type'
 
 | Lệnh | Mong đợi |
 | --- | --- |
-| repo | `"visibility":"public"`, `"has_issues":true`, `"allow_auto_merge":true`, `"allow_squash_merge":true`, `"allow_merge_commit":false`, `"allow_rebase_merge":false`; `"default_branch":"main"` sau push đầu (repo rỗng báo `master`, đọc ngày 2026-10-31: chưa có nghĩa gì) |
+| repo | `"visibility":"public"`, `"has_issues":true`, `"allow_auto_merge":true`, `"allow_squash_merge":true`, `"allow_merge_commit":false`, `"allow_rebase_merge":false`; `"default_branch":"main"` sau push đầu (repo rỗng báo `master`: chưa có nghĩa gì) |
 | squash | `{"squash_merge_commit_message":"PR_BODY","squash_merge_commit_title":"PR_TITLE"}` |
 | `actions/permissions` | `{"allowed_actions":"selected","enabled":true,"sha_pinning_required":true}` |
-| `selected-actions` | `{"github_owned_allowed":true,"patterns_allowed":[],"verified_allowed":false}` |
+| `selected-actions` | `{"github_owned_allowed":true,"patterns_allowed":["ossf/scorecard-action@*"],"verified_allowed":false}`; Terraform hiện còn giữ thêm `hashicorp/setup-terraform@*`, `terraform-linters/setup-tflint@*` như GitHub có lúc nhận repo (mục "Khác runbook" của `github/README.md`), nên sau `apply` ra ba pattern cho tới PR gỡ hai pattern đó |
 | `actions/permissions/workflow` | `{"can_approve_pull_request_reviews":false,"default_workflow_permissions":"read"}` |
 | `fork-pr-contributor-approval` | `{"approval_policy":"all_external_contributors"}` |
 | `security_and_analysis` | `{"push_protection":"enabled","secret_scanning":"enabled"}` |
 | `vulnerability-alerts` | `HTTP/2.0 204 No Content` (Dependabot alerts bật; `404` là tắt) |
 | `actions/secrets`, `actions/variables`, `environments` | `0`, `0`, `0` |
 | `gh run list` | một dòng `"conclusion":"success"` |
-| rulesets | đúng một dòng `main`, `"target":"branch"`, `"enforcement":"active"` |
-| `rules/branches/main` | `deletion`, `non_fast_forward`, `pull_request`, `required_status_checks` |
+| rulesets | hai dòng: `main`, `owners`, cả hai `"target":"branch"`, `"enforcement":"active"` |
+| `rules/branches/main` | `deletion`, `non_fast_forward`, `required_linear_history`, `pull_request` (hai lần: một của mỗi ruleset nhắm nhánh), `required_status_checks` (một dòng: khi `pr-title` thành check bắt buộc, nó nằm trong danh sách check của chính luật này, không thêm dòng) |
 
 Không kiểm được bằng `gh` của người học: **Renovate** (B2), như với hai repo kia ([svp-frontend-setup.md](svp-frontend-setup.md#kiểm-tra-nhanh-5-phút)).
 Kiểm bằng UI ở bước đó.
@@ -93,10 +93,12 @@ nhanh":
    thấy. Sửa ở A2.
 4. **Check bắt buộc mang tên khác tên job tổng của `check.yml`**: PR đứng ở "Expected — Waiting for status to be reported", không merge được.
    Tên đúng là `infra-ok`; sửa ruleset hay tên job cho khớp (C1).
-5. **Ai đó thêm secret, variable hay environment ở 7a** (`total_count` khác 0): không gì đỏ, nhưng repo public có credential. Xoá và xem
+5. **Ai đó thêm secret, variable hay environment** (`total_count` khác 0): không gì đỏ, nhưng repo public có credential. Xoá và xem
    "Giảm thiểu".
-6. **`patterns_allowed` không rỗng** (chép từ `svp-frontend`, nơi cần `sigstore/cosign-installer`): `svp-infra` không ký gì, ô đó chỉ làm danh
-   sách action được chạy rộng ra. Sửa ở A2.
+6. **`patterns_allowed` khác ba pattern của `github/repositories.tf`** (`ossf/scorecard-action@*` cho `scorecard.yml`,
+   `hashicorp/setup-terraform@*`, `terraform-linters/setup-tflint@*` như GitHub có lúc nhận repo; vd. thêm `sigstore/cosign-installer@*` chép
+   từ `svp-frontend`): `svp-infra` không ký gì, pattern thừa chỉ làm danh sách action được chạy rộng ra. Pattern do `repositories.tf` giữ:
+   không sửa ở UI; lệch thì `apply` của `github/` đặt lại theo file, đổi pattern thì sửa file bằng PR rồi `apply`.
 
 ## Giảm thiểu
 
@@ -124,7 +126,7 @@ Dựng từ đầu theo thứ tự:
 
 ### A1. Repo rỗng
 
-Repo `anhnvcoder/svp-infra` đã tạo ngày 2026-10-31 (public, rỗng) và bản clone ở `<workspace>/infra`.
+Repo `anhnvcoder/svp-infra` tạo public, rỗng, và bản clone ở `<workspace>/infra`.
 
 **Kiểm:**
 
@@ -141,13 +143,13 @@ không `--add-readme`, `--license`, `--gitignore` (người học chạy, chỉ 
 
 Làm trước khi bất kỳ commit nào có `.github/workflows/` được push.
 
-**Làm gì** (https://github.com/anhnvcoder/svp-infra/settings):
+**Làm gì** (<https://github.com/anhnvcoder/svp-infra/settings>):
 
 - **General** → mục **Pull Requests**: bật **Allow squash merging**, ô **Default commit message** chọn **Pull request title and
   description**; tắt **Allow merge commits** và **Allow rebase merging**; bật **Allow auto-merge**. Mục **Features**: giữ **Issues** bật.
 - **Actions** → **General**:
   - **Actions permissions**: **Allow anhnvcoder, and select non-anhnvcoder, actions and reusable workflows**; tích **Allow actions created
-    by GitHub**, không tích Marketplace verified creators; ô danh sách action **để trống**; tích **Require actions to be pinned to a
+    by GitHub**, không tích Marketplace verified creators; ô danh sách action thêm `ossf/scorecard-action@*` ([ADR-0041](../adr/0041-github-hardening.md) (g)); tích **Require actions to be pinned to a
     full-length commit SHA**. **Save**.
   - **Approval for running fork pull request workflows from contributors**: **Require approval for all external contributors**. **Save**.
   - **Workflow permissions**: **Read repository contents and packages permissions**; **bỏ tích** **Allow GitHub Actions to create and
@@ -160,8 +162,8 @@ Làm trước khi bất kỳ commit nào có `.github/workflows/` được push.
 - Chỉ squash: mỗi PR là đúng một commit trên `main`, nên mỗi thay đổi hạ tầng (mỗi lần người học `plan`, `apply` từ `main`) ứng với một
   commit đọc được; hoàn tác là revert một commit. Commit squash lấy tiêu đề và mô tả của PR (conventional commit, footer, dòng revert còn
   trong commit). Auto-merge để PR của người học tự merge khi `infra-ok` xanh; không mở đường nào qua ruleset.
-- Chỉ action của GitHub, ghim SHA bắt buộc: như hai repo kia; `check.yml` chỉ dùng action của GitHub, còn terraform, tflint, trivy,
-  shellcheck chạy bằng image hay bản tải ghim, nên danh sách action ngoài để trống (khác `svp-frontend`, không ký gì).
+- Chỉ action của GitHub và `ossf/scorecard-action`, ghim SHA bắt buộc: như hai repo kia; `check.yml` chỉ dùng action của GitHub, còn terraform, tflint, trivy,
+  shellcheck, zizmor chạy bằng image hay bản tải ghim; action ngoài duy nhất là Scorecard của `scorecard.yml` (khác `svp-frontend`, không ký gì).
 - Token mặc định chỉ đọc, tắt "create and approve pull requests": không workflow nào của repo này ghi hay mở PR.
 - Duyệt PR fork của mọi người ngoài: repo public, PR fork chạy `check.yml` với code lạ trên runner; người học xem trước khi cho chạy.
 - Secret scanning + push protection: chặn ngay lúc push nếu ai lỡ commit khoá AWS (threat model AWS-6). Dependabot alerts: cảnh báo về
@@ -170,18 +172,19 @@ Làm trước khi bất kỳ commit nào có `.github/workflows/` được push.
 **Kiểm:** tám lệnh đầu của "Kiểm tra nhanh" (repo tới `vulnerability-alerts`), output như bảng. Các API này chạy được trên repo rỗng.
 
 **Nếu sai:** sửa ở đúng ô rồi chạy lại lệnh kiểm. `allow_merge_commit`/`allow_rebase_merge` true → người merge tay có thể tạo merge commit hay
-rebase. `sha_pinning_required` false hay `verified_allowed` true → workflow dùng tag hay action bên thứ ba vẫn chạy. `patterns_allowed` không
-rỗng → xoá dòng trong ô danh sách action. `can_approve_pull_request_reviews` true → tắt ở Workflow permissions. `approval_policy` khác
+rebase. `sha_pinning_required` false hay `verified_allowed` true → workflow dùng tag hay action bên thứ ba vẫn chạy. `patterns_allowed` khác ba
+pattern của `github/repositories.tf` → không xoá ở UI: `apply` của `github/` đặt lại theo file, đổi pattern thì sửa file bằng PR rồi `apply`
+(thiếu pattern Scorecard thì `scorecard.yml` bị từ chối). `can_approve_pull_request_reviews` true → tắt ở Workflow permissions. `approval_policy` khác
 `all_external_contributors` → chọn lại ô duyệt PR fork.
 
-### A3. Không credential ở 7a
+### A3. Không credential
 
 **Làm gì:** không tạo gì ở Settings → **Secrets and variables** → **Actions** (cả tab Secrets lẫn Variables) và Settings → **Environments**;
 không tạo role IAM nào tin OIDC của GitHub cho repo này.
 
-**Vì sao** (ADR-0034 §2, threat model AWS-6): CI của 7a chỉ kiểm tĩnh (`make check` không gọi `plan`, `apply` hay `aws`), nên không job nào
+**Vì sao** (ADR-0034 §2, threat model AWS-6): CI chỉ kiểm tĩnh (`make check` không gọi `plan`, `apply` hay `aws`), nên không job nào
 cần quyền vào tài khoản; repo public với một credential trong CI là một đường vào tài khoản qua code của PR hay action bị chiếm. `plan`,
-`apply` chạy từ máy người học bằng SSO. Đăng nhập CI vào AWS bằng OIDC (không khoá dài hạn) là bài của 7c, khi có lý do.
+`apply` chạy từ máy người học bằng SSO. Đăng nhập CI vào AWS bằng OIDC (không khoá dài hạn) chỉ thêm khi có ADR cho nó (xem "Leo thang").
 
 **Kiểm:** ba lệnh "A3" của "Kiểm tra nhanh" in `0`.
 
@@ -214,7 +217,7 @@ bật nên còn push được), chờ lượt xanh trước C1.
 
 ### B2. Renovate
 
-**Làm gì:** https://github.com/apps/renovate → **Configure** → `anhnvcoder` → **Only select repositories** → thêm `anhnvcoder/svp-infra`
+**Làm gì:** <https://github.com/apps/renovate> → **Configure** → `anhnvcoder` → **Only select repositories** → thêm `anhnvcoder/svp-infra`
 (giữ ba repo đã có) → **Save**. Làm sau khi `renovate.json` đã ở `main` (B1), để không có PR onboarding.
 
 **Vì sao:** `renovate.json` của `svp-infra` nâng provider Terraform, module `terraform-aws-modules` (ghim version chính xác), ruleset tflint,
@@ -222,14 +225,14 @@ image ghim của `Makefile` và SHA của action, cùng lịch sáng thứ Bảy
 thì các ghim cũ dần. Không automerge: mỗi PR nâng module hay provider người học đọc changelog trước khi merge (nâng major của module EKS có
 breaking).
 
-**Kiểm** (UI): https://github.com/settings/installations → **Renovate** → **Configure**: danh sách repo có `svp-infra`. Vài giờ sau có issue
+**Kiểm** (UI): <https://github.com/settings/installations> → **Renovate** → **Configure**: danh sách repo có `svp-infra`. Vài giờ sau có issue
 **Dependency Dashboard**:
 
 ```sh
 gh issue list --repo anhnvcoder/svp-infra --state all --search 'Dependency Dashboard in:title' --json number,title,author
 ```
 
-**Nếu sai:** không có issue sau một ngày → log của repo ở https://developer.mend.io → `anhnvcoder/svp-infra`.
+**Nếu sai:** không có issue sau một ngày → log của repo ở <https://developer.mend.io> → `anhnvcoder/svp-infra`.
 
 ### C1. Ruleset `main` (sau lượt `check.yml` đầu xanh trên `main`)
 
@@ -250,9 +253,12 @@ tạo và sửa bằng `plan`, `apply` ở đó theo `github/README.md`, không 
 | Luật | Vì sao |
 | --- | --- |
 | `deletion`, `non_fast_forward` | Không ai xoá `main` hay force push: mỗi `apply` của người học ứng với một commit trên `main`, viết lại lịch sử làm mất dấu cấu hình đã apply |
-| `pull_request`, 0 approval | Mọi thay đổi qua PR để `make check` chạy; repo một người nên không bắt người thứ hai; không CODEOWNERS |
-| `required_status_checks` `infra-ok`, `integration_id` 15368 | Check tổng phải xanh, chỉ nhận từ app GitHub Actions (`gh api apps/github-actions -q .id` là 15368, như `svp-frontend-setup.md` đọc ngày 2026-10-30) |
+| `pull_request`, 0 approval | Mọi thay đổi qua PR để `make check` chạy; repo một người nên không bắt người thứ hai; chỉ squash (`allowed_merge_methods = ["squash"]`) |
+| `required_linear_history` | `main` thẳng, mỗi commit là một PR revert được, mang tiêu đề đã lint (ADR-0041 (c), (h)) |
+| `required_status_checks` `infra-ok`, `integration_id` 15368 | Check tổng phải xanh, chỉ nhận từ app GitHub Actions (`gh api apps/github-actions -q .id` là 15368, như `svp-frontend-setup.md`) |
 | `bypass_actors: []` | Không ai bỏ qua, cả admin |
+| Ruleset `owners` (`require_code_owner_review`; vai admin bypass chỉ ở chế độ `pull_request`) | PR đổi file có Code Owner ở `CODEOWNERS` (`/.github/`, `/Makefile`, `/renovate.json`, `/github/`, `/aws/`…) cần người học duyệt, kể cả PR của bot (ADR-0041 (b)) |
+| `pr-title` thêm vào check bắt buộc | Chỉ sau khi xanh trên một PR người và một PR bot (ADR-0041 (h)) |
 
 **Kiểm:** hai lệnh "C1" của "Kiểm tra nhanh", rồi:
 
@@ -274,18 +280,16 @@ check (nguyên nhân 4) → so tên job tổng của `check.yml` với `context`
   mở postmortem ([mẫu](../postmortems/README.md)); xét đóng tài khoản sandbox nếu không chắc đã dọn hết.
 - Cần viết lại lịch sử để gỡ email, IP hay tên miền: bước nặng (tắt ruleset, `git filter-repo`, force push, mọi bản clone phải clone lại);
   chỉ làm khi người học quyết, ghi lý do vào postmortem. Account ID không phải bí mật theo nghĩa credential: thường gỡ khỏi cây là đủ.
-- `check.yml` cần quyền hay secret mới (ví dụ OIDC vào AWS): không thêm tay; viết ADR (7c `ci-oidc`) rồi mới đổi cài đặt và threat model.
+- `check.yml` cần quyền hay secret mới (ví dụ OIDC vào AWS): không thêm tay; viết ADR rồi mới đổi cài đặt và threat model.
 
 ## Liên kết
 
 - [ADR-0034](../adr/0034-aws-stage7.md) §2 (repo, bố cục, state, CI không credential), §14 (buổi AWS); threat model
-  [AWS-6](../threat-model.md#411-biên-aws-giai-đoạn-7).
+  [AWS-6](../threat-model.md#411-biên-aws).
 - [svp-frontend-setup.md](svp-frontend-setup.md), [svp-gitops-setup.md](svp-gitops-setup.md): cùng mẫu cài đặt, ruleset, Renovate.
 - Trình tự buổi AWS và gỡ tài nguyên: `docs/runbooks/session-stg.md` của repo `svp-infra`.
 - Không có diễn tập; phép kiểm là lượt `check.yml` đầu (B1) và ruleset (C1).
 
 ## Đã kiểm
 
-- 2026-10-31, trước khi dựng: `gh api repos/anhnvcoder/svp-infra` trả `{"default_branch":"master","size":0,"visibility":"public"}`;
-  `git -C infra status` báo nhánh `master`, chưa có commit.
 - Chưa kiểm: toàn bộ A2–C1.

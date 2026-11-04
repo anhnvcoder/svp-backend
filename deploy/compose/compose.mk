@@ -1,6 +1,6 @@
 # Docker and compose targets, included by the root Makefile. Every docker call drops
 # DOCKER_DEFAULT_PLATFORM, which the global shell sets to linux/amd64 for another project:
-# containers here run native arm64 (CLAUDE.md).
+# containers here run native arm64, not amd64 under emulation (slower, more RAM).
 
 COMPOSE_ARGS := --env-file .env -f deploy/compose/compose.yaml
 COMPOSE   := env -u DOCKER_DEFAULT_PLATFORM docker compose $(COMPOSE_ARGS) --profile core
@@ -16,7 +16,7 @@ OBS_VALUES := lgtm elastic off
 TELEMETRY_OFF := SVP_OTEL_SDK_DISABLED=true SVP_PYROSCOPE_SERVER_ADDRESS= SENTRY_DSN=
 COMPOSE_UP_ := $(COMPOSE)
 # The Telegram bot token reaches Alertmanager as a compose secret, and compose refuses to create a
-# secret from a variable that is not set at all. A .env made before stage 3 lacks the line, so an
+# secret from a variable that is not set at all. A .env made from an older .env.example lacks the line, so an
 # absent variable is passed as empty; a value in .env is never overridden.
 TELEGRAM_TOKEN_ABSENT = $(shell grep -q '^SVP_ALERT_TELEGRAM_BOT_TOKEN=' .env 2>/dev/null || echo SVP_ALERT_TELEGRAM_BOT_TOKEN=)
 COMPOSE_UP_lgtm = env -u DOCKER_DEFAULT_PLATFORM $(TELEGRAM_TOKEN_ABSENT) docker compose $(COMPOSE_ARGS) --profile core --profile obs
@@ -129,7 +129,7 @@ obs-exclusive: env-required
 	@running=$$($(COMPOSE_ALL) ps -q $(OBS_OTHER_$(OBS))); \
 	  if [ -n "$$running" ]; then echo "make up$(if $(OBS), OBS=$(OBS)): a container of an observability profile it does not start is running (one of: $(OBS_OTHER_$(OBS))); run 'make down' first" >&2; exit 1; fi
 
-# Compose and the k3d cluster svp never run together on the 16 GB machine (CLAUDE.md): together
+# Compose and the k3d cluster svp never run together on the 16 GB machine: together
 # they do not fit in its RAM. No node of the cluster (label k3d.cluster=svp) and not its
 # registry may be running. `make k8s-up` refuses the other way round (deploy/k8s/k8s.mk).
 k3d-exclusive:
