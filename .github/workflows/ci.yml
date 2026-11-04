@@ -1,4 +1,4 @@
-# Checks of every pull request and of every push to main: the whole check list of CLAUDE.md (make check-go, generated
+# Checks of every pull request and of every push to main: the whole local check list (make check-go, generated
 # code, buf breaking, the version rule of the API contract, compose, Collector, Prometheus rules, charts) plus the
 # secret scan of the whole git history, the misconfiguration scan, the security lint of the workflows (zizmor) and, on
 # pull requests, the review of the dependencies they change. Job ci-ok is the only check the ruleset of main requires

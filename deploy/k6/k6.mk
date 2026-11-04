@@ -1,6 +1,6 @@
 # Load test targets (k6), included by the root Makefile. k6 runs only as
 # K6_IMAGE (pinned in the Makefile), never a k6 installed on the machine; every docker call drops DOCKER_DEFAULT_PLATFORM
-# (CLAUDE.md).
+# (the global shell sets it to linux/amd64 for another project), so k6 runs native arm64.
 
 .PHONY: k6-check load-local load-ci
 

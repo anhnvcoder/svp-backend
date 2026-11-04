@@ -2,7 +2,7 @@
 
 - Quy trình làm tay, không có cảnh báo. Làm định kỳ, hay **ngay** khi nghi khoá ký bị lộ (SEC-4, JWT-10 của
   [threat model](../threat-model.md)).
-- Trạng thái: viết theo mã, chưa chạy thử; diễn tập đổi khoá ở giai đoạn 7 cùng Secrets Manager
+- Trạng thái: viết theo mã, chưa chạy thử; diễn tập đổi khoá khi có Secrets Manager
   ([ADR-0020](../adr/0020-reliability-stage6.md) §12).
 
 ## Ý nghĩa và tác động tới người dùng
@@ -164,4 +164,4 @@ refresh); ở service đó là dòng INFO `caller token rejected`.
 - [ADR-0042](../adr/0042-caller-identity-grpc.md) (service kiểm lại token gateway chuyển tiếp).
 - Mã: `tools/jwtkey`, `internal/authtoken` (`TTL`, `ParseVerifyKeys`), `internal/callerid`, `deploy/k8s/secrets.sh`,
   `deploy/helm/svp-cluster/files/external-secrets.yaml`.
-- Diễn tập: chưa có; diễn tập đổi khoá ở giai đoạn 7.
+- Diễn tập: chưa có; diễn tập đổi khoá khi có Secrets Manager.

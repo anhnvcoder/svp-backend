@@ -45,7 +45,7 @@ groups:
 
       # Rate limiting runs on the in-memory fallback store when a Redis command
       # fails or exceeds its 50 ms limit. One slow command is not an outage: under load a few a minute
-      # time out (about 3 in 1 200 decisions in the game day of 2026-10-24), so the page is on the share
+      # time out (about 3 in 1 200 decisions in a game day), so the page is on the share
       # of fallback decisions, per gateway instance (a pod that lost Redis is not diluted by a healthy
       # one; every restart brings a new service_instance_id):
       # - increase branch: over 2 m, fallback decisions are at least half of all decisions and at least

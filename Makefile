@@ -104,7 +104,7 @@ PKGS ?= ./...
 TESTFLAGS ?=
 LINTFLAGS ?=
 
-# Local dev Postgres superuser DSN, published in CLAUDE.md; integration tests create their own databases from it.
+# Superuser DSN of the native dev Postgres on the machine; integration tests create their own databases from it.
 SVP_TEST_POSTGRES_URL ?= postgres://postgres:postgres@127.0.0.1:5432/postgres?sslmode=disable
 # Local Redis, db 15: the project's test database, used by no service or other project, so tests never touch their data
 # and never need FLUSHDB.
@@ -114,7 +114,7 @@ SVP_TEST_REDIS_URL ?= redis://127.0.0.1:6379/15
 
 .PHONY: help tools ci-tools generate generate-go generate-check slo otelcol-validate fmt-check vet lint actionlint buf-lint vulncheck test fuzz \
 	cover check check-go helm-check kyverno-test trivy-config grype renovate-check zizmor api-contract-check hooks web-e2e measure-web measure-upload \
-	web-lighthouse web-sourcemaps
+	web-lighthouse web-sourcemaps docs-check
 
 help: ## List the targets
 	@grep -hE '^[a-zA-Z0-9_-]+:.*## ' $(MAKEFILE_LIST) | awk -F':.*## ' '{printf "  %-12s %s\n", $$1, $$2}'
@@ -340,6 +340,29 @@ zizmor: ## Security lint of the workflows with the pinned zizmor (online audits 
 		$(ZIZMOR_IMAGE) --persona=regular --no-progress --color=never --cache-dir /tmp/zizmor "$$@" . \
 		$(if $(ZIZMOR_SARIF),> '$(ZIZMOR_SARIF)')
 
+# Static check of the Markdown: markdownlint-cli2 with .markdownlint.yaml (style), then lychee --offline --include-fragments
+# (relative links and heading anchors; links to other sites are not followed: the network is not stable and a check that
+# depends on it fails for reasons outside the change), both from their official images pinned by digest (multi-arch),
+# without network, the repository mounted read-only at /repo: a relative link that leaves the repository (to plans/,
+# which is no repository's) is an error on purpose. DOCS narrows the files (paths or globs, relative to the repository);
+# the default is every Markdown file git tracks plus the new ones it does not track yet. Both tools always run; the exit
+# code is not 0 when either reports a problem.
+# renovate: datasource=docker depName=davidanson/markdownlint-cli2
+MARKDOWNLINT_IMAGE := davidanson/markdownlint-cli2:v0.24.0@sha256:70ead7c0352d22d04bbe612cd96b54ec591538d8f4626cafe391bb2ecf3639ca
+# renovate: datasource=docker depName=lycheeverse/lychee
+LYCHEE_IMAGE := lycheeverse/lychee:0.24.2@sha256:e2d19e57cf6ab037026f20b8e449a1f30d9d7f81eef4194763aab2eab20bd28d
+# set -f keeps the globs of DOCS whole: the tools expand them (with **), sh does not and would drop the files at the top.
+DOCS ?=
+docs-check: ## markdownlint-cli2 + lychee --offline on the Markdown (DOCS='<files or globs>' narrows; pinned images, no network)
+	@if [ -n '$(DOCS)' ]; then set -f; set -- $(DOCS); set +f; \
+	else set --; for f in $$(git ls-files --cached --others --exclude-standard '*.md'); do [ -f "$$f" ] && set -- "$$@" "$$f"; done; fi; \
+	rc=0; \
+	env -u DOCKER_DEFAULT_PLATFORM docker run --rm --network none -v "$(CURDIR):/repo:ro" --workdir /repo \
+		$(MARKDOWNLINT_IMAGE) "$$@" || rc=1; \
+	env -u DOCKER_DEFAULT_PLATFORM docker run --rm --network none -v "$(CURDIR):/repo:ro" --workdir /repo \
+		$(LYCHEE_IMAGE) --offline --include-fragments "$$@" || rc=1; \
+	exit $$rc
+
 # The version rule of services/gateway/openapi.yaml (written at the top of that file) against the spec at commit BASE:
 # the file changed means info.version went up, a breaking change from 1.0.0 on means the major did, any entry in
 # oasdiff's changelog means at least the minor did. CI passes the base of the pull request, as for buf breaking.
@@ -375,11 +398,11 @@ web-lighthouse: ## Lighthouse (mobile, one run per page) of the feed logged in a
 web-sourcemaps: ## Upload the source maps of the web client's browser bundle, from the build the stack of make up OBS=lgtm WEB_FROM=clone runs, to its GlitchTip (http://127.0.0.1:8000); checks first that the web serves that build (make sourcemaps of svp-frontend)
 	@$(IN_WEB) sourcemaps
 
-# Docker and compose targets live in their own file (stage 1, compose card).
+# Docker and compose targets live in their own file.
 -include deploy/compose/compose.mk
-# Local Kubernetes targets (k3d cluster svp, stage 4).
+# Local Kubernetes targets (k3d cluster svp).
 -include deploy/k8s/k8s.mk
-# Load test targets (k6, stage 6).
+# Load test targets (k6).
 -include deploy/k6/k6.mk
-# DAST target (Schemathesis, stage 6b).
+# DAST target (Schemathesis).
 -include deploy/dast/dast.mk

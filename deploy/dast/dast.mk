@@ -1,6 +1,7 @@
 # DAST target (Schemathesis against the gateway's OpenAPI contract), included by the root Makefile. Schemathesis runs
 # only as SCHEMATHESIS_IMAGE (pinned in the Makefile), never one installed on the machine; deploy/dast/run.sh drops
-# DOCKER_DEFAULT_PLATFORM on every docker call (CLAUDE.md).
+# DOCKER_DEFAULT_PLATFORM on every docker call: the global shell sets it to linux/amd64 for another project, and
+# containers here run native arm64.
 
 .PHONY: dast
 

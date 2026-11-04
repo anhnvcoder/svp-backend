@@ -11,8 +11,8 @@ K8S_LIB := . deploy/k8s/lib.sh
 	gitops-clone web-clone eks-gitops-up eks-secrets eks-glitchtip-init eks-smoke eks-seed \
 	eks-rl-reset
 
-# Compose and k3d never run together on the 16 GB machine (CLAUDE.md): the cluster is not created or started beside a
-# running compose stack. `make up` refuses the other way round (deploy/compose/compose.mk).
+# Compose and k3d never run together on the 16 GB machine (they do not fit in its RAM): the cluster is not created or
+# started beside a running compose stack. `make up` refuses the other way round (deploy/compose/compose.mk).
 k8s-exclusive:
 	@running=$$(env -u DOCKER_DEFAULT_PLATFORM docker compose -p svp ps -q); \
 	  if [ -n "$$running" ]; then echo "make k8s-up: the compose stack svp is running; run 'make down' first" >&2; exit 1; fi
@@ -108,9 +108,9 @@ k8s-traffic-start: ## Start drill traffic in the background: 4 users, ~10 reques
 k8s-traffic-stop: ## Stop the drill traffic started by k8s-traffic-start (the pid it recorded, nothing else) and print its requests by status
 	@deploy/k8s/drills/traffic.sh stop
 
-# The stage 4 rows of the threat model (docs/threat-model.md, section 5): the checks of each item are listed at the top
+# The threat model rows checked on cluster svp (docs/threat-model.md): the checks of each item are listed at the top
 # of deploy/k8s/drills/threats.sh.
-drill-k8s-threats: ## Check the stage 4 threat model rows on cluster svp, each with a control case: a probe pod in namespace svp-probe (created, then deleted) and media-worker reach only what the NetworkPolicies allow, Kafka ACLs per user, pod security and PSA, no trust in pg_hba, login rate limit ignores forged X-Forwarded-For, no pprof/metrics, no exposed UI, Grafana 401, no ServiceAccount reads secrets or pods; web client: no token or JWT in pages, RSC or /api JSON and /api/ outside the BFF list 400/404 (WEB-7), cross-site or same-site POSTs 403 CSRF_REJECTED (WEB-2), the object store's CORS per bucket for https://svp.localhost:8443 only, POST to uploads and GET at media only (WEB-10), web pods reach only gateway, Valkey, Collector, GlitchTip (WEB-13), login rate limit through the /login form counts the address Envoy wrote (WEB-8); object store user svp-pg-backup reads only bucket pg-backups and no service's user reads it (BAK-1); on a cluster with External Secrets Operator: each store's ServiceAccount gets only its namespace's source Secrets by name (SEC-6), the controller writes Secrets only where its ExternalSecrets are and makes tokens only for the stores (SEC-5, its read of every Secret printed as an exception), no ServiceAccount of svp creates ExternalSecrets or SecretStores (SEC-7); PASS/FAIL table, log in .k8s/drills/threats-<time>.log, searched for the Secret values read (LOCAL LAB ONLY: resets register rate limit keys in the cluster's Valkey db 10)
+drill-k8s-threats: ## Check the threat model rows on cluster svp, each with a control case: a probe pod in namespace svp-probe (created, then deleted) and media-worker reach only what the NetworkPolicies allow, Kafka ACLs per user, pod security and PSA, no trust in pg_hba, login rate limit ignores forged X-Forwarded-For, no pprof/metrics, no exposed UI, Grafana 401, no ServiceAccount reads secrets or pods; web client: no token or JWT in pages, RSC or /api JSON and /api/ outside the BFF list 400/404 (WEB-7), cross-site or same-site POSTs 403 CSRF_REJECTED (WEB-2), the object store's CORS per bucket for https://svp.localhost:8443 only, POST to uploads and GET at media only (WEB-10), web pods reach only gateway, Valkey, Collector, GlitchTip (WEB-13), login rate limit through the /login form counts the address Envoy wrote (WEB-8); object store user svp-pg-backup reads only bucket pg-backups and no service's user reads it (BAK-1); on a cluster with External Secrets Operator: each store's ServiceAccount gets only its namespace's source Secrets by name (SEC-6), the controller writes Secrets only where its ExternalSecrets are and makes tokens only for the stores (SEC-5, its read of every Secret printed as an exception), no ServiceAccount of svp creates ExternalSecrets or SecretStores (SEC-7); PASS/FAIL table, log in .k8s/drills/threats-<time>.log, searched for the Secret values read (LOCAL LAB ONLY: resets register rate limit keys in the cluster's Valkey db 10)
 	@test -s .k8s/ca.crt || { echo "make drill-k8s-threats: .k8s/ca.crt missing; run make k8s-up (or make k8s-ca)" >&2; exit 1; }
 	$(K8S_DRILL_ENV) deploy/k8s/drills/threats.sh https://api.svp.localhost:8443
 
@@ -171,7 +171,7 @@ CLOUD_K8S_VERSION := 1.35.9
 cloud-check: ## Check the k6 Job of the cloud cluster (deploy/k6/cloud/render.sh) without a cluster: kubeconform -strict (Kubernetes CLOUD_K8S_VERSION), every image pinned by digest (needs network)
 	KUBECONFORM_IMAGE='$(KUBECONFORM_IMAGE)' CLOUD_K8S_VERSION='$(CLOUD_K8S_VERSION)' deploy/k8s/cloud/check.sh
 
-# --- An EKS cluster of the project (stage 7), which the infrastructure repository makes and destroys, and its learner
+# --- An EKS cluster of the project, which the infrastructure repository makes and destroys, and its learner
 # reaches with the AWS profile of the session (the AI runs none of these). CONTEXT is the cluster's alias in the
 # kubeconfig, svp-stg or svp-prd (output kubeconfig_command of the infrastructure repository: aws eks update-kubeconfig
 # --alias), never the current context; the scripts get it as SVP_KUBE_CONTEXT, and refuse every other name before any

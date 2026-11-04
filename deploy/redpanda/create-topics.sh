@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Creates the stage 2 topics and their dead-letter topics on the compose Redpanda. Topics are created here, not by
+# Creates the event topics and their dead-letter topics on the compose Redpanda. Topics are created here, not by
 # auto-create or by the services, so the topology lives in one place in the repo and a mistyped name fails.
 # Run by the one-shot redpanda-init
 # container; the broker comes from RPK_BROKERS, the Admin API from RPK_ADMIN_HOSTS. Idempotent:

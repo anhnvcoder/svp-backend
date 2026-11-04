@@ -1,6 +1,6 @@
 # 0002. REST/JSON ở biên, gRPC bên trong, contract Protobuf quản lý bằng buf
 
-- Trạng thái: Chấp nhận; đường dẫn file .proto chỉnh bởi [ADR-0006](0006-contract-ids-and-event-envelope.md)
+- Trạng thái: Chấp nhận
 - Ngày: 2026-10-04
 
 ## Bối cảnh
@@ -43,7 +43,7 @@ Chọn **C**, với các quy ước:
 - `.proto` đặt ở `proto/<service>/v1/`, package `svp.<service>.v1`; `buf lint` (bộ luật `STANDARD`) và `buf breaking`
   (so với nhánh `main`) chạy trong CI.
 - Gateway viết handler REST bằng `net/http`, không sinh tự động từ proto (như grpc-gateway). Lý do: gateway phải **ghép**
-  dữ liệu từ nhiều service (feed + bộ đếm, xem [architecture.md §7.2](../architecture.md#72-đọc-feed)), việc mà proxy sinh tự động 1-1 không
+  dữ liệu từ nhiều service (feed + bộ đếm, xem [architecture.md §6.2](../architecture.md#62-đọc-feed)), việc mà proxy sinh tự động 1-1 không
   làm được. OpenAPI viết tay hay sinh từ code: chốt ở giai đoạn 1.
 - Mọi lời gọi gRPC đều có deadline. Gateway đặt deadline tổng cho request; các service truyền tiếp bằng `context`, không
   tự đặt lại dài hơn.
@@ -62,3 +62,9 @@ Chọn **C**, với các quy ước:
   `buf` của `.github/workflows/ci.yml`.
 - Biên REST/JSON: `services/gateway/` (`internal/api/api.go` dịch REST sang gRPC và đặt hạn cho mỗi call, service chỉ chuyển
   tiếp hạn đó), contract REST viết tay ở `services/gateway/openapi.yaml`.
+
+## Thông tin thêm
+
+### Chỉnh bởi
+
+- Quyết định (đường dẫn file `.proto`): [0006](0006-contract-ids-and-event-envelope.md): đặt ở `proto/svp/<domain>/v1`, không đổi quyết định gRPC + `buf`.

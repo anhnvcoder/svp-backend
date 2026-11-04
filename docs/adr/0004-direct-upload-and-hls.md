@@ -1,15 +1,12 @@
 # 0004. Client upload thẳng lên object storage bằng presigned POST; transcode bất đồng bộ ra HLS
 
-- Trạng thái: Chấp nhận; object store local (MinIO ở Bối cảnh và Quyết định) bị thay một phần bởi [0022](0022-local-object-store-minio-replacement.md) (RustFS cho compose
-  và k3d; presigned POST, hai bucket và đọc công khai `media` giữ nguyên); phần Phát (đường dẫn `media/<video_id>/` cố định,
-  transcode lại ghi đè) chỉnh bởi [0029](0029-immutable-media-versions.md) (output theo version `media/<video_id>/<version>/`, không
-  ghi đè, `Cache-Control: max-age=31536000, immutable`)
+- Trạng thái: Chấp nhận
 - Ngày: 2026-10-04
 
 ## Bối cảnh
 
 - File gốc trung bình 75 MB, tối đa 3 phút; điện thoại quay bitrate cao có thể tới vài trăm MB. 1.000 upload/ngày, cao
-  điểm ~2 upload/phút ([architecture.md §3](../architecture.md#3-ước-lượng-quy-mô)).
+  điểm ~2 upload/phút ([ước lượng quy mô](../explanation/capacity.md)).
 - Upload từ mạng di động: chậm, chập chờn, một upload có thể kéo dài vài phút.
 - SLO: khởi tạo upload thành công 99,9%; video 1 phút sẵn sàng phát p95 < 2 phút sau khi upload xong.
 - Người xem dùng điện thoại với mạng thay đổi liên tục; egress là khoản chi lớn nhất của hệ thống.
@@ -96,3 +93,10 @@ Từ 2026-10-31 mã web ở repo `svp-frontend` ([ADR-0033](0033-svp-web-repo.md
 - Transcode bất đồng bộ ra HLS: `services/media-worker/` (`internal/worker/` giới hạn kích thước tải về, `internal/transcode/`
   chạy ffmpeg).
 - Upload từ trình duyệt: `web/features/upload/`.
+
+## Thông tin thêm
+
+### Chỉnh bởi
+
+- Quyết định (object store local, MinIO ở Bối cảnh và Quyết định): [0022](0022-local-object-store-minio-replacement.md): bị thay một phần, RustFS cho compose và k3d; presigned POST, hai bucket và đọc công khai `media` giữ nguyên.
+- Quyết định (phần Phát: đường dẫn `media/<video_id>/` cố định, transcode lại ghi đè): [0029](0029-immutable-media-versions.md): output theo version `media/<video_id>/<version>/`, không ghi đè, `Cache-Control: max-age=31536000, immutable`.

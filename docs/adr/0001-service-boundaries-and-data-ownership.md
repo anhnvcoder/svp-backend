@@ -5,7 +5,7 @@
 
 ## Bối cảnh
 
-- Tải thật nhỏ ([architecture.md §3](../architecture.md#3-ước-lượng-quy-mô)): feed ~21 req/s, upload ~2 video/phút lúc cao điểm.
+- Tải thật nhỏ ([ước lượng quy mô](../explanation/capacity.md)): feed ~21 req/s, upload ~2 video/phút lúc cao điểm.
   Một ứng dụng duy nhất trên một Postgres chịu được thoải mái, kể cả ở mục tiêu tải 1.000 req/s.
 - Mục tiêu của project là **học** vận hành hệ phân tán: deploy độc lập, lời gọi qua mạng có thể hỏng, event, trace xuyên
   service, scale từng phần, canary từng service. Một khối duy nhất không có chỗ để học những thứ này.

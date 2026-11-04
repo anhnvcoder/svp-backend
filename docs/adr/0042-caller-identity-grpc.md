@@ -34,25 +34,16 @@ stg 3 node `m7g.large` 8 GiB (`aws/envs/stg/stg.tfvars` của `svp-infra`, [N10]
 
 ## Phương án đã cân nhắc
 
-Nguồn đọc ngày 2026-11-02, mục Nguồn. "Chưa đo" là không có số có nguồn và chưa đo trên máy.
+Nguồn đọc ngày 2026-11-02; bảng trạng thái ngành, RAM và ưu nhược từng phương án ở phụ lục.
 
-| Phương án | Trạng thái ngành | Lớp | Nguồn |
-| --- | --- | --- | --- |
-| 1a. mTLS do mesh: Istio ambient (ztunnel mỗi node, istiod, istio-cni) | hiện hành: ambient GA từ Istio 1.24 (2024-11-07); bản mới nhất 1.31.3 (2026-10-22) | kênh: mTLS, danh tính workload, AuthorizationPolicy | [N3] |
-| 1b. mTLS do mesh: Linkerd (sidecar mỗi pod) | hiện hành, nhưng dự án mã nguồn mở không phát hành stable từ 02/2024: chỉ có edge (edge-26.10.2, 2026-10-29); stable 2.20 (2026-06-23) do nhà cung cấp phát hành | kênh | [N5] |
-| 2. SPIFFE/SPIRE (server, agent mỗi node, go-spiffe trong code) | hiện hành: CNCF graduated 2022-08-22; v1.15.5 (2026-10-20) | kênh: SVID X.509, mTLS trong code | [N6] |
-| 3. cert-manager cấp chứng chỉ từng service (csi-driver-spiffe hay Certificate mỗi service) | cert-manager hiện hành (graduated 2024-09-29, đã chạy trong cluster); csi-driver-spiffe mới nổi (v0.15.1, 2026-10-23, còn 0.x) | kênh: mTLS trong code | [N7] |
-| 4. Token nội bộ do gateway ký (JWT ngắn hạn, service kiểm chữ ký) | mẫu "assertion nội bộ từ issuer được chỉ định" hiện hành; dạng chuẩn hoá là bản nháp IETF Transaction Tokens (mới nổi); OWASP khuyên tránh để service ứng dụng làm issuer | ứng dụng | [N1], [N2], [N8] |
-| 5. Service tự kiểm access token gốc gateway chuyển tiếp trong `authorization: Bearer` | hiện hành có điều kiện: OWASP từ 2026-10-03 coi là hợp lý khi các service cùng hồ sơ kiểm và token dành cho chúng; bản trước đó gọi là "highly insecure" | ứng dụng | [N1], [N2] |
-
-| Phương án | RAM máy 16 GB (k3d 1 server + 1 agent) | RAM EKS (stg 3 × 8 GiB) | compose, k3d, EKS | Đường thẳng ([0037](0037-mainpath-standard-tools.md)) |
-| --- | --- | --- | --- | --- |
-| 1a | request mặc định chart 1.31.3: istiod 2048 Mi, mỗi node ztunnel 512 Mi và istio-cni 100 Mi, cộng ~3,2 GiB; ztunnel dùng ~12 MB ở 1 000 req/s (Istio đo bản 1.24), istiod chưa đo [N4] | ~3,8 GiB request trên 24 GiB, hạ được bằng values; dùng thật chưa đo | compose: không có (Istio cần Kubernetes); k3d: cluster đã vượt ngân sách; EKS: được | code không đổi; mesh là thành phần nền tảng bật theo dữ liệu `platforms/` của `svp-gitops`; compose khác cluster ở lớp kênh |
-| 1b | control plane và một sidecar mỗi pod; chart không đặt request mặc định; chưa đo | chưa đo | như 1a, thêm container ở mọi pod | như 1a |
-| 2 | server và agent mỗi node; chưa đo | chưa đo | compose: agent cần attestor `docker` đọc Docker socket; k3d: thêm hai thành phần; EKS: được | TLS trong code của gateway và bốn service; compose không chạy SPIRE thì phải có nhánh tắt TLS |
-| 3 | cert-manager đã có (ngân sách 150 MiB, [0014](0014-kubernetes-local-stage4.md)); DaemonSet và approver của csi-driver-spiffe chưa đo | chưa đo | compose: không có cert-manager, chứng chỉ phải cấp bằng script riêng | hai đường cấp chứng chỉ; code nạp và xoay chứng chỉ |
-| 4 | không thêm | không thêm | khoá ký mới ở `.env`, `secrets.sh`, ExternalSecret, runbook xoay riêng | một đường; gateway giữ khoá ký, trái JWT-10 |
-| 5 | không thêm; CPU ~42 µs mỗi RPC có người gọi (mục Xác nhận) | không thêm; Graviton chưa đo | như nhau: bốn service thêm `JWT_VERIFY_KEYS` từ nguồn `jwt-verify` có sẵn | một đường, cùng code và biến |
+- **1a.** mTLS do mesh Istio ambient (ztunnel mỗi node, istiod, istio-cni) [N3], [N4]: mTLS, danh tính workload, AuthorizationPolicy không đổi code;
+  không có ở compose, request mặc định thêm ~3,2 GiB trên k3d đã vượt ngân sách, không mang danh tính người dùng.
+- **1b.** mTLS do mesh Linkerd (sidecar mỗi pod) [N5]: không có stable mã nguồn mở, sidecar ở mọi pod, cùng giới hạn compose.
+- **2.** SPIFFE/SPIRE [N6]: SVID X.509 xoay tự động; hai thành phần mới, TLS trong code mọi service, compose cần Docker socket.
+- **3.** cert-manager cấp chứng chỉ từng service [N7]: dùng cert-manager có sẵn; csi-driver-spiffe còn 0.x, code tự nạp và xoay chứng chỉ.
+- **4.** Token nội bộ do gateway ký [N1], [N2], [N8]: gateway (thành phần ra internet) giữ khoá ký được mọi danh tính, trái JWT-10.
+- **5.** Service tự kiểm access token gốc gateway chuyển tiếp trong `authorization: Bearer` [N1], [N2]: không khoá, secret hay thành phần mới,
+  mọi môi trường như nhau; token tới thêm process, không xác thực service gọi, CPU ~42 µs mỗi RPC có người gọi.
 
 ## Kết quả quyết định
 
@@ -65,16 +56,12 @@ Chọn **5** cho lớp ứng dụng ở mọi môi trường; **1a** (Istio ambi
    chi tiết chỉ vào log. `aud` vẫn là `svp-api`: bốn service hiện thực chính API đó, không nới audience để chuyển tiếp được ([N1]).
    **Lý do chính:** giả danh tính giờ cần khoá ký của user-service, thứ không pod nào khác giữ; không khoá mới, không secret mới (khoá công
    khai, nguồn có sẵn), JWT-10 giữ; compose được che như cluster.
-2. **Điều OWASP nói.** Bản hiện hành ([N1], 2026-10-03; Microservices Security Cheat Sheet trỏ sang nó [N2]) gọi phương án 5 là "External
-   Identity Propagation": "reasonable when services share the token's validation profile and the token is intended for those services", cảnh
-   báo token chuyển tiếp tới càng nhiều service càng nhiều chỗ lộ và các bên nhận cùng credential không cách ly nhau; mục khuyến nghị mở đầu
-   bằng "Start with a token that each intended recipient can validate". Nó **ưu tiên assertion nội bộ do issuer được chỉ định** khi ngữ cảnh
-   đi qua nhiều ranh giới service hay khi nhiều cơ chế xác thực ngoài cùng đổ vào, khuyên tránh để service ứng dụng làm issuer và tách quyền
-   cấp khỏi quyền kiểm. Bản trước ngày đó ([N2], commit `4908e7b`) gọi việc dùng lại access token ngoài là "highly insecure" (token lộ, service
-   lỡ lộ ra ngoài bị gọi thẳng bằng token lộ) và khuyến nghị cấu trúc nội bộ do issuer tin cậy ký (Passport của Netflix). Ở đây chọn 5 vì:
-   một cơ chế xác thực ngoài, một chặng, mọi service cùng hồ sơ kiểm; issuer nội bộ hoặc là gateway (phương án 4: trái JWT-10, đúng điều OWASP
-   bảo tránh), hoặc là thành phần mới (token exchange với user-service làm STS: thêm một lượt gọi và một phụ thuộc cấp phát mỗi request);
-   token lộ ở service dùng được đúng như lộ ở gateway (cùng `aud`, hạn 1 giờ). Cả hai bản đều đòi xác thực **service gọi** riêng: mục 4.
+2. **Điều OWASP nói.** Bản hiện hành ([N1], 2026-10-03) coi phương án 5 ("External Identity Propagation") là hợp lý khi các service cùng hồ sơ
+   kiểm và token dành cho chúng, và ưu tiên assertion nội bộ do issuer được chỉ định khi ngữ cảnh đi qua nhiều ranh giới service hay nhiều
+   cơ chế xác thực ngoài; bản trước ([N2], commit `4908e7b`) gọi việc dùng lại access token ngoài là "highly insecure". Ở đây chọn 5 vì: một
+   cơ chế xác thực ngoài, một chặng, mọi service cùng hồ sơ kiểm; issuer nội bộ hoặc là gateway (phương án 4: trái JWT-10, đúng điều OWASP
+   bảo tránh), hoặc là thành phần mới (token exchange với user-service làm STS); token lộ ở service dùng được đúng như lộ ở gateway (cùng
+   `aud`, hạn 1 giờ). Cả hai bản đều đòi xác thực **service gọi** riêng: mục 4. Trích dẫn đầy đủ: phụ lục.
 3. **Ngữ nghĩa `callerid.Methods` giữ nguyên.** RPC public bỏ qua `authorization`. RPC có người gọi tuỳ chọn: không có `authorization` thì
    không có người gọi; có mà sai thì `UNAUTHENTICATED`, không bao giờ phục vụ như gọi ẩn danh.
 4. **Lớp kênh: Istio ambient, chưa dựng.** k3d không dựng: cluster đã vượt ngân sách RAM, request mặc định của Istio thêm ~3,2 GiB. Dựng ở buổi
@@ -110,25 +97,13 @@ Chọn **5** cho lớp ứng dụng ở mọi môi trường; **1a** (Istio ambi
 
 ## Xác nhận
 
-Đã đo chi phí kiểm (Apple M2, Go 1.27.3, cắm sạc): `go test -run '^$' -bench Verification crypto/ed25519` cho 38,3 µs/op; parse và kiểm JWT bằng
-`golang-jwt/jwt/v5` v5.3.1 với đúng tuỳ chọn parser của `authtoken.NewVerifier` (benchmark tạm ngoài repo, 3 lượt) cho 42,2–42,8 µs/op, 40 alloc.
-
-Kiểm cùng thay đổi hiện thực: test `internal/callerid` (token hợp lệ đặt `sub` vào context; `x-user-id` giả không token, sai chữ ký, hết hạn,
-kid lạ, sai `iss` hay `aud`, hai giá trị `authorization` đều ra cùng `UNAUTHENTICATED`; RPC public bỏ qua; người gọi tuỳ chọn thiếu thì ẩn danh,
-sai thì `UNAUTHENTICATED`; log không chứa token); test gateway (metadata chỉ có `authorization` của token đã kiểm, header `x-user-id` của client
-không đi tiếp); `make check`; `make smoke` trên compose; render `svp-cluster` với External Secrets bật có `JWT_VERIFY_KEYS` ở năm Secret.
-
-Chưa kiểm: k3d và EKS với khoá từ External Secrets, xoay khoá theo runbook (runbook chưa chạy thử), chi phí trên Graviton, cửa sổ lỗi lúc rollout.
-
-## Ưu nhược từng phương án
-
-- 1a: mTLS, danh tính workload và AuthorizationPolicy không đổi code, mesh chuẩn ngành; không có ở compose, RAM k3d không đủ, không mang danh
-  tính người dùng (vẫn cần lớp ứng dụng).
-- 1b: mTLS tự động, proxy nhẹ; không có stable mã nguồn mở, sidecar ở mọi pod, cùng giới hạn compose, RAM như 1a.
-- 2: danh tính workload chuẩn SPIFFE, xoay SVID tự động; hai thành phần mới, TLS trong code mọi service, compose cần Docker socket.
-- 3: dùng cert-manager có sẵn; csi-driver-spiffe còn 0.x, code tự nạp và xoay chứng chỉ, compose cần đường cấp chứng chỉ khác.
-- 4: token nội bộ ngắn hạn, định dạng riêng của bên trong; gateway (thành phần ra internet) giữ khoá ký được mọi danh tính, secret và runbook mới.
-- 5: không khoá, secret hay thành phần mới, mọi môi trường như nhau; token tới thêm process, không xác thực service gọi, CPU mỗi RPC.
+- Chi phí kiểm (Apple M2, Go 1.27.3): ed25519 38,3 µs/op; parse và kiểm JWT với tuỳ chọn parser của `authtoken.NewVerifier` 42,2–42,8 µs/op,
+  40 alloc (lệnh benchmark: phụ lục).
+- Test `internal/callerid`: token hợp lệ đặt `sub`; `x-user-id` giả không token, sai chữ ký, hết hạn, kid lạ, sai `iss` hay `aud`, hai giá trị
+  `authorization` cùng ra `UNAUTHENTICATED`; RPC public bỏ qua; người gọi tuỳ chọn thiếu thì ẩn danh, sai thì `UNAUTHENTICATED`; log không chứa
+  token. Test gateway: metadata chỉ có `authorization` của token đã kiểm, `x-user-id` của client không đi tiếp.
+- `make check`; `make smoke` trên compose; render `svp-cluster` với External Secrets bật có `JWT_VERIFY_KEYS` ở năm Secret.
+- Chưa kiểm: k3d và EKS với khoá từ External Secrets, xoay khoá theo runbook, chi phí trên Graviton, cửa sổ lỗi lúc rollout.
 
 ## Hiện thực ở
 
@@ -155,14 +130,15 @@ Chưa kiểm: k3d và EKS với khoá từ External Secrets, xoay khoá theo run
 - [N3] Istio, "Fast, Secure, and Simple: Istio's Ambient Mode Reaches General Availability in v1.24" (2024-11-07):
   <https://istio.io/latest/blog/2024/ambient-reaches-ga/>; bản phát hành: <https://github.com/istio/istio/releases>
 - [N4] Istio, "Performance and Scalability": <https://istio.io/latest/docs/ops/deployment/performance-and-scalability/>; request mặc định ở tag
-  1.31.3: [istiod](https://github.com/istio/istio/blob/1.31.3/manifests/charts/istio-control/istio-discovery/values.yaml),
-  [ztunnel](https://github.com/istio/istio/blob/1.31.3/manifests/charts/ztunnel/values.yaml),
-  [istio-cni](https://github.com/istio/istio/blob/1.31.3/manifests/charts/istio-cni/values.yaml)
+  1.31.3: chart istiod, ztunnel, istio-cni (link: phụ lục)
 - [N5] Linkerd, "Releases and Versions": <https://linkerd.io/releases/>; bản edge: <https://github.com/linkerd/linkerd2/releases>
-- [N6] CNCF, SPIRE: <https://www.cncf.io/projects/spire/>; bản phát hành: <https://github.com/spiffe/spire/releases>; attestor `docker`:
-  <https://github.com/spiffe/spire/blob/main/doc/plugin_agent_workloadattestor_docker.md>
-- [N7] CNCF, cert-manager: <https://www.cncf.io/projects/cert-manager/>; csi-driver-spiffe: <https://cert-manager.io/docs/usage/csi-driver-spiffe/>,
-  <https://github.com/cert-manager/csi-driver-spiffe/releases>
+- [N6] CNCF, SPIRE: <https://www.cncf.io/projects/spire/>; bản phát hành và attestor `docker`: phụ lục
+- [N7] CNCF, cert-manager: <https://www.cncf.io/projects/cert-manager/>; csi-driver-spiffe: <https://cert-manager.io/docs/usage/csi-driver-spiffe/>
 - [N8] IETF, draft-ietf-oauth-transaction-tokens-11: <https://datatracker.ietf.org/doc/html/draft-ietf-oauth-transaction-tokens-11>
 - [N9] RFC 8725, JSON Web Token Best Current Practices, §3.11: <https://www.rfc-editor.org/rfc/rfc8725#section-3.11>
 - [N10] AWS, Amazon EC2 M7g: <https://aws.amazon.com/ec2/instance-types/m7g/>
+
+## Thông tin thêm
+
+Phụ lục: [`appendix/0042-caller-identity-grpc.md`](appendix/0042-caller-identity-grpc.md) (dòng trạng thái lúc chốt, hai bảng phương án với
+trạng thái ngành và RAM, trích dẫn OWASP đầy đủ, ưu nhược từng phương án, lệnh benchmark, nguồn đầy đủ).

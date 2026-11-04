@@ -3,3 +3,7 @@ MD013: false
 # Go code blocks must keep gofmt tabs.
 MD010:
   code_blocks: false
+# ADR sections repeat the same sub-headings ("### Các lựa chọn", "### Hệ quả") under different "## N." parents, and a
+# GitHub anchor gets a numeric suffix there; only siblings under one parent must differ.
+MD024:
+  siblings_only: true

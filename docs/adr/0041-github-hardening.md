@@ -24,12 +24,29 @@ Ràng buộc: lab một người trên tài khoản cá nhân, gói Free, mọi 
 
 ## Phương án đã cân nhắc
 
-- Duyệt PR: 0 approval (chọn); 1 approval với tài khoản thứ hai (duyệt giả, [0025](0025-gitops-config-repo.md) §7). Code Owner: chỉ đường
-  nhạy cảm (chọn); `*` cả repo (chặn mọi PR Renovate tự merge); không `CODEOWNERS`.
-- Cổng prd: environment `promote-prd` có người duyệt (chọn); chỉ duyệt Code Owner trên PR prd; `prevent_self_review = true`. Lint bảo mật
-  workflow: zizmor qua image ghim (chọn); zizmor qua action chính thức; poutine; octoscan; chỉ CodeQL `actions`.
-- Tiêu đề PR: job shell (chọn); ruleset metadata restrictions; action bên thứ ba; commitlint. Check: `strict = false` (chọn); `true`; merge queue.
-- Renovate: tự merge hẹp lại (chọn); giữ [0035](0035-renovate-automerge.md); tắt hẳn tự merge.
+- Duyệt PR: **0 approval**.
+- Duyệt PR: 1 approval với tài khoản thứ hai: duyệt giả, [0025](0025-gitops-config-repo.md) §7.
+- Code Owner: **chỉ đường nhạy cảm**.
+- Code Owner: `*` cả repo: chặn mọi PR Renovate tự merge.
+- Code Owner: không `CODEOWNERS`.
+- Cổng prd: **environment `promote-prd` có người duyệt**.
+- Cổng prd: chỉ duyệt Code Owner trên PR prd.
+- Cổng prd: `prevent_self_review = true`.
+- Lint bảo mật workflow: **zizmor qua image ghim**.
+- Lint bảo mật workflow: zizmor qua action chính thức.
+- Lint bảo mật workflow: poutine.
+- Lint bảo mật workflow: octoscan.
+- Lint bảo mật workflow: chỉ CodeQL `actions`.
+- Tiêu đề PR: **job shell**.
+- Tiêu đề PR: ruleset metadata restrictions.
+- Tiêu đề PR: action bên thứ ba.
+- Tiêu đề PR: commitlint.
+- Check: **`strict = false`**.
+- Check: `strict = true`.
+- Check: merge queue.
+- Renovate: **tự merge hẹp lại**.
+- Renovate: giữ [0035](0035-renovate-automerge.md).
+- Renovate: tắt hẳn tự merge.
 
 ## Kết quả quyết định
 
@@ -119,27 +136,6 @@ Thứ tự áp: cài đặt repo, ruleset (chưa có `pr-title`), environment `p
 - Dispatch `promote_prd` dừng chờ duyệt, Reject thì không PR prd nào mở; lượt `scorecard.yml` đầu trên `main` xanh, có kết quả ở API Scorecard.
 - `renovate-config-validator --strict` đạt; không file nào vừa được tự merge vừa có Code Owner.
 
-## Ưu nhược từng phương án
-
-Lint bảo mật workflow, tính đến 2026-11-01 (bản phát hành đọc từ API GitHub ngày đó; không nguồn riêng về mức dùng):
-
-| Công cụ | Trạng thái | Ghi chú |
-| --- | --- | --- |
-| zizmor [N9] | hiện hành | Chuyên bảo mật workflow; v1.31.1 (2026-10-15), image chính thức đa kiến trúc, action `zizmorcore/zizmor-action` |
-| poutine [N10] | hiện hành, ngách | Quét chuỗi build nhiều nền tảng (GitHub, GitLab…); v1.1.6 (2026-05-22) |
-| octoscan [N11] | mới nổi | Chưa 1.0 (v0.1.7, 2026-03-30) |
-| actionlint [N12] | hiện hành | Đã có ở job `config`: cú pháp, kiểu, shellcheck; không phải công cụ bảo mật |
-| CodeQL `actions` [N13] | hiện hành | Default setup của backend đã quét `actions`, chỉ báo, không chặn PR |
-| Scorecard [N7] | hiện hành | Đo cấp repo (ruleset, ghim, quyền), không lint từng dòng: bổ sung, không thay zizmor |
-
-- zizmor qua image ghim: một bản cho máy và CI, Renovate theo dõi, allowlist không đổi; action chính thức tự đẩy SARIF nhưng thêm một action
-  bên thứ ba có `security-events: write`. Metadata restrictions: chỉ Enterprise, không kiểm tiêu đề PR [N2]; action kiểu
-  `action-semantic-pull-request`: thêm vào allowlist cho việc một regex làm được; commitlint: thêm Node và cấu hình ở mọi repo.
-- `prevent_self_review = true`: lab một người thì không ai duyệt được; chỉ Code Owner trên PR prd: admin bypass được, không bước dừng trước
-  khi job lấy khoá App. `strict = true` không merge queue: PR bot chờ cập nhật nhánh, build lại, auto-merge kẹt nối đuôi.
-- Giữ [0035](0035-renovate-automerge.md): bản vá Go module bị chiếm (tuổi do người phát hành tự đặt) vào stg không ai đọc; tắt hẳn tự merge:
-  hàng chục PR tay mỗi tuần, cả digest image.
-
 ## Hiện thực ở
 
 - `svp-infra`: `github/repositories.tf` (cách merge, commit squash, `can_approve`, Actions của `svp-labs`, `.github`, pattern Scorecard),
@@ -163,3 +159,8 @@ Lint bảo mật workflow, tính đến 2026-11-01 (bản phát hành đọc t�
 - [N13] [CodeQL: supported languages and frameworks](https://codeql.github.com/docs/codeql-overview/supported-languages-and-frameworks/) (GitHub Actions workflows). [N14] [actions/dependency-review-action](https://github.com/actions/dependency-review-action) v5.0.0: repo public, `fail-on-severity`, `allow-licenses`.
 - [N15] [Conventional Commits 1.0.0](https://www.conventionalcommits.org/en/v1.0.0/). [N16] [About code owners](https://docs.github.com/en/repositories/managing-your-repositorys-settings-and-features/customizing-your-repository/about-code-owners).
 - [N17] Renovate: [configuration options](https://docs.renovatebot.com/configuration-options/) (`automerge`, `matchUpdateTypes`, `matchDepTypes`). [N18] [Events that trigger workflows: `pull_request`](https://docs.github.com/en/actions/reference/workflows-and-actions/events-that-trigger-workflows#pull_request) (loại `edited`).
+
+## Thông tin thêm
+
+Phụ lục: [`appendix/0041-github-hardening.md`](appendix/0041-github-hardening.md) (dòng trạng thái lúc chốt, ưu nhược từng phương án với bảng
+công cụ lint bảo mật workflow tính đến 2026-11-01).

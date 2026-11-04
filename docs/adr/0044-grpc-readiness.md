@@ -29,9 +29,9 @@ Trạng thái ngành đọc ngày 2026-11-02 từ nguồn ở mục Nguồn.
 | Phương án | Trạng thái | Nguồn | Ghi chú |
 | --- | --- | --- | --- |
 | A. Cả ba probe hỏi health tổng, không phụ thuộc (như hiện nay) | hiện hành (mặc định của Spring Boot: không thêm kiểm phụ thuộc vào readiness) | [N4] | Pod mất database vẫn nhận RPC |
-| B. Readiness là tên health riêng, vòng nền ping pool Postgres của service; liveness, startup giữ `""` | hiện hành | [N2][N4] | Tách bạch "sống" và "phục vụ được" |
-| C. Như B nhưng kiểm mọi phụ thuộc (Redis, object store, Kafka) | cũ, bị khuyên tránh | [N4][N5] | Phụ thuộc không thiết yếu kéo pod khỏi Service |
-| D. Liveness cũng kiểm database | cũ, bị khuyên tránh | [N4][N5] | Database chập chờn là restart mọi pod |
+| B. Readiness là tên health riêng, vòng nền ping pool Postgres của service; liveness, startup giữ `""` | hiện hành | [N2], [N4] | Tách bạch "sống" và "phục vụ được" |
+| C. Như B nhưng kiểm mọi phụ thuộc (Redis, object store, Kafka) | cũ, bị khuyên tránh | [N4], [N5] | Phụ thuộc không thiết yếu kéo pod khỏi Service |
+| D. Liveness cũng kiểm database | cũ, bị khuyên tránh | [N4], [N5] | Database chập chờn là restart mọi pod |
 | E. Probe `exec` chạy `grpc_health_probe` | cũ: probe `grpc` gốc thay chỗ, GA từ v1.27 | [N1] | Thêm binary vào image distroless |
 
 ## Kết quả quyết định
@@ -114,7 +114,7 @@ không restart) chưa chạy.
 - A: tốt là không phụ thuộc gì; xấu là pod mất database vẫn nhận RPC, rollout không chờ database.
 - B: như Kết quả quyết định và Rủi ro.
 - C: xấu là Redis hay object store chập chờn rút cả service dù phần lớn RPC còn chạy.
-- D: xấu là database chập chờn restart mọi pod, thêm tải nối lại vào database đang yếu [N4][N5].
+- D: xấu là database chập chờn restart mọi pod, thêm tải nối lại vào database đang yếu [N4], [N5].
 - E: xấu là thêm binary vào image distroless trong khi probe gốc làm được.
 
 ## Hiện thực ở

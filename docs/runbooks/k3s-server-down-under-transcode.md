@@ -7,7 +7,7 @@
 
 ## Ý nghĩa và tác động tới người dùng
 
-Sự cố đã gặp ngày 2026-10-21 trên cluster GitOps ([ADR-0017](../adr/0017-gitops-capacity-media-worker-max2.md), Bối cảnh):
+Sự cố đã gặp trên cluster GitOps ([ADR-0017](../adr/0017-gitops-capacity-media-worker-max2.md), Bối cảnh):
 khoảng 25 s sau khi 3 media-worker cùng transcode, Docker VM bận 99% CPU, compaction của kine (SQLite của k3s) chạy `DELETE`
 20,03 s, chạm hạn 20 s, k3s thoát `level=fatal "Transaction commit failed"`; Docker khởi động lại container `k3d-svp-server-0`.
 API server mất 2,5 phút; ở lượt khác mọi pod và Application tự hồi sau 13 phút.
@@ -42,8 +42,8 @@ node bão hoà CPU, xem [liveness-timeout-cpu-saturation.md](liveness-timeout-cp
 
 1. **Nhiều worker cùng transcode** trên node chung với k3s server: mỗi worker giới hạn 2 CPU; 3 worker giữ 6/8 vCPU của Docker
    VM, phần còn lại không đủ cho API server và kine.
-2. **Máy host thiếu tài nguyên**: chạy pin, Low Power Mode, giới hạn nhiệt, nhiều app mở (swap 15–17 GB, roadmap giai đoạn 5),
-   test hay build chạy song song (lượt 1 ngày 2026-10-21).
+2. **Máy host thiếu tài nguyên**: chạy pin, Low Power Mode, giới hạn nhiệt, nhiều app mở (swap 15–17 GB),
+   test hay build chạy song song.
 3. **`maxReplicaCount` bị nâng lại quá 2** (khoá `keda.maxReplicas` ở `base/services/media-worker.yaml` của repo `svp-gitops`; sửa bằng PR vào repo đó).
 
 ## Giảm thiểu
@@ -80,7 +80,7 @@ Video đang transcode lúc server chết được làm lại (record chưa commi
 - Container server không lên lại sau 15 phút, hay restart lặp: `make k8s-down && make k8s-up` (dựng lại cluster dev; volume
   compose, Postgres native không bị đụng; dữ liệu trong cluster mất). Cluster GitOps: dựng lại bằng `make k8s-gitops-up`.
 - Lặp lại với 2 worker: tiêu chí (c) của ADR-0017 không đạt; theo ADR-0017 thì cắt tiếp, hay dời đo năng lực lên cluster cloud
-  (giai đoạn 7, node pool riêng cho media-worker, ADR-0020 §9). Mở postmortem.
+  (node pool riêng cho media-worker, ADR-0020 §9). Mở postmortem.
 
 ## Liên kết
 

@@ -62,7 +62,7 @@ Chọn **B**, cùng các luật sau:
    chung như `event_id`, thời điểm xảy ra) chốt ở bước viết contract.
 
 Saga upload chạy theo **choreography**: không có bộ điều phối trung tâm, mỗi service nghe event rồi làm phần của mình; lỗi
-transcode thì video-service chạy bước bù (chuyển `FAILED`, dọn file). Luồng đầy đủ ở [architecture.md §7.1](../architecture.md#71-upload-tới-khi-vào-feed-saga-dạng-choreography).
+transcode thì video-service chạy bước bù (chuyển `FAILED`, dọn file). Luồng đầy đủ ở [architecture.md §6.1](../architecture.md#61-upload-tới-khi-vào-feed).
 Chọn choreography vì saga chỉ có 3 bước và một nhánh lỗi; orchestration (một service điều phối, hoặc Temporal) đáng
 cân nhắc khi số bước và nhánh lỗi tăng tới mức khó theo dõi luồng qua event.
 
@@ -83,3 +83,9 @@ cân nhắc khi số bước và nhánh lỗi tăng tới mức khó theo dõi l
 - Consumer at-least-once, commit tay, DLQ: `internal/kafkax/`; consumer idempotent ở `services/feed-service/internal/projector/`,
   `services/video-service/internal/server/transcode.go`, `services/engagement-service/internal/server/views.go`.
 - Kiểm gửi trùng: `deploy/compose/drills/duplicate-events.sh`, `deploy/compose/drills/duplicate-feed-events.sh`.
+
+## Thông tin thêm
+
+### Chỉnh bởi
+
+- Quyết định (cách khoá relay outbox): [0008](0008-async-upload-pipeline-stage2a.md): thay `FOR UPDATE SKIP LOCKED` bằng advisory lock để giữ thứ tự theo key; phần còn lại giữ nguyên.

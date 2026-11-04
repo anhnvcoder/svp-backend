@@ -4,8 +4,8 @@
 // slow by design); the matching unfollow undoes it. For the local stack only.
 //
 // It impersonates user-service: it writes svp.user.v1.FollowEvent records straight to
-// user.follows.v1, which nothing stops it from doing until the broker has ACLs (threat model IN-4,
-// stage 4). feed-service then holds follows that user-service never had: its copy of the follow
+// user.follows.v1, which nothing stops it from doing on the compose broker: it has no ACLs (threat
+// model IN-4). feed-service then holds follows that user-service never had: its copy of the follow
 // graph disagrees with user-service until `unfollow` is run with the same ids file.
 //
 //	fakefollows follow   -followee <uuid> -n <count> -out <file> [-brokers 127.0.0.1:19092]

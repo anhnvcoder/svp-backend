@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
-# The k6 load test of the cloud cluster of stage 7: 20 pods of profile
+# The k6 load test of a cloud cluster: 20 pods of profile
 # cloud, 1 000 feed requests a second (1 250 req/s in all) held at least 10 minutes. The learner runs it, with the cloud
 # cluster's kubectl context; never from make. Needs kubectl and jq. A k3d-* context (the 16 GB laptop) is refused
 # before any kubectl call.
 #
 # Usage: deploy/k6/cloud/run.sh --context <ctx> --domain <domain> [--forwarded-for] [--ca-file <file>] [--pods <n>] [--ramp <duration>] [--hold <duration>] start|logs|delete
 #   --domain         the web's public host (the API is api.<domain>), as Envoy's listeners and certificates name them
-#   --forwarded-for  only when stage 7 trusts two hops of X-Forwarded-For (a load balancer before Envoy): each pod then
+#   --forwarded-for  only when the cluster trusts 2 hops of X-Forwarded-For (a load balancer before Envoy): each pod then
 #                    writes its own IP there, as the load balancer would (threat model RL-7)
 #   --ca-file        PEM file of the CA that signs Envoy's certificate, when a private CA does (an Envoy behind a load
 #                    balancer that holds the public certificate): the pods trust that CA alone (render.sh)

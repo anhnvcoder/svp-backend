@@ -5,14 +5,14 @@
 
 ## Ý nghĩa và tác động tới người dùng
 
-Sự cố đã gặp ở giai đoạn 4 (roadmap, "Ghi nhận"): máy chạy pin với Low Power Mode, transcode một video 60 s 1080p mất 91–253
+Sự cố đã gặp: máy chạy pin với Low Power Mode, transcode một video 60 s 1080p mất 91–253
 s, Docker VM 8 vCPU bận 99%; probe của service cùng node quá hạn 1 s nên kubelet **restart pod còn sống** (video-service
 restart 2 lần), readiness của user-service và gateway lỗi nên pod bị rút khỏi Service; `drill-k8s-keda` (bài lab `drills/` của `svp-labs`) FAIL 2/2. Ở lượt
 khác máy bị giới hạn nhiệt: API server chậm, controller mất lease và restart, Envoy trả 503, cluster tự hồi sau ~3 phút.
 
 Người dùng: 503 từ Envoy hay gateway trong lúc pod bị rút hay restart, request chậm.
 
-Từ giai đoạn 6 probe của chart `svp-service` đã nới ([ADR-0020](../adr/0020-reliability-stage6.md) §10): liveness
+Probe của chart `svp-service` được nới ([ADR-0020](../adr/0020-reliability-stage6.md) §10): liveness
 `timeoutSeconds: 5` (period 10 s, failure 3), readiness 2 s (period 5 s), startup gRPC 2 s × 30 lần. Còn bị restart với
 cấu hình đó nghĩa là node bận hơn mức probe chịu được.
 
@@ -35,7 +35,7 @@ kubectl --context k3d-svp -n svp get deployment video-service -o jsonpath='{.spe
 ```
 
 Trên máy: kiểm có đang chạy pin, Low Power Mode, nhiều app mở không. Ở Docker VM này PSI cpu không dùng làm bằng chứng nghẽn
-CPU (đọc 58–84% cả khi `/proc/stat` chỉ 8–11% bận, roadmap giai đoạn 5).
+CPU (đọc 58–84% cả khi `/proc/stat` chỉ 8–11% bận).
 
 ## Nguyên nhân thường gặp
 
@@ -80,7 +80,7 @@ make k8s-smoke                                                # LOCAL LAB ONLY
 
 - Pod vẫn restart khi máy cắm sạc, yên, không worker nào transcode: không phải do CPU; đọc log và `lastState` của pod.
 - Lặp lại mỗi lần có hai worker: đây là giới hạn của máy 16 GB; tách CPU của media-worker (node pool riêng, taint và
-  toleration) là việc của cluster cloud giai đoạn 7 (ADR-0020 §9, §10). Ghi số vào postmortem nếu có người dùng bị ảnh hưởng.
+  toleration) là việc của cluster cloud (ADR-0020 §9, §10). Ghi số vào postmortem nếu có người dùng bị ảnh hưởng.
 
 ## Liên kết
 
