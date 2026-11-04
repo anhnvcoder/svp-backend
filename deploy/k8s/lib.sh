@@ -493,6 +493,10 @@ web_clone() {
 # strings: a branch named 2026, true or 1e3 written into YAML as it is would be read as a number or a boolean, which the
 # Application CRD refuses (targetRevision is a string).
 #
+# Label svp.io/notify=root is what the subscriptions of Argo CD Notifications select (platforms/eks/argo-cd.yaml of
+# svp-gitops): the root alone reports, one commit status argocd/ENV per commit of svp-gitops for the whole environment.
+# Where notifications are off (k3d) the label selects nothing.
+#
 # The root compares with Argo CD's default diff, not with the server-side diff the controller uses for every other
 # Application (base/argo-cd.yaml of svp-gitops): the root applies its child Applications client-side (no
 # ServerSideApply=true), so their fields belong to a field manager of operation Update. A server-side dry run is an
@@ -508,6 +512,7 @@ argocd_root_app() {
     metadata: {
       name: "svp-root",
       namespace: "argocd",
+      labels: {"svp.io/notify": "root"},
       annotations: {"argocd.argoproj.io/compare-options": "ServerSideDiff=false"}
     },
     spec: {
@@ -524,6 +529,17 @@ argocd_root_app() {
         retry: {limit: 10, backoff: {duration: "10s", factor: 2, maxDuration: "3m"}}
       }
     }
+  }'
+}
+
+# argocd_root_telegram CHAT_ID: reads root Application svp-root (JSON, from argocd_root_app) on stdin and prints it
+# subscribed to Telegram chat CHAT_ID for triggers on-sync-failed and on-health-degraded of Argo CD Notifications, which
+# platforms/eks/argo-cd.yaml of svp-gitops defines with the telegram service. The chat is no value of that public
+# repository, so the bootstrap adds it from .env as annotations of the root, the one object of Argo CD it writes itself.
+argocd_root_telegram() {
+  jq -c --arg chat "$1" '.metadata.annotations += {
+    "notifications.argoproj.io/subscribe.on-sync-failed.telegram": $chat,
+    "notifications.argoproj.io/subscribe.on-health-degraded.telegram": $chat
   }'
 }
 

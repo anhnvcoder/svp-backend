@@ -90,3 +90,7 @@ Viết trước, chạy theo thứ tự ở mỗi nơi; một dòng trượt th�
 ## Thông tin thêm
 
 Phụ lục: [`appendix/0022-local-object-store-minio-replacement.md`](appendix/0022-local-object-store-minio-replacement.md) (tiêu đề và dòng trạng thái gốc, bảng so sánh phương án, phân tích từng phương án, kế hoạch kiểm đầy đủ, cách chuyển, danh sách file, kết quả từng mục, số đo RAM, nguồn).
+
+### Chỉnh bởi
+
+- Kết quả quyết định: [0050](0050-bash-to-standard-tools.md): bỏ đường quay lại MinIO; RustFS là object store duy nhất của đường local, đổi store thì dùng công cụ sao chép S3 chuẩn.
