@@ -53,7 +53,7 @@ problem=$(printf '%s\n' "$envelopes" | jq -r '.payload | @base64d' | check_vuln_
   fail "$repo@$digest: vuln attestation $problem"
 if [ "$provenance" = true ]; then
   if [ "$source_name" = backend ]; then
-    rebuild=$(ci_dispatch_hint images.yml main "services=${repo##*/}") || exit 1
+    rebuild="gh workflow run images.yml --repo anhnvcoder/svp-backend --ref main -f services=${repo##*/}"
   else
     # Another source's release is built by that repository's own workflow, not by a dispatch of this one.
     rebuild="a run of images.yml on main of $provenance_repository"

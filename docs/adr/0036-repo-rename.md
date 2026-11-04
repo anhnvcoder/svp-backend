@@ -170,8 +170,8 @@ tên được dùng lại [W1]; repo mới mang tên cũ ký được đúng sub
 
 - Bảng nguồn (mục 3): `deploy/helm/svp-policy/files/sources.json`, `deploy/helm/svp-policy/templates/imagevalidatingpolicy.yaml`;
   `deploy/k8s/lib.sh` (`_release_sources_jq`, `ghcr_prefix`, `web_url`); `deploy/ci/common.sh`; `deploy/ci/sources-test.sh`.
-- Tên repo trong adapter (mục 7, 8): `deploy/ci/platform.sh` (`_ci_code_repo`, `ci_is_run_url`, `ci_run_workflow`), `deploy/ci/platform-test.sh`,
-  `deploy/k8s/gitops.sh` (`chart_repo_url`).
+- Tên repo code (mục 7, 8): `run_repo_url` của `deploy/ci/common.sh` (trên máy), lệnh `gh workflow run` mà script trong `deploy/ci/`,
+  `deploy/k8s/` in ra, `deploy/k8s/gitops.sh` (`chart_repo_url`).
 - Script phát hành (mục 3, 8): `deploy/ci/gitops-check.sh`, `promote.sh`, `promote-prd.sh`, `rescan.sh`, `contract.sh`, `dora.sh`, `deploy/ci/verify/`.
 - Ca (l) (mục 6): `.github/workflows/images.yml`, `deploy/ci/verify/gitops.sh`, `deploy/k8s/drills/supplychain.sh`.
 - Go module, tên ở cấu hình (mục 7): `go.mod`, `gen/go`, `.github/workflows/`, `Makefile`, `deploy/`, `renovate.json`.

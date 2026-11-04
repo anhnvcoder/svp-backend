@@ -75,9 +75,6 @@ set -euo pipefail
 
 # shellcheck source=deploy/k8s/lib.sh
 . "$(dirname "$0")/lib.sh"
-# ci_dispatch_hint: the command that starts a CI run, for the message when the releases need a fresh attestation.
-# shellcheck source=deploy/ci/platform.sh
-. "$repo_root/deploy/ci/platform.sh"
 # Written for a cloud cluster too: kc and hc may reach the EKS cluster SVP_KUBE_CONTEXT names (deploy/k8s/lib.sh).
 kube_cloud_ok=1
 
@@ -242,7 +239,7 @@ mkdir -p "$work/release" &&
   git -C "$gitops" archive "$sha" "envs/$env" | tar -x -C "$work/release" ||
   fail "unpack envs/$env of ${sha:0:12} of svp-gitops with git archive"
 if ! "$repo_root/deploy/ci/values-check.sh" --gitops "$work/release" ""; then
-  refresh=$(ci_dispatch_hint images.yml main rescan=true) || exit 1
+  refresh="gh workflow run images.yml --repo anhnvcoder/svp-backend --ref main -f rescan=true"
   fail "a release at ${sha:0:12} of svp-gitops is not signed, its vuln attestation is not clean and fresh, or the provenance the policy requires is missing or wrong (above); nothing was created. Refresh the vuln attestations of the releases: $refresh, then run this again once that run is green (a missing provenance needs a new release instead, as named above)"
 fi
 ok "release images at ${sha:0:12} of svp-gitops: GHCR serves all seven anonymously, each signed by its release source with a fresh, clean vuln attestation"

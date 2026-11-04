@@ -12,8 +12,8 @@
 #     green with a minor;
 #   - the version lowered, or not MAJOR.MINOR.PATCH: red; a base that is no commit: red.
 # publish, against a fake registry (a fake docker answers the ORAS commands from files) and a fake cosign that records
-# what it signs, so nothing reaches GHCR or Sigstore. The context of a CI run comes from FAKE_CI_* variables that a
-# test-only block appended to the checkout's platform.sh turns into ci_* functions:
+# what it signs, so nothing reaches GHCR or Sigstore. The context of a CI run is the variables a GitHub Actions job of
+# the workflow it names would have; a run "local" has none of them, as on a machine:
 #   - a dry run of a version not published: says it would push, pushes and signs nothing, sends no credentials;
 #   - a run that is not the signing workflow (a machine, another workflow): nothing pushed;
 #   - the signing workflow: pushed with the artifact type, one OpenAPI layer and the source annotation, with the
@@ -55,15 +55,6 @@ cp "$src/deploy/k8s/lib.sh" "$tree/deploy/k8s/"
 cp -R "$src/deploy/helm/svp-policy/values.yaml" "$src/deploy/helm/svp-policy/files" "$tree/deploy/helm/svp-policy/"
 grep -E '^(OASDIFF|ORAS|COSIGN)_IMAGE[[:space:]]*:=' "$src/Makefile" >"$tree/Makefile"
 spec=$tree/services/gateway/openapi.yaml
-cat >>"$tree/deploy/ci/platform.sh" <<'EOF'
-
-# Test only (contract-test.sh): with FAKE_CI set, the context of a CI run comes from FAKE_CI_* variables.
-if [ -n "${FAKE_CI:-}" ]; then
-  ci_builder_id() { printf '%s\n' "$FAKE_CI_BUILDER"; }
-  ci_repo_url() { echo https://github.com/anhnvcoder/svp-backend; }
-  ci_commit() { echo 0123456789abcdef0123456789abcdef01234567; }
-fi
-EOF
 g() {
   env -i PATH="$PATH" HOME="$work/home" GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 git -C "$tree" \
     -c user.name=test -c user.email=test@example.invalid -c commit.gpgsign=false -c core.hooksPath=/dev/null "$@"
@@ -247,18 +238,22 @@ echo '{"auths":{}}' >"$work/home/.docker/config.json"
 subject=https://github.com/anhnvcoder/svp-backend/.github/workflows/images.yml@refs/heads/main
 repo=ghcr.io/anhnvcoder/svp-backend/api/gateway
 tagfile=$work/registry/$(tr '/:@' '___' <<<"$repo:1.0.0")
-# publish BUILDER [NAME=VALUE...] -- ARGS...: contract.sh publish ARGS in a made-up run of workflow BUILDER.
+# publish BUILDER [NAME=VALUE...] -- ARGS...: contract.sh publish ARGS in a made-up job of this repository running
+# workflow BUILDER (https://github.com/<workflow ref>), or on a machine when BUILDER is local.
 publish() {
   local builder=$1 rc=0 out
   shift
-  local extra=()
+  local extra=() job=()
   while [ "$1" != -- ]; do
     extra+=("$1")
     shift
   done
   shift
+  [ "$builder" = local ] || job=(GITHUB_ACTIONS=true GITHUB_SERVER_URL=https://github.com
+    GITHUB_REPOSITORY=anhnvcoder/svp-backend GITHUB_WORKFLOW_REF="${builder#https://github.com/}"
+    GITHUB_SHA=0123456789abcdef0123456789abcdef01234567)
   out=$(env -i PATH="$work/bin:$PATH" HOME="$work/home" GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 \
-    FAKE_CI=1 FAKE_CI_BUILDER="$builder" FAKE_REGISTRY="$work/registry" FAKE_ORAS_IMAGE="$oras_image" \
+    ${job[@]+"${job[@]}"} FAKE_REGISTRY="$work/registry" FAKE_ORAS_IMAGE="$oras_image" \
     ORAS_IMAGE="$oras_image" ${extra[@]+"${extra[@]}"} "$tree/deploy/ci/contract.sh" publish "$@" 2>&1) || rc=$?
   printf '%s\n' "$rc" "$out"
 }

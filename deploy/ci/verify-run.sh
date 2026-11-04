@@ -60,10 +60,8 @@ set -uo pipefail
 here=$(cd "$(dirname "$0")" && pwd)
 repo=$(cd "$here/../.." && pwd)
 cd "$repo" || exit 1
-# ci_temp_dir and the other ci_* functions: what depends on the CI platform.
-# shellcheck source=deploy/ci/platform.sh
-. "$here/platform.sh"
-tmp_root=$(ci_temp_dir) || exit 1
+# The job's own temp directory on GitHub Actions, emptied when the job ends; /tmp on a machine.
+tmp_root=${RUNNER_TEMP:-/tmp}
 out=${SVP_VERIFY_OUT:-$tmp_root/verify}
 # The secret lists of deploy/ci/verify-mask.sh.
 secrets=${SVP_VERIFY_SECRETS:-$tmp_root/verify-secrets}

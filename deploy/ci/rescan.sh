@@ -15,7 +15,7 @@
 #
 #   rescan.sh run [--source NAME] OUT GITOPS_DIR [VALUES_REF]   (CI only: it attests)
 #     NAME must be the release source of the repository running the job (use_build_source of common.sh), and the job
-#     the workflow that source signs with (ci_builder_id against its subject): checked before anything is read, as
+#     the workflow that source signs with (run_builder_id against its subject): checked before anything is read, as
 #     the vuln attestation is replaced whoever signed the old one (cosign attest --replace, or the older vuln bundles
 #     taken off), so a run of one repository naming another's source (or forgetting --source) would replace that
 #     source's attestations with its own identity, and Kyverno would then refuse every new pod of those releases. For every release `list` prints: an empty digest is skipped; a repository other than the service's image of
@@ -135,7 +135,7 @@ keep_own() {
 
 # list GITOPS_DIR [VALUES_REF]: see `list` above (source_args first).
 list() {
-  local dir=$1 values_ref=${2:-} refs=() labels=() prs open i ref e svc file status=0 code=
+  local dir=$1 values_ref=${2:-} refs=() labels=() open i ref e svc file status=0 code=
   [ "$(git -C "$dir" rev-parse --show-toplevel 2>/dev/null)" = "$(cd "$dir" 2>/dev/null && pwd -P)" ] ||
     fail "$dir is not a clone of svp-gitops (make gitops-clone)"
   # gf ARGS...: an anonymous fetch from svp-gitops into the clone.
@@ -143,12 +143,10 @@ list() {
   gf "+refs/heads/main:refs/svp/rescan/main" || fail "fetch main of svp-gitops"
   refs+=(refs/svp/rescan/main) labels+=("main of svp-gitops")
   # Unanswered, the releases of main and of VALUES_REF are still listed (and rescanned) before the run fails: they are
-  # what stg and prd run, whose attestations must not age out because the host did not answer.
-  if ! prs=$(ci_change_request_list "$source_branch" main "$gitops_repo"); then
+  # what stg and prd run, whose attestations must not age out because the host did not answer. promote_open_pr runs in
+  # a subshell here, so its fail ends that alone.
+  if ! open=$(promote_open_pr "$gitops_repo" "$source_branch" "$source_app"); then
     echo "FAIL  ask the repository's host whether the promote pull request of $gitops_repo is open; $source_branch not read" >&2
-    status=1
-  elif ! open=$(ci_change_request_pick "$source_app" <<<"$prs"); then
-    echo "FAIL  read the open pull requests of $source_branch; $source_branch not read" >&2
     status=1
   elif [ -n "$open" ]; then
     gf "+refs/heads/$source_branch:refs/svp/rescan/promote" || fail "fetch $source_branch of svp-gitops"
@@ -236,18 +234,16 @@ rescan_one() {
 }
 
 run() {
-  local platform
-  platform=$(ci_platform) || exit 1
-  [ "$platform" != local ] || fail "rescan.sh run attests with the workflow's identity: CI only"
+  [ "${GITHUB_ACTIONS:-}" = true ] || fail "rescan.sh run attests with the workflow's identity: CI only"
   source_args "$@"
   set -- ${args[@]+"${args[@]}"}
   [ $# -ge 2 ] && [ $# -le 3 ] || fail "usage: rescan.sh run [--source NAME] OUT GITOPS_DIR [VALUES_REF]"
   use_build_source
   [ "$build_source_name" = "$source" ] ||
-    fail "rescan.sh run --source $source in a run of $(ci_repo_url), the repository of release source $build_source_name: a run attests only the releases of its own source (--source $build_source_name)"
+    fail "rescan.sh run --source $source in a run of $(run_repo_url), the repository of release source $build_source_name: a run attests only the releases of its own source (--source $build_source_name)"
   local builder
   sign_identity "$source"
-  builder=$(ci_builder_id) || fail "read the workflow of this run"
+  builder=$(run_builder_id)
   [ "$builder" = "$sign_subject" ] ||
     fail "this run is $builder, but the releases of source $source are attested only as $sign_subject"
   local out=$1 lines svc repo digest where key sarif n=0 failed=0 seen=" " own
@@ -257,7 +253,7 @@ run() {
   while IFS=$'\t' read -r svc repo digest where; do
     [ -n "$svc" ] || continue
     if [ -z "$digest" ]; then
-      ci_summary "- $svc in $where: no digest, not released yet: skipped"
+      step_summary "- $svc in $where: no digest, not released yet: skipped"
       continue
     fi
     key="$svc@$digest"
@@ -273,11 +269,11 @@ run() {
     case $where in "main of svp-gitops,"*) sarif=$out/sarif ;; esac
     (rescan_one "$svc" "$repo" "$digest" "$out/$n-$svc" "$sarif") || failed=1
   done <<<"$lines"
-  [ "$n" -gt 0 ] || ci_summary "No released digest to rescan."
+  [ "$n" -gt 0 ] || step_summary "No released digest to rescan."
   return "$failed"
 }
 
-# Sourced (by deploy/ci/platform-test.sh, which replaces what rescan_one calls), the functions above are all that is defined.
+# Sourced (by deploy/ci/rescan-test.sh, which replaces what rescan_one calls), the functions above are all that is defined.
 if [[ ${BASH_SOURCE[0]} == "$0" ]]; then
   case ${1:-} in
   scan-index)

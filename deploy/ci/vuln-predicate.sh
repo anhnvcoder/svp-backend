@@ -88,7 +88,11 @@ started=$(cat "$amd64/scan-started")
 [[ $(cat "$arm64/scan-started") > $started ]] || started=$(cat "$arm64/scan-started")
 
 # Who made it: this attempt of the CI run, its run id and the workflow file at its ref; "local" for each on a machine.
-run_url=$(ci_run_attempt_url) && event=$(ci_run_id) && builder=$(ci_builder_id) || exit 1
+event=${GITHUB_RUN_ID:-local}
+run_url=local
+[ -z "${GITHUB_RUN_ID:-}" ] ||
+  run_url=$(run_repo_url)/actions/runs/$GITHUB_RUN_ID/attempts/${GITHUB_RUN_ATTEMPT:-1}
+builder=$(run_builder_id)
 
 tmp=$(mktemp "$out.XXXXXX") || fail "create a temporary file beside $out"
 trap 'rm -f "$tmp"' EXIT

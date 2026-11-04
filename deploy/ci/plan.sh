@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # plan.sh: the first job of images.yml. Decides what
-# this run does and hands it to the jobs after it as outputs (ci_output of platform.sh; stdout on a machine):
+# this run does and hands it to the jobs after it as outputs (step_output of common.sh; stdout on a machine):
 #   mode            build | rescan | drill
 #   images          JSON array of the images to build (build: changed services; drill: the drill images)
 #   legs            JSON matrix {"include": [{image, arch, runner}]}, every image on amd64 and arm64 (native runners)
@@ -82,7 +82,7 @@ if [ "$code_root" != "$script_root" ]; then
       done
       while IFS= read -r name; do images+=("$name"); done < <(printf '%s\n' "${names[@]}" | sort -u)
     fi
-    ci_summary "Release source $build_source_name: its tree is the code of ${images[*]}, built at every run."
+    step_summary "Release source $build_source_name: its tree is the code of ${images[*]}, built at every run."
     ;;
   esac
 fi
@@ -93,7 +93,7 @@ rescan) ;;
 build)
   if [ "$event" = push ] && [ "$on_main" = true ]; then
     base=$(printf '%s' "${LAST_SUCCESS_JSON:-}" | "$ci_dir/last-success.sh")
-    [ -n "$base" ] || ci_summary "No successful push run of images.yml on main to compare with: every service is built."
+    [ -n "$base" ] || step_summary "No successful push run of images.yml on main to compare with: every service is built."
   elif [ "$event" = pull_request ]; then
     base=$(git -C "$repo_root" merge-base HEAD "origin/${PR_BASE_REF:?}") ||
       base=
@@ -112,14 +112,14 @@ build)
       done
       while IFS= read -r name; do images+=("$name"); done < <(printf '%s\n' "${names[@]}" | sort -u)
     fi
-    ci_summary "Images chosen by the dispatch input services: ${images[*]}"
+    step_summary "Images chosen by the dispatch input services: ${images[*]}"
   else
     reason=$(mktemp) || fail "create a temporary file"
     list=$("$ci_dir/changed-services.sh" "$base" HEAD 2>"$reason") || {
       cat "$reason" >&2
       fail "choose the services to build"
     }
-    ci_summary "Base: \`${base:-none}\`." "$(sed 's/^/- /' "$reason")"
+    step_summary "Base: \`${base:-none}\`." "$(sed 's/^/- /' "$reason")"
     rm -f "$reason"
     read -r -a names <<<"$list"
     images=(${names[@]+"${names[@]}"})
@@ -148,7 +148,7 @@ build)
       fail "list the files of the charts changed since $base"
     if [ -n "$changed" ]; then
       promote_charts=true
-      ci_summary "No image to build, but the charts changed since \`${base:0:12}\`: promote moves stg's charts to this commit." \
+      step_summary "No image to build, but the charts changed since \`${base:0:12}\`: promote moves stg's charts to this commit." \
         "$(sed 's/^/- /' <<<"$changed")"
     fi
   fi
@@ -160,12 +160,12 @@ legs=$(jq -nc --argjson images "$json_images" '{include: [$images[] as $i
   | {image: $i, arch: "amd64", runner: "ubuntu-24.04"}, {image: $i, arch: "arm64", runner: "ubuntu-24.04-arm"}]}')
 has_images=false
 [ ${#images[@]} -eq 0 ] || has_images=true
-ci_summary "Mode: $mode. Images: ${images[*]:-none}."
+step_summary "Mode: $mode. Images: ${images[*]:-none}."
 
-ci_output mode "$mode"
-ci_output images "$json_images"
-ci_output legs "$legs"
-ci_output has_images "$has_images"
-ci_output base "$base"
-ci_output promote_charts "$promote_charts"
-ci_output values_ref "$values_ref"
+step_output mode "$mode"
+step_output images "$json_images"
+step_output legs "$legs"
+step_output has_images "$has_images"
+step_output base "$base"
+step_output promote_charts "$promote_charts"
+step_output values_ref "$values_ref"

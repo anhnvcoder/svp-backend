@@ -9,17 +9,14 @@
 # The pipeline is .github/workflows/images.yml, anything under deploy/ci/ but the files no image job reads:
 # trivy-config-ignore.yaml (read only by make trivy-config, so renewing one of its entries, due every 90 days at most,
 # releases nothing), the scripts of the verification runs of .github/workflows/verify.yml (verify-host.sh,
-# verify-run.sh and the scenario files under deploy/ci/verify/ it sources, verify-mask.sh, verify-collect.sh and its
-# test, ghcr-digest.sh, which the GitOps scenario and the supply chain drill call, and its test), platform-test.sh, the test of
-# platform.sh (and of sign-image.sh and the bundle helpers of common.sh), and
-# promote-test.sh, the test of the promote guards of common.sh and rescan.sh's list of releases (both run by job
-# config of ci.yml and on a machine), the scripts of svp-gitops's check:
+# verify-run.sh and the scenario files under deploy/ci/verify/ it sources, verify-mask.sh, verify-collect.sh,
+# ghcr-digest.sh, which the GitOps scenario and the supply chain drill call), every test *-test.sh (run by the jobs
+# of ci.yml and on a machine), the scripts of svp-gitops's check:
 # gitops-check.sh (svp-gitops's check and make helm-check) with values-check.sh and verify-release.sh,
-# which only it, make k8s-gitops-up and the drills run, its Kyverno policies gitops-policies/, the test gitops-check-test.sh
-# (job config of ci.yml), contract.sh (the version rule and
-# the publishing of the gateway's API contract: job contract of images.yml runs it, but it builds and promotes no image), contract-test.sh
-# and sources-test.sh (the release source table, job config of ci.yml); platform.sh still counts (common.sh sources it), as do
-# the helpers deploy/ci/ sources from deploy/k8s/lib.sh (docker_, values_field,
+# which only it, make k8s-gitops-up and the drills run, its Kyverno policies gitops-policies/,
+# contract.sh (the version rule and
+# the publishing of the gateway's API contract: job contract of images.yml runs it, but it builds and promotes no
+# image); the helpers deploy/ci/ sources from deploy/k8s/lib.sh still count (docker_, values_field,
 # values_set_image, ghcr_prefix), and the lines of the Makefile pinning the images the gate runs (TRIVY_IMAGE,
 # SYFT_IMAGE, GRYPE_IMAGE, COSIGN_IMAGE); other Makefile changes do not count. So the weekly Renovate pull request that
 # bumps those tools builds and scans every image with the new trivy or grype before it merges, instead of the next
@@ -75,13 +72,10 @@ while IFS= read -r path; do
   [ -n "$path" ] || continue
   case $path in
   deploy/ci/trivy-config-ignore.yaml | deploy/ci/verify-host.sh | deploy/ci/verify-run.sh | \
-    deploy/ci/verify-mask.sh | deploy/ci/verify-collect.sh | \
-    deploy/ci/verify-collect-test.sh | deploy/ci/ghcr-digest.sh | deploy/ci/ghcr-digest-test.sh | \
-    deploy/ci/verify/* | deploy/ci/platform-test.sh | deploy/ci/promote-test.sh | \
-    deploy/ci/gitops-check.sh | deploy/ci/gitops-check-test.sh | \
-    deploy/ci/values-check.sh | deploy/ci/verify-release.sh | \
-    deploy/ci/contract.sh | deploy/ci/contract-test.sh | deploy/ci/sources-test.sh | \
-    deploy/ci/gitops-policies/*)
+    deploy/ci/verify-mask.sh | deploy/ci/verify-collect.sh | deploy/ci/ghcr-digest.sh | \
+    deploy/ci/verify/* | deploy/ci/*-test.sh | \
+    deploy/ci/gitops-check.sh | deploy/ci/values-check.sh | deploy/ci/verify-release.sh | \
+    deploy/ci/contract.sh | deploy/ci/gitops-policies/*)
     continue
     ;;
   esac

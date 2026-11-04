@@ -19,9 +19,8 @@ Cấu hình triển khai (values, overlay, digest của mỗi môi trường, Ar
 [`svp-gitops`](https://github.com/anhnvcoder/svp-gitops) ([ADR-0025](adr/0025-gitops-config-repo.md)); repo đó có một workflow
 `check.yml` với check tổng `gitops-ok`, chạy `deploy/ci/gitops-check.sh` của repo này ở một commit ghim ([mục 1.5](#15-repo-cấu-hình-svp-gitops)).
 
-Script có sẵn đọc ngữ cảnh CI hay gọi API của GitHub (output, summary, mask, link lượt chạy, PR, dispatch) qua adapter
-`deploy/ci/platform.sh` (ADR-0023). Adapter đã đóng băng ([ADR-0037](adr/0037-mainpath-standard-tools.md) §2): không thêm hàm `ci_*`, script
-mới đọc biến GitHub và gọi `gh` trực tiếp, hàm bị xoá khi không còn script nào gọi nó. DORA không còn workflow ở đây: là bài lab `dora/` của
+Script của `deploy/ci/` đọc thẳng biến của GitHub Actions (`$GITHUB_OUTPUT`, `$GITHUB_STEP_SUMMARY`, `$RUNNER_TEMP`, repo, commit,
+workflow của lượt) và gọi `gh` trực tiếp ([ADR-0037](adr/0037-mainpath-standard-tools.md) §2). DORA không còn workflow ở đây: là bài lab `dora/` của
 [`svp-labs`](https://github.com/anhnvcoder/svp-labs) (§1 của ADR-0037).
 
 Ngoài các workflow trên, tab Actions còn có workflow "CodeQL" do GitHub dựng và giữ: CodeQL **default setup** bật bằng cài đặt repo,
@@ -202,7 +201,7 @@ Trigger: `pull_request`, `push` vào `main`, `workflow_dispatch`. Không trigger
 | `generate` | `make generate-check`: code sinh đã commit khớp | Mọi lượt | Không bao giờ | Có |
 | `buf` | `buf breaking` so với base | Mọi lượt | Không skip; push tạo nhánh mới thì bước in "buf breaking skipped" (không có gì để so) và xanh | Có |
 | `api-contract` | `make api-contract-check BASE=<base>` (base như `buf`): file `services/gateway/openapi.yaml` đổi thì `info.version` phải tăng đúng mức theo oasdiff (`OASDIFF_IMAGE`, không mạng), rồi `deploy/ci/contract-test.sh` (luật version với oasdiff thật, phát hành với registry và cosign giả) | Mọi lượt | Không skip; push tạo nhánh mới hay base không có spec thì một dòng summary và xanh | Có |
-| `config` | `make gitops-clone` (bản clone ẩn danh `main` của `svp-gitops`, `SVP_GITOPS_DIR`), quy tắc các tệp ngoại lệ của cổng quét (`scan-gate.sh --check-ignorefile`: `.trivyignore.yaml`, `.grype.yaml`, `deploy/ci/trivy-config-ignore.yaml`), `platform-test.sh` (gồm `sign-image.sh` và hàm Sigstore bundle của `common.sh` với docker, cosign giả), guard của hai job promote (`promote-test.sh`, trên repo nháp cục bộ), `verify-collect-test.sh`, rule Prometheus, Collector, compose, `make helm-check` (chart của working tree với `base/` của bản clone, gồm ExternalSecret, SecretStore của mỗi env qua kubeconform theo CRD của chart External Secrets ghim, và policy Kyverno CLI trên render: image ghim digest, không `svp.localhost` ở nền tảng thật), `sources-test.sh` (bảng nguồn phát hành hỏng bị cả template `svp-policy` lẫn `lib.sh` từ chối), `gitops-check-test.sh` (ca âm của check `svp-gitops`, gồm `kyverno test` của `deploy/ci/gitops-policies/`), k6, Job k6 của cloud (`make cloud-check`) | Mọi lượt | Không bao giờ | Có |
+| `config` | `make gitops-clone` (bản clone ẩn danh `main` của `svp-gitops`, `SVP_GITOPS_DIR`), quy tắc các tệp ngoại lệ của cổng quét (`scan-gate.sh --check-ignorefile`: `.trivyignore.yaml`, `.grype.yaml`, `deploy/ci/trivy-config-ignore.yaml`), test của script pipeline image (`plan-test.sh`, `scan-gate-test.sh`, `vuln-predicate-test.sh`, `sign-image-test.sh` gồm hàm Sigstore bundle của `common.sh`, `rescan-test.sh`, `verify-release-test.sh`, `changed-services-test.sh`; job giả của Actions, docker, gh, cosign giả), guard của hai job promote (`promote-test.sh`, trên repo nháp cục bộ), `verify-collect-test.sh`, rule Prometheus, Collector, compose, `make helm-check` (chart của working tree với `base/` của bản clone, gồm ExternalSecret, SecretStore của mỗi env qua kubeconform theo CRD của chart External Secrets ghim, và policy Kyverno CLI trên render: image ghim digest, không `svp.localhost` ở nền tảng thật), `sources-test.sh` (bảng nguồn phát hành hỏng bị cả template `svp-policy` lẫn `lib.sh` từ chối), `gitops-check-test.sh` (ca âm của check `svp-gitops`, gồm `kyverno test` của `deploy/ci/gitops-policies/`), k6, Job k6 của cloud (`make cloud-check`) | Mọi lượt | Không bao giờ | Có |
 | `gitleaks` | Quét bí mật toàn lịch sử, `--redact` | Mọi lượt | Không bao giờ | Có |
 | `trivy-config` | Quét misconfig, chỉ báo (phát hiện không làm job đỏ; trừ các mục có hạn của `deploy/ci/trivy-config-ignore.yaml`) | Mọi lượt | Không bao giờ | Có (chỉ khi lệnh lỗi, không khi có phát hiện) |
 | `zizmor` | `make zizmor`: lint bảo mật workflow (zizmor ghim, `--persona=regular`, audit online bằng `GITHUB_TOKEN` chỉ đọc; ngoại lệ ở `.github/zizmor.yml`), SARIF chỉ báo cho `sarif` | Mọi lượt | Không bao giờ | Có |
@@ -260,8 +259,8 @@ và không còn ở workflow: `dev-k3d`, `web-canary`, `k6-cloud-mini`, `chaos`,
   `pull_request_target`, `workflow_run`. Chi tiết: ADR-0015 §1; [`threat-model.md`](threat-model.md) SC-2, SC-10, SC-11.
 - **Chỉ build service đổi** (`deploy/ci/changed-services.sh`, ADR-0015 §3). Mỗi service có tập đường dẫn của image (`image_paths`
   của `deploy/k8s/lib.sh`); đổi đường build, quét, ký (`images.yml`, `deploy/ci/`, ghim `TRIVY_IMAGE`/`SYFT_IMAGE`/`GRYPE_IMAGE`/
-  `COSIGN_IMAGE`) thì cả sáu (PR nâng một bộ quét quét lại mọi image trước khi merge), trừ các file của `deploy/ci/` không job image nào đọc (tệp bỏ qua misconfig, script của `verify.yml`, test và guard
-  của adapter, check của `svp-gitops` cùng `values-check.sh` và `verify-release.sh` mà chỉ nó, `make k8s-gitops-up` và diễn tập chạy). Base của push `main` là lượt push thành công cuối chứ không phải commit ngay trước, để thay đổi của một lượt đỏ
+  `COSIGN_IMAGE`) thì cả sáu (PR nâng một bộ quét quét lại mọi image trước khi merge), trừ các file của `deploy/ci/` không job image nào đọc (tệp bỏ qua misconfig, script của `verify.yml`, mọi test
+  `*-test.sh`, check của `svp-gitops` cùng `values-check.sh` và `verify-release.sh` mà chỉ nó, `make k8s-gitops-up` và diễn tập chạy). Base của push `main` là lượt push thành công cuối chứ không phải commit ngay trước, để thay đổi của một lượt đỏ
   hay bị thay trong hàng chờ không bị bỏ sót. Không dùng `paths:` ở trigger vì check bắt buộc của workflow không chạy thì không
   bao giờ được báo, PR treo chờ mãi.
 - **Check tổng** (`ci-ok`, `images-ok`). Ruleset chỉ cần hai tên ổn định, thêm hay đổi tên job không đụng ruleset. GitHub coi
@@ -310,7 +309,7 @@ Trang một lượt chạy (Actions → chọn lượt) có đồ thị job, dan
   cho sự kiện này (ví dụ cả nhóm `build`, `sign`, `promote`, `drill-*` ở lượt PR). Muốn biết skip có đúng không, mở log job
   `images-ok`: mỗi job một dòng `ok    <job> skipped: not part of this run`, hay `::error::<job> was skipped, but this run needed
   it`.
-- **Summary của job** (cuộn xuống dưới đồ thị), từ hai nguồn. Script ghi qua `ci_summary` của adapter: một dòng mỗi lần quét của mỗi chân build của `images.yml`, của `scan-gate.sh` (`(trivy): CRITICAL n, HIGH n, secrets n` và
+- **Summary của job** (cuộn xuống dưới đồ thị), từ hai nguồn. Script ghi vào `$GITHUB_STEP_SUMMARY` (`step_summary` của `common.sh`): một dòng mỗi lần quét của mỗi chân build của `images.yml`, của `scan-gate.sh` (`(trivy): CRITICAL n, HIGH n, secrets n` và
   `(grype): Critical n, High n, excepted by .grype.yaml n`; chi tiết CRITICAL ở bảng của trivy trong log, HIGH ở SARIF); `plan` (chế độ, base, image được chọn và lý do); `rescan.sh` của lượt quét lại hằng ngày hay dispatch `rescan=true` (service chưa phát hành bị bỏ qua, hay không
   có digest đã phát hành nào để quét). Chính YAML của `ci.yml` ghi thẳng `$GITHUB_STEP_SUMMARY`: bảng SARIF (mức, rule, vị trí
   mỗi phát hiện, tối đa 50 dòng) của golangci-lint ở `check`, `gitleaks`, `trivy-config`, và
@@ -339,7 +338,7 @@ Trang một lượt chạy (Actions → chọn lượt) có đồ thị job, dan
 ## 5. Chạy lại một job trên máy
 
 Lệnh tương đương từng job, chạy từ gốc repo, ở mục "Chạy lại một job trên máy" của [`reference/ci.md`](reference/ci.md). Script
-của `deploy/ci/` chạy trên máy ở chế độ `local` của adapter: không gọi API nào của GitHub, không push lên origin mạng.
+của `deploy/ci/` chạy trên máy khi không có biến của GitHub Actions: output và tóm tắt in ra stdout, lệnh ghi qua API của GitHub chỉ được in ra, không push lên origin mạng.
 
 Riêng cổng grype của một chân `images.yml`: `make grype IMAGE=<ref>@sha256:<digest> ARCH=amd64` (syft ghim đọc image của nền tảng
 đó từ registry, ẩn danh, rồi grype và `scan-gate.sh --grype` như trong CI) hay `make grype SBOM=<đường tuyệt đối tới SPDX JSON>`;

@@ -24,10 +24,10 @@
 # are left out too: their value is a whole compressed release, a single line of megabytes, and the cluster's
 # credentials come from deploy/k8s/secrets.sh, not from chart values.
 #
-# Output: a mask (ci_mask of deploy/ci/platform.sh: an ::add-mask:: line on stdout on GitHub, which the runner hides;
-# nothing on a machine) for each value not masked before in this job (a mask set twice is harmless), and one fixed
+# Output: a mask (an ::add-mask:: line on stdout on GitHub Actions, which the runner hides; nothing on a machine)
+# for each value not masked before in this job (a mask set twice is harmless), and one fixed
 # line saying how many there were. Never set -x here: the trace would print every value. The values go to
-# $SVP_VERIFY_SECRETS (default verify-secrets in ci_temp_dir: $RUNNER_TEMP on GitHub; mode 700): env.values
+# $SVP_VERIFY_SECRETS (default verify-secrets in $RUNNER_TEMP, /tmp on a machine; mode 700): env.values
 # and cluster.values, one per line, mode 600, never uploaded. Each list only grows: a call adds what it read to what
 # the earlier calls of the job kept, so a Secret made again during the run with a new value is still searched for in
 # the files written before. A run that cannot read
@@ -40,10 +40,11 @@ set -euo pipefail
 here=$(cd "$(dirname "$0")" && pwd)
 repo=${SVP_VERIFY_REPO:-$(cd "$here/../.." && pwd)}
 env_file=${SVP_VERIFY_ENV_FILE:-$repo/.env}
-# ci_mask, ci_temp_dir: what depends on the CI platform.
-# shellcheck source=deploy/ci/platform.sh
-. "$here/platform.sh"
-tmp_root=$(ci_temp_dir) || exit 1
+# The job's own temp directory on GitHub Actions, emptied when the job ends; /tmp on a machine.
+tmp_root=${RUNNER_TEMP:-/tmp}
+# mask VALUE: hides VALUE wherever the job's log shows it from now on (the data of the command reads %25 as %). On a
+# machine it prints nothing: there it would print the value.
+mask() { [ "${GITHUB_ACTIONS:-}" != true ] || printf '::add-mask::%s\n' "${1//%/%25}"; }
 secrets=${SVP_VERIFY_SECRETS:-$tmp_root/verify-secrets}
 min_len=8
 namespaces="svp svp-data svp-obs argocd svp-secrets"
@@ -87,7 +88,7 @@ keep() {
   mv "$work/$1" "$secrets/$1.values"
   touch "$secrets/masked"
   LC_ALL=C comm -13 "$secrets/masked" "$secrets/$1.values" >"$work/new"
-  while IFS= read -r v; do ci_mask "$v"; done <"$work/new"
+  while IFS= read -r v; do mask "$v"; done <"$work/new"
   LC_ALL=C sort -u "$secrets/masked" "$work/new" -o "$secrets/masked"
   echo "verify-mask $1: $(wc -l <"$work/new" | tr -d ' ') new value(s) masked, $(wc -l <"$secrets/$1.values" | tr -d ' ') kept for the artifact scan"
 }
@@ -113,7 +114,7 @@ case ${1:-} in
     keep env
     if [ ! -e "$secrets/mask-checked" ]; then
       marker=$(openssl rand -hex 16)
-      ci_mask "$marker"
+      mask "$marker"
       echo "mask-check: $marker"
       touch "$secrets/mask-checked"
     fi
