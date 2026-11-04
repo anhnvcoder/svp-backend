@@ -99,6 +99,7 @@ func TestGRPCCodeTable(t *testing.T) {
 }
 
 func TestWriteGRPCErrorUnwrapsWrappedStatus(t *testing.T) {
+	t.Parallel()
 	wrapped := fmt.Errorf("get video: %w", grpcerr.New(codes.NotFound, "VIDEO_NOT_FOUND", "video not found"))
 	rec := httptest.NewRecorder()
 	WriteGRPCError(rec, httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/", nil), wrapped)
@@ -145,6 +146,7 @@ func TestWriteGRPCErrorNonStatusIsInternal(t *testing.T) {
 }
 
 func TestWriteProblem(t *testing.T) {
+	t.Parallel()
 	r, traceID := requestWithTrace(t)
 	rec := httptest.NewRecorder()
 	WriteProblem(rec, r, http.StatusUnauthorized, "INVALID_TOKEN", "missing or invalid access token")
@@ -156,6 +158,7 @@ func TestWriteProblem(t *testing.T) {
 }
 
 func TestWriteRateLimited(t *testing.T) {
+	t.Parallel()
 	for _, tt := range []struct {
 		retryAfter time.Duration
 		want       string
@@ -167,6 +170,7 @@ func TestWriteRateLimited(t *testing.T) {
 		{time.Minute, "60"},
 	} {
 		t.Run(tt.retryAfter.String(), func(t *testing.T) {
+			t.Parallel()
 			r, id := requestWithTrace(t)
 			rec := httptest.NewRecorder()
 			WriteRateLimited(rec, r, "login-ip", tt.retryAfter)

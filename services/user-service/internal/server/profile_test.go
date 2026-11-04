@@ -18,9 +18,10 @@ import (
 )
 
 func TestPickedHandleRules(t *testing.T) {
+	t.Parallel()
 	valid := map[string]string{
 		"Alice":                          "alice",
-		" \tbob \n":                      "bob",
+		" \tbob \n":                      "bob", //nolint:gocritic // the surrounding whitespace is what the rule must trim
 		"abc":                            "abc",
 		"u_bob":                          "u_bob",
 		"u_0123456789abc":                "u_0123456789abc", // 13 hex digits: not the generated form
@@ -65,6 +66,7 @@ func TestPickedHandleRules(t *testing.T) {
 }
 
 func TestGeneratedHandle(t *testing.T) {
+	t.Parallel()
 	id, err := ids.Parse("01928c6e-7b3a-7cde-8f01-23456789abcd")
 	if err != nil {
 		t.Fatal(err)
@@ -79,6 +81,7 @@ func TestGeneratedHandle(t *testing.T) {
 }
 
 func TestDisplayNameRules(t *testing.T) {
+	t.Parallel()
 	// 50 runes of NFC Vietnamese with diacritics: "Phương" is 6 runes, 8 bytes per rune at most.
 	vi50 := strings.Repeat("Phương", 8) + "ễ" + "ộ"
 	if n := len([]rune(vi50)); n != 50 {

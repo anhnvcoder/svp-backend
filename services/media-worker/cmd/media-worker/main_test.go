@@ -124,6 +124,7 @@ func TestLoadConfigAcceptsHTTPSEndpoint(t *testing.T) {
 }
 
 func TestRunRejectsOtherCommands(t *testing.T) {
+	t.Parallel()
 	for _, cmd := range []string{"migrate", "healthcheck"} {
 		if err := run(t.Context(), nil, []string{cmd}); err == nil {
 			t.Errorf("run(%q) = nil, want an error", cmd)

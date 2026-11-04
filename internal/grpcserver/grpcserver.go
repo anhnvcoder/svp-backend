@@ -16,6 +16,7 @@ import (
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/health"
 	healthpb "google.golang.org/grpc/health/grpc_health_v1"
+	"google.golang.org/grpc/keepalive"
 	"google.golang.org/grpc/status"
 
 	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
@@ -41,6 +42,15 @@ const (
 	readinessFailures = 3
 )
 
+// Server limits per client; Run says why each has its value.
+const (
+	maxRecvMsgSize       = 1 << 20 // bytes of one request; the grpc-go default is 4 MiB
+	maxConcurrentStreams = 1000    // RPCs in flight on one connection
+	keepaliveMinTime     = 10 * time.Second
+	keepaliveTime        = 30 * time.Second
+	keepaliveTimeout     = 10 * time.Second
+)
+
 // readiness is the background check that sets the status of readinessService.
 type readiness struct {
 	check    func(context.Context) error
@@ -57,6 +67,17 @@ type readiness struct {
 // of the metadata traceparent (a new root trace when it is missing or malformed), using the
 // global OTel providers and propagator. Every unary RPC then passes, in order, through: the RPC
 // log line, panic recovery, then interceptors.
+//
+// The server limits each client, so that a faulty or hostile one inside the cluster cannot hold
+// dead connections, send large messages or open streams without bound:
+//   - a request larger than 1 MiB fails with RESOURCE_EXHAUSTED: requests carry ids and short
+//     strings, and a batch of ids is bounded by the page size;
+//   - a connection carries at most 1000 concurrent streams, above the peak of the gateway, which
+//     holds one connection per backend;
+//   - a client may ping at most every 10 s, also with no RPC in flight, or it is sent GOAWAY
+//     (too_many_pings); no client sets keepalive;
+//   - the server pings a connection idle for 30 s and closes it when the ping has no answer within
+//     10 s, so a dead client is dropped in about 40 s instead of the 2 h default.
 //
 // The standard health service reports the overall health "" SERVING from the moment the server
 // listens until shutdown starts, whatever ready returns: liveness must not depend on anything
@@ -79,6 +100,10 @@ func serve(ctx context.Context, lis net.Listener, logger *slog.Logger, register 
 		// Docker probes the health check every 10 s: no span or metric for it.
 		grpc.StatsHandler(otelgrpc.NewServerHandler(otelgrpc.WithFilter(filters.Not(filters.FullMethodName(healthCheckMethod))))),
 		grpc.ChainUnaryInterceptor(chain...),
+		grpc.MaxRecvMsgSize(maxRecvMsgSize),
+		grpc.MaxConcurrentStreams(maxConcurrentStreams),
+		grpc.KeepaliveEnforcementPolicy(keepalive.EnforcementPolicy{MinTime: keepaliveMinTime, PermitWithoutStream: true}),
+		grpc.KeepaliveParams(keepalive.ServerParameters{Time: keepaliveTime, Timeout: keepaliveTimeout}),
 	)
 
 	hs := health.NewServer()
@@ -111,7 +136,7 @@ func serve(ctx context.Context, lis net.Listener, logger *slog.Logger, register 
 
 	// Report NOT_SERVING first so health checks stop routing traffic here while RPCs drain.
 	hs.Shutdown()
-	logger.Info("grpc server stopping")
+	logger.InfoContext(ctx, "grpc server stopping")
 	stopped := make(chan struct{})
 	go func() {
 		srv.GracefulStop()
@@ -122,14 +147,14 @@ func serve(ctx context.Context, lis net.Listener, logger *slog.Logger, register 
 	select {
 	case <-stopped:
 	case <-timer.C:
-		logger.Warn("graceful stop timed out, closing remaining connections", slog.Duration("timeout", shutdownTimeout))
+		logger.WarnContext(ctx, "graceful stop timed out, closing remaining connections", slog.Duration("timeout", shutdownTimeout))
 		srv.Stop()
 		<-stopped
 	}
 	if err := <-errCh; err != nil && !errors.Is(err, grpc.ErrServerStopped) {
 		return fmt.Errorf("serve grpc: %w", err)
 	}
-	logger.Info("grpc server stopped")
+	logger.InfoContext(ctx, "grpc server stopped")
 	return nil
 }
 
@@ -154,14 +179,14 @@ func (r readiness) run(ctx context.Context, hs *health.Server, logger *slog.Logg
 			if !serving {
 				serving = true
 				hs.SetServingStatus(readinessService, healthpb.HealthCheckResponse_SERVING)
-				logger.Info("grpc readiness serving")
+				logger.InfoContext(ctx, "grpc readiness serving")
 			}
 		case serving:
 			failed++
 			if failed >= r.failures {
 				serving = false
 				hs.SetServingStatus(readinessService, healthpb.HealthCheckResponse_NOT_SERVING)
-				logger.Warn("grpc readiness not serving", slog.Int("failed_checks", failed), slog.String("error", err.Error()))
+				logger.WarnContext(ctx, "grpc readiness not serving", slog.Int("failed_checks", failed), slog.String("error", err.Error()))
 			}
 		}
 		select {

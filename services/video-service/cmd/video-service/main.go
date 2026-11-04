@@ -143,11 +143,11 @@ func serve(ctx context.Context, logger *slog.Logger) (err error) {
 	// read up to the last export).
 	defer func() {
 		if err != nil {
-			logger.Error("video-service failed", slog.Any("error", err))
+			logger.ErrorContext(ctx, "video-service failed", slog.Any("error", err))
 			err = loggedError{err}
 		}
 		if err := shutdownTelemetry(context.WithoutCancel(ctx)); err != nil {
-			logger.Warn("telemetry shutdown failed", slog.Any("error", err))
+			logger.WarnContext(ctx, "telemetry shutdown failed", slog.Any("error", err))
 		}
 		flushErrors()
 		if pool != nil {

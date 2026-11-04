@@ -327,6 +327,7 @@ func TestStoreTimeout(t *testing.T) {
 }
 
 func TestMemoryConcurrent(t *testing.T) {
+	t.Parallel()
 	clock := newFakeClock()
 	m := newMemory(clock.Now)
 	lim := Limit{Rate: 1, Period: time.Hour, Burst: 50}
@@ -351,6 +352,7 @@ func TestMemoryConcurrent(t *testing.T) {
 }
 
 func TestMemorySweepsExpiredKeys(t *testing.T) {
+	t.Parallel()
 	clock := newFakeClock()
 	m := newMemory(clock.Now)
 	lim := Limit{Rate: 60, Period: time.Minute, Burst: 2} // full again 2 s after the last request

@@ -8,6 +8,7 @@ import (
 )
 
 func TestClientAddr(t *testing.T) {
+	t.Parallel()
 	pods := []netip.Prefix{netip.MustParsePrefix("10.42.0.0/16"), netip.MustParsePrefix("fd00:42::/56")}
 	envoy := NewClientAddr(1, pods)
 	twoHops := NewClientAddr(2, pods)
@@ -44,6 +45,7 @@ func TestClientAddr(t *testing.T) {
 		{"list shorter than the hops", twoHops, "10.42.0.7:5000", []string{"198.51.100.9"}, "10.42.0.7"},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 			r := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/x", nil)
 			r.RemoteAddr = tt.remote
 			for _, v := range tt.xff {

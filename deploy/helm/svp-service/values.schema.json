@@ -1,0 +1,152 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "svp-service values",
+  "description": "Values of chart svp-service, after Helm has merged values.yaml, the release's values files of svp-gitops and every --set. Each key and its meaning are in values.yaml; a key not listed here fails helm lint, helm template and every sync, so a typo in a release's values file never passes unnoticed. Rules across keys (an image tag or digest, hpa beside keda, a pdb on one replica, an unknown peer, an entry for every address) are the templates' own, which fail naming the release.",
+  "definitions": {
+    "quantity": {
+      "description": "A Kubernetes resource quantity: 100m, 128Mi, \"1\".",
+      "type": ["string", "number"]
+    },
+    "resources": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "requests": {"type": "object", "additionalProperties": {"$ref": "#/definitions/quantity"}},
+        "limits": {"type": "object", "additionalProperties": {"$ref": "#/definitions/quantity"}}
+      }
+    },
+    "stringMap": {
+      "type": "object",
+      "additionalProperties": {"type": "string"}
+    },
+    "peerNames": {
+      "type": "array",
+      "items": {"type": "string"}
+    },
+    "ports": {
+      "type": "array",
+      "items": {"type": "integer"}
+    }
+  },
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "image": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "repository": {"type": "string"},
+        "tag": {"type": "string"},
+        "digest": {"type": "string"}
+      }
+    },
+    "protocol": {"type": "string", "enum": ["http", "grpc", "none"]},
+    "port": {"type": "integer"},
+    "replicas": {"type": "integer"},
+    "hpa": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "minReplicas": {"type": "integer"},
+        "maxReplicas": {"type": "integer"},
+        "cpuUtilization": {"type": "integer"}
+      }
+    },
+    "pdb": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "minAvailable": {"description": "A count or a percentage, as in a PodDisruptionBudget.", "type": ["integer", "string"]}
+      }
+    },
+    "spreadAcrossNodes": {"type": "boolean"},
+    "keda": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "minReplicas": {"type": "integer"},
+        "maxReplicas": {"type": "integer"},
+        "kafka": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "topic": {"type": "string"},
+            "consumerGroup": {"type": "string"},
+            "lagThreshold": {"description": "A string, as in the metadata of a KEDA trigger.", "type": "string"}
+          }
+        }
+      }
+    },
+    "canary": {"type": "boolean"},
+    "canaryLimits": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "p99Ms": {"type": "number"},
+        "errorRatio": {"type": "number"}
+      }
+    },
+    "podAnnotations": {"$ref": "#/definitions/stringMap"},
+    "migrate": {"type": "boolean"},
+    "resources": {"$ref": "#/definitions/resources"},
+    "migrateResources": {"$ref": "#/definitions/resources"},
+    "env": {
+      "description": "Name -> value. Strings only: the template quotes each value, and a number YAML reads as a float would reach the process in its float form.",
+      "$ref": "#/definitions/stringMap"
+    },
+    "errorTracking": {"type": "boolean"},
+    "scratch": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["mountPath"],
+        "properties": {
+          "mountPath": {"type": "string"},
+          "sizeLimit": {"$ref": "#/definitions/quantity"},
+          "medium": {"type": "string"}
+        }
+      }
+    },
+    "terminationGracePeriodSeconds": {"type": ["integer", "null"]},
+    "preStopSleepSeconds": {"type": ["integer", "null"]},
+    "ingressFrom": {"$ref": "#/definitions/peerNames"},
+    "egressTo": {"$ref": "#/definitions/peerNames"},
+    "peers": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["namespace", "labels"],
+        "properties": {
+          "namespace": {"type": "string"},
+          "labels": {"$ref": "#/definitions/stringMap"},
+          "ports": {"$ref": "#/definitions/ports"}
+        }
+      }
+    },
+    "externalPeers": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "cidr": {"type": "string"},
+            "ports": {"$ref": "#/definitions/ports"}
+          }
+        }
+      }
+    },
+    "httpRoute": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "host": {"type": "string"},
+        "name": {"type": "string"},
+        "sectionName": {"type": "string"}
+      }
+    }
+  }
+}

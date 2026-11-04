@@ -154,11 +154,11 @@ func serve(ctx context.Context, logger *slog.Logger) (err error) {
 	// pool still exists, then the error reports, and the pool closes last.
 	defer func() {
 		if err != nil {
-			logger.Error("feed-service failed", slog.Any("error", err))
+			logger.ErrorContext(ctx, "feed-service failed", slog.Any("error", err))
 			err = loggedError{err}
 		}
 		if err := shutdownTelemetry(context.WithoutCancel(ctx)); err != nil {
-			logger.Warn("telemetry shutdown failed", slog.Any("error", err))
+			logger.WarnContext(ctx, "telemetry shutdown failed", slog.Any("error", err))
 		}
 		flushErrors()
 		if pool != nil {

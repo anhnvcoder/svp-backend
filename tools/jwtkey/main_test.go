@@ -11,6 +11,7 @@ import (
 )
 
 func TestOutputParsesAndSignsVerifiableTokens(t *testing.T) {
+	t.Parallel()
 	var buf bytes.Buffer
 	if err := run(&buf, time.Date(2026, 10, 11, 23, 0, 0, 0, time.FixedZone("ICT", 7*3600))); err != nil {
 		t.Fatal(err)
@@ -56,6 +57,7 @@ func TestOutputParsesAndSignsVerifiableTokens(t *testing.T) {
 }
 
 func TestEachRunMakesANewKey(t *testing.T) {
+	t.Parallel()
 	var a, b bytes.Buffer
 	now := time.Now()
 	if err := run(&a, now); err != nil {

@@ -37,6 +37,7 @@ func decode(t *testing.T, buf *bytes.Buffer) map[string]any {
 }
 
 func TestLoggerAddsServiceAndContextAttrs(t *testing.T) {
+	t.Parallel()
 	var buf bytes.Buffer
 	logger := newLogger(&buf, "user-service")
 
@@ -63,6 +64,7 @@ func TestLoggerAddsServiceAndContextAttrs(t *testing.T) {
 }
 
 func TestLoggerWithoutContextAttrs(t *testing.T) {
+	t.Parallel()
 	var buf bytes.Buffer
 	newLogger(&buf, "gateway").InfoContext(context.Background(), "started")
 
@@ -79,6 +81,7 @@ func TestLoggerWithoutContextAttrs(t *testing.T) {
 }
 
 func TestLoggerTraceAttrsPreferValidSpanContext(t *testing.T) {
+	t.Parallel()
 	attrs := []slog.Attr{slog.String("trace_id", "legacy-trace"), slog.String("span_id", "legacy-span")}
 	tests := []struct {
 		name    string
@@ -108,6 +111,7 @@ func TestLoggerTraceAttrsPreferValidSpanContext(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 			var buf bytes.Buffer
 			logger := newLogger(&buf, "svc")
 			for _, tc := range contexts {
@@ -157,6 +161,7 @@ func (*logExporter) Shutdown(context.Context) error   { return nil }
 func (*logExporter) ForceFlush(context.Context) error { return nil }
 
 func TestHandlerCorrelatesJSONAndOTelLogs(t *testing.T) {
+	t.Parallel()
 	exporter := &logExporter{}
 	lp := sdklog.NewLoggerProvider(sdklog.WithProcessor(sdklog.NewSimpleProcessor(exporter)))
 	tp := sdktrace.NewTracerProvider(sdktrace.WithSyncer(tracetest.NewInMemoryExporter()))
@@ -306,6 +311,7 @@ func TestLoggerCreatedBeforeSetupUsesGlobalProvider(t *testing.T) {
 }
 
 func TestWithDoesNotChangeParentContext(t *testing.T) {
+	t.Parallel()
 	var buf bytes.Buffer
 	logger := newLogger(&buf, "svc")
 

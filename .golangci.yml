@@ -9,6 +9,20 @@ linters:
     - bodyclose
     - noctx
     - misspell
+    - sloglint
+    - revive
+    - gocritic
+  # contextcheck stays off: it reports every context derived through a helper (callContext(r) wrapping r.Context(),
+  # middleware closures) as "non-inherited", which is noise rather than a missing trace.
+  settings:
+    sloglint:
+      no-mixed-args: true
+      context: scope
+      static-msg: true
+    revive:
+      rules:
+        - name: exported
+        - name: package-comments
   exclusions:
     # Skip files carrying the "Code generated ... DO NOT EDIT." header (protobuf, sqlc) and gen/.
     generated: lax

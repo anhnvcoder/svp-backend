@@ -31,6 +31,7 @@ func appendVideoID(b, id []byte) []byte {
 }
 
 func TestRoundTrip(t *testing.T) {
+	t.Parallel()
 	for _, c := range []Cursor{
 		sample(),
 		{Time: time.Unix(0, 0).UTC(), VideoID: uuid.Max()},
@@ -52,6 +53,7 @@ func TestRoundTrip(t *testing.T) {
 
 // The token keeps microseconds, the precision of timestamptz.
 func TestEncodeTruncatesToMicroseconds(t *testing.T) {
+	t.Parallel()
 	c := sample()
 	c.Time = c.Time.Add(789 * time.Nanosecond)
 	got, err := Decode(Encode(c))
@@ -65,6 +67,7 @@ func TestEncodeTruncatesToMicroseconds(t *testing.T) {
 
 // Fields an older or newer version does not know are skipped, as protobuf does.
 func TestUnknownFieldsAreSkipped(t *testing.T) {
+	t.Parallel()
 	c := sample()
 	b := protowire.AppendTag(nil, 9, protowire.BytesType)
 	b = protowire.AppendBytes(b, []byte("future"))
@@ -82,6 +85,7 @@ func TestUnknownFieldsAreSkipped(t *testing.T) {
 }
 
 func TestInvalidTokens(t *testing.T) {
+	t.Parallel()
 	c := sample()
 	micros := c.Time.UnixMicro()
 	valid := Encode(c)
@@ -112,6 +116,7 @@ func TestInvalidTokens(t *testing.T) {
 		{"time of max int64", encodeRaw(appendVideoID(appendTime(nil, 1<<63-1), c.VideoID[:]))},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			if _, err := Decode(tc.token); !errors.Is(err, ErrInvalid) {
 				t.Errorf("Decode(%q) = %v, want ErrInvalid", tc.token, err)
 			}
@@ -121,6 +126,7 @@ func TestInvalidTokens(t *testing.T) {
 
 // The edges of the accepted time range decode.
 func TestTimeRangeEdges(t *testing.T) {
+	t.Parallel()
 	id := uuid.Max()
 	for _, micros := range []int64{minMicros, maxMicros} {
 		got, err := Decode(encodeRaw(appendVideoID(appendTime(nil, micros), id[:])))

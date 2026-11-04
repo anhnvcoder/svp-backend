@@ -47,8 +47,10 @@ const batchSize = 5000
 
 func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
-	defer stop()
-	if err := run(ctx, os.Args[1:], os.Stderr); err != nil {
+	err := run(ctx, os.Args[1:], os.Stderr)
+	// Not deferred: os.Exit below would skip a deferred call.
+	stop()
+	if err != nil {
 		fmt.Fprintln(os.Stderr, "fakefollows:", err)
 		os.Exit(1)
 	}

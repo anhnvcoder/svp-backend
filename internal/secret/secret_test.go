@@ -12,6 +12,7 @@ import (
 const value = "hunter2-super-secret"
 
 func TestRevealReturnsValue(t *testing.T) {
+	t.Parallel()
 	if got := New(value).Reveal(); got != value {
 		t.Errorf("Reveal() = %q, want %q", got, value)
 	}
@@ -21,6 +22,7 @@ func TestRevealReturnsValue(t *testing.T) {
 }
 
 func TestFmtDoesNotLeak(t *testing.T) {
+	t.Parallel()
 	s := New(value)
 	type exported struct{ Password String }
 	type unexported struct{ password String }
@@ -42,11 +44,12 @@ func TestFmtDoesNotLeak(t *testing.T) {
 }
 
 func TestSlogDoesNotLeak(t *testing.T) {
+	t.Parallel()
 	s := New(value)
 	var buf bytes.Buffer
 	for _, h := range []slog.Handler{slog.NewJSONHandler(&buf, nil), slog.NewTextHandler(&buf, nil)} {
 		logger := slog.New(h)
-		logger.Info("login", "password", s, slog.Any("token", s), slog.Group("req", "password", s))
+		logger.Info("login", slog.Any("password", s), slog.Any("token", s), slog.Group("req", "password", s))
 		logger.Info("login", "req", struct{ Password String }{s})
 	}
 	out := buf.String()
@@ -59,6 +62,7 @@ func TestSlogDoesNotLeak(t *testing.T) {
 }
 
 func TestJSONDoesNotLeak(t *testing.T) {
+	t.Parallel()
 	out, err := json.Marshal(struct {
 		Password String `json:"password"`
 	}{New(value)})

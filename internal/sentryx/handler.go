@@ -49,10 +49,12 @@ type Handler struct {
 	grouped bool
 }
 
+// Enabled reports whether level is ERROR or above and a reporter is active.
 func (*Handler) Enabled(_ context.Context, level slog.Level) bool {
 	return level >= slog.LevelError && active.Load() != nil
 }
 
+// WithAttrs returns a Handler that also carries attrs, unless a group was opened before.
 func (h *Handler) WithAttrs(attrs []slog.Attr) slog.Handler {
 	copy := *h
 	if !h.grouped {
@@ -61,12 +63,15 @@ func (h *Handler) WithAttrs(attrs []slog.Attr) slog.Handler {
 	return &copy
 }
 
+// WithGroup returns a Handler that ignores every attribute after a non-empty group name.
 func (h *Handler) WithGroup(name string) slog.Handler {
 	copy := *h
 	copy.grouped = h.grouped || name != ""
 	return &copy
 }
 
+// Handle sends record to the reporter as an event holding only allowlisted fields: the message when
+// listed, error and panic metadata, string and integer tags, and the trace ids of ctx.
 func (h *Handler) Handle(ctx context.Context, record slog.Record) error {
 	r := active.Load()
 	if r == nil || record.Level < slog.LevelError {
@@ -121,6 +126,7 @@ func (h *Handler) Handle(ctx context.Context, record slog.Record) error {
 	if flushIn != 0 {
 		r.after(flushIn, func() {
 			if dropped := r.limits.flush(time.Now()); dropped != 0 {
+				//nolint:sloglint // the timer fires after Handle returned: ctx belongs to an unrelated earlier record, so its trace would mislabel this line
 				slog.Warn("error tracker events dropped", slog.Uint64("dropped", dropped))
 			}
 		})

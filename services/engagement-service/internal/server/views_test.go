@@ -671,6 +671,7 @@ func TestPostgresErrorRetriesTheBatch(t *testing.T) {
 // Each batch attempt has a deadline of its own, so a stuck lock or a slow broker fails it and the
 // batch is retried.
 func TestViewsConsumerConfigBoundsEachAttempt(t *testing.T) {
+	t.Parallel()
 	s, _ := newServerWithoutDB(nil)
 	if cfg := s.ViewsConsumerConfig("127.0.0.1:19092"); cfg.HandlerTimeout != 30*time.Second {
 		t.Errorf("HandlerTimeout = %s, want 30s", cfg.HandlerTimeout)
@@ -679,6 +680,7 @@ func TestViewsConsumerConfigBoundsEachAttempt(t *testing.T) {
 
 // A failing batch of views is retried for 5 minutes before it goes to the dead-letter topic.
 func TestViewsConsumerConfigBoundsRetries(t *testing.T) {
+	t.Parallel()
 	s, _ := newServerWithoutDB(nil)
 	if cfg := s.ViewsConsumerConfig("127.0.0.1:19092"); cfg.RetryBudget != 5*time.Minute {
 		t.Errorf("RetryBudget = %s, want 5m", cfg.RetryBudget)

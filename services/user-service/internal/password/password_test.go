@@ -12,6 +12,7 @@ import (
 )
 
 func TestHashThenVerify(t *testing.T) {
+	t.Parallel()
 	h := NewHasher()
 	ctx := context.Background()
 	pw := secret.New("correct horse battery staple")
@@ -39,6 +40,7 @@ func TestHashThenVerify(t *testing.T) {
 }
 
 func TestHashUsesRandomSalt(t *testing.T) {
+	t.Parallel()
 	h := NewHasher()
 	pw := secret.New("same password")
 	a, err := h.Hash(context.Background(), pw)
@@ -59,6 +61,7 @@ func TestHashUsesRandomSalt(t *testing.T) {
 }
 
 func TestVerifyAcceptsOtherValidParameters(t *testing.T) {
+	t.Parallel()
 	// A hash made with another OWASP configuration still verifies, and asks for a rehash.
 	salt := []byte("0123456789abcdef")
 	p := params{memoryKiB: 12 * 1024, passes: 3, lanes: 1}
@@ -75,6 +78,7 @@ func TestVerifyAcceptsOtherValidParameters(t *testing.T) {
 }
 
 func TestVerifyRejectsInvalidHashes(t *testing.T) {
+	t.Parallel()
 	h := NewHasher()
 	valid, err := h.Hash(context.Background(), secret.New("password1"))
 	if err != nil {
@@ -115,6 +119,7 @@ func TestVerifyRejectsInvalidHashes(t *testing.T) {
 	}
 	for name, encoded := range tests {
 		t.Run(name, func(t *testing.T) {
+			t.Parallel()
 			ok, err := h.Verify(context.Background(), secret.New("password1"), encoded)
 			if ok || !errors.Is(err, ErrInvalidHash) {
 				t.Errorf("Verify(%q) = (%v, %v), want (false, ErrInvalidHash)", encoded, ok, err)
@@ -127,6 +132,7 @@ func TestVerifyRejectsInvalidHashes(t *testing.T) {
 }
 
 func TestVerifyDummy(t *testing.T) {
+	t.Parallel()
 	h := NewHasher()
 	if NeedsRehash(h.dummy) {
 		t.Errorf("dummy hash %q does not use the current parameters, so it would not cost the same as a real one", h.dummy)
@@ -177,6 +183,7 @@ func TestBusyWhenAllSlotsStayTaken(t *testing.T) {
 
 // The MaxConcurrent comment states the worst case over every hash Verify accepts.
 func TestWorstCaseBoundMatchesComment(t *testing.T) {
+	t.Parallel()
 	if mib := MaxConcurrent * maxMemoryKiB / 1024; mib > 256 {
 		t.Errorf("MaxConcurrent hashes at maxMemoryKiB hold %d MiB, the comment says at most 256", mib)
 	}
@@ -208,6 +215,7 @@ func TestWaitsForAFreeSlot(t *testing.T) {
 }
 
 func TestConcurrentHashesQueueForSlots(t *testing.T) {
+	t.Parallel()
 	h := NewHasher()
 	h.wait = time.Minute
 	errs := make(chan error, 3*MaxConcurrent)
@@ -225,6 +233,7 @@ func TestConcurrentHashesQueueForSlots(t *testing.T) {
 }
 
 func TestCheckLength(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name string
 		pw   string
@@ -242,6 +251,7 @@ func TestCheckLength(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 			err := CheckLength(secret.New(tt.pw))
 			if tt.ok && err != nil {
 				t.Errorf("CheckLength() = %v, want nil", err)

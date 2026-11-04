@@ -129,6 +129,7 @@ func TestServeRejectsInvalidMaxConns(t *testing.T) {
 }
 
 func TestRunRejectsUnknownCommand(t *testing.T) {
+	t.Parallel()
 	if err := run(t.Context(), slog.New(slog.DiscardHandler), []string{"serv"}); err == nil {
 		t.Error("run(serv) = nil, want an error")
 	}
@@ -183,6 +184,7 @@ func TestRunConsumerStopsWhileWaitingToRestart(t *testing.T) {
 }
 
 func TestRunConsumerReturnsCreateError(t *testing.T) {
+	t.Parallel()
 	want := errors.New("bad config")
 	newConsumer := func() (runner, error) { return nil, want }
 	err := runConsumer(context.Background(), slog.New(slog.DiscardHandler), time.Millisecond, newConsumer)

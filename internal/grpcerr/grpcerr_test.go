@@ -11,6 +11,7 @@ import (
 )
 
 func TestNewCarriesCodeMessageAndErrorInfo(t *testing.T) {
+	t.Parallel()
 	err := New(codes.NotFound, "VIDEO_NOT_FOUND", "video not found")
 
 	st, ok := status.FromError(err)
@@ -34,6 +35,7 @@ func TestNewCarriesCodeMessageAndErrorInfo(t *testing.T) {
 }
 
 func TestReason(t *testing.T) {
+	t.Parallel()
 	foreign, err := status.New(codes.Internal, "x").WithDetails(&errdetails.ErrorInfo{Reason: "QUOTA", Domain: "googleapis.com"})
 	if err != nil {
 		t.Fatal(err)
@@ -52,6 +54,7 @@ func TestReason(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 			if got := Reason(tt.err); got != tt.want {
 				t.Errorf("Reason() = %q, want %q", got, tt.want)
 			}
