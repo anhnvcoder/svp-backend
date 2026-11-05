@@ -273,3 +273,60 @@ test_a_derived_value_without_its_colon if fx.says(
 	deny(with_charts(fx.tree_input, "stg", replace(fx.charts_text, "podSecurityVersion: v1.36", "podSecurityVersion"))),
 	"envs/stg/charts.yaml: line 'podSecurityVersion' is not 'key: value' with a value",
 )
+
+# with_overlay(given, env, name, text): given with envs/<env>/<name>.yaml holding text.
+with_overlay(given, env, name, text) := fx.with_file(given, sprintf("envs/%s/%s.yaml", [env, name]), text)
+
+empty_value := "sets no null, {} or [], which the health check of Argo CD's Applications cannot tell from a key left out"
+
+test_an_overlay_setting_null if fx.says(
+	deny(with_overlay(fx.tree_input, "stg", "gateway", "replicas: 2\npdb: null\n")),
+	sprintf("envs/stg/gateway.yaml: pdb is null: an overlay or image file %s", [empty_value]),
+)
+
+test_an_overlay_setting_null_names_no_other_rule if count(deny(with_overlay(fx.tree_input, "stg", "gateway", "pdb: null\n"))) == 1
+
+test_an_overlay_with_a_key_without_value if fx.says(
+	deny(with_overlay(fx.tree_input, "prd", "gateway", "pdb:\n")),
+	"envs/prd/gateway.yaml: pdb is null",
+)
+
+test_an_overlay_with_a_tilde if fx.says(deny(with_overlay(fx.tree_input, "stg", "gateway", "pdb: ~\n")), "envs/stg/gateway.yaml: pdb is null")
+
+test_an_overlay_with_an_empty_map_deep if fx.says(
+	deny(with_overlay(fx.tree_input, "stg", "gateway", "resources:\n  requests:\n    cpu: 100m\n  limits: {}\n")),
+	"envs/stg/gateway.yaml: resources.limits is {}",
+)
+
+test_an_overlay_with_an_empty_list if fx.says(
+	deny(with_overlay(fx.tree_input, "stg", "gateway", "env: []\n")),
+	"envs/stg/gateway.yaml: env is []",
+)
+
+test_an_overlay_with_an_empty_map_in_a_list if fx.says(
+	deny(with_overlay(fx.tree_input, "prd", "gateway", "env:\n  - name: A\n    value: x\n  - name: B\n    valueFrom: {}\n")),
+	"envs/prd/gateway.yaml: env[1].valueFrom is {}",
+)
+
+test_an_overlay_with_null_in_a_list if fx.says(
+	deny(with_overlay(fx.tree_input, "stg", "gateway", "args:\n  - --a\n  -\n")),
+	"envs/stg/gateway.yaml: args[1] is null",
+)
+
+test_a_new_overlay_with_null if fx.says(
+	deny(with_overlay(fx.tree_input, "stg", "svp-policy", "imageVerification:\n  required: null\n")),
+	"envs/stg/svp-policy.yaml: imageVerification.required is null",
+)
+
+test_an_image_file_with_a_null_tag if fx.says(
+	deny(with_image(fx.tree_input, "stg", "gateway", replace(fx.image_text(fx.repository("gateway")), "\"0b4c089951cf\"", ""))),
+	"envs/stg/images/gateway.yaml: image.tag is null",
+)
+
+# false, 0 and "" stay what they are in Lua, and an overlay of comments alone hands over no value at all.
+test_false_zero_and_empty_string_pass if count(deny(with_overlay(
+	fx.tree_input, "stg", "gateway",
+	"replicas: 0\npdb:\n  enabled: false\nenv:\n  - name: A\n    value: \"\"\n",
+))) == 0
+
+test_an_overlay_of_comments_alone_passes if count(deny(with_overlay(fx.tree_input, "stg", "gateway", "# Nothing yet.\n"))) == 0

@@ -14,6 +14,11 @@
 #     service's of exactly one release source of the table at the environment's revision (input.sources), so a release
 #     the policy of that environment admits; tag and digest are set. Whether the release is signed, and built from the
 #     commit its tag names, is step 5 of the check (values-check.sh).
+#   - no overlay envs/<env>/<name>.yaml nor image file sets a value null, {} or [], at any depth: the root hands their
+#     content to the Applications of argocd/apps in valuesObject, and the health check of an Application
+#     (argoproj.io_Application of base/argo-cd.yaml) compares the spec it reads with the one the controller compared,
+#     in Lua, where null is a key left out and {} and [] are one empty table. Such a change would leave the
+#     Application Healthy on the previous spec's status, and the root report the new commit deployed before it runs.
 package gitops.envs
 
 import data.gitops
@@ -235,6 +240,42 @@ deny contains msg if {
 		img.repository, img.tag, img.digest,
 	])
 }
+
+# values_files: each overlay envs/<env>/<name>.yaml (charts.yaml aside) and each image file envs/<env>/images/*.yaml.
+values_files contains path if {
+	some env in gitops.environments
+	some dir in [sprintf("envs/%s", [env]), images_dir(env)]
+	some name in gitops.visible(dir)
+	name != "charts.yaml"
+	endswith(name, ".yaml")
+	path := concat("/", [dir, name])
+	gitops.is_file(path)
+}
+
+deny contains msg if {
+	some path in values_files
+	doc := gitops.yaml_map(path)
+	walk(doc, [at, value])
+	count(at) > 0
+	empty(value)
+	msg := sprintf(
+		"%s: %s is %s: an overlay or image file sets no null, {} or [], which the health check of Argo CD's Applications cannot tell from a key left out; leave the key out or give it a value",
+		[path, key_path(at), json.marshal(value)],
+	)
+}
+
+empty(value) if is_null(value)
+
+empty(value) if value == {}
+
+empty(value) if value == []
+
+# key_path(at): a path walk gives, as YAML names it: a.b[0].c.
+key_path(at) := trim_prefix(concat("", [segment(k) | some k in at]), ".")
+
+segment(k) := sprintf("[%d]", [k]) if is_number(k)
+
+segment(k) := sprintf(".%s", [k]) if is_string(k)
 
 # release(table, svc, img): img is a release of svc of exactly one source of table, with its tag and digest.
 release(table, svc, img) if {
