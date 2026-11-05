@@ -3,9 +3,10 @@
 # the policy's values, a file under docs/ and a Makefile. Checked: a change of common.sh, rescan.sh or sign-image.sh
 # builds all six images of this repository (never web, which svp-frontend builds), and so does one of the GRYPE_IMAGE
 # line of the Makefile; none is built for a change under web/ (a file added, then deleted), of a test under deploy/ci/, of
-# ghcr-digest.sh, of a scenario file under deploy/ci/verify/, of the scripts of svp-gitops's check (gitops-check.sh with
-# values-check.sh, verify-release.sh and its conftest policies), of the policy's values, of docs/ or of another line of the
-# Makefile.
+# the scripts of the verification runs (verify-host.sh, verify-mask.sh, verify-collect.sh, the scripts of the steps
+# under deploy/ci/verify-steps/, ghcr-digest.sh), of the drills under deploy/k8s/drills/, of the scripts of svp-gitops's
+# check (gitops-check.sh with values-check.sh, verify-release.sh and its conftest policies), of the policy's values, of
+# docs/ or of another line of the Makefile.
 # Runs on macOS and Linux: no network, no Docker, no cluster.
 #
 # Usage, from anywhere: deploy/ci/changed-services-test.sh
@@ -33,6 +34,7 @@ tree=$work/tree
 mkdir -p "$tree/deploy/k8s" "$tree/deploy/helm/svp-policy" "$tree/docs"
 cp -R "$here" "$tree/deploy/ci"
 cp "$src/deploy/k8s/lib.sh" "$tree/deploy/k8s/"
+cp -R "$src/deploy/k8s/drills" "$tree/deploy/k8s/"
 cp -R "$src/deploy/helm/svp-policy/values.yaml" "$src/deploy/helm/svp-policy/files" "$tree/deploy/helm/svp-policy/"
 echo "# A decision" >"$tree/docs/decision.md"
 g() {
@@ -61,14 +63,23 @@ mkdir -p "$tree/web" && echo "export {};" >"$tree/web/page.ts"
 same "changed-services: a file added under web/ builds nothing" "" "$(g add web && changed_by web/page.ts)"
 g rm -q -r web && g commit -qm "drop web/"
 same "changed-services: the removal of web/ builds nothing" "" "$(changed)"
-# No image job reads a test, the scripts of the verification runs and of svp-gitops's check, the policy's values or
-# docs/.
+# No image job reads a test, the scripts of the verification runs and of svp-gitops's check, the drills, the policy's
+# values or docs/.
 for f in changed-services-test.sh plan-test.sh promote-test.sh rescan-test.sh scan-gate-test.sh sign-image-test.sh \
-  verify-release-test.sh vuln-predicate-test.sh ghcr-digest.sh ghcr-digest-test.sh verify/gitops.sh gitops-check.sh \
+  verify-release-test.sh vuln-predicate-test.sh ghcr-digest.sh ghcr-digest-test.sh verify-host.sh verify-mask.sh \
+  verify-collect.sh verify-collect-test.sh verify-steps/steps.sh verify-steps/supplychain.sh \
+  verify-steps/supplychain-test.sh verify-steps/admission-metrics.sh verify-steps/objstore.sh gitops-check.sh \
   gitops-check-test.sh values-check.sh verify-release.sh ignorefile-policies/grypeignore.rego \
   gitops-tree-policies/author.rego; do
   same "changed-services: a change of $f builds nothing" "" "$(changed_by "deploy/ci/$f")"
 done
+for f in drills/run.sh drills/.chainsaw.yaml drills/gitops/env/chainsaw-test.yaml drills/gitops/gitops-test.sh \
+  drills/templates/port-forward.yaml; do
+  same "changed-services: a change of deploy/k8s/$f builds nothing" "" "$(changed_by "deploy/k8s/$f")"
+done
+# A file of deploy/ci/ that is none of those still builds every image: the list is of names, not of a folder.
+same "changed-services: a change of another script of deploy/ci/ beside the verification scripts builds all six" "$all" \
+  "$(changed_by deploy/ci/build-image.sh)"
 same "changed-services: a change of the policy's values builds nothing" "" \
   "$(changed_by deploy/helm/svp-policy/values.yaml)"
 same "changed-services: a change under docs/ builds nothing" "" "$(changed_by docs/decision.md)"

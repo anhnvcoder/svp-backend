@@ -1,0 +1,99 @@
+# gitops-argocd-metrics, on the GitOps cluster svp (make k8s-gitops-up): Prometheus scrapes Argo CD's view of the
+# Applications (PodMonitor argocd-application-controller of chart svp-observability): within 180 s, argocd_app_info has
+# one series per Application of namespace argocd and every one is Synced and Healthy, and no ArgoCDApplication* alert
+# fires. Read through a port-forward of Prometheus on 127.0.0.1:19090 (templates/port-forward.yaml), stopped when the
+# test ends. When the charts the cluster runs (the targetRevision of the chart's source in Application
+# argocd/svp-observability, a commit of this repository's history) predate that PodMonitor, the check says so and
+# passes: it starts with the first promote that brings it.
+#
+# kubectl uses the caller's kubeconfig and context k3d-svp (templates/probe-up.yaml says why). Nothing is created.
+apiVersion: chainsaw.kyverno.io/v1alpha1
+kind: Test
+metadata:
+  name: gitops-argocd-metrics
+  labels:
+    drill: gitops
+spec:
+  description: "gitops-argocd-metrics: Prometheus sees every Application of Argo CD, all Synced and Healthy, and no ArgoCDApplication* alert fires"
+  # An existing namespace, so Chainsaw creates no ephemeral one and deletes nothing.
+  namespace: svp
+  steps:
+  # Outputs reach the next operations of their own step only: the port-forward, a template, is a step of its own, so it
+  # comes first.
+  - name: gitops-argocd-metrics-forward
+    use:
+      template: ../../templates/port-forward.yaml
+
+  - name: gitops-argocd-metrics-prometheus
+    try:
+    - description: "gitops-argocd-metrics: the charts the cluster runs have the PodMonitor of Argo CD, and the Applications of namespace argocd"
+      script:
+        shell: bash
+        env:
+        - &kubeconfig
+          name: CALLER_KUBECONFIG
+          value: (env('KUBECONFIG'))
+        content: |
+          set -euo pipefail
+          export KUBECONFIG="$CALLER_KUBECONFIG"
+          file=deploy/helm/svp-observability/templates/argocd.yaml
+          repo=$(git rev-parse --show-toplevel)
+          rev=$(kubectl --context k3d-svp -n argocd get applications.argoproj.io svp-observability -o json |
+            jq -r '[.spec.sources[]? | select(.path == "deploy/helm/svp-observability") | .targetRevision][0] // ""') ||
+            { echo "FAIL  gitops-argocd-metrics: read Application argocd/svp-observability" >&2; exit 1; }
+          # The commit itself must be there: a checkout without it would read as charts without the PodMonitor and pass.
+          [[ $rev =~ ^[0-9a-f]{40}$ ]] && git -C "$repo" cat-file -e "$rev^{commit}" 2>/dev/null ||
+            { echo "FAIL  gitops-argocd-metrics: the commit Application svp-observability runs its chart at ('$rev') is not in this checkout (it needs the whole history)" >&2; exit 1; }
+          check=true
+          if ! git -C "$repo" cat-file -e "$rev:$file" 2>/dev/null; then
+            check=false
+            echo "the charts the cluster runs (${rev:0:12}) have no $file yet; checked from the first promote that brings it" >&2
+          fi
+          apps=$(kubectl --context k3d-svp -n argocd get applications.argoproj.io -o name | grep -c .) ||
+            { echo "FAIL  gitops-argocd-metrics: list the Applications of namespace argocd" >&2; exit 1; }
+          jq -n --arg check "$check" --arg apps "$apps" --arg rev "$rev" '{check: $check, apps: $apps, rev: $rev}'
+        check:
+          ($error): ~
+        outputs:
+        - name: podMonitor
+          value: (json_parse($stdout).check)
+        - name: applications
+          value: (json_parse($stdout).apps)
+        - name: chartsRev
+          value: (json_parse($stdout).rev)
+    - description: "gitops-argocd-metrics: within 180 s Prometheus has argocd_app_info of every Application, all Synced and Healthy, and no ArgoCDApplication* alert fires"
+      script:
+        shell: bash
+        timeout: 4m
+        env:
+        - {name: CHECK, value: ($podMonitor)}
+        - {name: APPS, value: ($applications)}
+        - {name: REV, value: ($chartsRev)}
+        content: |
+          set -uo pipefail
+          if [ "$CHECK" != true ]; then
+            echo "ok    gitops-argocd-metrics: skipped, the charts the cluster runs (${REV:0:12}) predate the PodMonitor of Argo CD"
+            exit 0
+          fi
+          # q QUERY: the value of the first sample of QUERY, 0 when it has none or Prometheus did not answer.
+          q() {
+            curl -sf --max-time 10 http://127.0.0.1:19090/api/v1/query --data-urlencode "query=$1" |
+              jq -r '.data.result[0].value[1] // "0"' 2>/dev/null || echo 0
+          }
+          deadline=$((SECONDS + 180))
+          while :; do
+            got=$(q 'count(argocd_app_info)')
+            healthy=$(q 'count(argocd_app_info{sync_status="Synced",health_status="Healthy"})')
+            [ "$got" = "$APPS" ] && [ "$healthy" = "$APPS" ] && break
+            [ "$SECONDS" -lt "$deadline" ] || break
+            sleep 10
+          done
+          firing=$(q 'count(ALERTS{alertname=~"ArgoCDApplication.*",alertstate="firing"})')
+          echo "Applications: $APPS; argocd_app_info series: $got, Synced and Healthy: $healthy; ArgoCDApplication* firing: $firing"
+          if [ "$got" != "$APPS" ] || [ "$healthy" != "$APPS" ] || [ "$firing" != 0 ]; then
+            echo "FAIL  gitops-argocd-metrics: Prometheus must see every Application Synced and Healthy within 180 s, with no ArgoCDApplication* alert firing" >&2
+            exit 1
+          fi
+          echo "ok    gitops-argocd-metrics: Prometheus sees every Application of Argo CD, all Synced and Healthy"
+        check:
+          ($error): ~

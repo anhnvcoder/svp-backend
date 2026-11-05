@@ -113,7 +113,7 @@ Chọn 1A, 2a, 3a, vì repo không chứa giá trị lẫn ciphertext, cloud dù
 - Repo `svp-gitops`: `argocd/apps/components.json` (component `external-secrets`, wave 0, `gitopsOnly: true`), `argocd/apps/templates/applications.yaml`, `argocd/project.yaml`, `base/external-secrets.yaml`, `envs/stg/svp-cluster.yaml`, `envs/prd/svp-cluster.yaml`.
 - `deploy/helm/svp-cluster/files/external-secrets.yaml` (danh sách 28 Secret), `deploy/helm/svp-cluster/templates/external-secrets.yaml` (SecretStore, ServiceAccount, Role, ExternalSecret, ValidatingAdmissionPolicy `svp-external-secrets-writes`, `svp-store-serviceaccount-pods`, `-tokens`), `templates/namespaces.yaml`, `templates/networkpolicies.yaml`, `values.yaml`.
 - `deploy/k8s/secrets.sh`, `deploy/k8s/glitchtip-init.sh`, `deploy/k8s/lib.sh` (`es_force_sync`), `deploy/k8s/gitops.sh`, `deploy/k8s/install.sh` (bỏ qua `gitopsOnly`).
-- Kiểm: `deploy/k8s/drills/threats.sh`, `deploy/ci/verify/gitops.sh` (bước `gitops-external-secrets`), `deploy/ci/verify-mask.sh`, `deploy/ci/gitops-check.sh`, `renovate.json`. Danh sách theo ngày: phụ lục, mục "Hiện thực ở".
+- Kiểm: `deploy/k8s/drills/threats/` (SEC-5/6/7, SEC-6-reader), `deploy/k8s/drills/gitops/external-secrets/` (test `gitops-external-secrets`), `deploy/ci/verify-mask.sh`, `deploy/ci/gitops-check.sh`, `renovate.json`. Danh sách theo ngày: phụ lục, mục "Hiện thực ở".
 
 ## Nguồn
 

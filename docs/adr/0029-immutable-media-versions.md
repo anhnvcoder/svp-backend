@@ -96,7 +96,7 @@ Giữ MPEG-TS bây giờ: ladder chỉ H.264 + AAC, phát được ở mọi đ�
 - `services/media-worker/internal/transcode/transcode.go` (+ `transcode_test.go`): `rewriteMaster`, `ParseMaster`, `Master.LowestPlaylist`, `PlaylistDuration`.
 - `internal/objstore/objstore.go` (`Upload(…, cacheControl)`, `Create`, `Exists`), `internal/objstore/integration_test.go`.
 - `proto/svp/media/v1/events.proto`, `proto/svp/video/v1/events.proto`, `proto/svp/video/v1/video_service.proto`, `proto/svp/feed/v1/feed_service.proto` (comment của key), `gen/go`.
-- `deploy/s3/media-worker-policy.json`, `deploy/s3/init.sh`; `deploy/compose/smoke.sh`, `deploy/compose/drills/duplicate-events.sh`, `deploy/compose/drills/kill-worker.sh`, `deploy/ci/verify/compose-obs.sh`, `deploy/ci/verify-collect-test.sh`. Mô tả từng file: phụ lục, mục "Hiện thực ở".
+- `deploy/s3/media-worker-policy.json`, `deploy/s3/init.sh`; `deploy/compose/smoke.sh`, `deploy/compose/drills/duplicate-events.sh`, `deploy/compose/drills/kill-worker.sh`, `deploy/ci/verify-steps/objstore.sh` (bước `test-stack-objstore`), `deploy/ci/verify-steps/objstore-test.sh`. Mô tả từng file: phụ lục, mục "Hiện thực ở".
 
 ## Nguồn
 

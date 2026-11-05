@@ -3,15 +3,15 @@
 # it calls. Everything is a fixture in a temporary directory: a fake checkout with a fake .env (the repository's .env is
 # never read), a fake results folder, and a fake kubectl first on PATH that lists made-up Secrets or fails. The fake
 # secrets, the JWT and the private key header are made at run time, so no file of the repository holds one. Before the
-# filter, unready_report of deploy/k8s/lib.sh, with the same fake kubectl listing made-up pods and their logs; its
-# output is one of the fake results, as is a migrate Job's log marked by mark_log of the same file. verify-mask.sh
-# cluster on a binary value of 200 KiB, timed, and on small ones against the cut it made before.
-# Then deploy/ci/verify-run.sh with a fake make: the scenarios compose-obs and gitops, and made-up scenario files for
-# what a scenario file can get wrong. Then gitops_stale of deploy/ci/verify/gitops.sh with a fake cosign, its
-# gitops_supplychain with a stub of ghcr-digest.sh and a fake make, and its gitops_external_secrets with a fake kubectl,
-# against this checkout's files/external-secrets.yaml of chart svp-cluster.
-# Last, that deploy/ci/changed-services.sh builds no image for a change of these scripts, in a throwaway git repository
-# holding a copy of it. Runs on macOS and Linux, no network, no Docker, no cluster.
+# filter, unready_report and gitops_timeout_report of deploy/k8s/lib.sh, with the same fake kubectl listing made-up pods
+# and their logs, mark_log of the same file, and deploy/k8s/gitops.sh follow with a fake kubectl of its own; their
+# output is part of a fake step's output, which no artifact may hold. verify-mask.sh cluster on a binary value of
+# 200 KiB, timed, and on small ones against the cut it made before. Then the filter over the results of a run of each
+# scenario: what it keeps (the table of the steps, the verdict lines of drill-obs-threats, the admission figures, the
+# JUnit reports and JSON of the drills, the drill traffic's log), what it refuses whole (every other step's output),
+# and the scan of what it keeps (a secret value of .env or of the cluster, raw, in base64 or a piece of a binary value,
+# a JWT, Bearer, Set-Cookie, a private key, the session cookie). Runs on macOS and Linux, no network, no Docker, no
+# cluster.
 #
 # Usage, from anywhere: deploy/ci/verify-collect-test.sh
 set -euo pipefail
@@ -397,90 +397,6 @@ grep -qF 'mark_log "$namespace" <"$migrate_log" >&2' "$here/../k8s/install.sh" &
   ok "mark_log: install.sh marks a failed migrate Job's log with it" ||
   fail "mark_log: install.sh marks a failed migrate Job's log with it"
 
-# --- restart_workload of deploy/k8s/lib.sh on a Rollout, with a fake kubectl of its own (bin-rollout): it answers each
-# `get rollout web` with the next of the states rollout-1.json, rollout-2.json, ... (the last one again once they run
-# out), whose restartedAt AT is the time of the patch it got, and records every call. A canary before the restart stops
-# it at once, without a patch; one that starts during the restart (a release arriving) stops it at its next read, not
-# after 300 s; a Rollout running its stable revision alone is restarted and waited for; a Deployment (the drill of
-# Postgres' backup restarts only those) goes through kubectl rollout restart and status as before.
-rk=$work/kube-rollout
-mkdir -p "$work/bin-rollout"
-cat >"$work/bin-rollout/kubectl" <<'EOF'
-#!/usr/bin/env bash
-echo "$*" >>"$FAKE_ROLLOUT_DIR/calls"
-[ "$1 $2 $3 $4" = "--context k3d-svp -n svp" ] || exit 2
-shift 4
-case "$*" in
-  "get rollouts.argoproj.io web") exit 0 ;;
-  "get rollouts.argoproj.io "*) echo "Error from server (NotFound)" >&2; exit 1 ;;
-  "patch rollout web --type merge -p "*) jq -r .spec.restartAt <<<"$7" >"$FAKE_ROLLOUT_DIR/at"; exit 0 ;;
-  "rollout restart deployment user-service" | "rollout status deployment user-service --timeout=300s") exit 0 ;;
-  "get rollout web -o "*)
-    n=$(($(cat "$FAKE_ROLLOUT_DIR/n" 2>/dev/null || echo 0) + 1))
-    echo "$n" >"$FAKE_ROLLOUT_DIR/n"
-    f=$FAKE_ROLLOUT_DIR/rollout-$n.json
-    [ -f "$f" ] || f=$(ls "$FAKE_ROLLOUT_DIR"/rollout-*.json | sort -t- -k2 -n | tail -n 1)
-    state=$(jq --arg at "$(cat "$FAKE_ROLLOUT_DIR/at" 2>/dev/null)" \
-      'if .status.restartedAt == "AT" then .status.restartedAt = $at else . end' "$f")
-    if [ "$5" = json ]; then echo "$state"; else jq -j '"\(.status.restartedAt // "") \(.status.phase // "")"' <<<"$state"; fi
-    exit 0
-    ;;
-esac
-exit 2
-EOF
-chmod 755 "$work/bin-rollout/kubectl"
-stable='{"spec": {}, "status": {"phase": "Healthy", "currentPodHash": "7974b879c7", "stableRS": "7974b879c7"}}'
-restarted='{"spec": {}, "status": {"phase": "Healthy", "currentPodHash": "7974b879c7", "stableRS": "7974b879c7",
-  "restartedAt": "AT"}}'
-canary='{"spec": {}, "status": {"phase": "Paused", "currentPodHash": "7f9dc67c4c", "stableRS": "7974b879c7",
-  "restartedAt": "AT", "pauseConditions": [{"reason": "CanaryPauseStep"}], "canary": {"weights": {"canary": {"weight": 25}}}}}'
-# restart_case NAME STATE...: restart_workload svp web (svp user-service when NAME starts with deployment) over the
-# states, in a directory of its own; its output in NAME.out, its exit status and seconds taken in NAME.rc.
-restart_case() {
-  local name=$1 i=0 rc=0 start=$SECONDS target=web
-  shift
-  rm -rf "$rk" && mkdir -p "$rk"
-  for state in "$@"; do i=$((i + 1)) && echo "$state" >"$rk/rollout-$i.json"; done
-  case $name in deployment*) target=user-service ;; esac
-  (
-    PATH=$work/bin-rollout:$PATH FAKE_ROLLOUT_DIR=$rk
-    export FAKE_ROLLOUT_DIR
-    . "$here/../k8s/lib.sh"
-    restart_workload svp "$target"
-    echo "restarted"
-  ) >"$work/$name.out" 2>&1 || rc=$?
-  cp "$rk/calls" "$work/$name.calls"
-  echo "$rc $((SECONDS - start))" >"$work/$name.rc"
-}
-restart_case canary-before "$canary"
-read -r rc took <"$work/canary-before.rc"
-[ "$rc" = 1 ] && [ "$took" -lt 60 ] && ! grep -q patch "$work/canary-before.calls" &&
-  grep -qxF "FAIL  rollout svp/web runs a canary (pod template 7f9dc67c4c rolling out beside the stable 7974b879c7, canary weight 25%; paused (CanaryPauseStep)): it turns Healthy only once the canary is over, so its restart is not waited for. Let the canary finish (its analysis promotes it only under traffic: make k8s-traffic-start) or abort it (kubectl --context k3d-svp -n svp patch rollout web --subresource status --type merge -p '{\"status\":{\"abort\":true}}'), then run this again" \
-    "$work/canary-before.out" &&
-  ok "restart_workload: a Rollout in a canary stops it at once, naming the canary and the ways out, before any patch" ||
-  fail "restart_workload: a Rollout in a canary stops it at once, naming the canary and the ways out, before any patch (exit $rc in ${took}s: $(cat "$work/canary-before.out"))"
-restart_case canary-during "$stable" "$canary"
-read -r rc took <"$work/canary-during.rc"
-[ "$rc" = 1 ] && [ "$took" -lt 60 ] && [ "$(grep -c '^--context k3d-svp -n svp patch rollout web' "$work/canary-during.calls")" = 1 ] &&
-  grep -qF 'FAIL  rollout svp/web runs a canary (pod template 7f9dc67c4c rolling out beside the stable 7974b879c7' \
-    "$work/canary-during.out" && ! grep -qF 'within 300s' "$work/canary-during.out" &&
-  ok "restart_workload: a canary that starts during the restart stops it at the next read, not after 300 s" ||
-  fail "restart_workload: a canary that starts during the restart stops it at the next read, not after 300 s (exit $rc in ${took}s: $(cat "$work/canary-during.out"))"
-restart_case stable "$stable" "$restarted"
-read -r rc took <"$work/stable.rc"
-[ "$rc" = 0 ] && grep -qx restarted "$work/stable.out" &&
-  grep -q '^--context k3d-svp -n svp patch rollout web --type merge -p {"spec":{"restartAt":"20[0-9-]*T[0-9:]*Z"}}$' \
-    "$work/stable.calls" &&
-  ok "restart_workload: a Rollout on its stable revision gets spec.restartAt and is waited for until Healthy" ||
-  fail "restart_workload: a Rollout on its stable revision gets spec.restartAt and is waited for until Healthy (exit $rc: $(cat "$work/stable.out"))"
-restart_case deployment "$stable"
-read -r rc took <"$work/deployment.rc"
-[ "$rc" = 0 ] && grep -qx -- '--context k3d-svp -n svp rollout restart deployment user-service' "$work/deployment.calls" &&
-  grep -qx -- '--context k3d-svp -n svp rollout status deployment user-service --timeout=300s' "$work/deployment.calls" &&
-  ! grep -q 'get rollout ' "$work/deployment.calls" &&
-  ok "restart_workload: a Deployment is restarted with kubectl rollout restart and status, its canary never read" ||
-  fail "restart_workload: a Deployment is restarted with kubectl rollout restart and status, its canary never read (exit $rc: $(cat "$work/deployment.out"))"
-
 # --- deploy/k8s/gitops.sh follow BRANCH, with a fake kubectl of its own (bin-follow): Application argocd/svp-root at
 # revision FROM (from), compared at the target its last patch gave (Synced), at revision NOW (now) once patched. The
 # branch unchanged: one patch of both targetRevisions to refs/heads/main, the wait until Argo CD compares and syncs it
@@ -577,18 +493,18 @@ root_tg=$(. "$here/../k8s/lib.sh" && argocd_root_telegram -1001234 <<<"$root")
   ok "gitops.sh: the Telegram chat is added with notifications on, before the root is applied" ||
   fail "gitops.sh: the Telegram chat is added with notifications on, before the root is applied"
 
-# --- The fake results of a k3d run.
+# --- The fake results of a k3d run: the table of the steps, and the output of each step as the workflow writes it,
+# $SVP_VERIFY_OUT/logs/<step>.log. Only the verdict lines of drill-obs-threats and the admission figures may reach the
+# artifact; every other step's output is refused whole, whatever it holds.
 out=$work/out
-mkdir -p "$out/logs"
+mkdir -p "$out/logs/sub"
 echo gitops >"$out/scenario"
-printf 'id\tname\tstatus\texit\tstart\tend\tseconds\tnote\n' >"$out/results.tsv"
-printf '01\tk8s-up\tok\t0\t100\t160\t60\t\n02\tk8s-smoke\tfail\t1\t160\t170\t10\t\n' >>"$out/results.tsv"
-printf '03\tdrill-k8s-keda\tfail\t1\t170\t180\t10\t\n04\tdrill-k8s-threats\tfail\t1\t180\t190\t10\t\n' >>"$out/results.tsv"
-printf '05\tdrill-alert-to-sentry\tfail\t1\t190\t200\t10\t\n06\tdrill-obs-threats\tok\t0\t200\t210\t10\t\n' \
-  >>"$out/results.tsv"
-printf '12\tk8s-up\tfail\t1\t210\t220\t10\t\n13\tk8s-up\tfail\t1\t220\t230\t10\t\n' >>"$out/results.tsv"
-# A target that quotes service logs: the log of a failed migrate Job (JSON records, one with a secret, and a panic),
-# marked by mark_log as install.sh marks it, and the gateway's access log line of a trace, between lines of its own.
+printf 'step\toutcome\tnote\n' >"$out/results.tsv"
+printf '%s\t%s\t%s\n' k8s-gitops-up failure '' k8s-smoke failure '' drill-k8s-gitops failure '' \
+  drill-k8s-threats failure '' drill-obs-threats failure '' gitops-admission-metrics success '' >>"$out/results.tsv"
+# The build step's output: a failed migrate Job's log (JSON records, one with a secret, and a panic) marked by mark_log
+# as install.sh marks it, the report of unready_report and the timeout report above (log tails of svp-data and
+# svp-obs), and log lines of namespace svp and of Envoy, as a mistake of unready_report would print them.
 {
   echo "ok    cluster ready"
   echo "Job svp/feed-service-migrate failed; log of its last failed attempt, copied before its pod was deleted:"
@@ -597,64 +513,45 @@ printf '12\tk8s-up\tfail\t1\t210\t220\t10\t\n13\tk8s-up\tfail\t1\t220\t230\t10\t
     echo "{\"time\":\"2026-10-25T08:00:01Z\", \"level\": \"ERROR\", \"msg\":\"dsn $quoted_secret\"}"
     echo "panic: MIGRATE-PANIC-MARKER"
   } | mark_log_of svp
-  echo "FAIL  install feed-service"
-} >"$out/logs/01-k8s-up.log"
-# A failed make k8s-up with the report of unready_report above, and two log lines of namespaces whose logs never get
-# in, as a mistake of unready_report would print them; another whose broker log holds a cluster secret.
-{
-  echo "helm upgrade --install redpanda (wave 3, namespace svp-data)"
   cat "$unready"
   cat "$timeout_report"
   echo "    [svp] APP-FORGED-MARKER"
   echo "    [envoy-gateway-system] ENVOY-MARKER"
   echo "FAIL  install redpanda"
-} >"$out/logs/12-k8s-up.log"
-printf '    [svp-data] SECRET-TAIL-MARKER sasl password %s\nFAIL  install redpanda\n' "$kafka_secret" \
-  >"$out/logs/13-k8s-up.log"
-{
-  echo "ok    T2 08:00:05Z: earliest error trace after T0 abc"
-  echo 'ok    T3 08:00:09Z: gateway access log of trace abc: {"route":"/feed","status":"503","user_id":"USER-ID-MARKER"}'
-  echo "FAIL  T4 GlitchTip has an event"
-} >"$out/logs/05-drill-alert-to-sentry.log"
-# A failed target that printed a secret on stdout and a JWT on stderr, both into its log as verify-run.sh sends them.
+} >"$out/logs/k8s-gitops-up.log"
+# A failed step that printed a secret on stdout and a JWT on stderr, both into its file as the workflow sends them.
 {
   echo "ok    step 1"
   echo "response body: password=$quoted_secret"
   echo "Authorization header seen: $jwt" >&2
   echo "FAIL  step 2"
-} >"$out/logs/02-k8s-smoke.log" 2>&1
+} >"$out/logs/k8s-smoke.log" 2>&1
+# A failed step's long output, nothing secret in it.
 {
   for i in $(seq 1 60); do echo "sample $i lag 3"; done
   echo "FAIL  KEDA-TAIL-MARKER scale down took too long"
-} >"$out/logs/03-drill-k8s-keda.log"
-# The output of a threat model drill: item headings, verdicts, what the probes got back (in the forms the filter must
-# not take for one of its own lines), the closing table.
+} >"$out/logs/drill-k8s-gitops.log"
+# The output of a Chainsaw drill: what its scripts printed, a probe's answer among it.
 {
-  echo "== IN-2/IN-4"
-  echo "ok    IN-4: svp-feed-service may only read its topics (svp-admin)"
-  echo "probe answered: PROBE-BODY-MARKER"
-  echo "== NP-1"
-  echo "FAIL  NP-1: probe reached s3"
-  # An item stopped under set -e: bash's own line is left out, the drill's line after it is kept.
-  echo "deploy/k8s/drills/threats.sh: line 1742: BASH-ERROR-MARKER: unbound variable"
-  echo "FAIL  NP-1: the item ended with exit status 1"
-  echo "== PROBE-HEADING-MARKER: body"
-  echo "  PROBE-INDENT-MARKER   PASS with more"
-  echo "== WEB-7"
-  echo "ok    user @drill_ab12 registered: 303, session cookie __Host-Http-svp_sid in the drill's cookie jar"
-  echo
-  echo "drill-k8s-threats (20261025T080000Z-ab12)"
-  printf '  %-14s %s\n' ITEM RESULT IN-2/IN-4 PASS NP-1 FAIL
-} >"$out/logs/04-drill-k8s-threats.log"
-# Verdict lines of a threat drill holding the session cookie in a form its value is written in, one file each: a
-# header, a cookie jar line, JSON, and the name ending a line. A plain target output that names the cookie in prose.
-printf 'FAIL  WEB-2: sent Cookie: __Host-Http-svp_sid=SID-MARKER\n' >"$out/logs/07-drill-k8s-threats.log"
-printf 'ok    jar: svp.localhost\tFALSE\t/\tTRUE\t0\t__Host-Http-svp_sid\tSID-MARKER\n' >"$out/logs/08-drill-k8s-threats.log"
-printf 'FAIL  WEB-9: got {"name":"svp_sid","value":"SID-MARKER"}\n' >"$out/logs/09-drill-obs-threats.log"
-printf 'FAIL  WEB-9: the cookie jar holds svp_sid\n' >"$out/logs/10-drill-obs-threats.log"
-printf 'ok    session cookie __Host-Http-svp_sid in the jar\n' >"$out/logs/11-k8s-web-e2e.log"
-printf 'ok    OPS-1: 8 loopback ports\nprobe answered: PROBE-OBS-MARKER\ndrill-obs-threats: all checks passed\n' \
-  >"$out/logs/06-drill-obs-threats.log"
+  echo "    | 08:00:00 | in-2-in-4 | IN-2/IN-4: probe | SCRIPT | LOG |"
+  echo "        === STDOUT"
+  echo "        ok    IN-4: svp-feed-service may only read its topics (svp-admin)"
+  echo "        probe answered: PROBE-BODY-MARKER"
+} >"$out/logs/drill-k8s-threats.log"
+# The output of drill-obs-threats: verdicts (one naming the session cookie in prose, one failed), what the probes got
+# back, a JSON log record that starts like a verdict, bash's own error line, the closing line.
+{
+  echo "ok    OPS-1: 8 loopback ports"
+  echo "probe answered: PROBE-OBS-MARKER"
+  echo 'ok    {"level":"INFO","msg":"OBS-JSON-MARKER"}'
+  echo "deploy/compose/drills/obs-threats.sh: line 42: BASH-ERROR-MARKER: unbound variable"
+  echo "ok    WEB-9: session cookie __Host-Http-svp_sid in the drill's cookie jar"
+  echo "FAIL  JWT-8: an email in a trace"
+  echo "drill-obs-threats: all checks passed"
+} >"$out/logs/drill-obs-threats.log"
+printf '%s\n' "kyverno_admission_review_duration_seconds: _count 45, _sum 90.000 s, mean 2.000 s, <= 20 s: 40, <= 30 s: 44, > 30 s: 1" \
+  "NOTE  kyverno: no free port on 127.0.0.1 between 19100 and 19120 for a port-forward" >"$out/logs/gitops-admission-metrics.log"
+echo "nested" >"$out/logs/sub/x.log"
 echo '{}' >"$out/.hidden.json"
 # A file of the results folder that is not on the allow list.
 echo '{"label":"start"}' >"$out/ram-rest-start.json"
@@ -672,10 +569,20 @@ echo "{\"kafka\":\"$kafka_secret\"}" >"$d/kafka-1.json"
 # A JWT and nothing else: the only file whose drop the jwt rule alone decides.
 echo "{\"t\":\"$jwt\"}" >"$d/jwt-1.json"
 echo "{\"frame\":\"$bin_secret\"}" >"$d/binary-piece-1.json"
+# JUnit reports of the Chainsaw drills: a clean one; one per token pattern; one naming the session cookie in prose
+# (outside the verdict lines of drill-obs-threats, svp_sid at all is refused); one with a cluster secret.
+junit() { printf '<testsuites><testsuite name="%s"><testcase name="%s">%s</testcase></testsuite></testsuites>\n' "$1" "$2" "$3"; }
+junit threats in-2-in-4 "" >"$d/threats-20261105T000000Z.xml"
+junit gitops gitops-env "<failure message=\"sent Bearer abc\"/>" >"$d/bearer-1.xml"
+junit gitops gitops-env "<failure message=\"got Set-Cookie: x\"/>" >"$d/set-cookie-1.xml"
+junit gitops gitops-env "<failure message=\"$private_key_header\"/>" >"$d/private-key-1.xml"
+junit threats web-7-web-2 "<system-out>ok    session cookie __Host-Http-svp_sid in the jar</system-out>" >"$d/prose-1.xml"
+junit supplychain case-l "<failure message=\"s3 $cluster_secret\"/>" >"$d/supplychain-1.xml"
 echo "probe output" >"$d/threats-1.log"
 echo "1792332629000 u1 explore 200 12" >"$d/traffic-1.log"
 head -c 6000000 /dev/zero | tr '\0' a >"$d/big-1.json"
 ln -s ../../.env "$d/link-1.json"
+mkdir -p "$d/sub" && echo '{}' >"$d/sub/nested-1.json"
 echo "CA" >"$repo/.k8s/ca.crt"
 # Results of the checkout outside .k8s/drills, which the filter does not even look at.
 echo '{"metrics":{"http_reqs":{"count":10}}}' >"$repo/.k6/local-1/summary.json"
@@ -690,7 +597,7 @@ collect() {
   local name=$1 secrets=$2
   shift 2
   rm -rf "$work/art-$name"
-  env "${job[@]}" PATH="$work/bin:$PATH" SVP_VERIFY_REPO="$repo" SVP_VERIFY_OUT="$out" \
+  env "${job[@]}" PATH="$work/bin:$PATH" SVP_VERIFY_REPO="$repo" SVP_VERIFY_OUT="${collect_out:-$out}" \
     SVP_VERIFY_ARTIFACT="$work/art-$name" \
     SVP_VERIFY_SECRETS="$secrets" "$@" "$here/verify-collect.sh" >"$work/$name.log" 2>&1 ||
     fail "$name: verify-collect.sh exits 0"
@@ -795,17 +702,25 @@ cmp -s "$mb/want" "$work/mask-small.secrets/cluster.values" &&
 # --- k3d run, cluster readable.
 collect k3d "$work/secrets-k3d"
 for src in '$SVP_VERIFY_OUT/results.tsv' '$SVP_VERIFY_OUT/scenario' \
-  '$SVP_VERIFY_OUT/logs/01-k8s-up.log' '$SVP_VERIFY_OUT/logs/03-drill-k8s-keda.log' \
-  '$SVP_VERIFY_OUT/logs/04-drill-k8s-threats.log (verdict lines)' \
-  '$SVP_VERIFY_OUT/logs/06-drill-obs-threats.log (verdict lines)' \
-  '$SVP_VERIFY_OUT/logs/05-drill-alert-to-sentry.log' .k8s/drills/canary-drill-1.json .k8s/drills/names-1.json \
-  .k8s/drills/identifiers-1.json .k8s/drills/traffic-1.log; do
+  '$SVP_VERIFY_OUT/logs/drill-obs-threats.log (verdict lines)' '$SVP_VERIFY_OUT/logs/gitops-admission-metrics.log' \
+  .k8s/drills/canary-drill-1.json .k8s/drills/names-1.json .k8s/drills/identifiers-1.json .k8s/drills/traffic-1.log \
+  .k8s/drills/threats-20261105T000000Z.xml; do
   expect k3d "$src" kept
 done
+# The output of every other step is refused whole: the build step's log tails of every namespace (third-party ones
+# included) and the services' log records, a secret, a JWT, a long output, a Chainsaw drill's probe answers.
+for step in k8s-gitops-up k8s-smoke drill-k8s-gitops drill-k8s-threats; do
+  expect k3d "\$SVP_VERIFY_OUT/logs/$step.log" not-allowed
+done
+expect k3d '$SVP_VERIFY_OUT/logs/sub/x.log' not-allowed
 expect k3d .k8s/drills/kafka-1.json secret-value
 expect k3d .k8s/drills/jwt-1.json jwt
 expect k3d .k8s/drills/binary-piece-1.json secret-value
-expect k3d '$SVP_VERIFY_OUT/logs/02-k8s-smoke.log' secret-value
+expect k3d .k8s/drills/bearer-1.xml bearer
+expect k3d .k8s/drills/set-cookie-1.xml set-cookie
+expect k3d .k8s/drills/private-key-1.xml private-key
+expect k3d .k8s/drills/prose-1.xml session-cookie
+expect k3d .k8s/drills/supplychain-1.xml secret-value
 expect k3d '$SVP_VERIFY_OUT/ram-rest-start.json' not-allowed
 expect k3d '$SVP_VERIFY_OUT/.hidden.json' hidden
 has k3d "a hidden file gets a warning" '.hidden.json: hidden'
@@ -813,40 +728,37 @@ expect k3d .k8s/drills/backup-1.json secret-value
 expect k3d .k8s/drills/b64-1.json secret-value
 expect k3d .k8s/drills/multiline-1.json secret-value
 expect k3d .k8s/drills/threats-1.log not-allowed
+expect k3d .k8s/drills/sub/nested-1.json not-allowed
 expect k3d .k8s/drills/big-1.json too-large
 expect k3d .k8s/drills/link-1.json not-regular
 grep -qE '\.k6/|\.web/' "$work/art-k3d/files.txt" || [ -n "$(find "$work/art-k3d" -name 'summary.json' -o -name 'b.report.json')" ] &&
   fail "k3d: .k6 and the clone of svp-frontend are not read" || ok "k3d: .k6 and the clone of svp-frontend are not read"
-for n in 07-drill-k8s-threats 08-drill-k8s-threats 09-drill-obs-threats 10-drill-obs-threats; do
-  expect k3d "\$SVP_VERIFY_OUT/logs/$n.log (verdict lines)" session-cookie
-done
-expect k3d '$SVP_VERIFY_OUT/logs/11-k8s-web-e2e.log' session-cookie
-grep -rqa SID-MARKER "$work/art-k3d" && fail "k3d: no session cookie value in the artifact" ||
-  ok "k3d: no session cookie value in the artifact"
-[ -f "$work/art-k3d/k8s-drills/canary-drill-1.json" ] && ok "k3d: the checkout's files under a visible folder" ||
-  fail "k3d: the checkout's files under a visible folder"
+[ -f "$work/art-k3d/k8s-drills/canary-drill-1.json" ] && [ -f "$work/art-k3d/k8s-drills/threats-20261105T000000Z.xml" ] &&
+  ok "k3d: the checkout's files under a visible folder" || fail "k3d: the checkout's files under a visible folder"
 [ -z "$(find "$work/art-k3d" -name '.*')" ] && ok "k3d: no hidden file in the artifact" || fail "k3d: no hidden file in the artifact"
 [ ! -e "$work/art-k3d/ca.crt" ] && ! grep -q 'ca.crt' "$work/art-k3d/files.txt" && ok "k3d: .k8s/ca.crt not a candidate" ||
   fail "k3d: .k8s/ca.crt not a candidate"
-grep -q 'PROBE-BODY-MARKER' "$work/art-k3d/logs/04-drill-k8s-threats.verdicts.log" &&
-  fail "k3d: the threat drill's probe output is left out" || ok "k3d: the threat drill's probe output is left out"
-grep -q '^FAIL  NP-1' "$work/art-k3d/logs/04-drill-k8s-threats.verdicts.log" && ok "k3d: the threat drill's verdicts kept" ||
-  fail "k3d: the threat drill's verdicts kept"
-grep -q '^ok    IN-4: svp-feed-service .*(svp-admin)' "$work/art-k3d/logs/04-drill-k8s-threats.verdicts.log" &&
-  ok "k3d: a verdict naming Kafka users and svp-admin is kept" || fail "k3d: a verdict naming Kafka users and svp-admin is kept"
-v=$work/art-k3d/logs/04-drill-k8s-threats.verdicts.log
-want=$(printf '%s\n' "== IN-2/IN-4" "ok    IN-4: svp-feed-service may only read its topics (svp-admin)" "== NP-1" \
-  "FAIL  NP-1: probe reached s3" "FAIL  NP-1: the item ended with exit status 1" "== WEB-7" \
-  "ok    user @drill_ab12 registered: 303, session cookie __Host-Http-svp_sid in the drill's cookie jar" \
-  "drill-k8s-threats (20261025T080000Z-ab12)" "$(printf '  %-14s %s' ITEM RESULT)" \
-  "$(printf '  %-14s %s' IN-2/IN-4 PASS)" "$(printf '  %-14s %s' NP-1 FAIL)")
-[ "$(cat "$v")" = "$want" ] &&
-  ok "k3d: the threat drill keeps its item headings, verdicts (the session cookie named in prose) and closing table, nothing else" ||
-  fail "k3d: the threat drill keeps its item headings, verdicts (the session cookie named in prose) and closing table, nothing else"
-v=$work/art-k3d/logs/06-drill-obs-threats.verdicts.log
-[ "$(cat "$v")" = "$(printf '%s\n' "ok    OPS-1: 8 loopback ports" "drill-obs-threats: all checks passed")" ] &&
-  ok "k3d: the threat drill's closing line is kept, its probe output left out" ||
-  fail "k3d: the threat drill's closing line is kept, its probe output left out"
+[ -z "$(find "$work/art-k3d" -name '*.log' ! -name 'drill-obs-threats.verdicts.log' ! -name 'gitops-admission-metrics.log' ! -name 'traffic-1.log')" ] &&
+  ok "k3d: no step's output in the artifact but the verdicts of drill-obs-threats and the admission figures" ||
+  fail "k3d: no step's output in the artifact but the verdicts of drill-obs-threats and the admission figures"
+markers='INFRA-TAIL-MARKER INFRA-MESSAGE-MARKER OPERATOR-PREVIOUS-MARKER APP-FORGED-MARKER ENVOY-MARKER MIGRATE-PANIC-MARKER
+KEDA-TAIL-MARKER PROBE-BODY-MARKER PROBE-OBS-MARKER OBS-JSON-MARKER BASH-ERROR-MARKER'
+for m in $markers; do
+  if grep -rqaF -- "$m" "$work/art-k3d"; then fail "k3d: no $m in the artifact"; else ok "k3d: no $m in the artifact"; fi
+  lacks k3d "no $m in the job's log" "$m"
+done
+grep -qE '"(msg|level)"' -r "$work/art-k3d" && fail "k3d: no service log record in the artifact" ||
+  ok "k3d: no service log record in the artifact"
+v=$work/art-k3d/logs/drill-obs-threats.verdicts.log
+[ "$(cat "$v")" = "$(printf '%s\n' "ok    OPS-1: 8 loopback ports" \
+  "ok    WEB-9: session cookie __Host-Http-svp_sid in the drill's cookie jar" "FAIL  JWT-8: an email in a trace" \
+  "drill-obs-threats: all checks passed")" ] &&
+  ok "k3d: drill-obs-threats keeps its verdicts (the session cookie named in prose) and closing line, nothing else" ||
+  fail "k3d: drill-obs-threats keeps its verdicts (the session cookie named in prose) and closing line, nothing else"
+cmp -s "$out/logs/gitops-admission-metrics.log" "$work/art-k3d/logs/gitops-admission-metrics.log" &&
+  ok "k3d: the admission figures are kept whole" || fail "k3d: the admission figures are kept whole"
+cmp -s "$out/results.tsv" "$work/art-k3d/results.tsv" && ok "k3d: the table of the steps is kept whole" ||
+  fail "k3d: the table of the steps is kept whole"
 masked=0
 for v in $identifiers; do
   grep -qxF -e "::add-mask::$v" -e "::add-mask::$(b64 "$v")" "$work/k3d.log" && masked=1
@@ -855,52 +767,13 @@ done
   fail "k3d: user names, emails, key ids and mechanisms of the Secrets are not masked"
 grep -qxF "::add-mask::$kafka_secret" "$work/k3d.log" && ok "k3d: a password beside a user name is masked" ||
   fail "k3d: a password beside a user name is masked"
-# Service log lines quoted by a target are left out of its copy, and files.txt counts them.
-a=$work/art-k3d/logs
-if grep -qE '"(msg|level)"' "$a/01-k8s-up.log" || grep -q 'USER-ID-MARKER' "$a/05-drill-alert-to-sentry.log"; then
-  fail "k3d: service log lines are left out of the targets' outputs"
-else
-  ok "k3d: service log lines are left out of the targets' outputs"
-fi
-grep -q '^FAIL  install feed-service' "$a/01-k8s-up.log" && grep -q '^FAIL  T4' "$a/05-drill-alert-to-sentry.log" &&
-  ok "k3d: the targets' own lines around them are kept" || fail "k3d: the targets' own lines around them are kept"
-grep -qF "$(printf 'kept\t$SVP_VERIFY_OUT/logs/01-k8s-up.log\tlogs/01-k8s-up.log\t3 service log line(s) left out')" \
-  "$work/art-k3d/files.txt" && ok "k3d: files.txt counts the lines left out" || fail "k3d: files.txt counts the lines left out"
-grep -q MIGRATE-PANIC-MARKER "$a/01-k8s-up.log" && fail "k3d: a migrate Job's log line that is no JSON is left out" ||
-  ok "k3d: a migrate Job's log line that is no JSON is left out"
-# The log tails of unready_report: an infrastructure container's kept, a line of namespace svp or of Envoy left out,
-# in the artifact and in the end of the failed target printed to the job's log alike.
-expect k3d '$SVP_VERIFY_OUT/logs/12-k8s-up.log' kept
-expect k3d '$SVP_VERIFY_OUT/logs/13-k8s-up.log' secret-value
-grep -qxF "    [svp-data] INFRA-TAIL-MARKER" "$a/12-k8s-up.log" && grep -qF INFRA-MESSAGE-MARKER "$a/12-k8s-up.log" &&
-  grep -qF "    [svp-obs] OPERATOR-PREVIOUS-MARKER" "$a/12-k8s-up.log" &&
-  grep -qxF "  Prometheus svp-obs/kps-prometheus: no status conditions (no controller has reconciled it)" "$a/12-k8s-up.log" &&
-  grep -qxF "    Prometheus svp-obs/kps-prometheus: no status (no controller has reconciled it)" "$a/12-k8s-up.log" &&
-  grep -qxF "    HTTPRoute svp/gateway: ResolvedRefs=False BackendNotFound" "$a/12-k8s-up.log" &&
-  grep -q '^pod svp/gateway-abc, container gateway: ' "$a/12-k8s-up.log" &&
-  ok "k3d: the log tail of an infrastructure container, every container's state and the timeout report are kept" ||
-  fail "k3d: the log tail of an infrastructure container, every container's state and the timeout report are kept"
-if grep -qE 'APP-FORGED-MARKER|ENVOY-MARKER' "$a/12-k8s-up.log"; then
-  fail "k3d: a log line of namespace svp or envoy-gateway-system is left out"
-else
-  ok "k3d: a log line of namespace svp or envoy-gateway-system is left out"
-fi
-grep -qF "$(printf 'kept\t$SVP_VERIFY_OUT/logs/12-k8s-up.log\tlogs/12-k8s-up.log\t2 service log line(s) left out')" \
-  "$work/art-k3d/files.txt" && ok "k3d: files.txt counts the log lines of other namespaces" ||
-  fail "k3d: files.txt counts the log lines of other namespaces"
-has k3d "the log tail of an infrastructure container of a failed target is printed" '    [svp-data] INFRA-TAIL-MARKER'
-lacks k3d "a log line of namespace svp of a failed target is not printed" APP-FORGED-MARKER
-lacks k3d "a log line of Envoy of a failed target is not printed" ENVOY-MARKER
-lacks k3d "a log tail with a secret is not printed" SECRET-TAIL-MARKER
-lacks k3d "a failed target's service log lines are not printed" 'USER-ID-MARKER'
 no_leak k3d
-has k3d "the end of a failed target's clean output is printed" KEDA-TAIL-MARKER
-has k3d "the verdicts of a failed threat drill are printed" 'FAIL  NP-1'
-has k3d "the closing table of a failed threat drill is printed" "$(printf '  %-14s %s' NP-1 FAIL)"
-lacks k3d "the probe output of a threat drill is not printed" 'PROBE-'
-lacks k3d "the output of a failed target with a secret is not printed" 'step 2'
+has k3d "the verdicts of a failed drill-obs-threats are printed" "FAIL  JWT-8: an email in a trace"
+lacks k3d "the output of a failed step that is not in the artifact is not printed" 'step 2'
+lacks k3d "a failed step's long output is not printed" 'sample 60 lag'
 has k3d "a dropped file gets a warning with its rule" '::warning::.k8s/drills/backup-1.json: secret-value'
 lacks k3d "not-allowed files get no warning" '::warning::.k8s/drills/threats-1.log'
+lacks k3d "a refused step output gets no warning" '::warning::$SVP_VERIFY_OUT/logs/k8s-smoke.log'
 if grep -qF "::add-mask::$helm_payload" "$work/k3d.log" || grep -qF "::add-mask::$role_name" "$work/k3d.log"; then
   fail "k3d: Helm release payloads and user names are not masked"
 else
@@ -923,17 +796,42 @@ else
   ok "k3d: no mask line holds a control character or U+FFFD"
 fi
 
+# --- The verdict lines of drill-obs-threats holding the session cookie in a form its value is written in, one run
+# each: a header, a cookie jar line, JSON, and the name ending a line.
+cookie=0
+for line in 'FAIL  WEB-2: sent Cookie: __Host-Http-svp_sid=SID-MARKER' \
+  "$(printf 'ok    jar: svp.localhost\tFALSE\t/\tTRUE\t0\t__Host-Http-svp_sid\tSID-MARKER')" \
+  'FAIL  WEB-9: got {"name":"svp_sid","value":"SID-MARKER"}' 'FAIL  WEB-9: the cookie jar holds svp_sid'; do
+  cookie=$((cookie + 1))
+  co=$work/out-cookie-$cookie
+  mkdir -p "$co/logs" && echo gitops >"$co/scenario"
+  printf '%s\n' "$line" >"$co/logs/drill-obs-threats.log"
+  collect_out=$co collect "cookie-$cookie" "$work/secrets-k3d"
+  expect "cookie-$cookie" '$SVP_VERIFY_OUT/logs/drill-obs-threats.log (verdict lines)' session-cookie
+  grep -rqa SID-MARKER "$work/art-cookie-$cookie" && fail "cookie-$cookie: no session cookie value in the artifact" ||
+    ok "cookie-$cookie: no session cookie value in the artifact"
+done
+# The admission figures and the verdict lines are scanned like any file from the cluster.
+ao=$work/out-scanned
+mkdir -p "$ao/logs" && echo gitops >"$ao/scenario"
+printf 'kyverno: %s\n' "$kafka_secret" >"$ao/logs/gitops-admission-metrics.log"
+printf 'FAIL  JWT-8: %s\n' "$jwt" >"$ao/logs/drill-obs-threats.log"
+collect_out=$ao collect scanned "$work/secrets-k3d"
+expect scanned '$SVP_VERIFY_OUT/logs/gitops-admission-metrics.log' secret-value
+expect scanned '$SVP_VERIFY_OUT/logs/drill-obs-threats.log (verdict lines)' jwt
+no_leak scanned
+
 # --- k3d run, the cluster never read: only the files written on the runner itself.
 collect dead "$work/secrets-dead" FAKE_KUBECTL_FAIL=1
 for src in '$SVP_VERIFY_OUT/results.tsv' '$SVP_VERIFY_OUT/scenario'; do
   expect dead "$src" kept
 done
-for src in '$SVP_VERIFY_OUT/logs/01-k8s-up.log' '$SVP_VERIFY_OUT/logs/03-drill-k8s-keda.log' \
-  .k8s/drills/canary-drill-1.json .k8s/drills/backup-1.json; do
+for src in '$SVP_VERIFY_OUT/logs/drill-obs-threats.log (verdict lines)' '$SVP_VERIFY_OUT/logs/gitops-admission-metrics.log' \
+  .k8s/drills/canary-drill-1.json .k8s/drills/backup-1.json .k8s/drills/threats-20261105T000000Z.xml; do
   expect dead "$src" no-secret-list
 done
 no_leak dead
-lacks dead "no target output is printed" KEDA-TAIL-MARKER
+lacks dead "no verdict line is printed" 'FAIL  JWT-8'
 has dead "the missing list is a warning" '::warning::verify-collect: a secret list could not be read'
 
 # --- k3d run, cluster gone at the end but read while it ran: that list still counts.
@@ -961,23 +859,24 @@ mv "$work/kube.orig" "$work/kube"
 
 # --- compose-obs run: no cluster list needed, .env's still applies.
 echo compose-obs >"$out/scenario"
-# The object store's tests of a compose-obs run, and a target's output that printed the store's root password (a value
-# of .env).
-printf '%s\n' '=== RUN   TestIntegrationPresignedPost' \
-  '    integration_test.go:250: POST http://127.0.0.1:9000/media: status 400' \
-  '--- PASS: TestIntegrationPresignedPost (0.20s)' \
+# The object store's tests and the build step of a compose-obs run (refused whole like every step's output), and the
+# verdict lines of drill-obs-threats with the store's root password (a value of .env).
+printf '%s\n' '--- PASS: TestIntegrationPresignedPost (0.20s)' \
   'object store tests: 39 passed, 0 failed, 0 skipped (tests and subtests); make test-stack exit 0' \
-  >"$out/logs/14-test-stack-objstore.log"
-printf 'make up: s3 root %s\n' "$env_secret" >"$out/logs/15-up.log"
+  >"$out/logs/test-stack-objstore.log"
+printf 'make up: s3 root %s\n' "$env_secret" >"$out/logs/up.log"
+cp "$out/logs/drill-obs-threats.log" "$work/obs.good"
+printf 'FAIL  UP-8: s3 root %s in a log\n' "$env_secret" >>"$out/logs/drill-obs-threats.log"
 collect compose "$work/secrets-compose" FAKE_KUBECTL_FAIL=1
-expect compose '$SVP_VERIFY_OUT/logs/14-test-stack-objstore.log' kept
-expect compose '$SVP_VERIFY_OUT/logs/15-up.log' secret-value
+expect compose '$SVP_VERIFY_OUT/logs/test-stack-objstore.log' not-allowed
+expect compose '$SVP_VERIFY_OUT/logs/up.log' not-allowed
+expect compose '$SVP_VERIFY_OUT/logs/drill-obs-threats.log (verdict lines)' secret-value
 expect compose .k8s/drills/canary-drill-1.json kept
 expect compose .k8s/drills/b64-1.json secret-value
-expect compose '$SVP_VERIFY_OUT/logs/02-k8s-smoke.log' secret-value
 # A compose run has no cluster, so a value only a cluster Secret would hold is no secret of that run.
 expect compose .k8s/drills/backup-1.json kept
 no_leak compose env-secrets
+cp "$work/obs.good" "$out/logs/drill-obs-threats.log"
 
 # --- An .env that breaks its rule: nothing masked, no value printed, nothing from the stack copied.
 cp "$repo/.env" "$work/env.good"
@@ -988,491 +887,6 @@ expect broken .k8s/drills/canary-drill-1.json no-secret-list
 has broken "the broken line is named" 'SVP_BROKEN_PASSWORD'
 no_leak broken
 cp "$work/env.good" "$repo/.env"
-
-# --- verify-run.sh: the build target's failure skips the rest at once, SVP_VERIFY_TARGETS picks targets, every scenario
-# clones svp-gitops first (make gitops-clone) and starts nothing when that fails. It runs from a copy in a throwaway
-# tree with a fake .env, a fake make first on PATH (it logs its arguments and fails for the targets FAKE_MAKE_FAIL
-# names) and the fake kubectl above (no cluster answers), so no target, no container, no cluster, no clone and no real
-# .env is ever reached. verify-run.sh needs GNU timeout (and GNU date for its time lines: gdate on macOS).
-vr=$work/verify-run
-vb=$work/verify-run-bin
-mkdir -p "$vr/deploy/ci" "$vr/deploy/k8s" "$vr/deploy/observability/glitchtip" "$vb"
-cp "$here/verify-run.sh" "$here/verify-mask.sh" "$vr/deploy/ci/"
-cp "$here/../k8s/lib.sh" "$vr/deploy/k8s/"
-cp -R "$here/verify" "$vr/deploy/ci/"
-cp "$here/../observability/glitchtip/dotenv.sh" "$vr/deploy/observability/glitchtip/"
-cp "$repo/.env" "$vr/.env"
-cat >"$vb/make" <<'EOF'
-#!/usr/bin/env bash
-echo "$*" >>"$FAKE_MAKE_LOG"
-[ "$1" = -s ] && shift
-[ -f "${FAKE_MAKE_DIR:-/nonexistent}/$1.out" ] && cat "$FAKE_MAKE_DIR/$1.out"
-case " ${FAKE_MAKE_FAIL:-} " in *" $1 "*) exit 2 ;; esac
-case " ${FAKE_MAKE_SLOW:-} " in *" $1 "*) sleep 60 ;; esac
-EOF
-printf '#!/bin/sh\ncommand -v gdate >/dev/null 2>&1 && exec gdate "$@"\nexec /bin/date "$@"\n' >"$vb/date"
-chmod 755 "$vb/make" "$vb/date"
-# The images drill-k8s-supplychain reads from GHCR, named after what it asks for instead.
-printf '#!/bin/sh\necho "fake/$1${2:+-$2}@sha256:0"\n' >"$vr/deploy/ci/ghcr-digest.sh"
-chmod 755 "$vr/deploy/ci/ghcr-digest.sh"
-# The copy is a git checkout on a branch, which gitops does not give Argo CD: the cluster is built at main of
-# svp-gitops whatever the branch of this repository, at the commit of origin/main in the clone where make gitops-clone
-# leaves it (a fake one here, with one commit), given as that commit.
-git -c init.defaultBranch=feat/stage6b-verify init -q "$vr"
-fake_clone=$vr/.gitops/svp-gitops
-git init -q "$fake_clone" &&
-  git -C "$fake_clone" -c user.name=test -c user.email=test@example.invalid -c commit.gpgsign=false \
-    -c core.hooksPath=/dev/null commit -q --allow-empty -m base &&
-  git -C "$fake_clone" update-ref refs/remotes/origin/main HEAD
-fake_clone_sha=$(git -C "$fake_clone" rev-parse HEAD)
-# run_verify NAME SCENARIO [VAR=VALUE...]: the copy of verify-run.sh (in run_tree, default $vr) for SCENARIO; its
-# output in $work/run-NAME.log, the make calls in $work/run-NAME.make, its results in $work/run-NAME.out; prints its
-# exit status. It runs as on a machine, without the variables of any CI.
-run_verify() {
-  local name=$1 scenario=$2 rc=0
-  shift 2
-  : >"$work/run-$name.make"
-  env -u GITHUB_ACTIONS -u CI -u GITLAB_CI -u JENKINS_URL -u TF_BUILD PATH="$vb:$work/bin:$PATH" \
-    SVP_VERIFY_OUT="$work/run-$name.out" SVP_VERIFY_SECRETS="$work/run-$name.secrets" \
-    FAKE_MAKE_LOG="$work/run-$name.make" SVP_VERIFY_TARGETS= "$@" \
-    "${run_tree:-$vr}/deploy/ci/verify-run.sh" "$scenario" >"$work/run-$name.log" 2>&1 </dev/null || rc=$?
-  echo "$rc"
-}
-# makes NAME: the make calls of run NAME.
-makes() { cat "$work/run-$1.make"; }
-# results NAME: "id name status note" of each target of run NAME, one per line.
-results() { awk -F '\t' 'NR > 1 { print $1, $2, $3, $8 }' "$work/run-$1.out/results.tsv"; }
-compose_names="up smoke drill-obs-threats test-stack-objstore"
-gitops_names="k8s-gitops-up gitops-env gitops-external-secrets gitops-argocd-metrics gitops-admission-metrics k8s-smoke drill-k8s-supplychain
-drill-k8s-threats"
-gitops_build="k8s-gitops-up GITOPS_REV=$fake_clone_sha"
-# want_rows NAMES STATUS_OF_FIRST NOTE_OF_REST [ID NAME STATUS NOTE]...: the rows of a run: the first of NAMES with
-# STATUS_OF_FIRST and no note, every other skipped with NOTE_OF_REST, except the rows given whole after it.
-want_rows() {
-  local i=0 name line names=$1 first=$2 rest=$3
-  shift 3
-  for name in $names; do
-    i=$((i + 1))
-    line=$(printf '%02d %s' "$i" "$name")
-    if [ "$i" = 1 ]; then line="$line $first "; else line="$line skipped $rest"; fi
-    for over in "$@"; do [ "${over%% * * *}" = "$(printf '%02d' "$i")" ] && line=$over; done
-    echo "$line"
-  done
-}
-if timeout --version 2>/dev/null | grep -q GNU; then
-  # Each scenario: its failed build target makes the run fail and skips every other target at once.
-  rc=$(run_verify infra compose-obs FAKE_MAKE_FAIL=up)
-  same "verify-run: a failed build target makes the run fail" 1 "$rc"
-  same "verify-run: after the clone of svp-gitops and a failed build target no other target runs" \
-    "$(printf -- '-s gitops-clone\nup OBS=lgtm')" "$(makes infra)"
-  same "verify-run: every target after a failed build target is skipped for it" \
-    "$(want_rows "$compose_names" fail 'infrastructure step failed')" "$(results infra)"
-  rc=$(run_verify infra-gitops gitops FAKE_MAKE_FAIL=k8s-gitops-up)
-  same "verify-run: gitops's failed build target makes the run fail" 1 "$rc"
-  same "verify-run: gitops builds the cluster at the commit of main of svp-gitops, cloned first" \
-    "$(printf -- '-s gitops-clone\n%s' "$gitops_build")" "$(makes infra-gitops)"
-  same "verify-run: gitops skips every target after its failed build target for it" \
-    "$(want_rows "$gitops_names" fail 'infrastructure step failed')" "$(results infra-gitops)"
-
-  # A run stopped while a target runs (a cancel, the step's timeout-minutes): that target is cancelled.
-  : >"$work/run-cut.make"
-  env -u GITHUB_ACTIONS -u CI -u GITLAB_CI -u JENKINS_URL -u TF_BUILD PATH="$vb:$work/bin:$PATH" \
-    SVP_VERIFY_OUT="$work/run-cut.out" SVP_VERIFY_SECRETS="$work/run-cut.secrets" FAKE_MAKE_LOG="$work/run-cut.make" \
-    SVP_VERIFY_TARGETS=smoke FAKE_MAKE_SLOW=smoke "$vr/deploy/ci/verify-run.sh" compose-obs >"$work/run-cut.log" 2>&1 \
-    </dev/null &
-  cut_pid=$!
-  for _ in $(seq 1 100); do
-    grep -q '^smoke' "$work/run-cut.make" && break
-    sleep 0.1
-  done
-  kill -TERM "$cut_pid"
-  wait "$cut_pid" || :
-  results cut | grep -qx '02 smoke cancelled the run was cancelled or the step timed out' &&
-    ok "verify-run: a run stopped mid-target records it cancelled" ||
-    fail "verify-run: a run stopped mid-target records it cancelled"
-
-  # The narrow dispatch: the build target, then only the chosen ones, in the scenario's order.
-  rc=$(run_verify one gitops 'SVP_VERIFY_TARGETS=k8s-smoke drill-k8s-supplychain')
-  same "verify-run: a run of the chosen targets that pass passes" 0 "$rc"
-  same "verify-run: gitops clones svp-gitops, then only the build target and the chosen ones run" \
-    "$(printf -- '-s gitops-clone\n%s\nk8s-smoke\n%s' "$gitops_build" "drill-k8s-supplychain \
-SUPPLYCHAIN_UNSIGNED=fake/newest-drill-unsigned@sha256:0 SUPPLYCHAIN_VULNERABLE=fake/newest-drill-vulnerable@sha256:0 \
-SUPPLYCHAIN_NO_PROVENANCE=fake/newest-drill-no-provenance@sha256:0")" "$(makes one)"
-  same "verify-run: the targets left out keep their ids and are skipped as not in targets" \
-    "$(want_rows "$gitops_names" ok 'not in targets' '06 k8s-smoke ok ' '07 drill-k8s-supplychain ok ')" \
-    "$(results one)"
-
-  rc=$(run_verify one-fails gitops 'SVP_VERIFY_TARGETS=drill-k8s-threats  k8s-smoke' FAKE_MAKE_FAIL=k8s-smoke)
-  same "verify-run: a chosen target that fails makes the run fail" 1 "$rc"
-  same "verify-run: chosen targets run in the scenario's order, whatever the order given" \
-    "$(printf -- '-s gitops-clone\n%s\nk8s-smoke\ndrill-k8s-threats' "$gitops_build")" "$(makes one-fails)"
-
-  rc=$(run_verify clone-fails gitops FAKE_MAKE_FAIL=gitops-clone)
-  same "verify-run: a failed clone of svp-gitops makes the run fail" 1 "$rc"
-  [ "$(cat "$work/run-clone-fails.make")" = "-s gitops-clone" ] && [ ! -e "$work/run-clone-fails.out/results.tsv" ] &&
-    ok "verify-run: after a failed clone of svp-gitops no target starts" ||
-    fail "verify-run: after a failed clone of svp-gitops no target starts"
-  has run-clone-fails "the failed clone is named" "make gitops-clone (the deployment configuration svp-gitops); nothing started"
-
-  # test-stack-objstore over the output of a fake make test-stack: a unit test and the eight integration tests pass, one
-  # with a subtest; then a subtest skipped, an integration test missing, go test failing.
-  fm=$work/fake-make
-  mkdir -p "$fm"
-  # objstore NAME [LINE...]: test-stack-objstore over that output plus LINEs (DROP_TEST leaves a test out, FAKE_FAIL
-  # makes make fail); prints the step's status and its summary line.
-  objstore() {
-    local name=$1 t
-    shift
-    {
-      for t in TestNewRejectsMissingConfig TestIntegrationPresignedPost TestIntegrationWorkerPermissions \
-        TestIntegrationVideoServicePermissions TestIntegrationDeletePrefix TestIntegrationMultipartChecksum \
-        TestIntegrationCacheControl TestIntegrationCreateOnce TestIntegrationWorkerReadsMedia; do
-        [ "${DROP_TEST:-}" = "$t" ] || printf '=== RUN   %s\n--- PASS: %s (0.10s)\n' "$t" "$t"
-      done
-      echo '    --- PASS: TestIntegrationPresignedPost/valid_form (0.01s)'
-      [ "$#" = 0 ] || printf '%s\n' "$@"
-      printf 'ok  \tgithub.com/anhnvcoder/svp-backend/internal/objstore\t1.2s\n'
-    } >"$fm/test-stack.out"
-    run_verify "objstore-$name" compose-obs SVP_VERIFY_TARGETS=test-stack-objstore FAKE_MAKE_DIR="$fm" \
-      ${FAKE_FAIL:+FAKE_MAKE_FAIL=test-stack} >/dev/null
-    printf '%s ' "$(results "objstore-$name" | awk '$2 == "test-stack-objstore" { print $3 }')"
-    grep '^object store tests: ' "$work/run-objstore-$name.out/logs/04-test-stack-objstore.log"
-  }
-  same "verify-run: test-stack-objstore passes when every test passes" \
-    "ok object store tests: 10 passed, 0 failed, 0 skipped (tests and subtests); make test-stack exit 0" "$(objstore pass)"
-  makes objstore-pass | grep -qx 'test-stack PKGS=./internal/objstore/...' &&
-    ok "verify-run: test-stack-objstore runs make test-stack on internal/objstore" ||
-    fail "verify-run: test-stack-objstore runs make test-stack on internal/objstore"
-  same "verify-run: a skipped subtest fails test-stack-objstore" \
-    "fail object store tests: 10 passed, 0 failed, 1 skipped (tests and subtests); make test-stack exit 0" \
-    "$(objstore skip '    --- SKIP: TestIntegrationMultipartChecksum/trailer (0.00s)')"
-  same "verify-run: an integration test that did not run fails test-stack-objstore" \
-    "fail object store tests: 9 passed, 0 failed, 0 skipped (tests and subtests); make test-stack exit 0" \
-    "$(DROP_TEST=TestIntegrationMultipartChecksum objstore missing)"
-  grep -qx 'FAIL  did not pass: TestIntegrationMultipartChecksum' \
-    "$work/run-objstore-missing.out/logs/04-test-stack-objstore.log" &&
-    ok "verify-run: the integration test that did not pass is named" ||
-    fail "verify-run: the integration test that did not pass is named"
-  same "verify-run: go test failing fails test-stack-objstore" \
-    "fail object store tests: 10 passed, 0 failed, 0 skipped (tests and subtests); make test-stack exit 2" \
-    "$(FAKE_FAIL=1 objstore exit)"
-
-  for scn in nope dev-k3d chaos; do
-    rc=$(run_verify "no-scenario-$scn" "$scn")
-    same "verify-run: $scn is no scenario and stops it" 2 "$rc"
-    [ ! -s "$work/run-no-scenario-$scn.make" ] && [ ! -e "$work/run-no-scenario-$scn.out/results.tsv" ] &&
-      ok "verify-run: $scn starts nothing" || fail "verify-run: $scn starts nothing"
-  done
-
-  # A second copy whose scenario files are made for the test: one missing, one that declares too little, one whose
-  # first target is not its build target.
-  vr2=$work/verify-run-2
-  mkdir -p "$vr2/deploy"
-  cp -R "$vr/deploy/ci" "$vr/deploy/k8s" "$vr/deploy/observability" "$vr2/deploy/"
-  cp "$vr/.env" "$vr2/.env"
-  rm "$vr2/deploy/ci/verify/compose-obs.sh"
-  rc=$(run_tree=$vr2 run_verify no-file compose-obs)
-  same "verify-run: a scenario without its file stops it" 2 "$rc"
-  has run-no-file "the missing file is named" "no file deploy/ci/verify/compose-obs.sh for scenario compose-obs"
-  printf 'build=k8s-gitops-up\njob_minutes_default=160\nscenario_targets() { step k8s-gitops-up 1 make k8s-gitops-up; }\n' \
-    >"$vr2/deploy/ci/verify/gitops.sh"
-  rc=$(run_tree=$vr2 run_verify no-k3d gitops)
-  same "verify-run: a scenario file that does not set k3d stops it" 2 "$rc"
-  [ ! -s "$work/run-no-k3d.make" ] && ok "verify-run: a scenario file that declares too little starts nothing" ||
-    fail "verify-run: a scenario file that declares too little starts nothing"
-  printf 'build=k8s-gitops-up\njob_minutes_default=160\nk3d=1\nscenario_targets() { step other 1 make other; step k8s-gitops-up 1 make k8s-gitops-up; }\n' \
-    >"$vr2/deploy/ci/verify/gitops.sh"
-  rc=$(run_tree=$vr2 run_verify build-second gitops)
-  same "verify-run: a scenario whose first target is not its build target stops it" 2 "$rc"
-  [ ! -s "$work/run-build-second.make" ] && ok "verify-run: a scenario whose first target is not its build starts nothing" ||
-    fail "verify-run: a scenario whose first target is not its build starts nothing"
-
-  rc=$(run_verify unknown gitops 'SVP_VERIFY_TARGETS=drill-k8s-threats drill-k8s-thraets')
-  same "verify-run: a name that is no target of the scenario stops it" 2 "$rc"
-  [ ! -s "$work/run-unknown.make" ] && [ ! -e "$work/run-unknown.out/results.tsv" ] &&
-    ok "verify-run: an unknown name stops it before any target or results.tsv" ||
-    fail "verify-run: an unknown name stops it before any target or results.tsv"
-  # The error names the targets of the scenario: the list that the scenario's own steps make.
-  has run-unknown "an unknown name is named, with the scenario's targets" \
-    "not a target of gitops: drill-k8s-thraets (its targets: $(printf '%s' "$gitops_names" | tr '\n' ' '))"
-  rc=$(run_verify unknown-compose compose-obs SVP_VERIFY_TARGETS=k8s-smoke)
-  same "verify-run: a target of the other scenario is unknown" 2 "$rc"
-  has run-unknown-compose "the compose-obs targets are listed" \
-    "(its targets: $(printf '%s' "$compose_names" | tr '\n' ' '))"
-
-  rc=$(run_verify bad gitops $'SVP_VERIFY_TARGETS=k8s-smoke\n::warning::BAD-TARGET-MARKER')
-  same "verify-run: a target list with another character stops it" 2 "$rc"
-  [ ! -s "$work/run-bad.make" ] && lacks run-bad "the rejected list is not printed back" BAD-TARGET-MARKER ||
-    fail "verify-run: a rejected list starts no target"
-else
-  echo "skip  verify-run: no GNU timeout on PATH (Linux, or coreutils on macOS)"
-fi
-
-# --- gitops_stale of deploy/ci/verify/gitops.sh: on a scheduled run, the drill image of case c or l is left out only
-# when the oldest vuln attestation cosign verifies is past the policy's maximum age (72h). A fake cosign first on PATH
-# answers verify-attestation with one envelope scanned FAKE_SCAN_HOURS ago, or fails with FAKE_COSIGN_FAIL=1.
-mkdir -p "$work/cosign-bin"
-cat >"$work/cosign-bin/cosign" <<'EOF'
-#!/usr/bin/env bash
-[ "$1" = verify-attestation ] && [ "${FAKE_COSIGN_FAIL:-}" != 1 ] || exit 1
-jq -nc --argjson h "$FAKE_SCAN_HOURS" \
-  '{payload: ({predicate: {metadata: {scanFinishedOn: (now - $h * 3600 | floor | todate)}}} | tojson | @base64)}'
-EOF
-chmod 755 "$work/cosign-bin/cosign"
-stale_image=ghcr.io/anhnvcoder/svp-backend/drill-vulnerable@sha256:$(printf '%064d' 0)
-# stale NAME CASE [VAR=VALUE...]: gitops_stale CASE on stale_image; its output in $work/stale-NAME.log, prints its status.
-stale() {
-  local name=$1 case=$2 rc=0
-  shift 2
-  env -u GITHUB_ACTIONS -u CI -u GITLAB_CI -u JENKINS_URL -u TF_BUILD PATH="$work/cosign-bin:$PATH" here="$here" \
-    "$@" bash -c '. "$1/verify/gitops.sh" && gitops_stale "$2" "$3"' _ "$here" "$case" "$stale_image" \
-    >"$work/stale-$name.log" 2>&1 </dev/null || rc=$?
-  echo "$rc"
-}
-same "gitops_stale: an attestation older than 72h leaves case c out" 0 "$(stale old c FAKE_SCAN_HOURS=100)"
-has stale-old "the NOTE names the case, the age and the build of the drill images" \
-  "NOTE  case c left out on this scheduled run (it SKIPs): $stale_image was scanned at"
-has stale-old "the age is in hours" ", 100 h ago, within an hour of 72h or more;"
-same "gitops_stale: an attestation within the last hour before 72h leaves the case out too" 0 \
-  "$(stale near c FAKE_SCAN_HOURS=71.5)"
-has stale-old "case c names the build of the drill images" "-f drill=true"
-same "gitops_stale: case l too" 0 "$(stale old-l l FAKE_SCAN_HOURS=80)"
-has stale-old-l "case l (drill-no-provenance) names the build of the drill images too" "-f drill=true"
-lacks stale-old-l "case l names no rescan" "rescan=true"
-same "gitops_stale: an attestation within 72h keeps the case" 1 "$(stale fresh c FAKE_SCAN_HOURS=10)"
-lacks stale-fresh "nothing is noted for a case kept" NOTE
-same "gitops_stale: cosign without an answer keeps the case (the drill fails it)" 1 \
-  "$(stale no-cosign c FAKE_COSIGN_FAIL=1 FAKE_SCAN_HOURS=100)"
-
-# --- gitops_supplychain of deploy/ci/verify/gitops.sh: it hands the drill the newest drill-unsigned as the unsigned
-# image and the newest drill-no-provenance for case l, and none (never empty, which the drill reads as "look it up
-# yourself") when GHCR did not give it, the step then failing. A stub ghcr-digest.sh answers for GHCR and a fake make
-# records its arguments in supplychain-make.log.
-sc=$work/supplychain
-mkdir -p "$sc/bin"
-cat >"$sc/ghcr-digest.sh" <<'STUB'
-#!/usr/bin/env bash
-# Test stub: answers newest IMAGE the way GHCR would, failing for the image in FAKE_GHCR_MISSING.
-case $1 in
-newest)
-  [ "$2" != "${FAKE_GHCR_MISSING:-}" ] || { echo "ghcr.io/anhnvcoder/svp-backend/$2 is not on GHCR" >&2; exit 1; }
-  echo "ghcr.io/anhnvcoder/svp-backend/$2@sha256:$(printf 'd%.0s' $(seq 64))"
-  ;;
-esac
-STUB
-printf '#!/usr/bin/env bash\nprintf "%%s\\n" "$@" >"%s"\n' "$work/supplychain-make.log" >"$sc/bin/make"
-chmod 755 "$sc/ghcr-digest.sh" "$sc/bin/make"
-dnp=ghcr.io/anhnvcoder/svp-backend/drill-no-provenance@sha256:$(printf 'd%.0s' $(seq 64))
-dun=ghcr.io/anhnvcoder/svp-backend/drill-unsigned@sha256:$(printf 'd%.0s' $(seq 64))
-# supplychain [VAR=VALUE...]: gitops_supplychain with the stubs, its output in $work/supplychain.log; prints its status.
-supplychain() {
-  local rc=0
-  rm -f "$work/supplychain-make.log"
-  # The file as $1: with it as $0, it would take itself for run as a script.
-  # shellcheck disable=SC2016 # expanded by the inner shell
-  env -u GITHUB_ACTIONS -u SVP_VERIFY_SCHEDULED repo="$(cd "$here/../.." && pwd)" here="$sc" "$@" \
-    bash -c 'PATH="$2:$PATH"; . "$1"; gitops_supplychain' bash "$here/verify/gitops.sh" "$sc/bin" \
-    >"$work/supplychain.log" 2>&1 </dev/null || rc=$?
-  echo "$rc"
-}
-same "gitops_supplychain: every image on GHCR" 0 "$(supplychain)"
-has supplychain-make "the unsigned image is the newest drill-unsigned" "SUPPLYCHAIN_UNSIGNED=$dun"
-has supplychain-make "case l gets the newest drill-no-provenance" "SUPPLYCHAIN_NO_PROVENANCE=$dnp"
-same "gitops_supplychain: drill-no-provenance not on GHCR fails" 1 "$(supplychain FAKE_GHCR_MISSING=drill-no-provenance)"
-has supplychain-make "drill-no-provenance not on GHCR: case l left out with none" "SUPPLYCHAIN_NO_PROVENANCE=none"
-has supplychain "drill-no-provenance not on GHCR: the step fails naming it" \
-  "without what GHCR did not give (above): drill-no-provenance;"
-same "gitops_supplychain: drill-unsigned not on GHCR fails" 1 "$(supplychain FAKE_GHCR_MISSING=drill-unsigned)"
-has supplychain "drill-unsigned not on GHCR: the step fails naming it" \
-  "without what GHCR did not give (above): drill-unsigned;"
-
-# --- The summaries of gitops-admission-metrics (gitops_admission_apiserver, gitops_admission_kyverno) over a sample of
-# /metrics with the real buckets: the apiserver's 10, 25 and +Inf (two series of the Kyverno webhook, rejected false and
-# true, and one of another webhook that must not count), Kyverno's 20 and 30 (policy svp-images, and another policy).
-admission_sample=$work/admission-sample.txt
-cat >"$admission_sample" <<'SAMPLE'
-# TYPE apiserver_admission_webhook_admission_duration_seconds histogram
-apiserver_admission_webhook_admission_duration_seconds_bucket{le="10",name="ivpol.validate.kyverno.svc-ignore-finegrained-svp-images",operation="CREATE",rejected="false",type="validating"} 7
-apiserver_admission_webhook_admission_duration_seconds_bucket{le="25",name="ivpol.validate.kyverno.svc-ignore-finegrained-svp-images",operation="CREATE",rejected="false",type="validating"} 9
-apiserver_admission_webhook_admission_duration_seconds_bucket{le="+Inf",name="ivpol.validate.kyverno.svc-ignore-finegrained-svp-images",operation="CREATE",rejected="false",type="validating"} 10
-apiserver_admission_webhook_admission_duration_seconds_sum{name="ivpol.validate.kyverno.svc-ignore-finegrained-svp-images",operation="CREATE",rejected="false",type="validating"} 50.5
-apiserver_admission_webhook_admission_duration_seconds_count{name="ivpol.validate.kyverno.svc-ignore-finegrained-svp-images",operation="CREATE",rejected="false",type="validating"} 10
-apiserver_admission_webhook_admission_duration_seconds_bucket{le="10",name="ivpol.validate.kyverno.svc-ignore-finegrained-svp-images",operation="CREATE",rejected="true",type="validating"} 1
-apiserver_admission_webhook_admission_duration_seconds_bucket{le="25",name="ivpol.validate.kyverno.svc-ignore-finegrained-svp-images",operation="CREATE",rejected="true",type="validating"} 2
-apiserver_admission_webhook_admission_duration_seconds_bucket{le="+Inf",name="ivpol.validate.kyverno.svc-ignore-finegrained-svp-images",operation="CREATE",rejected="true",type="validating"} 2
-apiserver_admission_webhook_admission_duration_seconds_sum{name="ivpol.validate.kyverno.svc-ignore-finegrained-svp-images",operation="CREATE",rejected="true",type="validating"} 9.5
-apiserver_admission_webhook_admission_duration_seconds_count{name="ivpol.validate.kyverno.svc-ignore-finegrained-svp-images",operation="CREATE",rejected="true",type="validating"} 2
-apiserver_admission_webhook_admission_duration_seconds_bucket{le="10",name="validate.kyverno.svc-fail",operation="CREATE",rejected="false",type="validating"} 100
-apiserver_admission_webhook_admission_duration_seconds_bucket{le="25",name="validate.kyverno.svc-fail",operation="CREATE",rejected="false",type="validating"} 100
-apiserver_admission_webhook_admission_duration_seconds_bucket{le="+Inf",name="validate.kyverno.svc-fail",operation="CREATE",rejected="false",type="validating"} 100
-apiserver_admission_webhook_admission_duration_seconds_sum{name="validate.kyverno.svc-fail",operation="CREATE",rejected="false",type="validating"} 3
-apiserver_admission_webhook_admission_duration_seconds_count{name="validate.kyverno.svc-fail",operation="CREATE",rejected="false",type="validating"} 100
-kyverno_admission_review_duration_seconds_bucket{le="20",resource_kind="Pod"} 40
-kyverno_admission_review_duration_seconds_bucket{le="30",resource_kind="Pod"} 44
-kyverno_admission_review_duration_seconds_bucket{le="+Inf",resource_kind="Pod"} 45
-kyverno_admission_review_duration_seconds_sum{resource_kind="Pod"} 90
-kyverno_admission_review_duration_seconds_count{resource_kind="Pod"} 45
-kyverno_image_validating_policy_execution_duration_seconds_bucket{le="20",policy_name="svp-images"} 5
-kyverno_image_validating_policy_execution_duration_seconds_bucket{le="30",policy_name="svp-images"} 6
-kyverno_image_validating_policy_execution_duration_seconds_bucket{le="+Inf",policy_name="svp-images"} 6
-kyverno_image_validating_policy_execution_duration_seconds_sum{policy_name="svp-images"} 60
-kyverno_image_validating_policy_execution_duration_seconds_count{policy_name="svp-images"} 6
-kyverno_image_validating_policy_execution_duration_seconds_bucket{le="20",policy_name="other"} 900
-kyverno_image_validating_policy_execution_duration_seconds_bucket{le="30",policy_name="other"} 900
-kyverno_image_validating_policy_execution_duration_seconds_bucket{le="+Inf",policy_name="other"} 900
-kyverno_image_validating_policy_execution_duration_seconds_sum{policy_name="other"} 900
-kyverno_image_validating_policy_execution_duration_seconds_count{policy_name="other"} 900
-SAMPLE
-# admission NAME FUNCTION [ARG...]: the function over the sample (SAMPLE=FILE: another text) on stdin; output in $work/admission-NAME.log.
-admission() {
-  local name=$1
-  shift
-  bash -c '. "$1/verify/gitops.sh" && shift && "$@"' _ "$here" "$@" <"${SAMPLE:-$admission_sample}" \
-    >"$work/admission-$name.log" 2>&1
-}
-apiserver_webhook=ivpol.validate.kyverno.svc-ignore-finegrained-svp-images
-admission apiserver gitops_admission_apiserver "$apiserver_webhook"
-has admission-apiserver "the line adds the series of the webhook (rejected false and true) and leaves the other webhook out" \
-  "apiserver_admission_webhook_admission_duration_seconds{name=$apiserver_webhook}: _count 12, _sum 60.000 s, mean 5.000 s, <= 10 s: 8, <= 25 s: 11, > 25 s: 1"
-has admission-apiserver "it says where 20 s and 30 s fall in the buckets" \
-  "20 s lies between le=10 and le=25, the 30 s timeout of the webhook between le=25 and +Inf"
-admission kyverno gitops_admission_kyverno
-has admission-kyverno "the Kyverno admission review line" \
-  "kyverno_admission_review_duration_seconds: _count 45, _sum 90.000 s, mean 2.000 s, <= 20 s: 40, <= 30 s: 44, > 30 s: 1"
-has admission-kyverno "the line of policy svp-images leaves the other policy out" \
-  'kyverno_image_validating_policy_execution_duration_seconds{policy_name="svp-images"}: _count 6, _sum 60.000 s, mean 10.000 s, <= 20 s: 5, <= 30 s: 6, > 30 s: 0'
-admission apiserver-other gitops_admission_apiserver ivpol.validate.kyverno.svc-fail-finegrained-other
-has admission-apiserver-other "a webhook with no series is a NOTE" \
-  "NOTE  apiserver_admission_webhook_admission_duration_seconds{name=ivpol.validate.kyverno.svc-fail-finegrained-other}: no apiserver_admission_webhook_admission_duration_seconds_count and _sum series"
-admission apiserver-none gitops_admission_apiserver ""
-has admission-apiserver-none "no webhook of an image policy is a NOTE" "NOTE  apiserver: no webhook of an image policy (ivpol.*)"
-sed '/le="25"/d' "$admission_sample" >"$work/admission-sample-nobucket.txt"
-SAMPLE=$work/admission-sample-nobucket.txt admission apiserver-nobucket gitops_admission_apiserver "$apiserver_webhook"
-has admission-apiserver-nobucket "a missing bucket is a NOTE that says which" "but no bucket le= 25"
-: >"$work/admission-empty.txt"
-SAMPLE=$work/admission-empty.txt admission kyverno-empty gitops_admission_kyverno
-has admission-kyverno-empty "no Kyverno metrics is a NOTE for the review histogram" \
-  "NOTE  kyverno_admission_review_duration_seconds: no kyverno_admission_review_duration_seconds_count and _sum series in what was read"
-has admission-kyverno-empty "and for the policy histogram" \
-  'NOTE  kyverno_image_validating_policy_execution_duration_seconds{policy_name="svp-images"}: no'
-
-# --- gitops_external_secrets of deploy/ci/verify/gitops.sh, over this checkout's files/external-secrets.yaml of chart
-# svp-cluster committed into a throwaway repository, at the commit envs/stg/charts.yaml of a fake clone of svp-gitops
-# pins. A fake kubectl first on PATH lists an ExternalSecret per line NAMESPACE/NAME of file FAKE_ES, each Ready with one
-# key, and its Secret, and has Application svp-cluster render the ExternalSecrets of file FAKE_RENDERED (NAMESPACE/NAME,
-# then prune for one with requiresPruning), or fails with FAKE_APP_FAIL=1. An entry with enabledBy is wanted only where
-# that Application renders it: the cluster of the runner, where externalSecrets.argocdNotifications stays off, passes.
-mkdir -p "$work/es-bin"
-cat >"$work/es-bin/kubectl" <<'EOF'
-#!/usr/bin/env bash
-[ "$1 $2" = "--context k3d-svp" ] || exit 1
-shift 2
-ns=
-if [ "$1" = -n ]; then ns=$2 && shift 2; fi
-case "$*" in
-"get externalsecrets.external-secrets.io -A -o json")
-  jq -Rn '[inputs | select(. != "") | split("/") | {metadata: {namespace: .[0], name: .[1]},
-    spec: {target: {template: {type: "Opaque", data: {key: ""}}}},
-    status: {conditions: [{type: "Ready", status: "True"}]}}] | {items: .}' "$FAKE_ES" ;;
-"get secrets -o json")
-  jq -Rn --arg ns "$ns" '[inputs | select(. != "") | split("/") | select(.[0] == $ns)
-    | {metadata: {name: .[1]}, type: "Opaque", data: {key: "dmFsdWU="}}] | {items: .}' "$FAKE_ES" ;;
-"get applications.argoproj.io svp-cluster -o json")
-  [ "$ns" = argocd ] && [ "${FAKE_APP_FAIL:-}" != 1 ] || exit 1
-  jq -Rn '[inputs | select(. != "") | split(" ") | (.[0] | split("/")) as $id
-    | {group: "external-secrets.io", kind: "ExternalSecret", namespace: $id[0], name: $id[1]}
-      + (if .[1] == "prune" then {requiresPruning: true} else {} end)]
-    + [{kind: "SecretStore", namespace: "argocd", name: "svp-store"}] | {status: {resources: .}}' "$FAKE_RENDERED" ;;
-*) exit 1 ;;
-esac
-EOF
-chmod 755 "$work/es-bin/kubectl"
-es_file=deploy/helm/svp-cluster/files/external-secrets.yaml
-es_repo=$work/es-repo
-es_clone=$work/es-gitops
-gq() { git -c user.name=test -c user.email=test@example.invalid -c commit.gpgsign=false -c core.hooksPath=/dev/null "$@"; }
-mkdir -p "$es_repo/${es_file%/*}" "$es_clone/envs/stg"
-cp "$here/../../$es_file" "$es_repo/$es_file"
-git init -q "$es_repo" && gq -C "$es_repo" add -A && gq -C "$es_repo" commit -qm base
-echo "revision: $(git -C "$es_repo" rev-parse HEAD)" >"$es_clone/envs/stg/charts.yaml"
-git init -q "$es_clone" && gq -C "$es_clone" add -A && gq -C "$es_clone" commit -qm base &&
-  git -C "$es_clone" update-ref refs/remotes/origin/main HEAD
-# external NAME ES RENDERED [VAR=VALUE...]: gitops_external_secrets with the cluster of the lines ES and the render of
-# the lines RENDERED; its output in $work/external-NAME.log, prints its status.
-external() {
-  local name=$1 rc=0
-  printf '%s\n' "$2" >"$work/external-$name.es"
-  printf '%s\n' "$3" >"$work/external-$name.rendered"
-  shift 3
-  env -u GITHUB_ACTIONS -u CI -u GITLAB_CI -u JENKINS_URL -u TF_BUILD PATH="$work/es-bin:$PATH" repo="$es_repo" \
-    SVP_GITOPS_DIR="$es_clone" FAKE_ES="$work/external-$name.es" FAKE_RENDERED="$work/external-$name.rendered" "$@" \
-    bash -c '. "$1/verify/gitops.sh" && kc() { kubectl --context k3d-svp "$@"; } && gitops_external_secrets' _ "$here" \
-    >"$work/external-$name.log" 2>&1 </dev/null || rc=$?
-  echo "$rc"
-}
-notify_es=argocd/argocd-notifications-secret
-# An empty cluster: the diff's < lines are what is wanted.
-same "gitops_external_secrets: an empty cluster fails" 1 "$(external empty "" "")"
-base_es=$(sed -n 's/^< //p' "$work/external-empty.log")
-same "gitops_external_secrets: an entry without enabledBy is wanted whatever Application svp-cluster renders" \
-  "$(($(grep -c '^- namespace: ' "$es_repo/$es_file") - $(grep -c '^  enabledBy: ' "$es_repo/$es_file")))" \
-  "$(grep -c . <<<"$base_es")"
-grep -qx "$notify_es" <<<"$base_es" &&
-  fail "gitops_external_secrets: $notify_es is not wanted where Application svp-cluster does not render it" ||
-  ok "gitops_external_secrets: $notify_es is not wanted where Application svp-cluster does not render it"
-has external-empty "an entry left out is named with its key" \
-  "not wanted: $notify_es (enabledBy argocdNotifications), as Application svp-cluster renders no ExternalSecret of it"
-base_count=$(grep -c . <<<"$base_es" || true)
-same "gitops_external_secrets: a cluster with argocdNotifications off passes" 0 "$(external off "$base_es" "$base_es")"
-has external-off "every ExternalSecret is counted" "ok    $base_count ExternalSecrets Ready, each Secret with its type and keys"
-same "gitops_external_secrets: a cluster with argocdNotifications on passes" 0 \
-  "$(external on "$base_es"$'\n'"$notify_es" "$base_es"$'\n'"$notify_es")"
-has external-on "with one ExternalSecret more" "ok    $((base_count + 1)) ExternalSecrets Ready, each Secret with its type and keys"
-lacks external-on "nothing is left out" "not wanted:"
-same "gitops_external_secrets: an ExternalSecret Application svp-cluster renders and the cluster lacks fails" 1 \
-  "$(external missing "$base_es" "$base_es"$'\n'"$notify_es")"
-has external-missing "it is named as wanted" "< $notify_es"
-same "gitops_external_secrets: an ExternalSecret in the cluster that Application svp-cluster prunes fails" 1 \
-  "$(external pruned "$base_es"$'\n'"$notify_es" "$base_es"$'\n'"$notify_es prune")"
-has external-pruned "it is named as the cluster's" "> $notify_es"
-same "gitops_external_secrets: an entry without enabledBy that the cluster lacks fails, rendered or not" 1 \
-  "$(external lacks "$(sed 1d <<<"$base_es")" "")"
-has external-lacks "it is named as wanted" "< $(head -n 1 <<<"$base_es")"
-same "gitops_external_secrets: Application svp-cluster that cannot be read fails" 1 \
-  "$(external no-app "$base_es" "$base_es" FAKE_APP_FAIL=1)"
-has external-no-app "it says what it could not read" \
-  "FAIL  gitops-external-secrets: read the ExternalSecrets Application svp-cluster renders"
-lacks external-on "no value of a Secret is printed" dmFsdWU=
-
-# --- changed-services.sh: a change of a verification script builds no image; one of verify-release.sh, which the image
-# jobs run, still builds all seven. GIT_DIR is set for the throwaway repository, so git can never reach another one.
-cs=$work/changed-services
-mkdir -p "$cs/deploy/ci" "$cs/deploy/k8s"
-cp "$here/changed-services.sh" "$here/common.sh" "$here/verify-run.sh" "$here/verify-release.sh" \
-  "$cs/deploy/ci/"
-cp -R "$here/verify" "$cs/deploy/ci/"
-cp "$here/../k8s/lib.sh" "$cs/deploy/k8s/"
-g() {
-  GIT_DIR=$cs/.git GIT_WORK_TREE=$cs git -c user.name=test -c user.email=test@example.invalid -c commit.gpgsign=false \
-    -c core.hooksPath=/dev/null "$@"
-}
-g init -q && g add -A && g commit -qm base
-# changed_by PATH: commits a change of PATH, then prints what changed-services.sh builds for that commit.
-changed_by() {
-  echo "# changed" >>"$cs/$1"
-  g commit -qam "change $1"
-  "$cs/deploy/ci/changed-services.sh" HEAD~1 HEAD 2>/dev/null
-}
-got=$(changed_by deploy/ci/verify-run.sh)
-[ -z "$got" ] && ok "changed-services: a change of verify-run.sh builds nothing" ||
-  fail "changed-services: a change of verify-run.sh builds nothing (got '$got')"
-got=$(changed_by deploy/ci/verify/compose-obs.sh)
-[ -z "$got" ] && ok "changed-services: a change of a scenario file of verify-run.sh builds nothing" ||
-  fail "changed-services: a change of a scenario file of verify-run.sh builds nothing (got '$got')"
-# verify-release.sh runs in svp-gitops's check, make k8s-gitops-up and the drills only, no image job.
-got=$(changed_by deploy/ci/verify-release.sh)
-[ -z "$got" ] && ok "changed-services: a change of verify-release.sh builds nothing" ||
-  fail "changed-services: a change of verify-release.sh builds nothing (got '$got')"
 
 if ((failures)); then
   echo "$failures check(s) failed" >&2

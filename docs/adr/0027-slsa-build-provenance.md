@@ -120,7 +120,7 @@ Hiện thực bị 0040 thay (`provenance-predicate.sh` đã xoá); danh sách t
   `.github/workflows/images.yml` (mục 1, 2).
 - `deploy/helm/svp-policy/` (`imageVerification.requireProvenance`, `files/sources.json`, `templates/imagevalidatingpolicy.yaml`) (mục 4).
 - `deploy/ci/common.sh`, `deploy/ci/verify-release.sh`, `deploy/ci/values-check.sh`, `deploy/k8s/gitops.sh` (mục 5).
-- `deploy/k8s/drills/supplychain.sh`, `deploy/k8s/k8s.mk`, `deploy/ci/verify/gitops.sh` (mục 7); overlay `envs/stg/svp-policy.yaml`,
+- `deploy/k8s/drills/supplychain/` (ca l), `deploy/k8s/k8s.mk`, `deploy/ci/verify-steps/supplychain.sh` (mục 7); overlay `envs/stg/svp-policy.yaml`,
   `envs/prd/svp-policy.yaml` của `svp-gitops` (bậc 4).
 
 ## Nguồn

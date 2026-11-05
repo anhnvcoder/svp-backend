@@ -93,7 +93,7 @@ Bảng đầy đủ ở [phụ lục](appendix/0032-argocd-deploy-status.md#ki�
 - `deploy/helm/svp-observability/templates/networkpolicies.yaml` (policy `prometheus`): egress sang `argocd` cổng 8082.
 - `deploy/observability/prometheus/rules/svp-alerts.yaml` (nhóm `argocd`), `svp-alerts.test.yaml`: hai cảnh báo và test.
 - `docs/runbooks/argocd-application-degraded.md`: runbook của cả hai cảnh báo.
-- `deploy/ci/verify/gitops.sh` (`gitops_argocd_metrics`, bước `gitops-argocd-metrics`).
+- `deploy/k8s/drills/gitops/argocd-metrics/` (test `gitops-argocd-metrics` của `make drill-k8s-gitops`).
 - A và B, phần repo code:
   - `deploy/helm/svp-cluster/files/external-secrets.yaml` (entry `argocd/argocd-notifications-secret`, `enabledBy:
     argocdNotifications`, `sharedNamespace: true`), `values.yaml` (`externalSecrets.argocdNotifications`),
@@ -103,8 +103,8 @@ Bảng đầy đủ ở [phụ lục](appendix/0032-argocd-deploy-status.md#ki�
   - `deploy/k8s/gitops.sh` (Argo CD với `platforms/<platform>/argo-cd.yaml` sau `base/argo-cd.yaml`; bật nguồn theo values của
     `svp-cluster`; chat Telegram lên root), `deploy/k8s/lib.sh` (`argocd_root_app`: nhãn `svp.io/notify=root`;
     `argocd_root_telegram`), `deploy/ci/gitops-check.sh` (render Argo CD với file đó, đếm ExternalSecret theo `enabledBy`).
-  - `deploy/ci/verify/gitops.sh` (`gitops-external-secrets`: entry `enabledBy` chỉ khi Argo CD render nó),
-    `deploy/k8s/drills/threats.sh` (SEC-5, ba ca của `argocd`).
+  - `deploy/k8s/drills/gitops/external-secrets/` (test `gitops-external-secrets`: entry `enabledBy` chỉ khi Argo CD render nó),
+    `deploy/k8s/drills/threats/sec-5-6-7/` (SEC-5, ba ca của `argocd`).
   - `docs/runbooks/argocd-notifier-key-rotation.md`: xoay khoá App, nghi khoá lộ.
 - A và B, phần `svp-gitops`: `platforms/eks/argo-cd.yaml` (service, template, trigger, subscription theo nhãn của root),
   `platforms/eks/svp-cluster.yaml` (`externalSecrets.argocdNotifications: true`); `base/argo-cd.yaml` giữ notifications tắt cho k3d.

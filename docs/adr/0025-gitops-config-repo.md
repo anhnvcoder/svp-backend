@@ -154,7 +154,7 @@ Bảng file đổi của repo code (`lib.sh`, `install.sh`, `gitops.sh`, `promot
 - Repo `svp-gitops`: `README.md`, `CODEOWNERS`, `renovate.json`, `base/`, `envs/{stg,prd}/` (overlay, `charts.yaml`, `images/`), `argocd/` (`project.yaml`, `bootstrap.json`, `apps/`), `.github/workflows/check.yml`; ruleset ở `github/rulesets.tf` của `svp-infra`.
 - Thư mục cấu hình: `gitops_dir`, `gitops_clone` của `deploy/k8s/lib.sh`, target `gitops-clone` của `deploy/k8s/k8s.mk`, `deploy/k8s/install.sh`.
 - Check: `deploy/ci/gitops-check.sh` (+ `gitops-check-test.sh`), luật trên file của cây ở `deploy/ci/gitops-tree-policies/` (conftest, [0050](0050-bash-to-standard-tools.md)), `deploy/ci/values-check.sh`, `deploy/ci/verify-release.sh`, `deploy/ci/common.sh`.
-- Argo CD: `argocd_root_app`, `follow_branch` của `deploy/k8s/lib.sh`, `deploy/k8s/gitops.sh`, `deploy/ci/verify/gitops.sh`.
+- Argo CD: `argocd_root_app`, `follow_branch` của `deploy/k8s/lib.sh`, `deploy/k8s/gitops.sh`, job `gitops` của `.github/workflows/verify.yml` (dựng ở commit của `origin/main` trong bản clone).
 - Promote, bản ghi, rescan: `deploy/ci/promote.sh`, `deploy/ci/release-set.sh`, `deploy/ci/record-stg.sh`, `deploy/ci/promote-prd.sh`, `deploy/ci/rescan.sh` (+ test), job `promote`, `promote-prd`, `rescan` của `.github/workflows/images.yml`, `record-stg` của `.github/workflows/verify.yml`, job `config` của `ci.yml`.
 - Cài đặt GitHub (người học): [`docs/runbooks/svp-gitops-setup.md`](../runbooks/svp-gitops-setup.md). Danh sách file đầy đủ theo mục: phụ lục, mục "Hiện thực ở".
 

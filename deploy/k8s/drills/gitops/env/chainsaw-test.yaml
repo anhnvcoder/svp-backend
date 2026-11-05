@@ -1,0 +1,66 @@
+# gitops-env, on the GitOps cluster svp (make k8s-gitops-up, which runs as staging): the overlays of envs/stg of
+# svp-gitops reached the cluster. Application argocd/gateway carries envs/stg/gateway.yaml in the valuesObject of its
+# sources (level 1 of the root passes it down), so the first SENTRY_ENVIRONMENT under env there is stg; and every
+# running gateway pod has SENTRY_ENVIRONMENT=stg in its gateway container (the only variable of the pod spec read): at
+# least one such pod, and none with another value or without one.
+#
+# Declarative only (assert, error) on the cluster Chainsaw is started on (run.sh: --kube-context k3d-svp); nothing is
+# created. Each check is one operation; continueOnError keeps the next one running after one fails, and the test still
+# fails.
+apiVersion: chainsaw.kyverno.io/v1alpha1
+kind: Test
+metadata:
+  name: gitops-env
+  labels:
+    drill: gitops
+spec:
+  description: "gitops-env: the overlay of envs/stg reached Application gateway and every running gateway pod"
+  # An existing namespace, so Chainsaw creates no ephemeral one and deletes nothing.
+  namespace: svp
+  steps:
+  - name: gitops-env-application
+    try:
+    - description: "gitops-env: Application argocd/gateway carries SENTRY_ENVIRONMENT=stg (envs/stg/gateway.yaml) in the valuesObject of its sources"
+      continueOnError: true
+      assert:
+        timeout: 10s
+        resource:
+          apiVersion: argoproj.io/v1alpha1
+          kind: Application
+          metadata:
+            name: gateway
+            namespace: argocd
+          spec:
+            (sources[].helm.valuesObject.env.SENTRY_ENVIRONMENT | [0]): stg
+
+  - name: gitops-env-pods
+    try:
+    - description: "gitops-env: a running gateway pod has SENTRY_ENVIRONMENT=stg in its gateway container"
+      continueOnError: true
+      assert:
+        timeout: 10s
+        resource:
+          apiVersion: v1
+          kind: Pod
+          metadata:
+            namespace: svp
+            labels:
+              app.kubernetes.io/name: gateway
+          spec:
+            (containers[?name == 'gateway'].env[] | [?name == 'SENTRY_ENVIRONMENT'].value | [0]): stg
+          status:
+            phase: Running
+    - description: "gitops-env: no running gateway pod has another SENTRY_ENVIRONMENT in its gateway container, or none"
+      error:
+        timeout: 10s
+        resource:
+          apiVersion: v1
+          kind: Pod
+          metadata:
+            namespace: svp
+            labels:
+              app.kubernetes.io/name: gateway
+          spec:
+            ((containers[?name == 'gateway'].env[] | [?name == 'SENTRY_ENVIRONMENT'].value | [0]) == 'stg'): false
+          status:
+            phase: Running

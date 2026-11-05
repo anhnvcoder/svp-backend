@@ -1,0 +1,124 @@
+# gitops-external-secrets, on the GitOps cluster svp (make k8s-gitops-up): the cluster's ExternalSecrets are exactly the
+# entries of files/external-secrets.yaml of chart svp-cluster at the commit the cluster runs that chart at (the
+# targetRevision of the chart's source in Application argocd/svp-cluster, which envs/stg/charts.yaml of svp-gitops pins;
+# a commit of this repository's history, so the checkout needs it), an entry with enabledBy (off unless the values turn
+# that key of externalSecrets on) only where Application svp-cluster renders its ExternalSecret (requiresPruning: in
+# the cluster, not in the render); each Ready, and the Secret each builds exists with the type and exactly the keys its
+# ExternalSecret names (those of its template, or of its data without one): one line per Secret. Only the names of the
+# keys leave kubectl's pipe, never a value.
+#
+# Scripts, as the list is read at run time; kubectl uses the caller's kubeconfig and context k3d-svp
+# (templates/probe-up.yaml says why). Each check is one operation; continueOnError keeps the next one running after
+# one fails, and the test still fails. Nothing is created.
+apiVersion: chainsaw.kyverno.io/v1alpha1
+kind: Test
+metadata:
+  name: gitops-external-secrets
+  labels:
+    drill: gitops
+spec:
+  description: "gitops-external-secrets: the cluster's ExternalSecrets are those chart svp-cluster renders, each Ready with its Secret's type and keys"
+  # An existing namespace, so Chainsaw creates no ephemeral one and deletes nothing.
+  namespace: svp
+  steps:
+  - name: gitops-external-secrets
+    try:
+    # Its stdout is the JSON the checks below read; what it says goes to stderr.
+    - description: "gitops-external-secrets: read the entries of files/external-secrets.yaml of chart svp-cluster at the commit Application svp-cluster runs it at, and the ExternalSecrets that Application renders"
+      script:
+        shell: bash
+        env:
+        - &kubeconfig
+          name: CALLER_KUBECONFIG
+          value: (env('KUBECONFIG'))
+        content: |
+          set -euo pipefail
+          export KUBECONFIG="$CALLER_KUBECONFIG"
+          file=deploy/helm/svp-cluster/files/external-secrets.yaml
+          repo=$(git rev-parse --show-toplevel)
+          app=$(kubectl --context k3d-svp -n argocd get applications.argoproj.io svp-cluster -o json) ||
+            { echo "FAIL  gitops-external-secrets: read Application argocd/svp-cluster" >&2; exit 1; }
+          rev=$(jq -r '[.spec.sources[]? | select(.path == "deploy/helm/svp-cluster") | .targetRevision][0] // ""' <<<"$app")
+          [[ $rev =~ ^[0-9a-f]{40}$ ]] && list=$(git -C "$repo" show "$rev:$file" 2>/dev/null) ||
+            { echo "FAIL  gitops-external-secrets: read $file at the commit Application svp-cluster runs it at ('$rev'; the checkout needs the whole history)" >&2; exit 1; }
+          echo "charts of ${rev:0:12} (Application svp-cluster)" >&2
+          # NAMESPACE/NAME of each entry, then its enabledBy when it has one.
+          entries=$(awk 'function entry() { if (id != "") print id, by }
+            /^- namespace: / { entry(); ns = $3; id = ""; by = ""; next }
+            /^  name: / { if (id == "" && ns != "") id = ns "/" $2 }
+            /^  enabledBy: / { by = $2 }
+            END { entry() }' <<<"$list")
+          [ -n "$entries" ] || { echo "FAIL  gitops-external-secrets: no entry in $file at ${rev:0:12}" >&2; exit 1; }
+          rendered=" $(jq -r '.status.resources // [] | .[] | select(.kind == "ExternalSecret" and
+            (.requiresPruning // false | not)) | "\(.namespace)/\(.name)"' <<<"$app" | paste -sd ' ' -) "
+          awk -v rendered="$rendered" 'NF > 1 && !index(rendered, " " $1 " ") {
+            print "not wanted: " $1 " (enabledBy " $2 "), as Application svp-cluster renders no ExternalSecret of it" }' \
+            <<<"$entries" >&2
+          want=$(awk -v rendered="$rendered" 'NF == 1 || index(rendered, " " $1 " ") { print $1 }' <<<"$entries" | LC_ALL=C sort)
+          jq -n --arg rev "$rev" --arg want "$want" '{rev: $rev, want: $want}'
+        check:
+          ($error): ~
+        outputs:
+        - name: chartsRev
+          value: (json_parse($stdout).rev)
+        - name: wanted
+          value: (json_parse($stdout).want)
+    - description: "gitops-external-secrets: the cluster's ExternalSecrets are exactly those entries"
+      continueOnError: true
+      script:
+        shell: bash
+        env:
+        - *kubeconfig
+        - {name: WANT, value: ($wanted)}
+        - {name: REV, value: ($chartsRev)}
+        content: |
+          set -euo pipefail
+          export KUBECONFIG="$CALLER_KUBECONFIG"
+          have=$(kubectl --context k3d-svp get externalsecrets.external-secrets.io -A -o json |
+            jq -r '.items[] | "\(.metadata.namespace)/\(.metadata.name)"' | LC_ALL=C sort) ||
+            { echo "FAIL  gitops-external-secrets: list the ExternalSecrets" >&2; exit 1; }
+          if [ "$have" != "$WANT" ]; then
+            echo "FAIL  gitops-external-secrets: the cluster's ExternalSecrets (>) differ from files/external-secrets.yaml at ${REV:0:12} (<):" >&2
+            diff <(printf '%s\n' "$WANT") <(printf '%s\n' "$have") | grep '^[<>]' >&2 || true
+            exit 1
+          fi
+          echo "ok    gitops-external-secrets: the cluster's $(grep -c . <<<"$have") ExternalSecrets are those of files/external-secrets.yaml at ${REV:0:12}"
+        check:
+          ($error): ~
+    - description: "gitops-external-secrets: each ExternalSecret is Ready and its Secret has the type and exactly the keys it names"
+      continueOnError: true
+      script:
+        shell: bash
+        env:
+        - *kubeconfig
+        content: |
+          set -euo pipefail
+          export KUBECONFIG="$CALLER_KUBECONFIG"
+          es=$(kubectl --context k3d-svp get externalsecrets.external-secrets.io -A -o json) ||
+            { echo "FAIL  gitops-external-secrets: list the ExternalSecrets" >&2; exit 1; }
+          # Name, type and key names of each Secret of the namespaces with ExternalSecrets; the values go no further
+          # than jq.
+          secrets=$(for ns in $(jq -r '[.items[].metadata.namespace] | unique[]' <<<"$es"); do
+            kubectl --context k3d-svp -n "$ns" get secrets -o json | jq -c --arg ns "$ns" \
+              '.items[] | {id: "\($ns)/\(.metadata.name)", type, keys: ((.data // {}) | keys)}' || exit 1
+          done | jq -s 'map({key: .id, value: .}) | from_entries') ||
+            { echo "FAIL  gitops-external-secrets: read the key names of the Secrets" >&2; exit 1; }
+          report=$(jq -r --argjson secrets "$secrets" '.items[] | "\(.metadata.namespace)/\(.metadata.name)" as $id
+            | ((.status.conditions // []) | map(select(.type == "Ready")) | first // {}) as $r
+            | ((.spec.target.template.data // null | if . == null then null else keys end)
+                // [.spec.data[]?.secretKey] | sort) as $want
+            | (.spec.target.template.type // "Opaque") as $type
+            | $secrets[$id] as $s
+            | if $r.status != "True" then
+                "FAIL  \($id): ExternalSecret Ready \($r.status // "-") \($r.reason // "-"): \($r.message // "" | gsub("\n"; " "))"
+              elif $s == null then "FAIL  \($id): no Secret"
+              elif ($s.keys | sort) != $want then "FAIL  \($id): Secret keys \($s.keys | sort | join(",")), want \($want | join(","))"
+              elif $s.type != $type then "FAIL  \($id): Secret type \($s.type), want \($type)"
+              else "ok    \($id): Ready, Secret \($type) with keys \($want | join(","))" end' <<<"$es") ||
+            { echo "FAIL  gitops-external-secrets: compare the ExternalSecrets with their Secrets" >&2; exit 1; }
+          [ -n "$report" ] || { echo "FAIL  gitops-external-secrets: no ExternalSecret in the cluster" >&2; exit 1; }
+          printf '%s\n' "$report"
+          if grep -q '^FAIL' <<<"$report"; then exit 1; fi
+          echo "ok    $(grep -c . <<<"$report") ExternalSecrets Ready, each Secret with its type and keys"
+        check:
+          ($error): ~

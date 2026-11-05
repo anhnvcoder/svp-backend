@@ -103,7 +103,7 @@ Hàm đọc Deployment nhận repo đích, trả payload và mọi trạng thái
 ## Hiện thực ở
 
 - `deploy/ci/dora.sh`, `deploy/ci/dora-test.sh`, `.github/workflows/dora.yml`, `deploy/ci/platform.sh` (`ci_deployment_list`, `ci_run_workflow`, `ci_deployment_record`), `deploy/ci/record-stg.sh`, `deploy/ci/platform-test.sh`.
-- Front matter postmortem: `docs/postmortems/README.md`, `docs/postmortems/261024-gameday-engagement-down.md`. Lịch tuần của job `gitops`: `.github/workflows/verify.yml`, `deploy/ci/verify/gitops.sh`.
+- Front matter postmortem: `docs/postmortems/README.md`, `docs/postmortems/261024-gameday-engagement-down.md`. Lịch tuần của job `gitops`: `.github/workflows/verify.yml`.
 - Chưa kiểm: cài đặt squash của `svp-gitops` (§5). DORA đã thành bài lab `dora/` của `svp-labs` ([ADR-0037](0037-mainpath-standard-tools.md)).
 
 ## Nguồn
