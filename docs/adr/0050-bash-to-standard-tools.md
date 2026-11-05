@@ -126,6 +126,20 @@ Chọn phương án A ở cả bốn mục. Ngoài ra:
 - Một bản luật bảng nguồn (B3 của phụ lục): luật chỉ ở `fail` của `deploy/helm/svp-policy/templates/imagevalidatingpolicy.yaml`;
   `deploy/k8s/lib.sh` bỏ `_release_sources_check`, `release_sources` đọc bảng và chỉ giữ bất biến prefix (đường dẫn registry kết thúc bằng `/`, không prefix nào là
   đầu prefix khác) mà mọi script dựa vào trước khi chọn nguồn; `deploy/ci/sources-test.sh` kiểm luật bằng render (không thêm công cụ), cùng hai hàm chọn nguồn đó.
+- Diễn tập k8s (mục 2; E1, E2 của phụ lục): Chainsaw ghim `CHAINSAW_VERSION` của `Makefile` (cài ở `make tools`), config
+  `deploy/k8s/drills/.chainsaw.yaml`, StepTemplate chung `deploy/k8s/drills/templates/`, test `deploy/k8s/drills/threats/<ID>/`,
+  `supplychain/case-<chữ>/` (helper `supplychain/lib.sh`), `gitops/<mục>/`; `make drill-k8s-threats`, `drill-k8s-supplychain`,
+  `drill-k8s-gitops` (`deploy/k8s/k8s.mk`) chạy chúng qua glue `deploy/k8s/drills/run.sh` (guard context, tìm giá trị Secret trong log
+  và report; test `run-test.sh`); `make chainsaw-lint` (lint, kubeconform của StepTemplate theo schema cùng tag ở
+  `deploy/k8s/drills/.schemas/`); hai script diễn tập bash xoá, `deploy/k8s/drills/lib.sh` chỉ còn phần `traffic.sh` dùng; test không
+  cluster của diễn tập gitops `deploy/k8s/drills/gitops/gitops-test.sh`.
+- Runner `verify.yml` (C1, C2 của phụ lục): mỗi target là một bước của `.github/workflows/verify.yml` (`timeout-minutes` riêng, output vào
+  file, `targets` lọc bằng `if:`), script ngắn của bước ở `deploy/ci/verify-steps/` (`steps.sh`, `supplychain.sh`, `admission-metrics.sh`,
+  `objstore.sh`, mỗi script một test cạnh nó); ba kiểm cluster của kịch bản `gitops` thành test Chainsaw ở `deploy/k8s/drills/gitops/`;
+  `deploy/ci/verify-collect.sh` chỉ đưa lên artifact kết quả máy đọc, `verify-collect-test.sh` còn ca của phần lọc đó, ca restart sang
+  `deploy/k8s/restart-test.sh`; runner tự viết và các file kịch bản xoá; job `config` của `.github/workflows/ci.yml` chạy
+  `make chainsaw-lint` và các test trên; `deploy/ci/changed-services.sh` (script của bước không build image). Lượt `verify.yml` của
+  hai kịch bản trên nhánh của giai đoạn này: **kiểm sau push**.
 
 ## Thông tin thêm
 

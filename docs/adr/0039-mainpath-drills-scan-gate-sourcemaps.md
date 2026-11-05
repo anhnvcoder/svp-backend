@@ -128,9 +128,9 @@ tải (§3 của Phương án đã cân nhắc): **người học chọn**, chư
 Repo `svp-backend` (đường dẫn từ gốc repo):
 
 - `deploy/k8s/drills/` (xoá `keda.sh`, `pdb.sh`, `canary.sh`, `web-canary.sh`, `backup.sh`, `gitops.sh`, `web-obs.sh`), target của chúng ở `deploy/k8s/k8s.mk`, `deploy/k8s/cloud/` (còn `check.sh` cho Job k6), `deploy/k8s/install.sh`, `deploy/k8s/lib.sh`, `deploy/helm/svp-data/`, `deploy/helm/svp-service/`, `renovate.json`, `Makefile` (mục 1).
-- `.github/workflows/verify.yml`, `deploy/ci/verify/gitops.sh`, `deploy/ci/verify/compose-obs.sh` (thu gọn), `deploy/ci/verify/` (xoá năm kịch bản), `deploy/ci/verify-run.sh`, `verify-host.sh`, `verify-mask.sh`, `verify-collect.sh`; `deploy/ci/verify-sample.sh`, `verify-tempo.sh` (xoá); `deploy/k6/cloud/run.sh` (bỏ chế độ runner), `deploy/k6/cloud/render.sh` (mục 1).
+- `.github/workflows/verify.yml` (hai kịch bản tuần `compose-obs`, `gitops`; mỗi target một bước từ [0050](0050-bash-to-standard-tools.md)), `deploy/ci/verify-steps/`, `verify-host.sh`, `verify-mask.sh`, `verify-collect.sh`; `deploy/ci/verify-sample.sh`, `verify-tempo.sh` (xoá); `deploy/k6/cloud/run.sh` (bỏ chế độ runner), `deploy/k6/cloud/render.sh` (mục 1).
 - `deploy/ci/scan-gate.sh` (viết lại gọn), `deploy/ci/build-image.sh`, `deploy/ci/rescan.sh`, `deploy/ci/changed-services.sh`, `grype_sbom` của `deploy/ci/common.sh`, `deploy/ci/scan-gate-test.sh`, `.trivyignore.yaml`, `.grype.yaml`, `deploy/ci/trivy-config-ignore.yaml`, job `config` của `.github/workflows/ci.yml` (mục 2).
-- `deploy/ci/sourcemaps-image.sh`, `gitops-sourcemaps.sh` (+ test, xoá), `deploy/ci/ghcr-digest.sh` (+ test), `deploy/k8s/drills/supplychain.sh`, `deploy/observability/glitchtip/sourcemaps.sh` (bỏ `SOURCEMAPS_DIR`) (mục 3).
+- `deploy/ci/sourcemaps-image.sh`, `gitops-sourcemaps.sh` (+ test, xoá), `deploy/ci/ghcr-digest.sh` (+ test), `deploy/k8s/drills/run.sh` (diễn tập supplychain), `deploy/observability/glitchtip/sourcemaps.sh` (bỏ `SOURCEMAPS_DIR`) (mục 3).
 
 Repo khác:
 
@@ -145,3 +145,7 @@ Repo khác:
 ## Thông tin thêm
 
 Phụ lục: [`appendix/0039-mainpath-drills-scan-gate-sourcemaps.md`](appendix/0039-mainpath-drills-scan-gate-sourcemaps.md) (dòng trạng thái lúc chốt, bảng đếm dòng, bảng lựa chọn có trạng thái công cụ, nguyên văn quyết định §2, hệ quả có số dòng, lệnh đã chạy [T1]–[T7], [G1]–[G5], nguồn có ghi chú).
+
+### Chỉnh bởi
+
+- §1: [0050](0050-bash-to-standard-tools.md): `drill-k8s-supplychain`, `drill-k8s-threats` viết thành test Chainsaw (`deploy/k8s/drills/<diễn tập>/`, `make drill-k8s-*` qua `deploy/k8s/drills/run.sh`); runner của `verify.yml` thành từng bước Actions, artifact chỉ còn kết quả máy đọc.

@@ -347,6 +347,20 @@ jobs:
       # would use otherwise: a pull request that breaks one of their rules fails here. Fake secrets, kubectl, docker and
       # make in a temporary directory; bash, git, jq and openssl, no network.
       - run: deploy/ci/verify-collect-test.sh
+      # The steps of verify.yml: the check of its input targets and the table of its steps, and the shape of its two
+      # jobs (each target a step with its if:, its timeout-minutes and its output to a file, the time kept for the
+      # steps after them; yq through Docker), the supply chain step with the age of its drill images on a scheduled
+      # run, the admission figures, the gate of the object store's tests; fake make, cosign, kubectl, curl and nc,
+      # no network.
+      - run: deploy/ci/verify-steps/steps-test.sh
+      - run: deploy/ci/verify-steps/supplychain-test.sh
+      - run: deploy/ci/verify-steps/admission-metrics-test.sh
+      - run: deploy/ci/verify-steps/objstore-test.sh
+      # The glue of make drill-k8s-* (fake chainsaw and kubectl: the context guard, the search for the Secret values
+      # in the drill's output, the images of the supply chain drill), and the restart of a workload whose Secret
+      # changed (fake kubectl, a Rollout's canary). bash and jq, no network, no cluster.
+      - run: deploy/k8s/drills/run-test.sh
+      - run: deploy/k8s/restart-test.sh
       # The digest ghcr-digest.sh reads from GHCR for the supply chain drill (the newest drill image): a fake ghcr_oras
       # (the pinned ORAS) and a throwaway repository; bash and git, no network.
       - run: deploy/ci/ghcr-digest-test.sh
@@ -364,6 +378,11 @@ jobs:
         run: make tools ci-tools
       # Helm for gitops-check-test.sh below; make targets put GOBIN on PATH themselves.
       - run: echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
+      # The Chainsaw drills without a cluster: chainsaw lint and kubeconform of every file under deploy/k8s/drills/, then
+      # the tests of drill-k8s-gitops run with chainsaw test --no-cluster over a fake kubectl, and their assertions
+      # through chainsaw assert on made-up objects (yq through Docker). No network but the pinned images.
+      - run: make chainsaw-lint
+      - run: deploy/k8s/drills/gitops/gitops-test.sh
       - run: make slo-check
       - run: make otelcol-validate
       # make env writes a .env of fresh random secrets (mode 600) that lives on this runner until the job ends: it is

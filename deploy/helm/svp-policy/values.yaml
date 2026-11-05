@@ -36,7 +36,7 @@ imageVerification:
   # line of this file names the key: the checker of svp-gitops pinned at an older commit reads it that way.
   requireProvenance: false
 
-# Drills only (deploy/k8s/drills/supplychain.sh renders a temporary copy with another name, a shorter age and an
-# objectSelector on a drill label): the policy's name, and the pods it applies to within the namespace.
+# Drills only (the tests of deploy/k8s/drills/supplychain/ render temporary copies with another name and an objectSelector
+# on a drill label, case f with a shorter age): the policy's name, and the pods it applies to within the namespace.
 name: svp-images
 objectSelector: {}

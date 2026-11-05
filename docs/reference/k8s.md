@@ -220,8 +220,17 @@ Loại tài liệu (Diátaxis): **reference**, tra cứu khi cần một lệnh 
   `.k8s/drills/traffic-<time>.log`, chạy tới khi dừng (qua cả lúc push phát hành trên cluster GitOps); `stop` chỉ dừng
   đúng pid đã ghi và in số request theo status. **LOCAL LAB ONLY:** đăng ký user mới và xoá khoá rate limit đăng ký ở
   Valkey db 10 của cluster.
-- `make k8s-smoke`, `make drill-k8s-threats`: trên cluster đang chạy, qua Envoy với `.k8s/ca.crt` (thiếu thì chạy `make k8s-ca`), script ở
-  `deploy/k8s/drills/` (`k8s-smoke` dùng `deploy/compose/smoke.sh`). Lần lượt: luồng đầu-cuối như `make smoke`;
+- Diễn tập trên cluster là test Chainsaw ở `deploy/k8s/drills/<diễn tập>/` (nhãn `drill=<diễn tập>`, config chung `.chainsaw.yaml`,
+  StepTemplate chung ở `templates/`). `make drill-k8s-threats`, `drill-k8s-supplychain`, `drill-k8s-gitops` gọi
+  `deploy/k8s/drills/run.sh <diễn tập>`: kiểm context trước (`SVP_KUBE_CONTEXT` trống hay `k3d-svp`, kubeconfig có context `k3d-svp`, API
+  trả lời; sai thì dừng, không gọi cluster nào khác), rồi một lần `chainsaw test --kube-context k3d-svp --parallel 1` cho đúng một diễn tập
+  (hai diễn tập không bao giờ chạy cùng lúc). Output vào `.k8s/drills/<diễn tập>-<UTC>.log`, report JUnit `.k8s/drills/<diễn tập>-<UTC>.xml`;
+  target đỏ khi một test đỏ, không có report, hay số test trong report khác số test của thư mục (trừ test được bỏ có dòng `skip`).
+  Chainsaw không SKIP lúc chạy: một ca SKIP là bước xanh có dòng `SKIP` kèm lý do trong log. Test chạy `script` dùng kubeconfig
+  của người gọi và ghi `--context k3d-svp`. Kiểm tĩnh: `make chainsaw-lint`; glue: `deploy/k8s/drills/run-test.sh`.
+- `make k8s-smoke`, `make drill-k8s-threats`: trên cluster đang chạy, qua Envoy với `.k8s/ca.crt` (thiếu thì chạy `make k8s-ca`;
+  `k8s-smoke` dùng `deploy/compose/smoke.sh`, `drill-k8s-threats` chạy sau nó trên cùng cluster, mỗi mục một test ở
+  `deploy/k8s/drills/threats/<ID>/`, ID threat model viết thường). Lần lượt: luồng đầu-cuối như `make smoke`;
   các dòng Kubernetes của threat model, mỗi dòng có ca đối chứng (pod thử ở namespace `svp-probe` tạo rồi xoá,
   NetworkPolicy, ACL Kafka, PSA, `pg_hba`, RL-1 với `X-Forwarded-For` giả, pprof/metrics, UI không lộ, Grafana 401,
   RBAC: không ServiceAccount nào của `svp` đọc Secret hay pod, CloudNativePG và Envoy Gateway chỉ có quyền ở các
@@ -241,20 +250,23 @@ Loại tài liệu (Diátaxis): **reference**, tra cứu khi cần một lệnh 
   không ServiceAccount nào của `svp` tạo được ExternalSecret hay SecretStore, ClusterRole `view`/`edit`/`admin` không cấp gì trên
   `external-secrets.io`; mục `SEC-6-reader`, cùng điều kiện: dry run ở `svp-data` (namespace có `svp-secrets-reader`), pod chạy dưới
   ServiceAccount đó và Secret token của nó bị `svp-store-serviceaccount-pods`, `-tokens` từ chối đúng message, đối chứng cùng pod với
-  `default` và Secret token của `default` được nhận), log ở
-  `.k8s/drills/threats-<time>.log` được dò các giá trị
-  Secret đã đọc. Kết quả và JSON ở `.k8s/drills/`. **LOCAL LAB ONLY:** cả hai target xoá khoá `svp:gw:rl:register:*` ở
+  `default` và Secret token của `default` được nhận; trên cluster không có External Secrets Operator hai test nhãn
+  `requires=external-secrets` bị bỏ, mỗi test một dòng `skip`). `run.sh` đọc trước các giá trị Secret mà test dùng (6 user Kafka, admin
+  Grafana, 3 user object store; vào file quyền 600, xoá khi thoát, không bao giờ trên dòng lệnh; dưới 10 giá trị thì đỏ trước Chainsaw), dòng
+  output chứa một giá trị không in ra terminal, rồi dò log và report: dòng nào chứa giá trị là đỏ, chỉ in số dòng. **LOCAL LAB ONLY:** cả hai target xoá khoá `svp:gw:rl:register:*` ở
   Valkey db 10 của cluster (qua `kubectl exec`). Các diễn tập đo một lần (KEDA và RAM, PDB, canary của gateway và của web, backup và PITR,
   `measure-canary`, `measure-gitops`, `drill-k8s-web-obs`) là bài lab `drills/` của `svp-labs`
   ([ADR-0039](../adr/0039-mainpath-drills-scan-gate-sourcemaps.md) §1); quy trình khôi phục Postgres bằng tay ở
   [`postgres-restore.md`](../runbooks/postgres-restore.md).
 - `make drill-k8s-supplychain [SUPPLYCHAIN_UNSIGNED=<digest GHCR>] [SUPPLYCHAIN_VULNERABLE=<digest GHCR>]
-  [SUPPLYCHAIN_NO_PROVENANCE=<digest GHCR>|none] [SUPPLYCHAIN_ENFORCE_TMP=1]` (script `deploy/k8s/drills/supplychain.sh`;
+  [SUPPLYCHAIN_NO_PROVENANCE=<digest GHCR>|none] [SUPPLYCHAIN_ENFORCE_TMP=1]` (mỗi ca một test ở `deploy/k8s/drills/supplychain/case-<chữ>/`;
+  bốn biến thành values Chainsaw `unsigned`, `vulnerable`, `noProvenance`, `enforceTmp`; ảnh `drill-unsigned`, `drill-no-provenance` không
+  truyền thì `run.sh` tra trên GHCR một lần cho mọi ca, tra lỗi thì để trống và in lý do; `vulnerable` không bao giờ tự tra;
   ba biến digest nhận `<imagePrefix><tên>@sha256:…` với `<tên>` thuộc `services` hay `drillImages` của nguồn có prefix đó, như phép 1
   của policy, cosign đọc bằng identity của nguồn có prefix đó như Kyverno chọn attestor): policy Kyverno của `svp`, mỗi ca
   một dòng PASS/FAIL/SKIP và chỉ PASS khi đúng message của rule cần từ chối; pod gửi bằng `--dry-run=server` (trừ ca b là
   Deployment thật, xoá sau). Ca: (a) bản phát hành đã ký, sạch được nhận, hai lần liền (lần hai từ cache); (b)
-  `drill-unsigned` bị từ chối vì thiếu chữ ký (mặc định script tự lấy digest mới nhất của `<imagePrefix của backend>drill-unsigned`,
+  `drill-unsigned` bị từ chối vì thiếu chữ ký (mặc định tự lấy digest mới nhất của `<imagePrefix của backend>drill-unsigned`,
   ẩn danh, `SUPPLYCHAIN_UNSIGNED=<digest>` ghi đè, không tìm thấy thì SKIP; không dùng manifest con của một bản phát hành đã ký: với
   bundle, attestation của bản đó trỏ cả tới từng manifest con và Kyverno tính là chữ ký, nên manifest con qua phép chữ ký và bị từ chối
   ở phép `vuln`); (c) `drill-vulnerable` bị từ chối vì CRITICAL, ca này tự đọc
@@ -266,7 +278,7 @@ Loại tài liệu (Diátaxis): **reference**, tra cứu khi cần một lệnh 
   chưa ký bị từ chối; (k) đường keyless với image công khai của nhà cung cấp khác (đúng identity nhận, sai identity từ chối;
   chỉ trên dev); (l) image diễn tập `drill-no-provenance` (bản build sạch như `drill-unsigned`, ký và attest `vuln` (bundle) như bản phát hành, không attest provenance; [ADR-0036](../adr/0036-repo-rename.md) §6) bị từ
   chối đúng message của phép provenance, chỉ khi policy đang chạy kiểm provenance (có attestation `provenance`), không thì SKIP "policy
-  off" (không hỏi GHCR); mặc định script tự lấy digest mới nhất của `<imagePrefix của backend>drill-no-provenance` (ẩn danh),
+  off"; mặc định tự lấy digest mới nhất của `<imagePrefix của backend>drill-no-provenance` (ẩn danh),
   `SUPPLYCHAIN_NO_PROVENANCE=<digest>` ghi đè, `none` làm ca SKIP; trước khi gửi pod, cosign (ẩn danh) kiểm image có chữ ký, đúng một
   `vuln` hai nền tảng không CRITICAL trong tuổi tối đa và không có provenance, không tìm thấy hay thiếu một điều thì FAIL kèm lệnh dispatch
   `gh workflow run images.yml --ref main -f drill=true` (người học chạy, trong 72 giờ trước lượt diễn tập); ca (a), (c), (f), (l) đọc
@@ -279,11 +291,14 @@ Loại tài liệu (Diátaxis): **reference**, tra cứu khi cần một lệnh 
   `svp-drill=supplychain-swap`, một bản sao mỗi cặp cho cả hai chiều, xoá ngay sau), bị từ chối đúng message phép chữ ký nêu nguồn B
   (chọn nhầm attestor của A thì gặp identity của B và lọt qua; không đặt digest của A dưới prefix của B: GHCR không có manifest đó,
   Kyverno kéo image khớp glob trước mọi phép nên chỉ nhận lỗi registry; chưa bản nào của B chạy trong `svp` thì SKIP); bản của mỗi
-  nguồn khác `backend` mà pod `svp` chạy được nhận (chưa có thì SKIP). Đường dev là Audit nên script từ chối chạy trừ
-  khi `SUPPLYCHAIN_ENFORCE_TMP=1`: chạy (k), nâng tạm `svp-policy` lên Enforce cho các ca còn lại rồi trả Audit; trên
+  nguồn khác `backend` mà pod `svp` chạy được nhận (chưa có thì SKIP). Đường dev là Audit nên diễn tập từ chối chạy trừ
+  khi `SUPPLYCHAIN_ENFORCE_TMP=1`: chạy (k) trước mọi ca khác, mỗi ca còn lại nâng tạm `svp-policy` lên Enforce rồi trả Audit; trên
   đường dev chưa có image ký nên (a), (c), (f) và nửa nhận của (h) SKIP. Trên cluster GitOps (lượt 40954609229, nhánh PR-B):
-  a–i và (l) PASS, (l) đúng message của phép provenance, (k) SKIP như thiết kế. Khi kết thúc script trả Kyverno, Argo CD sync, Audit về như cũ, xoá policy tạm, `svp-probe`, và so
-  webhook với ảnh chụp đầu; JSON ở `.k8s/drills/`. Không gọi API của gateway, không xoá khoá rate limit nào.
+  a–i và (l) PASS, (l) đúng message của phép provenance, (k) SKIP như thiết kế. Khi kết thúc mỗi test trả Kyverno, Argo CD sync, Audit về như cũ, xoá policy tạm, `svp-probe`, và so
+  webhook với ảnh chụp đầu của nó; log và report JUnit `.k8s/drills/supplychain-<UTC>.log`, `.xml`. Không gọi API của gateway, không xoá
+  khoá rate limit nào.
+- `make drill-k8s-gitops`: các kiểm của cluster GitOps (`make k8s-gitops-up`), mỗi kiểm một test ở `deploy/k8s/drills/gitops/`; log và
+  report JUnit `.k8s/drills/gitops-<UTC>.log`, `.xml`.
 - `make k8s-ui-grafana`, `k8s-ui-prometheus`, `k8s-ui-alertmanager`, `k8s-ui-glitchtip`, `k8s-ui-argocd`: port-forward chỉ
   trên `127.0.0.1` (lần lượt 3000, 9090, 9093, 8000, 8081) trong lúc target chạy (Ctrl-C để đóng); không HTTPRoute,
   LoadBalancer hay NodePort nào cho UI (OPS-2). Grafana đăng nhập `admin` + `SVP_GRAFANA_ADMIN_PASSWORD`, GlitchTip bằng

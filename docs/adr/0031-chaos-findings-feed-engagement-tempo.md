@@ -135,7 +135,7 @@ sampling hay code tự viết. Dòng chi tiết rút khỏi các § ở [mục "
   ở `internal/pgretry/pgretrytest/`; `DATABASE_MAX_CONNS` ở `deploy/k8s/values/services/engagement-service.yaml`; test retry và breaker
   của gateway ở `services/gateway/cmd/gateway/main_test.go`; giả thuyết của `deploy/k8s/cloud/chaos/b-network-delay-engagement.yaml`.
 - Tempo (§3): giới hạn bộ nhớ và trần ingest, kèm phép tính, ở `deploy/k8s/values/tempo.yaml`; phép kiểm của runner ở
-  `deploy/ci/verify-tempo.sh`, step trong `deploy/ci/verify/chaos.sh`, `deploy/ci/verify/k6-cloud-mini.sh`, namespace `svp-obs` của
+  `deploy/ci/verify-tempo.sh`, step của kịch bản `chaos`, `k6-cloud-mini` (nay là bài lab `drills/` của `svp-labs`, [0039](0039-mainpath-drills-scan-gate-sourcemaps.md) §1), namespace `svp-obs` của
   `pods.tsv` ở `deploy/ci/verify-sample.sh`, bộ lọc artifact ở `deploy/ci/verify-collect.sh`, `deploy/ci/verify-collect-test.sh`.
 - Hiện trạng: [`explanation/reliability.md`](../explanation/reliability.md), [`explanation/observability.md`](../explanation/observability.md).
 

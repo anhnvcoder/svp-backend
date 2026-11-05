@@ -99,5 +99,5 @@ gh run list --workflow images.yml --event schedule --limit 2          # lịch c
 
 - ADR: [ADR-0015](../adr/0015-cicd-devsecops-stage5.md) §7 (rescan, 48 giờ, `values_ref`), §8 (Kyverno, 72 giờ),
   [threat model](../threat-model.md) FF-8, SC-1, SC-7.
-- Diễn tập tái hiện: `make drill-k8s-supplychain` ca (f) (attestation quá hạn với policy tạm tuổi tối đa 5 s); kiểm ngưỡng 48
-  giờ bằng `SVP_ATTEST_MAX_AGE=1m` với `make k8s-gitops-up` (dừng trước khi tạo gì).
+- Diễn tập tái hiện: `make drill-k8s-supplychain` ca (f), test `deploy/k8s/drills/supplychain/case-f/` (attestation quá hạn với
+  policy tạm tuổi tối đa 5 s); kiểm ngưỡng 48 giờ bằng `SVP_ATTEST_MAX_AGE=1m` với `make k8s-gitops-up` (dừng trước khi tạo gì).

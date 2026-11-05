@@ -90,4 +90,4 @@ cài đặt trên `anhnvcoder` → **Suspend** (mọi token của App ngừng ch
 
 - [ADR-0032](../adr/0032-argocd-deploy-status.md) (A, B), [ADR-0026](../adr/0026-secrets-gitops.md) (Secret qua External Secrets).
 - Threat model SEC-5, SEC-6, SEC-8.
-- `make drill-k8s-threats` SEC-5 kiểm controller ESO chỉ ghi được Secret này ở `argocd`; không có diễn tập xoay khoá.
+- `make drill-k8s-threats` SEC-5 (`deploy/k8s/drills/threats/sec-5-6-7/`) kiểm controller ESO chỉ ghi được Secret này ở `argocd`; không có diễn tập xoay khoá.

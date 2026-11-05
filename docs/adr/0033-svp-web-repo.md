@@ -156,10 +156,10 @@ Chọn các phương án in đậm ở "Phương án đã cân nhắc" và tri�
 ## Hiện thực ở
 
 - Hợp đồng (§1): `services/gateway/openapi.yaml`, `deploy/ci/contract.sh` (+ `contract-test.sh`), `Makefile` (`OASDIFF_IMAGE`, `ORAS_IMAGE`, `api-contract-check`), jobs `api-contract` của `ci.yml` và `contract` của `images.yml`.
-- Nguồn phát hành (§2): `deploy/helm/svp-policy/files/sources.json`, `deploy/helm/svp-policy/templates/imagevalidatingpolicy.yaml`, `deploy/k8s/lib.sh` (`release_sources`), `deploy/ci/common.sh`, `deploy/ci/verify-release.sh`, `deploy/k8s/drills/supplychain.sh`.
+- Nguồn phát hành (§2): `deploy/helm/svp-policy/files/sources.json`, `deploy/helm/svp-policy/templates/imagevalidatingpolicy.yaml`, `deploy/k8s/lib.sh` (`release_sources`), `deploy/ci/common.sh`, `deploy/ci/verify-release.sh`, `deploy/k8s/drills/supplychain/case-m/`.
 - Luật `svp-gitops` (§3): `deploy/ci/gitops-check.sh` (+ test; luật nguồn của file image và luật tác giả nay ở `envs.rego`, `author.rego` của `deploy/ci/gitops-tree-policies/`), `deploy/ci/release-set.sh`, `deploy/ci/dora.sh`; `.github/workflows/check.yml` của `svp-gitops` (`CHECKER_COMMIT`, clone `svp-web`).
 - Promote, rescan, script chung (§4, §5): `deploy/ci/promote.sh` (`--source`), `deploy/ci/rescan.sh`, `deploy/ci/build-image.sh`, `deploy/ci/sign-image.sh`, `deploy/ci/platform-guard.sh`.
-- Đường dev, source map, runner (§6, §7): `deploy/k8s/lib.sh` (`web_dir`, `web_clone`, `compose_images`), `deploy/compose/compose.mk` (`IMAGES`, `WEB_FROM`), `deploy/ci/sourcemaps-image.sh`, `deploy/ci/gitops-sourcemaps.sh`, `deploy/ci/verify-run.sh`, `.github/workflows/verify.yml`.
+- Đường dev, source map, runner (§6, §7): `deploy/k8s/lib.sh` (`web_dir`, `web_clone`, `compose_images`), `deploy/compose/compose.mk` (`IMAGES`, `WEB_FROM`), `deploy/ci/sourcemaps-image.sh`, `deploy/ci/gitops-sourcemaps.sh`, `.github/workflows/verify.yml` (bước `make gitops-clone`).
 - Repo `svp-web` (§10) và cài đặt GitHub: [`docs/runbooks/svp-frontend-setup.md`](../runbooks/svp-frontend-setup.md). Danh sách file đầy đủ theo PR-1, PR-2: phụ lục, mục "Hiện thực ở".
 
 ## Nguồn

@@ -1,0 +1,833 @@
+# RBAC of docs/threat-model.md on cluster svp: no ServiceAccount of namespace svp may get or list secrets or pods in any
+# namespace of the cluster (every one it has when the test runs, not a fixed list) or cluster-wide (kubectl auth can-i
+# --as), and in no namespace does a rule of its SelfSubjectRulesReview let it get, list or watch them, by name or not
+# (can-i asked without a name says no to a Role that grants only named objects; rules-reads.jq). Controls: the rule check
+# flags exactly the named, the watch and the wildcard rules of a sample review, and finds the Argo Rollouts controller's
+# right to list pods in svp, to which can-i says yes as well.
+# Operators: the CloudNativePG operator may get and list Secrets in cnpg-system and svp-data only, create pods, exec into
+# them, patch Deployments, create ServiceAccounts and delete Secrets in svp-data only, and create a ServiceAccount token
+# nowhere; it may not create, update, patch or delete a webhook configuration, a ValidatingAdmissionPolicy or binding,
+# svp-cnpg-operator-secrets by name included (control: as the same user, can-i says yes to create secrets in
+# cnpg-system); as it, in cnpg-system (server-side dry runs), a token Secret for ServiceAccount plugin-barman-cloud, the
+# same named cnpg-ca-secret and an Opaque Secret of another name are refused by ValidatingAdmissionPolicy
+# svp-cnpg-operator-secrets, and so is a label on another TLS Secret there (controls: as it, an Opaque cnpg-ca-secret
+# passes the policy and is AlreadyExists, a label on cnpg-webhook-cert passes; as the test's admin, the token Secret is
+# admitted); the Envoy Gateway controller gets and lists Secrets in the namespaces it watches only (envoy-gateway-system,
+# svp, svp-data, svp-edge) and patches pods nowhere, Kyverno's admission and reports controllers get and list Secrets in
+# kyverno only, neither cluster-wide (can-i in every namespace and -A); the exceptions (cert-manager, Argo CD, Kyverno,
+# the Barman Cloud plugin) are printed as info with their reason.
+#
+# Each check is one operation named by its ID; continueOnError keeps the next checks running after one fails, and the
+# test still fails. Nothing is created: every Secret and label is a server-side dry run. Impersonation (--as) is
+# kubectl's, so those checks are scripts; kubectl uses the caller's kubeconfig and context k3d-svp
+# (templates/probe-up.yaml says why).
+apiVersion: chainsaw.kyverno.io/v1alpha1
+kind: Test
+metadata:
+  name: rbac
+  labels:
+    drill: threats
+spec:
+  # An existing namespace, so Chainsaw creates no ephemeral one and deletes nothing.
+  namespace: svp
+  steps:
+  - name: rbac-svp-serviceaccounts
+    try:
+    - description: "RBAC: list the ServiceAccounts of svp and the namespaces of the cluster"
+      script:
+        shell: bash
+        env:
+        - &kubeconfig
+          name: CALLER_KUBECONFIG
+          value: (env('KUBECONFIG'))
+        content: |
+          set -euo pipefail
+          export KUBECONFIG="$CALLER_KUBECONFIG"
+          sas=$(kubectl --context k3d-svp -n svp get serviceaccounts -o jsonpath='{.items[*].metadata.name}')
+          [ -n "$sas" ] || { echo "FAIL  RBAC: list the ServiceAccounts of svp" >&2; exit 1; }
+          # The ServiceAccount of the SecretStore of svp (GitOps path) gets named source Secrets of svp-secrets by design:
+          # test sec-5-6-7 checks it gets exactly those, and test sec-6-reader that no pod may run as it and no Secret hold
+          # its token.
+          if [[ " $sas " == *" svp-secrets-reader "* ]]; then
+            sas=$(tr ' ' '\n' <<<"$sas" | grep -vx svp-secrets-reader | paste -sd ' ' -)
+            echo "info  RBAC: ServiceAccount svp/svp-secrets-reader (the SecretStore's, External Secrets Operator) is left to items SEC-5/6/7 (its rights) and SEC-6-reader (no pod runs as it)" >&2
+          fi
+          # Every namespace the cluster has now, not a fixed list: a RoleBinding in any of them, a platform namespace's
+          # included, can grant a ServiceAccount of svp access there, and kubectl auth can-i -A answers only for a right
+          # that holds in every namespace at once.
+          nss=$(kubectl --context k3d-svp get namespaces -o jsonpath='{.items[*].metadata.name}')
+          [ -n "$nss" ] || { echo "FAIL  RBAC: list the namespaces of the cluster" >&2; exit 1; }
+          jq -n --arg sas "$sas" --arg nss "$nss" '{serviceAccounts: $sas, namespaces: $nss}'
+        check:
+          ($error): ~
+        outputs:
+        - name: serviceAccounts
+          value: (json_parse($stdout).serviceAccounts)
+        - name: namespaces
+          value: (json_parse($stdout).namespaces)
+    # One background job per ServiceAccount: 4 calls per namespace, a tenth of a second per call.
+    - description: "RBAC: every ServiceAccount of svp, in each namespace of the cluster and cluster-wide: can-i says no to get and list of secrets and pods"
+      continueOnError: true
+      script:
+        shell: bash
+        env:
+        - *kubeconfig
+        - {name: SERVICE_ACCOUNTS, value: ($serviceAccounts)}
+        - {name: NAMESPACES, value: ($namespaces)}
+        content: |
+          set -euo pipefail
+          export KUBECONFIG="$CALLER_KUBECONFIG"
+          work=$(mktemp -d)
+          trap 'rm -rf "$work"' EXIT
+          for sa in $SERVICE_ACCOUNTS; do
+            (
+              for ns in $NAMESPACES -A; do
+                if [ "$ns" = -A ]; then scope=(-A); else scope=(-n "$ns"); fi
+                for r in secrets pods; do
+                  for v in get list; do
+                    out=$(kubectl --context k3d-svp auth can-i "$v" "$r" "${scope[@]}" --as="system:serviceaccount:svp:$sa" 2>&1 || true)
+                    echo "$sa $ns $v $r $out"
+                  done
+                done
+              done
+            ) >"$work/$sa" &
+          done
+          wait
+          n=0 bad=0
+          for sa in $SERVICE_ACCOUNTS; do
+            while read -r _ ns v r out; do
+              n=$((n + 1))
+              [[ $out == no ]] || {
+                echo "FAIL  RBAC: ServiceAccount svp/$sa may not $v $r in ${ns/-A/all namespaces} (got '$out')" >&2
+                bad=$((bad + 1))
+              }
+            done <"$work/$sa"
+          done
+          [ "$bad" = 0 ] || exit 1
+          echo "ok    RBAC: $n can-i checks, every ServiceAccount of svp ($SERVICE_ACCOUNTS) in each namespace of the cluster ($NAMESPACES) and cluster-wide: no to get and list of secrets and pods"
+        check:
+          ($error): ~
+          "(starts_with($stdout, 'ok    RBAC: '))": true
+    # The rules review catches what can-i asked without a name answers no to: a Role that grants get on named Secrets or
+    # pods only, and watch. A review lists the rules of the Roles bound in the namespace and of every ClusterRole bound,
+    # the way the authorizer applies them. --validate=false: kubectl's client-side schema check lists the cluster's CRDs,
+    # and it does so as the impersonated ServiceAccount, which may not list them; the check then fails before the review
+    # is sent. The object is fixed here and the API server still decodes it.
+    - description: "RBAC: no rule of the rules review of any ServiceAccount of svp lets it get, list or watch secrets or pods in any namespace, by name or not"
+      continueOnError: true
+      script:
+        shell: bash
+        env:
+        - *kubeconfig
+        - {name: SERVICE_ACCOUNTS, value: ($serviceAccounts)}
+        - {name: NAMESPACES, value: ($namespaces)}
+        content: |
+          set -euo pipefail
+          export KUBECONFIG="$CALLER_KUBECONFIG"
+          work=$(mktemp -d)
+          trap 'rm -rf "$work"' EXIT
+          for sa in $SERVICE_ACCOUNTS; do
+            (
+              for ns in $NAMESPACES; do
+                out=$(printf '{"apiVersion":"authorization.k8s.io/v1","kind":"SelfSubjectRulesReview","spec":{"namespace":"%s"}}' "$ns" |
+                  kubectl --context k3d-svp create -f - -o json --validate=false --as="system:serviceaccount:svp:$sa" 2>"$work/$sa.err" |
+                  jq -r -f rules-reads.jq) || out="error: the rules review failed: $(head -n 1 "$work/$sa.err")"
+                echo "$sa $ns ${out:-error: empty rules review}"
+              done
+            ) >"$work/$sa" &
+          done
+          wait
+          n=0 bad=0
+          for sa in $SERVICE_ACCOUNTS; do
+            while read -r _ ns out; do
+              n=$((n + 1))
+              [[ $out == none ]] || {
+                echo "FAIL  RBAC: no rule lets ServiceAccount svp/$sa get, list or watch secrets or pods in namespace $ns, by name or not (got: $out)" >&2
+                bad=$((bad + 1))
+              }
+            done <"$work/$sa"
+          done
+          [ "$bad" = 0 ] || exit 1
+          echo "ok    RBAC: $n rules reviews, every ServiceAccount of svp ($SERVICE_ACCOUNTS) in each namespace of the cluster: no rule lets it get, list or watch secrets or pods, by name or not"
+        check:
+          ($error): ~
+          "(starts_with($stdout, 'ok    RBAC: '))": true
+    - description: "RBAC control: the rule check on a sample review flags its named, watch and wildcard rules and none of pods/log, configmaps, create on secrets or apps"
+      continueOnError: true
+      script:
+        content: |
+          set -eu
+          jq -n '{status: {incomplete: false, resourceRules: [
+              {verbs: ["get"], apiGroups: [""], resources: ["secrets"], resourceNames: ["drill-tls"]},
+              {verbs: ["watch"], apiGroups: [""], resources: ["pods"]},
+              {verbs: ["*"], apiGroups: ["*"], resources: ["*"]},
+              {verbs: ["get", "list"], apiGroups: [""], resources: ["pods/log", "configmaps"]},
+              {verbs: ["create", "delete"], apiGroups: [""], resources: ["secrets"]},
+              {verbs: ["get"], apiGroups: ["apps"], resources: ["deployments"]}]}}' | jq -r -f rules-reads.jq
+        check:
+          ($error): ~
+          (trim_space($stdout)): '*:*,pods:watch,secrets/drill-tls:get'
+    - description: "RBAC control: the Argo Rollouts controller may list pods in svp: can-i yes, and its rules review has pods with list"
+      continueOnError: true
+      script:
+        shell: bash
+        env:
+        - *kubeconfig
+        content: |
+          set -euo pipefail
+          export KUBECONFIG="$CALLER_KUBECONFIG"
+          as=system:serviceaccount:argo-rollouts:argo-rollouts
+          can=$(kubectl --context k3d-svp auth can-i list pods -n svp --as="$as" 2>&1 || true)
+          review=$(printf '{"apiVersion":"authorization.k8s.io/v1","kind":"SelfSubjectRulesReview","spec":{"namespace":"svp"}}' |
+            kubectl --context k3d-svp create -f - -o json --validate=false --as="$as" 2>&1 | jq -r -f rules-reads.jq 2>&1) || review="error: $review"
+          jq -n --arg can "$can" --arg review "$review" '{canI: $can, review: $review}'
+        check:
+          ($error): ~
+          (json_parse($stdout).canI): 'yes'
+          (wildcard('*pods:*list*', json_parse($stdout).review)): true
+
+  # Operators outside svp: the rights narrowed in their values, and the exceptions that stay.
+  - name: rbac-operators
+    try:
+    - description: "RBAC: list the namespaces of the cluster"
+      script:
+        env:
+        - *kubeconfig
+        content: |
+          set -eu
+          export KUBECONFIG="$CALLER_KUBECONFIG"
+          kubectl --context k3d-svp get namespaces -o jsonpath='{.items[*].metadata.name}'
+        check:
+          ($error): ~
+          (trim_space($stdout) != ''): true
+        outputs:
+        - name: namespaces
+          value: (trim_space($stdout))
+    # operator: kubectl auth can-i CAN_I as ServiceAccount SA in each namespace of the cluster and cluster-wide (-A):
+    # passes when the answer is yes in every namespace of ALLOWED (space-separated) that exists and no in every other one
+    # and cluster-wide; LABEL names the right. In cnpg-system, beside the Barman Cloud plugin whose ServiceAccount reads
+    # every Secret of the cluster, the CloudNativePG operator reads, and writes only its PKI Secrets, events and Lease:
+    # nothing that runs code as that ServiceAccount. Kyverno: its own TLS Secrets and its lease, nothing else.
+    - description: "RBAC: cnpg-system/cloudnative-pg may get secrets in cnpg-system svp-data only, in no other namespace and not cluster-wide"
+      continueOnError: true
+      script:
+        shell: bash
+        env:
+        - *kubeconfig
+        - {name: NAMESPACES, value: ($namespaces)}
+        - {name: SA, value: cnpg-system/cloudnative-pg}
+        - {name: ALLOWED, value: "cnpg-system svp-data"}
+        - {name: LABEL, value: get secrets}
+        - {name: CAN_I, value: get secrets}
+        content: &operator-scope |
+          set -euo pipefail
+          export KUBECONFIG="$CALLER_KUBECONFIG"
+          set -f
+          allowed=" $ALLOWED " yes= bad=
+          for ns in $NAMESPACES -A; do
+            if [ "$ns" = -A ]; then scope=(-A); else scope=(-n "$ns"); fi
+            # shellcheck disable=SC2086 # CAN_I is the verb, the resource and their flags
+            out=$(kubectl --context k3d-svp auth can-i $CAN_I "${scope[@]}" --as="system:serviceaccount:${SA%/*}:${SA#*/}" 2>&1 || true)
+            if [[ $ns != -A && $allowed == *" $ns "* ]]; then
+              if [[ $out == yes ]]; then yes+=" $ns"; else bad+=" $ns:'$out'"; fi
+            elif [[ $out != no ]]; then
+              bad+=" ${ns/-A/all namespaces}:'$out'"
+            fi
+          done
+          if [[ -n $bad ]]; then
+            echo "FAIL  RBAC: $SA may $LABEL ${ALLOWED:+in $ALLOWED only, }nowhere ${ALLOWED:+else }and not cluster-wide (got:$bad)" >&2
+            exit 1
+          elif [[ -n $ALLOWED ]]; then
+            echo "ok    RBAC: $SA may $LABEL in$yes only, in no other namespace and not cluster-wide"
+          else
+            echo "ok    RBAC: $SA may $LABEL in no namespace and not cluster-wide"
+          fi
+        check:
+          ($error): ~
+          "(starts_with($stdout, 'ok    RBAC: '))": true
+    - description: "RBAC: cnpg-system/cloudnative-pg may list secrets in cnpg-system svp-data only, in no other namespace and not cluster-wide"
+      continueOnError: true
+      script:
+        shell: bash
+        env:
+        - *kubeconfig
+        - {name: NAMESPACES, value: ($namespaces)}
+        - {name: SA, value: cnpg-system/cloudnative-pg}
+        - {name: ALLOWED, value: "cnpg-system svp-data"}
+        - {name: LABEL, value: list secrets}
+        - {name: CAN_I, value: list secrets}
+        content: *operator-scope
+        check:
+          ($error): ~
+          "(starts_with($stdout, 'ok    RBAC: '))": true
+    - description: "RBAC: cnpg-system/cloudnative-pg may create pods in svp-data only, in no other namespace and not cluster-wide"
+      continueOnError: true
+      script:
+        shell: bash
+        env:
+        - *kubeconfig
+        - {name: NAMESPACES, value: ($namespaces)}
+        - {name: SA, value: cnpg-system/cloudnative-pg}
+        - {name: ALLOWED, value: "svp-data"}
+        - {name: LABEL, value: create pods}
+        - {name: CAN_I, value: create pods}
+        content: *operator-scope
+        check:
+          ($error): ~
+          "(starts_with($stdout, 'ok    RBAC: '))": true
+    - description: "RBAC: cnpg-system/cloudnative-pg may exec into pods in svp-data only, in no other namespace and not cluster-wide"
+      continueOnError: true
+      script:
+        shell: bash
+        env:
+        - *kubeconfig
+        - {name: NAMESPACES, value: ($namespaces)}
+        - {name: SA, value: cnpg-system/cloudnative-pg}
+        - {name: ALLOWED, value: "svp-data"}
+        - {name: LABEL, value: exec into pods}
+        - {name: CAN_I, value: create pods --subresource=exec}
+        content: *operator-scope
+        check:
+          ($error): ~
+          "(starts_with($stdout, 'ok    RBAC: '))": true
+    - description: "RBAC: cnpg-system/cloudnative-pg may patch deployments in svp-data only, in no other namespace and not cluster-wide"
+      continueOnError: true
+      script:
+        shell: bash
+        env:
+        - *kubeconfig
+        - {name: NAMESPACES, value: ($namespaces)}
+        - {name: SA, value: cnpg-system/cloudnative-pg}
+        - {name: ALLOWED, value: "svp-data"}
+        - {name: LABEL, value: patch deployments}
+        - {name: CAN_I, value: patch deployments}
+        content: *operator-scope
+        check:
+          ($error): ~
+          "(starts_with($stdout, 'ok    RBAC: '))": true
+    - description: "RBAC: cnpg-system/cloudnative-pg may create serviceaccounts in svp-data only, in no other namespace and not cluster-wide"
+      continueOnError: true
+      script:
+        shell: bash
+        env:
+        - *kubeconfig
+        - {name: NAMESPACES, value: ($namespaces)}
+        - {name: SA, value: cnpg-system/cloudnative-pg}
+        - {name: ALLOWED, value: "svp-data"}
+        - {name: LABEL, value: create serviceaccounts}
+        - {name: CAN_I, value: create serviceaccounts}
+        content: *operator-scope
+        check:
+          ($error): ~
+          "(starts_with($stdout, 'ok    RBAC: '))": true
+    - description: "RBAC: cnpg-system/cloudnative-pg may delete secrets in svp-data only, in no other namespace and not cluster-wide"
+      continueOnError: true
+      script:
+        shell: bash
+        env:
+        - *kubeconfig
+        - {name: NAMESPACES, value: ($namespaces)}
+        - {name: SA, value: cnpg-system/cloudnative-pg}
+        - {name: ALLOWED, value: "svp-data"}
+        - {name: LABEL, value: delete secrets}
+        - {name: CAN_I, value: delete secrets}
+        content: *operator-scope
+        check:
+          ($error): ~
+          "(starts_with($stdout, 'ok    RBAC: '))": true
+    - description: "RBAC: cnpg-system/cloudnative-pg may create serviceaccount tokens in no namespace and not cluster-wide"
+      continueOnError: true
+      script:
+        shell: bash
+        env:
+        - *kubeconfig
+        - {name: NAMESPACES, value: ($namespaces)}
+        - {name: SA, value: cnpg-system/cloudnative-pg}
+        - {name: ALLOWED, value: ""}
+        - {name: LABEL, value: create serviceaccount tokens}
+        - {name: CAN_I, value: create serviceaccounts --subresource=token}
+        content: *operator-scope
+        check:
+          ($error): ~
+          "(starts_with($stdout, 'ok    RBAC: '))": true
+    - description: "RBAC: envoy-gateway-system/envoy-gateway may get secrets in envoy-gateway-system svp svp-data svp-edge only, in no other namespace and not cluster-wide"
+      continueOnError: true
+      script:
+        shell: bash
+        env:
+        - *kubeconfig
+        - {name: NAMESPACES, value: ($namespaces)}
+        - {name: SA, value: envoy-gateway-system/envoy-gateway}
+        - {name: ALLOWED, value: "envoy-gateway-system svp svp-data svp-edge"}
+        - {name: LABEL, value: get secrets}
+        - {name: CAN_I, value: get secrets}
+        content: *operator-scope
+        check:
+          ($error): ~
+          "(starts_with($stdout, 'ok    RBAC: '))": true
+    - description: "RBAC: envoy-gateway-system/envoy-gateway may list secrets in envoy-gateway-system svp svp-data svp-edge only, in no other namespace and not cluster-wide"
+      continueOnError: true
+      script:
+        shell: bash
+        env:
+        - *kubeconfig
+        - {name: NAMESPACES, value: ($namespaces)}
+        - {name: SA, value: envoy-gateway-system/envoy-gateway}
+        - {name: ALLOWED, value: "envoy-gateway-system svp svp-data svp-edge"}
+        - {name: LABEL, value: list secrets}
+        - {name: CAN_I, value: list secrets}
+        content: *operator-scope
+        check:
+          ($error): ~
+          "(starts_with($stdout, 'ok    RBAC: '))": true
+    - description: "RBAC: envoy-gateway-system/envoy-gateway may patch pods in no namespace and not cluster-wide"
+      continueOnError: true
+      script:
+        shell: bash
+        env:
+        - *kubeconfig
+        - {name: NAMESPACES, value: ($namespaces)}
+        - {name: SA, value: envoy-gateway-system/envoy-gateway}
+        - {name: ALLOWED, value: ""}
+        - {name: LABEL, value: patch pods}
+        - {name: CAN_I, value: patch pods}
+        content: *operator-scope
+        check:
+          ($error): ~
+          "(starts_with($stdout, 'ok    RBAC: '))": true
+    - description: "RBAC: kyverno/kyverno-admission-controller may get secrets in kyverno only, in no other namespace and not cluster-wide"
+      continueOnError: true
+      script:
+        shell: bash
+        env:
+        - *kubeconfig
+        - {name: NAMESPACES, value: ($namespaces)}
+        - {name: SA, value: kyverno/kyverno-admission-controller}
+        - {name: ALLOWED, value: "kyverno"}
+        - {name: LABEL, value: get secrets}
+        - {name: CAN_I, value: get secrets}
+        content: *operator-scope
+        check:
+          ($error): ~
+          "(starts_with($stdout, 'ok    RBAC: '))": true
+    - description: "RBAC: kyverno/kyverno-admission-controller may list secrets in kyverno only, in no other namespace and not cluster-wide"
+      continueOnError: true
+      script:
+        shell: bash
+        env:
+        - *kubeconfig
+        - {name: NAMESPACES, value: ($namespaces)}
+        - {name: SA, value: kyverno/kyverno-admission-controller}
+        - {name: ALLOWED, value: "kyverno"}
+        - {name: LABEL, value: list secrets}
+        - {name: CAN_I, value: list secrets}
+        content: *operator-scope
+        check:
+          ($error): ~
+          "(starts_with($stdout, 'ok    RBAC: '))": true
+    - description: "RBAC: kyverno/kyverno-admission-controller may create pods in no namespace and not cluster-wide"
+      continueOnError: true
+      script:
+        shell: bash
+        env:
+        - *kubeconfig
+        - {name: NAMESPACES, value: ($namespaces)}
+        - {name: SA, value: kyverno/kyverno-admission-controller}
+        - {name: ALLOWED, value: ""}
+        - {name: LABEL, value: create pods}
+        - {name: CAN_I, value: create pods}
+        content: *operator-scope
+        check:
+          ($error): ~
+          "(starts_with($stdout, 'ok    RBAC: '))": true
+    - description: "RBAC: kyverno/kyverno-reports-controller may get secrets in kyverno only, in no other namespace and not cluster-wide"
+      continueOnError: true
+      script:
+        shell: bash
+        env:
+        - *kubeconfig
+        - {name: NAMESPACES, value: ($namespaces)}
+        - {name: SA, value: kyverno/kyverno-reports-controller}
+        - {name: ALLOWED, value: "kyverno"}
+        - {name: LABEL, value: get secrets}
+        - {name: CAN_I, value: get secrets}
+        content: *operator-scope
+        check:
+          ($error): ~
+          "(starts_with($stdout, 'ok    RBAC: '))": true
+    - description: "RBAC: kyverno/kyverno-reports-controller may list secrets in kyverno only, in no other namespace and not cluster-wide"
+      continueOnError: true
+      script:
+        shell: bash
+        env:
+        - *kubeconfig
+        - {name: NAMESPACES, value: ($namespaces)}
+        - {name: SA, value: kyverno/kyverno-reports-controller}
+        - {name: ALLOWED, value: "kyverno"}
+        - {name: LABEL, value: list secrets}
+        - {name: CAN_I, value: list secrets}
+        content: *operator-scope
+        check:
+          ($error): ~
+          "(starts_with($stdout, 'ok    RBAC: '))": true
+    - description: "RBAC: kyverno/kyverno-reports-controller may create pods in no namespace and not cluster-wide"
+      continueOnError: true
+      script:
+        shell: bash
+        env:
+        - *kubeconfig
+        - {name: NAMESPACES, value: ($namespaces)}
+        - {name: SA, value: kyverno/kyverno-reports-controller}
+        - {name: ALLOWED, value: ""}
+        - {name: LABEL, value: create pods}
+        - {name: CAN_I, value: create pods}
+        content: *operator-scope
+        check:
+          ($error): ~
+          "(starts_with($stdout, 'ok    RBAC: '))": true
+
+  # Webhook configurations are cluster-scoped: asked with -A, kubectl prints no warning that they have no namespace.
+  # Writing one would let the operator send itself every Secret written in the cluster; cainjector writes the CA of its
+  # two (base/cloudnative-pg.yaml of svp-gitops). Admission policies are cluster-scoped as well: updating or deleting
+  # ValidatingAdmissionPolicy svp-cnpg-operator-secrets or its binding (same name) would lift the only limit on the
+  # operator's Secret writes in cnpg-system (step rbac-cnpg-secrets), and a policy or binding of its own could refuse any
+  # write of the cluster. Asked without a name and by that name: a Role that grants only named objects gets no from can-i
+  # without a name; a name means nothing to create (RBAC does not narrow create by name). The last check answers yes for a
+  # right the same user must have, so the no above is not that of a misspelled ServiceAccount (can-i answers no for a
+  # user that does not exist): it creates cnpg-ca-secret in cnpg-system at start.
+  - name: rbac-cnpg-cluster-writes
+    try:
+    - description: "RBAC: cnpg-system/cloudnative-pg may not create mutatingwebhookconfigurations"
+      continueOnError: true
+      script:
+        env:
+        - *kubeconfig
+        - {name: AS, value: system:serviceaccount:cnpg-system:cloudnative-pg}
+        - {name: CAN_I, value: create mutatingwebhookconfigurations.admissionregistration.k8s.io -A}
+        content: &can-i |
+          set -eu
+          export KUBECONFIG="$CALLER_KUBECONFIG"
+          set -f
+          # shellcheck disable=SC2086 # CAN_I is the verb, the resource and their flags
+          kubectl --context k3d-svp auth can-i $CAN_I --as="$AS" 2>&1 || true
+        check:
+          (trim_space($stdout)): 'no'
+    - description: "RBAC: cnpg-system/cloudnative-pg may not update mutatingwebhookconfigurations"
+      continueOnError: true
+      script:
+        env:
+        - *kubeconfig
+        - {name: AS, value: system:serviceaccount:cnpg-system:cloudnative-pg}
+        - {name: CAN_I, value: update mutatingwebhookconfigurations.admissionregistration.k8s.io -A}
+        content: *can-i
+        check:
+          (trim_space($stdout)): 'no'
+    - description: "RBAC: cnpg-system/cloudnative-pg may not patch mutatingwebhookconfigurations"
+      continueOnError: true
+      script:
+        env:
+        - *kubeconfig
+        - {name: AS, value: system:serviceaccount:cnpg-system:cloudnative-pg}
+        - {name: CAN_I, value: patch mutatingwebhookconfigurations.admissionregistration.k8s.io -A}
+        content: *can-i
+        check:
+          (trim_space($stdout)): 'no'
+    - description: "RBAC: cnpg-system/cloudnative-pg may not create validatingwebhookconfigurations"
+      continueOnError: true
+      script:
+        env:
+        - *kubeconfig
+        - {name: AS, value: system:serviceaccount:cnpg-system:cloudnative-pg}
+        - {name: CAN_I, value: create validatingwebhookconfigurations.admissionregistration.k8s.io -A}
+        content: *can-i
+        check:
+          (trim_space($stdout)): 'no'
+    - description: "RBAC: cnpg-system/cloudnative-pg may not update validatingwebhookconfigurations"
+      continueOnError: true
+      script:
+        env:
+        - *kubeconfig
+        - {name: AS, value: system:serviceaccount:cnpg-system:cloudnative-pg}
+        - {name: CAN_I, value: update validatingwebhookconfigurations.admissionregistration.k8s.io -A}
+        content: *can-i
+        check:
+          (trim_space($stdout)): 'no'
+    - description: "RBAC: cnpg-system/cloudnative-pg may not patch validatingwebhookconfigurations"
+      continueOnError: true
+      script:
+        env:
+        - *kubeconfig
+        - {name: AS, value: system:serviceaccount:cnpg-system:cloudnative-pg}
+        - {name: CAN_I, value: patch validatingwebhookconfigurations.admissionregistration.k8s.io -A}
+        content: *can-i
+        check:
+          (trim_space($stdout)): 'no'
+    - description: "RBAC: cnpg-system/cloudnative-pg may not create validatingadmissionpolicies"
+      continueOnError: true
+      script:
+        env:
+        - *kubeconfig
+        - {name: AS, value: system:serviceaccount:cnpg-system:cloudnative-pg}
+        - {name: CAN_I, value: create validatingadmissionpolicies.admissionregistration.k8s.io -A}
+        content: *can-i
+        check:
+          (trim_space($stdout)): 'no'
+    - description: "RBAC: cnpg-system/cloudnative-pg may not update validatingadmissionpolicies"
+      continueOnError: true
+      script:
+        env:
+        - *kubeconfig
+        - {name: AS, value: system:serviceaccount:cnpg-system:cloudnative-pg}
+        - {name: CAN_I, value: update validatingadmissionpolicies.admissionregistration.k8s.io -A}
+        content: *can-i
+        check:
+          (trim_space($stdout)): 'no'
+    - description: "RBAC: cnpg-system/cloudnative-pg may not update validatingadmissionpolicies/svp-cnpg-operator-secrets"
+      continueOnError: true
+      script:
+        env:
+        - *kubeconfig
+        - {name: AS, value: system:serviceaccount:cnpg-system:cloudnative-pg}
+        - {name: CAN_I, value: update validatingadmissionpolicies.admissionregistration.k8s.io/svp-cnpg-operator-secrets -A}
+        content: *can-i
+        check:
+          (trim_space($stdout)): 'no'
+    - description: "RBAC: cnpg-system/cloudnative-pg may not patch validatingadmissionpolicies"
+      continueOnError: true
+      script:
+        env:
+        - *kubeconfig
+        - {name: AS, value: system:serviceaccount:cnpg-system:cloudnative-pg}
+        - {name: CAN_I, value: patch validatingadmissionpolicies.admissionregistration.k8s.io -A}
+        content: *can-i
+        check:
+          (trim_space($stdout)): 'no'
+    - description: "RBAC: cnpg-system/cloudnative-pg may not patch validatingadmissionpolicies/svp-cnpg-operator-secrets"
+      continueOnError: true
+      script:
+        env:
+        - *kubeconfig
+        - {name: AS, value: system:serviceaccount:cnpg-system:cloudnative-pg}
+        - {name: CAN_I, value: patch validatingadmissionpolicies.admissionregistration.k8s.io/svp-cnpg-operator-secrets -A}
+        content: *can-i
+        check:
+          (trim_space($stdout)): 'no'
+    - description: "RBAC: cnpg-system/cloudnative-pg may not delete validatingadmissionpolicies"
+      continueOnError: true
+      script:
+        env:
+        - *kubeconfig
+        - {name: AS, value: system:serviceaccount:cnpg-system:cloudnative-pg}
+        - {name: CAN_I, value: delete validatingadmissionpolicies.admissionregistration.k8s.io -A}
+        content: *can-i
+        check:
+          (trim_space($stdout)): 'no'
+    - description: "RBAC: cnpg-system/cloudnative-pg may not delete validatingadmissionpolicies/svp-cnpg-operator-secrets"
+      continueOnError: true
+      script:
+        env:
+        - *kubeconfig
+        - {name: AS, value: system:serviceaccount:cnpg-system:cloudnative-pg}
+        - {name: CAN_I, value: delete validatingadmissionpolicies.admissionregistration.k8s.io/svp-cnpg-operator-secrets -A}
+        content: *can-i
+        check:
+          (trim_space($stdout)): 'no'
+    - description: "RBAC: cnpg-system/cloudnative-pg may not create validatingadmissionpolicybindings"
+      continueOnError: true
+      script:
+        env:
+        - *kubeconfig
+        - {name: AS, value: system:serviceaccount:cnpg-system:cloudnative-pg}
+        - {name: CAN_I, value: create validatingadmissionpolicybindings.admissionregistration.k8s.io -A}
+        content: *can-i
+        check:
+          (trim_space($stdout)): 'no'
+    - description: "RBAC: cnpg-system/cloudnative-pg may not update validatingadmissionpolicybindings"
+      continueOnError: true
+      script:
+        env:
+        - *kubeconfig
+        - {name: AS, value: system:serviceaccount:cnpg-system:cloudnative-pg}
+        - {name: CAN_I, value: update validatingadmissionpolicybindings.admissionregistration.k8s.io -A}
+        content: *can-i
+        check:
+          (trim_space($stdout)): 'no'
+    - description: "RBAC: cnpg-system/cloudnative-pg may not update validatingadmissionpolicybindings/svp-cnpg-operator-secrets"
+      continueOnError: true
+      script:
+        env:
+        - *kubeconfig
+        - {name: AS, value: system:serviceaccount:cnpg-system:cloudnative-pg}
+        - {name: CAN_I, value: update validatingadmissionpolicybindings.admissionregistration.k8s.io/svp-cnpg-operator-secrets -A}
+        content: *can-i
+        check:
+          (trim_space($stdout)): 'no'
+    - description: "RBAC: cnpg-system/cloudnative-pg may not patch validatingadmissionpolicybindings"
+      continueOnError: true
+      script:
+        env:
+        - *kubeconfig
+        - {name: AS, value: system:serviceaccount:cnpg-system:cloudnative-pg}
+        - {name: CAN_I, value: patch validatingadmissionpolicybindings.admissionregistration.k8s.io -A}
+        content: *can-i
+        check:
+          (trim_space($stdout)): 'no'
+    - description: "RBAC: cnpg-system/cloudnative-pg may not patch validatingadmissionpolicybindings/svp-cnpg-operator-secrets"
+      continueOnError: true
+      script:
+        env:
+        - *kubeconfig
+        - {name: AS, value: system:serviceaccount:cnpg-system:cloudnative-pg}
+        - {name: CAN_I, value: patch validatingadmissionpolicybindings.admissionregistration.k8s.io/svp-cnpg-operator-secrets -A}
+        content: *can-i
+        check:
+          (trim_space($stdout)): 'no'
+    - description: "RBAC: cnpg-system/cloudnative-pg may not delete validatingadmissionpolicybindings"
+      continueOnError: true
+      script:
+        env:
+        - *kubeconfig
+        - {name: AS, value: system:serviceaccount:cnpg-system:cloudnative-pg}
+        - {name: CAN_I, value: delete validatingadmissionpolicybindings.admissionregistration.k8s.io -A}
+        content: *can-i
+        check:
+          (trim_space($stdout)): 'no'
+    - description: "RBAC: cnpg-system/cloudnative-pg may not delete validatingadmissionpolicybindings/svp-cnpg-operator-secrets"
+      continueOnError: true
+      script:
+        env:
+        - *kubeconfig
+        - {name: AS, value: system:serviceaccount:cnpg-system:cloudnative-pg}
+        - {name: CAN_I, value: delete validatingadmissionpolicybindings.admissionregistration.k8s.io/svp-cnpg-operator-secrets -A}
+        content: *can-i
+        check:
+          (trim_space($stdout)): 'no'
+    - description: "RBAC control: as the same user, can-i says yes to create secrets in cnpg-system (the operator's CA Secret)"
+      continueOnError: true
+      script:
+        env:
+        - *kubeconfig
+        - {name: AS, value: system:serviceaccount:cnpg-system:cloudnative-pg}
+        - {name: CAN_I, value: create secrets -n cnpg-system}
+        content: *can-i
+        check:
+          (trim_space($stdout)): 'yes'
+  # The CloudNativePG operator may create Secrets in cnpg-system (its CA, cnpg-ca-secret, made at start), and RBAC cannot
+  # narrow create by name, so ValidatingAdmissionPolicy svp-cnpg-operator-secrets (chart svp-cluster,
+  # templates/cnpg-rbac.yaml) keeps its writes there to cnpg-ca-secret and cnpg-webhook-cert. Server-side dry runs, as the
+  # operator's ServiceAccount but for one control: nothing is written. Each Secret names ServiceAccount
+  # plugin-barman-cloud.
+  - name: rbac-cnpg-secrets
+    try:
+    - description: "RBAC: cnpg-system/cloudnative-pg may not create a token Secret for ServiceAccount plugin-barman-cloud in cnpg-system (refused by ValidatingAdmissionPolicy svp-cnpg-operator-secrets)"
+      continueOnError: true
+      script:
+        env:
+        - *kubeconfig
+        - {name: NAME, value: drill-plugin-token}
+        - {name: TYPE, value: kubernetes.io/service-account-token}
+        content: &cnpg-secret |
+          set -eu
+          export KUBECONFIG="$CALLER_KUBECONFIG"
+          jq -n --arg name "$NAME" --arg type "$TYPE" '{apiVersion: "v1", kind: "Secret", type: $type, metadata: {name: $name,
+            namespace: "cnpg-system", annotations: {"kubernetes.io/service-account.name": "plugin-barman-cloud"}}}' |
+            kubectl --context k3d-svp create --dry-run=server -f - --as=system:serviceaccount:cnpg-system:cloudnative-pg 2>&1 || true
+        check:
+          (wildcard('*ValidatingAdmissionPolicy \'svp-cnpg-operator-secrets\'*denied*', $stdout)): true
+    - description: "RBAC: cnpg-system/cloudnative-pg may not create that token Secret named cnpg-ca-secret in cnpg-system (refused by ValidatingAdmissionPolicy svp-cnpg-operator-secrets)"
+      continueOnError: true
+      script:
+        env:
+        - *kubeconfig
+        - {name: NAME, value: cnpg-ca-secret}
+        - {name: TYPE, value: kubernetes.io/service-account-token}
+        content: *cnpg-secret
+        check:
+          (wildcard('*ValidatingAdmissionPolicy \'svp-cnpg-operator-secrets\'*denied*', $stdout)): true
+    - description: "RBAC: cnpg-system/cloudnative-pg may not create an Opaque Secret of a name other than cnpg-ca-secret in cnpg-system (refused by ValidatingAdmissionPolicy svp-cnpg-operator-secrets)"
+      continueOnError: true
+      script:
+        env:
+        - *kubeconfig
+        - {name: NAME, value: drill-opaque}
+        - {name: TYPE, value: Opaque}
+        content: *cnpg-secret
+        check:
+          (wildcard('*ValidatingAdmissionPolicy \'svp-cnpg-operator-secrets\'*denied*', $stdout)): true
+    - description: "RBAC control: as the operator, an Opaque cnpg-ca-secret passes ValidatingAdmissionPolicy svp-cnpg-operator-secrets and is refused only as AlreadyExists"
+      continueOnError: true
+      script:
+        env:
+        - *kubeconfig
+        - {name: NAME, value: cnpg-ca-secret}
+        - {name: TYPE, value: Opaque}
+        content: *cnpg-secret
+        check:
+          (wildcard('*AlreadyExists*', $stdout) || wildcard('*already exists*', $stdout)): true
+          (wildcard('*ValidatingAdmissionPolicy \'svp-cnpg-operator-secrets\'*', $stdout)): false
+    - description: "RBAC control: as the test's admin, the same token Secret is admitted in cnpg-system: the policy holds the operator only (server-side dry run)"
+      continueOnError: true
+      create:
+        dryRun: true
+        resource:
+          apiVersion: v1
+          kind: Secret
+          type: kubernetes.io/service-account-token
+          metadata:
+            name: drill-plugin-token
+            namespace: cnpg-system
+            annotations:
+              kubernetes.io/service-account.name: plugin-barman-cloud
+        expect:
+        - check:
+            ($error): ~
+    - description: "RBAC: cnpg-system holds a TLS Secret other than cnpg-webhook-cert (the Barman Cloud plugin's) to update as the operator"
+      continueOnError: true
+      script:
+        env:
+        - *kubeconfig
+        content: |
+          set -eu
+          export KUBECONFIG="$CALLER_KUBECONFIG"
+          kubectl --context k3d-svp -n cnpg-system get secrets --field-selector type=kubernetes.io/tls -o name |
+            grep -vx 'secret/cnpg-webhook-cert' | head -n 1 || true
+        check:
+          (trim_space($stdout) != ''): true
+        outputs:
+        - name: otherTls
+          value: (trim_space($stdout))
+    - description: "RBAC: cnpg-system/cloudnative-pg may not update that TLS Secret in cnpg-system (refused by ValidatingAdmissionPolicy svp-cnpg-operator-secrets)"
+      continueOnError: true
+      script:
+        env:
+        - *kubeconfig
+        - {name: TARGET, value: ($otherTls)}
+        content: &cnpg-label |
+          set -eu
+          export KUBECONFIG="$CALLER_KUBECONFIG"
+          kubectl --context k3d-svp -n cnpg-system label "$TARGET" svp-drill=threats --dry-run=server \
+            --as=system:serviceaccount:cnpg-system:cloudnative-pg 2>&1 || true
+        check:
+          (wildcard('*ValidatingAdmissionPolicy \'svp-cnpg-operator-secrets\'*denied*', $stdout)): true
+    - description: "RBAC control: as the operator, an update of cnpg-webhook-cert passes ValidatingAdmissionPolicy svp-cnpg-operator-secrets"
+      continueOnError: true
+      script:
+        env:
+        - *kubeconfig
+        - {name: TARGET, value: secret/cnpg-webhook-cert}
+        content: *cnpg-label
+        check:
+          (contains($stdout, 'labeled (server dry run)')): true
+
+  - name: rbac-exceptions
+    try:
+    - description: "RBAC exceptions (info): the rights that stay, with their reason"
+      script:
+        content: |
+          echo "info  RBAC exception: Envoy Gateway reads the Secrets of svp and svp-data, which it watches for routes api and s3 (its Secret cache covers every watched namespace; base/envoy-gateway.yaml of svp-gitops)"
+          echo "info  RBAC exception: cert-manager's controller and cainjector read Secrets in every namespace, cainjector patches every webhook configuration, the controller creates pods in every namespace (Certificates in cert-manager, svp-edge, keda and cnpg-system, ClusterIssuers svp-selfsigned and svp-ca; base/cert-manager.yaml of svp-gitops); its pods are held to PSA restricted everywhere but kube-system (PSA-platform)"
+          echo "info  RBAC exception: Argo CD's application controller and server (GitOps path) hold rights on every resource of the cluster, Secrets included: they apply every chart"
+          echo "info  RBAC exception: the Barman Cloud plugin (cnpg-system/plugin-barman-cloud, backups of Postgres svp-pg) reads, creates and deletes the Secrets of every namespace, the JWT signing key of svp included, and creates Roles and RoleBindings everywhere: its manager caches the whole cluster with no flag to narrow it, so a Role per namespace as for CloudNativePG would leave it failing on permissions (threat model BAK-1, accepted for the lab; base/plugin-barman-cloud.yaml of svp-gitops); the CloudNativePG operator beside it in cnpg-system may neither run code as its ServiceAccount nor get it a token (checked above)"
+          echo "info  RBAC exception: Kyverno's admission controller creates, patches and deletes every webhook configuration and validating admission policy of the cluster: it registers the webhooks of its policies itself (a taken-over controller could send itself any request, or drop the image policy's webhook); its reports controller reads the pods of every namespace (what the policy matches; the chart's view binding is off, base/kyverno.yaml of svp-gitops)"
+        check:
+          ($error): ~

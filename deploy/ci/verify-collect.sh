@@ -6,25 +6,22 @@
 # it is unsure of is left out, with a warning (an annotation on GitHub) naming the file and
 # the rule, never the text that matched.
 #
-# The allow list. From the run's results ($SVP_VERIFY_OUT, default verify in $RUNNER_TEMP; never uploaded as a whole):
-#   written on the runner itself  results.tsv, scenario, df-before.txt (deploy/ci/verify-run.sh, verify-host.sh)
-#   read from the stack/cluster   logs/*.log (each make target's own output; of the two threat model drills, whose
-#                                 output holds what their probes got back, only the verdict lines, ok, PASS, FAIL,
-#                                 SKIP, WARN, with the item headings, the closing table and the last line around
-#                                 them)
-# A target's output may quote a container's log, and no service log may reach the artifact. make k8s-gitops-up prints,
-# when its wait for the Applications runs out, the last lines of the Prometheus operator's log (gitops_timeout_report
-# of deploy/k8s/lib.sh), each line as "    [NAMESPACE] LINE", the form unready_report and mark_log of the same file
-# give the logs make k8s-up quotes. The copy of a target's output leaves out every such line of a namespace not in
-# log_tail_namespaces of deploy/k8s/lib.sh (third-party servers and operators only: never svp, the project's
-# services), every line of a JSON log record (a "msg" or "level" key, the form of the services' slog and of most
-# third-party servers) and every line quoting an access log ("access log of trace", the form a drill quotes one in),
-# and files.txt says how many lines it left out. What is kept of a third-party log goes through the scan below like
-# the rest of the file.
-# From the checkout (all read from the stack/cluster): .k8s/drills/*.json and traffic-*.log (each line a time, a user,
-# a route, a status and a duration). Everything else under that place is listed in files.txt as not-allowed:
-# .k8s/drills/threats-*.log and every service log never get in; a hidden file is dropped with its own rule and a
-# warning. Nothing else of the checkout (.env, kubeconfig, .k8s/ca.*, .k8s/helm/) is even looked at.
+# The allow list: results that machines read, never the output of a step (it may quote a service's or a third-party
+# container's log, which no artifact may hold; it stays on the runner). From the run's results ($SVP_VERIFY_OUT,
+# default verify in $RUNNER_TEMP; never uploaded as a whole):
+#   written on the runner itself  results.tsv (the table of the steps, deploy/ci/verify-steps/steps.sh), scenario,
+#                                 df-before.txt (deploy/ci/verify-host.sh)
+#   read from the stack/cluster   logs/drill-obs-threats.log, of which only the verdict lines (ok, PASS, FAIL, SKIP,
+#                                 WARN, and the closing "drill-obs-threats: all checks passed"; none of a JSON log record
+#                                 or quoting an access log) reach the artifact, as logs/drill-obs-threats.verdicts.log;
+#                                 logs/gitops-admission-metrics.log (the summary lines of
+#                                 deploy/ci/verify-steps/admission-metrics.sh)
+# Every other file there (the output of every other step) is listed in files.txt as not-allowed.
+# From the checkout (all read from the stack/cluster): .k8s/drills/*.xml (the JUnit report of each Chainsaw drill),
+# *-skips.tsv (its list of SKIPs and their reasons: the JUnit report counts a SKIP as passed), *.json and traffic-*.log (each line a time, a user, a route, a status and a duration). Everything else under that
+# place is listed in files.txt as not-allowed: the log of each Chainsaw drill and every service log never get in; a
+# hidden file is dropped with its own rule and a warning. Nothing else of the checkout (.env, kubeconfig, .k8s/ca.*,
+# .k8s/helm/) is even looked at.
 #
 # Each candidate is refused when it is hidden, not a regular file (a link could point at .env), over 5 MiB, or when it
 # matches (grep -a: binary files are read as text):
@@ -33,7 +30,7 @@
 #                  are read again here, the cluster's while it still runs
 #   jwt            eyJ<8+>.eyJ<8+>. (header and payload of a JWT or JWS; eyJ alone also occurs in the base64 of the
 #                  screenshots Lighthouse embeds, which have no dots)
-#   session-cookie svp_sid (in the verdict lines of a threat model drill: svp_sid not followed by a space, see rule)
+#   session-cookie svp_sid (in the verdict lines of drill-obs-threats: svp_sid not followed by a space, see rule)
 #   bearer "Bearer "; set-cookie "Set-Cookie"; private-key "-----BEGIN ... PRIVATE KEY-----"
 # A file read from the stack or the cluster is copied only when every list it needs was read: .env's always, the
 # cluster's too unless the scenario is compose-obs. A list that could not be read (an .env that breaks its rule, a
@@ -41,9 +38,10 @@
 # (no-secret-list). The cluster's list keeps every value read while the cluster ran, so a cluster gone by now still
 # has one.
 #
-# The artifact holds files.txt (every candidate: kept, with the lines left out of it if any, or dropped with its
-# rule), the results under their own names, and the checkout's files under k8s-drills/ (upload-artifact leaves hidden
-# folders such as .k8s out). Exits 0 whatever it dropped; 1 only when it cannot build the artifact folder.
+# The artifact holds files.txt (every candidate: kept, or dropped with its rule), the results under their own names,
+# and the checkout's files under k8s-drills/ (upload-artifact leaves hidden folders such as .k8s out). The job's log
+# gets a count, and for each step that did not succeed the end of its verdict lines when they reached the artifact.
+# Exits 0 whatever it dropped; 1 only when it cannot build the artifact folder.
 #
 # SVP_VERIFY_REPO (default: this checkout) points it at another tree, for deploy/ci/verify-collect-test.sh.
 set -uo pipefail
@@ -63,17 +61,13 @@ secrets=${SVP_VERIFY_SECRETS:-$tmp_root/verify-secrets}
 export SVP_VERIFY_REPO=$repo SVP_VERIFY_SECRETS=$secrets
 max_bytes=$((5 * 1024 * 1024))
 jwt_re='eyJ[A-Za-z0-9_-]{8,}\.eyJ[A-Za-z0-9_-]{8,}\.'
+# A line of a JSON log record (a "msg" or "level" key, the form of the services' slog and of most third-party
+# servers), or one quoting an access log: never kept, even when it starts like a verdict.
 service_log_re='"(msg|level)"[[:space:]]*:|access log of trace'
-# The namespaces whose container log lines may stay, read from deploy/k8s/lib.sh, which prints them; none (every
-# such line left out) when it cannot be read.
-log_tail_namespaces=$(. "$here/../k8s/lib.sh" >/dev/null 2>&1 && printf '%s' "$log_tail_namespaces") || log_tail_namespaces=
-# The lines of a threat model drill that reach the artifact, each a fixed form with no probe output in it: a verdict;
-# the "== ITEM" heading of drill-k8s-threats each check falls under; its closing table, "  ITEM  PASS|FAIL" under a
-# header "  ITEM  RESULT" and a title "drill-k8s-threats (<time>-<hex>)"; the closing "...: all checks passed".
+# The lines of drill-obs-threats that reach the artifact, each a fixed form with no probe output in it: a verdict, and
+# the closing "drill-obs-threats: all checks passed".
 verdict_re='^(ok|PASS|FAIL|SKIP|WARN)[[:space:]]'
-item_re='^== [A-Za-z0-9/-]+$'
-table_re='^  [A-Za-z0-9/-]+ +(PASS|FAIL|RESULT)$|^drill-k8s-threats \([0-9]{8}T[0-9]{6}Z-[0-9a-f]+\)$'
-drill_end_re='^drill-(k8s|obs)-threats: all checks passed$'
+drill_end_re='^drill-obs-threats: all checks passed$'
 
 scenario=$(cat "$out/scenario" 2>/dev/null) || scenario=unknown
 rm -rf "$art" && mkdir -p "$art" || {
@@ -113,7 +107,7 @@ drop() {
 }
 
 # rule FILE [KIND]: prints the first scan rule FILE breaks, nothing when it is clean. KIND verdicts (the verdict lines
-# of a threat model drill, the drill's own sentences) narrows session-cookie: the web client's items name the session
+# of drill-obs-threats, the drill's own sentences) narrows session-cookie: the web client's items name the session
 # cookie in prose, its name followed by a space ("session cookie __Host-Http-svp_sid in the drill's cookie jar"), and
 # no form a cookie's value is written in puts the value after the name and a space (a header has name=value, a cookie
 # jar name<TAB>value, JSON "name": ..., "value": ...). So there svp_sid followed by any other character, or ending a
@@ -136,11 +130,11 @@ rule() {
   fi
 }
 
-# consider FILE SRC DEST KIND [NOTE]: copies FILE (shown as SRC) to $art/DEST when it passes; KIND is runner (written
-# on the runner itself), stack (read from the stack or the cluster) or verdicts (the verdict lines of a threat model
-# drill, read from the stack or the cluster, scanned by rule as such); NOTE goes with it into files.txt.
+# consider FILE SRC DEST KIND: copies FILE (shown as SRC) to $art/DEST when it passes; KIND is runner (written
+# on the runner itself), stack (read from the stack or the cluster) or verdicts (the verdict lines of drill-obs-threats,
+# read from the stack, scanned by rule as such).
 consider() {
-  local file=$1 src=$2 dest=$3 kind=$4 note=${5:-} r size
+  local file=$1 src=$2 dest=$3 kind=$4 r size
   if [ -L "$file" ] || [ ! -f "$file" ]; then
     drop "$src" not-regular
     return
@@ -163,7 +157,7 @@ consider() {
     drop "$src" copy-failed
     return
   }
-  printf 'kept\t%s\t%s\t%s\n' "$src" "$dest" "$note" >>"$work/files"
+  printf 'kept\t%s\t%s\n' "$src" "$dest" >>"$work/files"
   kept=$((kept + 1))
 }
 
@@ -181,21 +175,11 @@ if [ -d "$out" ]; then
     case $sub in
       results.tsv | scenario | df-before.txt)
         consider "$file" "$src" "$sub" runner ;;
-      logs/*/*) drop "$src" not-allowed ;;
-      logs/*-drill-k8s-threats.log | logs/*-drill-obs-threats.log)
-        grep -aE -e "$verdict_re" -e "$item_re" -e "$table_re" -e "$drill_end_re" "$file" |
-          grep -avE -- "$service_log_re" >"$work/verdicts" || :
-        consider "$work/verdicts" "$src (verdict lines)" "${sub%.log}.verdicts.log" verdicts ;;
-      logs/*.log)
-        # A marked log line is "    [NAMESPACE] ", the namespace starting at character 6.
-        grep -avE -- "$service_log_re" "$file" | LC_ALL=C awk -v shown=" $log_tail_namespaces " '
-          match($0, /^    \[[a-z0-9-]+\] /) && !index(shown, " " substr($0, 6, RLENGTH - 7) " ") { next }
-          { print }' >"$work/output" || :
-        # grep -c, not wc -l: a last line without a newline counts too.
-        removed=$(($(grep -ac '' "$file") - $(grep -ac '' "$work/output")))
-        note=
-        [ "$removed" = 0 ] || note="$removed service log line(s) left out"
-        consider "$work/output" "$src" "$sub" stack "$note" ;;
+      logs/drill-obs-threats.log)
+        grep -aE -e "$verdict_re" -e "$drill_end_re" "$file" | grep -avE -- "$service_log_re" >"$work/verdicts" || :
+        consider "$work/verdicts" "$src (verdict lines)" logs/drill-obs-threats.verdicts.log verdicts ;;
+      logs/gitops-admission-metrics.log)
+        consider "$file" "$src" "$sub" stack ;;
       *) drop "$src" not-allowed ;;
     esac
   done < <(find "$out" \( -type f -o -type l \) -print0 | LC_ALL=C sort -z)
@@ -210,7 +194,7 @@ if [ -d "$repo/$base" ]; then
     if hidden "$sub"; then drop "$src" hidden; continue; fi
     case $sub in
       */*) drop "$src" not-allowed ;;
-      *.json | traffic-*.log) consider "$file" "$src" "k8s-drills/$sub" stack ;;
+      *.xml | *.json | *-skips.tsv | traffic-*.log) consider "$file" "$src" "k8s-drills/$sub" stack ;;
       *) drop "$src" not-allowed ;;
     esac
   done < <(find "$repo/$base" \( -type f -o -type l \) -print0 | LC_ALL=C sort -z)
@@ -226,18 +210,15 @@ fi
 
 echo "verify-collect ($scenario): $kept file(s) kept, $dropped dropped (files.txt in the artifact lists both)"
 
-# --- The summary in the job's log, from the copies only: the result of each target, and the end of the output of
-# each target that did not pass, when that output reached the artifact.
+# --- In the job's log, from the copies only: the end of the verdict lines of each step that did not succeed, when
+# they reached the artifact (the table of the steps is in the log already, from steps.sh table).
 if [ -f "$art/results.tsv" ]; then
-  echo "results:"
-  awk -F '\t' 'NR > 1 { printf "  %-3s %-28s %-8s exit %-4s %6s s  %s\n", $1, $2, $3, $4, $7, $8 }' "$art/results.tsv"
-  awk -F '\t' 'NR > 1 && $3 != "ok" && $3 != "skipped" { print $1 "-" $2 }' "$art/results.tsv" |
-    while IFS= read -r stem; do
-      for log in "$art/logs/$stem.log" "$art/logs/$stem.verdicts.log"; do
-        [ -f "$log" ] || continue
-        echo "---- last 40 lines of ${log#"$art"/}"
-        tail -n 40 "$log"
-      done
+  awk -F '\t' 'NR > 1 && $2 != "success" && $2 != "skipped" { print $1 }' "$art/results.tsv" |
+    while IFS= read -r step; do
+      log=$art/logs/$step.verdicts.log
+      [ -f "$log" ] || continue
+      echo "---- last 40 lines of ${log#"$art"/}"
+      tail -n 40 "$log"
     done
 fi
 exit 0

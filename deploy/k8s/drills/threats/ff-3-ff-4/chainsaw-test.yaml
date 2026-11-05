@@ -1,0 +1,382 @@
+# FF-3/FF-4 of docs/threat-model.md on cluster svp: every container of every pod in svp has CPU and memory requests and
+# limits, runAsNonRoot, readOnlyRootFilesystem, drops ALL and adds nothing, allowPrivilegeEscalation false, seccomp
+# RuntimeDefault (a container's own runAsNonRoot and seccomp override the pod's), no host namespace or hostPath, and no
+# ServiceAccount token reaches it: automount off, no volume of a projected serviceAccountToken or of a Secret of type
+# service-account-token (on its own or as a source of a projected volume) mounted at any path, no such Secret in its env
+# or envFrom (pod-rules.jq); the project's namespaces enforce PSA restricted; the kubelet of every node has podPidsLimit as
+# in deploy/k8s/k3d.yaml. Every pod of svp is checked, not a list, and each pod of the web client (labels
+# app.kubernetes.io/name=web, component=server) must be among them, its containers named.
+# Controls: the same rules flag every rule on a bare pod, and on a pod that is restricted but for a container's
+# runAsNonRoot false and a token reaching a container in each of those ways, while a container with an ordinary Secret as
+# a volume and in envFrom passes; a server-side dry run of a root pod in svp is Forbidden while a restricted one is
+# admitted.
+#
+# Each check is one operation named by its ID; continueOnError keeps the next checks running after one fails, and the
+# test still fails. Nothing is created: the two pods are server-side dry runs. kubectl in the scripts uses the caller's
+# kubeconfig and context k3d-svp (templates/probe-up.yaml says why).
+apiVersion: chainsaw.kyverno.io/v1alpha1
+kind: Test
+metadata:
+  name: ff-3-ff-4
+  labels:
+    drill: threats
+spec:
+  # An existing namespace, so Chainsaw creates no ephemeral one (it would carry no PSA label) and deletes nothing.
+  namespace: svp
+  steps:
+  - name: ff-3-ff-4-pods
+    try:
+    - description: "FF-3/FF-4: read the pods of svp and the names (only) of its Secrets of type service-account-token"
+      script:
+        shell: bash
+        env:
+        - &kubeconfig
+          name: CALLER_KUBECONFIG
+          value: (env('KUBECONFIG'))
+        content: |
+          set -euo pipefail
+          export KUBECONFIG="$CALLER_KUBECONFIG"
+          tokens=$(kubectl --context k3d-svp -n svp get secrets --field-selector type=kubernetes.io/service-account-token -o json |
+            jq -c '[.items[].metadata.name]')
+          kubectl --context k3d-svp -n svp get pods -o json | jq -r --argjson tokens "$tokens" -f pod-rules.jq
+        check:
+          ($error): ~
+        outputs:
+        - name: podLines
+          value: ($stdout)
+    - description: "FF-3/FF-4: namespace svp has pods to check"
+      continueOnError: true
+      script:
+        env:
+        - name: POD_LINES
+          value: ($podLines)
+        content: printf '%s\n' "$POD_LINES" | grep -c .
+        check:
+          (to_number(trim_space($stdout)) > `0`): true
+    - description: "FF-3/FF-4: every container of every pod in svp keeps the rules"
+      continueOnError: true
+      script:
+        shell: bash
+        env:
+        - name: POD_LINES
+          value: ($podLines)
+        content: |
+          set -euo pipefail
+          bad=0
+          while read -r ctr verdict requests limits; do
+            [ -n "$ctr" ] || continue
+            if [ "$verdict" = ok ]; then
+              echo "ok    FF-3/FF-4: $ctr: $requests $limits"
+            else
+              echo "FAIL  FF-3/FF-4: $ctr breaks: $verdict" >&2
+              bad=$((bad + 1))
+            fi
+          done <<<"$POD_LINES"
+          [ "$bad" = 0 ] || exit 1
+          echo "ok    FF-3/FF-4: every container of every pod in svp keeps the rules"
+        check:
+          ($error): ~
+          "(contains($stdout, 'ok    FF-3/FF-4: every container of every pod in svp keeps the rules'))": true
+    - description: "FF-3/FF-4: list the running pods of the web client (app.kubernetes.io/name=web,app.kubernetes.io/component=server)"
+      continueOnError: true
+      script:
+        env:
+        - *kubeconfig
+        content: |
+          set -eu
+          export KUBECONFIG="$CALLER_KUBECONFIG"
+          kubectl --context k3d-svp -n svp get pods -l app.kubernetes.io/name=web,app.kubernetes.io/component=server \
+            --field-selector status.phase=Running -o jsonpath='{range .items[*]}{.metadata.name}{"\n"}{end}'
+        check:
+          ($error): ~
+        outputs:
+        - name: webPods
+          value: ($stdout)
+    - description: "FF-3/FF-4: namespace svp has running pods of the web client"
+      continueOnError: true
+      script:
+        env:
+        - name: WEB_PODS
+          value: ($webPods)
+        content: printf '%s\n' "$WEB_PODS" | grep -c .
+        check:
+          (to_number(trim_space($stdout)) > `0`): true
+    - description: "FF-3/FF-4: the checks above cover each web pod, its containers named"
+      continueOnError: true
+      script:
+        shell: bash
+        env:
+        - name: POD_LINES
+          value: ($podLines)
+        - name: WEB_PODS
+          value: ($webPods)
+        content: |
+          set -euo pipefail
+          bad=0
+          while read -r pod; do
+            [ -n "$pod" ] || continue
+            out=$(awk -v p="$pod/" 'index($1, p) == 1 { sub(p, "", $1); printf "%s ", $1 }' <<<"$POD_LINES")
+            if [ -n "$out" ]; then
+              echo "ok    FF-3/FF-4: the checks above cover web pod $pod (containers: ${out% })"
+            else
+              echo "FAIL  FF-3/FF-4: web pod $pod is among the pods checked" >&2
+              bad=$((bad + 1))
+            fi
+          done <<<"$WEB_PODS"
+          [ "$bad" = 0 ] || exit 1
+          echo "ok    FF-3/FF-4: every web pod is among the pods checked"
+        check:
+          ($error): ~
+          "(contains($stdout, 'ok    FF-3/FF-4: every web pod is among the pods checked'))": true
+    # Controls of pod-rules.jq: on a pod that sets none of the rules it flags each one; on a pod restricted in every
+    # respect but six containers (one sets runAsNonRoot false over the pod's true; three mount a token at a path of their
+    # own, from a projected serviceAccountToken, from a Secret of type service-account-token and from that Secret as a
+    # source of a projected volume; two read that Secret through env and envFrom) it flags exactly those, and passes a
+    # seventh that mounts an ordinary Secret and reads it through envFrom, as the services do.
+    - description: "FF-3/FF-4 control: the same rules on a bare pod flag all of them"
+      continueOnError: true
+      script:
+        content: |
+          set -eu
+          jq -n '{items: [{metadata: {name: "bare"}, spec: {containers: [{name: "c", volumeMounts: [{mountPath: "/var/run/secrets/kubernetes.io/serviceaccount"}]}], hostNetwork: true, volumes: [{hostPath: {path: "/"}}]}}]}' |
+            jq -r --argjson tokens '[]' -f pod-rules.jq | awk '{ print $2 }'
+        check:
+          ($error): ~
+          (trim_space($stdout)): resources,runAsNonRoot,readOnlyRootFilesystem,drop-ALL,allowPrivilegeEscalation,seccomp,automountServiceAccountToken,token-mounted,host-namespaces,hostPath
+    - description: "FF-3/FF-4 control: on a restricted pod the rules flag a container's runAsNonRoot false and a token in each way, and pass an ordinary Secret"
+      continueOnError: true
+      script:
+        content: |
+          set -eu
+          jq -n '
+            {readOnlyRootFilesystem: true, allowPrivilegeEscalation: false, capabilities: {drop: ["ALL"]}} as $sc |
+            {resources: {requests: {cpu: "10m", memory: "16Mi"}, limits: {cpu: "100m", memory: "32Mi"}}, securityContext: $sc} as $c |
+            {items: [{metadata: {name: "override"}, spec: {
+              automountServiceAccountToken: false,
+              securityContext: {runAsNonRoot: true, seccompProfile: {type: "RuntimeDefault"}},
+              volumes: [{name: "tok", projected: {sources: [{serviceAccountToken: {path: "token"}}]}},
+                {name: "legacy", secret: {secretName: "drill-legacy-token"}},
+                {name: "bundle", projected: {sources: [{configMap: {name: "drill-ca"}}, {secret: {name: "drill-legacy-token"}}]}},
+                {name: "env", secret: {secretName: "drill-env"}}],
+              containers: [
+                ($c + {name: "root", securityContext: ($sc + {runAsNonRoot: false})}),
+                ($c + {name: "projected", volumeMounts: [{name: "tok", mountPath: "/var/run/svp-token"}]}),
+                ($c + {name: "legacy", volumeMounts: [{name: "legacy", mountPath: "/tok"}]}),
+                ($c + {name: "bundle", volumeMounts: [{name: "bundle", mountPath: "/x"}]}),
+                ($c + {name: "env", env: [{name: "TZ", value: "UTC"}, {name: "T", valueFrom: {secretKeyRef: {name: "drill-legacy-token", key: "token"}}}]}),
+                ($c + {name: "envfrom", envFrom: [{secretRef: {name: "drill-legacy-token"}}]}),
+                ($c + {name: "plain", volumeMounts: [{name: "env", mountPath: "/env"}], envFrom: [{secretRef: {name: "drill-env"}}]})]}}]}' |
+            jq -r --argjson tokens '["drill-legacy-token"]' -f pod-rules.jq | awk '{ printf "%s %s;", $1, $2 }'
+        check:
+          ($error): ~
+          ($stdout): override/root runAsNonRoot;override/projected token-mounted;override/legacy token-mounted;override/bundle token-mounted;override/env token-env;override/envfrom token-env;override/plain ok;
+
+  - name: ff-4-psa
+    try:
+    - description: "FF-4: read podSecurityVersion of deploy/helm/svp-cluster/values.yaml and the image of deployment svp/media-worker"
+      script:
+        shell: bash
+        env:
+        - *kubeconfig
+        content: |
+          set -euo pipefail
+          export KUBECONFIG="$CALLER_KUBECONFIG"
+          version=$(sed -n 's/^podSecurityVersion: *//p' "$(git rev-parse --show-toplevel)/deploy/helm/svp-cluster/values.yaml")
+          [[ $version =~ ^v1\.[0-9]+$ ]] || { echo "FAIL  read podSecurityVersion in deploy/helm/svp-cluster/values.yaml (got '$version')" >&2; exit 1; }
+          image=$(kubectl --context k3d-svp -n svp get deployment media-worker -o jsonpath='{.spec.template.spec.containers[0].image}')
+          [ -n "$image" ] || { echo "FAIL  read the image of deployment svp/media-worker" >&2; exit 1; }
+          jq -n --arg version "$version" --arg image "$image" \
+            '{psaVersion: $version, psaDenied: "violates PodSecurity \"restricted:\($version)\"", workerImage: $image}'
+        check:
+          ($error): ~
+        outputs:
+        - name: psaVersion
+          value: (json_parse($stdout).psaVersion)
+        # The admission message of a pod PSA refuses at that version.
+        - name: psaDenied
+          value: (json_parse($stdout).psaDenied)
+        - name: workerImage
+          value: (json_parse($stdout).workerImage)
+    - description: "FF-4: namespace svp enforces PSA restricted at podSecurityVersion"
+      continueOnError: true
+      assert:
+        resource:
+          apiVersion: v1
+          kind: Namespace
+          metadata:
+            name: svp
+            labels:
+              pod-security.kubernetes.io/enforce: restricted
+              pod-security.kubernetes.io/enforce-version: ($psaVersion)
+    - description: "FF-4: namespace svp-data enforces PSA restricted at podSecurityVersion"
+      continueOnError: true
+      assert:
+        resource:
+          apiVersion: v1
+          kind: Namespace
+          metadata:
+            name: svp-data
+            labels:
+              pod-security.kubernetes.io/enforce: restricted
+              pod-security.kubernetes.io/enforce-version: ($psaVersion)
+    - description: "FF-4: namespace svp-obs enforces PSA restricted at podSecurityVersion"
+      continueOnError: true
+      assert:
+        resource:
+          apiVersion: v1
+          kind: Namespace
+          metadata:
+            name: svp-obs
+            labels:
+              pod-security.kubernetes.io/enforce: restricted
+              pod-security.kubernetes.io/enforce-version: ($psaVersion)
+    - description: "FF-4: namespace svp-edge enforces PSA restricted at podSecurityVersion"
+      continueOnError: true
+      assert:
+        resource:
+          apiVersion: v1
+          kind: Namespace
+          metadata:
+            name: svp-edge
+            labels:
+              pod-security.kubernetes.io/enforce: restricted
+              pod-security.kubernetes.io/enforce-version: ($psaVersion)
+    - description: "FF-4: namespace argo-rollouts enforces PSA restricted at podSecurityVersion"
+      continueOnError: true
+      assert:
+        resource:
+          apiVersion: v1
+          kind: Namespace
+          metadata:
+            name: argo-rollouts
+            labels:
+              pod-security.kubernetes.io/enforce: restricted
+              pod-security.kubernetes.io/enforce-version: ($psaVersion)
+    - description: "FF-4: a pod running as root in svp is Forbidden by PSA restricted (server-side dry run)"
+      continueOnError: true
+      create:
+        dryRun: true
+        resource:
+          apiVersion: v1
+          kind: Pod
+          metadata:
+            name: drill-threats-psa
+            namespace: svp
+          spec:
+            automountServiceAccountToken: false
+            securityContext:
+              runAsNonRoot: false
+              runAsUser: 0
+              seccompProfile:
+                type: RuntimeDefault
+            containers:
+            - name: c
+              image: ($workerImage)
+              securityContext:
+                allowPrivilegeEscalation: false
+                readOnlyRootFilesystem: true
+                capabilities:
+                  drop: [ALL]
+              resources:
+                requests: {cpu: 10m, memory: 16Mi}
+                limits: {cpu: 100m, memory: 32Mi}
+        expect:
+        - check:
+            (contains(to_string($error), $psaDenied)): true
+    # In svp the dry run also goes through Kyverno's image webhook (on the GitOps path, failurePolicy Fail), whose first
+    # verification of an image reads GHCR and Sigstore and can run past the webhook's 30 s: a timeout is tried again, up
+    # to 3 times, as it says nothing about PSA; a refusal by the webhook ("denied the request") is not. The API server
+    # answers a timeout either as the webhook's ("failed calling webhook ...: context deadline exceeded") or, when the
+    # whole request ran past its own limit, "Timeout: request did not complete within requested timeout".
+    - description: "FF-4 control: the same pod as uid 65532 is admitted in svp (server-side dry run)"
+      continueOnError: true
+      script:
+        shell: bash
+        env:
+        - *kubeconfig
+        - name: WORKER_IMAGE
+          value: ($workerImage)
+        content: |
+          set -euo pipefail
+          export KUBECONFIG="$CALLER_KUBECONFIG"
+          for try in 1 2 3; do
+            out=$(kubectl --context k3d-svp create --dry-run=server -f - 2>&1 <<EOF || true
+          apiVersion: v1
+          kind: Pod
+          metadata:
+            name: drill-threats-psa
+            namespace: svp
+          spec:
+            automountServiceAccountToken: false
+            securityContext:
+              runAsNonRoot: true
+              runAsUser: 65532
+              seccompProfile:
+                type: RuntimeDefault
+            containers:
+              - name: c
+                image: $WORKER_IMAGE
+                securityContext:
+                  allowPrivilegeEscalation: false
+                  readOnlyRootFilesystem: true
+                  capabilities:
+                    drop: [ALL]
+                resources:
+                  requests: {cpu: 10m, memory: 16Mi}
+                  limits: {cpu: 100m, memory: 32Mi}
+          EOF
+            )
+            grep -Eq 'failed calling webhook.*(deadline exceeded|[Tt]imeout)|request did not complete within requested timeout' <<<"$out" || break
+            if [ "$try" -lt 3 ]; then
+              echo "info  control: Kyverno's webhook timed out on the restricted pod in svp, trying again"
+            else
+              echo "info  control: Kyverno's webhook timed out on the restricted pod in svp 3 times, giving up"
+            fi
+          done
+          echo "$out"
+        check:
+          ($error): ~
+          (contains($stdout, 'created (server dry run)')): true
+
+  - name: ff-3-pids
+    try:
+    - description: "FF-3: deploy/k8s/k3d.yaml sets --kubelet-arg=pod-max-pids"
+      continueOnError: true
+      script:
+        content: |
+          set -eu
+          sed -n 's/.*--kubelet-arg=pod-max-pids=\([0-9]*\).*/\1/p' "$(git rev-parse --show-toplevel)/deploy/k8s/k3d.yaml"
+        check:
+          ($error): ~
+          (trim_space($stdout) != ''): true
+        outputs:
+        - name: podMaxPids
+          value: (trim_space($stdout))
+    - description: "FF-3: the kubelet of every node has podPidsLimit as pod-max-pids of deploy/k8s/k3d.yaml (the kubelet's default is -1, unlimited)"
+      continueOnError: true
+      script:
+        shell: bash
+        env:
+        - *kubeconfig
+        - name: WANT
+          value: ($podMaxPids)
+        content: |
+          set -euo pipefail
+          export KUBECONFIG="$CALLER_KUBECONFIG"
+          bad=0
+          nodes=$(kubectl --context k3d-svp get nodes -o jsonpath='{.items[*].metadata.name}')
+          [ -n "$nodes" ] || { echo "FAIL  FF-3: list the nodes of the cluster" >&2; exit 1; }
+          for node in $nodes; do
+            pids=$(kubectl --context k3d-svp get --raw "/api/v1/nodes/$node/proxy/configz" | jq -r '.kubeletconfig.podPidsLimit // empty')
+            if [ "$pids" = "$WANT" ]; then
+              echo "ok    FF-3: kubelet of $node: podPidsLimit $pids"
+            else
+              echo "FAIL  FF-3: kubelet of $node has podPidsLimit $WANT (got '$pids')" >&2
+              bad=$((bad + 1))
+            fi
+          done
+          [ "$bad" = 0 ] || exit 1
+          echo "ok    FF-3: the kubelet of every node has podPidsLimit $WANT"
+        check:
+          ($error): ~
+          "(contains($stdout, 'ok    FF-3: the kubelet of every node has podPidsLimit'))": true

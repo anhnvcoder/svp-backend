@@ -172,8 +172,8 @@ tên được dùng lại [W1]; repo mới mang tên cũ ký được đúng sub
   `deploy/k8s/lib.sh` (`release_sources`, `ghcr_prefix`, `web_url`; luật bảng chỉ ở template từ [ADR-0050](0050-bash-to-standard-tools.md)); `deploy/ci/common.sh`; `deploy/ci/sources-test.sh`.
 - Tên repo code (mục 7, 8): `run_repo_url` của `deploy/ci/common.sh` (trên máy), lệnh `gh workflow run` mà script trong `deploy/ci/`,
   `deploy/k8s/` in ra, `deploy/k8s/gitops.sh` (`chart_repo_url`).
-- Script phát hành (mục 3, 8): `deploy/ci/gitops-check.sh`, `promote.sh`, `promote-prd.sh`, `rescan.sh`, `contract.sh`, `dora.sh`, `deploy/ci/verify/`.
-- Ca (l) (mục 6): `.github/workflows/images.yml`, `deploy/ci/verify/gitops.sh`, `deploy/k8s/drills/supplychain.sh`.
+- Script phát hành (mục 3, 8): `deploy/ci/gitops-check.sh`, `promote.sh`, `promote-prd.sh`, `rescan.sh`, `contract.sh`, `dora.sh`, `deploy/ci/verify-steps/`.
+- Ca (l) (mục 6): `.github/workflows/images.yml`, `deploy/ci/verify-steps/supplychain.sh`, `deploy/k8s/drills/supplychain/case-l/`.
 - Go module, tên ở cấu hình (mục 7): `go.mod`, `gen/go`, `.github/workflows/`, `Makefile`, `deploy/`, `renovate.json`.
 - Repo khác: `svp-gitops` (`.github/workflows/check.yml`, `argocd/apps/values.yaml`, `argocd/project.yaml`); `svp-frontend` (`.backend-commit`,
   `api/contract.json`, `scripts/backend.sh`). Danh sách đầy đủ của PR đổi tên và PR gỡ: phụ lục.

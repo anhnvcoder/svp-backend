@@ -1,0 +1,137 @@
+# Namespace svp-probe with pod probe, for the drills that try a connection from a pod no NetworkPolicy selects (nc, nslookup
+# of busybox). Use it as the first step of a test: `- use: {template: ../../templates/probe-up.yaml}`; the namespace is deleted
+# when the test ends, whether it failed or not.
+#
+# The namespace enforces Pod Security restricted at podSecurityVersion of deploy/helm/svp-cluster/values.yaml and has no
+# NetworkPolicy. The pod runs the image of Deployment svp/media-worker (pulled from the cluster's own registry), which has
+# busybox nc and nslookup, and meets the restricted standard, or the namespace would refuse it.
+#
+# A namespace of that name left by a killed run (it carries the label managed-by=probeOwner) is deleted first; one without
+# the label is someone else's: the step fails and, at the end of the test, nothing is deleted.
+#
+# Chainsaw runs each script with KUBECONFIG set to its own copy of the cluster it was started on (one context, named chainsaw).
+# kubectl in these scripts goes back to the caller's kubeconfig (CALLER_KUBECONFIG; empty means ~/.kube/config) and always
+# names context k3d-svp. The apply and wait steps use Chainsaw's own client, so the first step fails unless Chainsaw was
+# started on that same cluster (chainsaw test --kube-context k3d-svp).
+apiVersion: chainsaw.kyverno.io/v1alpha1
+kind: StepTemplate
+metadata:
+  name: probe-up
+spec:
+  bindings:
+  - name: probeNamespace
+    value: svp-probe
+  - name: probeOwner
+    value: svp-drill-threats
+  try:
+  - script:
+      env:
+      - name: PROBE_NS
+        value: ($probeNamespace)
+      - name: PROBE_OWNER
+        value: ($probeOwner)
+      - name: CALLER_KUBECONFIG
+        value: (env('KUBECONFIG'))
+      content: |
+        set -eu
+        chainsaw=$(kubectl config view --minify -o jsonpath='{.clusters[0].cluster.server}' 2>/dev/null || true)
+        export KUBECONFIG="$CALLER_KUBECONFIG"
+        k3d=$(kubectl config view --minify --context k3d-svp -o jsonpath='{.clusters[0].cluster.server}' 2>/dev/null || true)
+        if [ -z "$k3d" ] || [ "$chainsaw" != "$k3d" ]; then
+          echo "FAIL  chainsaw runs on ${chainsaw:-no cluster}, not on context k3d-svp (${k3d:-not in the kubeconfig}): run it with --kube-context k3d-svp" >&2
+          exit 1
+        fi
+        kubectl --context k3d-svp get namespace "$PROBE_NS" >/dev/null 2>&1 || exit 0
+        owner=$(kubectl --context k3d-svp get namespace "$PROBE_NS" -o jsonpath='{.metadata.labels.app\.kubernetes\.io/managed-by}')
+        if [ "$owner" != "$PROBE_OWNER" ]; then
+          echo "FAIL  namespace $PROBE_NS exists without label app.kubernetes.io/managed-by=$PROBE_OWNER: not this drill's, delete it yourself" >&2
+          exit 1
+        fi
+        kubectl --context k3d-svp delete namespace "$PROBE_NS" --ignore-not-found --wait=true --timeout=120s >/dev/null
+  - script:
+      env:
+      - name: CALLER_KUBECONFIG
+        value: (env('KUBECONFIG'))
+      outputs:
+      - name: workerImage
+        value: ($stdout)
+      content: |
+        set -eu
+        export KUBECONFIG="$CALLER_KUBECONFIG"
+        image=$(kubectl --context k3d-svp -n svp get deployment media-worker -o jsonpath='{.spec.template.spec.containers[0].image}')
+        [ -n "$image" ] || { echo "FAIL  read the image of deployment svp/media-worker" >&2; exit 1; }
+        printf %s "$image"
+  - script:
+      outputs:
+      - name: psaVersion
+        value: ($stdout)
+      content: |
+        set -eu
+        root=$(git rev-parse --show-toplevel)
+        version=$(sed -n 's/^podSecurityVersion: *//p' "$root/deploy/helm/svp-cluster/values.yaml")
+        [ -n "$version" ] || { echo "FAIL  read podSecurityVersion of deploy/helm/svp-cluster/values.yaml" >&2; exit 1; }
+        printf %s "$version"
+  - apply:
+      resource:
+        apiVersion: v1
+        kind: Namespace
+        metadata:
+          name: ($probeNamespace)
+          labels:
+            app.kubernetes.io/managed-by: ($probeOwner)
+            pod-security.kubernetes.io/enforce: restricted
+            pod-security.kubernetes.io/enforce-version: ($psaVersion)
+  - apply:
+      resource:
+        apiVersion: v1
+        kind: Pod
+        metadata:
+          name: probe
+          namespace: ($probeNamespace)
+        spec:
+          automountServiceAccountToken: false
+          restartPolicy: Never
+          terminationGracePeriodSeconds: 1
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 65532
+            runAsGroup: 65532
+            seccompProfile:
+              type: RuntimeDefault
+          containers:
+          - name: probe
+            image: ($workerImage)
+            command: [sleep, "900"]
+            securityContext:
+              allowPrivilegeEscalation: false
+              readOnlyRootFilesystem: true
+              capabilities:
+                drop: [ALL]
+            resources:
+              requests: {cpu: 10m, memory: 16Mi}
+              limits: {cpu: 200m, memory: 64Mi}
+  - wait:
+      apiVersion: v1
+      kind: Pod
+      name: probe
+      namespace: ($probeNamespace)
+      timeout: 120s
+      for:
+        condition:
+          name: Ready
+  cleanup:
+  # Only a namespace this template labelled: when the first step refused someone else's namespace it is still there.
+  - script:
+      env:
+      - name: PROBE_NS
+        value: ($probeNamespace)
+      - name: PROBE_OWNER
+        value: ($probeOwner)
+      - name: CALLER_KUBECONFIG
+        value: (env('KUBECONFIG'))
+      content: |
+        set -eu
+        export KUBECONFIG="$CALLER_KUBECONFIG"
+        owner=$(kubectl --context k3d-svp get namespace "$PROBE_NS" -o jsonpath='{.metadata.labels.app\.kubernetes\.io/managed-by}' 2>/dev/null || true)
+        [ "$owner" = "$PROBE_OWNER" ] || exit 0
+        kubectl --context k3d-svp delete namespace "$PROBE_NS" --ignore-not-found --wait=true --timeout=120s >/dev/null

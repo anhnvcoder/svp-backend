@@ -1,0 +1,191 @@
+# Supply chain drill, case m: the release sources apart (files/sources.json of chart svp-policy), for every ordered pair
+# of sources A and B of the table:
+#   - names: an image under A's prefix whose name only B publishes (a service or drill image of B, not of A), by a
+#     digest: refused by the prefix rule (the first check), whatever the digest, without any registry asked (no glob
+#     of the policy matches it); SKIP when every name of B is also A's;
+#   - identities, A→B: a release of B that a pod of svp runs, under a temporary copy of the policy (same chart, its
+#     table with the issuer and subject of A and B swapped, mode Enforce, only pods of svp labelled
+#     svp-drill=supplychain-swap): refused by the signature rule naming source B, since Kyverno verifies an image with
+#     the attestor of the source whose prefix it is under, which in the copy has A's identity; had it picked A's
+#     attestor, which has B's identity there, the pod would pass. One copy per pair of sources serves both directions
+#     and is deleted after them, its webhook gone, also when the step fails. Not A's release with its digest under B's
+#     prefix: GHCR has no manifest of another repository's digest, and Kyverno fetches a matched image before any check,
+#     so that answer is a registry error. SKIP while no release of B runs in svp (before that source's first release
+#     reaches the cluster);
+#   - a release of each source other than backend that a pod of svp runs: admitted (case a is backend's); SKIP while
+#     none runs.
+# The pairs come from the table, so the steps loop over it and print one verdict line per pair and direction.
+# Helpers, inputs and the verdict lines: ../lib.sh.
+apiVersion: chainsaw.kyverno.io/v1alpha1
+kind: Test
+metadata:
+  name: supplychain-case-m
+  labels:
+    drill: supplychain
+spec:
+  description: (m) each release source is verified under its own prefix with its own identity
+  # Concurrent, so that Chainsaw runs it after case k, the drill's one test that is not (Chainsaw runs those first):
+  # on the dev path k needs the policy in Audit, before any case puts it in Enforce. Still one test at a time:
+  # execution.parallel is 1 in deploy/k8s/drills/.chainsaw.yaml.
+  concurrent: true
+  # Namespace svp exists: Chainsaw neither creates nor deletes it.
+  namespace: svp
+  steps:
+  - name: m-setup
+    description: (m) Chainsaw on k3d-svp, the policy ready, its webhooks noted; on the dev path the policy in Enforce for the case (enforceTmp)
+    try:
+    - script:
+        shell: bash
+        timeout: 5m
+        env: &env
+        - name: CASE
+          value: m
+        - name: CALLER_KUBECONFIG
+          value: (env('KUBECONFIG'))
+        - name: UNSIGNED
+          value: (to_string($values.unsigned || ''))
+        - name: VULNERABLE
+          value: (to_string($values.vulnerable || ''))
+        - name: NO_PROVENANCE
+          value: (to_string($values.noProvenance || ''))
+        - name: ENFORCE_TMP
+          value: (to_string($values.enforceTmp || ''))
+        content: |
+          . ../lib.sh
+          preflight
+          enforce_tmp_up
+    cleanup:
+    - script:
+        shell: bash
+        timeout: 5m
+        env: *env
+        content: |
+          . ../lib.sh
+          audit_back
+    - script:
+        shell: bash
+        env: *env
+        content: |
+          . ../lib.sh
+          webhooks_back
+  - name: m-names
+    description: (m) names, for every ordered pair A, B, a name only B publishes, under A's prefix, refused by the prefix rule
+    try:
+    - continueOnError: true
+      script:
+        shell: bash
+        env: *env
+        content: |
+          . ../lib.sh
+          # A digest the names part sends: the prefix rule refuses by the name alone, before any registry is asked.
+          name_digest=sha256:$(printf '0%.0s' $(seq 64))
+          for a in $(jq -r '.sources[].name' <<<"$sources"); do
+            for b in $(jq -r '.sources[].name' <<<"$sources"); do
+              [[ $a != "$b" ]] || continue
+              pair=$(jq -c --arg a "$a" --arg b "$b" '{a: (.sources[] | select(.name == $a)), b: (.sources[] | select(.name == $b))}' \
+                <<<"$sources")
+              only_b=$(jq -r '(.b.services + .b.drillImages) - (.a.services + .a.drillImages) | first // empty' <<<"$pair")
+              pa=$(jq -r .a.imagePrefix <<<"$pair")
+              if [[ -n $only_b ]]; then
+                dry_run drill-supplychain-m svp "$pa$only_b@$name_digest"
+                refused "image not allowed in namespace svp" "$pa$only_b@… under source $a's prefix, a name only source $b publishes"
+              else
+                result SKIP "names, $a's prefix: source $b publishes no name that $a does not"
+              fi
+            done
+          done
+          finish
+        check:
+          ($error == null): true
+          (contains($stdout, 'PASS  (m) ') || contains($stdout, 'SKIP  (m) ')): true
+  - name: m-identities
+    description: (m) identities, for every pair of sources, a running release of each under a copy of the policy with the two identities swapped, refused by the signature rule naming its own source
+    try:
+    - continueOnError: true
+      script:
+        shell: bash
+        timeout: 10m
+        env: *env
+        content: |
+          . ../lib.sh
+          pods_json=$(kc -n svp get pods -o json) || fail "read the pods of svp"
+          # running_release PREFIX: the first image by digest under PREFIX that a pod of svp runs, empty without one.
+          running_release() {
+            jq -r --arg p "$1" '[.items[].spec.containers[].image | select(startswith($p) and test("@sha256:[0-9a-f]{64}$"))]
+              | first // empty' <<<"$pods_json"
+          }
+          n_sources=$(jq '.sources | length' <<<"$sources")
+          for ((i = 0; i < n_sources; i++)); do
+            for ((j = i + 1; j < n_sources; j++)); do
+              sa=$(jq -r ".sources[$i].name" <<<"$sources")
+              sb=$(jq -r ".sources[$j].name" <<<"$sources")
+              ra=$(running_release "$(jq -r ".sources[$i].imagePrefix" <<<"$sources")")
+              rb=$(running_release "$(jq -r ".sources[$j].imagePrefix" <<<"$sources")")
+              swap=svp-drill-swap-$sa-$sb
+              if [[ -n $ra || -n $rb ]]; then
+                rm -rf "$work/swap-chart"
+                cp -R "$repo_root/deploy/helm/svp-policy" "$work/swap-chart"
+                jq --argjson i "$i" --argjson j "$j" '.sources[$i] as $x | .sources[$j] as $y
+                  | .sources[$i].issuer = $y.issuer | .sources[$i].subject = $y.subject
+                  | .sources[$j].issuer = $x.issuer | .sources[$j].subject = $x.subject' \
+                  "$repo_root/deploy/helm/svp-policy/files/sources.json" >"$work/swap-chart/files/sources.json" ||
+                  fail "swap the identities of sources $sa and $sb"
+                hc template "$swap" "$work/swap-chart" --set imageVerification.mode=Enforce --set "name=$swap" \
+                  --set-json 'objectSelector={"matchLabels":{"svp-drill":"supplychain-swap"}}' >"$work/policy.yaml" ||
+                  fail "render chart svp-policy as $swap"
+                apply_policy "$swap" "$work/policy.yaml"
+              fi
+              # Each direction: the release of the second source of the line, under the copy where its attestor has the
+              # identity of the first.
+              for dir in "$sa $sb $rb" "$sb $sa $ra"; do
+                read -r x y ry <<<"$dir"
+                if [[ -n $ry ]]; then
+                  dry_run drill-supplychain-m svp "$ry" supplychain-swap
+                  refused "image without a keyless signature by the workflow of its source: $ry (source $y," \
+                    "identities, $x→$y: $ry, a release of source $y, under a copy of the policy whose attestor $y has $x's identity"
+                else
+                  result SKIP "identities, $x→$y: no release of source $y runs in svp (its first release has not reached this cluster)"
+                fi
+              done
+              if [[ -n $ra || -n $rb ]]; then
+                delete_temp_policies || fail "delete policy $swap and wait for its webhook to go"
+              fi
+            done
+          done
+          finish
+        check:
+          ($error == null): true
+          (contains($stdout, 'PASS  (m) ') || contains($stdout, 'SKIP  (m) ')): true
+    finally:
+    - script:
+        shell: bash
+        timeout: 5m
+        env: *env
+        content: |
+          . ../lib.sh
+          delete_temp_policies
+  - name: m-admitted
+    description: (m) a running release of each source other than backend, admitted under the real policy
+    try:
+    - continueOnError: true
+      script:
+        shell: bash
+        env: *env
+        content: |
+          . ../lib.sh
+          pods_json=$(kc -n svp get pods -o json) || fail "read the pods of svp"
+          for s in $(jq -r '.sources[] | select(.name != "backend") | .name' <<<"$sources"); do
+            p=$(jq -r --arg s "$s" '.sources[] | select(.name == $s) | .imagePrefix' <<<"$sources")
+            own=$(jq -r --arg p "$p" '[.items[].spec.containers[].image | select(startswith($p) and test("@sha256:[0-9a-f]{64}$"))]
+              | first // empty' <<<"$pods_json")
+            if [[ -n $own ]]; then
+              dry_run drill-supplychain-m svp "$own"
+              admitted "$own, a release of source $s, verified with $s's identity"
+            else
+              result SKIP "admitted, source $s: no pod of svp runs a release of it (its first release has not reached this cluster)"
+            fi
+          done
+          finish
+        check:
+          ($error == null): true
+          (contains($stdout, 'PASS  (m) ') || contains($stdout, 'SKIP  (m) ')): true

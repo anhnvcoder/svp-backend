@@ -1,0 +1,144 @@
+# IN-9 of the threat model (docs/threat-model.md): Postgres lets no one in without a password. The pg_hba rules of the
+# primary of Cluster svp-data/svp-pg have no trust, every TCP rule is scram-sha-256 or cert, and the last rule is host all
+# all all scram-sha-256 (CloudNativePG's default, to which the project adds nothing). From GlitchTip's pod (allowed to
+# 5432) a connection without a password, as postgres and as svp_user_app, with and without TLS, is refused with "no
+# password supplied"; control: a wrong password is refused with "password authentication failed" (the server checks it).
+# Inside the primary, TCP to 127.0.0.1 without a password is refused too (the old hole of the host's Postgres was trust
+# on loopback).
+#
+# Reads Postgres only: SELECT on pg_hba_file_rules, through peer login on the pod's socket as the image's postgres user
+# (the one way in without a password, by design). Each check and control is one step; a failed one marks the test failed
+# and the next steps still run.
+apiVersion: chainsaw.kyverno.io/v1alpha1
+kind: Test
+metadata:
+  name: in-9
+  labels:
+    drill: threats
+spec:
+  description: "IN-9: no pg_hba rule of the Postgres primary lets a client in without a password, over TCP or on loopback"
+  # An existing namespace: Chainsaw neither creates nor deletes it.
+  namespace: svp-data
+  steps:
+  # Each rule check reads the rules again (one SELECT) and prints its own verdict: CHECK trust and tcp print "none" when
+  # no rule breaks them, else the rules that do; CHECK last prints the last rule without its line number. The rules go to
+  # stderr, one "pg_hba line ..." per rule.
+  - name: "IN-9: no pg_hba rule of the primary is trust"
+    bindings:
+    - {name: check, value: trust}
+    - {name: want, value: none}
+    try: &hba
+    - script:
+        env:
+        - {name: CALLER_KUBECONFIG, value: (env('KUBECONFIG'))}
+        - {name: CHECK, value: ($check)}
+        content: |
+          set -eu
+          export KUBECONFIG="$CALLER_KUBECONFIG"
+          primary=$(kubectl --context k3d-svp -n svp-data get cluster.postgresql.cnpg.io svp-pg -o jsonpath='{.status.currentPrimary}')
+          [ -n "$primary" ] || { echo "FAIL  IN-9: read the primary of Cluster svp-data/svp-pg" >&2; exit 1; }
+          rules=$(kubectl --context k3d-svp -n svp-data exec "$primary" -c postgres -- psql -X -A -t -F ' ' -U postgres -d postgres -c \
+            "select line_number, type, array_to_string(database, ','), array_to_string(user_name, ','), coalesce(address, '-'), auth_method from pg_hba_file_rules order by line_number") ||
+            { echo "FAIL  IN-9: read pg_hba_file_rules on $primary" >&2; exit 1; }
+          [ -n "$rules" ] || { echo "FAIL  IN-9: $primary has no pg_hba rule" >&2; exit 1; }
+          printf '%s\n' "$rules" | sed "s/^/pg_hba line ($primary) /" >&2
+          case $CHECK in
+            trust) bad=$(printf '%s\n' "$rules" | awk '$NF == "trust"' | tr '\n' ';') ;;
+            tcp) bad=$(printf '%s\n' "$rules" | awk '$2 ~ /^host/ && $NF != "scram-sha-256" && $NF != "cert"' | tr '\n' ';') ;;
+            # The rules are ordered by line: the last one is CloudNativePG's catch-all.
+            last) printf '%s\n' "$rules" | tail -n 1 | cut -d ' ' -f 2-; exit 0 ;;
+          esac
+          echo "${bad:-none}"
+        check:
+          ($error): ~
+          (trim_space($stdout)): ($want)
+      continueOnError: true
+  - name: "IN-9: every TCP (host*) pg_hba rule of the primary is scram-sha-256 or cert"
+    bindings:
+    - {name: check, value: tcp}
+    - {name: want, value: none}
+    try: *hba
+  - name: "IN-9: the last pg_hba rule of the primary is host all all all scram-sha-256 (CloudNativePG's default, nothing added after it)"
+    bindings:
+    - {name: check, value: last}
+    - {name: want, value: host all all all scram-sha-256}
+    try: *hba
+
+  # From GlitchTip's pod, which the policy lets in to 5432: libpq through psycopg, no password file. The step prints why
+  # the login failed: no-password-supplied, password-authentication-failed, other, or CONNECTED.
+  - name: "IN-9: from GlitchTip's pod, postgres over TCP (sslmode=require) without a password: refused, the server asks for one"
+    bindings:
+    - {name: pgUser, value: postgres}
+    - {name: sslMode, value: require}
+    - {name: passwordKind, value: none}
+    - {name: want, value: no-password-supplied}
+    try: &login
+    - script:
+        env:
+        - {name: CALLER_KUBECONFIG, value: (env('KUBECONFIG'))}
+        - {name: PG_USER, value: ($pgUser)}
+        - {name: SSL_MODE, value: ($sslMode)}
+        - {name: PASSWORD_KIND, value: ($passwordKind)}
+        content: |
+          set -eu
+          export KUBECONFIG="$CALLER_KUBECONFIG"
+          kubectl --context k3d-svp -n svp-obs exec deploy/glitchtip -- python -c '
+          import secrets, sys, psycopg
+          user, ssl, kind = sys.argv[1:4]
+          pw = secrets.token_hex(16) if kind == "wrong" else ""
+          try:
+              psycopg.connect(f"host=svp-pg-rw.svp-data.svc.cluster.local port=5432 dbname=postgres user={user} "
+                              f"sslmode={ssl} connect_timeout=5 passfile=/nonexistent", password=pw).close()
+              print("CONNECTED")
+          except psycopg.OperationalError as e:
+              msg = str(e)
+              print("no-password-supplied" if "no password supplied" in msg else
+                    "password-authentication-failed" if "password authentication failed" in msg else "other")
+          ' "$PG_USER" "$SSL_MODE" "$PASSWORD_KIND"
+        check:
+          ($error): ~
+          (trim_space($stdout)): ($want)
+      continueOnError: true
+  - name: "IN-9: from GlitchTip's pod, postgres over TCP (sslmode=disable) without a password: refused, the server asks for one"
+    bindings:
+    - {name: pgUser, value: postgres}
+    - {name: sslMode, value: disable}
+    - {name: passwordKind, value: none}
+    - {name: want, value: no-password-supplied}
+    try: *login
+  - name: "IN-9: from GlitchTip's pod, svp_user_app over TCP (sslmode=require) without a password: refused, the server asks for one"
+    bindings:
+    - {name: pgUser, value: svp_user_app}
+    - {name: sslMode, value: require}
+    - {name: passwordKind, value: none}
+    - {name: want, value: no-password-supplied}
+    try: *login
+  - name: "IN-9: control: from GlitchTip's pod, postgres with a wrong password: password authentication failed (the server checks it)"
+    bindings:
+    - {name: pgUser, value: postgres}
+    - {name: sslMode, value: require}
+    - {name: passwordKind, value: wrong}
+    - {name: want, value: password-authentication-failed}
+    try: *login
+
+  - name: "IN-9: inside the primary, postgres over TCP to 127.0.0.1 without a password: refused (no trust on loopback)"
+    try:
+    - script:
+        env:
+        - {name: CALLER_KUBECONFIG, value: (env('KUBECONFIG'))}
+        content: |
+          set -eu
+          export KUBECONFIG="$CALLER_KUBECONFIG"
+          primary=$(kubectl --context k3d-svp -n svp-data get cluster.postgresql.cnpg.io svp-pg -o jsonpath='{.status.currentPrimary}')
+          [ -n "$primary" ] || { echo "FAIL  IN-9: read the primary of Cluster svp-data/svp-pg" >&2; exit 1; }
+          out=$(kubectl --context k3d-svp -n svp-data exec "$primary" -c postgres -- env -u PGPASSWORD PGPASSFILE=/nonexistent \
+            psql -X -w "host=127.0.0.1 port=5432 user=postgres dbname=postgres sslmode=disable" -c 'select 1' 2>&1 || true)
+          if printf '%s\n' "$out" | grep -q 'no password supplied'; then
+            echo "no password supplied"
+          else
+            printf '%s\n' "$out" | head -n 1
+          fi
+        check:
+          ($error): ~
+          (trim_space($stdout)): no password supplied
+      continueOnError: true

@@ -126,6 +126,6 @@ Cảnh báo resolve khi series của Application trở lại `Synced`/`Healthy` 
 
 - [ADR-0032](../adr/0032-argocd-deploy-status.md) (trạng thái triển khai của Argo CD), ADR-0025 (repo `svp-gitops`),
   ADR-0014 §12 (canary), [svp-gitops-setup.md](svp-gitops-setup.md) (rollback).
-- Diễn tập: bước `gitops-argocd-metrics` của kịch bản `gitops` (`verify.yml`) kiểm Prometheus thấy đủ Application
+- Diễn tập: test `gitops-argocd-metrics` của `make drill-k8s-gitops` (`deploy/k8s/drills/gitops/argocd-metrics/`) kiểm Prometheus thấy đủ Application
   `Synced`/`Healthy` và không cảnh báo Argo CD nào cháy. Ca canary bị abort tái hiện được bằng diễn tập canary của bài lab `drills/` của `svp-labs` (cluster
   dev, không có Argo CD nên không có cảnh báo này); chưa có diễn tập làm cảnh báo cháy trên cluster GitOps.

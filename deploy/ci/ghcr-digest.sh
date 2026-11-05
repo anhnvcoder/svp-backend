@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# A digest GHCR serves to anyone, for the supply chain drill (scenario gitops of deploy/ci/verify/gitops.sh, and
-# deploy/k8s/drills/supplychain.sh for cases b, h, i and l):
+# A digest GHCR serves to anyone, for the supply chain drill (step drill-k8s-supplychain of .github/workflows/verify.yml, deploy/ci/verify-steps/supplychain.sh, and
+# deploy/k8s/drills/run.sh with the tests of deploy/k8s/drills/supplychain/ for cases b, h, i and l):
 #   ghcr-digest.sh newest IMAGE
 #       Prints ghcr.io/anhnvcoder/svp-backend/IMAGE@<digest> of the newest index of IMAGE (drill-vulnerable,
 #       drill-unsigned, drill-no-provenance) on GHCR: its tags of 12 hex digits name the commit of main that CI built

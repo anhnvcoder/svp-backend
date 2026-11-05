@@ -1,0 +1,125 @@
+# WEB-10 of the threat model (docs/threat-model.md): the object store's CORS answers the web client's origin only, and
+# for each bucket only what the web client does there. Preflights (OPTIONS) through Envoy to
+# https://s3.svp.localhost:8443, /media/... (GET) and /uploads (POST), from https://evil.example and from the compose
+# origins http://localhost:3001 and :3002 get no Access-Control-Allow-Origin, and neither do the two requests the web
+# client never makes, POST to /media and GET at /uploads/..., from https://svp.localhost:8443 itself (the CORS rules are
+# per bucket, each allowing only what the web client does there). Control: from https://svp.localhost:8443, GET at
+# /media/... and POST to /uploads are 2xx with exactly that origin, so the store answers CORS at all.
+#
+# The objects named are of this run (drill-threats-<UTC time>-<random>) and exist nowhere: a preflight reads nothing.
+# Each check and control is one step; a failed one marks the test failed and the next steps still run. curl takes the
+# cluster's CA from CURL_CA_BUNDLE, which the make target sets.
+apiVersion: chainsaw.kyverno.io/v1alpha1
+kind: Test
+metadata:
+  name: web-10
+  labels:
+    drill: threats
+spec:
+  description: "WEB-10: the object store's CORS allows the web client's origin only, per bucket only what it does there"
+  # An existing namespace: Chainsaw neither creates nor deletes it.
+  namespace: svp-data
+  steps:
+  # One preflight per step: the step prints "answered, no Access-Control-Allow-Origin" when the store answered without
+  # the header, "<status>, Access-Control-Allow-Origin <value>" when it has one, "no answer" when nothing answered.
+  # The status and headers go to stderr. PATH is relative to the store's origin; RUN in it becomes the run's name.
+  - name: "WEB-10: OPTIONS /media/media/<run>/master.m3u8 (GET) from https://evil.example: no Access-Control-Allow-Origin"
+    bindings:
+    - {name: path, value: /media/media/RUN/master.m3u8}
+    - {name: method, value: GET}
+    - {name: origin, value: https://evil.example}
+    - {name: want, value: "answered, no Access-Control-Allow-Origin"}
+    try: &preflight
+    - script:
+        env:
+        - {name: URL_PATH, value: ($path)}
+        - {name: METHOD, value: ($method)}
+        - {name: ORIGIN, value: ($origin)}
+        content: |
+          set -eu
+          umask 077
+          headers=$(mktemp)
+          trap 'rm -f "$headers"' EXIT
+          run=drill-threats-$(date -u +%Y%m%dT%H%M%SZ)-$(openssl rand -hex 2)
+          path=$(printf '%s' "$URL_PATH" | sed "s/RUN/$run/")
+          status=$(curl -s --max-time 5 -o /dev/null -D "$headers" -w '%{http_code}' -X OPTIONS \
+            -H "Origin: $ORIGIN" -H "Access-Control-Request-Method: $METHOD" "https://s3.svp.localhost:8443$path" || true)
+          acao=$(tr -d '\r' <"$headers" | awk 'tolower($1) == "access-control-allow-origin:" { print $2 }')
+          echo "OPTIONS https://s3.svp.localhost:8443$path ($METHOD) from $ORIGIN: status $status, Access-Control-Allow-Origin '$acao'" >&2
+          if [ "$status" = 000 ]; then
+            echo "no answer"
+          elif [ -z "$acao" ]; then
+            echo "answered, no Access-Control-Allow-Origin"
+          else
+            case $status in 2??) class=2xx ;; *) class=$status ;; esac
+            echo "$class, Access-Control-Allow-Origin $acao"
+          fi
+        check:
+          ($error): ~
+          (trim_space($stdout)): ($want)
+      continueOnError: true
+  - name: "WEB-10: OPTIONS /media/media/<run>/master.m3u8 (GET) from http://localhost:3001: no Access-Control-Allow-Origin"
+    bindings:
+    - {name: path, value: /media/media/RUN/master.m3u8}
+    - {name: method, value: GET}
+    - {name: origin, value: "http://localhost:3001"}
+    - {name: want, value: "answered, no Access-Control-Allow-Origin"}
+    try: *preflight
+  - name: "WEB-10: OPTIONS /media/media/<run>/master.m3u8 (GET) from http://localhost:3002: no Access-Control-Allow-Origin"
+    bindings:
+    - {name: path, value: /media/media/RUN/master.m3u8}
+    - {name: method, value: GET}
+    - {name: origin, value: "http://localhost:3002"}
+    - {name: want, value: "answered, no Access-Control-Allow-Origin"}
+    try: *preflight
+  - name: "WEB-10: control: OPTIONS /media/media/<run>/master.m3u8 (GET) from https://svp.localhost:8443: 2xx, Access-Control-Allow-Origin https://svp.localhost:8443"
+    bindings:
+    - {name: path, value: /media/media/RUN/master.m3u8}
+    - {name: method, value: GET}
+    - {name: origin, value: "https://svp.localhost:8443"}
+    - {name: want, value: "2xx, Access-Control-Allow-Origin https://svp.localhost:8443"}
+    try: *preflight
+  - name: "WEB-10: OPTIONS /uploads (POST) from https://evil.example: no Access-Control-Allow-Origin"
+    bindings:
+    - {name: path, value: /uploads}
+    - {name: method, value: POST}
+    - {name: origin, value: https://evil.example}
+    - {name: want, value: "answered, no Access-Control-Allow-Origin"}
+    try: *preflight
+  - name: "WEB-10: OPTIONS /uploads (POST) from http://localhost:3001: no Access-Control-Allow-Origin"
+    bindings:
+    - {name: path, value: /uploads}
+    - {name: method, value: POST}
+    - {name: origin, value: "http://localhost:3001"}
+    - {name: want, value: "answered, no Access-Control-Allow-Origin"}
+    try: *preflight
+  - name: "WEB-10: OPTIONS /uploads (POST) from http://localhost:3002: no Access-Control-Allow-Origin"
+    bindings:
+    - {name: path, value: /uploads}
+    - {name: method, value: POST}
+    - {name: origin, value: "http://localhost:3002"}
+    - {name: want, value: "answered, no Access-Control-Allow-Origin"}
+    try: *preflight
+  - name: "WEB-10: control: OPTIONS /uploads (POST) from https://svp.localhost:8443: 2xx, Access-Control-Allow-Origin https://svp.localhost:8443"
+    bindings:
+    - {name: path, value: /uploads}
+    - {name: method, value: POST}
+    - {name: origin, value: "https://svp.localhost:8443"}
+    - {name: want, value: "2xx, Access-Control-Allow-Origin https://svp.localhost:8443"}
+    try: *preflight
+  # The rules are per bucket: from the web client's own origin, the request each bucket's rule leaves out gets no header
+  # either. The controls above show each bucket answering that origin for the method its rule allows.
+  - name: "WEB-10: OPTIONS /media (POST) from https://svp.localhost:8443: no Access-Control-Allow-Origin (no rule of the bucket allows POST)"
+    bindings:
+    - {name: path, value: /media}
+    - {name: method, value: POST}
+    - {name: origin, value: "https://svp.localhost:8443"}
+    - {name: want, value: "answered, no Access-Control-Allow-Origin"}
+    try: *preflight
+  - name: "WEB-10: OPTIONS /uploads/uploads/<run> (GET) from https://svp.localhost:8443: no Access-Control-Allow-Origin (no rule of the bucket allows GET)"
+    bindings:
+    - {name: path, value: /uploads/uploads/RUN}
+    - {name: method, value: GET}
+    - {name: origin, value: "https://svp.localhost:8443"}
+    - {name: want, value: "answered, no Access-Control-Allow-Origin"}
+    try: *preflight

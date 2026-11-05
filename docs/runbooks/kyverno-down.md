@@ -93,5 +93,5 @@ kubectl --context k3d-svp -n svp get pods -o jsonpath='{range .items[*]}{.metada
 
 - ADR: [ADR-0015](../adr/0015-cicd-devsecops-stage5.md) §8 (Kyverno, hai chế độ, webhook tự xoá), [threat model](../threat-model.md)
   SC-1, SC-7, mục 6 (Kyverno một replica).
-- Diễn tập tái hiện: `make drill-k8s-supplychain` ca (g): admission controller không lịch được thì pod `svp` bị từ chối, pod ở
-  `svp-probe` được nhận, webhook trở lại như trước khi kết thúc.
+- Diễn tập tái hiện: `make drill-k8s-supplychain` ca (g), test `deploy/k8s/drills/supplychain/case-g/`: admission controller không
+  lịch được thì pod `svp` bị từ chối, pod ở `svp-probe` được nhận, webhook trở lại như trước khi kết thúc.

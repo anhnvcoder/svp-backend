@@ -1,0 +1,360 @@
+# PSA-platform of docs/threat-model.md on cluster svp: every namespace but kube-system, kube-public, kube-node-lease and
+# default (the platform charts' included: cert-manager, envoy-gateway-system, cnpg-system, keda, argo-rollouts, kyverno,
+# argocd on the GitOps path) enforces PSA restricted at the podSecurityVersion of chart svp-cluster
+# (deploy/helm/svp-cluster/values.yaml), and every namespace of argocd/apps/components.json of svp-gitops that runs on k3d
+# exists (the clone deploy/k8s/lib.sh's gitops_dir names: SVP_GITOPS_DIR, or <workspace>/gitops); default, kube-public
+# and kube-node-lease carry no PSA label and the cluster default (deploy/k8s/pod-security-admission.yaml) refuses a
+# privileged pod with the node's / as hostPath there, restricted at that version (server-side dry run). Control: a
+# restricted pod is admitted in each. kube-system, exempt from the default, is printed as info with its reason.
+#
+# Each check is one operation named by its ID; continueOnError keeps the next checks running after one fails, and the
+# test still fails. Nothing is created: the pods are server-side dry runs. kubectl in the scripts uses the caller's
+# kubeconfig and context k3d-svp (templates/probe-up.yaml says why).
+apiVersion: chainsaw.kyverno.io/v1alpha1
+kind: Test
+metadata:
+  name: psa-platform
+  labels:
+    drill: threats
+spec:
+  # An existing namespace: an ephemeral one of Chainsaw would carry no PSA label and fail the first check.
+  namespace: svp
+  steps:
+  - name: psa-platform-namespaces
+    try:
+    - description: "PSA-platform: read podSecurityVersion of deploy/helm/svp-cluster/values.yaml"
+      script: &read-version
+        shell: bash
+        content: |
+          set -euo pipefail
+          version=$(sed -n 's/^podSecurityVersion: *//p' "$(git rev-parse --show-toplevel)/deploy/helm/svp-cluster/values.yaml")
+          [[ $version =~ ^v1\.[0-9]+$ ]] || { echo "FAIL  read podSecurityVersion in deploy/helm/svp-cluster/values.yaml (got '$version')" >&2; exit 1; }
+          printf %s "$version"
+        check:
+          ($error): ~
+        outputs:
+        - name: psaVersion
+          value: (trim_space($stdout))
+        # The admission message of a pod PSA refuses at that version.
+        - name: psaDenied
+          value: (join('', ['violates PodSecurity "restricted:', trim_space($stdout), '"']))
+    - description: "PSA-platform: list the namespaces of the cluster with their PSA enforce label and version"
+      script:
+        shell: bash
+        env:
+        - &kubeconfig
+          name: CALLER_KUBECONFIG
+          value: (env('KUBECONFIG'))
+        content: |
+          set -euo pipefail
+          export KUBECONFIG="$CALLER_KUBECONFIG"
+          kubectl --context k3d-svp get namespaces -o json | jq -r '.items[] | [.metadata.name,
+            (.metadata.labels["pod-security.kubernetes.io/enforce"] // "-"),
+            (.metadata.labels["pod-security.kubernetes.io/enforce-version"] // "-")] | @tsv'
+        check:
+          ($error): ~
+        outputs:
+        - name: namespaceLabels
+          value: ($stdout)
+    - description: "PSA-platform: every namespace but kube-system, kube-public, kube-node-lease and default enforces PSA restricted at podSecurityVersion"
+      continueOnError: true
+      script:
+        shell: bash
+        env:
+        - {name: VERSION, value: ($psaVersion)}
+        - {name: NAMESPACE_LABELS, value: ($namespaceLabels)}
+        content: |
+          set -euo pipefail
+          bad=0
+          while IFS=$'\t' read -r ns level got; do
+            case $ns in '' | kube-system | kube-public | kube-node-lease | default) continue ;; esac
+            if [[ $level == restricted && $got == "$VERSION" ]]; then
+              echo "ok    PSA-platform: namespace $ns enforces PSA restricted $VERSION"
+            else
+              echo "FAIL  PSA-platform: namespace $ns enforces PSA restricted $VERSION (got enforce '$level', version '$got')" >&2
+              bad=$((bad + 1))
+            fi
+          done <<<"$NAMESPACE_LABELS"
+          [ "$bad" = 0 ] || exit 1
+          echo "ok    PSA-platform: every namespace but kube-system, kube-public, kube-node-lease and default enforces PSA restricted $VERSION"
+        check:
+          ($error): ~
+          (starts_with($stdout, 'ok    PSA-platform') && contains($stdout, 'and default enforces PSA restricted')): true
+    # A component of the GitOps path only (gitopsOnly: External Secrets Operator) has its namespace there only, one of
+    # another platform (platforms without k3d) none at all: this test runs on k3d only, and such a component (an EKS
+    # controller, say) is never installed here.
+    - description: "PSA-platform: each namespace of argocd/apps/components.json of svp-gitops that runs on k3d exists"
+      continueOnError: true
+      script:
+        shell: bash
+        env:
+        - *kubeconfig
+        - {name: NAMESPACE_LABELS, value: ($namespaceLabels)}
+        content: |
+          set -euo pipefail
+          export KUBECONFIG="$CALLER_KUBECONFIG"
+          # shellcheck source=deploy/k8s/lib.sh
+          source "$(git rev-parse --show-toplevel)/deploy/k8s/lib.sh"
+          components=$(gitops_dir)/argocd/apps/components.json
+          gitops=false
+          if kubectl --context k3d-svp get namespace argocd >/dev/null 2>&1; then gitops=true; fi
+          want=$(jq -r --argjson gitops "$gitops" '.components[] | select($gitops or .gitopsOnly != true)
+            | select((has("platforms") | not) or (.platforms | index("k3d")) != null) | .namespace' "$components" | sort -u)
+          [ -n "$want" ] || { echo "FAIL  PSA-platform: read the namespaces of $components" >&2; exit 1; }
+          bad=0
+          for ns in $want; do
+            if awk -F '\t' -v ns="$ns" '$1 == ns { found = 1 } END { exit !found }' <<<"$NAMESPACE_LABELS"; then
+              echo "ok    PSA-platform: namespace $ns of argocd/apps/components.json exists"
+            else
+              echo "FAIL  PSA-platform: namespace $ns of argocd/apps/components.json of svp-gitops exists" >&2
+              bad=$((bad + 1))
+            fi
+          done
+          [ "$bad" = 0 ] || exit 1
+          echo "ok    PSA-platform: every namespace of argocd/apps/components.json that runs on k3d exists (GitOps path: $gitops)"
+        check:
+          ($error): ~
+          "(contains($stdout, 'ok    PSA-platform: every namespace of argocd/apps/components.json that runs on k3d exists'))": true
+    - description: "PSA-platform: the cluster has namespaces besides kube-system, kube-public, kube-node-lease and default"
+      continueOnError: true
+      script:
+        env:
+        - {name: NAMESPACE_LABELS, value: ($namespaceLabels)}
+        content: |
+          printf '%s\n' "$NAMESPACE_LABELS" |
+            awk -F '\t' '$1 != "" && $1 !~ /^(kube-system|kube-public|kube-node-lease|default)$/ { n++ } END { print n + 0 }'
+        check:
+          ($error): ~
+          (to_number(trim_space($stdout)) > `0`): true
+
+  # default, kube-public and kube-node-lease have no label: there the cluster default of the API server
+  # (deploy/k8s/pod-security-admission.yaml) holds, shown by a privileged pod it refuses at the same level and version; a
+  # label on one of them (privileged, say) would override the default, so they must have none.
+  - name: psa-platform-defaults
+    try:
+    - description: "PSA-platform: read podSecurityVersion of deploy/helm/svp-cluster/values.yaml"
+      script: *read-version
+    - description: "PSA-platform: read the image of deployment svp/media-worker"
+      script:
+        env:
+        - *kubeconfig
+        content: |
+          set -eu
+          export KUBECONFIG="$CALLER_KUBECONFIG"
+          kubectl --context k3d-svp -n svp get deployment media-worker -o jsonpath='{.spec.template.spec.containers[0].image}'
+        check:
+          ($error): ~
+          (trim_space($stdout) != ''): true
+        outputs:
+        - name: workerImage
+          value: (trim_space($stdout))
+    - description: "PSA-platform: namespace default has no PSA enforce label, so the cluster default applies"
+      continueOnError: true
+      assert:
+        resource:
+          apiVersion: v1
+          kind: Namespace
+          metadata:
+            name: default
+            (labels."pod-security.kubernetes.io/enforce"): ~
+    - description: "PSA-platform: a privileged pod with the node's / as hostPath is Forbidden in default by the cluster default restricted at podSecurityVersion (server-side dry run)"
+      continueOnError: true
+      create:
+        dryRun: true
+        resource:
+          apiVersion: v1
+          kind: Pod
+          metadata:
+            name: drill-threats-privileged
+            namespace: default
+          spec:
+            automountServiceAccountToken: false
+            containers:
+            - name: c
+              image: ($workerImage)
+              securityContext:
+                privileged: true
+                runAsUser: 0
+              volumeMounts:
+              - name: host
+                mountPath: /host
+            volumes:
+            - name: host
+              hostPath:
+                path: /
+        expect:
+        - check:
+            (contains(to_string($error), $psaDenied)): true
+    - description: "PSA-platform control: a restricted pod is admitted in default (server-side dry run)"
+      continueOnError: true
+      create:
+        dryRun: true
+        resource:
+          apiVersion: v1
+          kind: Pod
+          metadata:
+            name: drill-threats-psa
+            namespace: default
+          spec:
+            automountServiceAccountToken: false
+            securityContext:
+              runAsNonRoot: true
+              runAsUser: 65532
+              seccompProfile:
+                type: RuntimeDefault
+            containers:
+            - name: c
+              image: ($workerImage)
+              securityContext:
+                allowPrivilegeEscalation: false
+                readOnlyRootFilesystem: true
+                capabilities:
+                  drop: [ALL]
+              resources:
+                requests: {cpu: 10m, memory: 16Mi}
+                limits: {cpu: 100m, memory: 32Mi}
+        expect:
+        - check:
+            ($error): ~
+    - description: "PSA-platform: namespace kube-public has no PSA enforce label, so the cluster default applies"
+      continueOnError: true
+      assert:
+        resource:
+          apiVersion: v1
+          kind: Namespace
+          metadata:
+            name: kube-public
+            (labels."pod-security.kubernetes.io/enforce"): ~
+    - description: "PSA-platform: a privileged pod with the node's / as hostPath is Forbidden in kube-public by the cluster default restricted at podSecurityVersion (server-side dry run)"
+      continueOnError: true
+      create:
+        dryRun: true
+        resource:
+          apiVersion: v1
+          kind: Pod
+          metadata:
+            name: drill-threats-privileged
+            namespace: kube-public
+          spec:
+            automountServiceAccountToken: false
+            containers:
+            - name: c
+              image: ($workerImage)
+              securityContext:
+                privileged: true
+                runAsUser: 0
+              volumeMounts:
+              - name: host
+                mountPath: /host
+            volumes:
+            - name: host
+              hostPath:
+                path: /
+        expect:
+        - check:
+            (contains(to_string($error), $psaDenied)): true
+    - description: "PSA-platform control: a restricted pod is admitted in kube-public (server-side dry run)"
+      continueOnError: true
+      create:
+        dryRun: true
+        resource:
+          apiVersion: v1
+          kind: Pod
+          metadata:
+            name: drill-threats-psa
+            namespace: kube-public
+          spec:
+            automountServiceAccountToken: false
+            securityContext:
+              runAsNonRoot: true
+              runAsUser: 65532
+              seccompProfile:
+                type: RuntimeDefault
+            containers:
+            - name: c
+              image: ($workerImage)
+              securityContext:
+                allowPrivilegeEscalation: false
+                readOnlyRootFilesystem: true
+                capabilities:
+                  drop: [ALL]
+              resources:
+                requests: {cpu: 10m, memory: 16Mi}
+                limits: {cpu: 100m, memory: 32Mi}
+        expect:
+        - check:
+            ($error): ~
+    - description: "PSA-platform: namespace kube-node-lease has no PSA enforce label, so the cluster default applies"
+      continueOnError: true
+      assert:
+        resource:
+          apiVersion: v1
+          kind: Namespace
+          metadata:
+            name: kube-node-lease
+            (labels."pod-security.kubernetes.io/enforce"): ~
+    - description: "PSA-platform: a privileged pod with the node's / as hostPath is Forbidden in kube-node-lease by the cluster default restricted at podSecurityVersion (server-side dry run)"
+      continueOnError: true
+      create:
+        dryRun: true
+        resource:
+          apiVersion: v1
+          kind: Pod
+          metadata:
+            name: drill-threats-privileged
+            namespace: kube-node-lease
+          spec:
+            automountServiceAccountToken: false
+            containers:
+            - name: c
+              image: ($workerImage)
+              securityContext:
+                privileged: true
+                runAsUser: 0
+              volumeMounts:
+              - name: host
+                mountPath: /host
+            volumes:
+            - name: host
+              hostPath:
+                path: /
+        expect:
+        - check:
+            (contains(to_string($error), $psaDenied)): true
+    - description: "PSA-platform control: a restricted pod is admitted in kube-node-lease (server-side dry run)"
+      continueOnError: true
+      create:
+        dryRun: true
+        resource:
+          apiVersion: v1
+          kind: Pod
+          metadata:
+            name: drill-threats-psa
+            namespace: kube-node-lease
+          spec:
+            automountServiceAccountToken: false
+            securityContext:
+              runAsNonRoot: true
+              runAsUser: 65532
+              seccompProfile:
+                type: RuntimeDefault
+            containers:
+            - name: c
+              image: ($workerImage)
+              securityContext:
+                allowPrivilegeEscalation: false
+                readOnlyRootFilesystem: true
+                capabilities:
+                  drop: [ALL]
+              resources:
+                requests: {cpu: 10m, memory: 16Mi}
+                limits: {cpu: 100m, memory: 32Mi}
+        expect:
+        - check:
+            ($error): ~
+    - description: "PSA-platform (info): kube-system is exempt from the cluster default"
+      script:
+        content: |
+          echo "info  PSA-platform: kube-system is exempt from the cluster default (deploy/k8s/pod-security-admission.yaml): k3s's svclb-* pods need NET_ADMIN, local-path-provisioner's helper pods a hostPath of the node; whoever may create pods there (cert-manager's controller, which may in every namespace, among them) can still start a privileged pod"
+        check:
+          ($error): ~

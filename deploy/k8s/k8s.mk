@@ -7,7 +7,7 @@ K8S_LIB := . deploy/k8s/lib.sh
 .PHONY: k8s-exclusive k8s-up k8s-down k8s-status k8s-ca k8s-secrets k8s-images k8s-smoke \
 	k8s-glitchtip-init k8s-ui-grafana k8s-ui-prometheus k8s-ui-alertmanager k8s-ui-glitchtip k8s-gitops-up \
 	k8s-ui-argocd k8s-traffic-start k8s-traffic-stop drill-k8s-threats \
-	drill-k8s-supplychain k8s-web-sourcemaps k8s-web-e2e cloud-check \
+	drill-k8s-supplychain drill-k8s-gitops k8s-web-sourcemaps k8s-web-e2e cloud-check \
 	gitops-clone web-clone eks-secrets eks-glitchtip-init eks-smoke eks-seed \
 	eks-rl-reset
 
@@ -93,7 +93,7 @@ k8s-smoke: ## Run the end-to-end smoke test against cluster svp at https://api.s
 	@test -s .k8s/ca.crt || { echo "make k8s-smoke: .k8s/ca.crt missing; run make k8s-up (or make k8s-ca)" >&2; exit 1; }
 	SVP_STACK=k3d CURL_CA_BUNDLE=$(CURDIR)/.k8s/ca.crt deploy/compose/smoke.sh https://api.svp.localhost:8443
 
-# Drills on cluster svp (deploy/k8s/drills/), through Envoy like k8s-smoke.
+# The drill traffic on cluster svp (deploy/k8s/drills/traffic.sh), through Envoy like k8s-smoke.
 K8S_DRILL_ENV := SVP_STACK=k3d CURL_CA_BUNDLE=$(CURDIR)/.k8s/ca.crt
 
 # The canaries of the gateway and the web client. The drill traffic runs in the background until stopped, for hours
@@ -106,21 +106,24 @@ k8s-traffic-start: ## Start drill traffic in the background: 4 users, ~10 reques
 k8s-traffic-stop: ## Stop the drill traffic started by k8s-traffic-start (the pid it recorded, nothing else) and print its requests by status
 	@deploy/k8s/drills/traffic.sh stop
 
-# The threat model rows checked on cluster svp (docs/threat-model.md): the checks of each item are listed at the top
-# of deploy/k8s/drills/threats.sh.
-drill-k8s-threats: ## Check the threat model rows on cluster svp, each with a control case: a probe pod in namespace svp-probe (created, then deleted) and media-worker reach only what the NetworkPolicies allow, Kafka ACLs per user, pod security and PSA, no trust in pg_hba, login rate limit ignores forged X-Forwarded-For, no pprof/metrics, no exposed UI, Grafana 401, no ServiceAccount reads secrets or pods; web client: no token or JWT in pages, RSC or /api JSON and /api/ outside the BFF list 400/404 (WEB-7), cross-site or same-site POSTs 403 CSRF_REJECTED (WEB-2), the object store's CORS per bucket for https://svp.localhost:8443 only, POST to uploads and GET at media only (WEB-10), web pods reach only gateway, Valkey, Collector, GlitchTip (WEB-13), login rate limit through the /login form counts the address Envoy wrote (WEB-8); object store user svp-pg-backup reads only bucket pg-backups and no service's user reads it (BAK-1); on a cluster with External Secrets Operator: each store's ServiceAccount gets only its namespace's source Secrets by name (SEC-6), the controller writes Secrets only where its ExternalSecrets are and makes tokens only for the stores (SEC-5, its read of every Secret printed as an exception), no ServiceAccount of svp creates ExternalSecrets or SecretStores (SEC-7); PASS/FAIL table, log in .k8s/drills/threats-<time>.log, searched for the Secret values read (LOCAL LAB ONLY: resets register rate limit keys in the cluster's Valkey db 10)
-	@test -s .k8s/ca.crt || { echo "make drill-k8s-threats: .k8s/ca.crt missing; run make k8s-up (or make k8s-ca)" >&2; exit 1; }
-	$(K8S_DRILL_ENV) deploy/k8s/drills/threats.sh https://api.svp.localhost:8443
+# The drills on cluster svp are Chainsaw tests under deploy/k8s/drills/<drill>/, run by deploy/k8s/drills/run.sh: one
+# call of chainsaw per drill (never two drills together), context k3d-svp checked before it, the tests one at a time;
+# what each test checks is written in the test. threats needs .k8s/ca.crt (run.sh checks it) and the gateway.
+drill-k8s-threats: ## Check the threat model rows on cluster svp, each with a control case: a probe pod in namespace svp-probe (created, then deleted) and media-worker reach only what the NetworkPolicies allow, Kafka ACLs per user, pod security and PSA, no trust in pg_hba, login rate limit ignores forged X-Forwarded-For, no pprof/metrics, no exposed UI, Grafana 401, no ServiceAccount reads secrets or pods; web client: no token or JWT in pages, RSC or /api JSON and /api/ outside the BFF list 400/404 (WEB-7), cross-site or same-site POSTs 403 CSRF_REJECTED (WEB-2), the object store's CORS per bucket for https://svp.localhost:8443 only, POST to uploads and GET at media only (WEB-10), web pods reach only gateway, Valkey, Collector, GlitchTip (WEB-13), login rate limit through the /login form counts the address Envoy wrote (WEB-8); object store user svp-pg-backup reads only bucket pg-backups and no service's user reads it (BAK-1); on a cluster with External Secrets Operator: each store's ServiceAccount gets only its namespace's source Secrets by name (SEC-6), the controller writes Secrets only where its ExternalSecrets are and makes tokens only for the stores (SEC-5, its read of every Secret printed as an exception), no ServiceAccount of svp creates ExternalSecrets or SecretStores (SEC-7); one Chainsaw test per row (deploy/k8s/drills/threats/), log and JUnit report in .k8s/drills/threats-<UTC>.log and .xml, both searched for the Secret values read; needs make k8s-smoke run before (LOCAL LAB ONLY: resets register rate limit keys in the cluster's Valkey db 10)
+	deploy/k8s/drills/run.sh threats
 
-# The image policy of namespace svp; the cases are listed at the
-# top of deploy/k8s/drills/supplychain.sh. It talks to the cluster's API, to GHCR (anonymous) for the newest drill image,
+# The image policy of namespace svp. It talks to the cluster's API, to GHCR (anonymous) for the newest drill images,
 # and for the CRITICAL case and the case without provenance to GHCR and Sigstore through cosign (anonymous, COSIGN_IMAGE when cosign is not installed), so it needs
-# neither .k8s/ca.crt nor the gateway, and deletes no rate limit key.
-drill-k8s-supplychain: ## Check Kyverno's image policy of namespace svp: a signed, clean release admitted; unsigned (SUPPLYCHAIN_UNSIGNED=<GHCR digest>, default the newest drill-unsigned on GHCR), CRITICAL (SUPPLYCHAIN_VULNERABLE=<GHCR digest>, attestation within the maximum age), outside GHCR, without digest, attestation too old, ephemeral container and image UPDATE refused, a release without build provenance (SUPPLYCHAIN_NO_PROVENANCE=<GHCR digest>, its vuln attestation within the maximum age) refused when the running policy checks provenance, each with its rule's message; Kyverno down refuses svp only; PASS/FAIL per case, JSON in .k8s/drills/ (dev path, whose policy is Audit: SUPPLYCHAIN_ENFORCE_TMP=1 switches it to Enforce for the drill and back)
-	SVP_STACK=k3d SUPPLYCHAIN_UNSIGNED='$(SUPPLYCHAIN_UNSIGNED)' SUPPLYCHAIN_VULNERABLE='$(SUPPLYCHAIN_VULNERABLE)' \
+# neither .k8s/ca.crt nor the gateway, and deletes no rate limit key. The variables become the Chainsaw values unsigned,
+# vulnerable, noProvenance and enforceTmp (deploy/k8s/drills/run.sh).
+drill-k8s-supplychain: ## Check Kyverno's image policy of namespace svp: a signed, clean release admitted; unsigned (SUPPLYCHAIN_UNSIGNED=<GHCR digest>, default the newest drill-unsigned on GHCR), CRITICAL (SUPPLYCHAIN_VULNERABLE=<GHCR digest>, attestation within the maximum age), outside GHCR, without digest, attestation too old, ephemeral container and image UPDATE refused, a release without build provenance (SUPPLYCHAIN_NO_PROVENANCE=<GHCR digest>, its vuln attestation within the maximum age) refused when the running policy checks provenance, each with its rule's message; Kyverno down refuses svp only; one Chainsaw test per case (deploy/k8s/drills/supplychain/), log and JUnit report in .k8s/drills/supplychain-<UTC>.log and .xml (dev path, whose policy is Audit: SUPPLYCHAIN_ENFORCE_TMP=1 switches it to Enforce for the drill and back)
+	SUPPLYCHAIN_UNSIGNED='$(SUPPLYCHAIN_UNSIGNED)' SUPPLYCHAIN_VULNERABLE='$(SUPPLYCHAIN_VULNERABLE)' \
 	  SUPPLYCHAIN_NO_PROVENANCE='$(SUPPLYCHAIN_NO_PROVENANCE)' \
 	  SUPPLYCHAIN_ENFORCE_TMP='$(SUPPLYCHAIN_ENFORCE_TMP)' \
-	  deploy/k8s/drills/supplychain.sh
+	  deploy/k8s/drills/run.sh supplychain
+
+drill-k8s-gitops: ## Check the GitOps cluster svp (make k8s-gitops-up): one Chainsaw test per check (deploy/k8s/drills/gitops/), log and JUnit report in .k8s/drills/gitops-<UTC>.log and .xml
+	deploy/k8s/drills/run.sh gitops
 
 # The operations UIs have no route, LoadBalancer or NodePort (threat model OPS-2): each is reached by a port-forward
 # bound to the host's loopback only, for as long as the target runs (Ctrl-C ends it). The host ports are those of

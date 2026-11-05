@@ -29,6 +29,11 @@ K3S_IMAGE_TAG              := v1.36.5-k3s1
 # One line on purpose: a backslash-newline inside the single quotes of a recipe reaches the shell as a literal backslash
 # on GNU Make 4.x (Make 3.81 joined the lines), and the linker then gets a broken -ldflags.
 K3D_LDFLAGS                := -X github.com/k3d-io/k3d/v5/version.Version=$(K3D_VERSION) -X github.com/k3d-io/k3d/v5/version.K3sVersion=$(K3S_IMAGE_TAG)
+# Chainsaw runs the drills of deploy/k8s/drills/ (ADR-0050 §2). `go install` and not its image: the `script` steps need the
+# kubectl, curl, jq, nc, openssl and docker of the machine that runs them. Releases: github.com/kyverno/chainsaw/releases.
+# deploy/k8s/drills/.schemas/ holds the StepTemplate schema of this same tag (make chainsaw-lint fails when they differ).
+# renovate: datasource=go depName=github.com/kyverno/chainsaw
+CHAINSAW_VERSION           := v0.2.15
 # Linter of the GitHub Actions workflows, run by `make actionlint` inside `make check`. It also runs shellcheck on every
 # `run:` script when shellcheck is on PATH: the CI runner has it, a dev machine need not.
 # renovate: datasource=go depName=github.com/rhysd/actionlint
@@ -125,13 +130,13 @@ SVP_TEST_REDIS_URL ?= redis://127.0.0.1:6379/15
 .DEFAULT_GOAL := help
 
 .PHONY: help tools ci-tools generate generate-go generate-check slo otelcol-validate fmt-check vet lint actionlint buf-lint vulncheck test fuzz \
-	cover check check-go helm-check helm-docs helm-docs-check kyverno-test conftest-verify regal-lint regal-fix trivy-config grype renovate-check zizmor api-contract-check hooks web-e2e measure-web measure-upload \
+	cover check check-go helm-check helm-docs helm-docs-check kyverno-test conftest-verify regal-lint regal-fix chainsaw-lint trivy-config grype renovate-check zizmor api-contract-check hooks web-e2e measure-web measure-upload \
 	web-lighthouse web-sourcemaps docs-check
 
 help: ## List the targets
 	@grep -hE '^[a-zA-Z0-9_-]+:.*## ' $(MAKEFILE_LIST) | awk -F':.*## ' '{printf "  %-12s %s\n", $$1, $$2}'
 
-tools: ## Install the pinned code generators, linters, vulnerability and secret scanners, SLO generator and k3d into GOBIN
+tools: ## Install the pinned code generators, linters, vulnerability and secret scanners, SLO generator, k3d and Chainsaw into GOBIN
 	GOBIN=$(GOBIN) go install google.golang.org/protobuf/cmd/protoc-gen-go@$(PROTOC_GEN_GO_VERSION)
 	GOBIN=$(GOBIN) go install google.golang.org/grpc/cmd/protoc-gen-go-grpc@$(PROTOC_GEN_GO_GRPC_VERSION)
 	GOBIN=$(GOBIN) go install github.com/sqlc-dev/sqlc/cmd/sqlc@$(SQLC_VERSION)
@@ -142,6 +147,7 @@ tools: ## Install the pinned code generators, linters, vulnerability and secret 
 	GOBIN=$(GOBIN) go install -ldflags='-X github.com/slok/sloth/internal/info.Version=$(SLOTH_VERSION)' \
 		github.com/slok/sloth/cmd/sloth@$(SLOTH_VERSION)
 	GOBIN=$(GOBIN) go install -ldflags='$(K3D_LDFLAGS)' github.com/k3d-io/k3d/v5@$(K3D_VERSION)
+	GOBIN=$(GOBIN) go install github.com/kyverno/chainsaw@$(CHAINSAW_VERSION)
 
 # Refuses anything but Linux x86_64: the Helm it installs is the linux-amd64 build, and GOBIN comes first on PATH, so on
 # a Mac it would shadow Homebrew's helm and break every helm call with "exec format error".
@@ -338,6 +344,38 @@ regal-lint: ## Regal lint of the Rego policies (deploy/ci/*-policies/, rules in 
 	    -v "$(CURDIR)/$$dir:/p:ro" -v "$(CURDIR)/.regal:/regal:ro" -w /p '$(REGAL_IMAGE)' \
 	    lint . --config-file /regal/config.yaml --fail-level warning --no-color; \
 	done
+
+# Static check of the Chainsaw drills, no cluster: every YAML file under CHAINSAW_DRILLS is exactly one of three things, and
+# any other is an error (a file nothing checks is not a green one). chainsaw-test.yaml: `chainsaw lint test`; .chainsaw.yaml
+# (any folder): `chainsaw lint configuration`; a file under templates/ (StepTemplate): kubeconform -strict, no network,
+# against the schema of CHAINSAW_VERSION kept in .schemas/ (chainsaw lint, v0.2.15, takes only test and configuration).
+# .schemas/source names the URL the copy comes from, and its tag must be CHAINSAW_VERSION. The copy is kept in the
+# repository so the check runs offline; kubeconform fails on a kind with no schema, so a file of another kind under
+# templates/ is red.
+CHAINSAW_DRILLS := deploy/k8s/drills
+chainsaw-lint: ## Lint the Chainsaw drills of deploy/k8s/drills/: chainsaw lint test and configuration, kubeconform -strict on the step templates, any other YAML file is an error (no cluster)
+	@set -eu; d='$(CHAINSAW_DRILLS)'; rc=0; \
+	grep -qF "/chainsaw/$(CHAINSAW_VERSION)/.schemas/json/steptemplate-chainsaw-v1alpha1.json" "$$d/.schemas/source" || { \
+	  echo "FAIL  $$d/.schemas/source is not the schema of Chainsaw $(CHAINSAW_VERSION): copy it again from that tag and write its URL there" >&2; exit 1; }; \
+	files=$$(find "$$d" -path "$$d/.schemas" -prune -o -type f \( -name '*.yaml' -o -name '*.yml' \) -print | LC_ALL=C sort); \
+	for f in $$files; do \
+	  case $$f in \
+	    */chainsaw-test.yaml) kind=test ;; \
+	    */.chainsaw.yaml) kind=configuration ;; \
+	    "$$d"/templates/*) kind=steptemplate ;; \
+	    *) echo "FAIL  $$f: not a chainsaw-test.yaml, a .chainsaw.yaml or a StepTemplate under $$d/templates/" >&2; rc=1; continue ;; \
+	  esac; \
+	  if [ $$kind = steptemplate ]; then \
+	    out=$$(env -u DOCKER_DEFAULT_PLATFORM docker run --rm --user "$$(id -u):$$(id -g)" --network none \
+	      -v "$(CURDIR)/$$d:/drills:ro" '$(KUBECONFORM_IMAGE)' -strict -summary \
+	      -schema-location /drills/.schemas/json/steptemplate-chainsaw-v1alpha1.json "/drills/$${f#$$d/}" 2>&1) || { \
+	      echo "FAIL  $$f"; echo "$$out"; rc=1; continue; }; \
+	  else \
+	    out=$$(chainsaw lint $$kind -f "$$f" 2>&1) || { echo "FAIL  $$f"; echo "$$out"; rc=1; continue; }; \
+	  fi; \
+	  echo "ok    $$f ($$kind)"; \
+	done; \
+	exit $$rc
 
 regal-fix: ## Regal fix of the Rego policies (opa fmt and the other automatic fixes; writes deploy/ci/*-policies/)
 	@set -e; for dir in $(CONFTEST_POLICIES); do \

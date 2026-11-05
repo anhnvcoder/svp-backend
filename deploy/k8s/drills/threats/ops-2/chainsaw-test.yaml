@@ -1,0 +1,254 @@
+# OPS-2 of docs/threat-model.md on cluster svp: the only routes are HTTPRoute svp/api, svp/web and svp-data/s3 (to gateway,
+# web and s3; svp.localhost to web and web-canary), no other route kind or Ingress, the only LoadBalancer or NodePort
+# Service is Envoy's, no pod outside kube-system uses the host network or a hostPort; grafana, prometheus, alertmanager,
+# glitchtip and argocd .svp.localhost are 404 at Envoy; Grafana without a login is 401 (port-forward on 127.0.0.1:13000,
+# templates/port-forward.yaml, stopped when the test ends). Controls: api.svp.localhost/healthz 200, Grafana's
+# /api/health 200 and /api/user with the admin login (Secret svp-obs/grafana-admin, through a private curl config file,
+# never on a command line or in the output) 200.
+#
+# Each check is one operation named by its ID; continueOnError keeps the next checks running after one fails, and the
+# test still fails. curl takes the cluster's CA from CURL_CA_BUNDLE, which the make target sets; kubectl uses the caller's
+# kubeconfig and context k3d-svp (templates/probe-up.yaml says why).
+apiVersion: chainsaw.kyverno.io/v1alpha1
+kind: Test
+metadata:
+  name: ops-2
+  labels:
+    drill: threats
+spec:
+  # An existing namespace, so Chainsaw creates no ephemeral one and deletes nothing.
+  namespace: svp
+  bindings:
+  - name: base
+    value: https://api.svp.localhost:8443
+  steps:
+  - name: ops-2-routes
+    try:
+    - description: "OPS-2: HTTPRoutes are exactly svp/api (api.svp.localhost to gateway, gateway-canary), svp/web (svp.localhost to web, web-canary) and svp-data/s3 (s3.svp.localhost to s3)"
+      continueOnError: true
+      script:
+        shell: bash
+        env:
+        - &kubeconfig
+          name: CALLER_KUBECONFIG
+          value: (env('KUBECONFIG'))
+        content: |
+          set -euo pipefail
+          export KUBECONFIG="$CALLER_KUBECONFIG"
+          kubectl --context k3d-svp get httproutes.gateway.networking.k8s.io -A -o json | jq -r '.items[]
+            | "\(.metadata.namespace)/\(.metadata.name) \(.spec.hostnames | join(",")) \([.spec.rules[].backendRefs[]? | "\(.namespace // "-")/\(.name)"] | unique | join(","))"' |
+            LC_ALL=C sort
+        check:
+          ($error): ~
+          (trim_space($stdout)): |-
+            svp-data/s3 s3.svp.localhost -/s3
+            svp/api api.svp.localhost -/gateway,-/gateway-canary
+            svp/web svp.localhost -/web,-/web-canary
+    - description: "OPS-2: no grpcroutes"
+      continueOnError: true
+      script:
+        env:
+        - *kubeconfig
+        - {name: KIND, value: grpcroutes.gateway.networking.k8s.io}
+        content: &no-kind |
+          set -eu
+          export KUBECONFIG="$CALLER_KUBECONFIG"
+          if out=$(kubectl --context k3d-svp get "$KIND" -A -o name 2>&1); then
+            if [ -z "$out" ]; then echo none; else echo "$out"; fi
+          elif printf '%s\n' "$out" | grep -q "doesn't have a resource type"; then
+            echo "none: resource type not installed"
+          else
+            echo "error: $out"
+          fi
+        check:
+          (starts_with(trim_space($stdout), 'none')): true
+    - description: "OPS-2: no tlsroutes"
+      continueOnError: true
+      script:
+        env:
+        - *kubeconfig
+        - {name: KIND, value: tlsroutes.gateway.networking.k8s.io}
+        content: *no-kind
+        check:
+          (starts_with(trim_space($stdout), 'none')): true
+    - description: "OPS-2: no tcproutes"
+      continueOnError: true
+      script:
+        env:
+        - *kubeconfig
+        - {name: KIND, value: tcproutes.gateway.networking.k8s.io}
+        content: *no-kind
+        check:
+          (starts_with(trim_space($stdout), 'none')): true
+    - description: "OPS-2: no udproutes"
+      continueOnError: true
+      script:
+        env:
+        - *kubeconfig
+        - {name: KIND, value: udproutes.gateway.networking.k8s.io}
+        content: *no-kind
+        check:
+          (starts_with(trim_space($stdout), 'none')): true
+    - description: "OPS-2: no ingresses"
+      continueOnError: true
+      script:
+        env:
+        - *kubeconfig
+        - {name: KIND, value: ingresses.networking.k8s.io}
+        content: *no-kind
+        check:
+          (starts_with(trim_space($stdout), 'none')): true
+    - description: "OPS-2: the only LoadBalancer or NodePort Service is Envoy's of Gateway svp"
+      continueOnError: true
+      script:
+        shell: bash
+        env:
+        - *kubeconfig
+        content: |
+          set -euo pipefail
+          export KUBECONFIG="$CALLER_KUBECONFIG"
+          out=$(kubectl --context k3d-svp get services -A -o json | jq -r '.items[] | select(.spec.type == "LoadBalancer" or .spec.type == "NodePort")
+            | "\(.metadata.namespace)/\(.metadata.name) \(.spec.type) \(.metadata.labels["gateway.envoyproxy.io/owning-gateway-name"] // "-")"')
+          jq -n --arg out "$out" '{count: ($out | split("\n") | map(select(. != "")) | length), services: $out}'
+        check:
+          ($error): ~
+          (json_parse($stdout).count): 1
+          (wildcard('envoy-gateway-system/envoy-svp-edge-svp-* LoadBalancer svp', json_parse($stdout).services)): true
+    - description: "OPS-2: no pod outside kube-system uses the host network or a hostPort"
+      continueOnError: true
+      script:
+        shell: bash
+        env:
+        - *kubeconfig
+        content: |
+          set -euo pipefail
+          export KUBECONFIG="$CALLER_KUBECONFIG"
+          kubectl --context k3d-svp get pods -A -o json | jq -r '.items[] | select(.metadata.namespace != "kube-system")
+            | select(.spec.hostNetwork == true or any(.spec.containers[].ports[]?; .hostPort != null)) | "\(.metadata.namespace)/\(.metadata.name)"'
+        check:
+          ($error): ~
+          (trim_space($stdout)): ''
+    - description: "OPS-2 (info): whether Argo CD is installed"
+      script:
+        env:
+        - *kubeconfig
+        content: |
+          set -eu
+          export KUBECONFIG="$CALLER_KUBECONFIG"
+          if kubectl --context k3d-svp get namespace argocd >/dev/null 2>&1; then
+            echo "info  OPS-2: Argo CD is installed; its Services are covered by the LoadBalancer/NodePort check above"
+          else
+            echo "info  OPS-2: Argo CD is not installed on this cluster (dev path); nothing of it can be exposed"
+          fi
+        check:
+          ($error): ~
+
+  - name: ops-2-edge
+    try:
+    - description: "OPS-2: https://grafana.svp.localhost:8443/ at Envoy: 404 (no route)"
+      continueOnError: true
+      script:
+        env:
+        - {name: HOST, value: grafana}
+        content: &edge-404 |
+          curl -s --max-time 5 -o /dev/null -w '%{http_code}' "https://$HOST.svp.localhost:8443/" || true
+        check:
+          (trim_space($stdout)): '404'
+    - description: "OPS-2: https://prometheus.svp.localhost:8443/ at Envoy: 404 (no route)"
+      continueOnError: true
+      script:
+        env:
+        - {name: HOST, value: prometheus}
+        content: *edge-404
+        check:
+          (trim_space($stdout)): '404'
+    - description: "OPS-2: https://alertmanager.svp.localhost:8443/ at Envoy: 404 (no route)"
+      continueOnError: true
+      script:
+        env:
+        - {name: HOST, value: alertmanager}
+        content: *edge-404
+        check:
+          (trim_space($stdout)): '404'
+    - description: "OPS-2: https://glitchtip.svp.localhost:8443/ at Envoy: 404 (no route)"
+      continueOnError: true
+      script:
+        env:
+        - {name: HOST, value: glitchtip}
+        content: *edge-404
+        check:
+          (trim_space($stdout)): '404'
+    - description: "OPS-2: https://argocd.svp.localhost:8443/ at Envoy: 404 (no route)"
+      continueOnError: true
+      script:
+        env:
+        - {name: HOST, value: argocd}
+        content: *edge-404
+        check:
+          (trim_space($stdout)): '404'
+    - description: "OPS-2 control: /healthz through Envoy 200: Envoy reaches the gateway on 8080"
+      continueOnError: true
+      script:
+        env:
+        - {name: BASE, value: ($base)}
+        content: curl -s --max-time 5 -o /dev/null -w '%{http_code}' "$BASE/healthz" || true
+        check:
+          (trim_space($stdout)): '200'
+
+  - name: ops-2-grafana-forward
+    use:
+      template: ../../templates/port-forward.yaml
+      with:
+        bindings:
+        - {name: forwardNamespace, value: svp-obs}
+        - {name: forwardTarget, value: service/kps-grafana}
+        - {name: forwardPort, value: "13000"}
+        - {name: forwardRemotePort, value: "80"}
+        - {name: forwardReadyPath, value: /api/health}
+
+  - name: ops-2-grafana
+    try:
+    - description: "OPS-2: Grafana /api/user without a login: 401"
+      continueOnError: true
+      script:
+        env:
+        - {name: URL_PATH, value: /api/user}
+        content: &grafana-get curl -s --max-time 5 -o /dev/null -w '%{http_code}' "http://127.0.0.1:13000$URL_PATH" || true
+        check:
+          (trim_space($stdout)): '401'
+    - description: "OPS-2: Grafana /api/search (dashboards) without a login: 401"
+      continueOnError: true
+      script:
+        env:
+        - {name: URL_PATH, value: /api/search}
+        content: *grafana-get
+        check:
+          (trim_space($stdout)): '401'
+    - description: "OPS-2 control: Grafana /api/health: 200 (Grafana answers)"
+      continueOnError: true
+      script:
+        env:
+        - {name: URL_PATH, value: /api/health}
+        content: *grafana-get
+        check:
+          (trim_space($stdout)): '200'
+    # The admin login goes to curl in a private config file, never on a command line, and is removed at once.
+    - description: "OPS-2 control: Grafana /api/user with the admin login (Secret svp-obs/grafana-admin): 200"
+      continueOnError: true
+      script:
+        shell: bash
+        env:
+        - *kubeconfig
+        content: |
+          set -euo pipefail
+          export KUBECONFIG="$CALLER_KUBECONFIG"
+          umask 077
+          cfg=$(mktemp)
+          trap 'rm -f "$cfg"' EXIT
+          kubectl --context k3d-svp -n svp-obs get secret grafana-admin -o json |
+            jq -r '"user = \(((.data["admin-user"] | @base64d) + ":" + (.data["admin-password"] | @base64d)) | @json)"' >"$cfg" ||
+            { echo "FAIL  OPS-2: read the Grafana admin login from Secret svp-obs/grafana-admin" >&2; exit 1; }
+          curl -s --max-time 5 -o /dev/null -w '%{http_code}' -K "$cfg" "http://127.0.0.1:13000/api/user" || true
+        check:
+          ($error): ~
+          (trim_space($stdout)): '200'

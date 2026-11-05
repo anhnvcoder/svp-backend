@@ -1,0 +1,243 @@
+# Supply chain drill, case g: the admission controller down. Its Deployment keeps its replica, but the pod is stopped
+# and its replacement cannot be scheduled (strategy Recreate and a nodeSelector no node has), as when it crashes or its
+# node is gone. Not by scaling it to 0: Kyverno v1.19.1 deletes all its webhook configurations when it stops while its
+# Deployment asks for 0 replicas (IsGoingDown, pkg/utils/runtime/utils.go), so a scale to 0 lets every pod through.
+# A pod of svp is refused (the webhook fails closed), a pod of namespace svp-probe (made for the case by the shared
+# template, Pod Security restricted, outside the webhook's scope) is admitted; the Deployment still wants its replica
+# and has no ready pod between the probes. Then, also when a step failed, the Deployment is put back and ready, and on
+# the GitOps cluster the automated sync of Argo CD is on again: it is turned off first, the root Application svp-root
+# then Application kyverno, so Argo CD does not undo the change in the middle of the case, and put back kyverno first.
+# The webhooks of the policy (selectors, failurePolicy, rules) are the same after Kyverno came back as before.
+# The image sent is the signed release a pod of svp runs, else the local registry's image (the dev path).
+# Helpers, inputs and the verdict lines: ../lib.sh.
+apiVersion: chainsaw.kyverno.io/v1alpha1
+kind: Test
+metadata:
+  name: supplychain-case-g
+  labels:
+    drill: supplychain
+spec:
+  description: (g) with the admission controller down, pods of svp are refused (fail closed), pods outside its scope admitted, and Kyverno comes back with the same webhooks
+  # Concurrent, so that Chainsaw runs it after case k, the drill's one test that is not (Chainsaw runs those first):
+  # on the dev path k needs the policy in Audit, before any case puts it in Enforce. Still one test at a time:
+  # execution.parallel is 1 in deploy/k8s/drills/.chainsaw.yaml.
+  concurrent: true
+  # Namespace svp exists: Chainsaw neither creates nor deletes it.
+  namespace: svp
+  steps:
+  - name: g-setup
+    description: (g) Chainsaw on k3d-svp, the policy ready, its webhooks noted; on the dev path the policy in Enforce for the case (enforceTmp)
+    try:
+    - script:
+        shell: bash
+        timeout: 5m
+        env: &env
+        - name: CASE
+          value: g
+        - name: CALLER_KUBECONFIG
+          value: (env('KUBECONFIG'))
+        - name: UNSIGNED
+          value: (to_string($values.unsigned || ''))
+        - name: VULNERABLE
+          value: (to_string($values.vulnerable || ''))
+        - name: NO_PROVENANCE
+          value: (to_string($values.noProvenance || ''))
+        - name: ENFORCE_TMP
+          value: (to_string($values.enforceTmp || ''))
+        content: |
+          . ../lib.sh
+          preflight
+          enforce_tmp_up
+    cleanup:
+    - script:
+        shell: bash
+        timeout: 5m
+        env: *env
+        content: |
+          . ../lib.sh
+          audit_back
+    - script:
+        shell: bash
+        env: *env
+        content: |
+          . ../lib.sh
+          webhooks_back
+  - name: g-probe-namespace
+    description: (g) namespace svp-probe (Pod Security restricted, outside the webhook's scope), deleted when the test ends
+    use:
+      template: ../../templates/probe-up.yaml
+  - name: g-admission-down
+    description: (g) the admission controller stopped; a pod of svp refused, a pod of svp-probe admitted, the controller still down between them; then put back
+    try:
+    - script:
+        shell: bash
+        env: *env
+        outputs:
+        - name: image
+          value: ($stdout)
+        content: |
+          . ../lib.sh
+          image=$(signed_image)
+          printf %s "${image:-$(local_image)}"
+    - script:
+        shell: bash
+        timeout: 12m
+        env: *env
+        content: |
+          . ../lib.sh
+          before=$(webhooks) || fail "read Kyverno's webhook configuration kyverno-resource-validating-webhook-cfg"
+          st_set webhooks-before "$before"
+          if [ "$(st path)" = gitops ]; then argo_pause; fi
+          replicas=$(kc -n kyverno get deployment "$admission" -o jsonpath='{.spec.replicas}')
+          [[ $replicas =~ ^[1-9][0-9]*$ ]] || fail "read the replicas of deployment kyverno/$admission (got '$replicas')"
+          st_set replicas "$replicas"
+          strategy=$(kc -n kyverno get deployment "$admission" -o json | jq -c '.spec.strategy') ||
+            fail "read the strategy of deployment kyverno/$admission"
+          st_set strategy "$strategy"
+          park
+          wait_until 120 "no ready pod of kyverno/$admission, its replacement Pending" down
+          ok "(g) kyverno/$admission: $replicas replica(s) wanted, none ready (the replacement waits for a node)"
+    - description: (g) pod drill-supplychain-g of svp while the admission controller is down, server-side dry run, refused with "failed calling webhook"
+      continueOnError: true
+      create:
+        dryRun: true
+        timeout: 60s
+        resource:
+          apiVersion: v1
+          kind: Pod
+          metadata:
+            name: drill-supplychain-g
+            namespace: svp
+            labels:
+              app.kubernetes.io/managed-by: svp-drill-supplychain
+              svp-drill: supplychain
+          spec:
+            automountServiceAccountToken: false
+            securityContext:
+              runAsNonRoot: true
+              runAsUser: 65532
+              runAsGroup: 65532
+              seccompProfile:
+                type: RuntimeDefault
+            containers:
+            - name: c
+              image: ($image)
+              command: [sleep, "60"]
+              securityContext:
+                allowPrivilegeEscalation: false
+                readOnlyRootFilesystem: true
+                capabilities:
+                  drop: [ALL]
+              resources:
+                requests: {cpu: 10m, memory: 16Mi}
+                limits: {cpu: 100m, memory: 32Mi}
+        expect:
+        - check:
+            ($error != null): true
+            (contains($error || '', 'failed calling webhook')): true
+    - continueOnError: true
+      script:
+        shell: bash
+        env: *env
+        content: &stillDown |
+          . ../lib.sh
+          if down; then
+            result PASS "kyverno/$admission still without a ready pod"
+          else
+            result FAIL "kyverno/$admission stayed down through the probes"
+          fi
+          finish
+        check:
+          ($error == null): true
+          (contains($stdout, 'PASS  (g) ')): true
+    - description: (g) pod drill-supplychain-g of svp-probe (outside the webhook's scope) while the admission controller is down, server-side dry run, admitted
+      continueOnError: true
+      create:
+        dryRun: true
+        timeout: 60s
+        resource:
+          apiVersion: v1
+          kind: Pod
+          metadata:
+            name: drill-supplychain-g
+            namespace: svp-probe
+            labels:
+              app.kubernetes.io/managed-by: svp-drill-supplychain
+              svp-drill: supplychain
+          spec:
+            automountServiceAccountToken: false
+            securityContext:
+              runAsNonRoot: true
+              runAsUser: 65532
+              runAsGroup: 65532
+              seccompProfile:
+                type: RuntimeDefault
+            containers:
+            - name: c
+              image: ($image)
+              command: [sleep, "60"]
+              securityContext:
+                allowPrivilegeEscalation: false
+                readOnlyRootFilesystem: true
+                capabilities:
+                  drop: [ALL]
+              resources:
+                requests: {cpu: 10m, memory: 16Mi}
+                limits: {cpu: 100m, memory: 32Mi}
+        expect:
+        - check:
+            ($error == null): true
+    - continueOnError: true
+      script:
+        shell: bash
+        env: *env
+        content: *stillDown
+        check:
+          ($error == null): true
+          (contains($stdout, 'PASS  (g) ')): true
+    finally:
+    # Kyverno first: without a running admission controller its own webhook refuses every change to a policy.
+    - script:
+        shell: bash
+        timeout: 6m
+        env: *env
+        content: |
+          . ../lib.sh
+          [ -n "$(st parked)" ] || exit 0
+          if (unpark); then
+            rm -f "$state/parked"
+            ok "(g) deployment kyverno/$admission back as it was and ready, policy $policy ready"
+          else
+            echo "FAIL  (g) put deployment kyverno/$admission back: remove nodeSelector svp-drill-supplychain and set spec.strategy to $(st strategy) (make k8s-up on the dev path)" >&2
+            exit 1
+          fi
+    - script:
+        shell: bash
+        env: *env
+        content: |
+          . ../lib.sh
+          [ -n "$(st argo-paused)" ] || exit 0
+          argo_restore || {
+            echo "FAIL  (g) turn the automated sync back on: kubectl --context k3d-svp -n argocd patch applications.argoproj.io <svp-root|kyverno> (syncPolicy of git: automated prune and selfHeal)" >&2
+            exit 1
+          }
+  - name: g-webhooks-back
+    description: (g) the policy's webhooks after Kyverno came back match the snapshot before it went down
+    try:
+    - continueOnError: true
+      script:
+        shell: bash
+        env: *env
+        content: |
+          . ../lib.sh
+          before=$(st webhooks-before)
+          after=$(webhooks) || after=
+          if [[ -n $before && $after == "$before" ]]; then
+            result PASS "the policy's webhooks after Kyverno came back match the snapshot before (selectors, failurePolicy, rules)"
+          else
+            result FAIL "the policy's webhooks after Kyverno came back match the snapshot before (before: $before; after: $after)"
+          fi
+          finish
+        check:
+          ($error == null): true
+          (contains($stdout, 'PASS  (g) ')): true

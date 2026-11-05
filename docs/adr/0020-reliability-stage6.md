@@ -181,7 +181,7 @@ RFC một trang cạnh ADR: `docs/rfc/README.md` (mẫu: Vấn đề, Phương �
 
 - k6 (§2): `deploy/k6/` (`main.js`, `api.js`, `web.js`, `lib/`, `load.sh`, `k6.mk`), `deploy/k6/cloud/` (`render.sh`, `job.yaml.in`, `run.sh`).
 - SLO web và cảnh báo (§3): `deploy/observability/slo/svp-slos.yaml`, `deploy/observability/prometheus/rules/svp-alerts.yaml`.
-- Backup và phục hồi Postgres (§5): `deploy/helm/svp-data/templates/backup.yaml`, `deploy/helm/svp-data/values.yaml`, `deploy/k8s/values/plugin-barman-cloud.yaml`, `deploy/helm/svp-observability/templates/postgres.yaml`, `deploy/s3/init.sh`, `deploy/k8s/secrets.sh` (biến của `deploy/compose/compose.mk`), `deploy/k8s/install.sh`, `deploy/k8s/lib.sh`, `deploy/k8s/drills/backup.sh`, `deploy/k8s/drills/threats.sh`, `deploy/ci/trivy-config-ignore.yaml`.
+- Backup và phục hồi Postgres (§5): `deploy/helm/svp-data/templates/backup.yaml`, `deploy/helm/svp-data/values.yaml`, `deploy/k8s/values/plugin-barman-cloud.yaml`, `deploy/helm/svp-observability/templates/postgres.yaml`, `deploy/s3/init.sh`, `deploy/k8s/secrets.sh` (biến của `deploy/compose/compose.mk`), `deploy/k8s/install.sh`, `deploy/k8s/lib.sh`, `deploy/k8s/drills/backup.sh`, `deploy/k8s/drills/threats/bak-1/`, `deploy/ci/trivy-config-ignore.yaml`.
 - Velero, Chaos Mesh, kubeconform (§6–§8): `deploy/k8s/cloud/` (`chaos/`, `velero/`, `values/`, `check.sh`, `charts.json`), `cloud-check` của `deploy/k8s/k8s.mk`, `renovate.json`.
 - Probe (§10): `deploy/helm/svp-service/templates/deployment.yaml`. Thử lại Postgres (§11): `internal/pgretry/`, `internal/pgpool/`, `internal/dbmigrate/`.
 - Game day (§13): `deploy/compose/drills/gameday.sh`, `deploy/compose/compose.mk`. Job `stack` (§15): `.github/workflows/ci.yml`, `ci-bridge-check` của `Makefile`.

@@ -16,7 +16,7 @@ Cho code Go (`services/`, `internal/`, `tools/`), mọi lệnh chạy từ gốc
 liệt kê target):
 
 - `make tools`: cài một lần các công cụ ghim version (`protoc-gen-go`, `protoc-gen-go-grpc`, `sqlc`, `golangci-lint`,
-  `actionlint`, `gitleaks`, `govulncheck`, `sloth` sinh rule SLO, `k3d`); `buf`, Helm cài bằng Homebrew (CI cài hai thứ đó bằng
+  `actionlint`, `gitleaks`, `govulncheck`, `sloth` sinh rule SLO, `k3d`, `chainsaw` chạy diễn tập k8s); `buf`, Helm cài bằng Homebrew (CI cài hai thứ đó bằng
   `make ci-tools`, chỉ chạy trên Linux amd64).
 - `make generate`: chạy sau khi sửa `proto/` hoặc SQL của `sqlc`; code sinh ra (`gen/go`, code `sqlc`) được commit.
 - `make generate-check`: chạy `make generate` trong bản sao tạm của working tree (file đã track và file chưa track không bị
@@ -70,6 +70,19 @@ liệt kê target):
   hay chỉnh luật nào có lý do ghi ngay trong file (policy do conftest đọc: namespace theo package, `data.*` do `--data` đưa vào,
   độ dài dòng 200 vì thông điệp là một chuỗi không ngắt được). Không thuộc `make check`; CI chạy `make regal-lint` ở job
   `config`, hook `pre-commit` chạy khi commit đổi `*.rego`.
+- `make chainsaw-lint` ([ADR-0050](../adr/0050-bash-to-standard-tools.md) mục 2): kiểm tĩnh các diễn tập Chainsaw dưới
+  `deploy/k8s/drills/`, không cần cluster. Mỗi file YAML ở đó phải là đúng một trong ba loại: `chainsaw-test.yaml` (`chainsaw lint
+  test`), `.chainsaw.yaml` (`chainsaw lint configuration`), StepTemplate dưới `templates/` (kubeconform `-strict` từ
+  `KUBECONFORM_IMAGE`, `--network none`); file khác là lỗi, nêu tên file. `chainsaw lint` ở `CHAINSAW_VERSION` chỉ nhận `test` và
+  `configuration`, nên schema StepTemplate của đúng tag đó chép vào `deploy/k8s/drills/.schemas/json/` (chạy offline), `.schemas/source`
+  ghi URL nguồn và target đỏ khi tag trong URL khác `CHAINSAW_VERSION`: nâng version thì chép lại schema từ tag mới. Chainsaw ghim
+  `CHAINSAW_VERSION` ở `Makefile` (`# renovate:`), cài bằng `make tools`. Cấu hình chung `deploy/k8s/drills/.chainsaw.yaml` (chạy
+  tuần tự, report JUnit vào `.k8s/drills/`; context cluster và tên report là cờ của `chainsaw test`, không đặt được trong file);
+  StepTemplate dùng chung ở `deploy/k8s/drills/templates/`: `probe-up.yaml` (namespace `svp-probe` cùng pod `probe`, tự xoá khi test
+  kết thúc) và `port-forward.yaml` (port-forward loopback, dừng theo pid khi test kết thúc). Bước `script` của Chainsaw nhận
+  `KUBECONFIG` là bản chép của cluster nó đang chạy (một context tên `chainsaw`), nên `kubectl` trong template đọc lại kubeconfig của
+  người gọi (`env('KUBECONFIG')`) và luôn ghi `--context k3d-svp`; bước `apply`, `wait` dùng client của Chainsaw, nên `probe-up.yaml`
+  dừng FAIL khi Chainsaw không chạy trên cùng server với context `k3d-svp` (thiếu `--kube-context k3d-svp`).
 - `make fuzz [FUZZTIME=30s] [PKGS=…]` (ADR-0030 §2): chạy lần lượt mọi `FuzzXxx` (mỗi gói một `fuzz_test.go`: `pagetoken`,
   `authtoken`, `objstore`, `httpx` của gateway, `server` của user-service; 10 target) bằng `go test -fuzz`, không `-race`,
   dừng ở target đầu tiên đỏ và in đường dẫn input go ghi ra dưới `testdata/fuzz/<target>/`; seed chạy trong `make test`. Lỗi

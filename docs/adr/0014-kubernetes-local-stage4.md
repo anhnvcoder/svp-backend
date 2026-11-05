@@ -161,7 +161,7 @@ tập của compose không port sang k3d, ngoài `make k8s-smoke` (chạy `deplo
 
 ## Hiện thực ở
 
-- Công cụ, topology, cổng, compose (§1, §2, §14): `deploy/k8s/` (`k3d.yaml`, `k8s.mk`, `lib.sh`, `install.sh`), `Makefile`, `deploy/compose/compose.mk`; RAM của §2 đo bằng `deploy/ci/verify-sample.sh`, `deploy/ci/verify-run.sh`.
+- Công cụ, topology, cổng, compose (§1, §2, §14): `deploy/k8s/` (`k3d.yaml`, `k8s.mk`, `lib.sh`, `install.sh`), `Makefile`, `deploy/compose/compose.mk`; RAM của §2 đo bằng sampler và runner cũ của `.github/workflows/verify.yml` (đã bỏ: [0039](0039-mainpath-drills-scan-gate-sourcemaps.md) §1, [0050](0050-bash-to-standard-tools.md); số đo ở phụ lục).
 - Namespace, Pod Security, NetworkPolicy (§3): `deploy/k8s/pod-security-admission.yaml`, `deploy/helm/svp-cluster/`, `templates/networkpolicies.yaml` của `svp-data`, `svp-observability`, `templates/networkpolicy.yaml` của `svp-service`.
 - Dữ liệu, Redpanda SASL và ACL (§4, §5): `deploy/helm/svp-data/` (object store `s3` theo [0022](0022-local-object-store-minio-replacement.md)), `deploy/k8s/values/cloudnative-pg.yaml`, `deploy/k8s/values/redpanda.yaml`.
 - Image, chart, Secret (§6, §7, §8): `deploy/k8s/lib.sh`, năm chart dưới `deploy/helm/`, `deploy/argocd/apps/components.json` dùng chung cho `deploy/k8s/install.sh` và `deploy/argocd/apps/`, `deploy/k8s/values/`, `deploy/k8s/secrets.sh`, `deploy/k8s/glitchtip-init.sh`.

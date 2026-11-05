@@ -28,7 +28,9 @@ Loại tài liệu (Diátaxis): **reference**, tra cứu khi cần một lệnh 
     `vuln-predicate-test.sh`, `sign-image-test.sh` cùng hàm bundle của `common.sh` trên registry giả, `rescan-test.sh`,
     `verify-release-test.sh` cùng `values-check.sh`, `changed-services-test.sh`), `deploy/ci/promote-test.sh`
     (guard của hai job promote, danh sách bản phát hành của rescan),
-    `deploy/ci/verify-collect-test.sh`, `make slo-check`, `make otelcol-validate`, `make env`
+    `deploy/ci/verify-collect-test.sh`, test các bước của `verify.yml` (`deploy/ci/verify-steps/steps-test.sh`, `supplychain-test.sh`,
+    `admission-metrics-test.sh`, `objstore-test.sh`), `deploy/k8s/drills/run-test.sh`, `deploy/k8s/restart-test.sh`, `make chainsaw-lint`,
+    `deploy/k8s/drills/gitops/gitops-test.sh`, `make slo-check`, `make otelcol-validate`, `make env`
     rồi `make compose-config`, `deploy/observability/glitchtip/dotenv-test.sh`,
     `make helm-check`, `deploy/ci/sources-test.sh`, `deploy/ci/gitops-check-test.sh "$SVP_GITOPS_DIR"`, `make k6-check`,
     `make cloud-check`),
@@ -173,22 +175,27 @@ Loại tài liệu (Diátaxis): **reference**, tra cứu khi cần một lệnh 
     những gì máy 16 GB không chạy nổi, bằng đúng target `make` như trên máy. Trigger: `workflow_dispatch` (chỉ người có quyền ghi; ref
     `main` hay `feat/stage6b-*`, ref khác dừng ở bước đầu) và lịch hằng tuần trên `main` (00:37 UTC thứ Bảy, 07:37 giờ Việt Nam; cả hai kịch bản
     song song, mọi bước). Hai kịch bản, mỗi kịch bản một job; lượt lịch đầu sau khi thu gọn: **kiểm sau push**.
-    - `compose-obs` (job `compose`, hạn 90 phút): `make up OBS=lgtm`, `make smoke`, `make drill-obs-threats`, rồi `test-stack-objstore`
-      (`make test-stack PKGS=./internal/objstore/...`, một ca SKIP là đỏ, gồm ba test của output bất biến): nơi duy nhất test `internal/objstore`
-      chạy thật thay vì SKIP.
-    - `gitops` (job `gitops`, hạn 160 phút): `make k8s-gitops-up` (vai stg; `make gitops-clone` trước; `GITOPS_REV` là SHA của `origin/main` trong
-      bản clone, nên cluster ở yên commit đó suốt các bước kiểm, PR promote merge giữa chừng không đổi gì), `gitops-env` (overlay stg có trên pod
-      gateway), `gitops-external-secrets` (ExternalSecret của cluster đúng bằng danh sách của chart, mỗi cái `Ready`, Secret đích đúng
-      type và đúng tên key, không đọc giá trị; entry có `enabledBy`, như `argocd/argocd-notifications-secret`, chỉ được đòi khi Application
-      `argocd/svp-cluster` liệt kê ExternalSecret của nó, tức Argo CD render nó từ values cluster chạy, dòng `not wanted` khi không), `gitops-argocd-metrics` (trong 180 s Prometheus thấy `argocd_app_info` của mọi Application,
-      đều Synced và Healthy, không cảnh báo `ArgoCDApplication*` nào cháy; chart stg đang chạy chưa có PodMonitor của Argo CD thì nói vậy và qua),
-      `gitops-admission-metrics` (số đo thời gian admission của lượt sync đầu, chạy trước smoke và diễn tập để histogram chỉ chứa lượt sync đầu; điều kiện của
-      [ADR-0040](../adr/0040-sigstore-bundle-actions-attest.md) mục 6: 20 s lần không cache, hạn webhook 30 s. In ra `logs/NN-gitops-admission-metrics.log` chỉ dòng
+    - `compose-obs` (job `compose`, hạn 155 phút): `make up OBS=lgtm`, `make smoke`, `make drill-obs-threats`, rồi `test-stack-objstore`
+      (`deploy/ci/verify-steps/objstore.sh`: `make test-stack PKGS=./internal/objstore/...`, một ca SKIP là đỏ, gồm ba test của output bất
+      biến): nơi duy nhất test `internal/objstore` chạy thật thay vì SKIP.
+    - `gitops` (job `gitops`, hạn 205 phút): `make k8s-gitops-up` (vai stg; `make gitops-clone` trước; `GITOPS_REV` là SHA của `origin/main` trong
+      bản clone, nên cluster ở yên commit đó suốt các bước kiểm, PR promote merge giữa chừng không đổi gì), `make drill-k8s-gitops` (ba test
+      Chainsaw ở `deploy/k8s/drills/gitops/`: `gitops-env` (overlay stg có trong Application `gateway` và trên mọi pod gateway đang chạy, kiểm khai
+      báo), `gitops-external-secrets` (ExternalSecret của cluster đúng bằng danh sách `files/external-secrets.yaml` của chart `svp-cluster` ở
+      commit Application `argocd/svp-cluster` chạy chart đó, mỗi cái `Ready`, Secret đích đúng type và đúng tên key, không đọc giá trị; entry có
+      `enabledBy`, như `argocd/argocd-notifications-secret`, chỉ được đòi khi Application đó liệt kê ExternalSecret của nó, tức Argo CD render nó
+      từ values cluster chạy, dòng `not wanted` khi không), `gitops-argocd-metrics` (trong 180 s Prometheus thấy `argocd_app_info` của mọi
+      Application, đều Synced và Healthy, không cảnh báo `ArgoCDApplication*` nào cháy; chart Application `svp-observability` đang chạy chưa có
+      PodMonitor của Argo CD thì nói vậy và qua); cả hai đọc chart ở commit của lịch sử repo này nên checkout lấy đủ lịch sử),
+      `gitops-admission-metrics` (`deploy/ci/verify-steps/admission-metrics.sh`: số đo thời gian admission của lượt sync đầu, chạy trước smoke và
+      diễn tập để histogram chỉ chứa lượt sync đầu; điều kiện của
+      [ADR-0040](../adr/0040-sigstore-bundle-actions-attest.md) mục 6: 20 s lần không cache, hạn webhook 30 s. Ghi vào `logs/gitops-admission-metrics.log` chỉ dòng
       tóm tắt: từ apiserver, histogram `apiserver_admission_webhook_admission_duration_seconds` của webhook `ivpol.*` trong
       `kyverno-resource-validating-webhook-cfg` (bucket chỉ có 10, 25, +Inf: `_count`, `_sum`, trung bình, số ≤ 10, ≤ 25, > 25); từ Kyverno (port-forward
       `kyverno-svc-metrics`:8000) `kyverno_admission_review_duration_seconds` và `kyverno_image_validating_policy_execution_duration_seconds` của
       policy `svp-images` (bucket 20, 30). Thiếu metric thì dòng `NOTE`, bước không đỏ: phép đo là bằng chứng, không phải cổng),
-      `make k8s-smoke` (chặt, không biến chuyển tiếp), `make drill-k8s-supplychain` (ảnh chưa ký của ca (b), (h), (i) là digest mới nhất của
+      `make k8s-smoke` (chặt, không biến chuyển tiếp), `drill-k8s-supplychain` (`deploy/ci/verify-steps/supplychain.sh` gọi
+      `make drill-k8s-supplychain`; ảnh chưa ký của ca (b), (h), (i) là digest mới nhất của
       `drill-unsigned` (không chữ ký, không attestation nên không có hạn 72 giờ); ca (l) là digest mới nhất của `drill-no-provenance` dưới
       prefix của `backend`, lấy như ca (c) lấy `drill-vulnerable`; cả ba do `deploy/ci/ghcr-digest.sh` đọc ẩn danh từ GHCR, không đọc được thì ca SKIP (trừ `drill-unsigned`: drill tự tra lại) và bước đỏ sau drill; chỉ ở lượt lịch, `SVP_VERIFY_SCHEDULED=true`,
       image của ca (c) hay (l) có attestation `vuln` quá 72 giờ thì không đưa cho drill: ca đó SKIP kèm dòng `NOTE` nêu tuổi và lệnh dispatch
@@ -199,19 +206,25 @@ Loại tài liệu (Diátaxis): **reference**, tra cứu khi cần một lệnh 
       `object-store-roundtrip`), bước chờ phát hành và `measure-gitops`, `verify-sample.sh`, `verify-tempo.sh`. Số đo và id lượt chạy ở các ADR 0014, 0017, 0019, 0020, 0021, 0022, 0031. Bản clone
       `svp-frontend`, Node, pnpm, Playwright và image source map không còn trong workflow; `web_ref` không còn là input.
     Dispatch và đọc kết quả (AI được chạy, chỉ khi người học giao): `gh workflow run verify.yml --ref <main|feat/stage6b-…>
-    -f scenario=<compose-obs|gitops> [-f targets='<bước> …']` (`targets` rỗng là mọi bước, bước dựng luôn chạy; tên bước ở `results.tsv`, ví dụ
-    `targets='k8s-smoke drill-k8s-supplychain'`), `gh run view <id> --log`, `gh run download <id> -n verify-<kịch bản>`. Mỗi lượt chạy
-    `make gitops-clone` (`main` của `svp-gitops`, ẩn danh), export `SVP_GITOPS_DIR` tới bản clone cho mọi target; kịch bản `compose-obs` và `gitops`
-    chạy image web của bản phát hành stg. Cả hai job chỉ `contents: read`, không secret hay environment; `concurrency` một lượt mỗi kịch bản. Trình tự
-    mỗi kịch bản ở `deploy/ci/verify/<kịch bản>.sh` (bước dựng, hạn job mặc định, danh sách bước). Script `deploy/ci/verify-*.sh` (chạy được
-    trên VM Linux thay runner): `verify-host.sh` (cổng đĩa, `/etc/hosts` cho ba tên `*.svp.localhost`, lệch version kubectl), `verify-run.sh`
-    (nạp trình tự của kịch bản, hạn mỗi target, output mỗi target vào file thay vì log job, dừng sớm khi bước dựng đỏ), `verify-mask.sh`
-    (`::add-mask::` giá trị bí mật của `.env` sau mỗi target và của Secret trong cluster, ở namespace `svp`, `svp-data`, `svp-obs`, `argocd`,
-    `svp-secrets`), `verify-collect.sh` (artifact `verify-<kịch bản>`, giữ 30 ngày: chỉ file theo danh sách cho phép, gồm `results.tsv`,
-    `scenario`, `df-before.txt`, `logs/*.log` và `.k8s/drills/{*.json,traffic-*.log}`; quét theo giá trị bí mật đã biết và theo mẫu, file nghi bị bỏ
-    kèm `::warning::`, `files.txt` liệt kê file giữ và bỏ; đầu ra target bỏ dòng log JSON, access log và dòng log container `[<namespace>] …` thụt bốn khoảng trắng
-    ngoài `log_tail_namespaces` của `deploy/k8s/lib.sh`: chỉ đuôi log hạ tầng bên thứ ba mà `make k8s-up` in khi release không Ready, không bao giờ
-    `svp`). `deploy/ci/verify-collect-test.sh` chạy trên máy và ở job `config` (giá trị giả, `docker`/`kubectl` giả, không mạng).
+    -f scenario=<compose-obs|gitops> [-f targets='<bước> …']` (`targets` rỗng là mọi bước, bước dựng luôn chạy; tên bước là
+    `SVP_VERIFY_STEP_NAMES` của job và cột đầu của `results.tsv`, ví dụ `targets='k8s-smoke drill-k8s-supplychain'`; tên lạ hay ký tự ngoài
+    `a-z`, `0-9`, `-`, khoảng trắng thì job đỏ trước khi dựng gì; chỉ lọc, không tự thêm bước: `drill-k8s-threats` cần `k8s-smoke` đi cùng),
+    `gh run view <id> --log`, `gh run download <id> -n verify-<kịch bản>`. Mỗi target là một bước Actions, id là tên target, `timeout-minutes`
+    riêng; output vào `$RUNNER_TEMP/verify/logs/<bước>.log`, không vào log job; bước sau bước dựng chạy khi bước dựng xanh dù bước giữa đỏ, và
+    bị bỏ khi bước dựng đỏ; job đỏ khi một bước đã chạy đỏ. Hạn job đủ cho 20 phút cài đặt, tổng `timeout-minutes` của các bước và 25 phút cho
+    các bước cuối (bảng kết quả, lọc, tải artifact, gỡ), chạy `always()` khi kiểm ref qua, kể cả khi huỷ hay quá giờ. Mỗi lượt chạy
+    `make gitops-clone` (`main` của `svp-gitops`, ẩn danh) và đặt `SVP_GITOPS_DIR` tới bản clone cho mọi bước sau; kịch bản `compose-obs` và
+    `gitops` chạy image web của bản phát hành stg. Cả hai job chỉ `contents: read`, không secret hay environment; `concurrency` một lượt mỗi
+    kịch bản. Script: `deploy/ci/verify-host.sh` (cổng đĩa, `/etc/hosts` cho ba tên `*.svp.localhost`, lệch version kubectl), các bước ở
+    `deploy/ci/verify-steps/` (`steps.sh check|table`: kiểm `targets`, bảng `results.tsv` từ outcome của từng bước; `supplychain.sh`,
+    `admission-metrics.sh`, `objstore.sh`; mỗi script một test cạnh nó), `verify-mask.sh` (`::add-mask::` giá trị bí mật của `.env` sau `make
+    env` và sau bước dựng, cùng Secret trong cluster ở namespace `svp`, `svp-data`, `svp-obs`, `argocd`, `svp-secrets`), `verify-collect.sh`
+    (artifact `verify-<kịch bản>`, giữ 30 ngày: chỉ kết quả máy đọc theo danh sách cho phép: `results.tsv`, `scenario`, `df-before.txt`, dòng kết
+    luận của `drill-obs-threats`, số đo admission, `.k8s/drills/{*.xml,*-skips.tsv,*.json,traffic-*.log}` gồm report JUnit của diễn tập Chainsaw và `<diễn tập>-skips.tsv` (mỗi
+    dòng một ca SKIP kèm lý do, dòng cuối `total`: report JUnit tính bước SKIP là xanh nên file này mới cho biết ca nào bị bỏ; quét bí mật như file
+    khác); output của các bước khác không bao giờ lên; quét theo giá trị bí mật đã biết và theo mẫu (JWT, Bearer, `Set-Cookie`, khoá riêng, cookie phiên), file
+    nghi bị bỏ kèm `::warning::`, `files.txt` liệt kê file giữ và bỏ). `deploy/ci/verify-collect-test.sh` chạy trên máy và ở job `config` (giá
+    trị giả, `docker`/`kubectl` giả, không mạng).
   - DORA là bài lab `dora/` của `svp-labs` ([ADR-0037](../adr/0037-mainpath-standard-tools.md) §1, thay [ADR-0028](../adr/0028-dora-metrics.md)):
     `dora.yml`, `dora.sh`, `dora-test.sh` đã rời repo này; front matter của `docs/postmortems/` vẫn là dữ liệu cho bài lab đó.
   - **`svp-gitops`** (`https://github.com/anhnvcoder/svp-gitops`, public, không secret; [ADR-0025](../adr/0025-gitops-config-repo.md),
@@ -308,7 +321,8 @@ Loại tài liệu (Diátaxis): **reference**, tra cứu khi cần một lệnh 
     `deploy/ci/build-image.sh <svc> arm64 "$(mktemp -d)"`; riêng cổng grype của một chân: `make grype IMAGE=<ref>@sha256:<digest>
     [ARCH=amd64|arm64]` (syft ghim đọc image từ registry, ẩn danh) hay `make grype SBOM=<đường tuyệt đối tới SPDX JSON>`, in số
     gói và binary ngoài trình quản lý gói; bước `dast` của job `stack`: `make dast` trên stack `make up`; service nào sẽ build: `deploy/ci/changed-services.sh <base>
-    HEAD`; bộ lọc artifact của `verify.yml`: `deploy/ci/verify-collect-test.sh`. Push GHCR, ký, attest chỉ chạy
+    HEAD`; bộ lọc artifact của `verify.yml`: `deploy/ci/verify-collect-test.sh`; các bước của nó: `deploy/ci/verify-steps/*-test.sh`; diễn tập
+    gitops không cluster: `deploy/k8s/drills/gitops/gitops-test.sh`. Push GHCR, ký, attest chỉ chạy
     trong CI: không đăng nhập GHCR hay Sigstore từ máy. Bước promote stg, prd
     chỉ chạy trong CI (token App); guard của chúng thử bằng `deploy/ci/promote-test.sh`.
   - **Script CI cho cây của nguồn khác** ([ADR-0033](../adr/0033-svp-web-repo.md) §5): CI của một nguồn phát hành khác (`svp-frontend`)

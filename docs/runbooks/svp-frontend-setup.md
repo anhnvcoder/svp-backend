@@ -527,7 +527,7 @@ cosign verify-attestation --type slsaprovenance1 --certificate-oidc-issuer $iss 
 tay. Ký bằng identity backend, hay provenance mang repo backend, thì pod web bị từ chối khi Argo CD triển khai.
 
 **Nếu sai:** cosign báo identity không khớp → `images.yml` của `svp-frontend` chạy ký qua reusable workflow hay workflow khác tên (ADR-0033 §5:
-job ký chạy trong `images.yml` của chính `svp-frontend`). Image `web-sourcemaps` không còn ([ADR-0039](../adr/0039-mainpath-drills-scan-gate-sourcemaps.md) §3): package cũ trên GHCR xoá tay. Phép chéo nguồn trên cluster (ca `m` của `drill-k8s-supplychain`) và
+job ký chạy trong `images.yml` của chính `svp-frontend`). Image `web-sourcemaps` không còn ([ADR-0039](../adr/0039-mainpath-drills-scan-gate-sourcemaps.md) §3): package cũ trên GHCR xoá tay. Phép chéo nguồn trên cluster (ca `m` của `drill-k8s-supplychain`, `deploy/k8s/drills/supplychain/case-m/`) và
 lượt `gitops` sau bản phát hành đầu: mục "Kiểm chứng sau" của ADR-0033.
 
 ### E1. Đổi tên repo: package GHCR mới public

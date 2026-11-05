@@ -1,0 +1,334 @@
+# RL-1 of the threat model (docs/threat-model.md): a forged X-Forwarded-For gives no client a rate limit bucket of its
+# own. After every login-ip bucket in Valkey has expired (GCRA: a key lives until its bucket is full again, at most
+# 30 s; none is deleted), 40 wrong logins through https://api.svp.localhost:8443 over one HTTP/2 connection (so one
+# client address at the gateway), 8 in flight at a time, each with a new email and its own forged X-Forwarded-For: 30
+# (the burst of login-ip) pass the rate limit, plus one for each second the decisions spread over (the bucket refills
+# one per second; the spread is read from the login-email keys, which hold the time of each decision), and the rest get
+# 429 RATE_LIMITED, at least one; the login-email key of every email that passed exists and of none that got 429 (so
+# the 429 came from login-ip, which is checked first); the login-ip keys added are at most 2 (k3d: one per node), on the
+# pod network 10.42.0.0/16, none for a forged address.
+#
+# These are judged on an attempt in which no login decision fell back to a gateway pod's in-memory limiter (a Valkey
+# call over the gateway's 50 ms takes that path, with its own burst per pod): on every gateway pod, the fallback login
+# decisions of svp_ratelimit_decisions_total are the same in a sample after the burst as in its last one before it
+# (Prometheus, through a port-forward on 127.0.0.1:19090). An attempt with a fallback decision, or one where that cannot
+# be told, is printed and does not count, as does one in which the gateway's pods changed (a new, ended, deleted or
+# restarted one: the instance label of the samples, random per process, names no pod); the test tries again once the
+# bucket is full, at most 3 attempts in all. web-8 spends the same bucket and waits for it to be full the same way.
+#
+# The attempts are one operation, which stops the test when none counts (as the bash drill ended the item); each check of
+# the attempt that counts is one operation after it, named by its ID, reading what the attempt recorded right after its
+# burst; continueOnError keeps the next ones running after one fails, and the test still fails. The scripts source
+# ratelimit.sh; their files live in the test's private work directory .k8s/drills/rl-1, made by the first step and
+# removed when the test ends. Valkey is only read (SCAN, PTTL, MGET, TIME in db 10).
+apiVersion: chainsaw.kyverno.io/v1alpha1
+kind: Test
+metadata:
+  name: rl-1
+  labels:
+    drill: threats
+spec:
+  description: "RL-1: 40 logins with forged X-Forwarded-For over one connection share one login-ip bucket: its burst passes, the rest get 429"
+  # An existing namespace: Chainsaw neither creates nor deletes it.
+  namespace: svp
+  steps:
+  - name: "RL-1: setup: gateway ready, work directory"
+    try:
+    - description: "RL-1: setup: gateway ready through Envoy within 60 s"
+      script:
+        shell: bash
+        env:
+        - &kubeconfig {name: CALLER_KUBECONFIG, value: (env('KUBECONFIG'))}
+        content: |
+          set -eu
+          deadline=$(( $(date +%s) + 60 ))
+          until [ "$(curl -s --max-time 5 -o /dev/null -w '%{http_code}' https://api.svp.localhost:8443/readyz || true)" = 200 ]; do
+            [ "$(date +%s)" -lt "$deadline" ] || { echo "FAIL  readyz within 60s" >&2; exit 1; }
+            sleep 1
+          done
+          echo readyz
+        check:
+          ($error): ~
+    - description: "RL-1: setup: the test's private work directory .k8s/drills/rl-1 (one left by a killed run is removed first)"
+      script:
+        shell: bash
+        env:
+        - *kubeconfig
+        content: |
+          set -euo pipefail
+          . ./ratelimit.sh
+          rm -rf "$work"
+          mkdir -p "$(dirname "$work")"
+          mkdir "$work"
+          echo "work directory ${work#"$(git rev-parse --show-toplevel)"/}"
+        check:
+          ($error): ~
+    cleanup:
+    - script:
+        shell: bash
+        env:
+        - *kubeconfig
+        content: |
+          set -euo pipefail
+          . ./ratelimit.sh
+          rm -rf "$work"
+  - name: "RL-1: setup: port-forward to Prometheus on 127.0.0.1:19090"
+    use:
+      template: ../../templates/port-forward.yaml
+
+  - name: "RL-1: 40 logins with forged X-Forwarded-For over one HTTP/2 connection share the login-ip bucket of one address"
+    try:
+    - description: "RL-1: an attempt (at most 3) in which no login decision fell back to a gateway pod's in-memory limiter: no login-ip bucket left before its burst, the 40 logins over one HTTP/2 connection"
+      script:
+        shell: bash
+        timeout: 10m
+        env:
+        - *kubeconfig
+        content: |
+          set -euo pipefail
+          . ./ratelimit.sh
+          work_ready
+          # The logins of one attempt, and how many are in flight at once over the one connection. With all 40 at once, each
+          # gateway pod (two at rest; CPU limit 1, and Go never sets GOMAXPROCS below 2 from a cgroup limit, so 2) had about 20
+          # requests queued, and under host load some read their Valkey reply after the gateway's 50 ms store timeout: those
+          # were decided by the pod's in-memory fallback limiter, in about one run in three. 8 at a time leave a few per pod; the
+          # decisions then spread over a few hundred milliseconds, which the refill allowance of the checks counts.
+          rl1_n=40
+          rl1_parallel=8
+          base=https://api.svp.localhost:8443
+          run=$(date -u +%Y%m%dT%H%M%SZ)-$(openssl rand -hex 2)
+
+          # rl1_send ATTEMPT: waits until no login-ip bucket is left in Valkey, sends the logins of attempt ATTEMPT, and reads
+          # what the checks need right after them, before the login-ip bucket refills: Valkey's time around the burst
+          # (rl1_t_start, rl1_t_end), the gateway's pods as it starts (rl1_pods_before, from gateway_pods), the answers
+          # (rl1_passed, rl1_limited, rl1_busy, rl1_other; $work/rl1.passed, $work/rl1.other), the login keys ($work/rl-keys;
+          # $work/ip-pttl: "KEY PTTL" per login-ip key) and the spread of the decisions in ms (rl1_spread, empty when unknown).
+          rl1_send() {
+            local a=$1 i email status code connects versions key h
+            buckets_full RL-1 "$a"
+            : >"$work/rl1.curl"
+            : >"$work/rl1.hashes"
+            for ((i = 1; i <= rl1_n; i++)); do
+              ((i == 1)) || echo next >>"$work/rl1.curl"
+              email="drill-rl1-$run-$a-$i@example.test"
+              DRILL_PASSWORD=$(openssl rand -hex 16) jq -n --arg e "$email" '{email: $e, password: env.DRILL_PASSWORD}' >"$work/rl1-$i.json"
+              echo "$i $(email_hash "$email")" >>"$work/rl1.hashes"
+              # Two forged hops per request, new ones each time (TEST-NET addresses, RFC 5737).
+              cat >>"$work/rl1.curl" <<EOF
+          url = "$base/auth/login"
+          http2
+          max-time = 20
+          header = "Content-Type: application/json"
+          header = "X-Forwarded-For: 198.51.100.$i, 203.0.113.$i"
+          data-binary = "@$work/rl1-$i.json"
+          output = "$work/rl1-$i.out"
+          write-out = "$i %{http_code} %{num_connects} %{http_version}\n"
+          EOF
+            done
+            rl1_t_start=$(valkey_now)
+            # valkey-cli through kubectl exec runs in the Valkey container, so its CPU counts against Valkey's CPU limit, which
+            # one exec can use up for the current 100 ms period: Valkey then waits for the next period, longer than the
+            # gateway's 50 ms. The logins start a second after the test's last exec there.
+            sleep 1
+            rl1_pods_before=$(gateway_pods) || rl1_pods_before=
+            curl -sS --parallel --parallel-max "$rl1_parallel" -K "$work/rl1.curl" >"$work/rl1.wo" || true
+            rl1_t_end=$(valkey_now)
+            [[ $rl1_t_start =~ ^[0-9]+$ && $rl1_t_end =~ ^[0-9]+$ ]] ||
+              fail "RL-1: read Valkey's clock around the burst (got '$rl1_t_start', '$rl1_t_end')"
+            connects=$(awk '{ n += $3 } END { print n + 0 }' "$work/rl1.wo")
+            versions=$(awk '{ print $4 }' "$work/rl1.wo" | sort -u | tr '\n' ' ')
+            [[ $connects == 1 && $versions == "2 " && $(wc -l <"$work/rl1.wo" | tr -d ' ') == "$rl1_n" ]] ||
+              fail "RL-1: the $rl1_n logins went over one HTTP/2 connection (connections $connects, HTTP versions $versions, answers $(wc -l <"$work/rl1.wo" | tr -d ' '))"
+            ok "RL-1: attempt $a: the $rl1_n logins went over one HTTP/2 connection, $rl1_parallel in flight at a time"
+            rl1_passed=0 rl1_limited=0 rl1_busy=0 rl1_other=0
+            : >"$work/rl1.passed"
+            : >"$work/rl1.other"
+            while read -r i status _; do
+              code=$(jq -r '.code // ""' "$work/rl1-$i.out" 2>/dev/null || true)
+              case "$status $code" in
+                "429 RATE_LIMITED") rl1_limited=$((rl1_limited + 1)) ;;
+                "401 INVALID_CREDENTIALS") rl1_passed=$((rl1_passed + 1)) && echo "$i" >>"$work/rl1.passed" ;;
+                # user-service's bound on concurrent password hashes (JWT-9): past the rate limit, refused by user-service.
+                "429 SERVER_BUSY") rl1_passed=$((rl1_passed + 1)) rl1_busy=$((rl1_busy + 1)) && echo "$i" >>"$work/rl1.passed" ;;
+                *) rl1_other=$((rl1_other + 1)) && echo "request $i: $status ${code:-no code}" >>"$work/rl1.other" ;;
+              esac
+            done <"$work/rl1.wo"
+
+            # The PTTL of a login-ip key falls from the end of the burst on: read first.
+            valkey --scan --pattern 'svp:gw:rl:login-*' >"$work/rl-keys" || fail "RL-1: scan the login keys"
+            : >"$work/ip-pttl"
+            while read -r key; do
+              [[ $key == svp:gw:rl:login-ip:* ]] || continue
+              echo "$key $(valkey PTTL "$key")" >>"$work/ip-pttl"
+            done <"$work/rl-keys"
+            # The bucket refills one request per second, so decisions spread over S ms let up to floor(S / 1000) more through
+            # than the burst. S is measured on the login-email keys of the logins that passed: a new key holds its decision's
+            # time in Valkey's clock plus the interval of login-email. Each login-email decision follows its login-ip decision
+            # within one Valkey call (over 50 ms, the call falls back, which rl1_fallback catches); 100 ms covers it.
+            : >"$work/rl1.email-keys"
+            while read -r i; do
+              h=$(awk -v i="$i" '$1 == i { print $2 }' "$work/rl1.hashes")
+              grep ":$h\$" "$work/rl-keys" >>"$work/rl1.email-keys" || true
+            done <"$work/rl1.passed"
+            rl1_spread=
+            if [[ -s $work/rl1.email-keys ]]; then
+              # shellcheck disable=SC2046 # one argument per key; keys hold no space
+              rl1_spread=$(valkey MGET $(cat "$work/rl1.email-keys") | awk -v iv="$login_email_interval_ms" '/^[0-9]+$/ {
+                t = $1 - iv; if (n == 0 || t < min) min = t; if (n == 0 || t > max) max = t; n++ } END { if (n > 0) print max - min }') ||
+                rl1_spread=
+            fi
+          }
+
+          for ((a = 1; a <= rl1_attempts; a++)); do
+            rl1_send "$a"
+            rl1_fallback
+            if [[ $rl1_fell == 0 ]]; then
+              ok "RL-1: attempt $a of $rl1_attempts counts: no login decision fell back to a gateway pod's in-memory limiter (on each of the $rl1_pods gateway pods, the fallback decisions of login-ip and login-email in a sample after the burst equal those in its last sample before it)"
+              # What the checks below read, besides the files of this attempt.
+              for v in rl1_n rl1_parallel rl1_passed rl1_limited rl1_busy rl1_other rl1_spread; do
+                printf '%s=%q\n' "$v" "${!v}"
+              done >"$work/rl1.state"
+              exit 0
+            fi
+            echo "info  RL-1: attempt $a of $rl1_attempts does not count: $rl1_fell (it saw: passed $rl1_passed, limited $rl1_limited, other $rl1_other, decisions spread over ${rl1_spread:-unknown} ms, $(wc -l <"$work/ip-pttl" | tr -d ' ') login-ip key(s): $(awk '{ printf "%s PTTL %s ms; ", $1, $2 }' "$work/ip-pttl"))"
+          done
+          fail "RL-1: an attempt in which no login decision fell back to a gateway pod's in-memory limiter, within $rl1_attempts attempts (each is above): the shared login-ip bucket was not tested on its own"
+        check:
+          ($error): ~
+          (contains($stdout, 'no login-ip bucket in Valkey db 10')): true
+          (contains($stdout, 'logins went over one HTTP/2 connection')): true
+          "(contains($stdout, 'counts: no login decision fell back'))": true
+    # The checks of the attempt that counted, on what it read right after its burst.
+    - description: "RL-1: the burst of login-ip (30) passes the rate limit, plus one per second the decisions spread over; the rest, at least one, get 429 RATE_LIMITED"
+      continueOnError: true
+      script:
+        shell: bash
+        env:
+        - *kubeconfig
+        content: |
+          set -euo pipefail
+          . ./ratelimit.sh
+          work_ready
+          . "$work/rl1.state"
+          if [[ -s $work/rl1.other ]]; then sed 's/^/      /' "$work/rl1.other" >&2; fi
+          refill=$(((${rl1_spread:-0} + 100) / 1000))
+          if ((rl1_other == 0 && rl1_limited >= 1 && rl1_passed >= rl1_burst && rl1_passed <= rl1_burst + refill)); then
+            ok "RL-1: $rl1_n logins over one HTTP/2 connection, $rl1_parallel in flight at a time, each with a new email and its own forged X-Forwarded-For: $rl1_passed passed the rate limit (401, or 429 SERVER_BUSY from user-service's hash bound: $rl1_busy), the burst of $rl1_burst plus $((rl1_passed - rl1_burst)) refilled while the decisions spread over ${rl1_spread:-unknown} ms (up to $refill allowed); $rl1_limited got 429 RATE_LIMITED"
+          else
+            echo "FAIL  RL-1: of $rl1_n logins $rl1_burst to $((rl1_burst + refill)) pass the rate limit (the burst, plus one per second of the ${rl1_spread:-unknown} ms the decisions spread over) and the rest, at least one, get 429 RATE_LIMITED (passed $rl1_passed, limited $rl1_limited, other $rl1_other)"
+          fi
+        check:
+          ($error): ~
+          (starts_with($stdout, 'ok    RL-1:')): true
+    - description: "RL-1: the burst added 1 or 2 login-ip keys (k3d: one per node)"
+      continueOnError: true
+      script:
+        shell: bash
+        env:
+        - *kubeconfig
+        content: |
+          set -euo pipefail
+          . ./ratelimit.sh
+          work_ready
+          . "$work/rl1.state"
+          keys=$(wc -l <"$work/ip-pttl" | tr -d ' ')
+          if ((keys >= 1 && keys <= 2)); then
+            ok "RL-1: login-ip keys added by the burst: $keys ($(awk '{ printf "%s ", $1 }' "$work/ip-pttl"))"
+          else
+            echo "FAIL  RL-1: the burst added 1 or 2 login-ip keys (got $keys: $(awk '{ printf "%s ", $1 }' "$work/ip-pttl"))"
+          fi
+        check:
+          ($error): ~
+          (starts_with($stdout, 'ok    RL-1:')): true
+    - description: "RL-1: the address of each login-ip key, the one the gateway counts, is on the pod network of a node (10.42.0.0/16), not a forged one"
+      continueOnError: true
+      script:
+        shell: bash
+        env:
+        - *kubeconfig
+        content: |
+          set -euo pipefail
+          . ./ratelimit.sh
+          work_ready
+          . "$work/rl1.state"
+          nodes_read
+          while read -r key _; do
+            ip=${key#svp:gw:rl:login-ip:}
+            node=$(node_of "$ip")
+            if [[ $ip == 10.42.* && -n $node ]]; then
+              ok "RL-1: $ip, the address the gateway counts, is on the pod network of node $node, not a forged one"
+            else
+              echo "FAIL  RL-1: the login-ip key's address $ip is on the pod network of a node"
+            fi
+          done <"$work/ip-pttl"
+        check:
+          ($error): ~
+          (contains($stdout, 'FAIL  ')): false
+    - description: "RL-1: the bucket of each login-ip key is spent: right after the burst the key lives 20 s more or longer (TAT ahead of now; full again after 30 s)"
+      continueOnError: true
+      script:
+        shell: bash
+        env:
+        - *kubeconfig
+        content: |
+          set -euo pipefail
+          . ./ratelimit.sh
+          work_ready
+          . "$work/rl1.state"
+          while read -r key pttl; do
+            ip=${key#svp:gw:rl:login-ip:}
+            if [[ $pttl =~ ^[0-9]+$ ]] && ((pttl >= 20000)); then
+              ok "RL-1: the bucket of $ip is spent: right after the burst the key lived $pttl ms more (TAT ahead of now; full again after 30 s)"
+            else
+              echo "FAIL  RL-1: the bucket of $ip is spent (PTTL $pttl ms right after the burst, want >= 20000)"
+            fi
+          done <"$work/ip-pttl"
+        check:
+          ($error): ~
+          (contains($stdout, 'FAIL  ')): false
+    - description: "RL-1: no login-ip or login-email key is for a forged address (198.51.100.0/24, 203.0.113.0/24)"
+      continueOnError: true
+      script:
+        shell: bash
+        env:
+        - *kubeconfig
+        content: |
+          set -euo pipefail
+          . ./ratelimit.sh
+          work_ready
+          . "$work/rl1.state"
+          if grep -qE ':(198\.51\.100|203\.0\.113)\.' "$work/rl-keys"; then
+            echo "FAIL  RL-1: no login-ip or login-email key is for a forged address ($(grep -cE ':(198\.51\.100|203\.0\.113)\.' "$work/rl-keys") are)"
+          else
+            ok "RL-1: no login-ip or login-email key is for a forged address (198.51.100.0/24, 203.0.113.0/24)"
+          fi
+        check:
+          ($error): ~
+          (starts_with($stdout, 'ok    RL-1:')): true
+    - description: "RL-1: login-email keys exist for the emails that passed and for none that got 429: login-ip refused those, before login-email was asked"
+      continueOnError: true
+      script:
+        shell: bash
+        env:
+        - *kubeconfig
+        content: |
+          set -euo pipefail
+          . ./ratelimit.sh
+          work_ready
+          . "$work/rl1.state"
+          present=0 absent=0 wrong=0
+          while read -r i h; do
+            if grep -q ":$h\$" "$work/rl-keys"; then
+              if grep -qx "$i" "$work/rl1.passed"; then present=$((present + 1)); else wrong=$((wrong + 1)); fi
+            else
+              if grep -qx "$i" "$work/rl1.passed"; then wrong=$((wrong + 1)); else absent=$((absent + 1)); fi
+            fi
+          done <"$work/rl1.hashes"
+          if ((wrong == 0 && present == rl1_passed && absent == rl1_limited)); then
+            ok "RL-1: login-email keys exist for the $present emails that passed and for none of the $absent that got 429: login-ip refused those, before login-email was asked; no login-email bucket refused anything"
+          else
+            echo "FAIL  RL-1: login-email keys exist exactly for the emails that passed (present $present, absent $absent, mismatched $wrong)"
+          fi
+        check:
+          ($error): ~
+          (starts_with($stdout, 'ok    RL-1:')): true

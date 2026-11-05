@@ -125,7 +125,7 @@ Tạo overlay `stg/` (sáu file) và `prd/` (sáu file release cùng `svp-cluste
 ## Hiện thực ở
 
 - Overlay và chart app-of-apps: repo `svp-gitops` (`base/`, `envs/stg/`, `envs/prd/`, `envs/<env>/images/`, `envs/<env>/charts.yaml`, `argocd/apps/`, `CODEOWNERS`); ruleset ở `github/rulesets.tf` của `svp-infra`.
-- Chọn env và dựng: `argocd_root_app` của `deploy/k8s/lib.sh`, `deploy/k8s/gitops.sh`; phép kiểm tĩnh: `deploy/ci/gitops-check.sh` (`make helm-check` chạy `--worktree`); kiểm trên cluster: `deploy/ci/verify/gitops.sh`.
+- Chọn env và dựng: `argocd_root_app` của `deploy/k8s/lib.sh`, `deploy/k8s/gitops.sh`; phép kiểm tĩnh: `deploy/ci/gitops-check.sh` (`make helm-check` chạy `--worktree`); kiểm trên cluster: `deploy/k8s/drills/gitops/` (`make drill-k8s-gitops`, bước của job `gitops` ở `.github/workflows/verify.yml`).
 - Promote và bản ghi: `deploy/ci/promote.sh`, `deploy/ci/release-set.sh`, `deploy/ci/record-stg.sh`, `deploy/ci/promote-prd.sh`, bước 1b của `deploy/ci/gitops-check.sh`, `ci_deployment_record`, `ci_deployment_list` của `deploy/ci/platform.sh` (chi tiết ở [ADR-0025](0025-gitops-config-repo.md)). Danh sách theo phần và ngày: phụ lục, mục "Hiện thực ở".
 
 ## Nguồn
