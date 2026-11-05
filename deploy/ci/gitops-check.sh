@@ -38,21 +38,24 @@
 #      (refs/heads/main for one that pins none), that revision its valuesObject's targetRevision too; level 2 is
 #      argocd/apps with that valuesObject. An environment that pins a commit runs steps 2 to 4 on its own, with
 #      argocd/, base/ and platforms/ (the bootstrap of Argo CD included) of that commit unpacked with git archive and
-#      envs/<env>/ of the tree: there every source of svp-gitops with ref values names the commit and every one with ref
-#      env refs/heads/main, and each values file is read through the source of the revision Argo CD must read it at:
-#      base/ and platforms/ at the commit ($values/), envs/<env>/ on refs/heads/main ($env/), so neither a change of
-#      base/ or platforms/ on main nor an old envs/ reaches the environment. The other environments run them on the
-#      tree. In every environment (without --worktree) a chart of this repository is read at the revision of
-#      envs/<env>/charts.yaml of the tree. What the root renders from a template <name>.values.tpl (helm.valuesObject of the Application) is held to
-#      an overlay's rules: no image, canary or httpRoute.name for a release of chart svp-service (envs/<env>/images/
-#      names its image). The root fails when an overlay or an image file breaks its rules. It makes one Application per component that runs on the platform,
-#      each reading the values files base/ (and archValues of its architecture) < platforms/<platform>/<name>.yaml <
-#      envs/<env>/<name>.yaml < envs/<env>/images/<name>.yaml that exist, in that order (named without the ref of their
-#      source, $values/ or $env/), then a valuesObject exactly
-#      when platforms/<platform>/<name>.values.tpl exists. Every source it reads from svp-gitops names a full ref
-#      (refs/heads/<branch>) or a commit as targetRevision, never a short name, which Argo CD may resolve to a tag of
-#      that name. Argo Rollouts gets exactly one traffic router plugin on each architecture, the asset built for it,
-#      both of one release. gitops-check.sh --root GITOPS_DIR runs steps 1 and 2 alone (their test, no network).
+#      envs/<env>/ of the tree: there every source of svp-gitops names the commit and every values file is read through
+#      one (ref values), so a change of base/ or platforms/ on main does not reach the environment. The other
+#      environments run them on the tree. In every environment (without --worktree) a chart of this repository is read
+#      at the revision of envs/<env>/charts.yaml of the tree. What the root renders from a template <name>.values.tpl is
+#      held to an overlay's rules: no image, canary or httpRoute.name for a release of chart svp-service
+#      (envs/<env>/images/ names its image). The root fails when an overlay or an image file breaks its rules. It makes
+#      one Application per component that runs on the platform, each reading the values files base/ (and archValues of
+#      its architecture) < platforms/<platform>/<name>.yaml < envs/<env>/<name>.yaml < envs/<env>/images/<name>.yaml that
+#      exist, in that order (named without the ref of their source), then a valuesObject exactly when
+#      platforms/<platform>/<name>.values.tpl exists. On a two-level root the files of envs/<env>/ are no values files:
+#      level 1 hands their content over, and the valuesObject of each Application is its overlay < its image file < the
+#      template's render (the render of level 2 with the content of envs/<env>/ emptied), merged as Helm merges values
+#      files (jq's *), against the files of the tree, so neither an old envs/ nor another order reaches the cluster.
+#      Every source it reads from svp-gitops names a full ref (refs/heads/<branch>) or a commit as targetRevision, never
+#      a short name, which Argo CD may resolve to a tag of that name, and the sources of svp-gitops of one Application
+#      name one revision: Argo CD's repo-server refuses values files that reference one repository at two revisions.
+#      Argo Rollouts gets exactly one traffic router plugin on each architecture, the asset built for it, both of one
+#      release. gitops-check.sh --root GITOPS_DIR runs steps 1 and 2 alone (their test, no network).
 #   3. The charts of this repository (deploy/helm/*, at the revision of each environment) with base/ alone and with
 #      the values each environment on each platform reads, as Argo CD reads them (helm lint and template); no render on
 #      a platform without localHosts names svp.localhost: a grep of their whole text, and policy no-lab-hosts of
@@ -61,7 +64,7 @@
 #      alone (the dev path's), one ExternalSecret per entry of its files/external-secrets.yaml and one SecretStore per
 #      namespace there in each environment on each platform, the entries with inClusterObjectStore left out where its
 #      s3.mode is external and those with enabledBy where that key of externalSecrets is not true (provider
-#      kubernetes in stg, aws in prd, no svp-secrets in prd), valid against the CRDs of the External Secrets chart
+#      kubernetes on k3d, aws on eks, no svp-secrets on eks), valid against the CRDs of the External Secrets chart
 #      components.json pins (kubeconform -strict in KUBECONFORM_IMAGE of the Makefile).
 #   4. Every image pinned by digest. Renders, with `helm template --include-crds`, every component of
 #      components.json with its base/ values (upstream charts at their pinned versions, the charts of this repository
@@ -550,6 +553,11 @@ done
 [ -z "$pr_ok" ] || echo "$pr_ok"
 [ -z "$tree_only" ] || exit 0
 
+# two_level: the tree has the two-level root, argocd/root and then argocd/apps with the values level 1 gives it; empty for
+# a root of one level, argocd/apps alone.
+two_level=
+[ ! -f "$tree/argocd/root/Chart.yaml" ] || two_level=1
+
 # at PATH: where the values file PATH of the tree (relative to its top) is read for the environments render_tree
 # renders: envs/ in the tree, anything else in GTREE (the tree, or the commit an environment pins).
 at() {
@@ -663,10 +671,9 @@ render_tree() {
     awk -F $'\x1f' -v n="$1" -v f="$2" 'BEGIN { c["path"] = 2; c["values"] = 3; c["amd64"] = 4; c["arm64"] = 5 }
       $1 == n { print $c[f] }' "$vt/components"
   }
-  # values_files ENV PLATFORM NAME ARCH: the values files of component NAME that the root gives its Application in ENV
-  # on PLATFORM on ARCH nodes, relative to the tree, in the order Argo CD reads them:
-  # base/ and then archValues of ARCH (only with a base/ file), platforms/<platform>/<name>.yaml, envs/<env>/<name>.yaml,
-  # envs/<env>/images/<name>.yaml, those that exist.
+  # values_files ENV PLATFORM NAME ARCH: the values files of component NAME in ENV on PLATFORM on ARCH nodes, relative
+  # to the tree, in the order Argo CD reads them: base/ and then archValues of ARCH (only with a base/ file),
+  # platforms/<platform>/<name>.yaml, envs/<env>/<name>.yaml, envs/<env>/images/<name>.yaml, those that exist.
   values_files() {
     local v a
     v=$(component_field "$3" values)
@@ -678,6 +685,22 @@ render_tree() {
     [ ! -f "$gtree/platforms/$2/$3.yaml" ] || echo "platforms/$2/$3.yaml"
     [ ! -f "$tree/envs/$1/$3.yaml" ] || echo "envs/$1/$3.yaml"
     [ ! -f "$tree/envs/$1/images/$3.yaml" ] || echo "envs/$1/images/$3.yaml"
+  }
+  # app_files ENV PLATFORM NAME ARCH: those the Application names as values files: on a two-level root all but the
+  # files of envs/<env>/, whose content level 1 hands over and level 2 puts into the Application's valuesObject.
+  app_files() {
+    if [ -n "$two_level" ]; then values_files "$@" | grep -v '^envs/' || true; else values_files "$@"; fi
+  }
+  # env_values ENV FILE: envs/ENV/FILE of the tree as one line of JSON, {} for a file that is not there or holds comments
+  # alone; each file read once.
+  env_values() {
+    local f=$tree/envs/$1/$2 c=$tmp/env-values/$1/${2//\//-}.json
+    if [ ! -f "$c" ]; then
+      mkdir -p "$tmp/env-values/$1"
+      if [ -f "$f" ]; then yaml_json "$f"; fi | jq -cS 'select(type == "object")' >"$c" || fail "read envs/$1/$2"
+      [ -s "$c" ] || echo '{}' >"$c"
+    fi
+    cat "$c"
   }
   # overlay_keys JSON: the keys of a release's values that only envs/<env>/images/ (image) and the base (canary,
   # httpRoute.name, mirrored by canaryRoute of components.json) may set, those JSON sets: the rule overlay_keys of
@@ -704,7 +727,7 @@ render_tree() {
       # annotation, the fixture standing for it here.
       set -- --namespace argocd --set-string "env=$env" --set "nodeArch=$arch" --set-string "platform=$plat"
       [ "$plat" != eks ] || set -- "$@" -f "$tmp/cluster.yaml"
-      if [ -f "$tree/argocd/root/Chart.yaml" ]; then
+      if [ -n "$two_level" ]; then
         level_one "$env" "$plat" "$arch" "$@"
         set -- --namespace argocd -f "$tmp/render/level2-$tag-$arch.json"
       fi
@@ -718,32 +741,38 @@ render_tree() {
         fail "$apps for $label on $arch nodes reads no values from $gitops_url"
       [ -z "$short" ] ||
         fail "$apps for $label on $arch nodes: every source of $gitops_url must name a full ref (refs/heads/<branch>) or a commit as targetRevision, not $short (Argo CD may resolve a short name to a tag of that name)"
-      # A pinned environment reads base/ and platforms/ (ref values) at its commit, and its own files (ref env) on main.
-      if [ -n "$pin" ]; then
-        stale=$(awk -v url="$gitops_url" -v pin="$pin" '$0 ~ "repoURL: " url "$" { want = 1; rev = ""; next }
-          want && /targetRevision:/ { rev = $2; gsub(/"/, "", rev); next }
-          want && /ref:/ { if ($2 == "values" && rev != pin || $2 == "env" && rev != "refs/heads/main") print "ref " $2 " at " rev; want = 0 }
-          want && /^ *- / { want = 0 }' "$root" | sort -u | paste -sd ',' -)
-        [ -z "$stale" ] ||
-          fail "$apps for $label on $arch nodes: a source of $gitops_url with ${stale//,/, }; want ref values at the pinned commit $pin and ref env at refs/heads/main"
+      # On a two-level root, level 2 again with the content of every overlay and image file of envFiles emptied: the
+      # valuesObject of an Application there is what the root renders from the platform's template alone. One line per
+      # Application: its name and that valuesObject ("" for none).
+      if [ -n "$two_level" ]; then
+        jq '.envFiles.overlays |= map_values({}) | .envFiles.images |= map_values({})' "$tmp/render/level2-$tag-$arch.json" \
+          >"$tmp/render/level2-$tag-$arch-tpl.json" || fail "empty envFiles of the values of $apps for $label on $arch nodes"
+        helm template svp-root "$gtree/argocd/apps" --namespace argocd -f "$tmp/render/level2-$tag-$arch-tpl.json" \
+          >"$tmp/render/root-$tag-$arch-tpl.yaml" 2>"$tmp/err" || {
+          grep -v 'found symbolic link in path' "$tmp/err" >&2 || true
+          fail "helm template of $apps for $label on $arch nodes with the overlays and image files emptied"
+        }
+        yaml_json "$tmp/render/root-$tag-$arch-tpl.yaml" | jq -r 'select(.kind == "Application")
+          | [.metadata.name, ([.spec.sources[] | select(.helm)][0].helm | if has("valuesObject") then .valuesObject | tojson else "" end)]
+          | join("\u001f")' >"$tmp/render/tpl-$tag-$arch" ||
+          fail "read the Applications of $apps for $label on $arch nodes with the overlays and image files emptied"
       fi
-      # Each Application: its name, the values files of its source with helm (without the ref of their source, values or
-      # env), its valuesObject ("" for none), and the revision of its chart of this repository ("" for an upstream
-      # chart). In an environment that pins a commit, also each values file read at another revision than its part of
-      # the tree is: base/ and platforms/ at the commit, envs/ on refs/heads/main, through the source of svp-gitops whose
-      # ref the file names ("<file> at <revision>", that source's targetRevision, or "no source" for a file named
-      # without the ref of one).
+      # Each Application: its name, the values files of its source with helm (without the ref of their source), its
+      # valuesObject ("" for none), the revision of its chart of this repository ("" for an upstream chart), each values
+      # file read at another revision than the commit an environment pins ("<file> at <revision>", the targetRevision of
+      # the source of svp-gitops whose ref the file names, or "no source" for a file named without the ref of one; ""
+      # for an environment that pins none), and the revisions its sources of svp-gitops name, once each.
       yaml_json "$root" | jq -r --arg url "$gitops_url" --arg pin "$pin" 'select(.kind == "Application")
         | ([.spec.sources[] | select(.repoURL == $url and .ref) | {(.ref): (.targetRevision // "")}] | add // {}) as $refs
         | [.spec.sources[] | select(.helm)][0] as $s | $s.helm as $h
-        | [.metadata.name, ([($h.valueFiles // [])[] | sub("^\\$(values|env)/"; "")] | join(" ")),
+        | [.metadata.name, ([($h.valueFiles // [])[] | sub("^\\$[^/]+/"; "")] | join(" ")),
            (if $h | has("valuesObject") then $h.valuesObject | tojson else "" end),
            (if $s.path then $s.targetRevision else "" end),
            (if $pin == "" then "" else [($h.valueFiles // [])[]
              | (capture("^\\$(?<ref>[^/]+)/(?<path>.*)$") // {ref: "", path: .})
-             | (if .path | startswith("envs/") then "refs/heads/main" else $pin end) as $want
              | (if .ref == "" then null else $refs[.ref] end) as $rev
-             | select($rev != $want) | "\(.path) at \($rev // "no source")"] | join(", ") end)] | join("\u001f")' \
+             | select($rev != $pin) | "\(.path) at \($rev // "no source")"] | join(", ") end),
+           ([.spec.sources[] | select(.repoURL == $url) | .targetRevision // ""] | unique | join(" "))] | join("\u001f")' \
         >"$tmp/render/apps-$tag-$arch" || fail "read the Applications of $apps for $label on $arch nodes"
       got=$(cut -d $'\x1f' -f1 "$tmp/render/apps-$tag-$arch" | sort | paste -sd ' ' -)
       want=$(cut -d $'\x1f' -f1 "$vt/components" | while IFS= read -r name; do
@@ -751,25 +780,48 @@ render_tree() {
       done | sort | paste -sd ' ' -)
       [ "$got" = "$want" ] ||
         fail "$apps for $label on $arch nodes makes the Applications '$got', want one per component of components.json that runs on $plat: '$want'"
-      while IFS=$'\x1f' read -r name files object chart_rev misread; do
-        want=$(values_files "$env" "$plat" "$name" "$arch" | paste -sd ' ' -)
+      while IFS=$'\x1f' read -r name files object chart_rev misread revs; do
+        want=$(app_files "$env" "$plat" "$name" "$arch" | paste -sd ' ' -)
         [ "$files" = "$want" ] ||
-          problem "$apps for $label on $arch nodes: Application $name reads the values files '$files', want '$want' (base/ < platforms/<platform>/ < envs/<env>/ < envs/<env>/images/, those that exist)"
+          problem "$apps for $label on $arch nodes: Application $name reads the values files '$files', want '$want' (base/ < platforms/<platform>/ < envs/<env>/ < envs/<env>/images/, those that exist; on a two-level root envs/<env>/ in its valuesObject)"
+        # Argo CD's repo-server refuses values files whose ref sources name one repository at two revisions.
+        if [[ $revs == *" "* ]]; then
+          problem "$apps for $label on $arch nodes: Application $name has sources of $gitops_url at the revisions $revs; Argo CD refuses an Application whose values files reference one repository at two revisions (cannot reference multiple revisions for the same repository)"
+        elif [ -n "$pin" ] && [ -n "$revs" ] && [ "$revs" != "$pin" ]; then
+          problem "$apps for $label on $arch nodes: Application $name has a source of $gitops_url at $revs, want the pinned commit $pin"
+        fi
         [ -z "$misread" ] ||
-          problem "$apps for $label on $arch nodes: Application $name reads $misread; want base/ and platforms/ at the pinned commit $pin (\$values/, ref values) and envs/$env/ on refs/heads/main (\$env/, ref env)"
+          problem "$apps for $label on $arch nodes: Application $name reads $misread; want every values file at the pinned commit $pin (\$values/, ref values)"
         [ -n "$worktree" ] || [ -z "$chart_rev" ] || [ "$chart_rev" = "$(revision_of "$env")" ] ||
           problem "$apps for $label on $arch nodes: Application $name takes its chart at $chart_rev, want the revision of envs/$env/charts.yaml, $(revision_of "$env")"
+        # What the root renders from platforms/<platform>/<name>.values.tpl: the valuesObject itself on a root of one
+        # level, that of the render without the content of envs/<env>/ on a two-level root.
+        tpl_object=$object
+        [ -z "$two_level" ] || tpl_object=$(awk -F $'\x1f' -v n="$name" '$1 == n { print $2 }' "$tmp/render/tpl-$tag-$arch")
         if [ -f "$gtree/platforms/$plat/$name.values.tpl" ]; then
-          if [ "$(jq -r type <<<"${object:-null}")" != object ]; then
+          if [ "$(jq -r type <<<"${tpl_object:-null}")" != object ]; then
             problem "$apps for $label on $arch nodes: Application $name has no helm.valuesObject, the render of platforms/$plat/$name.values.tpl"
-          elif [ "$(component_field "$name" path)" = "$service_chart" ] && [ -n "$(overlay_keys "$object")" ]; then
-            problem "platforms/$plat/$name.values.tpl renders $(overlay_keys "$object") for $label: a release's image is envs/<env>/images/$name.yaml, and every platform runs the base's canary"
+          elif [ "$(component_field "$name" path)" = "$service_chart" ] && [ -n "$(overlay_keys "$tpl_object")" ]; then
+            problem "platforms/$plat/$name.values.tpl renders $(overlay_keys "$tpl_object") for $label: a release's image is envs/<env>/images/$name.yaml, and every platform runs the base's canary"
           else
-            echo "$object" >"$tmp/values/$tag-$name.json"
+            echo "$tpl_object" >"$tmp/values/$tag-$name.json"
           fi
-        elif [ -n "$object" ]; then
+        elif [ -n "$tpl_object" ]; then
           problem "$apps for $label on $arch nodes: Application $name has a helm.valuesObject, but no platforms/$plat/$name.values.tpl renders one"
         fi
+        # On a two-level root the valuesObject holds the overlay and the image file of the tree's envs/<env>/ (main on a
+        # cluster), then the template's render, merged as Helm merges values files: jq's * merges an object key by key
+        # and replaces any other value, a list too, whole.
+        if [ -n "$two_level" ]; then
+          want=$(jq -cS -n --argjson o "$(env_values "$env" "$name.yaml")" --argjson i "$(env_values "$env" "images/$name.yaml")" \
+            --argjson t "${tpl_object:-"{}"}" '$o * $i * $t') || fail "merge envs/$env/ of $name for $label"
+          got=$(jq -cS . <<<"${object:-"{}"}") || fail "read the valuesObject of Application $name for $label"
+          if [ "$got" != "$want" ]; then
+            diff <(jq -S . <<<"$want") <(jq -S . <<<"$got") | sed 's/^/    /' >&2 || true
+            problem "$apps for $label on $arch nodes: Application $name has the helm.valuesObject above (>), want envs/$env/$name.yaml < envs/$env/images/$name.yaml < the render of platforms/$plat/$name.values.tpl, those that exist, merged in that order (<)"
+          fi
+        fi
+        [ -z "$object" ] || echo "$object" >"$tmp/values/$tag-$name.object.json"
       done <"$tmp/render/apps-$tag-$arch"
       step "the Applications of $apps for $label on $arch nodes"
       files=()
@@ -787,14 +839,22 @@ render_tree() {
     read -r amd_name amd_loc amd_sum <"$tmp/plugin-amd64"
     [ "$arm_name" = "$amd_name" ] && [ "${arm_loc%/*}" = "${amd_loc%/*}" ] && [ "$arm_sum" != "$amd_sum" ] ||
       fail "Argo Rollouts gets $arm_name of ${arm_loc%/*} on arm64 nodes, $amd_name of ${amd_loc%/*} on amd64 nodes for $label: pin the two assets of one release"
-    echo "ok    $apps for $label on arm64 and amd64 nodes: one Application per component that runs there, each with its values files in order; its sources of svp-gitops name full refs; Argo Rollouts gets plugin $arm_name of ${arm_loc%/*}, the asset built for each"
+    echo "ok    $apps for $label on arm64 and amd64 nodes: one Application per component that runs there, each with its values files in order${two_level:+ and envs/$env/ in its valuesObject}; its sources of svp-gitops name full refs, one revision each Application; Argo Rollouts gets plugin $arm_name of ${arm_loc%/*}, the asset built for each"
   done
   [ -z "$root_only" ] || return 0
 
-  # target_values ENV PLATFORM NAME: the values files of component NAME as Argo CD reads them in ENV on PLATFORM, one
-  # absolute path per line: those of values_files (archValues of arm64 nodes: a chart of this repository has none), then
-  # the valuesObject the root renders from platforms/<platform>/<name>.values.tpl, when it does.
+  # target_values ENV PLATFORM NAME: the values of component NAME as Argo CD reads them in ENV on PLATFORM, one absolute
+  # path per line: the values files its Application names (app_files; archValues of arm64 nodes: a chart of this
+  # repository has none), then its valuesObject, when it has one.
   target_values() {
+    local f
+    app_files "$1" "$2" "$3" arm64 | while IFS= read -r f; do at "$f"; done
+    f=$tmp/values/$1-$2-$3.object.json
+    [ ! -f "$f" ] || echo "$f"
+  }
+  # layer_values ENV PLATFORM NAME: the same values one layer per file: those of values_files, then what the root renders
+  # from platforms/<platform>/<name>.values.tpl, when it does.
+  layer_values() {
     local f
     values_files "$1" "$2" "$3" arm64 | while IFS= read -r f; do at "$f"; done
     f=$tmp/values/$1-$2-$3.json
@@ -930,7 +990,7 @@ render_tree() {
       fail "svp-cluster for $label (object store $mode) renders $es ExternalSecrets and $ss SecretStores, want $want_es and $want_ss"
     provider=$(awk '/^kind: SecretStore$/ { s = 1 } s && /^    [a-z]+:$/ { sub(/:$/, ""); print $1; s = 0 }' "$f" |
       sort -u | paste -sd ' ' -)
-    if [ "$env" = prd ]; then
+    if [ "$plat" = eks ]; then
       [ "$provider" = aws ] || fail "the SecretStores of $label use provider '$provider', want aws"
       if grep -n 'svp-secrets' "$f" >&2; then
         fail "the render of svp-cluster for $label above still names svp-secrets, the lab's source namespace"
@@ -1028,17 +1088,16 @@ render_tree() {
           { cat "$tmp/err" >&2; fail "helm template $name ($label) with the values of platform $plat"; }
         platformed=$((platformed + 1))
       done
-      # With each environment's overlay, the values in the order Argo CD reads them, as step 3 renders them
-      # (target_values): the file of its platform, the overlay, then what the root renders from the platform's template,
-      # which a valuesObject puts after every values file. base/ is in args already; the image file is left out: base/
-      # has the placeholder.
+      # With each environment's overlay, the values in the order Argo CD reads them, one layer per file (layer_values):
+      # the file of its platform, the overlay, then what the root renders from the platform's template, which comes
+      # last. base/ is in args already; the image file is left out: base/ has the placeholder.
       for target in $rev_targets; do
         env=${target%%:*} plat=${target#*:}
         [ -f "$tree/envs/$env/$name.yaml" ] && runs_on "$name" "$plat" || continue
         eargs=()
         while IFS= read -r f; do
           case $f in "$gtree/$values" | "$tree/envs/$env/images/$name.yaml") ;; *) eargs+=(--values "$f") ;; esac
-        done < <(target_values "$env" "$plat" "$name")
+        done < <(layer_values "$env" "$plat" "$name")
         helm "${args[@]}" "${eargs[@]}" \
           >"$out/env/$env-$plat/$name.yaml" 2>"$tmp/err" ||
           { cat "$tmp/err" >&2; fail "helm template $name ($label) with envs/$env/$name.yaml on $plat"; }

@@ -20,12 +20,14 @@
 #     leaves out; a template of a platform rendering a release's image, a root chart making Applications of another
 #     platform and one reading a platform's values after the environment's each fail with their own message, while
 #     argo-cd.yaml of a platform passes the policies and the root's render (a root chart that refuses the file made to
-#     leave it out); k3d without localHosts fails the whole check on the render of stg there naming svp.localhost
-#     (step 3, charts of this repository, no network);
+#     leave it out); on a two-level root, an overlay and its platform's template setting one key pass with the
+#     template's value, and a root chart that merges the overlay over the template fails; k3d without localHosts fails
+#     the whole check on the render of stg there naming svp.localhost (step 3, charts of this repository, no network);
 #   - the pin of prd and the two-level root (gitops-check.sh --root on a copy of TREE made a git repository, its own
 #     section below): the pinned commit renders for prd, the tree for stg; a pin that is no commit on main holding
-#     argocd/apps fails before any render; level 1 must make svp-apps at the pin, and level 2 read envs/ on main and
-#     base/, platforms/ at the pin;
+#     argocd/apps fails before any render; level 1 must make svp-apps at the pin and hand level 2 the content of
+#     envs/prd/ of the tree; level 2 must read every values file at the pin, through sources of svp-gitops at one
+#     revision;
 #   - the Kyverno policies on rendered manifests (deploy/ci/gitops-policies/, the CLI of KYVERNO_CLI_IMAGE, no
 #     network once its image is pulled): their kyverno test (make kyverno-test); through gitops-check.sh --policy, a
 #     render with every image pinned passes, a document of comments alone and a CustomResourceDefinition left out; an
@@ -361,9 +363,26 @@ if replace_once "$t/argocd/apps/templates/applications.yaml" '{{- if or (not (ha
 else
   fail "platforms: the root chart of $tree no longer holds the line the case of Applications of another platform changes"
 fi
-# The root chart that reads the values of the platform after the overlay of the environment.
+# The root chart that reads the values of the platform after the overlay of the environment. On a two-level root the
+# overlay is no values file but part of the Application's valuesObject, after every values file: there an overlay and
+# the platform's template set one key, which the template's render must win, and a root chart that merges the overlay
+# over the template fails.
 t=$(copy)
-if platform_after_overlay "$t/argocd/apps/templates/applications.yaml"; then
+if [ -f "$t/argocd/root/Chart.yaml" ]; then
+  # shellcheck disable=SC2016 # the layers of the valuesObject in level 2, text of the template
+  layers=':= list (get $overlays .name) (get $images .name) (get $platformObjects .name) }}'
+  printf 'httpRoute:\n  host: api.overlay.example\n' >>"$t/envs/stg/gateway.yaml"
+  check_root "platforms: an overlay and its platform's template setting one key, the template's last" 0 \
+    "ok    argocd/apps for stg on eks on arm64 and amd64 nodes: one Application per component that runs there" "$t"
+  # shellcheck disable=SC2016 # text of the template
+  if replace_once "$t/argocd/apps/templates/applications.yaml" "$layers" \
+    ':= list (get $platformObjects .name) (get $overlays .name) (get $images .name) }}'; then
+    check_root "platforms: a root chart that merges an environment's overlay over its platform's template" 1 \
+      "argocd/apps for stg on eks on arm64 nodes: Application gateway has the helm.valuesObject above (>), want envs/stg/gateway.yaml < envs/stg/images/gateway.yaml < the render of platforms/eks/gateway.values.tpl" "$t"
+  else
+    fail "platforms: the root chart of $tree no longer holds the layers of the valuesObject the case of their order swaps"
+  fi
+elif platform_after_overlay "$t/argocd/apps/templates/applications.yaml"; then
   printf 'replicas: 2\n' >"$t/platforms/eks/gateway.yaml"
   check_root "platforms: a root chart that reads a platform's values after the environment's" 1 \
     "Application gateway reads the values files 'base/services/gateway.yaml envs/stg/gateway.yaml platforms/eks/gateway.yaml envs/stg/images/gateway.yaml', want 'base/services/gateway.yaml platforms/eks/gateway.yaml envs/stg/gateway.yaml envs/stg/images/gateway.yaml'" "$t"
@@ -379,16 +398,18 @@ check "platforms: k3d without localHosts, whose renders name svp.localhost" "$t"
 
 # --- the pin of prd (gitopsRevision of envs/prd/charts.yaml) and the two-level root (gitops-check.sh --root, steps 1
 # and 2, no network), on a copy of TREE made a git repository: commit A0 holds base/ alone, commit A on top of it (the
-# end of origin/main) the whole tree with the two-level root, level 1 argocd/root and level 2 argocd/apps reading
-# envs/<env>/ through a source ref env; the working tree then pins prd to A, as the promote to prd writes it. A tree
-# that has the two-level root keeps its own charts; one from before it gets stand-ins in the shape the check holds them
-# to: a level 1 written here, and its argocd/apps with the overlay and image files read through $env/ and that source
-# added. No case below edits either chart by the text of a line: each swaps two blocks of values files, changes a ref
-# ($values/, $env/) wherever the root writes one, or records the render of level 1 and changes a revision in it.
+# end of origin/main) the whole tree with the two-level root, level 1 argocd/root handing the content of envs/<env>/
+# to level 2 argocd/apps, which puts an overlay and an image file into the valuesObject of their Application; the
+# working tree then pins prd to A, as the promote to prd writes it. A tree that has the two-level root keeps its own
+# charts; one from before it gets stand-ins in the shape the check holds them to: a level 1 written here, and its
+# argocd/apps reading the overlays and image files from that level's values instead of as values files. The cases
+# below edit either chart only where both shapes hold the same text (a component's platforms, the source with ref
+# values, the ref $values/), or record the render of level 1 and change it.
 # Checked: prd renders argocd/apps, base/ and platforms/ at A and stg the tree, so a change of them reaches stg alone;
 # a commit the clone has not, one off main, one without argocd/apps, a branch name and a tree that is no git
-# repository each fail before any render; level 1 must make svp-apps at the pin, with level 2 reading envs/ on main
-# (ref env); each values file of level 2 must be read at its revision: envs/ on main, base/ and platforms/ at the pin.
+# repository each fail before any render; level 1 must make svp-apps at the pin and hand over envs/prd/ of the tree;
+# level 2 must read every values file at the pin, through sources of svp-gitops at one revision: a second one on main,
+# what Argo CD refuses, fails.
 gitops_url=https://github.com/anhnvcoder/svp-gitops.git
 pt=$(copy)
 pg() { git -C "$1" -c user.name=test -c user.email=test@example.invalid -c commit.gpgsign=false -c core.hooksPath=/dev/null "${@:2}"; }
@@ -400,6 +421,14 @@ if [ ! -f "$pt/argocd/root/Chart.yaml" ]; then
   cat >"$pt/argocd/root/templates/svp-apps.yaml" <<'TEMPLATE'
 {{- $charts := .Files.Get (printf "files/envs/%s/charts.yaml" .Values.env) | fromYaml }}
 {{- $rev := get $charts "gitopsRevision" | default "refs/heads/main" }}
+{{- $overlays := dict }}
+{{- range $file, $content := .Files.Glob (printf "files/envs/%s/*.yaml" .Values.env) }}
+{{- if ne (base $file) "charts.yaml" }}{{ $_ := set $overlays (base $file | trimSuffix ".yaml") (fromYaml (toString $content)) }}{{ end }}
+{{- end }}
+{{- $images := dict }}
+{{- range $file, $content := .Files.Glob (printf "files/envs/%s/images/*.yaml" .Values.env) }}
+{{- $_ := set $images (base $file | trimSuffix ".yaml") (fromYaml (toString $content)) }}
+{{- end }}
 apiVersion: argoproj.io/v1alpha1
 kind: Application
 metadata:
@@ -417,23 +446,23 @@ spec:
     helm:
       valuesObject:
         targetRevision: {{ $rev | quote }}
-        envRevision: refs/heads/main
         env: {{ .Values.env | quote }}
         platform: {{ .Values.platform | quote }}
         nodeArch: {{ .Values.nodeArch | quote }}
         cluster: {{ .Values.cluster | default dict | toJson }}
+        envFiles:
+          overlays: {{ $overlays | toJson }}
+          images: {{ $images | toJson }}
 TEMPLATE
   apps_tpl=$pt/argocd/apps/templates/applications.yaml
-  # shellcheck disable=SC2016 # the refs of Argo CD's values files, text of the template
-  from='$values/' to='$env/'
+  # The overlay and the image file leave the values files for the valuesObject, before what the platform's template
+  # renders; the chart still reads charts.yaml and checks every file of envs/ at its commit, as before.
+  # shellcheck disable=SC2016 # text of the template
   if ! { ov=$(with_block "$apps_tpl" overlay) && im=$(with_block "$apps_tpl" image) &&
-    replace_once "$apps_tpl" "$ov" "${ov/"$from"/"$to"}" && replace_once "$apps_tpl" "$im" "${im/"$from"/"$to"}" &&
-    replace_once "$apps_tpl" '      ref: values
-' '      ref: values
-    - repoURL: {{ $.Values.repoURL }}
-      targetRevision: {{ $.Values.envRevision | default $.Values.targetRevision | quote }}
-      ref: env
-'; }; then
+    replace_once "$apps_tpl" "$ov"$'\n' '' && replace_once "$apps_tpl" "$im"$'\n' '' &&
+    replace_once "$apps_tpl" '        {{- with get $platformObjects .name }}' \
+      '        {{- $envFiles := $.Values.envFiles | default dict }}
+        {{- with mustMergeOverwrite (dict) (deepCopy (get (get $envFiles "overlays" | default dict) .name | default dict)) (deepCopy (get (get $envFiles "images" | default dict) .name | default dict)) (deepCopy (get $platformObjects .name | default dict)) }}'; }; then
     fail "pin: the root chart of $tree, which has no argocd/root, no longer holds the lines its level 2 stand-in changes"
   fi
 fi
@@ -463,19 +492,21 @@ check_root "pin: prd renders argocd/apps, base/ and platforms/ at that commit, t
   "ok    argocd/apps at ${pin_a:0:12} for prd on eks on arm64 and amd64 nodes: one Application per component that runs there" "$t"
 check_root "pin: stg, which pins none, renders the tree, through level 1" 0 \
   "ok    argocd/apps for stg on eks on arm64 and amd64 nodes: one Application per component that runs there" "$t"
-# The tree's argocd/apps reads a platform's values after the environment's: stg renders it and fails, prd renders the
-# pinned commit's and passes.
+# The tree's argocd/apps makes the Applications of every platform on each, and its platforms/eks/ gets a values file
+# for the gateway: stg renders them and fails, prd renders the pinned commit's and passes.
 t=$(gcopy)
-if platform_after_overlay "$t/argocd/apps/templates/applications.yaml"; then
+# shellcheck disable=SC2016 # text of the template
+if replace_once "$t/argocd/apps/templates/applications.yaml" '{{- if or (not (hasKey . "platforms")) (has $platform .platforms) }}' \
+  '{{- if true }}'; then
   printf 'replicas: 2\n' >"$t/platforms/eks/gateway.yaml"
   rc=0
   out=$("$here/gitops-check.sh" --root "$t" 2>&1) || rc=$?
   expect "pin: a change of argocd/apps and platforms/ reaches stg, not prd pinned before it" "$out"$'\n'"rc=$rc" \
     "ok    argocd/apps at ${pin_a:0:12} for prd on eks on arm64 and amd64 nodes" \
-    "argocd/apps for stg on eks on arm64 nodes: Application gateway reads the values files 'base/services/gateway.yaml envs/stg/gateway.yaml platforms/eks/gateway.yaml envs/stg/images/gateway.yaml'" \
+    "argocd/apps for stg on k3d on arm64 nodes makes the Applications" \
     $'\n'rc=1
 else
-  fail "pin: the root chart no longer holds the blocks of a platform's values and the environment's overlay this case swaps"
+  fail "pin: the root chart no longer holds the line of a component's platforms this case changes"
 fi
 t=$(gcopy)
 missing=$(printf 'f%.0s' $(seq 40))
@@ -522,10 +553,12 @@ record_level1() {
   rm -rf "${dir:?}/argocd/root" && cp -R "$rec" "$dir/argocd/root"
 }
 # level1_case NAME FROM TO MESSAGE: level 1 recorded (record_level1), FROM replaced by TO in the renders of prd, fails
-# the check with MESSAGE.
+# the check with MESSAGE. The gateway's overlay of prd in the tree first gets a key of its own, svpLevelOneCase: main,
+# which a case may change in what level 1 hands over.
 level1_case() {
   local t f
   t=$(gcopy)
+  printf 'svpLevelOneCase: main\n' >>"$t/envs/prd/gateway.yaml"
   record_level1 "$t" || {
     fail "$1: record the render of argocd/root"
     return
@@ -537,18 +570,31 @@ level1_case() {
 }
 level1_case "pin: level 1 that makes svp-apps on main" "$pin_a" refs/heads/main \
   "argocd/root for prd on eks on arm64 nodes: svp-apps has '$gitops_url argocd/apps refs/heads/main refs/heads/main' (repoURL, path, targetRevision, valuesObject.targetRevision), want '$gitops_url argocd/apps $pin_a $pin_a'"
-level1_case "pin: level 1 that has level 2 read envs/ at the pin" refs/heads/main "$pin_a" \
-  "argocd/apps at ${pin_a:0:12} for prd on eks on arm64 nodes: a source of $gitops_url with ref env at $pin_a; want ref values at the pinned commit $pin_a and ref env at refs/heads/main"
-# level2_case NAME FROM TO MESSAGE: a commit on main whose argocd/apps reads through ref TO every values file it read
-# through ref FROM ($FROM/ becomes $TO/ in its template), pinned by prd, fails the check with MESSAGE, PIN in it
+level1_case "pin: level 1 that hands level 2 another content than envs/prd/ of the tree" \
+  '"svpLevelOneCase":"main"' '"svpLevelOneCase":"stale"' \
+  "argocd/apps at ${pin_a:0:12} for prd on eks on arm64 nodes: Application gateway has the helm.valuesObject above (>), want envs/prd/gateway.yaml < envs/prd/images/gateway.yaml"
+# level2_case NAME FROM TO MESSAGE: a commit on main whose argocd/apps has a second source of svp-gitops, ref main at
+# refs/heads/main, beside the one with ref values, and reads through ref TO every values file it read through ref FROM
+# ($FROM/ becomes $TO/ in its template; none when FROM is TO), pinned by prd, fails the check with MESSAGE, PIN in it
 # standing for that commit.
 level2_case() {
   local t commit f=argocd/apps/templates/applications.yaml
   t=$(gcopy)
-  sed -i.bak "s|\\\$$2/|\\\$$3/|g" "$t/$f" && rm "$t/$f.bak"
-  if cmp -s "$pt/$f" "$t/$f"; then
-    fail "$1: the root chart names no values file through the ref this case changes"
+  if ! replace_once "$t/$f" '      ref: values
+' '      ref: values
+    - repoURL: {{ $.Values.repoURL }}
+      targetRevision: refs/heads/main
+      ref: main
+'; then
+    fail "$1: the root chart no longer holds the one source with ref values this case adds a source beside"
     return
+  fi
+  if [ "$2" != "$3" ]; then
+    sed -i.bak "s|\\\$$2/|\\\$$3/|g" "$t/$f" && rm "$t/$f.bak"
+    if ! grep -q "\\\$$3/" "$t/$f"; then
+      fail "$1: the root chart names no values file through the ref this case changes"
+      return
+    fi
   fi
   pg "$t" commit -qm "$1" -- "$f"
   commit=$(pg "$t" rev-parse HEAD)
@@ -556,10 +602,10 @@ level2_case() {
   set_pin "$t" "$commit"
   check_root "$1" 1 "${4//PIN/$commit}" "$t"
 }
-level2_case "pin: level 2 that reads the overlays and images at the pinned commit (ref values)" env values \
-  "Application gateway reads envs/prd/gateway.yaml at PIN, envs/prd/images/gateway.yaml at PIN; want base/ and platforms/ at the pinned commit PIN"
-level2_case "pin: level 2 that reads base/ and platforms/ on main (ref env)" values env \
-  "Application gateway reads base/services/gateway.yaml at refs/heads/main; want base/ and platforms/ at the pinned commit PIN"
+level2_case "pin: level 2 with a second source of svp-gitops on main beside the pinned one" values values \
+  "Application gateway has sources of $gitops_url at the revisions PIN refs/heads/main; Argo CD refuses an Application whose values files reference one repository at two revisions"
+level2_case "pin: level 2 that reads base/ and platforms/ on main" values main \
+  "Application gateway reads base/services/gateway.yaml at refs/heads/main; want every values file at the pinned commit PIN"
 
 # --- the policies on rendered manifests (deploy/ci/gitops-policies/), through the Kyverno CLI of KYVERNO_CLI_IMAGE.
 # Their kyverno test first: what each must fail and pass, field by field.

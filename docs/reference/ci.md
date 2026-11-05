@@ -233,11 +233,13 @@ Loại tài liệu (Diátaxis): **reference**, tra cứu khi cần một lệnh 
     `deploy/ci/cluster-values.example.yaml` (đứng thay annotation `svp.io/cluster-values` mà GitOps Bridge đặt lên cluster Secret, đủ khoá
     của hợp đồng, gồm map `externalSecretsRoles`). Cây có `argocd/root` thì render hai tầng như Argo CD: tầng 1 `argocd/root` của cây phải ra
     đúng một Application `svp-apps`, nguồn `argocd/apps` của `svp-gitops` ở commit ghim (không ghim: `refs/heads/main`), cùng giá trị đó ở
-    `valuesObject.targetRevision`; tầng 2 là `argocd/apps` với `valuesObject` đó. Env có ghim render riêng trên `git archive` của commit ghim
-    (`argocd/`, `base/`, `platforms/`, bootstrap Argo CD; các bước 2–4 cũng vậy) với `envs/<env>/` của cây: nguồn `ref: values` ở commit ghim,
-    `ref: env` ở `refs/heads/main`, mỗi file values đọc qua nguồn của đúng revision nhóm nó (`base/`, `platforms/` qua `$values/` ở commit
-    ghim, `envs/<env>/` qua `$env/` ở `refs/heads/main`; đọc chéo là đỏ), chart repo này ở `revision` của `charts.yaml` trên cây;
-    env không ghim render trên cây như trước; (3) chart repo ở `revision` của env với `base/`,
+    `valuesObject.targetRevision`; tầng 2 là `argocd/apps` với `valuesObject` đó. Ở root hai tầng `envs/<env>/` không là file values: tầng 1
+    chuyển nội dung, `valuesObject` của mỗi Application phải bằng overlay < file image của `envs/<env>/` trên cây < phần mẫu
+    `.values.tpl` sinh ra (lấy từ lượt render tầng 2 thứ hai với nội dung overlay, image để rỗng), gộp như Helm (`*` của jq); mọi nguồn
+    `svp-gitops` của một Application cùng một `targetRevision` (repo-server của Argo CD từ chối file values trỏ một repo ở hai revision). Env có
+    ghim render riêng trên `git archive` của commit ghim (`argocd/`, `base/`, `platforms/`, bootstrap Argo CD; các bước 2–4 cũng vậy) với
+    `envs/<env>/` của cây: mọi nguồn `svp-gitops` của tầng 2 ở commit ghim, mọi file values qua `$values/` ở commit đó (đọc ở revision khác là
+    đỏ), chart repo này ở `revision` của `charts.yaml` trên cây; env không ghim render trên cây như trước; (3) chart repo ở `revision` của env với `base/`,
     `platforms/` và overlay, External Secrets qua kubeconform (số ExternalSecret, SecretStore mỗi env × nền tảng theo dữ liệu, như
     `make helm-check`), render của nền tảng không `localHosts` không nêu `svp.localhost` (grep cả
     render và policy `no-lab-hosts`); (4) mọi image ghim digest bằng policy `images-pinned` (dưới đây; ref ngoài tầm policy vẫn qua phép
@@ -334,7 +336,7 @@ Loại tài liệu (Diátaxis): **reference**, tra cứu khi cần một lệnh 
     ExternalSecret hay SecretStore; mỗi env × nền tảng đúng số tính từ `files/external-secrets.yaml` với values đã ghép: một
     ExternalSecret mỗi entry, trừ entry `inClusterObjectStore` khi `s3.mode` là `external` và entry `enabledBy` khi khoá đó của
     `externalSecrets` không `true`, một SecretStore mỗi namespace của chúng (hôm nay stg trên `k3d` 28 và 4, stg và prd trên `eks` 25 và 4;
-    `argocdNotifications` bật thêm một mỗi loại ở `argocd`; stg provider `kubernetes`; prd provider `aws` và không còn `svp-secrets`), qua kubeconform `-strict` (`KUBECONFORM_IMAGE`, `--network none`) theo schema sinh từ CRD của
+    `argocdNotifications` bật thêm một mỗi loại ở `argocd`; trên k3d provider `kubernetes`; trên eks provider `aws` và không còn `svp-secrets`), qua kubeconform `-strict` (`KUBECONFORM_IMAGE`, `--network none`) theo schema sinh từ CRD của
     chart External Secrets đúng version `components.json` ghim (provider `crd` bỏ khỏi schema SecretStore vì openapi2jsonschema
     sinh sai; không store nào dùng nó); cuối cùng mọi image (`helm template --include-crds` mọi component với values
     `base/` và Argo CD theo `bootstrap.json`, rồi Argo CD với `platforms/<platform>/argo-cd.yaml` của mỗi nền tảng có file đó) phải ghim đúng một `@sha256:` theo policy `images-pinned` của `deploy/ci/gitops-policies/`
