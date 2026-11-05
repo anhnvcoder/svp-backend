@@ -74,19 +74,41 @@ Lệnh `terraform` và script buổi ở `svp-infra` (`aws/scripts/`); mỗi bư
 ## Đổi secret của env đang chạy
 
 Cùng thứ tự như `make k8s-secrets` trên k3d. Sửa `.env` (hay `SVP_RDS_MASTER_PASSWORD`), rồi
-`AWS_PROFILE=anhnv-<env> make eks-secrets CONTEXT=svp-<env>` làm ba bước đầu (cluster phải tới được; prd: tunnel mở, không thì dừng
+`AWS_PROFILE=anhnv-<env> make eks-secrets CONTEXT=svp-<env>` làm bốn bước đầu (cluster phải tới được; prd: tunnel mở, không thì dừng
 trước mọi lệnh ghi):
 
 1. Mật khẩu superuser Redpanda đổi thì đặt vào broker đang chạy trước (`redpanda_admin` của `deploy/k8s/lib.sh`, dùng chung với
    `secrets.sh`; broker không chạy hay không nhận mật khẩu nào thì dừng, không ghi entry nào).
 2. Ghi mọi entry (trừ `glitchtip-runtime`, đã có giá trị).
 3. `force-sync` mọi ExternalSecret (`refreshPolicy: OnChange`), chờ từng cái dựng lại từ entry mới.
+4. Broker nào còn chạy với mật khẩu superuser khác `.env` thì rolling restart StatefulSet `redpanda` và chờ xong; không broker nào thì
+   in `skip` và không restart. Broker và sidecar đọc mật khẩu (`RPK_PASS`) từ environment chỉ lúc khởi động: từ bước 1, probe của sidecar
+   gọi Admin API bằng mật khẩu cũ nhận 401, mọi broker NotReady, và Argo CD chỉ chạy hook PostSync của `svp-data` khi tài nguyên đã
+   Healthy, nên bước này phải xong trước khi sync. Rolling update của StatefulSet thay từng broker (ordinal cao trước), chờ broker mới
+   Ready rồi mới sang broker sau; prd ba broker luôn còn hai, đủ đa số Raft. Hook `preStop` của broker cũ không đăng nhập được để drain:
+   partition do nó làm leader bầu leader mới, producer `acks=all` chờ và thử lại. Bước này lỗi (quá 300 giây mỗi broker) thì xem
+   `AWS_PROFILE=anhnv-<env> kubectl --context svp-<env> -n svp-data get pods -l app.kubernetes.io/name=redpanda` rồi chạy lại lệnh trên.
 
-Người vận hành làm tiếp:
+Người vận hành làm tiếp, theo thứ tự:
 
-1. Sync Application `svp-data` (Job init đặt mật khẩu mới trong Postgres, Redpanda):
-   `kubectl --context svp-<env> -n argocd patch applications.argoproj.io svp-data --type merge -p '{"operation":{"sync":{}}}'`.
-2. Restart workload có Secret đổi: Deployment bằng
-   `kubectl --context svp-<env> -n <namespace> rollout restart deployment/<tên>`; Rollout `gateway`, `web` bằng `spec.restartAt`
-   (không tạo revision, nên không thành canary):
-   `kubectl --context svp-<env> -n svp patch rollout <tên> --type merge -p "{\"spec\":{\"restartAt\":\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\"}}"`.
+1. Sync Application `svp-data` (Job init đặt mật khẩu mới trong Postgres, Redpanda) và chờ đúng lượt sync đó xong, gồm hook PostSync
+   `pg-bootstrap`, `redpanda-init`: restart trước khi Job đặt mật khẩu mới thì pod mới đăng nhập bằng mật khẩu hệ thống chưa có:
+
+   ```sh
+   before=$(AWS_PROFILE=anhnv-<env> kubectl --context svp-<env> -n argocd get applications.argoproj.io svp-data -o jsonpath='{.status.operationState.startedAt}')
+   AWS_PROFILE=anhnv-<env> kubectl --context svp-<env> -n argocd patch applications.argoproj.io svp-data --type merge -p '{"operation":{"sync":{}}}'
+   until s=$(AWS_PROFILE=anhnv-<env> kubectl --context svp-<env> -n argocd get applications.argoproj.io svp-data \
+       -o jsonpath='{.status.operationState.startedAt} {.status.operationState.phase}') &&
+     [ "${s% *}" != "$before" ] && case "${s#* }" in Succeeded) true ;; Failed | Error) echo "STOP sync $s"; true ;; *) false ;; esac
+   do sleep 5; done; echo "sync: $s"
+   ```
+
+   Dòng cuối phải là `sync: <thời điểm mới> Succeeded`. In `STOP` thì không sang bước 2: xem Job lỗi
+   (`AWS_PROFILE=anhnv-<env> kubectl --context svp-<env> -n svp-data get jobs`), sửa rồi chạy lại bước 1.
+2. Restart workload có Secret đổi: Deployment bằng `rollout restart`; Rollout `gateway`, `web` bằng `spec.restartAt` (không tạo
+   revision, nên không thành canary):
+
+   ```sh
+   AWS_PROFILE=anhnv-<env> kubectl --context svp-<env> -n <namespace> rollout restart deployment/<tên>
+   AWS_PROFILE=anhnv-<env> kubectl --context svp-<env> -n svp patch rollout <tên> --type merge -p "{\"spec\":{\"restartAt\":\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\"}}"
+   ```

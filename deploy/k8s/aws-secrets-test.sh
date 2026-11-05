@@ -11,7 +11,12 @@
 #     three keys empty, every aws call with the profile and the region on its command line, the account read first,
 #     the files in a folder of mode 700 that is gone after, no kubectl call, no force-sync;
 #   - a run again (glitchtip-runtime has a version): glitchtip-runtime not written, Redpanda's password set before the
-#     first write, every ExternalSecret built again after the last one;
+#     first write, every ExternalSecret built again after the last one, no broker restarted (each runs with the
+#     password of .env);
+#   - a run again with a changed password of Redpanda's superuser, three brokers: after every ExternalSecret is built
+#     again, each broker compared with .env, then StatefulSet redpanda restarted once and waited for (300 s a broker);
+#   - a run again with a changed password of Redpanda's superuser whose broker does not run yet: no restart (it reads
+#     the Secret when it starts); whose pod cannot be read: the script stops, no broker taken as up to date;
 #   - svp-prd: entries svp/prd/*, the account of SVP_AWS_PRD_ACCOUNT_ID;
 #   - stops before any write: AWS_PROFILE unset, another account, SVP_RDS_MASTER_PASSWORD unset, a variable missing
 #     in .env, an entry the infrastructure has not made, a run again with the cluster out of reach;
@@ -85,8 +90,19 @@ case $args in
   "get --raw /readyz") [ ! -f "$s/unreachable" ] ;;
   "get pvc datadir-redpanda-0" | "rollout status deployment/glitchtip --timeout=300s" | "get crd "*) ;;
   "get secret redpanda-bootstrap -o jsonpath={.data.password}") printf '%s' "$FAKE_KAFKA_B64" ;;
-  "get pod redpanda-0 -o jsonpath="*) printf true ;;
+  "get pod redpanda-0 -o jsonpath={.status.containerStatuses[?(@.name==\"redpanda\")].ready}") printf true ;;
+  # A broker read: pod-error, the API server unavailable; not-running, a pod whose container does not run.
+  "get pod redpanda-"[0-9]" --ignore-not-found -o jsonpath={.status.containerStatuses[?(@.name==\"redpanda\")].state.running.startedAt}")
+    if [ -f "$s/pod-error" ]; then echo "Error from server (ServiceUnavailable): the server is currently unable to handle the request" >&2; exit 1; fi
+    [ -f "$s/not-running" ] || printf 2026-01-01T00:00:00Z ;;
   "exec -i redpanda-0 -c redpanda -- bash -c "*) cat >/dev/null ;;
+  # The brokers' RPK_PASS: the one of file rpk-pass when it exists, else the one of .env (as Secret redpanda-bootstrap).
+  "exec -i redpanda-"[0-9]" -c redpanda -- sh -c "*)
+    IFS= read -r v
+    if [ -f "$s/rpk-pass" ]; then running=$(cat "$s/rpk-pass"); else running=$(printf '%s' "$FAKE_KAFKA_B64" | base64 -d); fi
+    [ "$v" = "$running" ] || exit 3 ;;
+  "get statefulset redpanda -o jsonpath={.spec.replicas}") cat "$s/replicas" 2>/dev/null || printf 1 ;;
+  "rollout restart statefulset/redpanda" | "rollout status statefulset/redpanda --timeout="*) ;;
   "exec deployment/glitchtip "*) printf 'svp-dsn=%s\nsvp-token=%s\nsvp-sourcemaps-token=%s\n' "$FAKE_DSN" "$FAKE_TOKEN" "$FAKE_SOURCEMAPS_TOKEN" ;;
   "get externalsecrets.external-secrets.io -A -o name") jq -r "$es[] | \"externalsecret.external-secrets.io/\(.[1])\"" <<<null ;;
   "get externalsecrets.external-secrets.io -A -o json")
@@ -270,12 +286,65 @@ first_annotate=$(line '^kubectl .* annotate externalsecrets')
 if [ "$rc" = 0 ] && [ -z "$problems" ] && [ -n "$redpanda" ] && [ "$redpanda" -lt "$first_put" ] &&
   [ -n "$first_annotate" ] && [ "$last_put" -lt "$first_annotate" ] &&
   [ "$(grep -c '^kubectl .* annotate externalsecrets' "$FAKE_STATE/calls")" = 4 ] &&
-  grep -q '^skip  entry svp/stg/glitchtip-runtime: it has a value already' "$work/again.out"; then
-  ok "aws-secrets.sh, a run again: glitchtip-runtime not written, Redpanda's password before the first write, every ExternalSecret (4) built again after the last one"
+  grep -q '^skip  entry svp/stg/glitchtip-runtime: it has a value already' "$work/again.out" &&
+  ! grep -q 'rollout restart statefulset/redpanda' "$FAKE_STATE/calls" &&
+  grep -q '^skip  restart of Redpanda.s brokers' "$work/again.out"; then
+  ok "aws-secrets.sh, a run again: glitchtip-runtime not written, Redpanda's password before the first write, every ExternalSecret (4) built again after the last one, no broker restarted"
 else
   fail "aws-secrets.sh, a run again: exit $rc; $problems; redpanda $redpanda, puts $first_put-$last_put, first annotate $first_annotate"$'\n'"$(sed 's/^/      /' "$work/again.out")"
 fi
 no_leak "aws-secrets.sh, a run again" "$work/again.out" "$FAKE_STATE/calls"
+
+# --- 2b. a run again with a changed password of Redpanda's superuser: three brokers run with the previous one.
+new_state v-runtime
+printf 3 >"$FAKE_STATE/replicas"
+old_kafka="old-$(openssl rand -hex 12)"
+echo "$old_kafka" >>"$work/secrets"
+printf '%s' "$old_kafka" >"$FAKE_STATE/rpk-pass"
+run aws-secrets.sh "$work/changed.out" SVP_RDS_MASTER_PASSWORD="$rds_password"
+last_sync=$(last_line '^kubectl .* get externalsecrets.external-secrets.io -A -o json')
+compared=$(grep -oE '^kubectl .* exec -i redpanda-[0-9] -c redpanda -- sh ' "$FAKE_STATE/calls" | grep -oE 'redpanda-[0-9]' | paste -sd ' ' - || true)
+first_compare=$(line '^kubectl .* exec -i redpanda-[0-9] -c redpanda -- sh ')
+restart=$(line '^kubectl .* rollout restart statefulset/redpanda$')
+status=$(line '^kubectl .* rollout status statefulset/redpanda --timeout=900s$')
+if [ "$rc" = 0 ] && [ -n "$first_compare" ] && [ "$first_compare" -gt "$last_sync" ] && [ "$compared" = "redpanda-0 redpanda-1 redpanda-2" ] &&
+  [ -n "$restart" ] && [ "$restart" -gt "$first_compare" ] && [ -n "$status" ] && [ "$status" -gt "$restart" ] &&
+  [ "$(grep -c 'rollout restart' "$FAKE_STATE/calls")" = 1 ] &&
+  grep -q '^ok    statefulset/redpanda restarted one broker at a time: redpanda-0 redpanda-1 redpanda-2' "$work/changed.out"; then
+  ok "aws-secrets.sh, a run again with a changed password of Redpanda's superuser: after every ExternalSecret is built again, the three brokers compared, StatefulSet redpanda restarted once and waited for 900s"
+else
+  fail "aws-secrets.sh, a run again with a changed password of Redpanda's superuser: exit $rc; last sync $last_sync, compared '$compared' from $first_compare, restart $restart, status $status"$'\n'"$(sed 's/^/      /' "$work/changed.out")"
+fi
+no_leak "aws-secrets.sh, a run again with a changed password of Redpanda's superuser" "$work/changed.out" "$FAKE_STATE/calls"
+
+# --- 2c. a run again with a changed password of Redpanda's superuser, broker redpanda-0 not running yet: it reads the
+# Secret when it starts, so no restart.
+new_state v-runtime
+printf '%s' "$old_kafka" >"$FAKE_STATE/rpk-pass"
+: >"$FAKE_STATE/not-running"
+run aws-secrets.sh "$work/not-running.out" SVP_RDS_MASTER_PASSWORD="$rds_password"
+if [ "$rc" = 0 ] && ! grep -qE '^kubectl .* exec -i redpanda-0 -c redpanda -- sh ' "$FAKE_STATE/calls" &&
+  ! grep -q 'rollout restart' "$FAKE_STATE/calls" && grep -q '^skip  restart of Redpanda.s brokers' "$work/not-running.out"; then
+  ok "aws-secrets.sh, a run again with a changed password of Redpanda's superuser, the broker not running yet: not compared, not restarted"
+else
+  fail "aws-secrets.sh, a run again, the broker not running yet: exit $rc"$'\n'"$(sed 's/^/      /' "$work/not-running.out")"
+fi
+
+# --- 2d. the same, the pod of broker redpanda-0 cannot be read (the API server unavailable): the script stops instead
+# of taking the broker as up to date.
+new_state v-runtime
+printf '%s' "$old_kafka" >"$FAKE_STATE/rpk-pass"
+: >"$FAKE_STATE/pod-error"
+run aws-secrets.sh "$work/pod-error.out" SVP_RDS_MASTER_PASSWORD="$rds_password"
+if [ "$rc" != 0 ] && grep -qF 'FAIL  read pod svp-data/redpanda-0 (above)' "$work/pod-error.out" &&
+  grep -qF 'run make eks-secrets CONTEXT=svp-stg again' "$work/pod-error.out" &&
+  ! grep -q 'rollout restart' "$FAKE_STATE/calls" && ! grep -q '^skip  restart of Redpanda' "$work/pod-error.out" &&
+  ! grep -q '^ok    next:' "$work/pod-error.out"; then
+  ok "aws-secrets.sh, a run again with a changed password of Redpanda's superuser, the broker's pod not readable: stops naming it, no restart skipped as up to date"
+else
+  fail "aws-secrets.sh, a run again, the broker's pod not readable: exit $rc"$'\n'"$(sed 's/^/      /' "$work/pod-error.out")"
+fi
+no_leak "aws-secrets.sh, a run again, the broker's pod not readable" "$work/pod-error.out" "$FAKE_STATE/calls"
 
 # --- 3. svp-prd.
 new_state
