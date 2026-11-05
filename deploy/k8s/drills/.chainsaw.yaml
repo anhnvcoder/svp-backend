@@ -1,0 +1,28 @@
+# Configuration of every drill under deploy/k8s/drills/ (chainsaw test --config deploy/k8s/drills/.chainsaw.yaml, from
+# deploy/k8s/drills/run.sh). Not given here, because Chainsaw takes them from flags only: the cluster context (--kube-context
+# k3d-svp, always written out by run.sh), the report name and the label selector of the drill (--report-name, --selector).
+apiVersion: chainsaw.kyverno.io/v1alpha2
+kind: Configuration
+metadata:
+  name: svp-drills
+spec:
+  timeouts:
+    apply: 30s
+    assert: 60s
+    error: 30s
+    delete: 60s
+    cleanup: 120s
+    exec: 120s
+  execution:
+    # One test at a time: they share the cluster, namespace svp-probe and the loopback ports of the port-forwards. Every
+    # item still runs when an earlier one fails, as the bash drills did.
+    parallel: 1
+    failFast: false
+  cleanup:
+    # What a test creates it deletes at the end, failed or not. A namespace the cluster already has (svp, svp-data...) is
+    # never created by Chainsaw and so never deleted by it; no test names an existing namespace to be recreated.
+    skipDelete: false
+  report:
+    # One JUnit testcase per test, to .k8s/drills/ (ignored by git). run.sh sets the name <drill>-<UTC>.
+    format: JUNIT-TEST
+    path: .k8s/drills

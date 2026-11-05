@@ -1,0 +1,79 @@
+# kubectl port-forward on 127.0.0.1 to a Service or pod, for the drills that read Prometheus (127.0.0.1:19090) or Grafana
+# (127.0.0.1:13000). Use it as a step of the test that needs it, with the bindings that differ from the defaults:
+#   - use:
+#       template: ../../templates/port-forward.yaml
+#       with:
+#         bindings:
+#         - {name: forwardNamespace, value: svp-obs}
+#         - {name: forwardTarget, value: service/kps-prometheus}
+#         - {name: forwardPort, value: "19090"}
+#         - {name: forwardRemotePort, value: "9090"}
+#         - {name: forwardReadyPath, value: /-/ready}
+# The forward stops when the test ends, failed or not: the pid goes to .k8s/drills/port-forward-<forwardPort>.pid and the end
+# kills that pid only if it is still a kubectl port-forward on that port. A port already listening fails the step.
+# kubectl uses the caller's kubeconfig (CALLER_KUBECONFIG, not the copy Chainsaw puts in KUBECONFIG) and context k3d-svp.
+apiVersion: chainsaw.kyverno.io/v1alpha1
+kind: StepTemplate
+metadata:
+  name: port-forward
+spec:
+  bindings:
+  - name: forwardNamespace
+    value: svp-obs
+  - name: forwardTarget
+    value: service/kps-prometheus
+  - name: forwardPort
+    value: "19090"
+  - name: forwardRemotePort
+    value: "9090"
+  - name: forwardReadyPath
+    value: /-/ready
+  try:
+  - script:
+      env:
+      - name: FWD_NS
+        value: ($forwardNamespace)
+      - name: FWD_TARGET
+        value: ($forwardTarget)
+      - name: FWD_PORT
+        value: ($forwardPort)
+      - name: FWD_REMOTE
+        value: ($forwardRemotePort)
+      - name: FWD_READY
+        value: ($forwardReadyPath)
+      - name: CALLER_KUBECONFIG
+        value: (env('KUBECONFIG'))
+      content: |
+        set -eu
+        export KUBECONFIG="$CALLER_KUBECONFIG"
+        if nc -z -w 1 127.0.0.1 "$FWD_PORT" >/dev/null 2>&1; then
+          echo "FAIL  127.0.0.1:$FWD_PORT is in use (another port-forward?); free it and run again" >&2
+          exit 1
+        fi
+        dir=$(git rev-parse --show-toplevel)/.k8s/drills
+        mkdir -p "$dir"
+        nohup kubectl --context k3d-svp -n "$FWD_NS" port-forward --address 127.0.0.1 "$FWD_TARGET" "$FWD_PORT:$FWD_REMOTE" \
+          >"$dir/port-forward-$FWD_PORT.log" 2>&1 </dev/null &
+        pid=$!
+        echo "$pid" >"$dir/port-forward-$FWD_PORT.pid"
+        for _ in $(seq 10); do
+          kill -0 "$pid" 2>/dev/null || { echo "FAIL  kubectl port-forward $FWD_TARGET exited: $(tail -n 3 "$dir/port-forward-$FWD_PORT.log")" >&2; exit 1; }
+          if curl -sf --max-time 2 -o /dev/null "http://127.0.0.1:$FWD_PORT$FWD_READY"; then exit 0; fi
+          sleep 2
+        done
+        echo "FAIL  port-forward to $FWD_TARGET on 127.0.0.1:$FWD_PORT answering $FWD_READY within 20s" >&2
+        exit 1
+  cleanup:
+  - script:
+      env:
+      - name: FWD_PORT
+        value: ($forwardPort)
+      content: |
+        set -eu
+        pidfile=$(git rev-parse --show-toplevel)/.k8s/drills/port-forward-$FWD_PORT.pid
+        [ -f "$pidfile" ] || exit 0
+        pid=$(cat "$pidfile")
+        rm -f "$pidfile"
+        case $(ps -p "$pid" -o command= 2>/dev/null || true) in
+          *"port-forward"*" $FWD_PORT:"*) kill "$pid" ;;
+        esac
