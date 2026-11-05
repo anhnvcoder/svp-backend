@@ -18,7 +18,7 @@
 #                                 deploy/ci/verify-steps/admission-metrics.sh)
 # Every other file there (the output of every other step) is listed in files.txt as not-allowed.
 # From the checkout (all read from the stack/cluster): .k8s/drills/*.xml (the JUnit report of each Chainsaw drill),
-# *.json and traffic-*.log (each line a time, a user, a route, a status and a duration). Everything else under that
+# *-skips.tsv (its list of SKIPs and their reasons: the JUnit report counts a SKIP as passed), *.json and traffic-*.log (each line a time, a user, a route, a status and a duration). Everything else under that
 # place is listed in files.txt as not-allowed: the log of each Chainsaw drill and every service log never get in; a
 # hidden file is dropped with its own rule and a warning. Nothing else of the checkout (.env, kubeconfig, .k8s/ca.*,
 # .k8s/helm/) is even looked at.
@@ -194,7 +194,7 @@ if [ -d "$repo/$base" ]; then
     if hidden "$sub"; then drop "$src" hidden; continue; fi
     case $sub in
       */*) drop "$src" not-allowed ;;
-      *.xml | *.json | traffic-*.log) consider "$file" "$src" "k8s-drills/$sub" stack ;;
+      *.xml | *.json | *-skips.tsv | traffic-*.log) consider "$file" "$src" "k8s-drills/$sub" stack ;;
       *) drop "$src" not-allowed ;;
     esac
   done < <(find "$repo/$base" \( -type f -o -type l \) -print0 | LC_ALL=C sort -z)

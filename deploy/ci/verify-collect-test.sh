@@ -578,6 +578,11 @@ junit gitops gitops-env "<failure message=\"got Set-Cookie: x\"/>" >"$d/set-cook
 junit gitops gitops-env "<failure message=\"$private_key_header\"/>" >"$d/private-key-1.xml"
 junit threats web-7-web-2 "<system-out>ok    session cookie __Host-Http-svp_sid in the jar</system-out>" >"$d/prose-1.xml"
 junit supplychain case-l "<failure message=\"s3 $cluster_secret\"/>" >"$d/supplychain-1.xml"
+# The list of the SKIPs of a Chainsaw drill (deploy/k8s/drills/run.sh): a clean one; one with a token pattern; one
+# with a cluster secret.
+printf 'case-b\tno drill-unsigned on GHCR\ntotal\t1\n' >"$d/threats-skips.tsv"
+printf 'case-l\tsent Bearer abc\ntotal\t1\n' >"$d/supplychain-skips.tsv"
+printf 'gitops-env\treason with %s\ntotal\t1\n' "$cluster_secret" >"$d/gitops-skips.tsv"
 echo "probe output" >"$d/threats-1.log"
 echo "1792332629000 u1 explore 200 12" >"$d/traffic-1.log"
 head -c 6000000 /dev/zero | tr '\0' a >"$d/big-1.json"
@@ -704,7 +709,7 @@ collect k3d "$work/secrets-k3d"
 for src in '$SVP_VERIFY_OUT/results.tsv' '$SVP_VERIFY_OUT/scenario' \
   '$SVP_VERIFY_OUT/logs/drill-obs-threats.log (verdict lines)' '$SVP_VERIFY_OUT/logs/gitops-admission-metrics.log' \
   .k8s/drills/canary-drill-1.json .k8s/drills/names-1.json .k8s/drills/identifiers-1.json .k8s/drills/traffic-1.log \
-  .k8s/drills/threats-20261105T000000Z.xml; do
+  .k8s/drills/threats-20261105T000000Z.xml .k8s/drills/threats-skips.tsv; do
   expect k3d "$src" kept
 done
 # The output of every other step is refused whole: the build step's log tails of every namespace (third-party ones
@@ -721,6 +726,8 @@ expect k3d .k8s/drills/set-cookie-1.xml set-cookie
 expect k3d .k8s/drills/private-key-1.xml private-key
 expect k3d .k8s/drills/prose-1.xml session-cookie
 expect k3d .k8s/drills/supplychain-1.xml secret-value
+expect k3d .k8s/drills/supplychain-skips.tsv bearer
+expect k3d .k8s/drills/gitops-skips.tsv secret-value
 expect k3d '$SVP_VERIFY_OUT/ram-rest-start.json' not-allowed
 expect k3d '$SVP_VERIFY_OUT/.hidden.json' hidden
 has k3d "a hidden file gets a warning" '.hidden.json: hidden'
@@ -734,6 +741,8 @@ expect k3d .k8s/drills/link-1.json not-regular
 grep -qE '\.k6/|\.web/' "$work/art-k3d/files.txt" || [ -n "$(find "$work/art-k3d" -name 'summary.json' -o -name 'b.report.json')" ] &&
   fail "k3d: .k6 and the clone of svp-frontend are not read" || ok "k3d: .k6 and the clone of svp-frontend are not read"
 [ -f "$work/art-k3d/k8s-drills/canary-drill-1.json" ] && [ -f "$work/art-k3d/k8s-drills/threats-20261105T000000Z.xml" ] &&
+  [ -f "$work/art-k3d/k8s-drills/threats-skips.tsv" ] && [ ! -e "$work/art-k3d/k8s-drills/supplychain-skips.tsv" ] &&
+  [ ! -e "$work/art-k3d/k8s-drills/gitops-skips.tsv" ] &&
   ok "k3d: the checkout's files under a visible folder" || fail "k3d: the checkout's files under a visible folder"
 [ -z "$(find "$work/art-k3d" -name '.*')" ] && ok "k3d: no hidden file in the artifact" || fail "k3d: no hidden file in the artifact"
 [ ! -e "$work/art-k3d/ca.crt" ] && ! grep -q 'ca.crt' "$work/art-k3d/files.txt" && ok "k3d: .k8s/ca.crt not a candidate" ||

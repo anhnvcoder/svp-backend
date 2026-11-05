@@ -24,6 +24,11 @@
 # --kube-context k3d-svp, and its tests name that context on every kubectl of their own.
 #
 # The output goes to .k8s/drills/<drill>-<UTC>.log, the JUnit report to .k8s/drills/<drill>-<UTC>.xml (ignored by git).
+# The JUnit report counts a SKIP step as passed, so after every chainsaw call the list of the SKIPs goes to
+# .k8s/drills/<drill>-skips.tsv: one line "<test><TAB><reason>" for each SKIP line a test printed (a line of the
+# form "SKIP  (<id>) <reason>" in the STDOUT block of a script step, read from the log of chainsaw before any filter;
+# <test> is the Chainsaw test running then) and for each test left out above, then "total<TAB><n>"; the file is there
+# when n is 0 too, and when chainsaw failed. A reason that holds a Secret value of threats is replaced by a line saying so.
 # A drill with no test, or whose report holds another number of tests than its folder (less those left out), fails.
 # threats reads the Secret values its tests use first (the 6 Kafka users of svp-data/kafka-users, the Grafana admin of
 # svp-obs/grafana-admin, the 3 object store users of svp-data/pg-backup-s3 and svp-data/s3-users), into a file of mode
@@ -80,6 +85,8 @@ threats)
     expected=$((expected - $(grep -c . <<<"$left_out" || true)))
     for f in $left_out; do
       echo "skip  $(basename "$(dirname "$f")"): no External Secrets Operator on this cluster (dev path: its Secrets come from .env)"
+      printf '%s\t%s\n' "$(basename "$(dirname "$f")")" \
+        "no External Secrets Operator on this cluster (dev path: its Secrets come from .env)" >>"$work/left-out.tsv"
     done
   fi
   # The Secret values the tests read, one per line, for the search: only ever in this file.
@@ -149,6 +156,29 @@ chainsaw test --kube-context k3d-svp --config deploy/k8s/drills/.chainsaw.yaml -
 )
 rc=${PIPESTATUS[0]}
 set -e
+
+# The SKIPs: the lines a test printed ("SKIP  (<id>) <reason>" in the STDOUT block of a script step, indented), each
+# with the test chainsaw was running ("=== RUN|CONT chainsaw/<test>"; tests run one at a time).
+skips=.k8s/drills/$drill-skips.tsv
+{
+  cat "$work/left-out.tsv" 2>/dev/null || true
+  awk -v secrets="${secrets:-}" '
+    BEGIN { if (secrets != "") while ((getline l < secrets) > 0) if (l != "") v[++n] = l }
+    /^=== (RUN|CONT) +chainsaw\// { cur = $0; sub(/^=== (RUN|CONT) +chainsaw\//, "", cur); next }
+    /^ +=== STDOUT$/ { out = 1; next }
+    $0 != "" && !/^        / { out = 0 }
+    /^ +=== / { out = 0 }
+    out && match($0, /^ +SKIP +\([a-z0-9]+\) +/) {
+      reason = substr($0, RLENGTH + 1)
+      gsub(/\t/, " ", reason)
+      for (i = 1; i <= n; i++) if (index(reason, v[i])) { reason = "[the reason holds a Secret value: not shown]"; break }
+      printf "%s\t%s\n", (cur == "" ? "unknown" : cur), reason
+    }' "$log"
+} >"$work/skips.body"
+{
+  cat "$work/skips.body"
+  printf 'total\t%s\n' "$(grep -c . "$work/skips.body" || true)"
+} >"$skips"
 
 failed=
 note() { echo "$1" | tee -a "$log" >&2; }

@@ -262,8 +262,11 @@ jobs:
       - name: make gitops-clone
         run: |
           make gitops-clone
-          sha=$(git -C .gitops/svp-gitops rev-parse --verify --quiet 'refs/remotes/origin/main^{commit}') &&
-            [[ $sha =~ ^[0-9a-f]{40}$ ]] || { echo "::error::origin/main is not in the clone of svp-gitops"; exit 1; }
+          if ! sha=$(git -C .gitops/svp-gitops rev-parse --verify --quiet 'refs/remotes/origin/main^{commit}') ||
+            [[ ! $sha =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::origin/main is not in the clone of svp-gitops"
+            exit 1
+          fi
           echo "SVP_GITOPS_DIR=$GITHUB_WORKSPACE/.gitops/svp-gitops" >>"$GITHUB_ENV"
           echo "SVP_GITOPS_SHA=$sha" >>"$GITHUB_ENV"
       - run: make env
