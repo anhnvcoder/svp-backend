@@ -126,3 +126,7 @@ Chọn 1A, 2a, 3a, vì repo không chứa giá trị lẫn ciphertext, cloud dù
 ## Thông tin thêm
 
 Phụ lục: [`appendix/0026-secrets-gitops.md`](appendix/0026-secrets-gitops.md) (tiêu đề và trạng thái gốc, bối cảnh đầy đủ, bảng công cụ và kho nguồn, toàn văn các §, bảng entry và 28 Secret, "Cần người học chọn", "Kiểm chứng sau", hệ quả, hiện thực ở, nguồn).
+
+### Chỉnh bởi
+
+- §2: [0048](0048-prd-aws.md): stg trên EKS cũng dùng store `aws` (Secrets Manager, entry `svp/<env>/<entry>`); namespace nguồn `svp-secrets` chỉ còn ở k3d.

@@ -112,3 +112,7 @@ Bảng đầy đủ ở [phụ lục](appendix/0032-argocd-deploy-status.md#ki�
 ## Thông tin thêm
 
 Phụ lục: [`appendix/0032-argocd-deploy-status.md`](appendix/0032-argocd-deploy-status.md).
+
+### Chỉnh bởi
+
+- Kết quả quyết định, đợt 2: [0048](0048-prd-aws.md): trên EKS nhãn `svp.io/notify: root` và người nhận Telegram của root do ApplicationSet `svp-bootstrap` đặt (chat id từ annotation của cluster Secret mà Terraform ghi), không qua `gitops.sh`.

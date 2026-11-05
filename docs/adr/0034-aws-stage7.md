@@ -122,7 +122,6 @@ Managed node group Graviton `m7g.large` × 3, **Spot** ở stg, loại thay th�
   component trong `components.json`. Values theo thứ tự `base/` < `platforms/<platform>/<tên>.yaml` < `envs/<env>/<tên>.yaml` < `envs/<env>/images/` < mẫu
   `platforms/<platform>/<tên>.values.tpl` (Helm `tpl` trên `.Values.cluster`); `env=stg platform=k3d` render như cũ.
 - **Hợp đồng `cluster.*`**: giá trị phụ thuộc account hay buổi, không bao giờ vào git. Bảng khoá (tên, nghĩa, ai dùng): [mục "Chi tiết rút khỏi ADR"](appendix/0034-aws-stage7.md#chi-tiết-rút-khỏi-adr).
-
 - **Ai ghi:** output `cluster_values` của `aws/envs/<env>`, qua `make eks-gitops-up CLUSTER_VALUES=<file>` thành `helm.valuesObject.cluster` của root. **Ai đọc:**
   mẫu `platforms/eks/*.values.tpl`; check render bằng `deploy/ci/cluster-values.example.yaml`, file trong git đặt `cluster` thì đỏ. Thêm khoá thì sửa cả bốn nơi:
   output Terraform, mẫu của `svp-gitops`, fixture, bảng này.
@@ -198,3 +197,4 @@ Phụ lục: [`appendix/0034-aws-stage7.md`](appendix/0034-aws-stage7.md) (trạ
 ### Chỉnh bởi
 
 - §2 "Biến cá nhân", §9 "S3": [0038](0038-s3-bucket-names.md): tên bucket.
+- §2, §3, §4, §5, §6, §7, §10, §11, §13, §14: [0048](0048-prd-aws.md): AWS Organizations, sandbox chỉ còn là management, stg và prd ở account `svp-stg`, `svp-prd`, mỗi account một profile, state, zone `<env>.aws.<miền>` và budget; root `aws/org`, `aws/accounts/<env>`, `aws/gitops/<env>`; region store từ `cluster.region`, SCP chỉ cho `ap-southeast-1`, `us-east-1`; Karpenter để sau; `cluster.*` qua annotation cluster Secret của GitOps Bridge, thêm khoá `externalSecretsRoles`; Secret EKS của stg và prd từ Secrets Manager, endpoint S3 có policy ở prd; giá trị prd và wiring riêng của root prd; gỡ và quét theo account; trình tự buổi bằng `terraform apply` hai root.

@@ -178,3 +178,4 @@ Phụ lục: [`appendix/0025-gitops-config-repo.md`](appendix/0025-gitops-config
 - §5, §8: [0036](0036-repo-rename.md): check checkout repo code dưới tên mới `svp-backend`, không checkout repo web, clone ẩn danh repo của mỗi nguồn khác `backend`; URL repo chart của `chartRepoURL`, `sourceRepos`.
 - §6: [0037](0037-mainpath-standard-tools.md): bị thay từ 2026-11-01: job promote bằng script, job ghi bản ghi stg, quyền `deployments` của App.
 - §6, §7: [0041](0041-github-hardening.md): job promote prd dùng environment `promote-prd` có người duyệt, khoá App thứ hai; ruleset `main` chỉ squash, lịch sử thẳng; `CODEOWNERS`, ruleset `owners` ở backend, frontend, infra.
+- §8: [0048](0048-prd-aws.md): trên EKS Argo CD do Terraform cài (GitOps Bridge, root `aws/gitops/<env>`), không qua `gitops.sh`; `svp-root` do ApplicationSet `svp-bootstrap` tạo, thêm chart tầng 1 `argocd/root` trước `argocd/apps`.

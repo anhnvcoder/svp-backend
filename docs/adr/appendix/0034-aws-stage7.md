@@ -377,6 +377,7 @@ infra/                          repo svp-infra
   | `mediaBucket` | Bucket `media` |
   | `mediaDomain` | Tên `*.cloudfront.net` của distribution: `MEDIA_ORIGIN` của web, `MEDIA_PUBLIC_BASE_URL` của gateway |
   | `s3Cidrs` | Các dải IPv4 AWS công bố cho S3 của region (list; output Terraform từ `data "aws_ip_ranges"`, đọc lại mỗi lần `apply`): egress 443 tới S3 (`externalPeers.s3`) của video-service, media-worker |
+  | `externalSecretsRoles` | Map namespace → ARN role IAM của SecretStore namespace đó (`svp`, `svp-data`, `svp-obs`, `keda`, `argocd`; output `roles` của module `external-secrets`): role của store `aws` trong `svp-cluster`; thêm bởi [0048](../0048-prd-aws.md) |
 
   **Ai ghi:** output `cluster_values` (một map) của `aws/envs/<env>`; script buổi ghi nó ra file rồi `make eks-gitops-up
   CLUSTER_VALUES=<file>` đặt thành `helm.valuesObject.cluster` của root. **Ai đọc:** mẫu `platforms/eks/*.values.tpl` của `svp-gitops`;
@@ -717,3 +718,4 @@ Các dòng dưới đây nguyên văn từ ADR, rút ra để ADR không vượt
   | `mediaBucket` | Bucket `media` |
   | `mediaDomain` | Tên `*.cloudfront.net` của distribution: `MEDIA_ORIGIN` của web, `MEDIA_PUBLIC_BASE_URL` của gateway |
   | `s3Cidrs` | Các dải IPv4 AWS công bố cho S3 của region (list; output Terraform từ `data "aws_ip_ranges"`, đọc lại mỗi lần `apply`): egress 443 tới S3 (`externalPeers.s3`) của video-service, media-worker |
+  | `externalSecretsRoles` | Map namespace → ARN role IAM của SecretStore namespace đó (`svp`, `svp-data`, `svp-obs`, `keda`, `argocd`; output `roles` của module `external-secrets`): role của store `aws` trong `svp-cluster`; thêm bởi [0048](../0048-prd-aws.md) |
