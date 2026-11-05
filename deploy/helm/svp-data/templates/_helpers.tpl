@@ -69,3 +69,21 @@ and on external while CloudNativePG in the cluster still archives its WAL into s
 {{- print "true" }}
 {{- end }}
 {{- end }}
+
+{{- /*
+RPK_ADMIN_HOSTS of the init Job: the Admin API of every broker of release redpanda (redpanda.replicas), comma
+separated; fails on a topic replication factor that is even or above the number of brokers, which rpk would refuse.
+*/}}
+{{- define "svp-data.redpandaAdminHosts" -}}
+{{- $rp := .Values.redpanda }}
+{{- $n := int $rp.replicas }}
+{{- $rf := int $rp.topicReplicas }}
+{{- if or (lt $rf 1) (eq (mod $rf 2) 0) (gt $rf $n) }}
+{{- fail (printf "redpanda.topicReplicas is %d: odd, from 1 to redpanda.replicas (%d)" $rf $n) }}
+{{- end }}
+{{- $hosts := list }}
+{{- range until $n }}
+{{- $hosts = append $hosts (printf "redpanda-%d.redpanda.%s.svc.cluster.local:9644" . $.Release.Namespace) }}
+{{- end }}
+{{- join "," $hosts }}
+{{- end }}
