@@ -1,0 +1,160 @@
+# SEC-6-reader of docs/threat-model.md: nothing but the controller of External Secrets Operator gets a token of the
+# stores' ServiceAccount svp-secrets-reader, on a cluster with that operator (the GitOps path's staging). Label
+# requires=external-secrets: the caller leaves this test out, with a skip line and its reason, on a cluster without the
+# CRD externalsecrets.external-secrets.io (dev path: its Secrets come from .env); run there anyway, its first step fails
+# rather than passing on nothing.
+# As server-side dry runs in svp-data, which has the stores' ServiceAccount (in a namespace without it, the ServiceAccount
+# admission plugin refuses the pod before any policy sees it, which proves nothing; Kyverno's image policy holds svp
+# only): a pod running as it with its token mounted is refused by ValidatingAdmissionPolicy
+# svp-store-serviceaccount-pods and a token Secret of it by svp-store-serviceaccount-tokens, each with the policy's message
+# (controls: the same pod as svp-data/default and a token Secret of default are admitted). The controller takes the
+# store's token through TokenRequest, which neither policy sees.
+#
+# Each check is one operation named by its ID; continueOnError keeps the next checks running after one fails, and the
+# test still fails. Nothing is created: every object is a server-side dry run.
+apiVersion: chainsaw.kyverno.io/v1alpha1
+kind: Test
+metadata:
+  name: sec-6-reader
+  labels:
+    drill: threats
+    requires: external-secrets
+spec:
+  # An existing namespace, so Chainsaw creates no ephemeral one and deletes nothing.
+  namespace: svp-data
+  bindings:
+  - name: podsDenied
+    value: '*ValidatingAdmissionPolicy ''svp-store-serviceaccount-pods''*denied*No pod may run as ServiceAccount svp-secrets-reader*'
+  - name: tokensDenied
+    value: '*ValidatingAdmissionPolicy ''svp-store-serviceaccount-tokens''*denied*No Secret may hold a token of ServiceAccount svp-secrets-reader*'
+  steps:
+  - name: sec-6-reader
+    try:
+    - description: "SEC-6-reader: External Secrets Operator is installed (CRD externalsecrets.external-secrets.io); the caller leaves this test out where it is not"
+      assert:
+        timeout: 5s
+        resource:
+          apiVersion: apiextensions.k8s.io/v1
+          kind: CustomResourceDefinition
+          metadata:
+            name: externalsecrets.external-secrets.io
+    - description: "SEC-6-reader: read ServiceAccount svp-data/svp-secrets-reader"
+      assert:
+        timeout: 5s
+        resource:
+          apiVersion: v1
+          kind: ServiceAccount
+          metadata:
+            name: svp-secrets-reader
+            namespace: svp-data
+    - description: "SEC-6-reader: read the image of deployment svp/media-worker"
+      script:
+        env:
+        - name: CALLER_KUBECONFIG
+          value: (env('KUBECONFIG'))
+        content: |
+          set -eu
+          export KUBECONFIG="$CALLER_KUBECONFIG"
+          kubectl --context k3d-svp -n svp get deployment media-worker -o jsonpath='{.spec.template.spec.containers[0].image}'
+        check:
+          ($error): ~
+          (trim_space($stdout) != ''): true
+        outputs:
+        - name: workerImage
+          value: (trim_space($stdout))
+    - description: "SEC-6-reader: a pod in svp-data running as svp-secrets-reader (token mounted) is refused by ValidatingAdmissionPolicy svp-store-serviceaccount-pods (server-side dry run)"
+      continueOnError: true
+      create:
+        dryRun: true
+        resource:
+          apiVersion: v1
+          kind: Pod
+          metadata:
+            name: drill-threats-psa
+            namespace: svp-data
+          spec:
+            automountServiceAccountToken: true
+            serviceAccountName: svp-secrets-reader
+            securityContext:
+              runAsNonRoot: true
+              runAsUser: 65532
+              seccompProfile:
+                type: RuntimeDefault
+            containers:
+            - name: c
+              image: ($workerImage)
+              securityContext:
+                allowPrivilegeEscalation: false
+                readOnlyRootFilesystem: true
+                capabilities:
+                  drop: [ALL]
+              resources:
+                requests: {cpu: 10m, memory: 16Mi}
+                limits: {cpu: 100m, memory: 32Mi}
+        expect:
+        - check:
+            (wildcard($podsDenied, to_string($error))): true
+    - description: "SEC-6-reader control: the same pod running as svp-data/default is admitted (server-side dry run)"
+      continueOnError: true
+      create:
+        dryRun: true
+        resource:
+          apiVersion: v1
+          kind: Pod
+          metadata:
+            name: drill-threats-psa
+            namespace: svp-data
+          spec:
+            automountServiceAccountToken: true
+            serviceAccountName: default
+            securityContext:
+              runAsNonRoot: true
+              runAsUser: 65532
+              seccompProfile:
+                type: RuntimeDefault
+            containers:
+            - name: c
+              image: ($workerImage)
+              securityContext:
+                allowPrivilegeEscalation: false
+                readOnlyRootFilesystem: true
+                capabilities:
+                  drop: [ALL]
+              resources:
+                requests: {cpu: 10m, memory: 16Mi}
+                limits: {cpu: 100m, memory: 32Mi}
+        expect:
+        - check:
+            ($error): ~
+    - description: "SEC-6-reader: a token Secret of svp-data/svp-secrets-reader is refused by ValidatingAdmissionPolicy svp-store-serviceaccount-tokens (server-side dry run)"
+      continueOnError: true
+      create:
+        dryRun: true
+        resource:
+          apiVersion: v1
+          kind: Secret
+          type: kubernetes.io/service-account-token
+          metadata:
+            name: svp-drill-threats
+            namespace: svp-data
+            annotations:
+              kubernetes.io/service-account.name: svp-secrets-reader
+        expect:
+        - check:
+            (wildcard($tokensDenied, to_string($error))): true
+    - description: "SEC-6-reader control: a token Secret of svp-data/default is admitted (server-side dry run)"
+      continueOnError: true
+      create:
+        dryRun: true
+        resource:
+          apiVersion: v1
+          kind: Secret
+          type: kubernetes.io/service-account-token
+          metadata:
+            name: svp-drill-threats
+            namespace: svp-data
+            annotations:
+              kubernetes.io/service-account.name: default
+        expect:
+        - check:
+            ($error): ~

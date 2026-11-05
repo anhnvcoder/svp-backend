@@ -1,0 +1,288 @@
+# FF-5 of the threat model (docs/threat-model.md): media-worker, which handles untrusted uploads, reaches only what it
+# needs. From media-worker (kubectl exec, busybox nslookup and nc -z): the internet (an IP and a name), the gateway, the
+# four gRPC services, Postgres, Valkey and the API server are closed; the object store, Kafka and the Collector open. A
+# name that resolves makes a closed port the policy, not a missing service.
+#
+# The controls show each closed target answers a client the policy lets in: /readyz through Envoy (the gateway reaches
+# user-, video- and feed-service), the explore feed of a drill user with stats on every item (the gateway reaches
+# engagement-service), /healthz (Envoy reaches the gateway), GlitchTip's pod opens 5432, a login leaves its rate limit
+# key in Valkey (the gateway reaches 6379), and pod probe of namespace svp-probe (no egress policy) reaches the API
+# server. The internet has no control case: it is tried from media-worker only; example.com resolves there, so its
+# failure is the connection.
+#
+# Each check and control is one step; a failed one marks the test failed and the next steps still run. A step whose
+# setup fails (namespace svp-probe, the drill user) ends the test, and the template's cleanup deletes svp-probe. LOCAL LAB
+# ONLY: the test deletes the register rate limit keys svp:gw:rl:register:* in the cluster's Valkey db 10 (SCAN + DEL)
+# before it registers its drill user, and otherwise only reads Valkey (SCAN in db 10).
+apiVersion: chainsaw.kyverno.io/v1alpha1
+kind: Test
+metadata:
+  name: ff-5
+  labels:
+    drill: threats
+spec:
+  description: "FF-5: media-worker reaches only the object store, Kafka and the Collector; each closed target answers a client the policy lets in"
+  # An existing namespace: Chainsaw neither creates nor deletes it. svp-probe is the template's to create and delete.
+  namespace: svp
+  steps:
+  - name: "FF-5: setup: gateway ready through Envoy within 60 s"
+    try:
+    - script:
+        content: |
+          set -eu
+          deadline=$(( $(date +%s) + 60 ))
+          until [ "$(curl -s --max-time 5 -o /dev/null -w '%{http_code}' https://api.svp.localhost:8443/readyz || true)" = 200 ]; do
+            [ "$(date +%s)" -lt "$deadline" ] || { echo "FAIL  readyz within 60s" >&2; exit 1; }
+            sleep 1
+          done
+          echo readyz
+        check:
+          ($error): ~
+  - name: "FF-5: setup: namespace svp-probe with pod probe"
+    use:
+      template: ../../templates/probe-up.yaml
+
+  # One target per step, from media-worker: "<dns|nodns|ip> <open|closed>" as busybox nslookup and nc -z (3 s) see it.
+  - name: "FF-5: from media-worker 1.1.1.1:443 closed"
+    bindings:
+    - {name: fromNamespace, value: svp}
+    - {name: from, value: deploy/media-worker}
+    - {name: target, value: 1.1.1.1:443}
+    - {name: want, value: ip closed}
+    try: &reach
+    - script:
+        env:
+        - {name: CALLER_KUBECONFIG, value: (env('KUBECONFIG'))}
+        - {name: FROM_NS, value: ($fromNamespace)}
+        - {name: FROM, value: ($from)}
+        - {name: TARGET, value: ($target)}
+        content: |
+          set -eu
+          export KUBECONFIG="$CALLER_KUBECONFIG"
+          kubectl --context k3d-svp -n "$FROM_NS" exec "$FROM" -- sh -c '
+            h=${1%:*} p=${1##*:}
+            case $h in
+              *[!0-9.]*) if nslookup "$h" >/dev/null 2>&1; then d=dns; else d=nodns; fi ;;
+              *) d=ip ;;
+            esac
+            if timeout 5 nc -z -w 3 "$h" "$p" >/dev/null 2>&1; then s=open; else s=closed; fi
+            echo "$d $s"' sh "$TARGET"
+        check:
+          ($error): ~
+          # nodns: the name does not resolve, so a closed port proves nothing.
+          (trim_space($stdout)): ($want)
+      continueOnError: true
+  - name: "FF-5: from media-worker example.com:443 closed"
+    bindings:
+    - {name: fromNamespace, value: svp}
+    - {name: from, value: deploy/media-worker}
+    - {name: target, value: example.com:443}
+    - {name: want, value: dns closed}
+    try: *reach
+  - name: "FF-5: from media-worker gateway.svp:8080 closed"
+    bindings:
+    - {name: fromNamespace, value: svp}
+    - {name: from, value: deploy/media-worker}
+    - {name: target, value: gateway.svp.svc.cluster.local:8080}
+    - {name: want, value: dns closed}
+    try: *reach
+  - name: "FF-5: from media-worker user-service.svp:9101 closed"
+    bindings:
+    - {name: fromNamespace, value: svp}
+    - {name: from, value: deploy/media-worker}
+    - {name: target, value: user-service.svp.svc.cluster.local:9101}
+    - {name: want, value: dns closed}
+    try: *reach
+  - name: "FF-5: from media-worker video-service.svp:9102 closed"
+    bindings:
+    - {name: fromNamespace, value: svp}
+    - {name: from, value: deploy/media-worker}
+    - {name: target, value: video-service.svp.svc.cluster.local:9102}
+    - {name: want, value: dns closed}
+    try: *reach
+  - name: "FF-5: from media-worker engagement-service.svp:9103 closed"
+    bindings:
+    - {name: fromNamespace, value: svp}
+    - {name: from, value: deploy/media-worker}
+    - {name: target, value: engagement-service.svp.svc.cluster.local:9103}
+    - {name: want, value: dns closed}
+    try: *reach
+  - name: "FF-5: from media-worker feed-service.svp:9104 closed"
+    bindings:
+    - {name: fromNamespace, value: svp}
+    - {name: from, value: deploy/media-worker}
+    - {name: target, value: feed-service.svp.svc.cluster.local:9104}
+    - {name: want, value: dns closed}
+    try: *reach
+  - name: "FF-5: from media-worker svp-pg-rw.svp-data:5432 closed"
+    bindings:
+    - {name: fromNamespace, value: svp}
+    - {name: from, value: deploy/media-worker}
+    - {name: target, value: svp-pg-rw.svp-data.svc.cluster.local:5432}
+    - {name: want, value: dns closed}
+    try: *reach
+  - name: "FF-5: from media-worker valkey.svp-data:6379 closed"
+    bindings:
+    - {name: fromNamespace, value: svp}
+    - {name: from, value: deploy/media-worker}
+    - {name: target, value: valkey.svp-data.svc.cluster.local:6379}
+    - {name: want, value: dns closed}
+    try: *reach
+  - name: "FF-5: from media-worker kubernetes.default:443 (the API server) closed"
+    bindings:
+    - {name: fromNamespace, value: svp}
+    - {name: from, value: deploy/media-worker}
+    - {name: target, value: kubernetes.default.svc.cluster.local:443}
+    - {name: want, value: dns closed}
+    try: *reach
+  - name: "FF-5: from media-worker s3.svp-data:9000 open"
+    bindings:
+    - {name: fromNamespace, value: svp}
+    - {name: from, value: deploy/media-worker}
+    - {name: target, value: s3.svp-data.svc.cluster.local:9000}
+    - {name: want, value: dns open}
+    try: *reach
+  - name: "FF-5: from media-worker redpanda.svp-data:9092 open"
+    bindings:
+    - {name: fromNamespace, value: svp}
+    - {name: from, value: deploy/media-worker}
+    - {name: target, value: redpanda.svp-data.svc.cluster.local:9092}
+    - {name: want, value: dns open}
+    try: *reach
+  - name: "FF-5: from media-worker otel-collector.svp-obs:4317 open"
+    bindings:
+    - {name: fromNamespace, value: svp}
+    - {name: from, value: deploy/media-worker}
+    - {name: target, value: otel-collector.svp-obs.svc.cluster.local:4317}
+    - {name: want, value: dns open}
+    try: *reach
+
+  - name: "FF-5: control: /readyz through Envoy 200: the gateway reaches user-, video- and feed-service (9101, 9102, 9104)"
+    bindings:
+    - {name: url, value: https://api.svp.localhost:8443/readyz}
+    - {name: want, value: "200"}
+    try: &status
+    - script:
+        env:
+        - {name: URL, value: ($url)}
+        content: |
+          curl -s --max-time 5 -o /dev/null -w '%{http_code}' "$URL" || true
+        check:
+          ($error): ~
+          (trim_space($stdout)): ($want)
+      continueOnError: true
+  - name: "FF-5: setup: register rate limit reset for this lab run (LOCAL LAB ONLY)"
+    try:
+    - script:
+        env:
+        - {name: CALLER_KUBECONFIG, value: (env('KUBECONFIG'))}
+        content: |
+          set -eu
+          export KUBECONFIG="$CALLER_KUBECONFIG"
+          umask 077
+          keys=$(mktemp)
+          trap 'rm -f "$keys"' EXIT
+          kubectl --context k3d-svp -n svp-data exec deploy/valkey -c valkey -- \
+            valkey-cli -n 10 --scan --pattern 'svp:gw:rl:register:*' >"$keys"
+          n=0
+          while IFS= read -r key; do
+            [ -n "$key" ] || continue
+            kubectl --context k3d-svp -n svp-data exec deploy/valkey -c valkey -- valkey-cli -n 10 DEL "$key" >/dev/null
+            n=$((n + 1))
+          done <"$keys"
+          echo "register rate limit reset ($n keys deleted in Valkey db 10 of cluster svp)"
+        check:
+          ($error): ~
+  # The drill user is registered and logged in here; its access token stays in a private temporary file, never printed.
+  # /readyz leaves engagement-service out on purpose; the feed adds each item's stats from one GetStats call (100 ms, no
+  # retry), so under load one page can come without stats while engagement-service answers: up to 3 pages, 1 s apart.
+  - name: "FF-5: control: GET /feed/explore 200 with stats on every item: the gateway reaches engagement-service (9103)"
+    try:
+    - script:
+        content: |
+          set -eu
+          umask 077
+          work=$(mktemp -d)
+          trap 'rm -rf "$work"' EXIT
+          api=https://api.svp.localhost:8443
+          email="drill-threats-$(date -u +%Y%m%dT%H%M%SZ)-$(openssl rand -hex 4)@example.test"
+          DRILL_PASSWORD=$(openssl rand -hex 16) jq -n --arg e "$email" '{email: $e, password: env.DRILL_PASSWORD}' >"$work/cred"
+          status=$(curl -sS --max-time 5 -o "$work/body" -w '%{http_code}' -X POST -H 'Content-Type: application/json' \
+            --data-binary "@$work/cred" "$api/auth/register" || true)
+          [ "$status" = 201 ] || { echo "FAIL  register the drill user (status $status, code $(jq -r '.code // ""' "$work/body" 2>/dev/null || true))" >&2; exit 1; }
+          status=$(curl -sS --max-time 5 -o "$work/body" -w '%{http_code}' -X POST -H 'Content-Type: application/json' \
+            --data-binary "@$work/cred" "$api/auth/login" || true)
+          token=$(jq -r '.access_token // ""' "$work/body" 2>/dev/null || true)
+          : >"$work/body"
+          [ "$status" = 200 ] && [ -n "$token" ] || { echo "FAIL  log the drill user in (status $status)" >&2; exit 1; }
+          printf 'Authorization: Bearer %s\n' "$token" >"$work/auth"
+          token=
+          for try in 1 2 3; do
+            status=$(curl -sS --max-time 5 -o "$work/body" -w '%{http_code}' -H "@$work/auth" "$api/feed/explore?page_size=10" || true)
+            items=$(jq '.items | length' "$work/body" 2>/dev/null || echo 0)
+            with=$(jq '[.items[] | select(.stats != null)] | length' "$work/body" 2>/dev/null || echo 0)
+            if [ "$status" = 200 ] && [ "$items" -gt 0 ] && [ "$with" = "$items" ]; then
+              echo "200 with stats on every item"
+              exit 0
+            fi
+            [ "$try" = 3 ] || sleep 1
+          done
+          echo "FAIL  GET /feed/explore is 200 with stats on every item, in one of 3 pages 1 s apart (last: status $status, $with of $items items with stats; an empty explore feed needs a READY video: run make k8s-smoke)" >&2
+          echo "status $status, $with of $items items with stats"
+        check:
+          ($error): ~
+          (trim_space($stdout)): 200 with stats on every item
+      continueOnError: true
+  - name: "FF-5: control: /healthz through Envoy 200: Envoy reaches the gateway on 8080"
+    bindings:
+    - {name: url, value: https://api.svp.localhost:8443/healthz}
+    - {name: want, value: "200"}
+    try: *status
+  - name: "FF-5: control: GlitchTip's pod (svp-obs) opens svp-pg-rw.svp-data:5432"
+    try:
+    - script:
+        env:
+        - {name: CALLER_KUBECONFIG, value: (env('KUBECONFIG'))}
+        content: |
+          set -eu
+          export KUBECONFIG="$CALLER_KUBECONFIG"
+          kubectl --context k3d-svp -n svp-obs exec deploy/glitchtip -- python -c '
+          import socket
+          socket.create_connection(("svp-pg-rw.svp-data.svc.cluster.local", 5432), 5).close()
+          print("open")'
+        check:
+          ($error): ~
+          (trim_space($stdout)): open
+      continueOnError: true
+  # A login with a new email leaves its login-email key (svp:gw:rl:login-email:<ip>:<first 32 hex of the SHA-256 of the
+  # lower-cased email>) in db 10. Costs one request of the login-ip bucket (refilled in 1 s).
+  - name: "FF-5: control: a login (401) leaves its login-email key in Valkey db 10: the gateway reaches valkey.svp-data:6379"
+    try:
+    - script:
+        env:
+        - {name: CALLER_KUBECONFIG, value: (env('KUBECONFIG'))}
+        content: |
+          set -eu
+          export KUBECONFIG="$CALLER_KUBECONFIG"
+          umask 077
+          work=$(mktemp -d)
+          trap 'rm -rf "$work"' EXIT
+          email="drill-threats-$(date -u +%Y%m%dT%H%M%SZ)-control-$(openssl rand -hex 4)@example.test"
+          DRILL_PASSWORD=$(openssl rand -hex 16) jq -n --arg e "$email" '{email: $e, password: env.DRILL_PASSWORD}' >"$work/login.json"
+          status=$(curl -sS --max-time 5 -o /dev/null -w '%{http_code}' -X POST -H 'Content-Type: application/json' \
+            --data-binary "@$work/login.json" https://api.svp.localhost:8443/auth/login || true)
+          hash=$(printf '%s' "$email" | tr 'A-Z' 'a-z' | shasum -a 256 | cut -c1-32)
+          keys=$(kubectl --context k3d-svp -n svp-data exec deploy/valkey -c valkey -- \
+            valkey-cli -n 10 --scan --pattern "svp:gw:rl:login-email:*:$hash" | wc -l | tr -d ' ')
+          echo "status $status, keys $keys"
+        check:
+          ($error): ~
+          (trim_space($stdout)): status 401, keys 1
+      continueOnError: true
+  - name: "FF-5: control: from svp-probe (no egress policy) kubernetes.default:443 (the API server) open"
+    bindings:
+    - {name: fromNamespace, value: svp-probe}
+    - {name: from, value: pod/probe}
+    - {name: target, value: kubernetes.default.svc.cluster.local:443}
+    - {name: want, value: dns open}
+    try: *reach

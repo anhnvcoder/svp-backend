@@ -1,0 +1,195 @@
+# WEB-13 of the threat model (docs/threat-model.md): the web pods reach only the gateway, Valkey, the Collector and
+# GlitchTip, and only Envoy reaches them. From each web pod (labels app.kubernetes.io/name=web, component=server; a
+# Rollout's, so kubectl exec names each pod): kubectl exec of the image's node (/nodejs/bin/node -e: distroless has no
+# shell, no nc), a name resolved first, so a closed port with a name that resolves is the policy: the internet (an IP and
+# a name), Postgres, Redpanda (9092, 9644), the object store, the four gRPC services, Pyroscope and the API server are
+# closed; the gateway 8080, Valkey 6379, the Collector 4317 and GlitchTip 8000 open (the controls of the closed ones). The
+# internet has no control case from the web pods: example.com resolves there, so its failure is the connection. Pod probe
+# of namespace svp-probe cannot open web:3001; control: Envoy reaches it (/healthz 200).
+#
+# Each check and control is one step, which runs its target in every web pod; a failed one marks the test failed and the
+# next steps still run. No running web pod, or namespace svp-probe not made, ends the test; the template's cleanup deletes
+# svp-probe.
+apiVersion: chainsaw.kyverno.io/v1alpha1
+kind: Test
+metadata:
+  name: web-13
+  labels:
+    drill: threats
+spec:
+  description: "WEB-13: the web pods reach only the gateway, Valkey, the Collector and GlitchTip; only Envoy reaches them"
+  # An existing namespace: Chainsaw neither creates nor deletes it. svp-probe is the template's to create and delete.
+  namespace: svp
+  steps:
+  - name: "WEB-13: setup: namespace svp has running web pods"
+    try:
+    - script:
+        env:
+        - {name: CALLER_KUBECONFIG, value: (env('KUBECONFIG'))}
+        content: |
+          set -eu
+          export KUBECONFIG="$CALLER_KUBECONFIG"
+          pods=$(kubectl --context k3d-svp -n svp get pods -l app.kubernetes.io/name=web,app.kubernetes.io/component=server \
+            --field-selector status.phase=Running -o jsonpath='{range .items[*]}{.metadata.name}{"\n"}{end}')
+          [ -n "$pods" ] || { echo "FAIL  WEB-13: namespace svp has running web pods (app.kubernetes.io/name=web,app.kubernetes.io/component=server)" >&2; exit 1; }
+          printf '%s\n' "$pods"
+        check:
+          ($error): ~
+
+  # One target per step, in every running web pod: each pod's answer "<dns|nodns|ip> <open|closed>" goes to stderr as
+  # "POD: ANSWER" ("POD: probe failed" when node could not run), and stdout has the answers of all pods, each once. With
+  # every pod giving the expected answer that is exactly it; a pod that differs adds its own line.
+  - name: "WEB-13: from each web pod 1.1.1.1:443 closed"
+    bindings:
+    - {name: target, value: 1.1.1.1:443}
+    - {name: want, value: ip closed}
+    try: &webReach
+    - script:
+        env:
+        - {name: CALLER_KUBECONFIG, value: (env('KUBECONFIG'))}
+        - {name: TARGET, value: ($target)}
+        content: |
+          set -eu
+          export KUBECONFIG="$CALLER_KUBECONFIG"
+          js='
+          const net = require("node:net");
+          const dns = require("node:dns");
+          const probe = (target) => new Promise((done) => {
+            const i = target.lastIndexOf(":");
+            const host = target.slice(0, i);
+            const port = Number(target.slice(i + 1));
+            const connect = (resolved) => {
+              const socket = net.connect({ host, port, timeout: 3000 });
+              const end = (state) => { socket.destroy(); done(`${resolved} ${state}`); };
+              socket.once("connect", () => end("open"));
+              socket.once("timeout", () => end("closed"));
+              socket.once("error", () => end("closed"));
+            };
+            if (net.isIP(host) !== 0) connect("ip");
+            else dns.lookup(host, (error) => connect(error ? "nodns" : "dns"));
+          });
+          Promise.all(process.argv.slice(1).map(probe)).then((lines) => console.log(lines.join("\n")));
+          '
+          pods=$(kubectl --context k3d-svp -n svp get pods -l app.kubernetes.io/name=web,app.kubernetes.io/component=server \
+            --field-selector status.phase=Running -o jsonpath='{range .items[*]}{.metadata.name}{"\n"}{end}')
+          [ -n "$pods" ] || { echo "FAIL  WEB-13: namespace svp has running web pods" >&2; exit 1; }
+          answers=$(mktemp)
+          trap 'rm -f "$answers"' EXIT
+          for pod in $pods; do
+            got=$(kubectl --context k3d-svp -n svp exec "$pod" -c web -- /nodejs/bin/node -e "$js" "$TARGET" </dev/null) ||
+              got="probe failed"
+            echo "$pod: $got" >&2
+            printf '%s\n' "$got" >>"$answers"
+          done
+          sort -u "$answers"
+        check:
+          ($error): ~
+          # nodns: the name does not resolve, so a closed port proves nothing.
+          (trim_space($stdout)): ($want)
+      continueOnError: true
+  - name: "WEB-13: from each web pod example.com:443 closed"
+    bindings:
+    - {name: target, value: example.com:443}
+    - {name: want, value: dns closed}
+    try: *webReach
+  - name: "WEB-13: from each web pod svp-pg-rw.svp-data:5432 closed"
+    bindings:
+    - {name: target, value: svp-pg-rw.svp-data.svc.cluster.local:5432}
+    - {name: want, value: dns closed}
+    try: *webReach
+  - name: "WEB-13: from each web pod redpanda.svp-data:9092 closed"
+    bindings:
+    - {name: target, value: redpanda.svp-data.svc.cluster.local:9092}
+    - {name: want, value: dns closed}
+    try: *webReach
+  - name: "WEB-13: from each web pod redpanda-0.redpanda.svp-data:9644 closed"
+    bindings:
+    - {name: target, value: redpanda-0.redpanda.svp-data.svc.cluster.local:9644}
+    - {name: want, value: dns closed}
+    try: *webReach
+  - name: "WEB-13: from each web pod s3.svp-data:9000 closed"
+    bindings:
+    - {name: target, value: s3.svp-data.svc.cluster.local:9000}
+    - {name: want, value: dns closed}
+    try: *webReach
+  - name: "WEB-13: from each web pod user-service.svp:9101 closed"
+    bindings:
+    - {name: target, value: user-service.svp.svc.cluster.local:9101}
+    - {name: want, value: dns closed}
+    try: *webReach
+  - name: "WEB-13: from each web pod video-service.svp:9102 closed"
+    bindings:
+    - {name: target, value: video-service.svp.svc.cluster.local:9102}
+    - {name: want, value: dns closed}
+    try: *webReach
+  - name: "WEB-13: from each web pod engagement-service.svp:9103 closed"
+    bindings:
+    - {name: target, value: engagement-service.svp.svc.cluster.local:9103}
+    - {name: want, value: dns closed}
+    try: *webReach
+  - name: "WEB-13: from each web pod feed-service.svp:9104 closed"
+    bindings:
+    - {name: target, value: feed-service.svp.svc.cluster.local:9104}
+    - {name: want, value: dns closed}
+    try: *webReach
+  - name: "WEB-13: from each web pod pyroscope.svp-obs:4040 closed"
+    bindings:
+    - {name: target, value: pyroscope.svp-obs.svc.cluster.local:4040}
+    - {name: want, value: dns closed}
+    try: *webReach
+  - name: "WEB-13: from each web pod kubernetes.default:443 (the API server) closed"
+    bindings:
+    - {name: target, value: kubernetes.default.svc.cluster.local:443}
+    - {name: want, value: dns closed}
+    try: *webReach
+  - name: "WEB-13: from each web pod gateway.svp:8080 open (control of the closed ones)"
+    bindings:
+    - {name: target, value: gateway.svp.svc.cluster.local:8080}
+    - {name: want, value: dns open}
+    try: *webReach
+  - name: "WEB-13: from each web pod valkey.svp-data:6379 open (control of the closed ones)"
+    bindings:
+    - {name: target, value: valkey.svp-data.svc.cluster.local:6379}
+    - {name: want, value: dns open}
+    try: *webReach
+  - name: "WEB-13: from each web pod otel-collector.svp-obs:4317 open (control of the closed ones)"
+    bindings:
+    - {name: target, value: otel-collector.svp-obs.svc.cluster.local:4317}
+    - {name: want, value: dns open}
+    try: *webReach
+  - name: "WEB-13: from each web pod glitchtip.svp-obs:8000 open (control of the closed ones)"
+    bindings:
+    - {name: target, value: glitchtip.svp-obs.svc.cluster.local:8000}
+    - {name: want, value: dns open}
+    try: *webReach
+
+  - name: "WEB-13: setup: namespace svp-probe with pod probe"
+    use:
+      template: ../../templates/probe-up.yaml
+  - name: "WEB-13: from svp-probe, the web client web.svp:3001 closed"
+    try:
+    - script:
+        env:
+        - {name: CALLER_KUBECONFIG, value: (env('KUBECONFIG'))}
+        content: |
+          set -eu
+          export KUBECONFIG="$CALLER_KUBECONFIG"
+          kubectl --context k3d-svp -n svp-probe exec pod/probe -- sh -c '
+            h=${1%:*} p=${1##*:}
+            if nslookup "$h" >/dev/null 2>&1; then d=dns; else d=nodns; fi
+            if timeout 5 nc -z -w 3 "$h" "$p" >/dev/null 2>&1; then s=open; else s=closed; fi
+            echo "$d $s"' sh web.svp.svc.cluster.local:3001
+        check:
+          ($error): ~
+          # nodns: the name does not resolve, so a closed port proves nothing.
+          (trim_space($stdout)): dns closed
+      continueOnError: true
+  - name: "WEB-13: control: the web client's /healthz through Envoy (https://svp.localhost:8443) 200: Envoy reaches web:3001"
+    try:
+    - script:
+        content: |
+          curl -s --max-time 5 -o /dev/null -w '%{http_code}' https://svp.localhost:8443/healthz || true
+        check:
+          ($error): ~
+          (trim_space($stdout)): "200"
+      continueOnError: true

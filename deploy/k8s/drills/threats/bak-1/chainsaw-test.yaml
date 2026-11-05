@@ -1,0 +1,142 @@
+# BAK-1 of the threat model (docs/threat-model.md): the object store user of the backups of Postgres reads bucket
+# pg-backups only, and no service's user reads that bucket. S3 requests to the object store through Envoy
+# (https://s3.svp.localhost:8443), signed (AWS Signature V4, region us-east-1) with the store's logins of Secrets
+# svp-data/pg-backup-s3 and svp-data/s3-users, each written to a private curl config file (umask 077) for that one request
+# and deleted after it, never on a command line: svp-pg-backup may neither list buckets uploads and media nor read an
+# object there, 403 AccessDenied, and svp-video-service and svp-media-worker may neither list pg-backups nor read an object
+# there. Objects under media/ of media are public to every GET by design (UP-6), signed ones included on RustFS, so
+# svp-pg-backup's read of media is of a key outside that prefix, which only its own policy could allow.
+#
+# The objects read are a name made for the request (drill-threats-<UTC time>-<random>), which exists nowhere: the store
+# answers 404 NoSuchKey where the user may read and 403 AccessDenied where not, so nothing of a backup is downloaded.
+# Controls: svp-pg-backup lists pg-backups (200) and reads there (404 NoSuchKey), each service's user reads its own prefix
+# uploads/uploads/ (404 NoSuchKey). Other pods cannot reach the store (IN-2, FF-5, WEB-13), and the Barman Cloud plugin's
+# RBAC is printed with its reason by the RBAC item.
+#
+# Each check and control is one step; a failed one marks the test failed and the next steps still run.
+apiVersion: chainsaw.kyverno.io/v1alpha1
+kind: Test
+metadata:
+  name: bak-1
+  labels:
+    drill: threats
+spec:
+  description: "BAK-1: object store user svp-pg-backup reads only bucket pg-backups, and no service's user reads it"
+  # An existing namespace: Chainsaw neither creates nor deletes it.
+  namespace: svp-data
+  steps:
+  # One signed GET per step, as the user named; the step prints "STATUS CODE", CODE the S3 error code of the answer ("-"
+  # when it has none). @object@ in the path is replaced by the name of this request's object.
+  - name: "BAK-1: control: svp-pg-backup lists its bucket pg-backups: 200 -"
+    bindings:
+    - {name: s3User, value: svp-pg-backup}
+    - {name: s3Path, value: "/pg-backups?list-type=2&max-keys=1"}
+    - {name: want, value: "200 -"}
+    try: &s3
+    - script:
+        env:
+        - {name: CALLER_KUBECONFIG, value: (env('KUBECONFIG'))}
+        - {name: S3_USER, value: ($s3User)}
+        - {name: S3_PATH, value: ($s3Path)}
+        content: |
+          set -eu
+          export KUBECONFIG="$CALLER_KUBECONFIG"
+          umask 077
+          work=$(mktemp -d)
+          trap 'rm -rf "$work"' EXIT
+          case $S3_USER in
+            svp-pg-backup)
+              kubectl --context k3d-svp -n svp-data get secret pg-backup-s3 -o json |
+                jq -r '"user = \(((.data.ACCESS_KEY_ID | @base64d) + ":" + (.data.ACCESS_SECRET_KEY | @base64d)) | @json)"' \
+                >"$work/login.curl" || { echo "FAIL  BAK-1: read the login of svp-pg-backup from Secret svp-data/pg-backup-s3" >&2; exit 1; }
+              ;;
+            svp-video-service | svp-media-worker)
+              [ "$S3_USER" = svp-video-service ] && key=SVP_VIDEO_S3_SECRET_KEY || key=SVP_MEDIA_WORKER_S3_SECRET_KEY
+              kubectl --context k3d-svp -n svp-data get secret s3-users -o json |
+                jq -r --arg u "$S3_USER" --arg k "$key" '"user = \(($u + ":" + (.data[$k] | @base64d)) | @json)"' \
+                >"$work/login.curl" || { echo "FAIL  BAK-1: read the login of $S3_USER from Secret svp-data/s3-users" >&2; exit 1; }
+              ;;
+            *) echo "FAIL  BAK-1: no login for $S3_USER" >&2; exit 1 ;;
+          esac
+          [ -s "$work/login.curl" ] || { echo "FAIL  BAK-1: read the login of $S3_USER (Secret svp-data/pg-backup-s3 or s3-users)" >&2; exit 1; }
+          object=drill-threats-$(date -u +%Y%m%dT%H%M%SZ)-$(openssl rand -hex 2)
+          path=$(printf '%s' "$S3_PATH" | sed "s/@object@/$object/")
+          : >"$work/out"
+          status=$(curl -s --max-time 10 -o "$work/out" -w '%{http_code}' -K "$work/login.curl" --aws-sigv4 aws:amz:us-east-1:s3 \
+            "https://s3.svp.localhost:8443$path" || true)
+          rm -f "$work/login.curl"
+          code=$(sed -n 's:.*<Code>\([A-Za-z]*\)</Code>.*:\1:p' "$work/out" | sed -n 1p)
+          echo "$status ${code:--}"
+        check:
+          ($error): ~
+          (trim_space($stdout)): ($want)
+      continueOnError: true
+  - name: "BAK-1: control: svp-pg-backup reads its bucket pg-backups: 404 NoSuchKey"
+    bindings:
+    - {name: s3User, value: svp-pg-backup}
+    - {name: s3Path, value: "/pg-backups/@object@"}
+    - {name: want, value: "404 NoSuchKey"}
+    try: *s3
+  - name: "BAK-1: svp-pg-backup lists no bucket of the services: GET /uploads?list-type=2 403 AccessDenied"
+    bindings:
+    - {name: s3User, value: svp-pg-backup}
+    - {name: s3Path, value: "/uploads?list-type=2&max-keys=1"}
+    - {name: want, value: "403 AccessDenied"}
+    try: *s3
+  - name: "BAK-1: svp-pg-backup reads no bucket of the services: GET /uploads/uploads/<object> 403 AccessDenied"
+    bindings:
+    - {name: s3User, value: svp-pg-backup}
+    - {name: s3Path, value: "/uploads/uploads/@object@"}
+    - {name: want, value: "403 AccessDenied"}
+    try: *s3
+  - name: "BAK-1: svp-pg-backup lists no bucket of the services: GET /media?list-type=2 403 AccessDenied"
+    bindings:
+    - {name: s3User, value: svp-pg-backup}
+    - {name: s3Path, value: "/media?list-type=2&max-keys=1"}
+    - {name: want, value: "403 AccessDenied"}
+    try: *s3
+  # Not under media/: what is there any request may read (UP-6), signed or not.
+  - name: "BAK-1: svp-pg-backup reads no bucket of the services: GET /media/<object> 403 AccessDenied"
+    bindings:
+    - {name: s3User, value: svp-pg-backup}
+    - {name: s3Path, value: "/media/@object@"}
+    - {name: want, value: "403 AccessDenied"}
+    try: *s3
+
+  - name: "BAK-1: control: svp-video-service reads its own prefix: GET /uploads/uploads/<object> 404 NoSuchKey"
+    bindings:
+    - {name: s3User, value: svp-video-service}
+    - {name: s3Path, value: "/uploads/uploads/@object@"}
+    - {name: want, value: "404 NoSuchKey"}
+    try: *s3
+  - name: "BAK-1: svp-video-service lists no backup: GET /pg-backups?list-type=2 403 AccessDenied"
+    bindings:
+    - {name: s3User, value: svp-video-service}
+    - {name: s3Path, value: "/pg-backups?list-type=2&max-keys=1"}
+    - {name: want, value: "403 AccessDenied"}
+    try: *s3
+  - name: "BAK-1: svp-video-service reads no backup: GET /pg-backups/<object> 403 AccessDenied"
+    bindings:
+    - {name: s3User, value: svp-video-service}
+    - {name: s3Path, value: "/pg-backups/@object@"}
+    - {name: want, value: "403 AccessDenied"}
+    try: *s3
+
+  - name: "BAK-1: control: svp-media-worker reads its own prefix: GET /uploads/uploads/<object> 404 NoSuchKey"
+    bindings:
+    - {name: s3User, value: svp-media-worker}
+    - {name: s3Path, value: "/uploads/uploads/@object@"}
+    - {name: want, value: "404 NoSuchKey"}
+    try: *s3
+  - name: "BAK-1: svp-media-worker lists no backup: GET /pg-backups?list-type=2 403 AccessDenied"
+    bindings:
+    - {name: s3User, value: svp-media-worker}
+    - {name: s3Path, value: "/pg-backups?list-type=2&max-keys=1"}
+    - {name: want, value: "403 AccessDenied"}
+    try: *s3
+  - name: "BAK-1: svp-media-worker reads no backup: GET /pg-backups/<object> 403 AccessDenied"
+    bindings:
+    - {name: s3User, value: svp-media-worker}
+    - {name: s3Path, value: "/pg-backups/@object@"}
+    - {name: want, value: "403 AccessDenied"}
+    try: *s3

@@ -1,0 +1,510 @@
+# SEC-5, SEC-6 and SEC-7 of docs/threat-model.md, on a cluster with External Secrets Operator (the GitOps path's staging).
+# Label requires=external-secrets: the caller leaves this test out, with a skip line and its reason, on a cluster without
+# the CRD externalsecrets.external-secrets.io (dev path: its Secrets come from .env); run there anyway, its first step
+# fails rather than passing on nothing.
+# SEC-6: the ServiceAccount of the SecretStore of each namespace with ExternalSecrets may get exactly the source Secrets
+# of svp-secrets that files/external-secrets.yaml of chart svp-cluster has that namespace read, by name, and neither list
+# nor watch them nor get a Secret of its own or any namespace (so the store of svp may not get pg-superuser; control: it
+# may get pg-roles); no ClusterSecretStore kind exists.
+# SEC-5: the controller (external-secrets/external-secrets) may create a token for the stores' ServiceAccounts only (Argo
+# CD's application controller, svp/default and a ServiceAccount of that name in svp-secrets refused; control: the store of
+# svp); as it, server-side dry runs: an Opaque Secret in argocd and a token Secret in svp are refused by
+# ValidatingAdmissionPolicy svp-external-secrets-writes (control: an Opaque Secret in svp passes it); where the chart
+# renders Argo CD Notifications' ExternalSecret (externalSecrets.argocdNotifications), Opaque Secret
+# argocd/argocd-notifications-secret passes it (control) while a token Secret of that name and an Opaque Secret of another
+# name in argocd are refused, the latter with the message naming the one Secret allowed there (elsewhere those three are
+# said as info and pass); its right to read every Secret is printed as the SEC-5 exception with its reason; no webhook
+# configuration of ESO and no pod but the controller in external-secrets; the probe pod of svp-probe
+# (templates/probe-up.yaml) cannot open the controller's metrics port 8080 (control: a port-forward to it on
+# 127.0.0.1:18080, through the kubelet, gets /metrics; templates/port-forward.yaml).
+# SEC-7: no ServiceAccount of svp may create ExternalSecrets or SecretStores in svp, and ClusterRoles view, edit and admin
+# grant nothing on external-secrets.io.
+#
+# Each check is one operation named by its ID; continueOnError keeps the next checks running after one fails, and the
+# test still fails. The steps that use a template (probe pod, port-forward) come last: a template step that fails ends
+# the test. Nothing is written: every Secret is a server-side dry run. Impersonation (--as) is kubectl's, so those checks
+# are scripts; kubectl uses the caller's kubeconfig and context k3d-svp (templates/probe-up.yaml says why).
+apiVersion: chainsaw.kyverno.io/v1alpha1
+kind: Test
+metadata:
+  name: sec-5-6-7
+  labels:
+    drill: threats
+    requires: external-secrets
+spec:
+  # An existing namespace, so Chainsaw creates no ephemeral one and deletes nothing.
+  namespace: svp
+  bindings:
+  # What the API server answers when ValidatingAdmissionPolicy svp-external-secrets-writes refuses a write.
+  - name: writesDenied
+    value: '*ValidatingAdmissionPolicy ''svp-external-secrets-writes''*denied*'
+  # ... and when it refuses a Secret in argocd other than Argo CD Notifications' one.
+  - name: onlyNotifications
+    value: '*ValidatingAdmissionPolicy ''svp-external-secrets-writes''*denied*only Secret argocd/argocd-notifications-secret of type Opaque: not CREATE of argocd/svp-drill-threats*'
+  steps:
+  - name: sec-5-6-7-eso-installed
+    try:
+    - description: "SEC-5/6/7: External Secrets Operator is installed (CRD externalsecrets.external-secrets.io); the caller leaves this test out where it is not"
+      assert:
+        timeout: 5s
+        resource:
+          apiVersion: apiextensions.k8s.io/v1
+          kind: CustomResourceDefinition
+          metadata:
+            name: externalsecrets.external-secrets.io
+
+  - name: sec-6-stores
+    try:
+    # The entries are read from the list the chart renders the stores' Roles from (values: NAME: ENTRY/KEY), not from the
+    # Roles it renders. An entry with enabledBy (rendered only when a key of externalSecrets turns it on) counts only
+    # where the cluster has its ExternalSecret.
+    - description: "SEC-6: read the entries each namespace's ExternalSecrets read (files/external-secrets.yaml of chart svp-cluster) and the source Secrets of svp-secrets"
+      script:
+        shell: bash
+        env:
+        - &kubeconfig
+          name: CALLER_KUBECONFIG
+          value: (env('KUBECONFIG'))
+        content: |
+          set -euo pipefail
+          export KUBECONFIG="$CALLER_KUBECONFIG"
+          entries=$(awk '/^- namespace: / { ns = $3; name = ""; by = 0; vals = 0; next }
+            /^  name: / { name = $2 }
+            /^  enabledBy: / { by = 1 }
+            /^  values:$/ { vals = 1; next }
+            /^  [^ ]/ { vals = 0 }
+            vals && /^    [^ :]+: [a-z0-9-]+\/[A-Za-z0-9_]+$/ { e = $2; sub(/\/.*/, "", e); print ns, e, (by ? ns "/" name : "") }' \
+            "$(git rev-parse --show-toplevel)/deploy/helm/svp-cluster/files/external-secrets.yaml" |
+            while read -r ns entry es; do
+              if [ -n "$es" ] && ! kubectl --context k3d-svp -n "${es%/*}" get externalsecrets.external-secrets.io "${es#*/}" >/dev/null 2>&1; then
+                continue
+              fi
+              echo "$ns $entry"
+            done | sort -u)
+          [ -n "$entries" ] || { echo "FAIL  SEC-6: read the entries of deploy/helm/svp-cluster/files/external-secrets.yaml" >&2; exit 1; }
+          sources=$(kubectl --context k3d-svp -n svp-secrets get secrets -o jsonpath='{.items[*].metadata.name}')
+          [ -n "$sources" ] || { echo "FAIL  SEC-6: namespace svp-secrets holds no source Secret" >&2; exit 1; }
+          jq -n --arg entries "$entries" --arg sources "$sources" \
+            '{entries: $entries, sources: $sources, namespaces: ($entries | split("\n") | map(split(" ")[0]) | unique | join(" "))}'
+        check:
+          ($error): ~
+        outputs:
+        - name: entries
+          value: (json_parse($stdout).entries)
+        - name: sources
+          value: (json_parse($stdout).sources)
+        - name: storeNamespaces
+          value: (json_parse($stdout).namespaces)
+    - description: "SEC-6: the store of each namespace may get exactly the source Secrets of svp-secrets its ExternalSecrets read, by name"
+      continueOnError: true
+      script:
+        shell: bash
+        env:
+        - *kubeconfig
+        - {name: ENTRIES, value: ($entries)}
+        - {name: SOURCES, value: ($sources)}
+        - {name: STORE_NAMESPACES, value: ($storeNamespaces)}
+        content: |
+          set -euo pipefail
+          export KUBECONFIG="$CALLER_KUBECONFIG"
+          bad=0 n=0
+          for ns in $STORE_NAMESPACES; do
+            for entry in $SOURCES; do
+              # The control below.
+              [[ $ns == svp && $entry == pg-roles ]] && continue
+              if grep -qx "$ns $entry" <<<"$ENTRIES"; then want=yes; else want=no; fi
+              out=$(kubectl --context k3d-svp auth can-i get "secrets/$entry" -n svp-secrets --as="system:serviceaccount:$ns:svp-secrets-reader" 2>&1 || true)
+              n=$((n + 1))
+              if [[ $out == "$want" ]]; then
+                echo "ok    SEC-6: the store of $ns may $([[ $want == yes ]] || echo 'not ')get svp-secrets/$entry"
+              else
+                echo "FAIL  SEC-6: the store of $ns may $([[ $want == yes ]] || echo 'not ')get svp-secrets/$entry (can-i '$out', want $want)" >&2
+                bad=$((bad + 1))
+              fi
+            done
+          done
+          [ "$bad" = 0 ] || exit 1
+          echo "ok    SEC-6: $n can-i checks, the store of each namespace ($STORE_NAMESPACES) gets exactly its entries of svp-secrets"
+        check:
+          ($error): ~
+          "(starts_with($stdout, 'ok    SEC-6: '))": true
+    - description: "SEC-6 control: the store of svp may get svp-secrets/pg-roles, which its ExternalSecrets read"
+      continueOnError: true
+      script:
+        env:
+        - *kubeconfig
+        - {name: AS, value: system:serviceaccount:svp:svp-secrets-reader}
+        - {name: CAN_I, value: get secrets/pg-roles -n svp-secrets}
+        content: &can-i |
+          set -eu
+          export KUBECONFIG="$CALLER_KUBECONFIG"
+          set -f
+          # shellcheck disable=SC2086 # CAN_I is the verb, the resource and their flags
+          kubectl --context k3d-svp auth can-i $CAN_I --as="$AS" 2>&1 || true
+        check:
+          (trim_space($stdout)): 'yes'
+    # store-can-not: kubectl auth can-i CAN_I (with @ns replaced by each namespace) as the store of each namespace with
+    # ExternalSecrets answers no.
+    - description: "SEC-6: the store of each namespace may not list secrets in svp-secrets"
+      continueOnError: true
+      script:
+        shell: bash
+        env:
+        - *kubeconfig
+        - {name: STORE_NAMESPACES, value: ($storeNamespaces)}
+        - {name: WHAT, value: list secrets in svp-secrets}
+        - {name: CAN_I, value: list secrets -n svp-secrets}
+        content: &store-can-not |
+          set -euo pipefail
+          export KUBECONFIG="$CALLER_KUBECONFIG"
+          set -f
+          bad=0
+          for ns in $STORE_NAMESPACES; do
+            args=${CAN_I//@ns/$ns}
+            # shellcheck disable=SC2086 # args is the verb, the resource and their flags
+            out=$(kubectl --context k3d-svp auth can-i $args --as="system:serviceaccount:$ns:svp-secrets-reader" 2>&1 || true)
+            if [[ $out == no ]]; then
+              echo "ok    SEC-6: the store of $ns may not ${WHAT//@ns/$ns}"
+            else
+              echo "FAIL  SEC-6: the store of $ns may not ${WHAT//@ns/$ns} (can-i '$out', want no)" >&2
+              bad=$((bad + 1))
+            fi
+          done
+          [ "$bad" = 0 ] || exit 1
+          echo "ok    SEC-6: the store of no namespace ($STORE_NAMESPACES) may $WHAT"
+        check:
+          ($error): ~
+          "(starts_with($stdout, 'ok    SEC-6: '))": true
+    - description: "SEC-6: the store of each namespace may not watch secrets in svp-secrets"
+      continueOnError: true
+      script:
+        shell: bash
+        env:
+        - *kubeconfig
+        - {name: STORE_NAMESPACES, value: ($storeNamespaces)}
+        - {name: WHAT, value: watch secrets in svp-secrets}
+        - {name: CAN_I, value: watch secrets -n svp-secrets}
+        content: *store-can-not
+        check:
+          ($error): ~
+          "(starts_with($stdout, 'ok    SEC-6: '))": true
+    - description: "SEC-6: the store of each namespace may not get secrets in its own namespace"
+      continueOnError: true
+      script:
+        shell: bash
+        env:
+        - *kubeconfig
+        - {name: STORE_NAMESPACES, value: ($storeNamespaces)}
+        - {name: WHAT, value: get secrets in @ns}
+        - {name: CAN_I, value: get secrets -n @ns}
+        content: *store-can-not
+        check:
+          ($error): ~
+          "(starts_with($stdout, 'ok    SEC-6: '))": true
+    - description: "SEC-6: the store of each namespace may not get secrets in every namespace"
+      continueOnError: true
+      script:
+        shell: bash
+        env:
+        - *kubeconfig
+        - {name: STORE_NAMESPACES, value: ($storeNamespaces)}
+        - {name: WHAT, value: get secrets in every namespace}
+        - {name: CAN_I, value: get secrets -A}
+        content: *store-can-not
+        check:
+          ($error): ~
+          "(starts_with($stdout, 'ok    SEC-6: '))": true
+    - description: "SEC-6: no ClusterSecretStore kind: no store reads the source for every namespace"
+      continueOnError: true
+      error:
+        resource:
+          apiVersion: apiextensions.k8s.io/v1
+          kind: CustomResourceDefinition
+          metadata:
+            name: clustersecretstores.external-secrets.io
+
+  - name: sec-5-controller
+    try:
+    # SEC-5: tokens only for the stores' ServiceAccounts.
+    - description: "SEC-5: the controller may not create a token for argocd/argocd-application-controller"
+      continueOnError: true
+      script:
+        env:
+        - *kubeconfig
+        - &controller {name: AS, value: system:serviceaccount:external-secrets:external-secrets}
+        - {name: CAN_I, value: create serviceaccounts/argocd-application-controller --subresource=token -n argocd}
+        content: *can-i
+        check:
+          (trim_space($stdout)): 'no'
+    - description: "SEC-5: the controller may not create a token for svp/default"
+      continueOnError: true
+      script:
+        env:
+        - *kubeconfig
+        - *controller
+        - {name: CAN_I, value: create serviceaccounts/default --subresource=token -n svp}
+        content: *can-i
+        check:
+          (trim_space($stdout)): 'no'
+    - description: "SEC-5: the controller may not create a token for svp-secrets/svp-secrets-reader"
+      continueOnError: true
+      script:
+        env:
+        - *kubeconfig
+        - *controller
+        - {name: CAN_I, value: create serviceaccounts/svp-secrets-reader --subresource=token -n svp-secrets}
+        content: *can-i
+        check:
+          (trim_space($stdout)): 'no'
+    - description: "SEC-5 control: the controller may create a token for svp/svp-secrets-reader, the store's"
+      continueOnError: true
+      script:
+        env:
+        - *kubeconfig
+        - *controller
+        - {name: CAN_I, value: create serviceaccounts/svp-secrets-reader --subresource=token -n svp}
+        content: *can-i
+        check:
+          (trim_space($stdout)): 'yes'
+    # Its Secret writes: held by the admission policy, which RBAC cannot do. A token Secret names ServiceAccount default.
+    - description: "SEC-5: as the controller, an Opaque Secret in argocd is refused by ValidatingAdmissionPolicy svp-external-secrets-writes"
+      continueOnError: true
+      script:
+        env:
+        - *kubeconfig
+        - {name: NS, value: argocd}
+        - {name: NAME, value: svp-drill-threats}
+        - {name: TYPE, value: Opaque}
+        content: &controller-secret |
+          set -eu
+          export KUBECONFIG="$CALLER_KUBECONFIG"
+          jq -n --arg ns "$NS" --arg name "$NAME" --arg type "$TYPE" '{apiVersion: "v1", kind: "Secret", type: $type,
+            metadata: {name: $name, namespace: $ns, annotations: {"kubernetes.io/service-account.name": "default"}}}' |
+            kubectl --context k3d-svp create --dry-run=server -f - --as=system:serviceaccount:external-secrets:external-secrets 2>&1 || true
+        check:
+          (wildcard($writesDenied, $stdout)): true
+    - description: "SEC-5: as the controller, a token Secret in svp is refused by ValidatingAdmissionPolicy svp-external-secrets-writes"
+      continueOnError: true
+      script:
+        env:
+        - *kubeconfig
+        - {name: NS, value: svp}
+        - {name: NAME, value: svp-drill-threats}
+        - {name: TYPE, value: kubernetes.io/service-account-token}
+        content: *controller-secret
+        check:
+          (wildcard($writesDenied, $stdout)): true
+    - description: "SEC-5 control: as the controller, an Opaque Secret in svp passes ValidatingAdmissionPolicy svp-external-secrets-writes"
+      continueOnError: true
+      script:
+        env:
+        - *kubeconfig
+        - {name: NS, value: svp}
+        - {name: NAME, value: svp-drill-threats}
+        - {name: TYPE, value: Opaque}
+        content: *controller-secret
+        check:
+          (contains($stdout, 'created (server dry run)')): true
+    # Argo CD Notifications' Secret, where the chart renders its ExternalSecret: the one Secret the controller may write in
+    # argocd, Argo CD's namespace, and only of type Opaque. The dry run of a Secret that exists already passes admission
+    # before the API server answers AlreadyExists. Where it is not rendered, the three checks below pass on that.
+    - description: "SEC-5: read whether the chart renders ExternalSecret argocd/argocd-notifications-secret (externalSecrets.argocdNotifications)"
+      script:
+        env:
+        - *kubeconfig
+        content: |
+          set -eu
+          export KUBECONFIG="$CALLER_KUBECONFIG"
+          if kubectl --context k3d-svp -n argocd get externalsecrets.external-secrets.io argocd-notifications-secret >/dev/null 2>&1; then
+            echo true
+          else
+            echo "info  SEC-5: no ExternalSecret argocd/argocd-notifications-secret (externalSecrets.argocdNotifications of chart svp-cluster off here): the controller writes no Secret in argocd" >&2
+            echo false
+          fi
+        check:
+          ($error): ~
+        outputs:
+        - name: notifications
+          value: (json_parse(trim_space($stdout)))
+    - description: "SEC-5 control: as the controller, Opaque Secret argocd/argocd-notifications-secret passes ValidatingAdmissionPolicy svp-external-secrets-writes"
+      continueOnError: true
+      script:
+        env:
+        - *kubeconfig
+        - {name: NS, value: argocd}
+        - {name: NAME, value: argocd-notifications-secret}
+        - {name: TYPE, value: Opaque}
+        content: *controller-secret
+        check:
+          ($notifications == `false` || contains($stdout, 'created (server dry run)') || contains($stdout, 'AlreadyExists') || contains($stdout, 'already exists')): true
+    - description: "SEC-5: as the controller, a token Secret argocd/argocd-notifications-secret is refused by ValidatingAdmissionPolicy svp-external-secrets-writes"
+      continueOnError: true
+      script:
+        env:
+        - *kubeconfig
+        - {name: NS, value: argocd}
+        - {name: NAME, value: argocd-notifications-secret}
+        - {name: TYPE, value: kubernetes.io/service-account-token}
+        content: *controller-secret
+        check:
+          ($notifications == `false` || wildcard($writesDenied, $stdout)): true
+    - description: "SEC-5: as the controller, Opaque Secret argocd/svp-drill-threats is refused by ValidatingAdmissionPolicy svp-external-secrets-writes, which names the one Secret allowed in argocd"
+      continueOnError: true
+      script:
+        env:
+        - *kubeconfig
+        - {name: NS, value: argocd}
+        - {name: NAME, value: svp-drill-threats}
+        - {name: TYPE, value: Opaque}
+        content: *controller-secret
+        check:
+          ($notifications == `false` || wildcard($onlyNotifications, $stdout)): true
+    - description: "SEC-5 exception (info): the controller reads every Secret of the cluster"
+      script:
+        env:
+        - *kubeconfig
+        content: |
+          set -eu
+          export KUBECONFIG="$CALLER_KUBECONFIG"
+          out=$(kubectl --context k3d-svp auth can-i list secrets -n argocd --as=system:serviceaccount:external-secrets:external-secrets 2>&1 || true)
+          echo "info  SEC-5 exception: External Secrets Operator's controller reads every Secret of the cluster (can-i list secrets in argocd: $out): it watches the metadata of every Secret whatever its flags (WatchesMetadata of Secret, externalsecret_controller.go of v2.14.0), and a right to list is a right to read; its writes are held to the namespaces of its ExternalSecrets by ValidatingAdmissionPolicy 'svp-external-secrets-writes' and its tokens to the stores' ServiceAccounts (checked above; base/external-secrets.yaml of svp-gitops)"
+        check:
+          ($error): ~
+    - description: "SEC-5: no webhook configuration of External Secrets Operator"
+      continueOnError: true
+      script:
+        shell: bash
+        env:
+        - *kubeconfig
+        content: |
+          set -euo pipefail
+          export KUBECONFIG="$CALLER_KUBECONFIG"
+          kubectl --context k3d-svp get validatingwebhookconfigurations,mutatingwebhookconfigurations -o json | jq -r '.items[]
+            | select((.metadata.name | test("external-secrets")) or ((.metadata.labels // {})["app.kubernetes.io/instance"] == "external-secrets"))
+            | .metadata.name'
+        check:
+          ($error): ~
+          (trim_space($stdout)): ''
+    - description: "SEC-5: the only pod of external-secrets is the controller: no webhook, no cert-controller"
+      continueOnError: true
+      script:
+        shell: bash
+        env:
+        - *kubeconfig
+        content: |
+          set -euo pipefail
+          export KUBECONFIG="$CALLER_KUBECONFIG"
+          kubectl --context k3d-svp -n external-secrets get pods -o json |
+            jq -c '[.items[] | {name: .metadata.name, app: (.metadata.labels["app.kubernetes.io/name"] // "-")}]'
+        check:
+          ($error): ~
+          (length(json_parse($stdout))): 1
+          (json_parse($stdout)[0].app): external-secrets
+
+  # SEC-7: creating an ExternalSecret is reading what its store reads.
+  - name: sec-7
+    try:
+    - description: "SEC-7: no ServiceAccount of svp may create externalsecrets in svp"
+      continueOnError: true
+      script:
+        shell: bash
+        env:
+        - *kubeconfig
+        - {name: RESOURCE, value: externalsecrets}
+        content: &sec-7 |
+          set -euo pipefail
+          export KUBECONFIG="$CALLER_KUBECONFIG"
+          sas=$(kubectl --context k3d-svp -n svp get serviceaccounts -o jsonpath='{.items[*].metadata.name}')
+          [ -n "$sas" ] || { echo "FAIL  SEC-7: list the ServiceAccounts of svp" >&2; exit 1; }
+          bad=0
+          for sa in $sas; do
+            out=$(kubectl --context k3d-svp auth can-i create "$RESOURCE.external-secrets.io" -n svp --as="system:serviceaccount:svp:$sa" 2>&1 || true)
+            if [[ $out == no ]]; then
+              echo "ok    SEC-7: ServiceAccount svp/$sa may not create $RESOURCE in svp"
+            else
+              echo "FAIL  SEC-7: ServiceAccount svp/$sa may not create $RESOURCE in svp (can-i '$out', want no)" >&2
+              bad=$((bad + 1))
+            fi
+          done
+          [ "$bad" = 0 ] || exit 1
+          echo "ok    SEC-7: no ServiceAccount of svp ($sas) may create $RESOURCE in svp"
+        check:
+          ($error): ~
+          "(starts_with($stdout, 'ok    SEC-7: '))": true
+    - description: "SEC-7: no ServiceAccount of svp may create secretstores in svp"
+      continueOnError: true
+      script:
+        shell: bash
+        env:
+        - *kubeconfig
+        - {name: RESOURCE, value: secretstores}
+        content: *sec-7
+        check:
+          ($error): ~
+          "(starts_with($stdout, 'ok    SEC-7: '))": true
+    - description: "SEC-7: ClusterRoles view, edit and admin grant nothing on external-secrets.io (aggregation off)"
+      continueOnError: true
+      script:
+        shell: bash
+        env:
+        - *kubeconfig
+        content: |
+          set -euo pipefail
+          export KUBECONFIG="$CALLER_KUBECONFIG"
+          kubectl --context k3d-svp get clusterroles view edit admin -o json | jq -r '[.items[] | .metadata.name as $n
+            | .rules[]? | select(any(.apiGroups[]?; . == "external-secrets.io" or . == "*")) | $n] | unique | join(" ")'
+        check:
+          ($error): ~
+          (trim_space($stdout)): ''
+
+  - name: sec-5-probe
+    use:
+      template: ../../templates/probe-up.yaml
+
+  - name: sec-5-metrics
+    try:
+    - description: "SEC-5: find the running controller pod of external-secrets and its address"
+      continueOnError: true
+      script:
+        shell: bash
+        env:
+        - *kubeconfig
+        content: |
+          set -euo pipefail
+          export KUBECONFIG="$CALLER_KUBECONFIG"
+          kubectl --context k3d-svp -n external-secrets get pods -l app.kubernetes.io/name=external-secrets \
+            --field-selector status.phase=Running -o jsonpath='{.items[0].status.podIP}'
+        check:
+          ($error): ~
+          (trim_space($stdout) != ''): true
+        outputs:
+        - name: controllerIp
+          value: (trim_space($stdout))
+    # busybox nc of the probe pod, 3 s to open; an address needs no name to resolve.
+    - description: "SEC-5: the probe pod of svp-probe cannot open the controller's metrics port 8080"
+      continueOnError: true
+      script:
+        env:
+        - *kubeconfig
+        - {name: TARGET, value: ($controllerIp)}
+        content: |
+          set -eu
+          export KUBECONFIG="$CALLER_KUBECONFIG"
+          kubectl --context k3d-svp -n svp-probe exec pod/probe -- sh -c '
+            if timeout 5 nc -z -w 3 "$1" 8080 >/dev/null 2>&1; then echo open; else echo closed; fi' sh "$TARGET"
+        check:
+          ($error): ~
+          (trim_space($stdout)): closed
+
+  # Control of the check above: the port answers a client the policy lets in. The forward goes through the kubelet, which
+  # no NetworkPolicy holds; the step fails unless /metrics answers within 20 s.
+  - name: sec-5-control-metrics-forward
+    use:
+      template: ../../templates/port-forward.yaml
+      with:
+        bindings:
+        - {name: forwardNamespace, value: external-secrets}
+        - {name: forwardTarget, value: deployment/external-secrets}
+        - {name: forwardPort, value: "18080"}
+        - {name: forwardRemotePort, value: "8080"}
+        - {name: forwardReadyPath, value: /metrics}

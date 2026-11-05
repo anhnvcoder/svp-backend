@@ -1,0 +1,1326 @@
+# WEB-7 and WEB-2 of the threat model (docs/threat-model.md), one test because WEB-2 uses the session WEB-7 reads and
+# ends with its logout.
+#
+# Setup: a drill user registers through the web client's /register form at https://svp.localhost:8443 (posted as a
+# browser without JavaScript posts it: the form's hidden Server Action fields, read from the page, then the user's
+# fields; the session cookie __Host-Http-svp_sid stays in a private cookie jar).
+#
+# WEB-7, the BFF is no open proxy and no token reaches the browser: with that session, /api/ paths outside the BFF's list
+# are 400 or 404: unknown and gateway-only routes, `..` (sent as is), %2F, an internal host in the path, an unknown query
+# parameter; a path with %2F may instead get Envoy's own redirect to the unescaped path (Envoy Gateway's default
+# UnescapeAndRedirect), whose Location must stay on the web client's origin with no escaped slash and answer 400 or 404
+# in turn. Its HTML pages (/, /me, /upload, /u/<handle>) are 200, and they, the RSC payloads of / and /me and the JSON of
+# /api/me and /api/feed/explore hold no string shaped like a JWT (eyJ.., three dot-separated parts), nor the session's
+# own access token, refresh token or session id (read from the session in Valkey db 9, never printed). Controls:
+# /api/feed/explore and /api/me are 200 (handle of the drill user), /me renders the handle (the pages were rendered with
+# the session), the RSC answers are text/x-component, and the same JWT search finds the token of a login answered by the
+# gateway itself (https://api.svp.localhost:8443) and the session's access token.
+#
+# WEB-2, no request from another site, or from s3.svp.localhost, changes state with the session: POSTs carrying the
+# drill user's session cookie to a Server Action (the /login form), /api/videos (an empty JSON object), /logout, /rum
+# and /monitoring with Sec-Fetch-Site cross-site or same-site, Origin https://evil.example, https://s3.svp.localhost:8443
+# (same site: it serves files users uploaded) or null, or with neither header, are 403 CSRF_REJECTED, and after the
+# refused logouts the session still works. Controls: the same POSTs with Sec-Fetch-Site same-origin and the app's Origin
+# are not refused: the login action renders its form with "Wrong email or password" in the form's alert (200), the empty
+# upload request reaches the gateway (400, its own code), /rum takes a beacon (204), /monitoring checks the body (400
+# INVALID_REPORT; 404 means SENTRY_DSN is empty in Secret svp/sentry), and /logout (303) clears the cookie and ends the
+# session on the server: the old session id sent again gets 401 from /api/me.
+#
+# Each check and control is one operation named by its ID; continueOnError keeps the next ones running after one fails,
+# and the test still fails. A failed setup (the gateway not ready, the drill user not registered, the /login form not
+# read) ends the test. The scripts source web.sh (helpers, and what the test may write and print); their files live in
+# the test's private work directory .k8s/drills/web-7-web-2, made by the first step and removed when the test ends,
+# after the web session is logged out if it is still on (it lives 30 days). LOCAL LAB ONLY: the test deletes the
+# register rate limit keys svp:gw:rl:register:* in the cluster's Valkey db 10 (SCAN + DEL) before it registers its drill
+# user; otherwise it reads Valkey only (GET of the drill user's own session in db 9).
+apiVersion: chainsaw.kyverno.io/v1alpha1
+kind: Test
+metadata:
+  name: web-7-web-2
+  labels:
+    drill: threats
+spec:
+  description: "WEB-7: the BFF is no open proxy and no token reaches the browser; WEB-2: no request from another site changes state with the session"
+  # An existing namespace: Chainsaw neither creates nor deletes it.
+  namespace: svp
+  steps:
+  - name: "WEB-7: setup: gateway ready, register rate limit reset, work directory, drill user registered through the web client"
+    try:
+    - description: "WEB-7: setup: gateway ready through Envoy within 60 s"
+      script:
+        shell: bash
+        env:
+        - &kubeconfig {name: CALLER_KUBECONFIG, value: (env('KUBECONFIG'))}
+        content: |
+          set -eu
+          deadline=$(( $(date +%s) + 60 ))
+          until [ "$(curl -s --max-time 5 -o /dev/null -w '%{http_code}' https://api.svp.localhost:8443/readyz || true)" = 200 ]; do
+            [ "$(date +%s)" -lt "$deadline" ] || { echo "FAIL  readyz within 60s" >&2; exit 1; }
+            sleep 1
+          done
+          echo readyz
+        check:
+          ($error): ~
+    - description: "WEB-7: setup: register rate limit reset for this lab run (LOCAL LAB ONLY)"
+      script:
+        shell: bash
+        env:
+        - *kubeconfig
+        content: |
+          set -eu
+          export KUBECONFIG="$CALLER_KUBECONFIG"
+          umask 077
+          keys=$(mktemp)
+          trap 'rm -f "$keys"' EXIT
+          kubectl --context k3d-svp -n svp-data exec deploy/valkey -c valkey -- \
+            valkey-cli -n 10 --scan --pattern 'svp:gw:rl:register:*' >"$keys"
+          n=0
+          while IFS= read -r key; do
+            [ -n "$key" ] || continue
+            kubectl --context k3d-svp -n svp-data exec deploy/valkey -c valkey -- valkey-cli -n 10 DEL "$key" >/dev/null
+            n=$((n + 1))
+          done <"$keys"
+          echo "register rate limit reset ($n keys deleted in Valkey db 10 of cluster svp)"
+        check:
+          ($error): ~
+    - description: "WEB-7: setup: the test's private work directory .k8s/drills/web-7-web-2 (one left by a killed run is removed first)"
+      script:
+        shell: bash
+        env:
+        - *kubeconfig
+        content: |
+          set -euo pipefail
+          . ./web.sh
+          rm -rf "$work"
+          mkdir -p "$(dirname "$work")"
+          mkdir "$work"
+          echo "work directory ${work#"$(git rev-parse --show-toplevel)"/}"
+        check:
+          ($error): ~
+    - description: "WEB-7: setup: a drill user registers through the web client's /register form (no JavaScript, Server Action): 303 with the session cookie"
+      script:
+        shell: bash
+        env:
+        - *kubeconfig
+        content: |
+          set -euo pipefail
+          . ./web.sh
+          work_ready
+          web_user
+        check:
+          ($error): ~
+    cleanup:
+    # At the end of the test, whatever failed: the web session is logged out if it is still on, the work directory goes.
+    - script:
+        shell: bash
+        env:
+        - *kubeconfig
+        content: |
+          set -euo pipefail
+          . ./web.sh
+          web_logout
+          rm -rf "$work"
+
+  - name: "WEB-7: the BFF is no open proxy and no token reaches the browser"
+    try:
+    # Paths outside the BFF's list, with the session, so a refusal is the list and not a missing login. `..` goes as is
+    # (--path-as-is); should Envoy or Next normalise it, the path left is /debug/pprof or /api/internal, neither of which
+    # the app has: 404 as well. No path ends in / or holds //: Next answers those with a 308 to the normalised path. A
+    # path with %2F may get Envoy's redirect instead; none of them unescapes to a route on the list (/api/videos/{id} is
+    # one, but of a random id: 404), so wherever the redirect leads is 400 or 404 too. Each prints "refused" when so.
+    - description: "WEB-7: GET /api/internal/secrets through the web client with the session: 400 or 404 (or Envoy's redirect, on the web client's origin, to a path that is)"
+      continueOnError: true
+      script:
+        shell: bash
+        env:
+        - *kubeconfig
+        - {name: PROBE, value: "/api/internal/secrets"}
+        content: &web7probe |
+          set -euo pipefail
+          . ./web.sh
+          work_ready
+          # {id} is a random id in the BFF's id pattern (no listed route has it: 404 there too).
+          p=${PROBE//\{id\}/$(rand_uuid)}
+          status=$(web_get "$p" "$work/web7-probe" --path-as-is)
+          code=$(jq -r '.code // ""' "$work/web7-probe" 2>/dev/null || true)
+          echo "GET $p through the web client with the session: status $status${code:+, code $code}" >&2
+          if [[ $status == 3?? && $p == *%2F* ]]; then
+            # Envoy Gateway's default for an escaped slash (%2F, %5C) is UnescapeAndRedirect (ClientTrafficPolicy
+            # path.escapedSlashesAction; the repo sets none): Envoy answers a redirect to the unescaped, normalised path itself,
+            # before the web client sees the request. No way past the BFF's list as long as the Location stays on the web
+            # client's origin (a path, or https://svp.localhost:8443/...), holds no escaped slash, and answers 400 or 404 there.
+            loc=$(tr -d '\r' <"$work/web7-probe.headers" | awk 'tolower($1) == "location:" { v = $2 } END { print v }')
+            loc=${loc#"$web_base"}
+            if [[ $loc != /* || $loc == //* || $loc == *\\* ]] || grep -qiE '%2f|%5c' <<<"$loc"; then
+              echo "redirect $status to '$loc', not a path of the web client's origin with no escaped slash left"
+              exit 0
+            fi
+            follow=$(web_get "$loc" "$work/web7-follow" --path-as-is)
+            echo "redirect $status to $loc (same origin, slash unescaped), which answers $follow" >&2
+            if [[ $follow == 400 || $follow == 404 ]]; then echo refused; else echo "redirect $status to $loc, which answers $follow"; fi
+          elif [[ $status == 400 || $status == 404 ]]; then
+            echo refused
+          else
+            echo "status $status${code:+, code $code}"
+          fi
+        check:
+          ($error): ~
+          (trim_space($stdout)): refused
+    - description: "WEB-7: GET /api/healthz through the web client with the session: 400 or 404 (or Envoy's redirect, on the web client's origin, to a path that is)"
+      continueOnError: true
+      script:
+        shell: bash
+        env:
+        - *kubeconfig
+        - {name: PROBE, value: "/api/healthz"}
+        content: *web7probe
+        check:
+          ($error): ~
+          (trim_space($stdout)): refused
+    - description: "WEB-7: GET /api/readyz through the web client with the session: 400 or 404 (or Envoy's redirect, on the web client's origin, to a path that is)"
+      continueOnError: true
+      script:
+        shell: bash
+        env:
+        - *kubeconfig
+        - {name: PROBE, value: "/api/readyz"}
+        content: *web7probe
+        check:
+          ($error): ~
+          (trim_space($stdout)): refused
+    - description: "WEB-7: GET /api/metrics through the web client with the session: 400 or 404 (or Envoy's redirect, on the web client's origin, to a path that is)"
+      continueOnError: true
+      script:
+        shell: bash
+        env:
+        - *kubeconfig
+        - {name: PROBE, value: "/api/metrics"}
+        content: *web7probe
+        check:
+          ($error): ~
+          (trim_space($stdout)): refused
+    - description: "WEB-7: GET /api/debug/pprof through the web client with the session: 400 or 404 (or Envoy's redirect, on the web client's origin, to a path that is)"
+      continueOnError: true
+      script:
+        shell: bash
+        env:
+        - *kubeconfig
+        - {name: PROBE, value: "/api/debug/pprof"}
+        content: *web7probe
+        check:
+          ($error): ~
+          (trim_space($stdout)): refused
+    - description: "WEB-7: GET /api/auth/login through the web client with the session: 400 or 404 (or Envoy's redirect, on the web client's origin, to a path that is)"
+      continueOnError: true
+      script:
+        shell: bash
+        env:
+        - *kubeconfig
+        - {name: PROBE, value: "/api/auth/login"}
+        content: *web7probe
+        check:
+          ($error): ~
+          (trim_space($stdout)): refused
+    - description: "WEB-7: GET /api/public/videos/<random id> through the web client with the session: 400 or 404 (or Envoy's redirect, on the web client's origin, to a path that is)"
+      continueOnError: true
+      script:
+        shell: bash
+        env:
+        - *kubeconfig
+        - {name: PROBE, value: "/api/public/videos/{id}"}
+        content: *web7probe
+        check:
+          ($error): ~
+          (trim_space($stdout)): refused
+    - description: "WEB-7: GET /api/videos/..%2Finternal through the web client with the session: 400 or 404 (or Envoy's redirect, on the web client's origin, to a path that is)"
+      continueOnError: true
+      script:
+        shell: bash
+        env:
+        - *kubeconfig
+        - {name: PROBE, value: "/api/videos/..%2Finternal"}
+        content: *web7probe
+        check:
+          ($error): ~
+          (trim_space($stdout)): refused
+    - description: "WEB-7: GET /api/videos%2F<random id> through the web client with the session: 400 or 404 (or Envoy's redirect, on the web client's origin, to a path that is)"
+      continueOnError: true
+      script:
+        shell: bash
+        env:
+        - *kubeconfig
+        - {name: PROBE, value: "/api/videos%2F{id}"}
+        content: *web7probe
+        check:
+          ($error): ~
+          (trim_space($stdout)): refused
+    - description: "WEB-7: GET /api/me%2F..%2F..%2Fdebug%2Fpprof through the web client with the session: 400 or 404 (or Envoy's redirect, on the web client's origin, to a path that is)"
+      continueOnError: true
+      script:
+        shell: bash
+        env:
+        - *kubeconfig
+        - {name: PROBE, value: "/api/me%2F..%2F..%2Fdebug%2Fpprof"}
+        content: *web7probe
+        check:
+          ($error): ~
+          (trim_space($stdout)): refused
+    - description: "WEB-7: GET /api/feed/explore/../../../debug/pprof through the web client with the session: 400 or 404 (or Envoy's redirect, on the web client's origin, to a path that is)"
+      continueOnError: true
+      script:
+        shell: bash
+        env:
+        - *kubeconfig
+        - {name: PROBE, value: "/api/feed/explore/../../../debug/pprof"}
+        content: *web7probe
+        check:
+          ($error): ~
+          (trim_space($stdout)): refused
+    - description: "WEB-7: GET /api/feed/../internal through the web client with the session: 400 or 404 (or Envoy's redirect, on the web client's origin, to a path that is)"
+      continueOnError: true
+      script:
+        shell: bash
+        env:
+        - *kubeconfig
+        - {name: PROBE, value: "/api/feed/../internal"}
+        content: *web7probe
+        check:
+          ($error): ~
+          (trim_space($stdout)): refused
+    - description: "WEB-7: GET /api/gateway.svp.svc.cluster.local:8080/healthz through the web client with the session: 400 or 404 (or Envoy's redirect, on the web client's origin, to a path that is)"
+      continueOnError: true
+      script:
+        shell: bash
+        env:
+        - *kubeconfig
+        - {name: PROBE, value: "/api/gateway.svp.svc.cluster.local:8080/healthz"}
+        content: *web7probe
+        check:
+          ($error): ~
+          (trim_space($stdout)): refused
+    - description: "WEB-7: GET /api/http:%2F%2Fuser-service.svp.svc.cluster.local:9101%2Freadyz through the web client with the session: 400 or 404 (or Envoy's redirect, on the web client's origin, to a path that is)"
+      continueOnError: true
+      script:
+        shell: bash
+        env:
+        - *kubeconfig
+        - {name: PROBE, value: "/api/http:%2F%2Fuser-service.svp.svc.cluster.local:9101%2Freadyz"}
+        content: *web7probe
+        check:
+          ($error): ~
+          (trim_space($stdout)): refused
+    - description: "WEB-7: GET /api/@user-service.svp.svc.cluster.local:9101/readyz through the web client with the session: 400 or 404 (or Envoy's redirect, on the web client's origin, to a path that is)"
+      continueOnError: true
+      script:
+        shell: bash
+        env:
+        - *kubeconfig
+        - {name: PROBE, value: "/api/@user-service.svp.svc.cluster.local:9101/readyz"}
+        content: *web7probe
+        check:
+          ($error): ~
+          (trim_space($stdout)): refused
+    - description: "WEB-7: GET /api/feed/explore?page_size=1&url=http://gateway.svp.svc.cluster.local:8080/healthz through the web client with the session: 400 or 404 (or Envoy's redirect, on the web client's origin, to a path that is)"
+      continueOnError: true
+      script:
+        shell: bash
+        env:
+        - *kubeconfig
+        - {name: PROBE, value: "/api/feed/explore?page_size=1&url=http://gateway.svp.svc.cluster.local:8080/healthz"}
+        content: *web7probe
+        check:
+          ($error): ~
+          (trim_space($stdout)): refused
+    - description: "WEB-7: GET /api/feed/explore?page_size=1&page_size=2 through the web client with the session: 400 or 404 (or Envoy's redirect, on the web client's origin, to a path that is)"
+      continueOnError: true
+      script:
+        shell: bash
+        env:
+        - *kubeconfig
+        - {name: PROBE, value: "/api/feed/explore?page_size=1&page_size=2"}
+        content: *web7probe
+        check:
+          ($error): ~
+          (trim_space($stdout)): refused
+    - description: "WEB-7: control: GET /api/feed/explore?page_size=1 through the web client with the session: 200 with items (the BFF passes a listed route)"
+      continueOnError: true
+      script:
+        shell: bash
+        env:
+        - *kubeconfig
+        content: |
+          set -euo pipefail
+          . ./web.sh
+          work_ready
+          status=$(web_get "/api/feed/explore?page_size=1" "$work/web7-api-explore")
+          echo "$work/web7-api-explore JSON of /api/feed/explore" >>"$work/web7-files"
+          type=$(jq -r '.items | type' "$work/web7-api-explore" 2>/dev/null || true)
+          if [[ $status == 200 && $type == array ]]; then echo "200 with items"; else echo "status $status, items '$type'"; fi
+        check:
+          ($error): ~
+          (trim_space($stdout)): 200 with items
+    - description: "WEB-7: control: GET /api/me through the web client: 200 with the drill user's handle (the session reaches the gateway)"
+      continueOnError: true
+      script:
+        shell: bash
+        env:
+        - *kubeconfig
+        content: |
+          set -euo pipefail
+          . ./web.sh
+          work_ready
+          handle=$(jq -r .handle "$work/web.cred")
+          status=$(web_get /api/me "$work/web7-api-me")
+          echo "$work/web7-api-me JSON of /api/me" >>"$work/web7-files"
+          got=$(jq -r '.handle // ""' "$work/web7-api-me" 2>/dev/null || true)
+          echo "GET /api/me: status $status, handle @$got (drill user @$handle)" >&2
+          if [[ $status == 200 && $got == "$handle" ]]; then echo "200 with the handle"; else echo "status $status, handle '@$got'"; fi
+        check:
+          ($error): ~
+          (trim_space($stdout)): 200 with the handle
+    # What the browser gets: the HTML of the pages, the RSC payloads of client navigation, the JSON of /api. Each answer
+    # fetched is listed in web7-files for the searches below.
+    - description: "WEB-7: GET / through the web client with the session: 200"
+      continueOnError: true
+      script:
+        shell: bash
+        env:
+        - *kubeconfig
+        - {name: PAGE, value: "/"}
+        - {name: FILE, value: "web7-page-1"}
+        content: &web7page |
+          set -euo pipefail
+          . ./web.sh
+          work_ready
+          handle=$(jq -r .handle "$work/web.cred")
+          p=${PAGE//\{handle\}/$handle}
+          status=$(web_get "$p" "$work/$FILE")
+          echo "GET $p through the web client with the session: status $status" >&2
+          if [[ $status == 200 ]]; then
+            echo "$work/$FILE HTML of $p" >>"$work/web7-files"
+            echo 200
+          else
+            echo "status $status"
+          fi
+        check:
+          ($error): ~
+          (trim_space($stdout)): "200"
+    - description: "WEB-7: GET /me through the web client with the session: 200"
+      continueOnError: true
+      script:
+        shell: bash
+        env:
+        - *kubeconfig
+        - {name: PAGE, value: "/me"}
+        - {name: FILE, value: "web7-page-2"}
+        content: *web7page
+        check:
+          ($error): ~
+          (trim_space($stdout)): "200"
+    - description: "WEB-7: GET /upload through the web client with the session: 200"
+      continueOnError: true
+      script:
+        shell: bash
+        env:
+        - *kubeconfig
+        - {name: PAGE, value: "/upload"}
+        - {name: FILE, value: "web7-page-3"}
+        content: *web7page
+        check:
+          ($error): ~
+          (trim_space($stdout)): "200"
+    - description: "WEB-7: GET /u/<handle of the drill user> through the web client with the session: 200"
+      continueOnError: true
+      script:
+        shell: bash
+        env:
+        - *kubeconfig
+        - {name: PAGE, value: "/u/{handle}"}
+        - {name: FILE, value: "web7-page-4"}
+        content: *web7page
+        check:
+          ($error): ~
+          (trim_space($stdout)): "200"
+    - description: "WEB-7: control: the HTML of /me shows the drill user's handle: the pages were rendered with the session"
+      continueOnError: true
+      script:
+        shell: bash
+        env:
+        - *kubeconfig
+        content: |
+          set -euo pipefail
+          . ./web.sh
+          work_ready
+          handle=$(jq -r .handle "$work/web.cred")
+          if grep -qF "$handle" "$work/web7-page-2" 2>/dev/null; then echo "shows the handle"; else echo "no @$handle in the HTML of /me"; fi
+        check:
+          ($error): ~
+          (trim_space($stdout)): shows the handle
+    - description: "WEB-7: control: GET / with RSC: 1: 200 text/x-component (the RSC payload of client navigation)"
+      continueOnError: true
+      script:
+        shell: bash
+        env:
+        - *kubeconfig
+        - {name: PAGE, value: "/"}
+        - {name: FILE, value: "web7-page-5"}
+        content: &web7rsc |
+          set -euo pipefail
+          . ./web.sh
+          work_ready
+          # Next may answer an RSC request without its cache-busting parameter with a redirect to the URL that has it.
+          status=$(web_get "$PAGE" "$work/$FILE" -H 'RSC: 1' -L --max-redirs 2)
+          ct=$(tr -d '\r' <"$work/$FILE.headers" | awk 'tolower($1) == "content-type:" { v = $2 } END { print v }')
+          echo "GET $PAGE with RSC: 1 through the web client with the session: status $status, content type '$ct'" >&2
+          if [[ $status == 200 && $ct == text/x-component* ]]; then
+            echo "$work/$FILE RSC payload of $PAGE" >>"$work/web7-files"
+            echo "200 text/x-component"
+          else
+            echo "status $status, content type '$ct'"
+          fi
+        check:
+          ($error): ~
+          (trim_space($stdout)): 200 text/x-component
+    - description: "WEB-7: control: GET /me with RSC: 1: 200 text/x-component (the RSC payload of client navigation)"
+      continueOnError: true
+      script:
+        shell: bash
+        env:
+        - *kubeconfig
+        - {name: PAGE, value: "/me"}
+        - {name: FILE, value: "web7-page-6"}
+        content: *web7rsc
+        check:
+          ($error): ~
+          (trim_space($stdout)): 200 text/x-component
+    # Its own operation, so that WEB-2 still runs when it fails: the token searches below then fail with "not searched".
+    - description: "WEB-7: setup: the drill user's web session read from Valkey db 9 (svp:web:sess:<SHA-256 of the sid>): an access and a refresh token"
+      continueOnError: true
+      script:
+        shell: bash
+        env:
+        - *kubeconfig
+        content: |
+          set -euo pipefail
+          . ./web.sh
+          work_ready
+          web_tokens
+          echo "session read"
+        check:
+          ($error): ~
+          (trim_space($stdout)): session read
+    - description: "WEB-7: the HTML of / holds no string shaped like a JWT"
+      continueOnError: true
+      script:
+        shell: bash
+        env:
+        - *kubeconfig
+        - {name: FILE, value: "web7-page-1"}
+        - {name: WHAT, value: "HTML of /"}
+        - {name: SEARCH, value: "jwt"}
+        content: &web7search |
+          set -euo pipefail
+          . ./web.sh
+          work_ready
+          # Only an answer its step fetched and listed in web7-files is searched; SEARCH tokens needs the session's three values.
+          if ! awk -v f="$work/$FILE" '$1 == f { found = 1 } END { exit !found }' "$work/web7-files" 2>/dev/null; then
+            echo "not searched: the $WHAT was not fetched (its step above failed)"
+            exit 0
+          fi
+          case $SEARCH in
+            jwt)
+              if jwt_shaped "$work/$FILE"; then echo "the $WHAT holds a string shaped like a JWT"; else echo "no JWT"; fi
+              ;;
+            tokens)
+              if [[ $(awk -F '\t' '$2 != ""' "$work/web.tokens" 2>/dev/null | wc -l | tr -d ' ') != 3 ]]; then
+                echo "not searched: the session's tokens were not read from Valkey db 9 (its step above failed)"
+                exit 0
+              fi
+              # Names of the values found (access-token, refresh-token, sid), never the values.
+              found=$(holds "$work/web.tokens" "$work/$FILE")
+              if [[ -z $found ]]; then echo "none of the session's tokens"; else echo "the $WHAT holds the session's $found"; fi
+              ;;
+          esac
+        check:
+          ($error): ~
+          (trim_space($stdout)): no JWT
+    - description: "WEB-7: the HTML of / holds none of the session's access token, refresh token and sid"
+      continueOnError: true
+      script:
+        shell: bash
+        env:
+        - *kubeconfig
+        - {name: FILE, value: "web7-page-1"}
+        - {name: WHAT, value: "HTML of /"}
+        - {name: SEARCH, value: "tokens"}
+        content: *web7search
+        check:
+          ($error): ~
+          (trim_space($stdout)): none of the session's tokens
+    - description: "WEB-7: the HTML of /me holds no string shaped like a JWT"
+      continueOnError: true
+      script:
+        shell: bash
+        env:
+        - *kubeconfig
+        - {name: FILE, value: "web7-page-2"}
+        - {name: WHAT, value: "HTML of /me"}
+        - {name: SEARCH, value: "jwt"}
+        content: *web7search
+        check:
+          ($error): ~
+          (trim_space($stdout)): no JWT
+    - description: "WEB-7: the HTML of /me holds none of the session's access token, refresh token and sid"
+      continueOnError: true
+      script:
+        shell: bash
+        env:
+        - *kubeconfig
+        - {name: FILE, value: "web7-page-2"}
+        - {name: WHAT, value: "HTML of /me"}
+        - {name: SEARCH, value: "tokens"}
+        content: *web7search
+        check:
+          ($error): ~
+          (trim_space($stdout)): none of the session's tokens
+    - description: "WEB-7: the HTML of /upload holds no string shaped like a JWT"
+      continueOnError: true
+      script:
+        shell: bash
+        env:
+        - *kubeconfig
+        - {name: FILE, value: "web7-page-3"}
+        - {name: WHAT, value: "HTML of /upload"}
+        - {name: SEARCH, value: "jwt"}
+        content: *web7search
+        check:
+          ($error): ~
+          (trim_space($stdout)): no JWT
+    - description: "WEB-7: the HTML of /upload holds none of the session's access token, refresh token and sid"
+      continueOnError: true
+      script:
+        shell: bash
+        env:
+        - *kubeconfig
+        - {name: FILE, value: "web7-page-3"}
+        - {name: WHAT, value: "HTML of /upload"}
+        - {name: SEARCH, value: "tokens"}
+        content: *web7search
+        check:
+          ($error): ~
+          (trim_space($stdout)): none of the session's tokens
+    - description: "WEB-7: the HTML of /u/<handle> holds no string shaped like a JWT"
+      continueOnError: true
+      script:
+        shell: bash
+        env:
+        - *kubeconfig
+        - {name: FILE, value: "web7-page-4"}
+        - {name: WHAT, value: "HTML of /u/<handle>"}
+        - {name: SEARCH, value: "jwt"}
+        content: *web7search
+        check:
+          ($error): ~
+          (trim_space($stdout)): no JWT
+    - description: "WEB-7: the HTML of /u/<handle> holds none of the session's access token, refresh token and sid"
+      continueOnError: true
+      script:
+        shell: bash
+        env:
+        - *kubeconfig
+        - {name: FILE, value: "web7-page-4"}
+        - {name: WHAT, value: "HTML of /u/<handle>"}
+        - {name: SEARCH, value: "tokens"}
+        content: *web7search
+        check:
+          ($error): ~
+          (trim_space($stdout)): none of the session's tokens
+    - description: "WEB-7: the RSC payload of / holds no string shaped like a JWT"
+      continueOnError: true
+      script:
+        shell: bash
+        env:
+        - *kubeconfig
+        - {name: FILE, value: "web7-page-5"}
+        - {name: WHAT, value: "RSC payload of /"}
+        - {name: SEARCH, value: "jwt"}
+        content: *web7search
+        check:
+          ($error): ~
+          (trim_space($stdout)): no JWT
+    - description: "WEB-7: the RSC payload of / holds none of the session's access token, refresh token and sid"
+      continueOnError: true
+      script:
+        shell: bash
+        env:
+        - *kubeconfig
+        - {name: FILE, value: "web7-page-5"}
+        - {name: WHAT, value: "RSC payload of /"}
+        - {name: SEARCH, value: "tokens"}
+        content: *web7search
+        check:
+          ($error): ~
+          (trim_space($stdout)): none of the session's tokens
+    - description: "WEB-7: the RSC payload of /me holds no string shaped like a JWT"
+      continueOnError: true
+      script:
+        shell: bash
+        env:
+        - *kubeconfig
+        - {name: FILE, value: "web7-page-6"}
+        - {name: WHAT, value: "RSC payload of /me"}
+        - {name: SEARCH, value: "jwt"}
+        content: *web7search
+        check:
+          ($error): ~
+          (trim_space($stdout)): no JWT
+    - description: "WEB-7: the RSC payload of /me holds none of the session's access token, refresh token and sid"
+      continueOnError: true
+      script:
+        shell: bash
+        env:
+        - *kubeconfig
+        - {name: FILE, value: "web7-page-6"}
+        - {name: WHAT, value: "RSC payload of /me"}
+        - {name: SEARCH, value: "tokens"}
+        content: *web7search
+        check:
+          ($error): ~
+          (trim_space($stdout)): none of the session's tokens
+    - description: "WEB-7: the JSON of /api/feed/explore holds no string shaped like a JWT"
+      continueOnError: true
+      script:
+        shell: bash
+        env:
+        - *kubeconfig
+        - {name: FILE, value: "web7-api-explore"}
+        - {name: WHAT, value: "JSON of /api/feed/explore"}
+        - {name: SEARCH, value: "jwt"}
+        content: *web7search
+        check:
+          ($error): ~
+          (trim_space($stdout)): no JWT
+    - description: "WEB-7: the JSON of /api/feed/explore holds none of the session's access token, refresh token and sid"
+      continueOnError: true
+      script:
+        shell: bash
+        env:
+        - *kubeconfig
+        - {name: FILE, value: "web7-api-explore"}
+        - {name: WHAT, value: "JSON of /api/feed/explore"}
+        - {name: SEARCH, value: "tokens"}
+        content: *web7search
+        check:
+          ($error): ~
+          (trim_space($stdout)): none of the session's tokens
+    - description: "WEB-7: the JSON of /api/me holds no string shaped like a JWT"
+      continueOnError: true
+      script:
+        shell: bash
+        env:
+        - *kubeconfig
+        - {name: FILE, value: "web7-api-me"}
+        - {name: WHAT, value: "JSON of /api/me"}
+        - {name: SEARCH, value: "jwt"}
+        content: *web7search
+        check:
+          ($error): ~
+          (trim_space($stdout)): no JWT
+    - description: "WEB-7: the JSON of /api/me holds none of the session's access token, refresh token and sid"
+      continueOnError: true
+      script:
+        shell: bash
+        env:
+        - *kubeconfig
+        - {name: FILE, value: "web7-api-me"}
+        - {name: WHAT, value: "JSON of /api/me"}
+        - {name: SEARCH, value: "tokens"}
+        content: *web7search
+        check:
+          ($error): ~
+          (trim_space($stdout)): none of the session's tokens
+    - description: "WEB-7: 8 answers searched (4 pages, 2 RSC payloads, 2 /api JSON)"
+      continueOnError: true
+      script:
+        shell: bash
+        env:
+        - *kubeconfig
+        content: |
+          set -euo pipefail
+          . ./web.sh
+          work_ready
+          echo "$(wc -l <"$work/web7-files" | tr -d ' ') answers searched"
+        check:
+          ($error): ~
+          (trim_space($stdout)): 8 answers searched
+    # Controls of the search: it finds the token of a login answered by the gateway itself, and the session's access
+    # token. The gateway's answer is deleted at once.
+    - description: "WEB-7: control: the same search finds a JWT in the gateway's own login answer (https://api.svp.localhost:8443/auth/login, 200)"
+      continueOnError: true
+      script:
+        shell: bash
+        env:
+        - *kubeconfig
+        content: |
+          set -euo pipefail
+          . ./web.sh
+          work_ready
+          jq '{email, password}' "$work/web.cred" >"$work/web7-login.json"
+          status=$(curl -sS --max-time 5 -o "$work/web7-login.body" -w '%{http_code}' -X POST -H 'Content-Type: application/json' \
+            --data-binary "@$work/web7-login.json" "$api_base/auth/login" || true)
+          if [[ $status == 200 ]] && jwt_shaped "$work/web7-login.body"; then r=found; else r="status $status, no JWT found"; fi
+          rm -f "$work/web7-login.body" "$work/web7-login.json"
+          echo "$r"
+        check:
+          ($error): ~
+          (trim_space($stdout)): found
+    - description: "WEB-7: control: the same search finds the session's access token (shaped like a JWT)"
+      continueOnError: true
+      script:
+        shell: bash
+        env:
+        - *kubeconfig
+        content: |
+          set -euo pipefail
+          . ./web.sh
+          work_ready
+          awk -F '\t' '$1 == "access-token" { print $2 }' "$work/web.tokens" >"$work/web7-access" 2>/dev/null || :
+          if jwt_shaped "$work/web7-access"; then r="shaped like a JWT"; else r="not shaped like a JWT, or the session's tokens were not read"; fi
+          rm -f "$work/web7-access"
+          echo "$r"
+        check:
+          ($error): ~
+          (trim_space($stdout)): shaped like a JWT
+
+  - name: "WEB-2: no request from another site, or from s3.svp.localhost, changes state with the session"
+    try:
+    - description: "WEB-2: setup: the drill user's session (a new user when it is gone) and the /login form's Server Action read logged out"
+      script:
+        shell: bash
+        env:
+        - *kubeconfig
+        content: |
+          set -euo pipefail
+          . ./web.sh
+          work_ready
+          web_user
+          # Logged out: AuthPage sends a logged-in visitor of /login to the home page.
+          DRILL_PASSWORD=$(openssl rand -hex 16) jq -n --arg e "drill-web2-$(date -u +%Y%m%dT%H%M%SZ)-$(openssl rand -hex 4)@example.test" \
+            '{email: $e, password: env.DRILL_PASSWORD}' >"$work/web2-wrong.cred"
+          : >"$work/anon.jar"
+          web_jar=$work/anon.jar web_form_config /login "$work/web2-wrong.cred" "$work/web2-login.curl"
+          echo "the /login form's Server Action fields read (curl config in the work directory)"
+        check:
+          ($error): ~
+    - description: "WEB-2: POST action with the session cookie and Sec-Fetch-Site: cross-site, Origin: https://evil.example: 403 CSRF_REJECTED"
+      continueOnError: true
+      script:
+        shell: bash
+        env:
+        - *kubeconfig
+        - {name: TARGET, value: "action"}
+        - {name: VARIANT, value: "Sec-Fetch-Site: cross-site|Origin: https://evil.example"}
+        content: &web2send |
+          set -euo pipefail
+          . ./web.sh
+          work_ready
+          # VARIANT: the headers of the POST, "HEADER|HEADER", empty for neither Sec-Fetch-Site nor Origin. args stays empty
+          # then: ${args[@]+...} expands it to nothing, where a plain "${args[@]}" of an empty array stops bash 3.2 (macOS
+          # /bin/bash) under set -u with "unbound variable".
+          args=()
+          if [[ -n $VARIANT ]]; then
+            IFS='|' read -r -a hs <<<"$VARIANT"
+            for h in "${hs[@]}"; do args+=(-H "$h"); done
+          fi
+          out=$work/web2.out
+          case $TARGET in
+            # The /login form's Server Action, posted with the config the setup of this step wrote, and the session cookie.
+            action)
+              : >"$out"
+              status=$(curl -sS --max-time 15 -o "$out" -w '%{http_code}' -b "$work/web.jar" -K "$work/web2-login.curl" \
+                ${args[@]+"${args[@]}"} || true)
+              ;;
+            api) status=$(web_post /api/videos "$out" -H 'Content-Type: application/json' --data-binary '{}' ${args[@]+"${args[@]}"}) ;;
+            logout) status=$(web_post /logout "$out" ${args[@]+"${args[@]}"}) ;;
+            rum)
+              status=$(web_post /rum "$out" -H 'Content-Type: text/plain;charset=UTF-8' \
+                --data-binary '{"path":"/","metrics":[{"name":"LCP","value":1200}]}' ${args[@]+"${args[@]}"})
+              ;;
+            monitoring)
+              status=$(web_post /monitoring "$out" -H 'Content-Type: text/plain;charset=UTF-8' --data-binary '{}' ${args[@]+"${args[@]}"})
+              ;;
+          esac
+          code=$(jq -r '.code // ""' "$out" 2>/dev/null || true)
+          echo "POST $TARGET with the session cookie and ${VARIANT:-neither Sec-Fetch-Site nor Origin}: status $status, code '$code'" >&2
+          echo "$status $code"
+        check:
+          ($error): ~
+          (trim_space($stdout)): 403 CSRF_REJECTED
+    - description: "WEB-2: POST action with the session cookie and Sec-Fetch-Site: same-site, Origin: https://s3.svp.localhost:8443: 403 CSRF_REJECTED"
+      continueOnError: true
+      script:
+        shell: bash
+        env:
+        - *kubeconfig
+        - {name: TARGET, value: "action"}
+        - {name: VARIANT, value: "Sec-Fetch-Site: same-site|Origin: https://s3.svp.localhost:8443"}
+        content: *web2send
+        check:
+          ($error): ~
+          (trim_space($stdout)): 403 CSRF_REJECTED
+    - description: "WEB-2: POST action with the session cookie and Origin: https://evil.example: 403 CSRF_REJECTED"
+      continueOnError: true
+      script:
+        shell: bash
+        env:
+        - *kubeconfig
+        - {name: TARGET, value: "action"}
+        - {name: VARIANT, value: "Origin: https://evil.example"}
+        content: *web2send
+        check:
+          ($error): ~
+          (trim_space($stdout)): 403 CSRF_REJECTED
+    - description: "WEB-2: POST action with the session cookie and Origin: https://s3.svp.localhost:8443: 403 CSRF_REJECTED"
+      continueOnError: true
+      script:
+        shell: bash
+        env:
+        - *kubeconfig
+        - {name: TARGET, value: "action"}
+        - {name: VARIANT, value: "Origin: https://s3.svp.localhost:8443"}
+        content: *web2send
+        check:
+          ($error): ~
+          (trim_space($stdout)): 403 CSRF_REJECTED
+    - description: "WEB-2: POST action with the session cookie and Origin: null: 403 CSRF_REJECTED"
+      continueOnError: true
+      script:
+        shell: bash
+        env:
+        - *kubeconfig
+        - {name: TARGET, value: "action"}
+        - {name: VARIANT, value: "Origin: null"}
+        content: *web2send
+        check:
+          ($error): ~
+          (trim_space($stdout)): 403 CSRF_REJECTED
+    - description: "WEB-2: POST action with the session cookie and neither Sec-Fetch-Site nor Origin: 403 CSRF_REJECTED"
+      continueOnError: true
+      script:
+        shell: bash
+        env:
+        - *kubeconfig
+        - {name: TARGET, value: "action"}
+        - {name: VARIANT, value: ""}
+        content: *web2send
+        check:
+          ($error): ~
+          (trim_space($stdout)): 403 CSRF_REJECTED
+    - description: "WEB-2: POST api with the session cookie and Sec-Fetch-Site: cross-site, Origin: https://evil.example: 403 CSRF_REJECTED"
+      continueOnError: true
+      script:
+        shell: bash
+        env:
+        - *kubeconfig
+        - {name: TARGET, value: "api"}
+        - {name: VARIANT, value: "Sec-Fetch-Site: cross-site|Origin: https://evil.example"}
+        content: *web2send
+        check:
+          ($error): ~
+          (trim_space($stdout)): 403 CSRF_REJECTED
+    - description: "WEB-2: POST api with the session cookie and Sec-Fetch-Site: same-site, Origin: https://s3.svp.localhost:8443: 403 CSRF_REJECTED"
+      continueOnError: true
+      script:
+        shell: bash
+        env:
+        - *kubeconfig
+        - {name: TARGET, value: "api"}
+        - {name: VARIANT, value: "Sec-Fetch-Site: same-site|Origin: https://s3.svp.localhost:8443"}
+        content: *web2send
+        check:
+          ($error): ~
+          (trim_space($stdout)): 403 CSRF_REJECTED
+    - description: "WEB-2: POST api with the session cookie and Origin: https://evil.example: 403 CSRF_REJECTED"
+      continueOnError: true
+      script:
+        shell: bash
+        env:
+        - *kubeconfig
+        - {name: TARGET, value: "api"}
+        - {name: VARIANT, value: "Origin: https://evil.example"}
+        content: *web2send
+        check:
+          ($error): ~
+          (trim_space($stdout)): 403 CSRF_REJECTED
+    - description: "WEB-2: POST api with the session cookie and Origin: https://s3.svp.localhost:8443: 403 CSRF_REJECTED"
+      continueOnError: true
+      script:
+        shell: bash
+        env:
+        - *kubeconfig
+        - {name: TARGET, value: "api"}
+        - {name: VARIANT, value: "Origin: https://s3.svp.localhost:8443"}
+        content: *web2send
+        check:
+          ($error): ~
+          (trim_space($stdout)): 403 CSRF_REJECTED
+    - description: "WEB-2: POST api with the session cookie and Origin: null: 403 CSRF_REJECTED"
+      continueOnError: true
+      script:
+        shell: bash
+        env:
+        - *kubeconfig
+        - {name: TARGET, value: "api"}
+        - {name: VARIANT, value: "Origin: null"}
+        content: *web2send
+        check:
+          ($error): ~
+          (trim_space($stdout)): 403 CSRF_REJECTED
+    - description: "WEB-2: POST api with the session cookie and neither Sec-Fetch-Site nor Origin: 403 CSRF_REJECTED"
+      continueOnError: true
+      script:
+        shell: bash
+        env:
+        - *kubeconfig
+        - {name: TARGET, value: "api"}
+        - {name: VARIANT, value: ""}
+        content: *web2send
+        check:
+          ($error): ~
+          (trim_space($stdout)): 403 CSRF_REJECTED
+    - description: "WEB-2: POST logout with the session cookie and Sec-Fetch-Site: cross-site, Origin: https://evil.example: 403 CSRF_REJECTED"
+      continueOnError: true
+      script:
+        shell: bash
+        env:
+        - *kubeconfig
+        - {name: TARGET, value: "logout"}
+        - {name: VARIANT, value: "Sec-Fetch-Site: cross-site|Origin: https://evil.example"}
+        content: *web2send
+        check:
+          ($error): ~
+          (trim_space($stdout)): 403 CSRF_REJECTED
+    - description: "WEB-2: POST logout with the session cookie and Sec-Fetch-Site: same-site, Origin: https://s3.svp.localhost:8443: 403 CSRF_REJECTED"
+      continueOnError: true
+      script:
+        shell: bash
+        env:
+        - *kubeconfig
+        - {name: TARGET, value: "logout"}
+        - {name: VARIANT, value: "Sec-Fetch-Site: same-site|Origin: https://s3.svp.localhost:8443"}
+        content: *web2send
+        check:
+          ($error): ~
+          (trim_space($stdout)): 403 CSRF_REJECTED
+    - description: "WEB-2: POST logout with the session cookie and Origin: https://evil.example: 403 CSRF_REJECTED"
+      continueOnError: true
+      script:
+        shell: bash
+        env:
+        - *kubeconfig
+        - {name: TARGET, value: "logout"}
+        - {name: VARIANT, value: "Origin: https://evil.example"}
+        content: *web2send
+        check:
+          ($error): ~
+          (trim_space($stdout)): 403 CSRF_REJECTED
+    - description: "WEB-2: POST logout with the session cookie and Origin: https://s3.svp.localhost:8443: 403 CSRF_REJECTED"
+      continueOnError: true
+      script:
+        shell: bash
+        env:
+        - *kubeconfig
+        - {name: TARGET, value: "logout"}
+        - {name: VARIANT, value: "Origin: https://s3.svp.localhost:8443"}
+        content: *web2send
+        check:
+          ($error): ~
+          (trim_space($stdout)): 403 CSRF_REJECTED
+    - description: "WEB-2: POST logout with the session cookie and Origin: null: 403 CSRF_REJECTED"
+      continueOnError: true
+      script:
+        shell: bash
+        env:
+        - *kubeconfig
+        - {name: TARGET, value: "logout"}
+        - {name: VARIANT, value: "Origin: null"}
+        content: *web2send
+        check:
+          ($error): ~
+          (trim_space($stdout)): 403 CSRF_REJECTED
+    - description: "WEB-2: POST logout with the session cookie and neither Sec-Fetch-Site nor Origin: 403 CSRF_REJECTED"
+      continueOnError: true
+      script:
+        shell: bash
+        env:
+        - *kubeconfig
+        - {name: TARGET, value: "logout"}
+        - {name: VARIANT, value: ""}
+        content: *web2send
+        check:
+          ($error): ~
+          (trim_space($stdout)): 403 CSRF_REJECTED
+    - description: "WEB-2: after the refused logouts the session still works (GET /api/me 200)"
+      continueOnError: true
+      script:
+        shell: bash
+        env:
+        - *kubeconfig
+        content: |
+          set -euo pipefail
+          . ./web.sh
+          work_ready
+          web_get /api/me "$work/web2.out"
+        check:
+          ($error): ~
+          (trim_space($stdout)): "200"
+    - description: "WEB-2: POST rum with the session cookie and Sec-Fetch-Site: cross-site, Origin: https://evil.example: 403 CSRF_REJECTED"
+      continueOnError: true
+      script:
+        shell: bash
+        env:
+        - *kubeconfig
+        - {name: TARGET, value: "rum"}
+        - {name: VARIANT, value: "Sec-Fetch-Site: cross-site|Origin: https://evil.example"}
+        content: *web2send
+        check:
+          ($error): ~
+          (trim_space($stdout)): 403 CSRF_REJECTED
+    - description: "WEB-2: POST rum with the session cookie and Sec-Fetch-Site: same-site, Origin: https://s3.svp.localhost:8443: 403 CSRF_REJECTED"
+      continueOnError: true
+      script:
+        shell: bash
+        env:
+        - *kubeconfig
+        - {name: TARGET, value: "rum"}
+        - {name: VARIANT, value: "Sec-Fetch-Site: same-site|Origin: https://s3.svp.localhost:8443"}
+        content: *web2send
+        check:
+          ($error): ~
+          (trim_space($stdout)): 403 CSRF_REJECTED
+    - description: "WEB-2: POST rum with the session cookie and Origin: https://evil.example: 403 CSRF_REJECTED"
+      continueOnError: true
+      script:
+        shell: bash
+        env:
+        - *kubeconfig
+        - {name: TARGET, value: "rum"}
+        - {name: VARIANT, value: "Origin: https://evil.example"}
+        content: *web2send
+        check:
+          ($error): ~
+          (trim_space($stdout)): 403 CSRF_REJECTED
+    - description: "WEB-2: POST rum with the session cookie and Origin: https://s3.svp.localhost:8443: 403 CSRF_REJECTED"
+      continueOnError: true
+      script:
+        shell: bash
+        env:
+        - *kubeconfig
+        - {name: TARGET, value: "rum"}
+        - {name: VARIANT, value: "Origin: https://s3.svp.localhost:8443"}
+        content: *web2send
+        check:
+          ($error): ~
+          (trim_space($stdout)): 403 CSRF_REJECTED
+    - description: "WEB-2: POST rum with the session cookie and Origin: null: 403 CSRF_REJECTED"
+      continueOnError: true
+      script:
+        shell: bash
+        env:
+        - *kubeconfig
+        - {name: TARGET, value: "rum"}
+        - {name: VARIANT, value: "Origin: null"}
+        content: *web2send
+        check:
+          ($error): ~
+          (trim_space($stdout)): 403 CSRF_REJECTED
+    - description: "WEB-2: POST rum with the session cookie and neither Sec-Fetch-Site nor Origin: 403 CSRF_REJECTED"
+      continueOnError: true
+      script:
+        shell: bash
+        env:
+        - *kubeconfig
+        - {name: TARGET, value: "rum"}
+        - {name: VARIANT, value: ""}
+        content: *web2send
+        check:
+          ($error): ~
+          (trim_space($stdout)): 403 CSRF_REJECTED
+    - description: "WEB-2: POST monitoring with the session cookie and Sec-Fetch-Site: cross-site, Origin: https://evil.example: 403 CSRF_REJECTED"
+      continueOnError: true
+      script:
+        shell: bash
+        env:
+        - *kubeconfig
+        - {name: TARGET, value: "monitoring"}
+        - {name: VARIANT, value: "Sec-Fetch-Site: cross-site|Origin: https://evil.example"}
+        content: *web2send
+        check:
+          ($error): ~
+          (trim_space($stdout)): 403 CSRF_REJECTED
+    - description: "WEB-2: POST monitoring with the session cookie and Sec-Fetch-Site: same-site, Origin: https://s3.svp.localhost:8443: 403 CSRF_REJECTED"
+      continueOnError: true
+      script:
+        shell: bash
+        env:
+        - *kubeconfig
+        - {name: TARGET, value: "monitoring"}
+        - {name: VARIANT, value: "Sec-Fetch-Site: same-site|Origin: https://s3.svp.localhost:8443"}
+        content: *web2send
+        check:
+          ($error): ~
+          (trim_space($stdout)): 403 CSRF_REJECTED
+    - description: "WEB-2: POST monitoring with the session cookie and Origin: https://evil.example: 403 CSRF_REJECTED"
+      continueOnError: true
+      script:
+        shell: bash
+        env:
+        - *kubeconfig
+        - {name: TARGET, value: "monitoring"}
+        - {name: VARIANT, value: "Origin: https://evil.example"}
+        content: *web2send
+        check:
+          ($error): ~
+          (trim_space($stdout)): 403 CSRF_REJECTED
+    - description: "WEB-2: POST monitoring with the session cookie and Origin: https://s3.svp.localhost:8443: 403 CSRF_REJECTED"
+      continueOnError: true
+      script:
+        shell: bash
+        env:
+        - *kubeconfig
+        - {name: TARGET, value: "monitoring"}
+        - {name: VARIANT, value: "Origin: https://s3.svp.localhost:8443"}
+        content: *web2send
+        check:
+          ($error): ~
+          (trim_space($stdout)): 403 CSRF_REJECTED
+    - description: "WEB-2: POST monitoring with the session cookie and Origin: null: 403 CSRF_REJECTED"
+      continueOnError: true
+      script:
+        shell: bash
+        env:
+        - *kubeconfig
+        - {name: TARGET, value: "monitoring"}
+        - {name: VARIANT, value: "Origin: null"}
+        content: *web2send
+        check:
+          ($error): ~
+          (trim_space($stdout)): 403 CSRF_REJECTED
+    - description: "WEB-2: POST monitoring with the session cookie and neither Sec-Fetch-Site nor Origin: 403 CSRF_REJECTED"
+      continueOnError: true
+      script:
+        shell: bash
+        env:
+        - *kubeconfig
+        - {name: TARGET, value: "monitoring"}
+        - {name: VARIANT, value: ""}
+        content: *web2send
+        check:
+          ($error): ~
+          (trim_space($stdout)): 403 CSRF_REJECTED
+    # Controls: the same POSTs from the app's own pages pass the check.
+    - description: "WEB-2: control: POST of the /login form's Server Action from the app's origin (logged out, wrong password): 200, the form shows \"Wrong email or password\" (the action ran and asked the gateway)"
+      continueOnError: true
+      script:
+        shell: bash
+        env:
+        - *kubeconfig
+        content: |
+          set -euo pipefail
+          . ./web.sh
+          work_ready
+          : >"$work/web2.out"
+          status=$(curl -sS --max-time 15 -o "$work/web2.out" -w '%{http_code}' -K "$work/web2-login.curl" \
+            -H 'Sec-Fetch-Site: same-origin' -H "Origin: $web_base" || true)
+          echo "$status $(form_error "$work/web2.out")"
+        check:
+          ($error): ~
+          (trim_space($stdout)): 200 wrong-credentials
+    - description: "WEB-2: control: POST /api/videos with an empty object from the app's origin: 400 from the gateway, past the check"
+      continueOnError: true
+      script:
+        shell: bash
+        env:
+        - *kubeconfig
+        - {name: TARGET, value: "api"}
+        - {name: VARIANT, value: "Sec-Fetch-Site: same-origin|Origin: https://svp.localhost:8443"}
+        content: *web2send
+        check:
+          ($error): ~
+          (starts_with(trim_space($stdout), '400 ')): true
+          (trim_space($stdout) != '400 CSRF_REJECTED'): true
+    - description: "WEB-2: control: POST /rum with a beacon from the app's origin: 204"
+      continueOnError: true
+      script:
+        shell: bash
+        env:
+        - *kubeconfig
+        - {name: TARGET, value: "rum"}
+        - {name: VARIANT, value: "Sec-Fetch-Site: same-origin|Origin: https://svp.localhost:8443"}
+        content: *web2send
+        check:
+          ($error): ~
+          (trim_space($stdout)): "204"
+    - description: "WEB-2: control: POST /monitoring with an empty object from the app's origin: 400 INVALID_REPORT (checked, nothing sent; 404 means SENTRY_DSN is empty in Secret svp/sentry)"
+      continueOnError: true
+      script:
+        shell: bash
+        env:
+        - *kubeconfig
+        - {name: TARGET, value: "monitoring"}
+        - {name: VARIANT, value: "Sec-Fetch-Site: same-origin|Origin: https://svp.localhost:8443"}
+        content: *web2send
+        check:
+          ($error): ~
+          (trim_space($stdout)): 400 INVALID_REPORT
+    # The logout clears the cookie (Max-Age=0), so curl drops it from the jar; a copy of the jar from before sends the old
+    # sid again, which shows the server deleted the session, not only the cookie.
+    - description: "WEB-2: control: POST /logout from the app's origin: 303"
+      continueOnError: true
+      script:
+        shell: bash
+        env:
+        - *kubeconfig
+        content: |
+          set -euo pipefail
+          . ./web.sh
+          work_ready
+          cp "$work/web.jar" "$work/web2-old.jar"
+          web_post /logout "$work/web2.out" -H 'Sec-Fetch-Site: same-origin' -H "Origin: $web_base"
+        check:
+          ($error): ~
+          (trim_space($stdout)): "303"
+    - description: "WEB-2: control: the logout cleared the session cookie (no __Host-Http-svp_sid left in the cookie jar)"
+      continueOnError: true
+      script:
+        shell: bash
+        env:
+        - *kubeconfig
+        content: |
+          set -euo pipefail
+          . ./web.sh
+          work_ready
+          if [[ -z $(web_sid) ]]; then echo cleared; else echo "the session cookie is still in the cookie jar"; fi
+        check:
+          ($error): ~
+          (trim_space($stdout)): cleared
+    - description: "WEB-2: control: after the logout the old session id sent again is refused: GET /api/me 401 (the session was deleted on the server)"
+      continueOnError: true
+      script:
+        shell: bash
+        env:
+        - *kubeconfig
+        content: |
+          set -euo pipefail
+          . ./web.sh
+          work_ready
+          if [[ -f $work/web2-old.jar ]]; then
+            status=$(web_jar=$work/web2-old.jar web_get /api/me "$work/web2.out")
+          else
+            status="no copy of the cookie jar from before the logout"
+          fi
+          rm -f "$work/web2-old.jar"
+          echo "$status"
+        check:
+          ($error): ~
+          (trim_space($stdout)): "401"

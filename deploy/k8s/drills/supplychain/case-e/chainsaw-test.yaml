@@ -1,0 +1,107 @@
+# Supply chain drill, case e: an image of the project (prefix of release source backend) by tag, without a digest,
+# sent as a server-side dry run of a pod of svp: refused by Kyverno's digest check within 1 s (the operation's
+# timeout), before any registry is asked. Declarative: Chainsaw's create with dryRun, the expected admission error
+# checked by its message.
+# Helpers, inputs and the verdict lines: ../lib.sh.
+apiVersion: chainsaw.kyverno.io/v1alpha1
+kind: Test
+metadata:
+  name: supplychain-case-e
+  labels:
+    drill: supplychain
+spec:
+  description: (e) the project's image by tag, without a digest, is refused by the digest check within 1 s
+  # Concurrent, so that Chainsaw runs it after case k, the drill's one test that is not (Chainsaw runs those first):
+  # on the dev path k needs the policy in Audit, before any case puts it in Enforce. Still one test at a time:
+  # execution.parallel is 1 in deploy/k8s/drills/.chainsaw.yaml.
+  concurrent: true
+  # Namespace svp exists: Chainsaw neither creates nor deletes it.
+  namespace: svp
+  steps:
+  - name: e-setup
+    description: (e) Chainsaw on k3d-svp, the policy ready, its webhooks noted; on the dev path the policy in Enforce for the case (enforceTmp)
+    try:
+    - script:
+        shell: bash
+        timeout: 5m
+        env: &env
+        - name: CASE
+          value: e
+        - name: CALLER_KUBECONFIG
+          value: (env('KUBECONFIG'))
+        - name: UNSIGNED
+          value: (to_string($values.unsigned || ''))
+        - name: VULNERABLE
+          value: (to_string($values.vulnerable || ''))
+        - name: NO_PROVENANCE
+          value: (to_string($values.noProvenance || ''))
+        - name: ENFORCE_TMP
+          value: (to_string($values.enforceTmp || ''))
+        content: |
+          . ../lib.sh
+          preflight
+          enforce_tmp_up
+    cleanup:
+    - script:
+        shell: bash
+        timeout: 5m
+        env: *env
+        content: |
+          . ../lib.sh
+          audit_back
+    - script:
+        shell: bash
+        env: *env
+        content: |
+          . ../lib.sh
+          webhooks_back
+  - name: e-tag-no-digest
+    description: (e) <prefix of backend>gateway:latest refused by the digest check within 1 s
+    try:
+    - script:
+        shell: bash
+        env: *env
+        outputs:
+        - name: taggedImage
+          value: ($stdout)
+        content: |
+          . ../lib.sh
+          printf %s "${prefix}gateway:latest"
+    - description: (e) pod drill-supplychain-e of svp with the gateway's image by tag, server-side dry run, refused with "does not have a digest" within 1 s
+      continueOnError: true
+      create:
+        dryRun: true
+        timeout: 1s
+        resource:
+          apiVersion: v1
+          kind: Pod
+          metadata:
+            name: drill-supplychain-e
+            namespace: svp
+            labels:
+              app.kubernetes.io/managed-by: svp-drill-supplychain
+              svp-drill: supplychain
+          spec:
+            automountServiceAccountToken: false
+            securityContext:
+              runAsNonRoot: true
+              runAsUser: 65532
+              runAsGroup: 65532
+              seccompProfile:
+                type: RuntimeDefault
+            containers:
+            - name: c
+              image: ($taggedImage)
+              command: [sleep, "60"]
+              securityContext:
+                allowPrivilegeEscalation: false
+                readOnlyRootFilesystem: true
+                capabilities:
+                  drop: [ALL]
+              resources:
+                requests: {cpu: 10m, memory: 16Mi}
+                limits: {cpu: 100m, memory: 32Mi}
+        expect:
+        - check:
+            ($error != null): true
+            (contains($error || '', 'does not have a digest')): true

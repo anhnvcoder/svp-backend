@@ -1,0 +1,362 @@
+# WEB-8 of the threat model (docs/threat-model.md): the web client puts neither every web user in one rate limit bucket
+# nor a client with a forged X-Forwarded-For in a bucket of its own. Once every login-ip bucket has expired, 40 wrong
+# logins through the web client's /login form (the Server Action, each with a new email and its own forged
+# X-Forwarded-For) over one HTTP/2 connection to Envoy, 8 in flight at a time: every answer is the form whose alert reads
+# "Wrong email or password" or "Too many tries" (any 429 of the gateway), at least one is a 429 of login-ip (no
+# login-email key for its email), every 401 left its login-email key; the login-ip keys added are 1 or 2, on the pod
+# network of a node and none the address of a web pod (which would put every web user in one bucket), no key is for a
+# forged address, and the login-email key of every login that passed names one of those addresses: the gateway counts
+# the address Envoy wrote, which the web client passes on unchanged. Control: logins through the web client pass the
+# rate limit and reach the gateway's limiter and user-service.
+#
+# As RL-1 (rl-1/chainsaw-test.yaml, whose ratelimit.sh this test sources): judged on an attempt in which no login
+# decision fell back to a gateway pod's in-memory limiter, at most 3 attempts, each once the login-ip bucket is full
+# again (RL-1 spends the same bucket). The attempts are one operation, which stops the test when none counts; each check
+# of the attempt that counts is one operation after it, named by its ID; continueOnError keeps the next ones running
+# after one fails, and the test still fails. The scripts source ../web-7-web-2/web.sh (the form helpers) and
+# ../rl-1/ratelimit.sh; their files live in the test's private work directory .k8s/drills/web-8, made by the first step
+# and removed when the test ends. Valkey is only read (SCAN, TIME in db 10).
+apiVersion: chainsaw.kyverno.io/v1alpha1
+kind: Test
+metadata:
+  name: web-8
+  labels:
+    drill: threats
+spec:
+  description: "WEB-8: logins through the web client count the address Envoy wrote: no shared bucket of the web pods, no bucket per forged X-Forwarded-For"
+  # An existing namespace: Chainsaw neither creates nor deletes it.
+  namespace: svp
+  steps:
+  - name: "WEB-8: setup: gateway ready, work directory"
+    try:
+    - description: "WEB-8: setup: gateway ready through Envoy within 60 s"
+      script:
+        shell: bash
+        env:
+        - &kubeconfig {name: CALLER_KUBECONFIG, value: (env('KUBECONFIG'))}
+        content: |
+          set -eu
+          deadline=$(( $(date +%s) + 60 ))
+          until [ "$(curl -s --max-time 5 -o /dev/null -w '%{http_code}' https://api.svp.localhost:8443/readyz || true)" = 200 ]; do
+            [ "$(date +%s)" -lt "$deadline" ] || { echo "FAIL  readyz within 60s" >&2; exit 1; }
+            sleep 1
+          done
+          echo readyz
+        check:
+          ($error): ~
+    - description: "WEB-8: setup: the test's private work directory .k8s/drills/web-8 (one left by a killed run is removed first)"
+      script:
+        shell: bash
+        env:
+        - *kubeconfig
+        content: |
+          set -euo pipefail
+          . ../rl-1/ratelimit.sh
+          rm -rf "$work"
+          mkdir -p "$(dirname "$work")"
+          mkdir "$work"
+          echo "work directory ${work#"$(git rev-parse --show-toplevel)"/}"
+        check:
+          ($error): ~
+    cleanup:
+    - script:
+        shell: bash
+        env:
+        - *kubeconfig
+        content: |
+          set -euo pipefail
+          . ../rl-1/ratelimit.sh
+          rm -rf "$work"
+  - name: "WEB-8: setup: port-forward to Prometheus on 127.0.0.1:19090"
+    use:
+      template: ../../templates/port-forward.yaml
+
+  - name: "WEB-8: 40 logins through the web client with forged X-Forwarded-For over one HTTP/2 connection to Envoy"
+    try:
+    - description: "WEB-8: an attempt (at most 3) in which no login decision fell back to a gateway pod's in-memory limiter: no login-ip bucket left before its burst, the 40 logins over one HTTP/2 connection to Envoy"
+      script:
+        shell: bash
+        timeout: 10m
+        env:
+        - *kubeconfig
+        content: |
+          set -euo pipefail
+          . ../web-7-web-2/web.sh
+          . ../rl-1/ratelimit.sh
+          work_ready
+          # The logins of one attempt and how many are in flight at once over the one connection (as RL-1).
+          web8_n=40
+          web8_parallel=8
+          run=$(date -u +%Y%m%dT%H%M%SZ)-$(openssl rand -hex 2)
+
+          # web8_send ATTEMPT: waits until no login-ip bucket is left in Valkey, sends the logins of attempt ATTEMPT through the
+          # web client's /login form and reads, right after them, what the checks need: Valkey's time around the burst and the
+          # gateway's pods as it starts (rl1_t_start, rl1_t_end, rl1_pods_before, for rl1_fallback), the login keys
+          # ($work/rl-keys) and each answer's form error ($work/web8.answers: "I STATUS ERROR").
+          web8_send() {
+            local a=$1 i email connects versions status
+            buckets_full WEB-8 "$a"
+            # The form's hidden Server Action fields, read once and logged out (they are the same for every post of a build).
+            : >"$work/anon.jar"
+            status=$(web_jar=$work/anon.jar web_get /login "$work/web8-login.html")
+            [[ $status == 200 ]] || fail "WEB-8: GET /login of the web client is 200 (status $status)"
+            form_fields "$work/web8-login.html" >"$work/web8-hidden" || fail "WEB-8: the /login form has hidden Server Action fields"
+            : >"$work/web8.curl"
+            : >"$work/web8.hashes"
+            for ((i = 1; i <= web8_n; i++)); do
+              ((i == 1)) || echo next >>"$work/web8.curl"
+              email="drill-web8-$run-$a-$i@example.test"
+              DRILL_PASSWORD=$(openssl rand -hex 16) jq -n --arg e "$email" '{email: $e, password: env.DRILL_PASSWORD}' >"$work/web8-$i.json"
+              echo "$i $(email_hash "$email")" >>"$work/web8.hashes"
+              {
+                echo "url = \"$web_base/login\""
+                echo http2
+                echo "max-time = 30"
+                echo "header = \"Origin: $web_base\""
+                echo 'header = "Accept-Language: en"'
+                # Two forged hops per request, new ones each time (TEST-NET addresses, RFC 5737), as RL-1.
+                echo "header = \"X-Forwarded-For: 198.51.100.$i, 203.0.113.$i\""
+                cat "$work/web8-hidden"
+                jq -r 'to_entries[] | "form-string = \("\(.key)=\(.value)" | @json)"' "$work/web8-$i.json"
+                echo "output = \"$work/web8-$i.out\""
+                echo "write-out = \"$i %{http_code} %{num_connects} %{http_version}\\n\""
+              } >>"$work/web8.curl"
+            done
+            rl1_t_start=$(valkey_now)
+            # As RL-1: the logins start a second after the test's last exec in the Valkey container.
+            sleep 1
+            rl1_pods_before=$(gateway_pods) || rl1_pods_before=
+            curl -sS --parallel --parallel-max "$web8_parallel" -K "$work/web8.curl" >"$work/web8.wo" || true
+            rl1_t_end=$(valkey_now)
+            [[ $rl1_t_start =~ ^[0-9]+$ && $rl1_t_end =~ ^[0-9]+$ ]] ||
+              fail "WEB-8: read Valkey's clock around the burst (got '$rl1_t_start', '$rl1_t_end')"
+            connects=$(awk '{ n += $3 } END { print n + 0 }' "$work/web8.wo")
+            versions=$(awk '{ print $4 }' "$work/web8.wo" | sort -u | tr '\n' ' ')
+            [[ $connects == 1 && $versions == "2 " && $(wc -l <"$work/web8.wo" | tr -d ' ') == "$web8_n" ]] ||
+              fail "WEB-8: the $web8_n logins went over one HTTP/2 connection to Envoy (connections $connects, HTTP versions $versions, answers $(wc -l <"$work/web8.wo" | tr -d ' '))"
+            ok "WEB-8: attempt $a: the $web8_n logins went over one HTTP/2 connection to Envoy, $web8_parallel in flight at a time"
+            valkey --scan --pattern 'svp:gw:rl:login-*' >"$work/rl-keys" || fail "WEB-8: scan the login keys"
+            : >"$work/web8.answers"
+            while read -r i status _; do
+              echo "$i $status $(form_error "$work/web8-$i.out")" >>"$work/web8.answers"
+            done <"$work/web8.wo"
+          }
+
+          # web8_sort: each answer of the attempt that counts by its form error and whether its email has a login-email key:
+          # passed (wrong password, key), busy (Too many tries, key: user-service's bound on concurrent password hashes, past the
+          # rate limit), limited (Too many tries, no key: login-ip refused it), wrong (wrong password without a key), other; the
+          # counts go to $work/web8.state, the answers of other to $work/web8.others, the address of each login-email key found
+          # to $work/web8.email-ips, the address of each login-ip key to $work/web8.ips.
+          web8_sort() {
+            local i status error h key passed=0 busy=0 limited=0 wrong=0 other=0
+            : >"$work/web8.email-ips"
+            : >"$work/web8.others"
+            while read -r i status error; do
+              h=$(awk -v i="$i" '$1 == i { print $2 }' "$work/web8.hashes")
+              key=$(grep ":$h\$" "$work/rl-keys" | head -n 1 || true)
+              case "$status $error" in
+                "200 wrong-credentials") if [[ -n $key ]]; then passed=$((passed + 1)); else wrong=$((wrong + 1)); fi ;;
+                # Any 429 of the gateway reads "Too many tries": with a login-email key it passed the rate limit (user-service's
+                # bound on concurrent password hashes), without one login-ip refused it.
+                "200 rate-limited") if [[ -n $key ]]; then busy=$((busy + 1)); else limited=$((limited + 1)); fi ;;
+                *) other=$((other + 1)) && echo "request $i: status $status, form error $error" >>"$work/web8.others" ;;
+              esac
+              [[ -z $key ]] || echo "${key#svp:gw:rl:login-email:}" | sed 's/:[0-9a-f]*$//' >>"$work/web8.email-ips"
+            done <"$work/web8.answers"
+            grep '^svp:gw:rl:login-ip:' "$work/rl-keys" | sed 's/^svp:gw:rl:login-ip://' >"$work/web8.ips" || true
+            printf 'web8_n=%q\npassed=%q\nbusy=%q\nlimited=%q\nwrong=%q\nother=%q\n' \
+              "$web8_n" "$passed" "$busy" "$limited" "$wrong" "$other" >"$work/web8.state"
+          }
+
+          for ((a = 1; a <= rl1_attempts; a++)); do
+            web8_send "$a"
+            rl1_fallback
+            if [[ $rl1_fell == 0 ]]; then
+              ok "WEB-8: attempt $a of $rl1_attempts counts: no login decision fell back to a gateway pod's in-memory limiter (as RL-1, on each of the $rl1_pods gateway pods)"
+              web8_sort
+              exit 0
+            fi
+            echo "info  WEB-8: attempt $a of $rl1_attempts does not count: $rl1_fell"
+          done
+          fail "WEB-8: an attempt in which no login decision fell back to a gateway pod's in-memory limiter, within $rl1_attempts attempts (each is above)"
+        check:
+          ($error): ~
+          (contains($stdout, 'no login-ip bucket in Valkey db 10')): true
+          (contains($stdout, 'logins went over one HTTP/2 connection to Envoy')): true
+          "(contains($stdout, 'counts: no login decision fell back'))": true
+    # The checks of the attempt that counted, on what it read right after its burst.
+    - description: "WEB-8: every answer is the /login form with \"Wrong email or password\" (each left its login-email key) or \"Too many tries\""
+      continueOnError: true
+      script:
+        shell: bash
+        env:
+        - *kubeconfig
+        content: |
+          set -euo pipefail
+          . ../web-7-web-2/web.sh
+          . ../rl-1/ratelimit.sh
+          work_ready
+          . "$work/web8.state"
+          if [[ -s $work/web8.others ]]; then sed 's/^/      /' "$work/web8.others" >&2; fi
+          if ((other == 0 && wrong == 0)); then
+            ok "WEB-8: every answer is the /login form with \"Wrong email or password\" ($passed, each left its login-email key) or \"Too many tries\" ($((busy + limited)))"
+          else
+            echo "FAIL  WEB-8: every answer is the form with \"Wrong email or password\" and a login-email key, or \"Too many tries\" (other $other, wrong password without a key $wrong)"
+          fi
+        check:
+          ($error): ~
+          (starts_with($stdout, 'ok    WEB-8:')): true
+    - description: "WEB-8: at least one login through the web client got 429 from login-ip (no login-email key): the forged X-Forwarded-For of each did not give it a bucket of its own"
+      continueOnError: true
+      script:
+        shell: bash
+        env:
+        - *kubeconfig
+        content: |
+          set -euo pipefail
+          . ../web-7-web-2/web.sh
+          . ../rl-1/ratelimit.sh
+          work_ready
+          . "$work/web8.state"
+          if ((limited >= 1)); then
+            ok "WEB-8: $limited of the $web8_n logins through the web client got 429 from login-ip (no login-email key), $passed passed (burst of login-ip $rl1_burst), $busy were refused by user-service's hash bound past the limit: the forged X-Forwarded-For of each did not give it a bucket of its own"
+          else
+            echo "FAIL  WEB-8: at least one login through the web client got 429 from login-ip (limited $limited, passed $passed, busy $busy)"
+          fi
+        check:
+          ($error): ~
+          (starts_with($stdout, 'ok    WEB-8:')): true
+    - description: "WEB-8: control: logins through the web client pass the rate limit and reach the gateway's limiter and user-service"
+      continueOnError: true
+      script:
+        shell: bash
+        env:
+        - *kubeconfig
+        content: |
+          set -euo pipefail
+          . ../web-7-web-2/web.sh
+          . ../rl-1/ratelimit.sh
+          work_ready
+          . "$work/web8.state"
+          if ((passed + busy >= 1)); then
+            echo "ok    control: $((passed + busy)) logins through the web client passed the rate limit and reached the gateway's limiter and user-service"
+          else
+            echo "FAIL  control: logins through the web client pass the rate limit (none did)"
+          fi
+        check:
+          ($error): ~
+          (starts_with($stdout, 'ok    control:')): true
+    - description: "WEB-8: the burst added 1 or 2 login-ip keys"
+      continueOnError: true
+      script:
+        shell: bash
+        env:
+        - *kubeconfig
+        content: |
+          set -euo pipefail
+          . ../web-7-web-2/web.sh
+          . ../rl-1/ratelimit.sh
+          work_ready
+          . "$work/web8.state"
+          keys=$(wc -l <"$work/web8.ips" | tr -d ' ')
+          if ((keys >= 1 && keys <= 2)); then
+            ok "WEB-8: login-ip keys added by the burst: $keys ($(tr '\n' ' ' <"$work/web8.ips"))"
+          else
+            echo "FAIL  WEB-8: the burst added 1 or 2 login-ip keys (got $keys: $(tr '\n' ' ' <"$work/web8.ips"))"
+          fi
+        check:
+          ($error): ~
+          (starts_with($stdout, 'ok    WEB-8:')): true
+    - description: "WEB-8: the address of each login-ip key, the one the gateway counts, is on the pod network of a node"
+      continueOnError: true
+      script:
+        shell: bash
+        env:
+        - *kubeconfig
+        content: |
+          set -euo pipefail
+          . ../web-7-web-2/web.sh
+          . ../rl-1/ratelimit.sh
+          work_ready
+          . "$work/web8.state"
+          nodes_read
+          while read -r ip; do
+            node=$(node_of "$ip")
+            if [[ $ip == 10.42.* && -n $node ]]; then
+              ok "WEB-8: $ip, the address the gateway counts, is on the pod network of node $node"
+            else
+              echo "FAIL  WEB-8: the login-ip key's address $ip is on the pod network of a node"
+            fi
+          done <"$work/web8.ips"
+        check:
+          ($error): ~
+          (contains($stdout, 'FAIL  ')): false
+    - description: "WEB-8: the address of each login-ip key is none of the web pods' addresses: the gateway counts the hop Envoy wrote, not the web pod"
+      continueOnError: true
+      script:
+        shell: bash
+        env:
+        - *kubeconfig
+        content: |
+          set -euo pipefail
+          . ../web-7-web-2/web.sh
+          . ../rl-1/ratelimit.sh
+          work_ready
+          . "$work/web8.state"
+          web_pods >"$work/web-pods" || true
+          while read -r ip; do
+            if awk -v ip="$ip" '$2 == ip { found = 1 } END { exit !found }' "$work/web-pods"; then
+              echo "FAIL  WEB-8: $ip is not a web pod's address (it is: every web user would share its bucket)"
+            else
+              ok "WEB-8: $ip is none of the web pods' addresses ($(awk '{ printf "%s ", $2 }' "$work/web-pods")): the gateway counts the hop Envoy wrote, not the web pod"
+            fi
+          done <"$work/web8.ips"
+        check:
+          ($error): ~
+          (contains($stdout, 'FAIL  ')): false
+    - description: "WEB-8: no login-ip or login-email key is for a forged address (198.51.100.0/24, 203.0.113.0/24)"
+      continueOnError: true
+      script:
+        shell: bash
+        env:
+        - *kubeconfig
+        content: |
+          set -euo pipefail
+          . ../web-7-web-2/web.sh
+          . ../rl-1/ratelimit.sh
+          work_ready
+          . "$work/web8.state"
+          if grep -qE ':(198\.51\.100|203\.0\.113)\.' "$work/rl-keys"; then
+            echo "FAIL  WEB-8: no login-ip or login-email key is for a forged address ($(grep -cE ':(198\.51\.100|203\.0\.113)\.' "$work/rl-keys") are)"
+          else
+            ok "WEB-8: no login-ip or login-email key is for a forged address (198.51.100.0/24, 203.0.113.0/24)"
+          fi
+        check:
+          ($error): ~
+          (starts_with($stdout, 'ok    WEB-8:')): true
+    - description: "WEB-8: the login-email keys of the logins that passed name the login-ip address(es) only: the web client passes the address Envoy wrote on unchanged"
+      continueOnError: true
+      script:
+        shell: bash
+        env:
+        - *kubeconfig
+        content: |
+          set -euo pipefail
+          . ../web-7-web-2/web.sh
+          . ../rl-1/ratelimit.sh
+          work_ready
+          . "$work/web8.state"
+          if [[ ! -s $work/web8.email-ips ]]; then
+            # As the bash drill: no login passed, so there is nothing to compare (the control above fails then).
+            ok "WEB-8: no login passed the rate limit, so no login-email key names an address"
+            exit 0
+          fi
+          sort -u "$work/web8.email-ips" | while read -r ip; do grep -qxF "$ip" "$work/web8.ips" || echo "$ip"; done >"$work/web8.stray"
+          if [[ ! -s $work/web8.stray ]]; then
+            ok "WEB-8: the login-email keys of the logins that passed name the login-ip address(es) only ($(sort -u "$work/web8.email-ips" | tr '\n' ' '))"
+          else
+            echo "FAIL  WEB-8: the login-email keys of the logins that passed name a login-ip address (others: $(tr '\n' ' ' <"$work/web8.stray"))"
+          fi
+        check:
+          ($error): ~
+          (starts_with($stdout, 'ok    WEB-8:')): true
