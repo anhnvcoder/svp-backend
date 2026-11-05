@@ -3,7 +3,7 @@
 # multi-arch index, from the two scans that gated its two
 # manifests. Shared by the build (after the gate) and the daily rescan.
 #
-# Each DIR describes one manifest of the index (what build-image.sh and push-image.sh, or the rescan, wrote):
+# Each DIR describes one manifest of the index (a leg artifact of .github/actions/image-leg, or the rescan's):
 #   platform       linux/amd64 or linux/arm64 (one DIR each)
 #   digest         sha256:<64 hex> of the manifest inside the signed index
 #   config-digest  sha256:<64 hex> of its config; must equal Metadata.ImageID of the report

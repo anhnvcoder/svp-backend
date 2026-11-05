@@ -6,14 +6,14 @@
 #   - the flags each pass gets (trivy convert of the secrets with no --severity and no ignore file, of the
 #     vulnerabilities with --severity CRITICAL and the tree's .trivyignore.yaml, each reading only its own findings;
 #     grype with --fail-on critical and the tree's .grype.yaml);
-#   - a secret blocks even with --allow-critical, a CRITICAL blocks unless --allow-critical, a scanner that fails or a
-#     report that is not trivy's exits 2; one summary line per scan, in the job's summary (and the log) in a job, in
-#     the log on a machine;
+#   - a secret blocks even with --allow-critical (the rescan), a CRITICAL blocks unless --allow-critical, which grype's
+#     gate (make grype) refuses, a scanner that fails or a report that is not trivy's exits 2; one summary line per
+#     scan, in the job's summary (and the log) in a job, in the log on a machine;
 #   - the check of the ignore files around their conftest policies (each rule is a case of make conftest-verify):
 #     conftest and yq without network, as the caller, on the files read-only; a policy's message in the output; job
-#     config refuses an expired entry and its grype rule, the image gates refuse a broken file but leave an expired
-#     entry to trivy and job config; a key written twice, a file YAML cannot read, a misconfiguration for a path that is
-#     no file fail;
+#     config refuses an expired entry and its grype rule, the gates of a report (here "the image gate": the rescan's,
+#     make grype's) refuse a broken file but leave an expired entry to trivy and job config; a key written twice, a
+#     file YAML cannot read, a misconfiguration for a path that is no file fail;
 #   - another repository's tree (SVP_CODE_ROOT, svp-frontend's checkout): its own .trivyignore.yaml and .grype.yaml
 #     are read, and the gate stops, naming the file, when the tree has either not.
 # Runs on macOS and Linux: Docker for conftest and yq (pulled once, then no network), no cluster.
@@ -241,11 +241,12 @@ check "scan-gate.sh --grype: grype runs with --fail-on critical and the tree's .
 same "scan-gate.sh --grype in a job: one line in the summary, the Critical under it" '- web linux/arm64 (grype): Critical 1, High 1, excepted by .grype.yaml 1
 critical  CVE-2026-1111 left-pad@1.0.0 pkg:npm/left-pad@1.0.0 (fixed: 9.9.9)' "$(cat "$work/summary")"
 check "scan-gate.sh --grype: the report itself is not printed" lacks "$work/gate.out" '"matches"'
-grype_gate local "scan-gate.sh --grype: --allow-critical lets a Critical through" 0 -- --allow-critical --grype \
+# Only the rescan lets CRITICAL through, in trivy's report; make grype never does.
+grype_gate local "scan-gate.sh --grype: --allow-critical is refused" 1 -- --allow-critical --grype \
   "web linux/arm64" "$work/leg"
-check "scan-gate.sh --grype: --allow-critical runs grype without --fail-on" lacks "$work/docker.log" "--fail-on"
-check "scan-gate.sh --grype: --allow-critical says so" has "$work/gate.err" \
-  "note  web linux/arm64 (grype): 1 Critical vulnerabilities let through (--allow-critical)"
+check "scan-gate.sh --grype: --allow-critical is refused, naming the usage" has "$work/gate.err" \
+  "usage: scan-gate.sh [--allow-critical] LABEL REPORT | --grype LABEL DIR | --check-ignorefile"
+check "scan-gate.sh --grype: --allow-critical is refused before grype runs" test ! -s "$work/docker.log"
 grype_report "$work/grype.json" 0 "$high_npm"
 grype_gate local "scan-gate.sh --grype: High and below only counted" 0 -- --grype "web linux/arm64" "$work/leg"
 check "scan-gate.sh --grype: the counts" has "$work/gate.out" \

@@ -113,9 +113,9 @@ Kyverno v1.19.1.
 
 Repo `svp-backend` (đường dẫn từ gốc repo):
 
-- `.github/workflows/images.yml` (job `sign`, `rescan`), `.github/workflows/ci.yml`, `deploy/ci/sign-image.sh`, `deploy/ci/rescan.sh`,
+- `.github/workflows/images.yml` (job `sign`, `rescan`), `.github/workflows/ci.yml`, `.github/actions/image-sign/` với `deploy/ci/image-guard.sh` (thay `sign-image.sh` đã xoá), `deploy/ci/rescan.sh`,
   `deploy/ci/provenance-predicate.sh` và `provenance-predicate-test.sh` (đã xoá), `deploy/ci/common.sh`, `changed-services.sh`
-  (mục 1, 2, 3); test `deploy/ci/sign-image-test.sh`, `rescan-test.sh`, `verify-collect-test.sh`, `ghcr-digest-test.sh`.
+  (mục 1, 2, 3); test `deploy/ci/image-guard-test.sh`, `sign-image-test.sh`, `rescan-test.sh`, `verify-collect-test.sh`, `ghcr-digest-test.sh`.
 - `deploy/ci/verify-release.sh`, `deploy/ci/verify-steps/supplychain.sh`, `deploy/ci/ghcr-digest.sh` (mục 4); bước
   `gitops-admission-metrics` của `.github/workflows/verify.yml`, `deploy/ci/verify-steps/admission-metrics.sh` (mục 6); `deploy/helm/svp-policy/templates/imagevalidatingpolicy.yaml`
   (mục 2, 7); `deploy/k8s/drills/supplychain/`, `deploy/k8s/drills/run.sh`, `deploy/k8s/k8s.mk` (ca b, c, f, l).

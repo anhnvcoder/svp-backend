@@ -9,7 +9,7 @@
 #     origin on github.com (run_repo_url of common.sh), and one off github.com is refused without showing a credential;
 #   - in this checkout: a run of svp-frontend that forgot SVP_CODE_ROOT, a run of a fork and a run of this repository
 #     under its name before the rename (no source names it) are refused; services all builds the six, services web is
-#     refused, and build-image.sh refuses web before it builds anything;
+#     refused;
 #   - a push to main that builds no image: promote_charts when a file under deploy/helm/ or one a symbolic link there
 #     points to changed, not for docs/.
 # Runs on macOS and Linux: no network, no Docker, no cluster.
@@ -201,7 +201,8 @@ check "plan.sh in this checkout: a run under the name before the rename: no rele
 lacks "$work/output" "images=" && ok "plan.sh in this checkout: a run under the name before the rename: no output" ||
   fail "plan.sh in this checkout: a run under the name before the rename: no output"
 # web is no service of release source backend (svp-frontend publishes it), and this repository holds no source of it:
-# a dispatch builds the six, never web, and build-image.sh refuses web before anything is built.
+# a dispatch builds the six, never web (the leg of image-leg refuses web before anything is built:
+# deploy/ci/image-guard-test.sh).
 plan_own "a dispatch with services all" 0 "${backend_run[@]}" GITHUB_SHA="$base" EVENT_NAME=workflow_dispatch \
   INPUT_SERVICES=all
 same "plan.sh in this checkout: services all builds the six, not web" \
@@ -211,16 +212,6 @@ plan_own "a dispatch with services web" 1 "${backend_run[@]}" GITHUB_SHA="$base"
   INPUT_SERVICES="gateway web"
 check "plan.sh in this checkout: services web is refused, naming the six" has "$work/plan.err" \
   "services: 'web' is not an image this repository builds (gateway user-service video-service engagement-service feed-service media-worker)"
-rc=0
-on github env "${backend_run[@]}" GITHUB_SHA="$base" "$tree/deploy/ci/build-image.sh" web amd64 "$work/leg" \
-  >/dev/null 2>"$work/build.err" || rc=$?
-same "build-image.sh in this checkout: web (exit 1)" 1 "$rc"
-# Source backend no longer publishes web, so the source of the run refuses it before the list of this checkout's
-# services is read.
-check "build-image.sh in this checkout: web is refused, not an image of its release source" has "$work/build.err" \
-  "web is not an image of release source backend (gateway user-service video-service engagement-service feed-service media-worker drill-vulnerable drill-unsigned drill-no-provenance): nothing is built, pushed or signed under ghcr.io/anhnvcoder/svp-backend/"
-[ ! -e "$work/leg" ] && ok "build-image.sh in this checkout: web: nothing built, no output folder" ||
-  fail "build-image.sh in this checkout: web: nothing built, no output folder"
 
 # A push to main that builds no image (the base: the newest successful push run): promote_charts when what the charts
 # read changed (a file under deploy/helm/, or the file a symbolic link there points to), not for docs/.

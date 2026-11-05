@@ -1,8 +1,10 @@
 #!/usr/bin/env bash
 # Tests for deploy/ci/changed-services.sh, in a throwaway git repository holding a copy of deploy/ci/, deploy/k8s/lib.sh,
-# the policy's values, a file under docs/ and a Makefile. Checked: a change of common.sh, rescan.sh or sign-image.sh
-# builds all six images of this repository (never web, which svp-frontend builds), and so does one of the GRYPE_IMAGE
-# line of the Makefile; none is built for a change under web/ (a file added, then deleted), of a test under deploy/ci/, of
+# the policy's values, the composite actions of the image pipeline, another action, a file under docs/ and a Makefile.
+# Checked: a change of common.sh, rescan.sh, image-guard.sh or of a file of one of the actions under
+# .github/actions/image-*/ builds all six images of this repository (never web, which svp-frontend builds), and so does
+# one of the GRYPE_IMAGE line of the Makefile; none is built for a change under web/ (a file added, then deleted), of
+# another action under .github/actions/, of a test under deploy/ci/ or its fixtures under testdata/, of
 # the scripts of the verification runs (verify-host.sh, verify-mask.sh, verify-collect.sh, the scripts of the steps
 # under deploy/ci/verify-steps/, ghcr-digest.sh), of the drills under deploy/k8s/drills/, of the scripts of svp-gitops's
 # check (gitops-check.sh with values-check.sh, verify-release.sh and its conftest policies), of the policy's values, of
@@ -31,8 +33,11 @@ same() {
 # The throwaway repository. GIT_DIR is set for every git call of the test itself, so git can never reach another
 # repository.
 tree=$work/tree
-mkdir -p "$tree/deploy/k8s" "$tree/deploy/helm/svp-policy" "$tree/docs"
+mkdir -p "$tree/deploy/k8s" "$tree/deploy/helm/svp-policy" "$tree/docs" "$tree/.github/actions/other"
 cp -R "$here" "$tree/deploy/ci"
+cp -R "$src/.github/actions/image-leg" "$src/.github/actions/image-index" "$src/.github/actions/image-sign" \
+  "$tree/.github/actions/"
+echo "name: other" >"$tree/.github/actions/other/action.yml"
 cp "$src/deploy/k8s/lib.sh" "$tree/deploy/k8s/"
 cp -R "$src/deploy/k8s/drills" "$tree/deploy/k8s/"
 cp -R "$src/deploy/helm/svp-policy/values.yaml" "$src/deploy/helm/svp-policy/files" "$tree/deploy/helm/svp-policy/"
@@ -57,7 +62,13 @@ changed_by() {
 all="engagement-service feed-service gateway media-worker user-service video-service"
 same "changed-services: a change of common.sh builds all six" "$all" "$(changed_by deploy/ci/common.sh)"
 same "changed-services: a change of rescan.sh builds all six" "$all" "$(changed_by deploy/ci/rescan.sh)"
-same "changed-services: a change of sign-image.sh builds all six" "$all" "$(changed_by deploy/ci/sign-image.sh)"
+same "changed-services: a change of image-guard.sh builds all six" "$all" "$(changed_by deploy/ci/image-guard.sh)"
+# The composite actions are the pipeline: one of them changed alone builds every image.
+for a in image-leg image-index image-sign; do
+  same "changed-services: a change of the action $a alone builds all six" "$all" \
+    "$(changed_by ".github/actions/$a/action.yml")"
+done
+same "changed-services: a change of another action builds nothing" "" "$(changed_by .github/actions/other/action.yml)"
 # The web client's source left this repository: a file under web/ (and its removal) builds no image.
 mkdir -p "$tree/web" && echo "export {};" >"$tree/web/page.ts"
 same "changed-services: a file added under web/ builds nothing" "" "$(g add web && changed_by web/page.ts)"
@@ -66,11 +77,11 @@ same "changed-services: the removal of web/ builds nothing" "" "$(changed)"
 # No image job reads a test, the scripts of the verification runs and of svp-gitops's check, the drills, the policy's
 # values or docs/.
 for f in changed-services-test.sh plan-test.sh promote-test.sh rescan-test.sh scan-gate-test.sh sign-image-test.sh \
-  verify-release-test.sh vuln-predicate-test.sh ghcr-digest.sh ghcr-digest-test.sh verify-host.sh verify-mask.sh \
-  verify-collect.sh verify-collect-test.sh verify-steps/steps.sh verify-steps/supplychain.sh \
-  verify-steps/supplychain-test.sh verify-steps/admission-metrics.sh verify-steps/objstore.sh gitops-check.sh \
-  gitops-check-test.sh values-check.sh verify-release.sh ignorefile-policies/grypeignore.rego \
-  gitops-tree-policies/author.rego; do
+  image-guard-test.sh image-gate-test.sh testdata/image-gate/clean.json verify-release-test.sh vuln-predicate-test.sh \
+  ghcr-digest.sh ghcr-digest-test.sh verify-host.sh verify-mask.sh verify-collect.sh verify-collect-test.sh \
+  verify-steps/steps.sh verify-steps/supplychain.sh verify-steps/supplychain-test.sh \
+  verify-steps/admission-metrics.sh verify-steps/objstore.sh gitops-check.sh gitops-check-test.sh values-check.sh \
+  verify-release.sh ignorefile-policies/grypeignore.rego gitops-tree-policies/author.rego; do
   same "changed-services: a change of $f builds nothing" "" "$(changed_by "deploy/ci/$f")"
 done
 for f in drills/run.sh drills/.chainsaw.yaml drills/gitops/env/chainsaw-test.yaml drills/gitops/gitops-test.sh \
@@ -79,7 +90,7 @@ for f in drills/run.sh drills/.chainsaw.yaml drills/gitops/env/chainsaw-test.yam
 done
 # A file of deploy/ci/ that is none of those still builds every image: the list is of names, not of a folder.
 same "changed-services: a change of another script of deploy/ci/ beside the verification scripts builds all six" "$all" \
-  "$(changed_by deploy/ci/build-image.sh)"
+  "$(changed_by deploy/ci/vuln-predicate.sh)"
 same "changed-services: a change of the policy's values builds nothing" "" \
   "$(changed_by deploy/helm/svp-policy/values.yaml)"
 same "changed-services: a change under docs/ builds nothing" "" "$(changed_by docs/decision.md)"

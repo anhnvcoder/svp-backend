@@ -116,7 +116,7 @@ trên `main` ở [41015270736](https://github.com/anhnvcoder/svp-backend/actions
 
 Hiện thực bị 0040 thay (`provenance-predicate.sh` đã xoá); danh sách theo bậc ở phụ lục.
 
-- `deploy/ci/provenance-predicate.sh`, `deploy/ci/provenance-predicate-test.sh`, `deploy/ci/platform.sh`, `deploy/ci/sign-image.sh`,
+- `deploy/ci/provenance-predicate.sh`, `deploy/ci/provenance-predicate-test.sh`, `deploy/ci/platform.sh`, `.github/actions/image-sign/` với `deploy/ci/image-guard.sh` (thay `sign-image.sh` đã xoá),
   `.github/workflows/images.yml` (mục 1, 2).
 - `deploy/helm/svp-policy/` (`imageVerification.requireProvenance`, `files/sources.json`, `templates/imagevalidatingpolicy.yaml`) (mục 4).
 - `deploy/ci/common.sh`, `deploy/ci/verify-release.sh`, `deploy/ci/values-check.sh`, `deploy/k8s/gitops.sh` (mục 5).

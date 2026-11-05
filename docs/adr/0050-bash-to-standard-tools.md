@@ -140,6 +140,16 @@ Chọn phương án A ở cả bốn mục. Ngoài ra:
   `deploy/k8s/restart-test.sh`; runner tự viết và các file kịch bản xoá; job `config` của `.github/workflows/ci.yml` chạy
   `make chainsaw-lint` và các test trên; `deploy/ci/changed-services.sh` (script của bước không build image). Lượt `verify.yml` của
   hai kịch bản trên nhánh của giai đoạn này: **kiểm sau push**.
+- Pipeline image (A1, A2, A3, A7 của phụ lục): ba composite action `.github/actions/image-leg/` (build `docker buildx build`, `docker save`,
+  trivy trên tar, syft, grype, hai cổng bằng mã thoát của công cụ, push rồi so config digest), `image-index/` (`docker buildx imagetools
+  create`, kiểm index đúng hai manifest đã quét), `image-sign/` (`cosign sign`, `cosign attest --type spdxjson|vuln` bằng `COSIGN_IMAGE`
+  ghim, `actions/attest`); mọi công cụ chạy từ image ghim của `Makefile`. Guard còn là bash ở `deploy/ci/image-guard.sh` (test
+  `image-guard-test.sh`, các bước đọc từ file action); `deploy/ci/image-gate-test.sh` chạy bước cổng của `image-leg` bằng công cụ thật trên
+  fixture `deploy/ci/testdata/image-gate/`. Job `build-nopush`, `build`, `merge`, `sign`, `drill-*` của `.github/workflows/images.yml` gọi
+  action; `build-image.sh`, `push-image.sh`, `merge-index.sh`, `sign-image.sh` xoá; `deploy/ci/scan-gate.sh` còn `--check-ignorefile`
+  (cả bước đầu của mỗi chân), cổng trivy của rescan và cổng grype của `make grype`; `sign-image-test.sh` còn ca của helper bundle mà rescan
+  dùng; đổi file dưới `.github/actions/image-*/` build lại mọi image (`deploy/ci/changed-services.sh`); job `config` của
+  `.github/workflows/ci.yml` chạy hai test mới. Predicate `vuln` không đổi (`deploy/ci/vuln-predicate.sh`).
 
 ## Thông tin thêm
 
