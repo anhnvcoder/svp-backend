@@ -1,0 +1,76 @@
+# One multi-arch index per image from its two scanned manifests: downloads the artifacts leg-<image>-amd64 and -arm64
+# of image-leg, joins the two manifests into <prefix><image>:<12 hex of the commit> with the OCI annotations of the
+# commit (docker buildx imagetools create), reads the index back and checks it holds exactly those two manifests
+# (deploy/ci/image-guard.sh index, index-check), and hands on the artifact index-<image> (repository, tag, digest): the
+# digest that is signed, attested and promoted. An image with a failed leg has not both artifacts and fails here: no
+# index, no signature, no release. Used by images.yml of this repository and of svp-frontend (code-root its checkout).
+#
+# Inputs reach the steps through env:, never ${{ }} inside run:. The job grants contents: read and packages: write;
+# GITHUB_TOKEN is used only by docker login. The step that calls docker unsets DOCKER_DEFAULT_PLATFORM first, as every
+# docker call of this repository does.
+name: image-index
+description: "Join the two scanned manifests of an image into one index and check it"
+
+inputs:
+  image:
+    description: "A service or drill image of the release source of this run's repository"
+    required: true
+  code-root:
+    description: "The checkout whose code is built (another repository's); empty: this repository's checkout"
+    required: false
+    default: ""
+  out:
+    description: "Working folder: the legs are downloaded to <out>/legs, the index written to <out>/index"
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+      with:
+        pattern: leg-${{ inputs.image }}-*
+        path: ${{ inputs.out }}/legs
+
+    - name: Check the two legs
+      id: guard
+      shell: bash
+      env:
+        GUARD: ${{ github.action_path }}/../../../deploy/ci/image-guard.sh
+        IMAGE: ${{ inputs.image }}
+        OUT: ${{ inputs.out }}
+        SVP_CODE_ROOT: ${{ inputs.code-root }}
+      run: '"$GUARD" index "$IMAGE" "$OUT/legs"'
+
+    - name: Join the two manifests into one index, check it
+      shell: bash
+      env:
+        GUARD: ${{ github.action_path }}/../../../deploy/ci/image-guard.sh
+        IMAGE: ${{ inputs.image }}
+        OUT: ${{ inputs.out }}
+        SVP_CODE_ROOT: ${{ inputs.code-root }}
+        REPOSITORY: ${{ steps.guard.outputs.repository }}
+        TAG: ${{ steps.guard.outputs.tag }}
+        AMD64: ${{ steps.guard.outputs.amd64 }}
+        ARM64: ${{ steps.guard.outputs.arm64 }}
+        ANNOTATIONS: ${{ steps.guard.outputs.annotations }}
+        GH_TOKEN: ${{ github.token }}
+      run: |
+        unset DOCKER_DEFAULT_PLATFORM
+        args=()
+        for annotation in $ANNOTATIONS; do args+=(--annotation "$annotation"); done
+        printf '%s' "$GH_TOKEN" | docker login ghcr.io --username "$GITHUB_ACTOR" --password-stdin
+        docker buildx imagetools create --tag "$REPOSITORY:$TAG" "${args[@]}" "$REPOSITORY@$AMD64" "$REPOSITORY@$ARM64"
+        mkdir -p "$OUT/index"
+        # Byte for byte as the registry stores it: a file, whose sha256 is the digest.
+        docker buildx imagetools inspect --raw "$REPOSITORY:$TAG" >"$OUT/index/index.json"
+        "$GUARD" index-check "$IMAGE" "$OUT/legs" "$OUT/index"
+
+    - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+      with:
+        name: index-${{ inputs.image }}
+        path: |
+          ${{ inputs.out }}/index/repository
+          ${{ inputs.out }}/index/tag
+          ${{ inputs.out }}/index/digest
+        if-no-files-found: error
+        retention-days: 7

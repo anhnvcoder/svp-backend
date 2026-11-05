@@ -1,0 +1,28 @@
+{
+  "SchemaVersion": 2,
+  "ArtifactName": "/image.tar",
+  "ArtifactType": "container_image",
+  "Metadata": {
+    "ImageID": "sha256:3333333333333333333333333333333333333333333333333333333333333333"
+  },
+  "Results": [
+    {
+      "Target": "app/node_modules/zod/package.json",
+      "Class": "lang-pkgs",
+      "Type": "node-pkg",
+      "Vulnerabilities": [
+        {
+          "VulnerabilityID": "CVE-2026-2222",
+          "PkgName": "zod",
+          "PkgIdentifier": {
+            "PURL": "pkg:npm/zod@3.25.76"
+          },
+          "InstalledVersion": "3.25.76",
+          "FixedVersion": "3.25.77",
+          "Severity": "HIGH",
+          "Title": "A HIGH vulnerability of the fixture"
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,320 @@
+# One leg of the image pipeline: one image on this runner's own architecture. Builds it from its Dockerfile, saves it to a
+# tar, scans that very tar with trivy (vulnerabilities and secrets) and its SBOM (syft) with grype, gates both, and with
+# push: true pushes exactly the scanned image (compared by config digest) and hands the leg on as artifacts
+# leg-<image>-<arch> and sarif-<image>-<arch>. Used by images.yml of this repository (./.github/actions/image-leg) and of
+# svp-frontend (./.backend/.github/actions/image-leg, the checkout of .backend-commit, with code-root its own checkout).
+#
+# The tools run from the images the Makefile of this repository pins by digest, each step calling its tool directly;
+# the guards around them are deploy/ci/image-guard.sh (the image is a service or drill image of the release source of
+# the run's repository, the tree is the run's commit, the pushed config is the scanned one), and the rules of the
+# ignore files deploy/ci/scan-gate.sh --check-ignorefile. Every step that calls docker unsets DOCKER_DEFAULT_PLATFORM
+# first, as every docker call of this repository does: the leg is built and scanned for the runner's own
+# architecture, never emulated. The verdicts are the scanners' exit codes:
+#   - trivy convert --exit-code 5 of the secrets, with no --severity (a severity filter would hide a HIGH secret) and no
+#     ignore file: any secret blocks, drill-vulnerable too;
+#   - trivy convert --exit-code 5 --severity CRITICAL with the tree's .trivyignore.yaml (trivy drops an expired entry):
+#     a CRITICAL blocks, unless the image is drill-vulnerable;
+#   - grype --fail-on critical with the tree's .grype.yaml (exit 2): a Critical blocks, unless drill-vulnerable;
+#   - any other exit code of a scanner, a DB that cannot be fetched, a tar syft cannot read: the leg fails.
+# Both gates run whatever the other found, so the job summary shows both; nothing is pushed unless every step passed.
+#
+# Security rules: inputs reach the steps through env:, never ${{ }} inside run:; nothing here is cached but the trivy
+# and grype DBs (one entry per day); the token is the job's GITHUB_TOKEN, used only by docker login when pushing (the
+# job grants packages: write only then).
+name: image-leg
+description: "Build, scan and gate one image for this runner's architecture; push exactly what was scanned"
+
+inputs:
+  image:
+    description: "A service or drill image of the release source of this run's repository"
+    required: true
+  arch:
+    description: "amd64 or arm64: the architecture of this runner"
+    required: true
+  push:
+    description: "true: push the scanned image and upload the leg; false: build, scan and gate only"
+    required: false
+    default: "false"
+  code-root:
+    description: "The checkout whose code is built (another repository's); empty: this repository's checkout"
+    required: false
+    default: ""
+  out:
+    description: "Folder the leg is written to (image.tar, trivy.json, sbom.spdx.json, digests, scan times)"
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - name: Check the image and the tree
+      id: guard
+      shell: bash
+      env:
+        GUARD: ${{ github.action_path }}/../../../deploy/ci/image-guard.sh
+        IMAGE: ${{ inputs.image }}
+        ARCH: ${{ inputs.arch }}
+        OUT: ${{ inputs.out }}
+        SVP_CODE_ROOT: ${{ inputs.code-root }}
+      run: '"$GUARD" leg "$IMAGE" "$ARCH" "$OUT"'
+
+    - name: Check the rules of the ignore files
+      id: rules
+      shell: bash
+      env:
+        SCAN_GATE: ${{ github.action_path }}/../../../deploy/ci/scan-gate.sh
+        SVP_CODE_ROOT: ${{ inputs.code-root }}
+      run: '"$SCAN_GATE" --check-ignorefile'
+
+    - id: day
+      shell: bash
+      run: echo "day=$(date -u +%F)" >>"$GITHUB_OUTPUT"
+    # The trivy DB, one cache entry per day (trivy's advice against download limits); trivy still downloads a newer DB
+    # when the cached one is stale. A pull request's cache stays in its own ref and never replaces main's.
+    - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: ${{ runner.temp }}/trivy-cache/db
+        key: trivy-db-${{ steps.day.outputs.day }}
+        restore-keys: trivy-db-
+    # The grype DB, the same way (about 480 MB as a cache entry, of the repository's 10 GB quota). grype checks for a
+    # newer DB on every scan that has not checked in the last two hours, and refuses one built more than five days ago.
+    - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: ${{ runner.temp }}/grype-cache
+        key: grype-db-${{ steps.day.outputs.day }}
+        restore-keys: grype-db-
+
+    # Native architecture, no emulation, no cross-compiling; no BuildKit provenance or SBOM, so the image is one plain
+    # manifest; then the tar every scanner reads.
+    - name: Build
+      id: build
+      shell: bash
+      env:
+        IMAGE: ${{ inputs.image }}
+        ARCH: ${{ inputs.arch }}
+        OUT: ${{ steps.guard.outputs.out }}
+        DOCKERFILE: ${{ steps.guard.outputs.dockerfile }}
+        CONTEXT: ${{ steps.guard.outputs.context }}
+        BUILD_ARG: ${{ steps.guard.outputs.build-arg }}
+        LABELS: ${{ steps.guard.outputs.labels }}
+        TAG: ${{ steps.guard.outputs.tag }}
+      run: |
+        unset DOCKER_DEFAULT_PLATFORM
+        args=(--file "$DOCKERFILE" --tag "$TAG")
+        [ -z "$BUILD_ARG" ] || args+=(--build-arg "$BUILD_ARG")
+        for label in $LABELS; do args+=(--label "$label"); done
+        echo "build $IMAGE for linux/$ARCH from $DOCKERFILE, context $CONTEXT"
+        docker buildx build --load --provenance=false --sbom=false "${args[@]}" "$CONTEXT"
+        rm -f "$OUT/image.tar"
+        docker save --output "$OUT/image.tar" "$TAG"
+
+    # trivy on the tar (read-only), vulnerabilities and secrets, every severity, as JSON: the record the gate, the SARIF
+    # and the vuln attestation are made from. A DB that cannot be downloaded fails the scan, never a scan against a DB
+    # of unknown age. Its ImageID is the config digest the push is compared with.
+    - name: Scan with trivy
+      id: scan
+      shell: bash
+      env:
+        OUT: ${{ steps.guard.outputs.out }}
+        TRIVY_IMAGE: ${{ steps.guard.outputs.trivy-image }}
+        TRIVY_SCAN_ARGS: ${{ steps.guard.outputs.trivy-scan-args }}
+        TRIVYIGNORE: ${{ steps.guard.outputs.trivyignore }}
+        TRIVY_CACHE: ${{ runner.temp }}/trivy-cache
+      run: |
+        unset DOCKER_DEFAULT_PLATFORM
+        mounts=(-v "$OUT/image.tar:/image.tar:ro" -v "$OUT:/out")
+        [ -z "$TRIVYIGNORE" ] || mounts+=(-v "$TRIVYIGNORE:/ignore.yaml:ro")
+        mkdir -p "$TRIVY_CACHE"
+        trivy() { docker run --rm --user "$(id -u):$(id -g)" -e HOME=/tmp -v "$TRIVY_CACHE:/cache" "${mounts[@]}" "$TRIVY_IMAGE" "$@" --cache-dir /cache; }
+        date -u +%Y-%m-%dT%H:%M:%SZ >"$OUT/scan-started"
+        # shellcheck disable=SC2086 # the flags of deploy/ci/common.sh (trivy_scan_args), one word each
+        trivy image --input /image.tar $TRIVY_SCAN_ARGS --output /out/trivy.json
+        date -u +%Y-%m-%dT%H:%M:%SZ >"$OUT/scan-finished"
+        # The DB version the vuln predicate records, cut to seconds so every time in it has one form.
+        trivy version --format json | jq -er '.VulnerabilityDB.UpdatedAt | sub("\\.[0-9]+"; "")' >"$OUT/db-updated-at"
+        jq -er .Metadata.ImageID "$OUT/trivy.json" >"$OUT/config-digest"
+
+    # The SBOM of the same tar, one SPDX document per platform, attested later on the manifest of that platform. syft
+    # runs with no network; its image has no writable /tmp for a non-root user, hence the tmpfs.
+    - name: Write the SBOM with syft
+      id: sbom
+      shell: bash
+      env:
+        IMAGE: ${{ inputs.image }}
+        OUT: ${{ steps.guard.outputs.out }}
+        SYFT_IMAGE: ${{ steps.guard.outputs.syft-image }}
+      run: |
+        unset DOCKER_DEFAULT_PLATFORM
+        rm -f "$OUT/sbom.spdx.json"
+        docker run --rm --network none --user "$(id -u):$(id -g)" --tmpfs /tmp:mode=1777 -e HOME=/tmp \
+          -e SYFT_CHECK_FOR_APP_UPDATE=false -v "$OUT/image.tar:/image.tar:ro" -v "$OUT:/out" "$SYFT_IMAGE" \
+          docker-archive:/image.tar -o spdx-json=/out/sbom.spdx.json -q
+        jq -e .spdxVersion "$OUT/sbom.spdx.json" >/dev/null 2>&1 || {
+          echo "::error::syft wrote no SPDX document for $IMAGE"
+          exit 1
+        }
+
+    # grype on that SBOM: a second matcher and DB, and it sees what syft found outside any package manager (the node
+    # binary of the web image), which trivy does not list. grype exits 2 for a match at or above --fail-on, 1 when it
+    # could not scan (a DB it cannot fetch: the update check is required, and grype refuses a DB built more than five
+    # days ago). The only configuration it reads is .grype.yaml of the tree, passed with -c: the working directory and
+    # HOME are an empty tmpfs. Exit 1: blocked; exit 2: grype could not scan.
+    - name: Scan the SBOM with grype, gate
+      id: grype
+      shell: bash
+      env:
+        OUT: ${{ steps.guard.outputs.out }}
+        LABEL: ${{ steps.guard.outputs.label }}
+        GUARD: ${{ github.action_path }}/../../../deploy/ci/image-guard.sh
+        GRYPE_IMAGE: ${{ steps.guard.outputs.grype-image }}
+        GRYPEIGNORE: ${{ steps.guard.outputs.grypeignore }}
+        ALLOW_CRITICAL: ${{ steps.guard.outputs.allow-critical }}
+        GRYPE_CACHE: ${{ runner.temp }}/grype-cache
+      run: |
+        unset DOCKER_DEFAULT_PLATFORM
+        mounts=() config=() fail_on=(--fail-on critical)
+        if [ -n "$GRYPEIGNORE" ]; then
+          mounts=(-v "$GRYPEIGNORE:/ignore/grype.yaml:ro")
+          config=(-c /ignore/grype.yaml)
+        fi
+        [ "$ALLOW_CRITICAL" != true ] || fail_on=()
+        mkdir -p "$GRYPE_CACHE"
+        rm -f "$OUT/grype.json" "$OUT/grype.sarif.raw"
+        rc=0
+        docker run --rm --user "$(id -u):$(id -g)" --tmpfs /tmp:mode=1777 -e HOME=/tmp --workdir /tmp \
+          -e GRYPE_CHECK_FOR_APP_UPDATE=false -e GRYPE_DB_CACHE_DIR=/cache -e GRYPE_DB_REQUIRE_UPDATE_CHECK=true \
+          -v "$GRYPE_CACHE:/cache" -v "$OUT:/out" "${mounts[@]}" "$GRYPE_IMAGE" \
+          sbom:/out/sbom.spdx.json "${config[@]}" "${fail_on[@]}" -o json=/out/grype.json -o sarif=/out/grype.sarif.raw -q ||
+          rc=$?
+        if { [ "$rc" -ne 0 ] && [ "$rc" -ne 2 ]; } || ! jq -e '.descriptor.name == "grype"' "$OUT/grype.json" >/dev/null 2>&1; then
+          echo "::error::$LABEL: grype could not scan $OUT/sbom.spdx.json (exit $rc)"
+          exit 2
+        fi
+        "$GUARD" grype-summary "$LABEL" "$OUT"
+        if [ "$rc" -eq 2 ]; then
+          echo "::error::$LABEL (grype): Critical vulnerabilities; nothing is pushed, signed or attested"
+          exit 1
+        fi
+        [ "$ALLOW_CRITICAL" != true ] || echo "note  $LABEL (grype): Critical vulnerabilities let through (allow-critical)"
+        echo "ok    $LABEL (grype) passes the scan gate"
+
+    # SARIF for the Security tab (HIGH and CRITICAL; convert applies the scan's own filters), one category per image and
+    # architecture, written before the trivy gate decides, so a blocked image still shows its findings on main.
+    - name: Write the SARIF
+      if: ${{ !cancelled() && steps.scan.outcome == 'success' }}
+      shell: bash
+      env:
+        IMAGE: ${{ inputs.image }}
+        ARCH: ${{ inputs.arch }}
+        OUT: ${{ steps.guard.outputs.out }}
+        GUARD: ${{ github.action_path }}/../../../deploy/ci/image-guard.sh
+        TRIVY_IMAGE: ${{ steps.guard.outputs.trivy-image }}
+        TRIVY_CACHE: ${{ runner.temp }}/trivy-cache
+      run: |
+        unset DOCKER_DEFAULT_PLATFORM
+        docker run --rm --user "$(id -u):$(id -g)" -e HOME=/tmp -v "$TRIVY_CACHE:/cache" -v "$OUT:/out" "$TRIVY_IMAGE" \
+          convert --format sarif --severity HIGH,CRITICAL --output /out/trivy.sarif.tmp /out/trivy.json --cache-dir /cache
+        "$GUARD" sarif "$IMAGE" "$ARCH" "$OUT"
+
+    # The trivy gate, two passes of trivy convert on the report, each on its own half: trivy exits 5 (--exit-code) for a
+    # finding, 1 when it fails. Exit 1: blocked; exit 2: trivy could not read the report. Prints
+    # rule, file and line of a secret, never the matched text (trivy masks it anyway; the report is never printed).
+    - name: Gate the trivy report
+      id: trivy-gate
+      if: ${{ !cancelled() && steps.scan.outcome == 'success' }}
+      shell: bash
+      env:
+        OUT: ${{ steps.guard.outputs.out }}
+        LABEL: ${{ steps.guard.outputs.label }}
+        GUARD: ${{ github.action_path }}/../../../deploy/ci/image-guard.sh
+        TRIVY_IMAGE: ${{ steps.guard.outputs.trivy-image }}
+        TRIVYIGNORE: ${{ steps.guard.outputs.trivyignore }}
+        ALLOW_CRITICAL: ${{ steps.guard.outputs.allow-critical }}
+        TRIVY_CACHE: ${{ runner.temp }}/trivy-cache
+      run: |
+        unset DOCKER_DEFAULT_PLATFORM
+        "$GUARD" trivy-report "$LABEL" "$OUT"
+        mounts=(-v "$OUT/gate:/in:ro") ignore=(--ignorefile '')
+        if [ -n "$TRIVYIGNORE" ]; then
+          mounts+=(-v "$TRIVYIGNORE:/ignore.yaml:ro")
+          ignore=(--ignorefile /ignore.yaml)
+        fi
+        mkdir -p "$TRIVY_CACHE"
+        # convert ARGS...: trivy convert with ARGS; rc is 0 (nothing found) or 5 (found); trivy failing stops the step.
+        convert() {
+          rc=0
+          docker run --rm --user "$(id -u):$(id -g)" -e HOME=/tmp -v "$TRIVY_CACHE:/cache" "${mounts[@]}" "$TRIVY_IMAGE" \
+            convert --exit-code 5 "$@" --cache-dir /cache >&2 || rc=$?
+          [ "$rc" -eq 0 ] || [ "$rc" -eq 5 ] || {
+            echo "::error::$LABEL: trivy could not read $OUT/trivy.json (exit $rc)"
+            exit 2
+          }
+        }
+        blocked=0
+        convert --format json --output /dev/null --ignorefile '' /in/secrets.json
+        if [ "$rc" -ne 0 ]; then
+          echo "::error::$LABEL: secrets found; nothing is pushed, signed or attested"
+          jq -r '.Results[]? | .Target as $t | .Secrets[]? | "secret  \(.RuleID) (\(.Severity)) in \($t) line \(.StartLine)"' \
+            "$OUT/trivy.json" | if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then tee -a "$GITHUB_STEP_SUMMARY"; else cat; fi >&2
+          blocked=1
+        fi
+        convert --format table --table-mode detailed --severity CRITICAL "${ignore[@]}" /in/vulnerabilities.json
+        if [ "$rc" -ne 0 ]; then
+          if [ "$ALLOW_CRITICAL" = true ]; then
+            echo "note  $LABEL (trivy): CRITICAL vulnerabilities let through (allow-critical)"
+          else
+            echo "::error::$LABEL (trivy): CRITICAL vulnerabilities; nothing is pushed, signed or attested"
+            blocked=1
+          fi
+        fi
+        [ "$blocked" -ne 0 ] || echo "ok    $LABEL (trivy) passes the scan gate"
+        exit "$blocked"
+
+    # main only: push exactly the scanned image, read back what the registry serves under its tag and compare its config
+    # digest with the scanned one; any difference fails the leg, and that digest is never merged, signed or promoted.
+    - name: Push the scanned image, compare its config digest
+      if: ${{ inputs.push == 'true' }}
+      shell: bash
+      env:
+        IMAGE: ${{ inputs.image }}
+        ARCH: ${{ inputs.arch }}
+        OUT: ${{ steps.guard.outputs.out }}
+        GUARD: ${{ github.action_path }}/../../../deploy/ci/image-guard.sh
+        SVP_CODE_ROOT: ${{ inputs.code-root }}
+        GH_TOKEN: ${{ github.token }}
+      run: |
+        unset DOCKER_DEFAULT_PLATFORM
+        remote=$("$GUARD" push "$IMAGE" "$ARCH" "$OUT")
+        printf '%s' "$GH_TOKEN" | docker login ghcr.io --username "$GITHUB_ACTOR" --password-stdin
+        docker tag "$(cat "$OUT/local-tag")" "$remote"
+        docker push --quiet "$remote" >/dev/null
+        docker buildx imagetools inspect --raw "$remote" >"$OUT/manifest.json"
+        "$GUARD" pushed "$IMAGE" "$ARCH" "$OUT"
+
+    - name: Hand the leg over (manifest digest, scan report, SBOM, scan times)
+      if: ${{ inputs.push == 'true' }}
+      uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+      with:
+        name: leg-${{ inputs.image }}-${{ inputs.arch }}
+        path: |
+          ${{ steps.guard.outputs.out }}/platform
+          ${{ steps.guard.outputs.out }}/repository
+          ${{ steps.guard.outputs.out }}/digest
+          ${{ steps.guard.outputs.out }}/config-digest
+          ${{ steps.guard.outputs.out }}/trivy.json
+          ${{ steps.guard.outputs.out }}/sbom.spdx.json
+          ${{ steps.guard.outputs.out }}/scan-started
+          ${{ steps.guard.outputs.out }}/scan-finished
+          ${{ steps.guard.outputs.out }}/db-updated-at
+        if-no-files-found: error
+        retention-days: 7
+    # The SARIF for the Security tab, blocked or not (no upload from a pull request).
+    - name: Keep the SARIF
+      if: ${{ !cancelled() && inputs.push == 'true' && steps.guard.outcome == 'success' }}
+      uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+      with:
+        name: sarif-${{ inputs.image }}-${{ inputs.arch }}
+        path: |
+          ${{ steps.guard.outputs.out }}/trivy.sarif
+          ${{ steps.guard.outputs.out }}/grype.sarif
+        if-no-files-found: ignore
+        retention-days: 7
