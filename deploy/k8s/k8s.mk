@@ -8,7 +8,7 @@ K8S_LIB := . deploy/k8s/lib.sh
 	k8s-glitchtip-init k8s-ui-grafana k8s-ui-prometheus k8s-ui-alertmanager k8s-ui-glitchtip k8s-gitops-up \
 	k8s-ui-argocd k8s-traffic-start k8s-traffic-stop drill-k8s-threats \
 	drill-k8s-supplychain k8s-web-sourcemaps k8s-web-e2e cloud-check \
-	gitops-clone web-clone eks-gitops-up eks-secrets eks-glitchtip-init eks-smoke eks-seed \
+	gitops-clone web-clone eks-secrets eks-glitchtip-init eks-smoke eks-seed \
 	eks-rl-reset
 
 # Compose and k3d never run together on the 16 GB machine (they do not fit in its RAM): the cluster is not created or
@@ -169,35 +169,31 @@ CLOUD_K8S_VERSION := 1.35.9
 cloud-check: ## Check the k6 Job of the cloud cluster (deploy/k6/cloud/render.sh) without a cluster: kubeconform -strict (Kubernetes CLOUD_K8S_VERSION), every image pinned by digest (needs network)
 	KUBECONFORM_IMAGE='$(KUBECONFORM_IMAGE)' CLOUD_K8S_VERSION='$(CLOUD_K8S_VERSION)' deploy/k8s/cloud/check.sh
 
-# --- An EKS cluster of the project, which the infrastructure repository makes and destroys, and its learner
-# reaches with the AWS profile of the session (the AI runs none of these). CONTEXT is the cluster's alias in the
-# kubeconfig, svp-stg or svp-prd (output kubeconfig_command of the infrastructure repository: aws eks update-kubeconfig
-# --alias), never the current context; the scripts get it as SVP_KUBE_CONTEXT, and refuse every other name before any
-# command (deploy/k8s/lib.sh, deploy/compose/lib.sh). These targets never run k8s-exclusive: a cluster in the cloud
-# takes no memory of this machine. DOMAIN is the domain of the cluster's web client, its API api.<domain>, behind
-# certificates of a public CA (no .k8s/ca.crt). LOCAL LAB ONLY: eks-smoke, eks-seed and eks-rl-reset delete the
-# register rate limit keys in the cluster's Valkey db 10, as k8s-smoke does on k3d; a stg or prd of this lab only.
+# --- An EKS cluster of the project, which the infrastructure repository makes, bootstraps (Argo CD and its root, root
+# aws/gitops/<env> of svp-infra) and destroys, and its learner reaches with the AWS profile of the session (the AI runs
+# none of these). CONTEXT is the cluster's alias in the kubeconfig, svp-stg or svp-prd (output kubeconfig_command of
+# the infrastructure repository: aws eks update-kubeconfig --alias), never the current context; the scripts get it as
+# SVP_KUBE_CONTEXT, and refuse every other name before any command (deploy/k8s/lib.sh, deploy/compose/lib.sh). These
+# targets never run k8s-exclusive: a cluster in the cloud takes no memory of this machine. DOMAIN is the domain of the
+# cluster's web client, its API api.<domain>, behind certificates of a public CA (no .k8s/ca.crt). LOCAL LAB ONLY:
+# eks-smoke, eks-seed and eks-rl-reset delete the register rate limit keys in the cluster's Valkey db 10, as k8s-smoke
+# does on k3d; a stg or prd of this lab only.
 CONTEXT ?=
-CLUSTER_VALUES ?=
 DOMAIN ?=
 EKS_CONTEXT_CHECK = case '$(CONTEXT)' in svp-stg | svp-prd) ;; *) echo "make $@: CONTEXT must be svp-stg or svp-prd, the alias of an EKS cluster of the project in the kubeconfig (got '$(CONTEXT)')" >&2; exit 1 ;; esac
 EKS_DOMAIN_CHECK = printf '%s' '$(DOMAIN)' | grep -Eqx '([a-z0-9]([a-z0-9-]*[a-z0-9])?[.])+[a-z]{2,}' || { echo "make $@: DOMAIN must be the domain of the cluster's web client, its API at api.<domain> (got '$(DOMAIN)')" >&2; exit 1; }
 
-# deploy/k8s/gitops.sh on the EKS cluster: its steps but the registry and the cluster (made already) and following a
-# branch (it stays at the commit checked). CLUSTER_VALUES is the file of the root's value cluster, the JSON of
-# `terraform output -json cluster_values` of the infrastructure repository, checked against the keys of
-# deploy/ci/cluster-values.example.yaml before any kubectl call. SVP_RDS_MASTER_PASSWORD comes from the environment
-# (the session's script reads it from AWS), never from .env.
-eks-gitops-up: env-required ## On the EKS cluster CONTEXT=svp-stg|svp-prd, with CLUSTER_VALUES=<file of the root's value cluster> [GITOPS_REV=main, a branch of the clone of svp-gitops or a commit]: check the seven release digests of envs/stg/images/ as k8s-gitops-up does, make the namespaces with the values Argo CD gives svp-cluster on platform eks, write the source Secrets (pg-superuser from SVP_RDS_MASTER_PASSWORD of the environment), install Argo CD and root svp-root (platform eks, cluster from the file) at that commit, wait until every Application is Synced and Healthy; no registry, no k3d cluster, no branch followed
+# The source of every Secret of an EKS cluster is AWS Secrets Manager, entries svp/<env>/<entry> (deploy/k8s/lib.sh):
+# both targets take AWS_PROFILE (the profile of the account of the environment, whose id SVP_AWS_<ENV>_ACCOUNT_ID of
+# the session's terminal must match) from the environment, and name it and the region in every aws call.
+# eks-secrets runs after the apply of root aws/envs/<env> and before that of aws/gitops/<env>, then again after each
+# change of .env; SVP_RDS_MASTER_PASSWORD comes from the environment (the session's script reads it from AWS), never
+# from .env.
+eks-secrets: env-required ## With AWS_PROFILE=<profile of the environment>, write the entries svp/<env>/* of AWS Secrets Manager of the EKS cluster CONTEXT=svp-stg|svp-prd from .env (keys of chart svp-cluster's files/external-secrets.yaml), pg-superuser from SVP_RDS_MASTER_PASSWORD of the environment (required), glitchtip-runtime empty only while it has no value; on a running environment Redpanda takes a changed superuser password first and every ExternalSecret is built again after (no value printed)
 	@$(EKS_CONTEXT_CHECK)
-	@test -n '$(CLUSTER_VALUES)' || { echo "make eks-gitops-up: set CLUSTER_VALUES=<file> (terraform output -json cluster_values of the infrastructure repository)" >&2; exit 1; }
-	SVP_KUBE_CONTEXT='$(CONTEXT)' CLUSTER_VALUES='$(CLUSTER_VALUES)' GITOPS_REV='$(GITOPS_REV)' deploy/k8s/gitops.sh
+	SVP_KUBE_CONTEXT='$(CONTEXT)' deploy/k8s/aws-secrets.sh
 
-eks-secrets: env-required ## Write the source Secrets of namespace svp-secrets of the EKS cluster CONTEXT=svp-stg|svp-prd from .env, pg-superuser from SVP_RDS_MASTER_PASSWORD of the environment (required), none for an object store in the cluster (SVP_OBJECT_STORE=external by default), then have every ExternalSecret built again from them (no value printed)
-	@$(EKS_CONTEXT_CHECK)
-	SVP_KUBE_CONTEXT='$(CONTEXT)' deploy/k8s/secrets.sh
-
-eks-glitchtip-init: ## As k8s-glitchtip-init on the EKS cluster CONTEXT=svp-stg|svp-prd: GlitchTip's DSN and API tokens into source Secret svp-secrets/glitchtip-runtime, its ExternalSecrets built again, each service restarted that started without the current DSN; idempotent, run by eks-gitops-up
+eks-glitchtip-init: ## With AWS_PROFILE=<profile of the environment>, as k8s-glitchtip-init on the EKS cluster CONTEXT=svp-stg|svp-prd once Application svp-observability is Healthy: GlitchTip's DSN and API tokens into entry svp/<env>/glitchtip-runtime of AWS Secrets Manager, its three ExternalSecrets built again, each service restarted that started without the current DSN; idempotent
 	@$(EKS_CONTEXT_CHECK)
 	SVP_KUBE_CONTEXT='$(CONTEXT)' deploy/k8s/glitchtip-init.sh
 

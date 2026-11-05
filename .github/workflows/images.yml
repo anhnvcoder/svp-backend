@@ -522,15 +522,19 @@ jobs:
   promote-prd:
     # Promotes to prd in svp-gitops what envs/stg/ held at a commit of its main (input stg_ref, main when empty; an
     # older commit is a rollback): the image block of the seven envs/stg/images/*.yaml and the three values of
-    # envs/stg/charts.yaml go into the same files of envs/prd/, every other line of them (the comments) kept, on branch
-    # bot/promote-prd, one commit of the app's bot on top of main there, and its pull request is opened or updated. No
-    # auto-merge: a code owner approves it. Two stops on the way to prd: environment promote-prd waits for its
-    # required reviewer before the job starts (no admin bypass), so no key and no token exist until someone approves
-    # the run, and the pull request waits for its code owner. The guard promote_stg_ref of deploy/ci/common.sh takes
-    # main or a full commit on main of svp-gitops only. Runs alone: plan skips every other job of a dispatch with
-    # promote_prd, and this job refuses one that also asks to build, rescan or drill, so one run does one thing.
+    # envs/stg/charts.yaml go into the same files of envs/prd/, every other line of them (the comments) kept, with
+    # gitopsRevision of envs/prd/charts.yaml set to that commit, at which prd then renders argocd/apps, base/ and
+    # platforms/; all on branch bot/promote-prd, one commit of the app's bot on top of main there, and its pull request
+    # is opened or updated. No auto-merge: a code owner approves it. Two stops on the way to prd: environment
+    # promote-prd waits for its required reviewer before the job starts (no admin bypass), so no key and no token exist
+    # until someone approves the run, and the pull request waits for its code owner. Two guards of
+    # deploy/ci/common.sh run before the app's token is made: promote_stg_ref takes main or a full commit on main of
+    # svp-gitops only, and promote_stg_evidence wants commit status argocd/stg success on that commit (stg synced it and
+    # found it Healthy). Runs alone: plan skips every other job of a dispatch with promote_prd, and this job refuses one
+    # that also asks to build, rescan or drill, so one run does one thing.
     # The token is the app's, for svp-gitops alone, from the second key of the app that only promote-prd holds;
-    # GITHUB_TOKEN only reads this repository. No id-token, no packages.
+    # GITHUB_TOKEN reads this repository and the commit statuses of svp-gitops, a public repository. No id-token, no
+    # packages.
     if: >-
       ${{ github.event_name == 'workflow_dispatch' && inputs.promote_prd && github.ref == 'refs/heads/main' }}
     runs-on: ubuntu-24.04
@@ -553,6 +557,18 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      - id: stg
+        name: The commit of svp-gitops at stg_ref, and stg's commit status on it
+        env:
+          GH_TOKEN: ${{ github.token }}
+          STG_REF: ${{ inputs.stg_ref }}
+        run: |
+          set -euo pipefail
+          . deploy/ci/common.sh
+          git -c credential.helper= clone --quiet --no-tags "https://github.com/$gitops_repo.git" "$RUNNER_TEMP/gitops"
+          ref=$(promote_stg_ref "${STG_REF:-main}" "$RUNNER_TEMP/gitops")
+          promote_stg_evidence "$ref"
+          step_output ref "$ref"
       - id: app
         # Revoked when the job ends; narrower than the app's own permissions.
         uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
@@ -566,15 +582,15 @@ jobs:
       - name: Rebuild bot/promote-prd in svp-gitops from envs/stg/ at stg_ref, open or update its pull request
         env:
           GH_TOKEN: ${{ steps.app.outputs.token }}
-          STG_REF: ${{ inputs.stg_ref }}
+          REF: ${{ steps.stg.outputs.ref }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           set -euo pipefail
           . deploy/ci/common.sh
           repo=anhnvcoder/svp-gitops branch=bot/promote-prd app=svp-gitops-promoter
-          git -c credential.helper= clone --quiet --no-tags "https://github.com/$repo.git" "$RUNNER_TEMP/gitops"
+          # The clone of the step before, whose guards passed on REF.
           cd "$RUNNER_TEMP/gitops"
-          ref=$(promote_stg_ref "${STG_REF:-main}" .)
+          ref=$REF
           lease=$(git rev-parse --verify --quiet "refs/remotes/origin/$branch") || lease=
           git checkout --quiet -B "$branch" origin/main
           # Read into a variable, not through a pipe into read: a file missing at stg_ref fails the step.
@@ -590,11 +606,13 @@ jobs:
           line=$(git show "$ref:envs/stg/charts.yaml" |
             yq_ '[.revision, .podSecurityVersion, .collectorConfigSha256] | join("|")')
           IFS='|' read -r REV PSV SUM <<<"$line"
-          yq_ REV="$REV" PSV="$PSV" SUM="$SUM" -i \
-            '.revision = strenv(REV) | .podSecurityVersion = strenv(PSV) | .collectorConfigSha256 = strenv(SUM)' \
-            envs/prd/charts.yaml
-          list+="- charts: $REV"$'\n'
+          # gitopsRevision: the commit whose argocd/apps, base/ and platforms/ prd renders, the one stg ran.
+          yq_ REV="$REV" PSV="$PSV" SUM="$SUM" PIN="$ref" -i \
+            '.revision = strenv(REV) | .podSecurityVersion = strenv(PSV) | .collectorConfigSha256 = strenv(SUM)
+              | .gitopsRevision = strenv(PIN)' envs/prd/charts.yaml
+          list+="- charts: $REV"$'\n'"- gitopsRevision: $ref"$'\n'
           rows+="| \`charts.yaml\` | [\`${REV:0:12}\`](https://github.com/$GITHUB_REPOSITORY/commit/$REV) | — |"$'\n'
+          rows+="| \`gitopsRevision\` | [\`${ref:0:12}\`](https://github.com/$repo/commit/$ref) | — |"$'\n'
           if git diff --quiet origin/main; then
             echo "prd on main of svp-gitops already runs envs/stg/ of ${ref:0:12}: no push, no pull request."
             exit 0
@@ -605,7 +623,8 @@ jobs:
           Run: $RUN_URL"
           body="## Thay đổi gì
 
-          Đưa prd lên đúng bộ mà stg chạy ở commit [\`${ref:0:12}\`](https://github.com/$repo/commit/$ref) của \`svp-gitops\`: image của ${#svp_services[@]} service và chart.
+          Đưa prd lên đúng bộ mà stg chạy ở commit [\`${ref:0:12}\`](https://github.com/$repo/commit/$ref) của \`svp-gitops\`: image của ${#svp_services[@]} service, chart, và
+          \`gitopsRevision\` (prd render \`argocd/apps\`, \`base/\`, \`platforms/\` ở commit đó).
 
           | Service | Commit | Image |
           | --- | --- | --- |
@@ -619,6 +638,7 @@ jobs:
 
           ## Đã kiểm gì
 
+          - Commit trên có commit status \`argocd/stg\` mới nhất là \`success\`: stg đã đồng bộ bộ này và thấy Healthy.
           - [Lượt promote]($RUN_URL) đọc \`envs/stg/\` ở commit trên và chép vào \`envs/prd/\`.
           - Check \`gitops-ok\` của \`svp-gitops\` chạy trên PR này, kiểm như PR của stg: image ghim digest, chữ ký, kết quả quét lỗ hổng
             và provenance, chart render được.
@@ -628,8 +648,8 @@ jobs:
 
           ## Phạm vi
 
-          Bot \`$app\` chỉ sửa khối \`image\` của ${#svp_services[@]} file \`envs/prd/images/*.yaml\` và ba giá trị \`revision\`, \`podSecurityVersion\`,
-          \`collectorConfigSha256\` của \`envs/prd/charts.yaml\`. Các dòng khác của file, kể cả chú thích, giữ nguyên."
+          Bot \`$app\` chỉ sửa khối \`image\` của ${#svp_services[@]} file \`envs/prd/images/*.yaml\` và bốn giá trị \`revision\`, \`podSecurityVersion\`,
+          \`collectorConfigSha256\`, \`gitopsRevision\` của \`envs/prd/charts.yaml\`. Các dòng khác của file, kể cả chú thích, giữ nguyên."
           id=$(gh api "users/${app}%5Bbot%5D" --jq .id)
           git -c user.name="${app}[bot]" -c user.email="$id+${app}[bot]@users.noreply.github.com" \
             commit --quiet -am "$title" -m "$msg"

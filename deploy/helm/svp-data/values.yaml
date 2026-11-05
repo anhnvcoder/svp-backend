@@ -78,7 +78,12 @@ redpanda:
   # The broker image, for rpk in the init Job.
   image: docker.io/redpandadata/redpanda:v26.2.4@sha256:c98c2f04a751e6646012cc701bac5183252cee44c88ba1dfa412e4c7124f2e89
   brokers: redpanda.svp-data.svc.cluster.local:9092
-  adminHosts: redpanda-0.redpanda.svp-data.svc.cluster.local:9644
+  # Brokers of release redpanda, the statefulset.replicas its values set: the init Job gets the Admin API of each one
+  # (redpanda-<n>.redpanda), so it still runs while one is down.
+  replicas: 1
+  # Replication factor of every topic the init Job creates (deploy/redpanda/create-topics.sh): odd (each partition is
+  # a Raft group) and at most replicas. Existing topics keep theirs.
+  topicReplicas: 1
 
 # The init Jobs (Postgres bootstrap, the object store s3, Redpanda). waitSeconds bounds how long each waits for its
 # server after an install or upgrade before it fails.

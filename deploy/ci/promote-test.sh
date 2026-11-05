@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Tests for the guards of the promote jobs of .github/workflows/images.yml (promote_not_behind, promote_stg_ref and
-# promote_open_pr of deploy/ci/common.sh), and for the list of releases deploy/ci/rescan.sh reads in svp-gitops. Throwaway repositories on
+# Tests for the guards of the promote jobs of .github/workflows/images.yml (promote_not_behind, promote_stg_ref,
+# promote_stg_evidence and promote_open_pr of deploy/ci/common.sh), and for the list of releases deploy/ci/rescan.sh reads in svp-gitops. Throwaway repositories on
 # disk stand for this repository (deploy/ci/, lib.sh and the policy's release sources, with its own origin) and for
 # svp-gitops (envs/stg and envs/prd with charts.yaml and images/, reached as file://); a fake gh first on PATH records
 # its arguments and answers the open pull requests from a fixture, so no test reaches GitHub. Checked:
@@ -10,6 +10,9 @@
 #   - promote_stg_ref: main gives the commit of main of svp-gitops, and a full commit on main (an older one, a rollback)
 #     is given back; a branch name (the bot's, refs/heads/main), a short SHA, a full commit only of the bot's branch and
 #     a full commit svp-gitops has not are refused, each with its own message;
+#   - promote_stg_evidence: a commit whose newest commit status argocd/stg is success passes (a rollback to an older one
+#     too), read from every page; a newest failure or pending (an older success notwithstanding), no status of stg, an
+#     answer that is no list of pages and a gh that fails are refused, each with its own message;
 #   - promote_open_pr: the app's own open pull request of the branch, never a fork's or a person's from a branch of that
 #     name, asked for up to 500; nothing when the app has none; a full list of 500, and a gh that fails, are refused;
 #   - promote_image_row: the row of a release in the table of a promote pull request, linked to the commit and the package
@@ -53,8 +56,9 @@ same() {
 has() { grep -qF -- "$2" "$1"; }
 lacks() { ! grep -qF -- "$2" "$1"; }
 
-# --- The fake gh writes each call to gh.log (one line of %q-quoted arguments) and answers pr list from gh/prs.json;
-# without that file it fails, as a host that does not answer.
+# --- The fake gh writes each call to gh.log (one line of %q-quoted arguments), answers pr list from gh/prs.json and the
+# statuses of a commit of svp-gitops (gh api --paginate --slurp repos/<repo>/commits/<commit>/statuses...) from
+# gh/statuses/<commit>.json; without that file it fails, as a host that does not answer.
 mkdir -p "$work/bin" "$work/gh" "$work/home"
 cat >"$work/bin/gh" <<'EOF'
 #!/usr/bin/env bash
@@ -62,6 +66,10 @@ printf '%q ' "$@" >>"$FAKE_GH_LOG"
 echo >>"$FAKE_GH_LOG"
 case "$1 $2" in
 "pr list") cat "$FAKE_GH_DIR/prs.json" ;;
+"api --paginate")
+  commit=${4#*/commits/}
+  cat "$FAKE_GH_DIR/statuses/${commit%%/*}.json"
+  ;;
 *) exit 1 ;;
 esac
 EOF
@@ -180,6 +188,50 @@ refused "promote_stg_ref: a full commit only of bot/promote-stg" \
 unknown=$(printf 'e%.0s' $(seq 40))
 refused "promote_stg_ref: a full commit svp-gitops has not" "stg_ref $unknown is no commit of svp-gitops" \
   promote_stg_ref "$unknown" "$work/clone"
+
+# --- promote_stg_evidence COMMIT: the statuses of a commit come from the fake gh, statuses/<commit>.json (a list of
+# pages, as gh api --paginate --slurp gives them); main has a failure of stg as its newest status, the commit before it
+# a success (a rollback to it).
+main_commit=$(remote rev-parse main)
+mkdir -p "$work/gh/statuses"
+# statuses COMMIT PAGES: the answer for COMMIT.
+statuses() { printf '%s\n' "$2" >"$work/gh/statuses/$1.json"; }
+status() { printf '{"id": %s, "context": "%s", "state": "%s"}' "$1" "$2" "$3"; }
+statuses "$main_commit" "[[$(status 30 argocd/stg failure), $(status 20 argocd/prd success)], [$(status 10 argocd/stg success)]]"
+statuses "$older" "[[$(status 9 argocd/prd failure)], [$(status 8 argocd/stg success), $(status 7 argocd/stg pending)]]"
+fresh
+check "promote_stg_evidence: a rollback to a commit whose newest status of stg is success passes" \
+  guard promote_stg_evidence "$older"
+same "promote_stg_evidence: reads every page of the commit's statuses" \
+  "$(gh_line api --paginate --slurp "repos/anhnvcoder/svp-gitops/commits/$older/statuses?per_page=100")" "$(cat "$work/gh.log")"
+refused "promote_stg_evidence: the newest status of stg is failure, an older one success" \
+  "the newest commit status argocd/stg of ${main_commit:0:12} in anhnvcoder/svp-gitops is failure, not success: only a set stg ran healthy goes to prd" \
+  promote_stg_evidence "$main_commit"
+statuses "$main_commit" "[[$(status 31 argocd/stg pending), $(status 30 argocd/stg success)]]"
+refused "promote_stg_evidence: the newest status of stg is pending" \
+  "the newest commit status argocd/stg of ${main_commit:0:12} in anhnvcoder/svp-gitops is pending, not success: only a set stg ran healthy goes to prd" \
+  promote_stg_evidence "$main_commit"
+statuses "$main_commit" "[[$(status 30 argocd/stg success)], [$(status 40 argocd/stg success), $(status 35 argocd/stg failure)]]"
+check "promote_stg_evidence: the newest is on a later page and is success" guard promote_stg_evidence "$main_commit"
+statuses "$main_commit" "[[$(status 20 argocd/prd success), $(status 21 ci/check success)], []]"
+refused "promote_stg_evidence: no status of stg (only prd's and another context's)" \
+  "${main_commit:0:12} of anhnvcoder/svp-gitops has no commit status argocd/stg: stg never ran that set, so it does not go to prd" \
+  promote_stg_evidence "$main_commit"
+statuses "$main_commit" "[]"
+refused "promote_stg_evidence: no status at all" \
+  "${main_commit:0:12} of anhnvcoder/svp-gitops has no commit status argocd/stg: stg never ran that set, so it does not go to prd" \
+  promote_stg_evidence "$main_commit"
+statuses "$main_commit" '{"message": "Not Found"}'
+refused "promote_stg_evidence: an answer that is no list of pages" \
+  "read the commit statuses of ${main_commit:0:12} in anhnvcoder/svp-gitops: the answer is no list of pages of statuses" \
+  promote_stg_evidence "$main_commit"
+rm "$work/gh/statuses/$main_commit.json"
+if guard promote_stg_evidence "$main_commit"; then
+  fail "promote_stg_evidence: gh fails: refused (passed: $(cat "$work/guard.out"))"
+else
+  check "promote_stg_evidence: gh fails (the host does not answer): refused, saying why" has "$work/guard.out" \
+    "FAIL  read the commit statuses of ${main_commit:0:12} in anhnvcoder/svp-gitops"
+fi
 
 # --- promote_open_pr REPO BRANCH APP.
 open_pr=(promote_open_pr anhnvcoder/svp-gitops bot/promote-stg svp-gitops-promoter)

@@ -138,12 +138,17 @@ Loại tài liệu (Diátaxis): **reference**, tra cứu khi cần một lệnh 
     `plan` bỏ qua mọi job khác) chạy job `promote-prd` (environment `promote-prd`, người học duyệt trước khi job chạy, token App `contents`, `pull_requests` write): bước shell
     chép giá trị khối `image` của cả bảy `envs/stg/images/*.yaml` và ba khoá của `envs/stg/charts.yaml` ở commit `stg_ref` của
     `svp-gitops` (mặc định `main`; commit cũ hơn là rollback) vào cùng file dưới `envs/prd/` bằng `yq -i` (comment của file prd giữ nguyên),
-    nhánh `bot/promote-prd`, mở PR không auto-merge (Code Owner duyệt), mô tả nêu `stg_ref`. Environment `promote-prd` ([ADR-0041](../adr/0041-github-hardening.md) (d)): người duyệt là
+    đặt `gitopsRevision` của `envs/prd/charts.yaml` bằng chính commit đó (**ghim**: prd render `argocd/apps`, `base/`, `platforms/` ở commit stg đã
+    chạy, `envs/prd/` đọc ở `main`; ADR-0048 §7), nhánh `bot/promote-prd`, mở PR không auto-merge (Code Owner duyệt), bảng trong mô tả có
+    thêm dòng `gitopsRevision`. Rollback là một lượt với `stg_ref` cũ: PR đặt lại ghim cùng image, chart của commit đó. Environment `promote-prd` ([ADR-0041](../adr/0041-github-hardening.md) (d)): người duyệt là
     người học, `prevent_self_review = false` (người dispatch là người duyệt duy nhất), admin không bypass, chỉ nhánh `main`; khoá App ở đây là khoá
-    riêng thứ hai của `svp-gitops-promoter`, `promote` của stg giữ nguyên. Reject thì không PR prd nào mở. Guard `promote_stg_ref` của `common.sh` chỉ
-    nhận `main` hay SHA đủ 40 hex của một commit trên `main` của `svp-gitops` (nhánh, SHA ngắn, commit ngoài `main` bị từ chối trước mọi
-    lệnh `gh`). Không còn bản ghi stg: `stg_ref` chỉ bảo đảm bộ từng nằm trên `main` của `envs/stg/`, không bảo đảm stg đã chạy và smoke
-    qua với đúng bộ đó; cổng là duyệt environment `promote-prd` rồi duyệt của Code Owner trên PR prd. Check tổng `images-ok` (gồm `contract`; dispatch promote prd: `plan` skipped vẫn xanh). Provenance định dạng cũ trên bản phát hành
+    riêng thứ hai của `svp-gitops-promoter`, `promote` của stg giữ nguyên. Reject thì không PR prd nào mở. Hai guard của `common.sh` chạy ở bước
+    riêng trước khi tạo token App: `promote_stg_ref` chỉ nhận `main` hay SHA đủ 40 hex của một commit trên `main` của `svp-gitops` (nhánh,
+    SHA ngắn, commit ngoài `main` bị từ chối); `promote_stg_evidence` (**bằng chứng stg**) đọc mọi trang commit status của commit đó
+    (`gh api --paginate --slurp`, `GITHUB_TOKEN` của job, repo public) và đòi status mới nhất (id lớn nhất) của context `argocd/stg` là
+    `success`, thứ Argo CD Notifications của stg ghi khi đồng bộ xong và Healthy ([ADR-0032](../adr/0032-argocd-deploy-status.md));
+    `failure`, `pending`, không có status, hay lỗi API đều đỏ. Hệ quả: buổi prd cần buổi stg đã đồng bộ đúng commit sẽ promote. Cổng còn
+    lại là duyệt environment `promote-prd` rồi duyệt của Code Owner trên PR prd. Check tổng `images-ok` (gồm `contract`; dispatch promote prd: `plan` skipped vẫn xanh). Provenance định dạng cũ trên bản phát hành
     đang chạy ở stg, prd đã kiểm (bảy bản của `6ca2d8a`, `cosign verify-attestation --type slsaprovenance1` và lượt `gitops` 40954609229);
     bản phát hành bundle: **kiểm sau push**, gồm đo admission thật (ADR-0040 mục 6). Đã kiểm ngày
     2026-10-30 với `promote.sh`, `promote-prd.sh` cũ: lần promote stg đầu và auto-merge của PR bot (PR #4, #5, #6 của `svp-gitops`, lượt
@@ -212,17 +217,29 @@ Loại tài liệu (Diátaxis): **reference**, tra cứu khi cần một lệnh 
   - **`svp-gitops`** (`https://github.com/anhnvcoder/svp-gitops`, public, không secret; [ADR-0025](../adr/0025-gitops-config-repo.md),
     quy trình tay ở [`docs/runbooks/svp-gitops-setup.md`](../runbooks/svp-gitops-setup.md)): `base/` (values gốc của chart upstream,
     `argo-cd.yaml`, `services/<svc>.yaml` không khối `image`), `envs/{stg,prd}/` (overlay, `svp-policy.yaml`, `charts.yaml` ghim
-    commit chart của repo này cùng hai giá trị dẫn xuất, `images/<svc>.yaml` chỉ khối `image`), `argocd/` (`project.yaml`,
-    `bootstrap.json`, chart app-of-apps `apps/` với `components.json`), `CODEOWNERS` (`*` của người học, `/envs/stg/` không chủ),
+    commit chart của repo này cùng hai giá trị dẫn xuất, riêng prd có thể thêm `gitopsRevision`, `images/<svc>.yaml` chỉ khối `image`),
+    `argocd/` (`project.yaml`, `bootstrap.json`, chart app-of-apps `apps/` với `components.json`, root hai tầng `root/`), `CODEOWNERS` (`*` của người học, `/envs/stg/` không chủ),
     `renovate.json` (chart upstream, image ghim trong `base/`, commit checker; bỏ qua `envs/**`). Check: `.github/workflows/check.yml`
     (PR và push `main`, chỉ quyền đọc, không secret) checkout repo này (`anhnvcoder/svp-backend`) ở `CHECKER_COMMIT` (SHA đủ, một chỗ
     trong workflow; đổi bằng PR ở `svp-gitops`) rồi chạy `deploy/ci/gitops-check.sh <cây> <base>`, bản rút gọn
     ([ADR-0037](../adr/0037-mainpath-standard-tools.md) §4–§6; bước 1b "bộ prd = payload một bản ghi stg", 1c dạng cũ (tiếp quản, đọc
     qua adapter), luật tổ tiên và đường cho cây chưa có `platforms/` hay commit chưa có bảng nguồn đã bỏ): (1) cây và `charts.yaml` (khoá,
-    `revision` trên `main` repo này, hai giá trị dẫn xuất tính lại), mỗi `envs/<env>/images/<svc>.yaml` là `<imagePrefix><svc>` của một
+    `revision` trên `main` repo này, hai giá trị dẫn xuất tính lại; `gitopsRevision` chỉ ở prd, 40 hex, cây có nó thì phải có
+    `argocd/root/Chart.yaml`, và script kiểm bằng git trong bản clone `svp-gitops` (cần đủ lịch sử, `origin/main`) rằng nó là commit có
+    trong clone, trên `origin/main` và chứa `argocd/apps/Chart.yaml`), mỗi `envs/<env>/images/<svc>.yaml` là `<imagePrefix><svc>` của một
     nguồn có `<svc>` trong bảng nguồn ở `revision` của env; lớp nền tảng theo khoá `platforms` của `components.json` (thiếu hay sai dạng
     là đỏ, tên nền tảng khớp thư mục `platforms/`); luật tác giả hẹp viết từ bảng nguồn (dưới đây); (2) render root theo env × nền tảng
-    của `platforms` × kiến trúc (mọi `targetRevision` vào `svp-gitops` phải tên đầy đủ); (3) chart repo ở `revision` của env với `base/`,
+    của `platforms` × kiến trúc (mọi `targetRevision` vào `svp-gitops` phải tên đầy đủ), với giá trị `cluster` của nền tảng `eks` là
+    `deploy/ci/cluster-values.example.yaml` (đứng thay annotation `svp.io/cluster-values` mà GitOps Bridge đặt lên cluster Secret, đủ khoá
+    của hợp đồng, gồm map `externalSecretsRoles`). Cây có `argocd/root` thì render hai tầng như Argo CD: tầng 1 `argocd/root` của cây phải ra
+    đúng một Application `svp-apps`, nguồn `argocd/apps` của `svp-gitops` ở commit ghim (không ghim: `refs/heads/main`), cùng giá trị đó ở
+    `valuesObject.targetRevision`; tầng 2 là `argocd/apps` với `valuesObject` đó. Ở root hai tầng `envs/<env>/` không là file values: tầng 1
+    chuyển nội dung, `valuesObject` của mỗi Application phải bằng overlay < file image của `envs/<env>/` trên cây < phần mẫu
+    `.values.tpl` sinh ra (lấy từ lượt render tầng 2 thứ hai với nội dung overlay, image để rỗng), gộp như Helm (`*` của jq); mọi nguồn
+    `svp-gitops` của một Application cùng một `targetRevision` (repo-server của Argo CD từ chối file values trỏ một repo ở hai revision). Env có
+    ghim render riêng trên `git archive` của commit ghim (`argocd/`, `base/`, `platforms/`, bootstrap Argo CD; các bước 2–4 cũng vậy) với
+    `envs/<env>/` của cây: mọi nguồn `svp-gitops` của tầng 2 ở commit ghim, mọi file values qua `$values/` ở commit đó (đọc ở revision khác là
+    đỏ), chart repo này ở `revision` của `charts.yaml` trên cây; env không ghim render trên cây như trước; (3) chart repo ở `revision` của env với `base/`,
     `platforms/` và overlay, External Secrets qua kubeconform (số ExternalSecret, SecretStore mỗi env × nền tảng theo dữ liệu, như
     `make helm-check`), render của nền tảng không `localHosts` không nêu `svp.localhost` (grep cả
     render và policy `no-lab-hosts`); (4) mọi image ghim digest bằng policy `images-pinned` (dưới đây; ref ngoài tầm policy vẫn qua phép
@@ -319,7 +336,7 @@ Loại tài liệu (Diátaxis): **reference**, tra cứu khi cần một lệnh 
     ExternalSecret hay SecretStore; mỗi env × nền tảng đúng số tính từ `files/external-secrets.yaml` với values đã ghép: một
     ExternalSecret mỗi entry, trừ entry `inClusterObjectStore` khi `s3.mode` là `external` và entry `enabledBy` khi khoá đó của
     `externalSecrets` không `true`, một SecretStore mỗi namespace của chúng (hôm nay stg trên `k3d` 28 và 4, stg và prd trên `eks` 25 và 4;
-    `argocdNotifications` bật thêm một mỗi loại ở `argocd`; stg provider `kubernetes`; prd provider `aws` và không còn `svp-secrets`), qua kubeconform `-strict` (`KUBECONFORM_IMAGE`, `--network none`) theo schema sinh từ CRD của
+    `argocdNotifications` bật thêm một mỗi loại ở `argocd`; trên k3d provider `kubernetes`; trên eks provider `aws` và không còn `svp-secrets`), qua kubeconform `-strict` (`KUBECONFORM_IMAGE`, `--network none`) theo schema sinh từ CRD của
     chart External Secrets đúng version `components.json` ghim (provider `crd` bỏ khỏi schema SecretStore vì openapi2jsonschema
     sinh sai; không store nào dùng nó); cuối cùng mọi image (`helm template --include-crds` mọi component với values
     `base/` và Argo CD theo `bootstrap.json`, rồi Argo CD với `platforms/<platform>/argo-cd.yaml` của mỗi nền tảng có file đó) phải ghim đúng một `@sha256:` theo policy `images-pinned` của `deploy/ci/gitops-policies/`

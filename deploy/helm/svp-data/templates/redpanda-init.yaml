@@ -62,7 +62,12 @@ spec:
             - name: RPK_BROKERS
               value: {{ .Values.redpanda.brokers }}
             - name: RPK_ADMIN_HOSTS
-              value: {{ .Values.redpanda.adminHosts }}
+              value: {{ include "svp-data.redpandaAdminHosts" . }}
+            {{- /* Set only when it differs from the script's default of 1, so a render with the default values stays as it was. */}}
+            {{- if ne (int .Values.redpanda.topicReplicas) 1 }}
+            - name: TOPIC_REPLICAS
+              value: {{ .Values.redpanda.topicReplicas | quote }}
+            {{- end }}
             - name: RPK_SASL_MECHANISM
               value: SCRAM-SHA-256
             - name: RPK_USER

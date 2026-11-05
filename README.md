@@ -93,7 +93,7 @@ Compose và k3d không chạy cùng lúc: mỗi bên từ chối khi bên kia đ
 | --- | --- | --- | --- |
 | Compose trên máy | Đường dev chính, smoke, diễn tập | `make up`, `make smoke` | [`reference/compose.md`](docs/reference/compose.md) |
 | Cluster k3d | Cùng chart như cloud: Envoy Gateway, NetworkPolicy, canary, Kyverno; `make k8s-gitops-up` chạy như stg qua Argo CD | `make k8s-up`, `make k8s-gitops-up`, `make k8s-smoke` | [`reference/k8s.md`](docs/reference/k8s.md) |
-| EKS stg trên AWS | Môi trường stg thật, dựng bằng Terraform của [`svp-infra`](https://github.com/anhnvcoder/svp-infra), dựng và xoá trong mỗi buổi; người học chạy | `make eks-gitops-up`, `make eks-smoke` | [`reference/eks.md`](docs/reference/eks.md) |
+| EKS stg, prd trên AWS | Môi trường thật, dựng bằng Terraform của [`svp-infra`](https://github.com/anhnvcoder/svp-infra) (cluster rồi Argo CD và root), dựng và xoá trong mỗi buổi; người học chạy | `make eks-secrets`, `make eks-glitchtip-init`, `make eks-smoke` | [`reference/eks.md`](docs/reference/eks.md) |
 
 ## Bản đồ thư mục
 

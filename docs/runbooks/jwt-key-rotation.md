@@ -21,8 +21,9 @@ mà xoá phiên và thu hồi cả họ refresh token. Chỉ client gọi API th
 `POST /auth/refresh` mà không đăng nhập lại.
 
 Khoá nằm ở `.env` (compose đọc thẳng; k3d chép qua `make k8s-secrets` vào Secret `svp/user-service-env` cho khoá ký, khoá công
-khai vào `svp/gateway-env` và `svp/<service>-env` của bốn service gRPC; cluster có External Secrets, kể cả EKS, nhận nguồn
-`svp-secrets/jwt-signing`, `svp-secrets/jwt-verify` rồi ExternalSecret dựng các Secret đó). Không in `.env`, không in khoá.
+khai vào `svp/gateway-env` và `svp/<service>-env` của bốn service gRPC; cluster k3d có External Secrets nhận nguồn
+`svp-secrets/jwt-signing`, `svp-secrets/jwt-verify`, cluster EKS nhận entry `svp/<env>/jwt-signing`, `svp/<env>/jwt-verify` của AWS
+Secrets Manager, rồi ExternalSecret dựng các Secret đó). Không in `.env`, không in khoá.
 
 ## Kiểm tra nhanh (5 phút)
 
@@ -99,8 +100,9 @@ done
 kubectl --context k3d-svp -n svp get rollout gateway -o jsonpath='{.status.restartedAt} {.status.phase}{"\n"}'
 ```
 
-EKS: người vận hành chạy `make eks-secrets CONTEXT=<context EKS>` (ghi nguồn ở `svp-secrets`, dựng lại ExternalSecret), rồi đúng
-các lệnh restart và kiểm ở trên với `--context <context EKS>` thay cho `--context k3d-svp`.
+EKS: người vận hành chạy `AWS_PROFILE=anhnv-<env> make eks-secrets CONTEXT=svp-<env>` (prd: tunnel tới API mở; ghi mọi entry của
+`svp/<env>/` vào Secrets Manager, dựng lại mọi ExternalSecret; [`eks.md`](../reference/eks.md), mục "Đổi secret của env đang chạy"),
+rồi đúng các lệnh restart và kiểm ở trên với `--context svp-<env>` thay cho `--context k3d-svp`; bước 2 cũng vậy.
 
 Gateway và service không khởi động khi `JWT_VERIFY_KEYS` sai dạng hay trùng `kid`. Trước khi sang bước 2, kiểm mọi pod của năm
 workload đã Ready và khởi động sau lúc áp dụng (cột `START` muộn hơn lệnh restart; compose: `make ps`, cột thời gian tạo):

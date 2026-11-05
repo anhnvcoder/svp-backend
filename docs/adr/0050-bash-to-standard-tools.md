@@ -115,6 +115,14 @@ Chọn phương án A ở cả bốn mục. Ngoài ra:
   `deploy/ci/gitops-check.sh` chỉ dựng input JSON (mục và nội dung file của cây; `revision` trên `main`, giá trị dẫn xuất và bảng nguồn
   đọc bằng git; tác giả, người gửi, file đổi của PR) rồi chạy `conftest test` bằng `CONFTEST_IMAGE`, không trả lời là đỏ; render, kubeconform,
   Kyverno CLI và kiểm bản phát hành ở lại script; `deploy/ci/gitops-check-test.sh` còn ca của phần bash, render và một ca mỗi phần input.
+- Bootstrap EKS theo GitOps Bridge (mục 1): root Terraform mỗi env
+  [`aws/gitops/`](https://github.com/anhnvcoder/svp-infra/tree/main/aws/gitops) và module
+  [`aws/modules/gitops-bridge`](https://github.com/anhnvcoder/svp-infra/tree/main/aws/modules/gitops-bridge) của `svp-infra` (Argo CD,
+  AppProject, cluster Secret mang `cluster_values`, ApplicationSet tạo root); Secret nguồn của EKS ghi vào AWS Secrets Manager bằng
+  `deploy/k8s/aws-secrets.sh` (`make eks-secrets`, test `aws-secrets-test.sh`), `deploy/k8s/glitchtip-init.sh`, helper ở `deploy/k8s/lib.sh`;
+  `deploy/k8s/gitops.sh`, `secrets.sh` chỉ còn đường k3d. Check của `svp-gitops` render nền tảng `eks` với
+  `deploy/ci/cluster-values.example.yaml` đứng thay giá trị bridge đặt, root hai tầng và env có ghim `gitopsRevision`
+  (`deploy/ci/gitops-check.sh`, ca ở `gitops-check-test.sh`, luật khoá ở `deploy/ci/gitops-tree-policies/envs.rego`).
 - Một bản luật bảng nguồn (B3 của phụ lục): luật chỉ ở `fail` của `deploy/helm/svp-policy/templates/imagevalidatingpolicy.yaml`;
   `deploy/k8s/lib.sh` bỏ `_release_sources_check`, `release_sources` đọc bảng và chỉ giữ bất biến prefix (đường dẫn registry kết thúc bằng `/`, không prefix nào là
   đầu prefix khác) mà mọi script dựa vào trước khi chọn nguồn; `deploy/ci/sources-test.sh` kiểm luật bằng render (không thêm công cụ), cùng hai hàm chọn nguồn đó.

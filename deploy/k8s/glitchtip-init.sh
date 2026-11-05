@@ -14,7 +14,11 @@
 # On the GitOps path's staging (a cluster with namespace svp-secrets) those three Secrets are ExternalSecrets of chart
 # svp-cluster: the values go into their source instead, Secret svp-secrets/glitchtip-runtime (SENTRY_DSN,
 # SENTRY_AUTH_TOKEN, SENTRY_SOURCEMAPS_TOKEN, empty while GlitchTip has no such token), and the three ExternalSecrets
-# are built again from it (es_force_sync of deploy/k8s/lib.sh) before the restarts below.
+# are built again from it (es_force_sync of deploy/k8s/lib.sh) before the restarts below. On an EKS cluster
+# (SVP_KUBE_CONTEXT svp-stg or svp-prd, `make eks-glitchtip-init`) the source is entry svp/<env>/glitchtip-runtime of
+# AWS Secrets Manager, written with the AWS profile AWS_PROFILE of that environment's account, checked before anything
+# is read (aws_setup and aws_put_entry of deploy/k8s/lib.sh: the values go through a file of mode 700, never on a
+# command line); the same three ExternalSecrets are built again from it.
 #
 # Then each service that reads Secret sentry restarts when its pods started before the Secret's current version, so
 # it reports errors from then on (restart_on_secret_change of deploy/k8s/lib.sh, annotation
@@ -28,8 +32,8 @@
 # before error tracking) is left alone: its next upgrade rolls it with the new template, which reads the Secret then.
 #
 # Needs only GlitchTip ready (its init Job has run); run by deploy/k8s/install.sh after chart svp-observability, by
-# `make k8s-glitchtip-init` on its own (`make eks-glitchtip-init` on an EKS cluster, SVP_KUBE_CONTEXT svp-stg or
-# svp-prd, whose GitOps staging has svp-secrets too), and by the GitOps path once Argo CD reports GlitchTip healthy.
+# `make k8s-glitchtip-init` on its own (`make eks-glitchtip-init` on an EKS cluster, once Argo CD reports Application
+# svp-observability Healthy), and by the GitOps path of k3d once Argo CD reports GlitchTip healthy.
 # Idempotent: the DSN and tokens do not change between runs (bootstrap.py never makes a second key or token), so a
 # second run applies the same Secrets, which keep their resourceVersion, and restarts nothing.
 set -euo pipefail
@@ -39,7 +43,11 @@ set -euo pipefail
 # Written for a cloud cluster too: kc may reach the EKS cluster SVP_KUBE_CONTEXT names (deploy/k8s/lib.sh).
 kube_cloud_ok=1
 make_cluster="make k8s-up"
-! cloud_context || make_cluster="make eks-gitops-up CONTEXT=$kube_context"
+if cloud_context; then
+  make_cluster="the apply of root aws/gitops/${kube_context#svp-} of the infrastructure repository"
+  aws_setup
+  trap 'rm -rf "$aws_dir"' EXIT
+fi
 
 kc get --raw /readyz >/dev/null 2>&1 ||
   fail "cluster ${kube_context#k3d-} is not reachable (context $kube_context); run $make_cluster"
@@ -86,7 +94,12 @@ creds=
 service_dsn=${dsn/@127.0.0.1:8000\//@glitchtip.svp-obs:8000/}
 [ "$service_dsn" != "$dsn" ] || fail "the DSN does not name 127.0.0.1:8000; check GLITCHTIP_DOMAIN in deploy/helm/svp-observability/values.yaml"
 
-if kc get namespace svp-secrets >/dev/null 2>&1; then
+if cloud_context; then
+  printf '%s\n' SENTRY_DSN "$service_dsn" SENTRY_AUTH_TOKEN "$token" SENTRY_SOURCEMAPS_TOKEN "$sourcemaps_token" |
+    aws_put_entry glitchtip-runtime
+  es_force_sync svp/sentry svp-obs/glitchtip-api svp-obs/glitchtip-sourcemaps
+  ok "GlitchTip's DSN and API tokens in entry ${aws_prefix}glitchtip-runtime of AWS Secrets Manager, ExternalSecrets svp/sentry, svp-obs/glitchtip-api and svp-obs/glitchtip-sourcemaps built again from it"
+elif kc get namespace svp-secrets >/dev/null 2>&1; then
   secret svp-secrets glitchtip-runtime Opaque SENTRY_DSN="$service_dsn" SENTRY_AUTH_TOKEN="$token" \
     SENTRY_SOURCEMAPS_TOKEN="$sourcemaps_token" |
     kc apply --server-side --field-manager=svp-secrets --force-conflicts -f - >/dev/null ||

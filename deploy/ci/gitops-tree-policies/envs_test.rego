@@ -63,6 +63,51 @@ test_the_keys_with_the_working_tree if fx.says(
 	"envs/stg/charts.yaml holds 'collectorConfigSha256 podSecurityVersion replicas revision'",
 )
 
+# pinned(given, env, rev): given with gitopsRevision rev added to envs/<env>/charts.yaml, and the two-level root.
+pinned(given, env, rev) := fx.with_file(
+	with_charts(given, env, sprintf("%s# The commit of svp-gitops prd renders at.\ngitopsRevision: %s\n", [fx.charts_text, rev])),
+	"argocd/root/Chart.yaml",
+	"apiVersion: v2\nname: svp-root\nversion: 0.1.0\n",
+)
+
+gitops_commit := "5d2b1c7e9f0a3b4c5d6e7f8091a2b3c4d5e6f708"
+
+test_prd_pinned_to_a_commit_passes if count(deny(pinned(fx.tree_input, "prd", gitops_commit))) == 0
+
+test_prd_pinned_with_the_working_tree_passes if count(deny(pinned(worktree, "prd", gitops_commit))) == 0
+
+test_stg_pinned if fx.says(
+	deny(pinned(fx.tree_input, "stg", gitops_commit)),
+	"envs/stg/charts.yaml sets gitopsRevision: only prd pins a commit of svp-gitops (the one the promote to prd copied from stg); stg follows main",
+)
+
+test_stg_pinned_names_no_other_rule if count(deny(pinned(fx.tree_input, "stg", gitops_commit))) == 1
+
+test_a_pin_that_is_a_branch if fx.says(
+	deny(pinned(fx.tree_input, "prd", "main")),
+	"envs/prd/charts.yaml: gitopsRevision is 'main', the full commit (40 hex) of svp-gitops at which prd renders argocd/apps, base/ and platforms/",
+)
+
+test_a_short_pin if fx.says(
+	deny(pinned(fx.tree_input, "prd", substring(gitops_commit, 0, 12))),
+	"envs/prd/charts.yaml: gitopsRevision is '5d2b1c7e9f0a', the full commit (40 hex)",
+)
+
+test_a_short_pin_with_the_working_tree if fx.says(
+	deny(pinned(worktree, "prd", substring(gitops_commit, 0, 12))),
+	"envs/prd/charts.yaml: gitopsRevision is '5d2b1c7e9f0a'",
+)
+
+test_a_pin_without_the_two_level_root if fx.says(
+	deny(fx.without(pinned(fx.tree_input, "prd", gitops_commit), "argocd/root")),
+	"envs/prd/charts.yaml sets gitopsRevision, which only the two-level root argocd/root reads: argocd/root/Chart.yaml is missing",
+)
+
+test_a_pin_twice if fx.says(
+	deny(with_charts(pinned(fx.tree_input, "prd", gitops_commit), "prd", sprintf("%sgitopsRevision: %s\ngitopsRevision: %s\n", [fx.charts_text, gitops_commit, gitops_commit]))),
+	"envs/prd/charts.yaml holds 'collectorConfigSha256 gitopsRevision gitopsRevision podSecurityVersion revision': exactly revision, podSecurityVersion and collectorConfigSha256, one line each (and gitopsRevision in envs/prd/charts.yaml alone)",
+)
+
 test_an_empty_revision if fx.says(
 	deny(with_charts(fx.tree_input, "stg", replace(fx.charts_text, fx.revision, ""))),
 	"envs/stg/charts.yaml: revision is '', the full commit (40 hex) of this repository whose charts stg runs",
@@ -228,3 +273,60 @@ test_a_derived_value_without_its_colon if fx.says(
 	deny(with_charts(fx.tree_input, "stg", replace(fx.charts_text, "podSecurityVersion: v1.36", "podSecurityVersion"))),
 	"envs/stg/charts.yaml: line 'podSecurityVersion' is not 'key: value' with a value",
 )
+
+# with_overlay(given, env, name, text): given with envs/<env>/<name>.yaml holding text.
+with_overlay(given, env, name, text) := fx.with_file(given, sprintf("envs/%s/%s.yaml", [env, name]), text)
+
+empty_value := "sets no null, {} or [], which the health check of Argo CD's Applications cannot tell from a key left out"
+
+test_an_overlay_setting_null if fx.says(
+	deny(with_overlay(fx.tree_input, "stg", "gateway", "replicas: 2\npdb: null\n")),
+	sprintf("envs/stg/gateway.yaml: pdb is null: an overlay or image file %s", [empty_value]),
+)
+
+test_an_overlay_setting_null_names_no_other_rule if count(deny(with_overlay(fx.tree_input, "stg", "gateway", "pdb: null\n"))) == 1
+
+test_an_overlay_with_a_key_without_value if fx.says(
+	deny(with_overlay(fx.tree_input, "prd", "gateway", "pdb:\n")),
+	"envs/prd/gateway.yaml: pdb is null",
+)
+
+test_an_overlay_with_a_tilde if fx.says(deny(with_overlay(fx.tree_input, "stg", "gateway", "pdb: ~\n")), "envs/stg/gateway.yaml: pdb is null")
+
+test_an_overlay_with_an_empty_map_deep if fx.says(
+	deny(with_overlay(fx.tree_input, "stg", "gateway", "resources:\n  requests:\n    cpu: 100m\n  limits: {}\n")),
+	"envs/stg/gateway.yaml: resources.limits is {}",
+)
+
+test_an_overlay_with_an_empty_list if fx.says(
+	deny(with_overlay(fx.tree_input, "stg", "gateway", "env: []\n")),
+	"envs/stg/gateway.yaml: env is []",
+)
+
+test_an_overlay_with_an_empty_map_in_a_list if fx.says(
+	deny(with_overlay(fx.tree_input, "prd", "gateway", "env:\n  - name: A\n    value: x\n  - name: B\n    valueFrom: {}\n")),
+	"envs/prd/gateway.yaml: env[1].valueFrom is {}",
+)
+
+test_an_overlay_with_null_in_a_list if fx.says(
+	deny(with_overlay(fx.tree_input, "stg", "gateway", "args:\n  - --a\n  -\n")),
+	"envs/stg/gateway.yaml: args[1] is null",
+)
+
+test_a_new_overlay_with_null if fx.says(
+	deny(with_overlay(fx.tree_input, "stg", "svp-policy", "imageVerification:\n  required: null\n")),
+	"envs/stg/svp-policy.yaml: imageVerification.required is null",
+)
+
+test_an_image_file_with_a_null_tag if fx.says(
+	deny(with_image(fx.tree_input, "stg", "gateway", replace(fx.image_text(fx.repository("gateway")), "\"0b4c089951cf\"", ""))),
+	"envs/stg/images/gateway.yaml: image.tag is null",
+)
+
+# false, 0 and "" stay what they are in Lua, and an overlay of comments alone hands over no value at all.
+test_false_zero_and_empty_string_pass if count(deny(with_overlay(
+	fx.tree_input, "stg", "gateway",
+	"replicas: 0\npdb:\n  enabled: false\nenv:\n  - name: A\n    value: \"\"\n",
+))) == 0
+
+test_an_overlay_of_comments_alone_passes if count(deny(with_overlay(fx.tree_input, "stg", "gateway", "# Nothing yet.\n"))) == 0

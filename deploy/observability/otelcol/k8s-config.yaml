@@ -27,15 +27,18 @@ receivers:
   # Consumer group lag and broker metrics, as in compose. /public_metrics of Redpanda's Admin API needs
   # no login even though the Admin API requires one, so this Collector holds no
   # Redpanda credential. enable_consumer_group_metrics is set by the redpanda-init Job of chart
-  # svp-data (deploy/redpanda/create-topics.sh).
+  # svp-data (deploy/redpanda/create-topics.sh). Every broker is scraped, each exporting its own metrics: found through
+  # the SRV records of port admin of headless Service redpanda, one per broker whatever their number, whose targets are
+  # the brokers' own names (redpanda-<n>.redpanda.svp-data.svc.cluster.local:9644), so instance stays that name.
   prometheus:
     config:
       scrape_configs:
         - job_name: redpanda
           scrape_interval: 15s
           metrics_path: /public_metrics
-          static_configs:
-            - targets: ["redpanda-0.redpanda.svp-data.svc.cluster.local:9644"]
+          dns_sd_configs:
+            - names: ["_admin._tcp.redpanda.svp-data.svc.cluster.local"]
+              type: SRV
 
 processors:
   # In a 256 MiB container (the chart's resources.limits.memory): refuses data from 144 MiB of heap

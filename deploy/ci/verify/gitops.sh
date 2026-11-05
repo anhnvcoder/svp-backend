@@ -11,9 +11,10 @@
 # cases c and l when their image is too old (below).
 #
 # Steps that are not a make target of their own:
-#   gitops-env             the overlays of envs/stg of svp-gitops reached the cluster: Application gateway reads
-#                          envs/stg/gateway.yaml after its values, and every running gateway pod has
-#                          SENTRY_ENVIRONMENT=stg (the only variable of the pod spec read)
+#   gitops-env             the overlays of envs/stg of svp-gitops reached the cluster: Application gateway carries
+#                          envs/stg/gateway.yaml on main in its valuesObject (level 1 of the root passes it down), so
+#                          its env.SENTRY_ENVIRONMENT is stg, and every running gateway pod has SENTRY_ENVIRONMENT=stg
+#                          (the only variable of the pod spec read)
 #   gitops-external-secrets the cluster's ExternalSecrets are exactly those of files/external-secrets.yaml of chart
 #                          svp-cluster at the commit the cluster runs its charts at (envs/stg/charts.yaml of
 #                          svp-gitops at origin/main of the clone), an entry with enabledBy (off unless the values turn
@@ -85,21 +86,17 @@ gitops_charts_rev() {
 
 # gitops_env: see gitops-env in the header.
 gitops_env() {
-  # shellcheck disable=SC2016 # $values is Argo CD's name of the values source, written as it is
-  local want='$values/envs/stg/gateway.yaml' files pods values
-  files=$(kc -n argocd get applications.argoproj.io gateway -o json |
-    jq -r '[.spec.sources[] | .helm.valueFiles // [] | .[]] | join(" ")') || {
+  local carried pods values
+  carried=$(kc -n argocd get applications.argoproj.io gateway -o json |
+    jq -r '[.spec.sources[] | .helm.valuesObject.env.SENTRY_ENVIRONMENT // empty][0] // "unset"') || {
     echo "FAIL  gitops-env: read Application gateway"
     return 1
   }
-  echo "Application gateway reads: $files"
-  case " $files " in
-  *" $want "*) ;;
-  *)
-    echo "FAIL  gitops-env: Application gateway does not read $want"
+  echo "Application gateway carries SENTRY_ENVIRONMENT=$carried in its valuesObject"
+  [ "$carried" = stg ] || {
+    echo "FAIL  gitops-env: Application gateway does not carry envs/stg/gateway.yaml (SENTRY_ENVIRONMENT=stg) in its valuesObject"
     return 1
-    ;;
-  esac
+  }
   pods=$(kc -n svp get pods -l app.kubernetes.io/name=gateway --field-selector=status.phase=Running -o json) || {
     echo "FAIL  gitops-env: list the gateway's pods"
     return 1

@@ -4,7 +4,15 @@
 # Run by the one-shot redpanda-init
 # container; the broker comes from RPK_BROKERS, the Admin API from RPK_ADMIN_HOSTS. Idempotent:
 # a topic that already exists is left as it is, and the cluster property is set to the same value.
+#
+# TOPIC_REPLICAS is the replication factor of every topic: 1 on a single broker (compose, the default), 3 on three
+# brokers. Redpanda has no min.insync.replicas: each partition is a Raft group, and a write with acks=all (franz-go's
+# default) is answered once a majority of its replicas holds it, 2 of 3. It applies only to topics this run creates:
+# --if-not-exists leaves an existing topic with the replicas it has; changing it there takes
+# `rpk topic alter-config <topic> --set replication.factor=<n>`.
 set -euo pipefail
+
+replicas=${TOPIC_REPLICAS:-1}
 
 week_ms=604800000
 two_weeks_ms=1209600000
@@ -13,7 +21,7 @@ two_weeks_ms=1209600000
 # table, so the output is kept and printed when the command fails.
 create() {
   local out
-  if ! out=$(rpk topic create "$1" --if-not-exists -p "$2" -r 1 -c "retention.ms=$3" 2>&1); then
+  if ! out=$(rpk topic create "$1" --if-not-exists -p "$2" -r "$replicas" -c "retention.ms=$3" 2>&1); then
     printf '%s\n' "$out" >&2
     echo "redpanda-init: creating topic $1 failed" >&2
     return 1
