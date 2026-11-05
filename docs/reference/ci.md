@@ -220,8 +220,9 @@ Loại tài liệu (Diátaxis): **reference**, tra cứu khi cần một lệnh 
     `admission-metrics.sh`, `objstore.sh`; mỗi script một test cạnh nó), `verify-mask.sh` (`::add-mask::` giá trị bí mật của `.env` sau `make
     env` và sau bước dựng, cùng Secret trong cluster ở namespace `svp`, `svp-data`, `svp-obs`, `argocd`, `svp-secrets`), `verify-collect.sh`
     (artifact `verify-<kịch bản>`, giữ 30 ngày: chỉ kết quả máy đọc theo danh sách cho phép: `results.tsv`, `scenario`, `df-before.txt`, dòng kết
-    luận của `drill-obs-threats`, số đo admission, `.k8s/drills/{*.xml,*.json,traffic-*.log}` gồm report JUnit của diễn tập Chainsaw; output của
-    các bước khác không bao giờ lên; quét theo giá trị bí mật đã biết và theo mẫu (JWT, Bearer, `Set-Cookie`, khoá riêng, cookie phiên), file
+    luận của `drill-obs-threats`, số đo admission, `.k8s/drills/{*.xml,*-skips.tsv,*.json,traffic-*.log}` gồm report JUnit của diễn tập Chainsaw và `<diễn tập>-skips.tsv` (mỗi
+    dòng một ca SKIP kèm lý do, dòng cuối `total`: report JUnit tính bước SKIP là xanh nên file này mới cho biết ca nào bị bỏ; quét bí mật như file
+    khác); output của các bước khác không bao giờ lên; quét theo giá trị bí mật đã biết và theo mẫu (JWT, Bearer, `Set-Cookie`, khoá riêng, cookie phiên), file
     nghi bị bỏ kèm `::warning::`, `files.txt` liệt kê file giữ và bỏ). `deploy/ci/verify-collect-test.sh` chạy trên máy và ở job `config` (giá
     trị giả, `docker`/`kubectl` giả, không mạng).
   - DORA là bài lab `dora/` của `svp-labs` ([ADR-0037](../adr/0037-mainpath-standard-tools.md) §1, thay [ADR-0028](../adr/0028-dora-metrics.md)):

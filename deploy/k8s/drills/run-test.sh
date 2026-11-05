@@ -11,6 +11,10 @@
 #     values fail before chainsaw; the file of the values is mode 600, never an argument, removed at the end;
 #   - every drill: chainsaw red, no report, a report with another number of tests than the folder, a folder without
 #     tests, an unknown drill: each exits non-zero;
+#   - the list of the SKIPs, .k8s/drills/<drill>-skips.tsv: one line per SKIP line of a script step's STDOUT with the
+#     test chainsaw was running, a line "total<TAB>n" last (n = 0 too); the tests left out for want of External Secrets
+#     Operator are in it; a SKIP line outside a STDOUT block is not counted; a Secret value in a reason is not in the
+#     file; chainsaw red leaves the file and a non-zero exit;
 #   - supplychain: the values chainsaw gets for each row "diễn tập" of the image table of the drill (an image looked up
 #     when not given, a lookup that fails left empty, vulnerable never looked up, noProvenance=none as is), and the
 #     values given passed as they are.
@@ -261,6 +265,62 @@ fresh 4
 rm "$FAKE_STATE/eso"
 drill threats
 red "threats, no ESO: 4 tests in the report where 2 should run fails"
+
+# --- the list of the SKIPs: chainsaw's output as v0.2.15 prints it, a STDOUT block per script step.
+skips_file() { cat "$tree/.k8s/drills/$1-skips.tsv" 2>/dev/null || echo "no file"; }
+fresh 3
+cat >"$FAKE_STATE/out" <<'EOF'
+=== RUN   chainsaw/case-a
+    sink.go:61: | 00:15:53 | case-a | step #1 | SCRIPT | LOG |
+        === COMMAND
+        /bin/sh -c skip "not a verdict line"
+        SKIP  (a) in the script, not in its output
+        === STDOUT
+        ok    (a) fine
+=== RUN   chainsaw/case-b
+    sink.go:61: | 00:15:54 | case-b | step #1 | SCRIPT | LOG |
+        === STDOUT
+        SKIP  (b) no drill-unsigned on GHCR; build it (make x)
+        ok    (b) not run, the case is SKIP above
+=== CONT  chainsaw/case-l
+    sink.go:61: | 00:15:55 | case-l | step #1 | SCRIPT | LOG |
+        === STDOUT
+        PASS  (l) fine
+
+        SKIP  (l) policy off: no provenance to check
+--- PASS: chainsaw (1.00s)
+EOF
+drill supplychain
+same "skips: two SKIP lines, chainsaw green, exit 0" 0 "$rc"
+same "skips: two lines (test, reason) in order, then total 2" \
+  "$(printf 'case-b\tno drill-unsigned on GHCR; build it (make x)\ncase-l\tpolicy off: no provenance to check\ntotal\t2')" \
+  "$(skips_file supplychain)"
+fresh 3
+printf '=== RUN   chainsaw/case-a\n        === STDOUT\n        ok    (a) fine\n' >"$FAKE_STATE/out"
+drill supplychain
+same "skips: no SKIP gives the file with total 0" "$(printf 'total\t0')" "$(skips_file supplychain)"
+fresh 3
+echo 1 >"$FAKE_STATE/rc"
+printf '=== RUN   chainsaw/case-b\n        === STDOUT\n        SKIP  (b) a reason\n' >"$FAKE_STATE/out"
+drill supplychain
+red "skips: chainsaw red still exits non-zero"
+same "skips: chainsaw red still leaves the file" "$(printf 'case-b\ta reason\ntotal\t1')" "$(skips_file supplychain)"
+fresh 4
+printf '=== RUN   chainsaw/sec-5-6-7\n        === STDOUT\n        SKIP  (x) the reason names %s here\n' "$secret1" >"$FAKE_STATE/out"
+drill threats
+red "skips: a Secret value in a reason still fails the drill (the log holds it)"
+no_value "skips: the Secret value of a reason is not in the file" "$(skips_file threats)"
+same "skips: the reason is replaced and still counted" \
+  "$(printf 'sec-5-6-7\t[the reason holds a Secret value: not shown]\ntotal\t1')" "$(skips_file threats)"
+fresh 2
+rm "$FAKE_STATE/eso"
+drill threats
+same "skips: the tests left out for want of ESO are in the file" \
+  "$(printf 'sec-5-6-7\tno External Secrets Operator on this cluster (dev path: its Secrets come from .env)\nsec-6-reader\tno External Secrets Operator on this cluster (dev path: its Secrets come from .env)\ntotal\t2')" \
+  "$(skips_file threats)"
+fresh 4
+drill threats
+same "skips: threats with ESO and no SKIP gives total 0" "$(printf 'total\t0')" "$(skips_file threats)"
 
 # --- a Secret value in the output, or in the report.
 fresh 4
