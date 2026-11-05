@@ -28,6 +28,8 @@ các mối đe doạ thấy rõ, biện pháp, nơi biện pháp chạy và mứ
   hệ thống nhận request từ internet. **Vừa** = cần làm nhưng hậu quả có giới hạn. **Thấp** = phòng thêm.
 - Dòng ghi **Chấp nhận** là rủi ro không xử lý (hoặc chỉ giảm bớt); lý do và lúc xem lại ở [mục 6](#6-rủi-ro-chấp-nhận).
 - Câu "vì sao" của các biện pháp quan trọng nằm ngay dưới mỗi bảng.
+- Phép kiểm `drill-k8s-threats` của một dòng là test Chainsaw `deploy/k8s/drills/threats/<ID>/` (ID viết thường, `/` thành `-`); ca (x)
+  của `drill-k8s-supplychain` là `deploy/k8s/drills/supplychain/case-<x>/`. Cách chạy ở [`reference/k8s.md`](reference/k8s.md).
 
 ## 2. Luồng dữ liệu và ranh giới tin cậy
 

@@ -92,6 +92,9 @@ giữ để tra ngược ai đổi dòng nào, khi nào, kiểm bằng gì. Tài
 > Cập nhật ngày 2026-11-02 theo phần A, B của [ADR-0032](../adr/0032-argocd-deploy-status.md) (Argo CD Notifications trên nền tảng `eks`, khoá
 > GitHub App `svp-argocd-notifier` vào cluster qua External Secrets): SEC-5 (một Secret được ghi ở `argocd`), dòng mới SEC-8 ở 4.7. Phần chỉ
 > kiểm được trên EKS ghi "kiểm ở buổi AWS".
+> Cập nhật ngày 2026-11-05 theo [ADR-0050](../adr/0050-bash-to-standard-tools.md) mục 2: `drill-k8s-threats` và `drill-k8s-supplychain` viết
+> lại thành test Chainsaw (`deploy/k8s/drills/threats/<ID>/`, `deploy/k8s/drills/supplychain/case-<x>/`), cùng phép kiểm và ca đối chứng;
+> cách kiểm của các dòng không đổi.
 
 ## Tổng hợp theo giai đoạn (mục 5 cũ)
 
