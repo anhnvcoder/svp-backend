@@ -99,6 +99,11 @@ YQ_IMAGE := mikefarah/yq:4.54.1@sha256:4b3d9475d65571d28cbb19544d3820ec2945e4c8b
 # conftest's parser hides.
 # renovate: datasource=docker depName=openpolicyagent/conftest
 CONFTEST_IMAGE := openpolicyagent/conftest:v0.71.1@sha256:0e77cdf7c1fcde035f3c579e4aaa6664ee2a8be5777eaa9af9f520cdd02280c0
+# Regal, the linter of the OPA project, for those Rego policies (make regal-lint, make regal-fix; rules in
+# .regal/config.yaml), from its official image (ghcr.io/open-policy-agent/regal, as the README of the project gives)
+# pinned by digest, run without network.
+# renovate: datasource=docker depName=ghcr.io/open-policy-agent/regal
+REGAL_IMAGE := ghcr.io/open-policy-agent/regal:0.43.0@sha256:29460f0ec1340d37f6c0c74bcbd88dd232fd8382c7a2337f0684415bd4c46da1
 
 # Tools installed by `go install` land here; the PATH of the caller is not assumed to contain it.
 GOBIN ?= $(shell go env GOPATH)/bin
@@ -120,7 +125,7 @@ SVP_TEST_REDIS_URL ?= redis://127.0.0.1:6379/15
 .DEFAULT_GOAL := help
 
 .PHONY: help tools ci-tools generate generate-go generate-check slo otelcol-validate fmt-check vet lint actionlint buf-lint vulncheck test fuzz \
-	cover check check-go helm-check helm-docs helm-docs-check kyverno-test conftest-verify trivy-config grype renovate-check zizmor api-contract-check hooks web-e2e measure-web measure-upload \
+	cover check check-go helm-check helm-docs helm-docs-check kyverno-test conftest-verify regal-lint regal-fix trivy-config grype renovate-check zizmor api-contract-check hooks web-e2e measure-web measure-upload \
 	web-lighthouse web-sourcemaps docs-check
 
 help: ## List the targets
@@ -320,6 +325,26 @@ conftest-verify: ## conftest verify of the ignore-file and svp-gitops tree polic
 	  echo "conftest verify $$dir"; \
 	  env -u DOCKER_DEFAULT_PLATFORM docker run --rm --user "$$(id -u):$$(id -g)" --network none \
 	    -v "$(CURDIR)/$$dir:/p:ro" -w /p '$(CONFTEST_IMAGE)' verify --policy . --no-color; \
+	done
+
+# Regal over the same two folders, one run per folder like conftest (the packages of a folder see each other only).
+# regal-lint only reads (a violation, a warning too, is exit 1); regal-fix writes the fixes Regal has (opa fmt and the
+# rest of the list in `regal fix --help`) into the folders, the only place the container may write. The rules are
+# .regal/config.yaml, mounted read-only.
+regal-lint: ## Regal lint of the Rego policies (deploy/ci/*-policies/, rules in .regal/config.yaml, Regal in REGAL_IMAGE, no network, read-only)
+	@set -e; for dir in $(CONFTEST_POLICIES); do \
+	  echo "regal lint $$dir"; \
+	  env -u DOCKER_DEFAULT_PLATFORM docker run --rm --user "$$(id -u):$$(id -g)" --network none --read-only \
+	    -v "$(CURDIR)/$$dir:/p:ro" -v "$(CURDIR)/.regal:/regal:ro" -w /p '$(REGAL_IMAGE)' \
+	    lint . --config-file /regal/config.yaml --fail-level warning --no-color; \
+	done
+
+regal-fix: ## Regal fix of the Rego policies (opa fmt and the other automatic fixes; writes deploy/ci/*-policies/)
+	@set -e; for dir in $(CONFTEST_POLICIES); do \
+	  echo "regal fix $$dir"; \
+	  env -u DOCKER_DEFAULT_PLATFORM docker run --rm --user "$$(id -u):$$(id -g)" --network none --read-only \
+	    -v "$(CURDIR)/$$dir:/p" -v "$(CURDIR)/.regal:/regal:ro" -w /p '$(REGAL_IMAGE)' \
+	    fix . --config-file /regal/config.yaml --no-color; \
 	done
 
 # Misconfiguration scan of the Dockerfiles, charts and manifests with the pinned trivy. It only

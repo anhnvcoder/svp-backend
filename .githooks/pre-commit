@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Pre-commit checks: gofmt on staged Go files, golangci-lint, buf lint, gitleaks on staged changes.
+# Pre-commit checks: gofmt on staged Go files, golangci-lint, buf lint, gitleaks on staged changes, and regal-lint when
+# Rego is staged.
 # Enable with `make hooks`; install the tools with `make tools`.
 set -euo pipefail
 
@@ -33,6 +34,11 @@ if [ "${#unformatted[@]}" -gt 0 ]; then
   echo "pre-commit: gofmt needed (run 'gofmt -w'):" >&2
   printf '  %s\n' "${unformatted[@]}" >&2
   exit 1
+fi
+
+# Regal runs in Docker, so it is asked for only when Rego is committed.
+if [ -n "$(git diff --cached --name-only --diff-filter=ACMR -- '*.rego')" ]; then
+  make regal-lint
 fi
 
 golangci-lint run

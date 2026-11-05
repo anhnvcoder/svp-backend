@@ -19,7 +19,7 @@ platform_map := gitops.components_doc.platforms
 
 envs := concat(" ", gitops.environments)
 
-deny contains sprintf("%s: has no key platforms, a map of each platform to {envs, localHosts}", [file]) if {
+deny contains $"{file}: has no key platforms, a map of each platform to \{envs, localHosts}" if {
 	is_object(gitops.components_doc)
 	not filled
 }
@@ -68,7 +68,7 @@ deny contains sprintf("%s: platforms: no platform runs %s", [file, concat(" ", u
 # names: the platforms, sorted and joined by spaces, once the map is sound.
 names := concat(" ", sort(object.keys(platform_map))) if count(unrun) == 0
 
-platforms := object.keys(platform_map) if count(unrun) == 0
+platform_list := object.keys(platform_map) if count(unrun) == 0
 
 deny contains msg if {
 	misplaced := [c.name | some c in gitops.components; "platforms" in object.keys(c); not lists_platforms(c.platforms)]
@@ -84,7 +84,7 @@ lists_platforms(list) if {
 	count(list) > 0
 	count({p | some p in list}) == count(list)
 	every p in list {
-		p in platforms
+		p in platform_list
 	}
 }
 
@@ -96,10 +96,7 @@ deny contains msg if {
 	gitops.is_dir("platforms")
 	got := gitops.folders("platforms")
 	got != names
-	msg := sprintf(
-		"platforms/ holds '%s': the platforms are exactly those of key platforms of components.json, '%s'",
-		[got, names],
-	)
+	msg := $"platforms/ holds '{got}': the platforms are exactly those of key platforms of components.json, '{names}'"
 }
 
 deny contains msg if {
@@ -107,10 +104,10 @@ deny contains msg if {
 	msg := "argocd/apps/files/platforms must be a symlink to ../../../platforms, through which the root chart reads platforms/"
 }
 
-deny contains sprintf("platforms/%s: platforms/ holds a folder per platform (and README.md), the root reads nothing else there", [name]) if {
+deny contains $"platforms/{name}: platforms/ holds a folder per platform (and README.md), the root reads nothing else there" if {
 	some name in gitops.visible("platforms")
 	name != "README.md"
-	not gitops.is_dir(concat("/", ["platforms", name]))
+	not gitops.is_dir($"platforms/{name}")
 }
 
 # component_of(name): the component a file of a platform is for, by its name.
@@ -121,26 +118,23 @@ component_of(name) := trim_suffix(name, ".yaml") if endswith(name, ".yaml")
 # platform_files: [platform, name] of each entry of the folder of a platform of the map, README.md and argo-cd.yaml
 # aside.
 platform_files contains [platform, name] if {
-	some platform in platforms
-	some name in gitops.visible(concat("/", ["platforms", platform]))
+	some platform in platform_list
+	some name in gitops.visible($"platforms/{platform}")
 	not name in {"README.md", "argo-cd.yaml"}
 }
 
 deny contains msg if {
 	some [platform, name] in platform_files
 	not known(platform, name)
-	msg := sprintf(
-		"platforms/%s/%s: a file of a platform is README.md, <name>.yaml or <name>.values.tpl, <name> a component of components.json",
-		[platform, name],
-	)
+	msg := $"platforms/{platform}/{name}: a file of a platform is README.md, <name>.yaml or <name>.values.tpl, <name> a component of components.json"
 }
 
 known(platform, name) if {
-	not gitops.is_dir(sprintf("platforms/%s/%s", [platform, name]))
+	not gitops.is_dir($"platforms/{platform}/{name}")
 	gitops.component(component_of(name))
 }
 
-deny contains sprintf("platforms/%s/%s: component %s does not run on %s (its platforms in components.json)", [platform, name, c, platform]) if {
+deny contains $"platforms/{platform}/{name}: component {c} does not run on {platform} (its platforms in components.json)" if {
 	some [platform, name] in platform_files
 	known(platform, name)
 	c := component_of(name)
@@ -150,13 +144,13 @@ deny contains sprintf("platforms/%s/%s: component %s does not run on %s (its pla
 # values_files: [path, name] of each file platforms/<platform>/<name>.yaml of any folder of platforms/.
 values_files contains [path, trim_suffix(name, ".yaml")] if {
 	some platform in gitops.visible("platforms")
-	some name in gitops.visible(concat("/", ["platforms", platform]))
+	some name in gitops.visible($"platforms/{platform}")
 	endswith(name, ".yaml")
-	path := sprintf("platforms/%s/%s", [platform, name])
+	path := $"platforms/{platform}/{name}"
 	gitops.is_file(path)
 }
 
-deny contains sprintf("%s is no YAML map", [path]) if {
+deny contains $"{path} is no YAML map" if {
 	some [path, _] in values_files
 	not gitops.yaml_map(path)
 }
@@ -164,10 +158,7 @@ deny contains sprintf("%s is no YAML map", [path]) if {
 deny contains msg if {
 	some [path, name] in values_files
 	"cluster" in object.keys(gitops.yaml_map(path))
-	msg := sprintf(
-		"%s sets cluster: what depends on the cluster reaches a component through platforms/<platform>/%s.values.tpl from the root's value cluster, which the bootstrap alone sets",
-		[path, name],
-	)
+	msg := $"{path} sets cluster: what depends on the cluster reaches a component through platforms/<platform>/{name}.values.tpl from the root's value cluster, which the bootstrap alone sets"
 }
 
 deny contains msg if {
@@ -177,8 +168,5 @@ deny contains msg if {
 	gitops.component(name).path == gitops.service_chart
 	keys := gitops.overlay_keys(values)
 	keys != ""
-	msg := sprintf(
-		"%s sets %s: a release's image is envs/<env>/images/%s.yaml, and every platform runs the base's canary",
-		[path, keys, name],
-	)
+	msg := $"{path} sets {keys}: a release's image is envs/<env>/images/{name}.yaml, and every platform runs the base's canary"
 }

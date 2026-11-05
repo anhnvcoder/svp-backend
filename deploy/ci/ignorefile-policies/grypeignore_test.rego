@@ -19,16 +19,10 @@ deny(trivy, grype, mode) := msgs if {
 }
 
 # entry(id, expired_at, purl): a .trivyignore.yaml of one entry.
-entry(id, expired_at, purl) := sprintf(
-	"vulnerabilities:\n  - id: %s\n    statement: Accepted for the test.\n    expired_at: %s\n    purls:\n      - %s\n",
-	[id, expired_at, purl],
-)
+entry(id, expired_at, purl) := $"vulnerabilities:\n  - id: {id}\n    statement: Accepted for the test.\n    expired_at: {expired_at}\n    purls:\n      - {purl}\n"
 
 # rule(id, name, version): a .grype.yaml of one rule, each value written as given.
-rule(id, name, version) := sprintf(
-	"ignore:\n  - vulnerability: %s\n    include-aliases: true\n    package:\n      name: %s\n      version: %s\n",
-	[id, name, version],
-)
+rule(id, name, version) := $"ignore:\n  - vulnerability: {id}\n    include-aliases: true\n    package:\n      name: {name}\n      version: {version}\n"
 
 left_pad := entry("CVE-2026-1111", "2026-11-15", "pkg:npm/left-pad@1.0.0")
 
@@ -97,7 +91,7 @@ test_a_rule_without_a_trivyignore_yaml if {
 
 test_a_rule_two_entries_cover if says(
 	deny(
-		concat("", [left_pad, "  - id: CVE-2026-1111\n    statement: Again.\n    expired_at: 2026-11-20\n    purls:\n      - pkg:npm/left-pad@1.0.0\n"]),
+		$"{left_pad}  - id: CVE-2026-1111\n    statement: Again.\n    expired_at: 2026-11-20\n    purls:\n      - pkg:npm/left-pad@1.0.0\n",
 		rule("CVE-2026-1111", "left-pad", "1.0.0"),
 		gate,
 	),
@@ -110,8 +104,8 @@ test_a_rule_two_entries_cover if says(
 test_a_name_that_is_not_the_escaped_purl_name if {
 	every name in [".*", `"mini.*"`, "minimis.", "minimis[t]", "libstdc++", "socket.io-parser", `mini\st`] {
 		plain := trim(name, `"`)
-		msgs := deny(entry("CVE-2021-44906", "2026-11-15", sprintf("pkg:npm/%s@1.2.5", [plain])), rule("CVE-2021-44906", name, "1.2.5"), live)
-		says(msgs, sprintf(`package.name %s is not a purl name with each of .*+?[](){}|^$\ escaped by \`, [plain]))
+		msgs := deny(entry("CVE-2021-44906", "2026-11-15", $"pkg:npm/{plain}@1.2.5"), rule("CVE-2021-44906", name, "1.2.5"), live)
+		says(msgs, $`package.name {plain} is not a purl name with each of .*+?[]()\{}|^$\ escaped by \`)
 		not matched(msgs)
 	}
 }
@@ -129,7 +123,7 @@ test_an_escaped_name_matches_its_entry if {
 		[`"libstdc\\+\\+"`, "pkg:apk/alpine/libstdc++"],
 		[`golang\.org/x/net`, "pkg:golang/golang.org/x/net"],
 	] {
-		count(deny(entry("CVE-2021-44906", "2026-11-15", sprintf("%s@1.2.5", [case[1]])), rule("CVE-2021-44906", case[0], "1.2.5"), live)) == 0
+		count(deny(entry("CVE-2021-44906", "2026-11-15", $"{case[1]}@1.2.5"), rule("CVE-2021-44906", case[0], "1.2.5"), live)) == 0
 	}
 }
 
@@ -144,8 +138,8 @@ test_an_escaped_name_that_is_not_the_entry if says(
 test_a_name_without_the_namespace_grype_gives if {
 	every case in [["foo", "pkg:npm/%40scope/foo"], ["net", "pkg:golang/golang.org/x/net"], ["alpine/glib", "pkg:apk/alpine/glib"]] {
 		says(
-			deny(entry("CVE-2026-1111", "2026-11-15", sprintf("%s@1.0.0", [case[1]])), rule("CVE-2026-1111", case[0], "1.0.0"), live),
-			sprintf("rule CVE-2026-1111 %s@1.0.0 is 0 entries", [case[0]]),
+			deny(entry("CVE-2026-1111", "2026-11-15", $"{case[1]}@1.0.0"), rule("CVE-2026-1111", case[0], "1.0.0"), live),
+			$"rule CVE-2026-1111 {case[0]}@1.0.0 is 0 entries",
 		)
 	}
 }
@@ -164,11 +158,11 @@ test_a_distribution_package_with_qualifiers_and_percent_escapes if {
 # vulnerability, name and version even with an entry of that very text, and not matched; quoted it is text.
 test_a_version_that_is_no_text if {
 	every value in ["null", "NULL", "~", "true", "False", "1.10", "017", "0x1F", "0o17", "0b101", "1e5", "1_000"] {
-		msgs := deny(entry("CVE-2021-44906", "2026-11-15", sprintf("pkg:npm/minimist@%s", [value])), rule("CVE-2021-44906", "minimist", value), live)
+		msgs := deny(entry("CVE-2021-44906", "2026-11-15", $"pkg:npm/minimist@{value}"), rule("CVE-2021-44906", "minimist", value), live)
 		says(msgs, "rule CVE-2021-44906: package.version ")
 		says(msgs, "is a null, a bool, a number or a date to YAML, not text")
 		not matched(msgs)
-		count(deny(entry("CVE-2021-44906", "2026-11-15", sprintf("pkg:npm/minimist@%s", [value])), rule("CVE-2021-44906", "minimist", sprintf("'%s'", [value])), live)) == 0
+		count(deny(entry("CVE-2021-44906", "2026-11-15", $"pkg:npm/minimist@{value}"), rule("CVE-2021-44906", "minimist", $"'{value}'"), live)) == 0
 	}
 }
 
@@ -184,11 +178,11 @@ test_a_version_of_the_form_of_a_date if {
 
 test_a_name_that_is_no_text if {
 	every value in ["null", "true", "017"] {
-		msgs := deny(entry("CVE-2021-44906", "2026-11-15", sprintf("pkg:npm/%s@1.2.5", [value])), rule("CVE-2021-44906", value, "1.2.5"), live)
+		msgs := deny(entry("CVE-2021-44906", "2026-11-15", $"pkg:npm/{value}@1.2.5"), rule("CVE-2021-44906", value, "1.2.5"), live)
 		says(msgs, "rule CVE-2021-44906: package.name ")
 		says(msgs, "is a null, a bool, a number or a date to YAML, not text")
 		not matched(msgs)
-		count(deny(entry("CVE-2021-44906", "2026-11-15", sprintf("pkg:npm/%s@1.2.5", [value])), rule("CVE-2021-44906", sprintf("'%s'", [value]), "1.2.5"), live)) == 0
+		count(deny(entry("CVE-2021-44906", "2026-11-15", $"pkg:npm/{value}@1.2.5"), rule("CVE-2021-44906", $"'{value}'", "1.2.5"), live)) == 0
 	}
 }
 

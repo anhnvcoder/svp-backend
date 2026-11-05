@@ -38,17 +38,14 @@ retired := [
 
 table := [backend, web]
 
-repository(svc) := "ghcr.io/anhnvcoder/svp-frontend/web" if svc == "web"
+repository("web") := "ghcr.io/anhnvcoder/svp-frontend/web"
 
-repository(svc) := concat("", ["ghcr.io/anhnvcoder/svp-backend/", svc]) if svc != "web"
+repository(svc) := $"ghcr.io/anhnvcoder/svp-backend/{svc}" if svc != "web"
 
-charts_text := sprintf(
-	"# The commit of the code repository whose charts this environment runs.\nrevision: %s\npodSecurityVersion: v1.36\ncollectorConfigSha256: %s\n",
-	[revision, sha],
-)
+charts_text := $"# The commit of the code repository whose charts this environment runs.\nrevision: {revision}\npodSecurityVersion: v1.36\ncollectorConfigSha256: {sha}\n"
 
 # image_text(repo): an image file as the promote writes it, comments included.
-image_text(repo) := sprintf("# The release image, nothing else.\nimage:\n  repository: %s\n  tag: \"0b4c089951cf\"\n  digest: \"%s\"\n", [repo, digest])
+image_text(repo) := $"# The release image, nothing else.\nimage:\n  repository: {repo}\n  tag: \"0b4c089951cf\"\n  digest: \"{digest}\"\n"
 
 components := {
 	"components": [
@@ -108,12 +105,12 @@ tree := object.union_n([
 			["/gateway.yaml", file("replicas: 2\n")],
 			["/images", dir],
 		]
-		path := sprintf("envs/%s%s", [env, name])
+		path := $"envs/{env}{name}"
 	},
 	{path: file(image_text(repository(svc))) |
 		some env in envs
 		some svc in services
-		path := sprintf("envs/%s/images/%s.yaml", [env, svc])
+		path := $"envs/{env}/images/{svc}.yaml"
 	},
 ])
 
@@ -135,7 +132,7 @@ with_entry(given, path, entry) := object.union(given, {"tree": {path: entry}})
 without(given, path) := object.union(object.remove(given, ["tree"]), {"tree": {p: e |
 	some p, e in given.tree
 	p != path
-	not startswith(p, concat("", [path, "/"]))
+	not startswith(p, $"{path}/")
 }})
 
 # with_components(given, doc): given with argocd/apps/components.json holding doc.

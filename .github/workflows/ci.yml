@@ -321,6 +321,7 @@ jobs:
       # days. The rules are conftest policies (deploy/ci/ignorefile-policies/), run with yq from the images the Makefile
       # pins, without network once pulled; no token. make conftest-verify runs their tests, every case that must fail,
       # and those of the policies deploy/ci/gitops-check.sh holds a tree of svp-gitops to (deploy/ci/gitops-tree-policies/).
+      - run: make regal-lint
       - run: make conftest-verify
       - run: deploy/ci/scan-gate.sh --check-ignorefile
       # The scripts of the image pipeline, which otherwise run only in images.yml (most of them on main only), each in a

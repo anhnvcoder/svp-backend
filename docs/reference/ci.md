@@ -23,7 +23,7 @@ Loại tài liệu (Diátaxis): **reference**, tra cứu khi cần một lệnh 
     merge-base của PR, `main` trước push, hay merge-base với `origin/main` khi dispatch), `api-contract` (luật version của hợp đồng
     REST, [ADR-0033](../adr/0033-svp-web-repo.md) §1: `make api-contract-check BASE=<base>` với base tính như job `buf`, rồi
     `deploy/ci/contract-test.sh`), `config`
-    (đủ lịch sử, `make gitops-clone` và `SVP_GITOPS_DIR` ở `env` của job; `make conftest-verify`, `deploy/ci/scan-gate.sh --check-ignorefile`,
+    (đủ lịch sử, `make gitops-clone` và `SVP_GITOPS_DIR` ở `env` của job; `make regal-lint`, `make conftest-verify`, `deploy/ci/scan-gate.sh --check-ignorefile`,
     test của script pipeline image trong job giả của Actions và trên máy (`deploy/ci/plan-test.sh`, `scan-gate-test.sh`,
     `vuln-predicate-test.sh`, `sign-image-test.sh` cùng hàm bundle của `common.sh` trên registry giả, `rescan-test.sh`,
     `verify-release-test.sh` cùng `values-check.sh`, `changed-services-test.sh`), `deploy/ci/promote-test.sh`
@@ -346,11 +346,13 @@ Loại tài liệu (Diátaxis): **reference**, tra cứu khi cần một lệnh 
     trừ các mục của `deploy/ci/trivy-config-ignore.yaml` (dưới đây). Cổng `--fs` của lockfile không còn trong `scan-gate.sh`
     ([ADR-0039](../adr/0039-mainpath-drills-scan-gate-sourcemaps.md) §2): `svp-frontend` chạy `trivy fs` rồi `trivy convert --exit-code 1 --severity CRITICAL --ignorefile`
     trong `Makefile` của nó. `make renovate-check`: `renovate-config-validator --strict` trong `RENOVATE_IMAGE` ghim, không mạng. trivy, syft,
-    grype, cosign, Renovate, k6, Schemathesis, kubeconform, Kyverno CLI, conftest, oasdiff, ORAS, yq chạy trên máy chỉ bằng image ghim
+    grype, cosign, Renovate, k6, Schemathesis, kubeconform, Kyverno CLI, conftest, Regal, oasdiff, ORAS, yq chạy trên máy chỉ bằng image ghim
     digest của `Makefile` (`TRIVY_IMAGE`, `SYFT_IMAGE`, `GRYPE_IMAGE`, `COSIGN_IMAGE`, `RENOVATE_IMAGE`, `K6_IMAGE`, `SCHEMATHESIS_IMAGE`,
-    `KUBECONFORM_IMAGE`, `KYVERNO_CLI_IMAGE`, `CONFTEST_IMAGE`, `OASDIFF_IMAGE`, `ORAS_IMAGE`, `YQ_IMAGE`; yq của bước promote và của phép
+    `KUBECONFORM_IMAGE`, `KYVERNO_CLI_IMAGE`, `CONFTEST_IMAGE`, `REGAL_IMAGE`, `OASDIFF_IMAGE`, `ORAS_IMAGE`, `YQ_IMAGE`; yq của bước promote và của phép
     kiểm tệp ngoại lệ), không cài;
     `make kyverno-test`: `kyverno test` của `deploy/ci/gitops-policies/` (fixture đạt, hỏng mỗi policy; `gitops-check-test.sh` gọi nó);
+    `make regal-lint`: Regal (linter của dự án OPA, `REGAL_IMAGE`, luật ở `.regal/config.yaml`) trên hai thư mục policy đó, chạy ngay
+    trước `make conftest-verify` ở job `config`; `make regal-fix` sửa các lỗi có sửa tự động;
     `make conftest-verify`: `conftest verify` của `deploy/ci/ignorefile-policies/` (mỗi ca âm của luật tệp ngoại lệ là một test `*_test.rego`,
     hôm nay cố định) và của `deploy/ci/gitops-tree-policies/` (mỗi ca âm của luật cây `svp-gitops`, trên một cây viết trong test;
     `gitops-check-test.sh` gọi nó);

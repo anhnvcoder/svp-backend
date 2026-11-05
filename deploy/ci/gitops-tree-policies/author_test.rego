@@ -27,12 +27,12 @@ test_the_bot_of_svp_frontend_moves_web_of_prd if count(by(web_bot, [["M", "envs/
 
 test_the_bot_of_backend_promotes_charts_and_the_six_services_to_stg if count(by(backend_bot, array.concat(
 	[["M", "envs/stg/charts.yaml"]],
-	[["M", sprintf("envs/stg/images/%s.yaml", [svc])] | some svc in fx.six],
+	[["M", $"envs/stg/images/{svc}.yaml"] | some svc in fx.six],
 ))) == 0
 
 test_the_bot_of_backend_promotes_the_whole_set_to_prd_web_included if count(by(backend_bot, array.concat(
 	[["M", "envs/prd/charts.yaml"]],
-	[["M", sprintf("envs/prd/images/%s.yaml", [svc])] | some svc in fx.services],
+	[["M", $"envs/prd/images/{svc}.yaml"] | some svc in fx.services],
 ))) == 0
 
 test_a_person_changes_anything if count(by("anhnvcoder", [
@@ -82,27 +82,27 @@ test_the_bot_of_backend_adds_an_image_file_of_no_service_to_prd if fx.says(
 
 test_the_bot_of_svp_frontend_changes_an_overlay_of_stg if fx.says(
 	by(web_bot, [["M", "envs/stg/svp-cluster.yaml"]]),
-	concat("", ["envs/stg/svp-cluster.yaml: changed by svp-web-promoter[bot], ", outside]),
+	$"envs/stg/svp-cluster.yaml: changed by svp-web-promoter[bot], {outside}",
 )
 
 test_the_bot_of_backend_changes_an_overlay_of_stg if fx.says(
 	by(backend_bot, [["M", "envs/stg/gateway.yaml"]]),
-	concat("", ["envs/stg/gateway.yaml: changed by svp-gitops-promoter[bot], ", outside]),
+	$"envs/stg/gateway.yaml: changed by svp-gitops-promoter[bot], {outside}",
 )
 
 test_the_bot_of_backend_adds_an_overlay_to_stg if fx.says(
 	by(backend_bot, [["A", "envs/stg/kyverno.yaml"]]),
-	concat("", ["envs/stg/kyverno.yaml: changed by svp-gitops-promoter[bot], ", outside]),
+	$"envs/stg/kyverno.yaml: changed by svp-gitops-promoter[bot], {outside}",
 )
 
 test_the_bot_of_backend_adds_an_image_file_of_an_unknown_environment if fx.says(
 	by(backend_bot, [["A", "envs/qa/images/gateway.yaml"]]),
-	concat("", ["envs/qa/images/gateway.yaml: changed by svp-gitops-promoter[bot], ", outside]),
+	$"envs/qa/images/gateway.yaml: changed by svp-gitops-promoter[bot], {outside}",
 )
 
 test_the_bot_of_backend_adds_an_image_file_without_a_name if fx.says(
 	by(backend_bot, [["A", "envs/stg/images/.yaml"]]),
-	concat("", ["envs/stg/images/.yaml: changed by svp-gitops-promoter[bot], ", outside]),
+	$"envs/stg/images/.yaml: changed by svp-gitops-promoter[bot], {outside}",
 )
 
 test_the_bot_of_svp_frontend_deletes_web if fx.says(
@@ -117,12 +117,12 @@ test_the_bot_of_backend_deletes_charts if fx.says(
 
 test_the_bot_of_svp_frontend_changes_base if fx.says(
 	by(web_bot, [["M", "base/tempo.yaml"]]),
-	concat("", ["base/tempo.yaml: changed by svp-web-promoter[bot], ", outside]),
+	$"base/tempo.yaml: changed by svp-web-promoter[bot], {outside}",
 )
 
 test_the_bot_of_backend_changes_the_workflow_of_the_check if fx.says(
 	by(backend_bot, [["M", ".github/workflows/check.yml"]]),
-	concat("", [".github/workflows/check.yml: changed by svp-gitops-promoter[bot], ", outside]),
+	$".github/workflows/check.yml: changed by svp-gitops-promoter[bot], {outside}",
 )
 
 test_a_bot_that_promotes_no_source_changes_an_image_file if fx.says(

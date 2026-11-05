@@ -63,6 +63,13 @@ liệt kê target):
   chỉ tạo khi có mục đầu tiên; hiện không có): khoá `ignore`, mỗi mục đúng `id`, `module`, `version` (như frame đầu, `stdlib`
   cho thư viện chuẩn), `statement` có nội dung, `expired_at` sau hôm nay (UTC) và không quá 30 ngày; chỉ cho lỗ hổng chưa có bản
   vá (có bản vá thì nâng), mục trùng, hết hạn hay không còn khớp finding nào là đỏ.
+- `make regal-lint` và `make regal-fix`: lint Rego của `deploy/ci/ignorefile-policies/` và `deploy/ci/gitops-tree-policies/` bằng Regal
+  (linter của dự án OPA) từ image chính thức `REGAL_IMAGE` ghim `tag@sha256`, `--network none`, mỗi thư mục một lượt như
+  `make conftest-verify`. `regal-lint` chỉ đọc, exit khác 0 khi có vi phạm (cả mức warning); `regal-fix` ghi vào hai thư mục
+  các sửa tự động (`opa fmt`, danh sách ở `regal fix --help`), phần còn lại sửa tay. Luật ở `.regal/config.yaml`: mặc định, chỉ tắt
+  hay chỉnh luật nào có lý do ghi ngay trong file (policy do conftest đọc: namespace theo package, `data.*` do `--data` đưa vào,
+  độ dài dòng 200 vì thông điệp là một chuỗi không ngắt được). Không thuộc `make check`; CI chạy `make regal-lint` ở job
+  `config`, hook `pre-commit` chạy khi commit đổi `*.rego`.
 - `make fuzz [FUZZTIME=30s] [PKGS=…]` (ADR-0030 §2): chạy lần lượt mọi `FuzzXxx` (mỗi gói một `fuzz_test.go`: `pagetoken`,
   `authtoken`, `objstore`, `httpx` của gateway, `server` của user-service; 10 target) bằng `go test -fuzz`, không `-race`,
   dừng ở target đầu tiên đỏ và in đường dẫn input go ghi ra dưới `testdata/fuzz/<target>/`; seed chạy trong `make test`. Lỗi
@@ -91,4 +98,5 @@ liệt kê target):
 ## Git hook
 
 - `make hooks`: bật git hook ở `.githooks/` một lần cho mỗi clone. `pre-commit` chạy `gofmt` trên file Go đã stage,
-  `golangci-lint run`, `buf lint` và `gitleaks` trên thay đổi đã stage.
+  `golangci-lint run`, `buf lint` và `gitleaks` trên thay đổi đã stage, thêm `make regal-lint` khi commit đổi file `*.rego`
+  (cần Docker).

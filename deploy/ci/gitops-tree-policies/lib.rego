@@ -45,8 +45,8 @@ lines(path) := split(text(path), "\n")
 # names(dir): the names of the entries directly inside dir, dot files included (ls -A).
 names(dir) := {name |
 	some path, _ in input.tree
-	startswith(path, concat("", [dir, "/"]))
-	name := trim_prefix(path, concat("", [dir, "/"]))
+	startswith(path, $"{dir}/")
+	name := trim_prefix(path, $"{dir}/")
 	not contains(name, "/")
 }
 
@@ -54,7 +54,7 @@ names(dir) := {name |
 visible(dir) := {name | some name in names(dir); not startswith(name, ".")}
 
 # folders(dir): the folders the glob */ of the shell gives in dir, sorted and joined by spaces, as messages list them.
-folders(dir) := concat(" ", sort([name | some name in visible(dir); is_dir(concat("/", [dir, name]))]))
+folders(dir) := concat(" ", sort([name | some name in visible(dir); is_dir($"{dir}/{name}")]))
 
 # yaml_map(path): file path as YAML reads it when it is a mapping, an empty one for a file of comments alone; undefined
 # for a file that is no YAML or holds something else.

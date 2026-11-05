@@ -18,10 +18,7 @@ bot(login) if endswith(login, "[bot]")
 
 deny contains msg if {
 	foreign_sender
-	msg := sprintf(
-		"the commit checked was pushed by %s onto the pull request of %s: a bot pushes onto its own pull requests only, since the files allowed are the author's",
-		[pr.sender, pr.author],
-	)
+	msg := $"the commit checked was pushed by {pr.sender} onto the pull request of {pr.author}: a bot pushes onto its own pull requests only, since the files allowed are the author's"
 }
 
 foreign_sender if {
@@ -43,10 +40,7 @@ unread contains env if {
 
 deny contains msg if {
 	some env in unread
-	msg := sprintf(
-		"the release sources of the charts of envs/%s cannot be read (above), so neither can which files %s may change",
-		[env, pr.author],
-	)
+	msg := $"the release sources of the charts of envs/{env} cannot be read (above), so neither can which files {pr.author} may change"
 }
 
 # changes: the files of the pull request to judge, once every table is read.
@@ -65,7 +59,7 @@ promoters contains s.promoter if {
 
 promoter if login in promoters
 
-deny contains sprintf("%s: changed by %s, a bot that promotes no release source: such a bot changes nothing under envs/", [c.path, pr.author]) if {
+deny contains $"{c.path}: changed by {pr.author}, a bot that promotes no release source: such a bot changes nothing under envs/" if {
 	not promoter
 	some c in changes
 	startswith(c.path, "envs/")
@@ -74,14 +68,14 @@ deny contains sprintf("%s: changed by %s, a bot that promotes no release source:
 # target(path): the environment of a file a promoter may change, with the service of an image file.
 target(path) := {"env": env} if {
 	some env in gitops.environments
-	path == sprintf("envs/%s/charts.yaml", [env])
+	path == $"envs/{env}/charts.yaml"
 }
 
 target(path) := {"env": env, "service": svc} if {
-	some env in gitops.environments
-	prefix := sprintf("envs/%s/images/", [env])
-	startswith(path, prefix)
 	endswith(path, ".yaml")
+	some env in gitops.environments
+	prefix := $"envs/{env}/images/"
+	startswith(path, prefix)
 	svc := trim_suffix(trim_prefix(path, prefix), ".yaml")
 	svc != ""
 }
@@ -90,10 +84,10 @@ deny contains msg if {
 	promoter
 	some c in changes
 	not target(c.path)
-	msg := sprintf(
-		"%s: changed by %s, the bot of a release source: it changes envs/<env>/images/<service>.yaml of its own services only (the bot of %s also envs/<env>/charts.yaml and envs/prd/images/)",
-		[c.path, pr.author, gitops.chart_source],
-	)
+	msg := concat("", [
+		$"{c.path}: changed by {pr.author}, the bot of a release source: it changes envs/<env>/images/<service>.yaml ",
+		$"of its own services only (the bot of {gitops.chart_source} also envs/<env>/charts.yaml and envs/prd/images/)",
+	])
 }
 
 # source(env): the release source of the environment's table that the author promotes.
@@ -107,9 +101,7 @@ deny contains msg if {
 	some c in changes
 	env := target(c.path).env
 	not source(env)
-	msg := sprintf("%s: changed by %s, which promotes no release source of the charts envs/%s runs (%s)", [
-		c.path, pr.author, env, substring(input.sources[env].revision, 0, 12),
-	])
+	msg := $"{c.path}: changed by {pr.author}, which promotes no release source of the charts envs/{env} runs ({substring(input.sources[env].revision, 0, 12)})"
 }
 
 # judged_changes: [change, its target, the source the author promotes there].
@@ -120,9 +112,9 @@ judged_changes contains [c, t, s] if {
 	s := source(t.env)
 }
 
-who(s) := sprintf("%s, the bot of release source %s", [pr.author, s.name])
+who(s) := $"{pr.author}, the bot of release source {s.name}"
 
-deny contains sprintf("%s: deleted by %s: a bot changes files under envs/, never deletes one", [c.path, who(s)]) if {
+deny contains $"{c.path}: deleted by {who(s)}: a bot changes files under envs/, never deletes one" if {
 	some [c, _, s] in judged_changes
 	c.status == "D"
 }
@@ -132,10 +124,7 @@ deny contains msg if {
 	c.status != "D"
 	not t.service
 	s.name != gitops.chart_source
-	msg := sprintf(
-		"%s: changed by %s: only the bot of %s, whose repository holds the charts, changes charts.yaml",
-		[c.path, who(s), gitops.chart_source],
-	)
+	msg := $"{c.path}: changed by {who(s)}: only the bot of {gitops.chart_source}, whose repository holds the charts, changes charts.yaml"
 }
 
 deny contains msg if {

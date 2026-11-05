@@ -29,54 +29,54 @@ entries[i] := e if {
 
 name(i) := ignorefiles.label(i, object.get(entries[i], "id", null))
 
-deny contains sprintf("%s: the file must be a mapping of the one key vulnerabilities", [file]) if {
+deny contains $"{file}: the file must be a mapping of the one key vulnerabilities" if {
 	ignorefiles.present(file)
 	not is_object(doc)
 }
 
-deny contains sprintf("%s: only vulnerabilities may be ignored, never secrets or anything else: %s", [file, k]) if {
+deny contains $"{file}: only vulnerabilities may be ignored, never secrets or anything else: {k}" if {
 	is_object(doc)
 	some k, _ in doc
 	k != "vulnerabilities"
 }
 
-deny contains sprintf("%s: vulnerabilities must be a list (vulnerabilities: [] when nothing is excepted)", [file]) if {
+deny contains $"{file}: vulnerabilities must be a list (vulnerabilities: [] when nothing is excepted)" if {
 	is_object(doc)
 	not is_array(object.get(doc, "vulnerabilities", null))
 }
 
-deny contains sprintf("%s: entry #%d is not a mapping", [file, i + 1]) if {
+deny contains $"{file}: entry #{i + 1} is not a mapping" if {
 	some i, e in list
 	not is_object(e)
 }
 
-deny contains sprintf("%s: entry %s: unexpected key %s (only id, statement, expired_at, purls)", [file, name(i), k]) if {
+deny contains $"{file}: entry {name(i)}: unexpected key {k} (only id, statement, expired_at, purls)" if {
 	some i, e in entries
 	some k in ignorefiles.extra(e, keys)
 }
 
-deny contains sprintf("%s: entry %s has no id", [file, name(i)]) if {
+deny contains $"{file}: entry {name(i)} has no id" if {
 	some i, e in entries
 	not ignorefiles.text(object.get(e, "id", null))
 }
 
-deny contains sprintf("%s: entry %s has no statement (the reason it is ignored)", [file, name(i)]) if {
+deny contains $"{file}: entry {name(i)} has no statement (the reason it is ignored)" if {
 	some i, e in entries
 	not ignorefiles.text(object.get(e, "statement", null))
 }
 
-deny contains sprintf("%s: entry %s has no purls (the package versions it covers)", [file, name(i)]) if {
+deny contains $"{file}: entry {name(i)} has no purls (the package versions it covers)" if {
 	some i, e in entries
 	not ignorefiles.filled(object.get(e, "purls", null))
 }
 
-deny contains sprintf("%s: entry %s: purl %v is not pkg:<type>/<name>@<version>", [file, name(i), p]) if {
+deny contains $"{file}: entry {name(i)}: purl {p} is not pkg:<type>/<name>@<version>" if {
 	some i, e in entries
 	some p in ignorefiles.items(e.purls)
 	not purl(p)
 }
 
-deny contains sprintf("%s: entry %s has no expired_at yyyy-mm-dd", [file, name(i)]) if {
+deny contains $"{file}: entry {name(i)} has no expired_at yyyy-mm-dd" if {
 	some i, e in entries
 	not ignorefiles.day(object.get(e, "expired_at", null))
 }
@@ -84,19 +84,13 @@ deny contains sprintf("%s: entry %s has no expired_at yyyy-mm-dd", [file, name(i
 deny contains msg if {
 	some i, e in entries
 	ignorefiles.expires_late(e.expired_at, 30)
-	msg := sprintf("%s: entry %s expires %s, more than 30 days from today (%s)", [
-		file, name(i), e.expired_at,
-		ignorefiles.after(30),
-	])
+	msg := $"{file}: entry {name(i)} expires {e.expired_at}, more than 30 days from today ({ignorefiles.after(30)})"
 }
 
 deny contains msg if {
 	some i, e in entries
 	ignorefiles.expired(e.expired_at)
-	msg := sprintf("%s: entry %s expired on %s: renew it with a reason, or remove it (and its rule in .grype.yaml)", [
-		file, name(i),
-		e.expired_at,
-	])
+	msg := $"{file}: entry {name(i)} expired on {e.expired_at}: renew it with a reason, or remove it (and its rule in .grype.yaml)"
 }
 
 purl(p) if {

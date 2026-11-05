@@ -62,4 +62,4 @@ extra(obj, keys) := {k | some k, _ in obj; not k in keys}
 # label(i, v): how a message names item i: v when it is a string (the item's id), its place in the list otherwise.
 label(_, v) := v if is_string(v)
 
-label(i, v) := sprintf("#%d", [i + 1]) if not is_string(v)
+label(i, v) := $"#{i + 1}" if not is_string(v)

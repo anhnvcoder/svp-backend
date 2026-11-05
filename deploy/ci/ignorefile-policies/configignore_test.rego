@@ -14,10 +14,7 @@ deny(text) := msgs if {
 }
 
 # entry(id, path, statement, expired_at): a file of one entry with one path.
-entry(id, path, statement, expired_at) := sprintf(
-	"misconfigurations:\n  - id: %s\n    paths:\n      - %s\n    statement: %s\n    expired_at: %s\n",
-	[id, path, statement, expired_at],
-)
+entry(id, path, statement, expired_at) := $"misconfigurations:\n  - id: {id}\n    paths:\n      - {path}\n    statement: {statement}\n    expired_at: {expired_at}\n"
 
 says(msgs, want) if {
 	some m in msgs

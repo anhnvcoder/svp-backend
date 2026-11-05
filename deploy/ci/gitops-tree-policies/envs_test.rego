@@ -11,10 +11,10 @@ deny(given) := msgs if {
 worktree := object.union(object.remove(fx.tree_input, ["charts"]), {"worktree": true})
 
 # with_image(given, env, svc, text): given with envs/<env>/images/<svc>.yaml holding text.
-with_image(given, env, svc, text) := fx.with_file(given, sprintf("envs/%s/images/%s.yaml", [env, svc]), text)
+with_image(given, env, svc, text) := fx.with_file(given, $"envs/{env}/images/{svc}.yaml", text)
 
 # with_charts(given, env, text): given with envs/<env>/charts.yaml holding text.
-with_charts(given, env, text) := fx.with_file(given, sprintf("envs/%s/charts.yaml", [env]), text)
+with_charts(given, env, text) := fx.with_file(given, $"envs/{env}/charts.yaml", text)
 
 test_the_fixture_passes if count(deny(fx.tree_input)) == 0
 
@@ -39,17 +39,17 @@ test_charts_missing if fx.says(
 )
 
 test_charts_with_another_key if fx.says(
-	deny(with_charts(fx.tree_input, "stg", concat("", [fx.charts_text, "replicas: 2\n"]))),
+	deny(with_charts(fx.tree_input, "stg", $"{fx.charts_text}replicas: 2\n")),
 	"envs/stg/charts.yaml holds 'collectorConfigSha256 podSecurityVersion replicas revision': exactly revision, podSecurityVersion and collectorConfigSha256, one line each",
 )
 
 test_charts_with_a_key_twice if fx.says(
-	deny(with_charts(fx.tree_input, "prd", concat("", [fx.charts_text, "revision: ", fx.revision, "\n"]))),
+	deny(with_charts(fx.tree_input, "prd", $"{fx.charts_text}revision: {fx.revision}\n")),
 	"envs/prd/charts.yaml holds 'collectorConfigSha256 podSecurityVersion revision revision'",
 )
 
 test_charts_without_a_key if fx.says(
-	deny(with_charts(fx.tree_input, "stg", sprintf("revision: %s\npodSecurityVersion: v1.36\n", [fx.revision]))),
+	deny(with_charts(fx.tree_input, "stg", $"revision: {fx.revision}\npodSecurityVersion: v1.36\n")),
 	"envs/stg/charts.yaml holds 'podSecurityVersion revision'",
 )
 
@@ -59,13 +59,13 @@ test_charts_with_an_indented_key if fx.says(
 )
 
 test_the_keys_with_the_working_tree if fx.says(
-	deny(with_charts(worktree, "stg", concat("", [fx.charts_text, "replicas: 2\n"]))),
+	deny(with_charts(worktree, "stg", $"{fx.charts_text}replicas: 2\n")),
 	"envs/stg/charts.yaml holds 'collectorConfigSha256 podSecurityVersion replicas revision'",
 )
 
 # pinned(given, env, rev): given with gitopsRevision rev added to envs/<env>/charts.yaml, and the two-level root.
 pinned(given, env, rev) := fx.with_file(
-	with_charts(given, env, sprintf("%s# The commit of svp-gitops prd renders at.\ngitopsRevision: %s\n", [fx.charts_text, rev])),
+	with_charts(given, env, $"{fx.charts_text}# The commit of svp-gitops prd renders at.\ngitopsRevision: {rev}\n"),
 	"argocd/root/Chart.yaml",
 	"apiVersion: v2\nname: svp-root\nversion: 0.1.0\n",
 )
@@ -104,8 +104,11 @@ test_a_pin_without_the_two_level_root if fx.says(
 )
 
 test_a_pin_twice if fx.says(
-	deny(with_charts(pinned(fx.tree_input, "prd", gitops_commit), "prd", sprintf("%sgitopsRevision: %s\ngitopsRevision: %s\n", [fx.charts_text, gitops_commit, gitops_commit]))),
-	"envs/prd/charts.yaml holds 'collectorConfigSha256 gitopsRevision gitopsRevision podSecurityVersion revision': exactly revision, podSecurityVersion and collectorConfigSha256, one line each (and gitopsRevision in envs/prd/charts.yaml alone)",
+	deny(with_charts(pinned(fx.tree_input, "prd", gitops_commit), "prd", $"{fx.charts_text}gitopsRevision: {gitops_commit}\ngitopsRevision: {gitops_commit}\n")),
+	concat("", [
+		"envs/prd/charts.yaml holds 'collectorConfigSha256 gitopsRevision gitopsRevision podSecurityVersion revision': ",
+		"exactly revision, podSecurityVersion and collectorConfigSha256, one line each (and gitopsRevision in envs/prd/charts.yaml alone)",
+	]),
 )
 
 test_an_empty_revision if fx.says(
@@ -119,18 +122,15 @@ test_a_short_revision if fx.says(
 )
 
 test_a_quoted_revision if fx.says(
-	deny(with_charts(fx.tree_input, "stg", replace(fx.charts_text, fx.revision, sprintf("\"%s\"", [fx.revision])))),
-	sprintf("envs/stg/charts.yaml: revision is '\"%s\"'", [fx.revision]),
+	deny(with_charts(fx.tree_input, "stg", replace(fx.charts_text, fx.revision, $"\"{fx.revision}\""))),
+	$"envs/stg/charts.yaml: revision is '\"{fx.revision}\"'",
 )
 
 test_the_working_tree_reads_no_revision if count(deny(with_charts(worktree, "stg", replace(fx.charts_text, fx.revision, "")))) == 0
 
 test_a_wrong_collector_config_sha256 if fx.says(
 	deny(with_charts(fx.tree_input, "stg", replace(fx.charts_text, fx.sha, "0000000000000000000000000000000000000000000000000000000000000000"))),
-	sprintf(
-		"envs/stg/charts.yaml: collectorConfigSha256 is '0000000000000000000000000000000000000000000000000000000000000000', deploy/observability/otelcol/k8s-config.yaml at 0b4c089951cf has sha256 %s",
-		[fx.sha],
-	),
+	$"envs/stg/charts.yaml: collectorConfigSha256 is '0000000000000000000000000000000000000000000000000000000000000000', deploy/observability/otelcol/k8s-config.yaml at 0b4c089951cf has sha256 {fx.sha}",
 )
 
 test_a_wrong_pod_security_version if fx.says(
@@ -145,7 +145,10 @@ test_derived_values_of_an_environment_off_main_are_not_compared if count(deny(wi
 
 test_six_image_files_of_seven if fx.says(
 	deny(fx.without(fx.tree_input, "envs/stg/images/web.yaml")),
-	"envs/stg/images/ holds 'engagement-service.yaml feed-service.yaml gateway.yaml media-worker.yaml user-service.yaml video-service.yaml': exactly one file per service, engagement-service.yaml feed-service.yaml gateway.yaml media-worker.yaml user-service.yaml video-service.yaml web.yaml",
+	concat("", [
+		"envs/stg/images/ holds 'engagement-service.yaml feed-service.yaml gateway.yaml media-worker.yaml user-service.yaml video-service.yaml': ",
+		"exactly one file per service, engagement-service.yaml feed-service.yaml gateway.yaml media-worker.yaml user-service.yaml video-service.yaml web.yaml",
+	]),
 )
 
 test_an_image_file_of_no_service if fx.says(
@@ -202,12 +205,12 @@ test_a_field_outside_the_image_block if fx.says(
 
 test_bare_values_pass if count(deny(with_image(
 	fx.tree_input, "stg", "gateway",
-	sprintf("image:\n  repository: ghcr.io/anhnvcoder/svp-backend/gateway\n  tag: 0b4c089951cf\n  digest: %s\n", [fx.digest]),
+	$"image:\n  repository: ghcr.io/anhnvcoder/svp-backend/gateway\n  tag: 0b4c089951cf\n  digest: {fx.digest}\n",
 ))) == 0
 
 test_an_empty_tag if fx.says(
 	deny(with_image(fx.tree_input, "stg", "gateway", replace(fx.image_text(fx.repository("gateway")), "\"0b4c089951cf\"", "\"\""))),
-	sprintf("envs/stg/images/gateway.yaml: the image must be a release of ghcr.io/anhnvcoder/svp-backend/gateway with its tag and digest, not 'ghcr.io/anhnvcoder/svp-backend/gateway' '' '%s'", [fx.digest]),
+	$"envs/stg/images/gateway.yaml: the image must be a release of ghcr.io/anhnvcoder/svp-backend/gateway with its tag and digest, not 'ghcr.io/anhnvcoder/svp-backend/gateway' '' '{fx.digest}'",
 )
 
 test_an_empty_digest if fx.says(
@@ -260,12 +263,12 @@ test_without_the_table_the_shape_alone if count(deny(with_image(
 # A key without its colon or its value counts among the keys but gives the rules no value: refused, so the revision and
 # the derived values are always checked.
 test_a_revision_without_its_colon if fx.says(
-	deny(with_charts(fx.tree_input, "stg", replace(fx.charts_text, concat("", ["revision: ", fx.revision]), "revision"))),
+	deny(with_charts(fx.tree_input, "stg", replace(fx.charts_text, $"revision: {fx.revision}", "revision"))),
 	"envs/stg/charts.yaml: line 'revision' is not 'key: value' with a value",
 )
 
 test_a_revision_without_a_value if fx.says(
-	deny(with_charts(fx.tree_input, "prd", replace(fx.charts_text, concat("", ["revision: ", fx.revision]), "revision:"))),
+	deny(with_charts(fx.tree_input, "prd", replace(fx.charts_text, $"revision: {fx.revision}", "revision:"))),
 	"envs/prd/charts.yaml: line 'revision:' is not 'key: value' with a value",
 )
 
@@ -275,13 +278,13 @@ test_a_derived_value_without_its_colon if fx.says(
 )
 
 # with_overlay(given, env, name, text): given with envs/<env>/<name>.yaml holding text.
-with_overlay(given, env, name, text) := fx.with_file(given, sprintf("envs/%s/%s.yaml", [env, name]), text)
+with_overlay(given, env, name, text) := fx.with_file(given, $"envs/{env}/{name}.yaml", text)
 
 empty_value := "sets no null, {} or [], which the health check of Argo CD's Applications cannot tell from a key left out"
 
 test_an_overlay_setting_null if fx.says(
 	deny(with_overlay(fx.tree_input, "stg", "gateway", "replicas: 2\npdb: null\n")),
-	sprintf("envs/stg/gateway.yaml: pdb is null: an overlay or image file %s", [empty_value]),
+	$"envs/stg/gateway.yaml: pdb is null: an overlay or image file {empty_value}",
 )
 
 test_an_overlay_setting_null_names_no_other_rule if count(deny(with_overlay(fx.tree_input, "stg", "gateway", "pdb: null\n"))) == 1

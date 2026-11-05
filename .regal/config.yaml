@@ -1,0 +1,48 @@
+# Regal (https://docs.styra.com/regal) lints deploy/ci/*-policies/ (make regal-lint; make regal-fix applies its fixes).
+# The default rules apply. Only the rules below are changed, each because the policies are read by conftest, not by a
+# bare OPA project: conftest loads one flat folder per run, picks the packages by namespace and injects its data.
+rules:
+  idiomatic:
+    # conftest loads a folder as one flat policy set and picks its packages by namespace (gitops.author, trivyignore…),
+    # so a package does not have to sit in a folder of its own name; moving the files would break conftest --policy .
+    directory-package-mismatch:
+      level: ignore
+    # conftest evaluates the deny, warn and violation rules of every package by name; there is no entrypoint
+    # annotation to put on them.
+    no-defined-entrypoint:
+      level: ignore
+  imports:
+    # `import data.gitops` in package gitops.author (envs, layout, platforms) is how the files reach the shared helpers
+    # of package gitops (lib.rego) as gitops.<name>; without it the name gitops is undefined. Regal reads the parent
+    # package as the file's own.
+    pointless-import:
+      level: ignore
+    # data.gitops_check (the config of the tree) and data.scan_gate (today, live) are not in any file: the callers pass
+    # them with conftest --data, and the tests with `with data… as`, so Regal cannot resolve them.
+    unresolved-reference:
+      level: ignore
+  style:
+    # The messages of the policies, and the tests that expect them word for word, are one string each and cannot be
+    # broken over lines (a string template cannot be joined with +), so 120 would cut them in the middle of a sentence.
+    # A message longer than 200 is joined from parts.
+    line-length:
+      max-line-length: 200
+    # Each deny rule sits beside the helpers it uses (a file per concern, a section per check), the way the tests read
+    # it; conftest collects every deny of a package by name wherever it is, so grouping them first buys nothing.
+    messy-rule:
+      level: ignore
+    # The *_test.rego helpers (deny(...), says(...)) call the rule under test and the fixture config from a function
+    # body, with `with data.gitops_check as fx.cfg`; that is their whole job.
+    external-reference:
+      level: error
+      ignore:
+        files:
+          - "*_test.rego"
+  performance:
+    # The *_test.rego helpers wrap `with input as…` once so each test states only what differs from the fixture; Regal
+    # sees the `with` in a rule that is not named test_….
+    with-outside-test-context:
+      level: error
+      ignore:
+        files:
+          - "*_test.rego"
