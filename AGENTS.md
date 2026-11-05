@@ -93,7 +93,8 @@ nó hoặc dựng bản sao từ event.
 
 - **AI không chạy lệnh nào chạm tài khoản AWS/GCP, kể cả lệnh chỉ đọc:** `aws`, `gcloud`, `gsutil`, `bq`, `eksctl`,
   `terraform init/plan/apply/destroy/import/state/output`, `kubectl`/`helm` vào cluster EKS/GKE, script dùng SDK cloud. Mọi target
-  `eks-*` (`make eks-gitops-up`, `eks-secrets`, `eks-smoke`…) do người học chạy; AI chỉ chạy test giả `deploy/k8s/eks-context-test.sh`.
+  `eks-*` (`make eks-secrets`, `eks-glitchtip-init`, `eks-smoke`…) do người học chạy; AI chỉ chạy test giả
+  `deploy/k8s/eks-context-test.sh`, `deploy/k8s/aws-secrets-test.sh`.
 - AI được chạy: `terraform fmt`, `terraform init -backend=false` + `terraform validate`, `aws --version`, `gcloud --version`, đọc và
   sửa code IaC.
 - **AI soạn lệnh để người học tự chạy:** ghi profile/project và region ngay trong lệnh (`AWS_PROFILE=anhnv-sso aws ... --region ...`,
@@ -106,7 +107,8 @@ nó hoặc dựng bản sao từ event.
 - **Không đăng nhập GHCR hay Sigstore từ máy:** push GHCR, ký, attest chỉ chạy trong CI; bước promote stg, prd chỉ chạy trong CI
   (token GitHub App), guard của chúng thử bằng `deploy/ci/promote-test.sh`.
 - **Khoá GitHub App `svp-argocd-notifier`** (chỉ commit status trên `svp-gitops`, [ADR-0032](docs/adr/0032-argocd-deploy-status.md)) do
-  người học tạo và đặt vào `.env` (`SVP_ARGOCD_NOTIFY_*`, `make env` không sinh); vào cluster chỉ qua External Secrets thành Secret
+  người học tạo và đặt vào `.env` (`SVP_ARGOCD_NOTIFY_*`, `make env` không sinh); `make eks-secrets` ghi nó vào entry
+  `svp/<env>/argocd-notifications` của AWS Secrets Manager, rồi vào cluster chỉ qua External Secrets thành Secret
   `argocd/argocd-notifications-secret`, khi chart `svp-cluster` bật `externalSecrets.argocdNotifications` (nền tảng `eks`). AI không
   đọc, không in khoá; xoay theo [`docs/runbooks/argocd-notifier-key-rotation.md`](docs/runbooks/argocd-notifier-key-rotation.md).
 - `verify.yml` chỉ dispatch và đọc kết quả khi người học giao ([`docs/reference/ci.md`](docs/reference/ci.md)).

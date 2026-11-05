@@ -13,8 +13,8 @@
 # Secrets; on its own with `make k8s-secrets` (after changing .env; then `make k8s-up` runs the init Jobs again, which
 # set the new passwords in Postgres, the object store and Redpanda, and restarts each service whose Secret changed). A
 # changed password of Redpanda's superuser is set in the running broker before any Secret is applied, and the script
-# stops when the broker does not run to take it (see redpanda_admin below). The object store or Redpanda running with
-# another password than the one now in .env is restarted (see the end of this script).
+# stops when the broker does not run to take it (redpanda_admin of deploy/k8s/lib.sh). The object store or Redpanda
+# running with another password than the one now in .env is restarted (see the end of this script).
 #
 # The GitOps path's staging (a cluster with namespace svp-secrets, which chart svp-cluster makes with its externalSecrets
 # on and deploy/k8s/gitops.sh before Argo CD): there External Secrets Operator builds the same Secrets from the
@@ -26,61 +26,32 @@
 # `make k8s-secrets` finds the mode by the namespace. A cluster of the GitOps path from a revision without External
 # Secrets has no svp-secrets and gets the Secrets themselves, as on the dev path.
 #
-# An EKS cluster (SVP_KUBE_CONTEXT svp-stg or svp-prd: make eks-secrets, or deploy/k8s/gitops.sh of make eks-gitops-up)
-# always has svp-secrets and gets only the source, with two differences:
-#   - the password of Postgres' superuser (source pg-superuser, key SVP_PG_SUPERUSER_PASSWORD as on k3d) is the master
-#     password of the managed Postgres (RDS), which the session's script reads from AWS into SVP_RDS_MASTER_PASSWORD of
-#     this script's environment: required, never read from .env, never written to a file; the user is postgres, as
-#     the ExternalSecret writes it;
-#   - the object store is the managed one by default (SVP_OBJECT_STORE external: its users take the credentials of
-#     their pods), so the sources of the in-cluster store's users (s3-root, s3-users) are not written;
-#     deploy/k8s/gitops.sh sets SVP_OBJECT_STORE to s3.mode of the values Argo CD gives chart svp-cluster.
+# The source of Argo CD Notifications' Secret (entry argocd-notifications) is written only when chart svp-cluster
+# renders its ExternalSecret (externalSecrets.argocdNotifications, on only where the platform turns notifications on):
+# SVP_ARGOCD_NOTIFICATIONS on or off, which deploy/k8s/gitops.sh sets from the values Argo CD gives the chart; unset
+# (make k8s-secrets), on when the cluster has that ExternalSecret. Then SVP_ARGOCD_NOTIFY_APP_ID,
+# SVP_ARGOCD_NOTIFY_INSTALLATION_ID and SVP_ARGOCD_NOTIFY_PRIVATE_KEY_B64 are required in .env (check_notify_key of
+# deploy/k8s/lib.sh). Argo CD's notifications controller reads its Secret whenever it changes: no restart.
 #
-# On either, the source of Argo CD Notifications' Secret (entry argocd-notifications) is written only when chart
-# svp-cluster renders its ExternalSecret (externalSecrets.argocdNotifications, on only where the platform turns
-# notifications on): SVP_ARGOCD_NOTIFICATIONS on or off, which deploy/k8s/gitops.sh sets from the values Argo CD gives
-# the chart; unset (make k8s-secrets, make eks-secrets), on when the cluster has that ExternalSecret. Then
-# SVP_ARGOCD_NOTIFY_APP_ID, SVP_ARGOCD_NOTIFY_INSTALLATION_ID and SVP_ARGOCD_NOTIFY_PRIVATE_KEY_B64 are required in .env
-# (make env cannot make a GitHub App's key, so it writes none of them). Argo CD's notifications controller reads its
-# Secret whenever it changes: no restart.
+# The local cluster only (kc of deploy/k8s/lib.sh refuses an EKS context here): the Secrets of an EKS cluster come
+# from AWS Secrets Manager, whose entries deploy/k8s/aws-secrets.sh writes (make eks-secrets).
 set -euo pipefail
 
 # shellcheck source=deploy/k8s/lib.sh
 . "$(dirname "$0")/lib.sh"
-# Written for a cloud cluster too: kc may reach the EKS cluster SVP_KUBE_CONTEXT names (deploy/k8s/lib.sh).
-kube_cloud_ok=1
+require_k3d "deploy/k8s/secrets.sh (the Secrets of an EKS cluster come from AWS Secrets Manager: make eks-secrets)"
 # The command that runs this script again, and the one that makes the cluster, for the messages.
-if cloud_context; then
-  again="make eks-secrets CONTEXT=$kube_context"
-  make_cluster="make eks-gitops-up CONTEXT=$kube_context"
-  object_store=${SVP_OBJECT_STORE:-external}
-else
-  again="make k8s-secrets"
-  make_cluster="make k8s-up"
-  object_store=${SVP_OBJECT_STORE:-cluster}
-fi
-case $object_store in
-  cluster | external) ;;
-  *) fail "SVP_OBJECT_STORE is '$object_store': cluster (the object store s3 of chart svp-data) or external (a managed one)" ;;
-esac
+again="make k8s-secrets"
+make_cluster="make k8s-up"
 # shellcheck source=deploy/observability/glitchtip/dotenv.sh
 . "$repo_root/deploy/observability/glitchtip/dotenv.sh"
 
 env_file="$repo_root/.env"
 [ -f "$env_file" ] || fail ".env not found; run make env"
 
-# Read every variable below into a shell variable of the same name; on EKS the superuser's password comes from the
-# environment instead (above), checked before .env is read.
-vars=(SVP_PG_SUPERUSER_PASSWORD)
-if cloud_context; then
-  [ -n "${SVP_RDS_MASTER_PASSWORD:-}" ] ||
-    fail "SVP_RDS_MASTER_PASSWORD is not set or empty: on cluster $kube_context the superuser of Postgres is the master user of the managed Postgres, whose password the session's script reads from AWS into it; no Secret was changed"
-  SVP_PG_SUPERUSER_PASSWORD=$SVP_RDS_MASTER_PASSWORD
-  # Kept in this shell alone: no program this script starts gets it in its environment.
-  unset SVP_RDS_MASTER_PASSWORD
-  vars=()
-fi
-vars+=(SVP_USER_MIGRATOR_DB_PASSWORD SVP_USER_APP_DB_PASSWORD SVP_VIDEO_MIGRATOR_DB_PASSWORD SVP_VIDEO_APP_DB_PASSWORD
+# Read every variable below into a shell variable of the same name.
+vars=(SVP_PG_SUPERUSER_PASSWORD
+  SVP_USER_MIGRATOR_DB_PASSWORD SVP_USER_APP_DB_PASSWORD SVP_VIDEO_MIGRATOR_DB_PASSWORD SVP_VIDEO_APP_DB_PASSWORD
   SVP_ENGAGEMENT_MIGRATOR_DB_PASSWORD SVP_ENGAGEMENT_APP_DB_PASSWORD SVP_FEED_MIGRATOR_DB_PASSWORD
   SVP_FEED_APP_DB_PASSWORD SVP_GLITCHTIP_MIGRATOR_DB_PASSWORD SVP_GLITCHTIP_APP_DB_PASSWORD
   SVP_S3_ROOT_PASSWORD SVP_VIDEO_S3_SECRET_KEY SVP_MEDIA_WORKER_S3_SECRET_KEY SVP_PG_BACKUP_S3_SECRET_KEY
@@ -88,23 +59,11 @@ vars+=(SVP_USER_MIGRATOR_DB_PASSWORD SVP_USER_APP_DB_PASSWORD SVP_VIDEO_MIGRATOR
   SVP_KAFKA_ENGAGEMENT_SERVICE_PASSWORD SVP_KAFKA_FEED_SERVICE_PASSWORD SVP_KAFKA_MEDIA_WORKER_PASSWORD
   JWT_SIGNING_KID JWT_SIGNING_KEY JWT_VERIFY_KEYS SVP_GRAFANA_ADMIN_PASSWORD
   GLITCHTIP_SECRET_KEY GLITCHTIP_ADMIN_EMAIL GLITCHTIP_ADMIN_PASSWORD NEXT_SERVER_ACTIONS_ENCRYPTION_KEY)
-missing=
-for v in "${vars[@]}"; do
-  # dotenv_value has named the offending line (never a value) on stderr when it fails.
-  val=$(dotenv_value "$env_file" "$v") || fail "read $env_file"
-  [ -n "$val" ] || missing="$missing $v"
-  printf -v "$v" '%s' "$val"
-done
-[ -z "$missing" ] || fail ".env lacks or has empty:$missing; run make env, then this again"
-# Next decodes the Server Action key with atob and imports it as a raw AES-GCM key the first time an action needs it;
-# make env writes 32 bytes (AES-256) in standard base64. A value edited into another shape stops the script here,
-# rather than failing in the web pods later, on some request. The check is on the text, not on what base64 -d makes of
-# it: macOS base64 -d also decodes the URL-safe alphabet (- and _), on which atob throws.
-[[ $NEXT_SERVER_ACTIONS_ENCRYPTION_KEY =~ ^[A-Za-z0-9+/]{43}=$ ]] ||
-  fail "NEXT_SERVER_ACTIONS_ENCRYPTION_KEY in .env is not the standard base64 of 32 bytes; empty it and run make env, then this again"
+dotenv_read "$env_file" "${vars[@]}"
+[ -z "$dotenv_missing" ] || fail ".env lacks or has empty:$dotenv_missing; run make env, then this again"
+check_next_key
 # Telegram is optional: the learner fills in both variables by hand, and without them alerts stay in the UI.
-SVP_ALERT_TELEGRAM_BOT_TOKEN=$(dotenv_value "$env_file" SVP_ALERT_TELEGRAM_BOT_TOKEN) || fail "read $env_file"
-SVP_ALERT_TELEGRAM_CHAT_ID=$(dotenv_value "$env_file" SVP_ALERT_TELEGRAM_CHAT_ID) || fail "read $env_file"
+dotenv_read "$env_file" SVP_ALERT_TELEGRAM_BOT_TOKEN SVP_ALERT_TELEGRAM_CHAT_ID
 
 for ns in svp-data svp svp-obs; do
   kc get namespace "$ns" >/dev/null 2>&1 || fail "namespace $ns not found; run $make_cluster"
@@ -112,13 +71,9 @@ done
 source_ns=svp-secrets
 gitops=
 if kc get namespace "$source_ns" >/dev/null 2>&1; then gitops=yes; fi
-# An EKS cluster takes only the sources: its Secrets themselves are External Secrets Operator's to write.
-[ -n "$gitops" ] || ! cloud_context ||
-  fail "cluster $kube_context has no namespace $source_ns, for the source Secrets of External Secrets Operator; run $make_cluster first"
 
 # Argo CD Notifications (see the header): the GitHub App that writes commit statuses on svp-gitops, checked before
-# anything is applied. Its ids are integers; its private key is the standard base64 of the PEM file on one line, which
-# the ExternalSecret decodes. The checks read the values without printing them.
+# anything is applied.
 notify=off
 if [ -n "$gitops" ]; then
   case ${SVP_ARGOCD_NOTIFICATIONS:-} in
@@ -127,24 +82,7 @@ if [ -n "$gitops" ]; then
     *) fail "SVP_ARGOCD_NOTIFICATIONS is '$SVP_ARGOCD_NOTIFICATIONS': on or off" ;;
   esac
 fi
-if [ "$notify" = on ]; then
-  missing=
-  for v in SVP_ARGOCD_NOTIFY_APP_ID SVP_ARGOCD_NOTIFY_INSTALLATION_ID SVP_ARGOCD_NOTIFY_PRIVATE_KEY_B64; do
-    val=$(dotenv_value "$env_file" "$v") || fail "read $env_file"
-    [ -n "$val" ] || missing="$missing $v"
-    printf -v "$v" '%s' "$val"
-  done
-  [ -z "$missing" ] ||
-    fail ".env lacks or has empty:$missing, which Argo CD Notifications needs (chart svp-cluster has externalSecrets.argocdNotifications on): set them from the GitHub App svp-argocd-notifier (.env.example), then run $again; no Secret was changed"
-  [[ $SVP_ARGOCD_NOTIFY_APP_ID =~ ^[0-9]+$ && $SVP_ARGOCD_NOTIFY_INSTALLATION_ID =~ ^[0-9]+$ ]] ||
-    fail "SVP_ARGOCD_NOTIFY_APP_ID and SVP_ARGOCD_NOTIFY_INSTALLATION_ID in .env must be the App's and its installation's numeric ids; no Secret was changed"
-  # Whole groups of four characters, padded: b64dec of the ExternalSecret (Go's standard encoding) refuses anything
-  # else and puts its error text in the Secret, where base64 -d here would decode a value cut short. Then the whole
-  # key, its END line included, as openssl reads it from the pipe; one with a passphrase fails, as Argo CD has none.
-  [[ $SVP_ARGOCD_NOTIFY_PRIVATE_KEY_B64 =~ ^[A-Za-z0-9+/]+={0,2}$ ]] && ((${#SVP_ARGOCD_NOTIFY_PRIVATE_KEY_B64} % 4 == 0)) &&
-    printf '%s' "$SVP_ARGOCD_NOTIFY_PRIVATE_KEY_B64" | base64 -d 2>/dev/null | openssl pkey -noout -passin pass: >/dev/null 2>&1 ||
-    fail "SVP_ARGOCD_NOTIFY_PRIVATE_KEY_B64 in .env is not the standard base64 of a PEM private key on one line (base64 < key.pem | tr -d '\\n'); no Secret was changed"
-fi
+if [ "$notify" = on ]; then check_notify_key "$env_file" "$again"; fi
 
 manifests() {
   # Superuser of the Postgres svp-pg: CloudNativePG sets its password from this Secret, and the pg-bootstrap Job logs
@@ -338,13 +276,11 @@ source_manifests() {
     SVP_FEED_APP_DB_PASSWORD="$SVP_FEED_APP_DB_PASSWORD" \
     SVP_GLITCHTIP_MIGRATOR_DB_PASSWORD="$SVP_GLITCHTIP_MIGRATOR_DB_PASSWORD" \
     SVP_GLITCHTIP_APP_DB_PASSWORD="$SVP_GLITCHTIP_APP_DB_PASSWORD"
-  if [ "$object_store" = cluster ]; then
-    secret "$source_ns" s3-root Opaque SVP_S3_ROOT_PASSWORD="$SVP_S3_ROOT_PASSWORD"
-    secret "$source_ns" s3-users Opaque \
-      SVP_VIDEO_S3_SECRET_KEY="$SVP_VIDEO_S3_SECRET_KEY" \
-      SVP_MEDIA_WORKER_S3_SECRET_KEY="$SVP_MEDIA_WORKER_S3_SECRET_KEY" \
-      SVP_PG_BACKUP_S3_SECRET_KEY="$SVP_PG_BACKUP_S3_SECRET_KEY"
-  fi
+  secret "$source_ns" s3-root Opaque SVP_S3_ROOT_PASSWORD="$SVP_S3_ROOT_PASSWORD"
+  secret "$source_ns" s3-users Opaque \
+    SVP_VIDEO_S3_SECRET_KEY="$SVP_VIDEO_S3_SECRET_KEY" \
+    SVP_MEDIA_WORKER_S3_SECRET_KEY="$SVP_MEDIA_WORKER_S3_SECRET_KEY" \
+    SVP_PG_BACKUP_S3_SECRET_KEY="$SVP_PG_BACKUP_S3_SECRET_KEY"
   secret "$source_ns" kafka-admin Opaque SVP_KAFKA_ADMIN_PASSWORD="$SVP_KAFKA_ADMIN_PASSWORD"
   secret "$source_ns" kafka-users Opaque \
     SVP_KAFKA_KEDA_PASSWORD="$SVP_KAFKA_KEDA_PASSWORD" \
@@ -372,69 +308,9 @@ source_manifests() {
   fi
 }
 
-# Redpanda, unlike the object store, keeps its superuser svp-admin with its password in its own data: it creates it
-# from Secret redpanda-bootstrap once, when the cluster forms, and never reads that Secret again. Every container that
-# logs in as svp-admin (the broker's rpk, the sidecar that keeps the superusers in step, the redpanda-init Job) takes
-# the password from that Secret when it starts. A changed password applied to the Secret alone would lock all of them
-# out as soon as they start again, with the password Redpanda knows gone from everywhere; restarting the object store,
-# which reads its root password from its environment at every start, is all the store needs (below).
-#
-# redpanda_admin: makes Redpanda take the password in .env for svp-admin before any Secret is applied. Inside the
-# broker container it logs in with that password; when that fails, with the one of Secret redpanda-bootstrap, then
-# with the one the container started with, and sets the new one. It stops the script, before anything is applied,
-# when the password changes and no broker runs to take it. The passwords go to the container on stdin; the new one is
-# on rpk's command line inside that container only, as in the redpanda-init Job.
-redpanda_admin() {
-  local current ready err rc=0
-  # No data volume yet: the cluster that forms takes svp-admin from the Secret applied below.
-  kc -n svp-data get pvc datadir-redpanda-0 >/dev/null 2>&1 || return 0
-  current=$(kc -n svp-data get secret redpanda-bootstrap -o jsonpath='{.data.password}' 2>/dev/null | base64 -d) ||
-    current=
-  # The broker container is ready once the Admin API reports it ready (its startup probe); the sidecar's readiness
-  # needs svp-admin's login, so it is not waited for.
-  ready=$(kc -n svp-data get pod redpanda-0 \
-    -o jsonpath='{.status.containerStatuses[?(@.name=="redpanda")].ready}' 2>/dev/null) || true
-  if [ "$ready" != true ]; then
-    # Nothing changes for Redpanda when the Secret already holds this password. A missing Secret is applied all the
-    # same: without it the broker cannot start at all.
-    if [ -z "$current" ] || [ "$current" = "$SVP_KAFKA_ADMIN_PASSWORD" ]; then return 0; fi
-    fail "SVP_KAFKA_ADMIN_PASSWORD in .env differs from Secret redpanda-bootstrap and broker redpanda-0 is not running to take it; no Secret was changed. Wait until it runs (scaled to 0: kubectl --context $kube_context -n svp-data scale statefulset redpanda --replicas=1) and run $again again, or put the previous value back in .env"
-  fi
-  # Exit 10 inside the container means "set", 3 "no password logs in", 4 "the update failed", 5 "the Admin API gave
-  # no answer on the password" (refused, timed out, anything but a rejected login); rpk's error, which holds no
-  # password, comes back on stderr.
-  err=$(printf '%s\n%s\n' "$SVP_KAFKA_ADMIN_PASSWORD" "$current" |
-    kc -n svp-data exec -i redpanda-0 -c redpanda -- bash -c '
-      IFS= read -r new; IFS= read -r secret
-      # The Admin API answers a superuser only. A wrong password is the HTTP 401 rpk reports as "Unauthorized"; any
-      # other failure says nothing about the password, so it stops here: trying the next password could not tell
-      # more, and only exit 3 may suggest starting over with new data.
-      login() {
-        out=$(RPK_PASS=$1 rpk security user list 2>&1) && return 0
-        case $out in *Unauthorized*) return 1 ;; esac
-        printf "%s\n" "$out" >&2
-        exit 5
-      }
-      login "$new" && exit 0
-      for old in "$secret" "$RPK_PASS"; do
-        if [ -n "$old" ] && login "$old"; then
-          out=$(RPK_PASS=$old rpk security user update svp-admin --new-password "$new" --mechanism SCRAM-SHA-256 2>&1) &&
-            login "$new" && exit 10
-          printf "%s\n" "$out" >&2
-          exit 4
-        fi
-      done
-      printf "%s\n" "$out" >&2
-      exit 3' 2>&1) || rc=$?
-  case $rc in
-    0) ;;
-    10) ok "password of svp-admin set in Redpanda from .env (logged in with the previous one)" ;;
-    3) fail "Redpanda takes none of these passwords for svp-admin: the one in .env, the one of Secret redpanda-bootstrap, the one redpanda-0 started with; no Secret was changed. Put the previous one back in .env, or start over with new data ($(if cloud_context; then echo "a new cluster $kube_context"; else echo "make k8s-down && make k8s-up"; fi)). rpk: $err" ;;
-    4) fail "set svp-admin's password in Redpanda from .env; no Secret was changed. rpk: $err" ;;
-    5) fail "Redpanda's Admin API in redpanda-0 did not answer whether svp-admin's password is right (not a rejected password); no Secret was changed. Run $again again once the broker answers. rpk: $err" ;;
-    *) fail "log in to Redpanda as svp-admin inside redpanda-0: $err" ;;
-  esac
-}
+# A changed password of Redpanda's superuser goes into the running broker before any Secret is applied
+# (redpanda_admin of deploy/k8s/lib.sh); restarting the object store, which reads its root password from its
+# environment at every start, is all the store needs (below).
 redpanda_admin
 
 if [ -n "$gitops" ]; then
@@ -442,11 +318,7 @@ if [ -n "$gitops" ]; then
     fail "apply the source Secrets of namespace $source_ns"
   notify_source=
   if [ "$notify" = on ]; then notify_source=", argocd-notifications"; fi
-  if [ "$object_store" = cluster ]; then
-    ok "source Secrets of $source_ns applied from .env: pg-superuser, pg-roles, s3-root, s3-users, kafka-admin, kafka-users, jwt-signing, jwt-verify, web, obs$notify_source"
-  else
-    ok "source Secrets of $source_ns applied$(if cloud_context; then echo " (pg-superuser from SVP_RDS_MASTER_PASSWORD, the others from .env)"; else echo " from .env"; fi): pg-superuser, pg-roles, kafka-admin, kafka-users, jwt-signing, jwt-verify, web, obs$notify_source; none for the users of an object store in the cluster (SVP_OBJECT_STORE=external: a managed store)"
-  fi
+  ok "source Secrets of $source_ns applied from .env: pg-superuser, pg-roles, s3-root, s3-users, kafka-admin, kafka-users, jwt-signing, jwt-verify, web, obs$notify_source"
   if ! kc -n "$source_ns" get secret glitchtip-runtime >/dev/null 2>&1; then
     secret "$source_ns" glitchtip-runtime Opaque SENTRY_DSN= SENTRY_AUTH_TOKEN= SENTRY_SOURCEMAPS_TOKEN= |
       kc create -f - >/dev/null || fail "create the empty source Secret $source_ns/glitchtip-runtime"

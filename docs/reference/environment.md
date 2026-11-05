@@ -16,8 +16,14 @@ Loại tài liệu (Diátaxis): **reference**, tra cứu khi cần một lệnh 
 - Người học tự đặt, `make env` không sinh (không tạo được khoá của GitHub App), chỉ cho cluster EKS có Argo CD Notifications
   ([`eks.md`](eks.md), [ADR-0032](../adr/0032-argocd-deploy-status.md)): `SVP_ARGOCD_NOTIFY_APP_ID`, `SVP_ARGOCD_NOTIFY_INSTALLATION_ID`
   (số của App `svp-argocd-notifier` và bản cài của nó trên `svp-gitops`), `SVP_ARGOCD_NOTIFY_PRIVATE_KEY_B64` (khoá riêng của App,
-  `base64 < key.pem | tr -d '\n'`: `.env` không nhận giá trị nhiều dòng). Chỉ `deploy/k8s/secrets.sh` đọc, khi chart `svp-cluster` bật
+  `base64 < key.pem | tr -d '\n'`: `.env` không nhận giá trị nhiều dòng). `deploy/k8s/aws-secrets.sh` (`make eks-secrets`) đọc để ghi
+  entry `argocd-notifications` của Secrets Manager, `deploy/k8s/secrets.sh` chỉ đọc khi chart `svp-cluster` của cluster k3d bật
   `externalSecrets.argocdNotifications`; compose không đọc.
+- Không ở `.env`, đặt trong terminal của buổi AWS (không commit), cho `make eks-secrets` và `make eks-glitchtip-init`
+  ([`eks.md`](eks.md)): `AWS_PROFILE` (profile SSO của account env: `anhnv-stg`, `anhnv-prd`), `SVP_AWS_STG_ACCOUNT_ID`,
+  `SVP_AWS_PRD_ACCOUNT_ID` (id 12 chữ số của account env; script dừng trước mọi lệnh ghi khi account của `AWS_PROFILE` khác biến
+  của env đó), `SVP_RDS_MASTER_PASSWORD` (chỉ `eks-secrets`: mật khẩu master của RDS, script buổi của `svp-infra` đọc từ AWS, thành
+  key `SVP_PG_SUPERUSER_PASSWORD` của entry `pg-superuser`; không bao giờ đọc từ `.env`).
 - Quy tắc đọc `.env` (`deploy/observability/glitchtip/dotenv.sh`, dùng chung cho `make env`, `make test-stack`,
   `make glitchtip-init`, bootstrap Postgres và script diễn tập): mỗi dòng là dòng trống, comment `#` ở cột 1, hoặc
   `KEY=value` với `KEY` ở cột 1 và `=` ngay sau; giá trị trơn (ASCII in được, không khoảng trắng, nháy, `\`, `$`) hoặc nằm

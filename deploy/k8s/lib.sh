@@ -41,7 +41,7 @@ fail() {
 # otherwise SVP_KUBE_CONTEXT, which may only name the local cluster or an EKS cluster of the project by the alias
 # `aws eks update-kubeconfig --alias` gives it (svp-stg, svp-prd), never an ARN or another cluster of the kubeconfig.
 # Checked as this file is sourced, before any command. A cloud cluster is reached only by the scripts written for it
-# (deploy/k8s/gitops.sh, secrets.sh, glitchtip-init.sh), each of which sets kube_cloud_ok=1: kc and hc of any other
+# (deploy/k8s/aws-secrets.sh, glitchtip-init.sh), each of which sets kube_cloud_ok=1: kc and hc of any other
 # script refuse it (the dev path, the drills, which build, reset or measure a local cluster), and so do the helpers of
 # the local cluster alone (k3d_, ensure_registry, ensure_cluster, export_ca), whoever calls them.
 kube_context=${SVP_KUBE_CONTEXT-k3d-svp}
@@ -319,6 +319,162 @@ es_force_sync() {
   done
 }
 
+# The values of .env that become Secrets, shared by deploy/k8s/secrets.sh (a lab cluster) and deploy/k8s/aws-secrets.sh
+# (the entries of AWS Secrets Manager of an EKS cluster). The caller sources deploy/observability/glitchtip/dotenv.sh,
+# whose strict rule they are read with.
+#
+# dotenv_read FILE VAR...: reads each VAR of FILE into a shell variable of the same name, and the names of those missing
+# or empty into dotenv_missing (space first, empty when none). Fails on a FILE that breaks the rule; dotenv_value has
+# then named the offending line (never a value) on stderr.
+dotenv_read() {
+  local file=$1 v val
+  shift
+  dotenv_missing=
+  for v in "$@"; do
+    val=$(dotenv_value "$file" "$v") || fail "read $file"
+    [ -n "$val" ] || dotenv_missing="$dotenv_missing $v"
+    printf -v "$v" '%s' "$val"
+  done
+}
+
+# check_next_key: NEXT_SERVER_ACTIONS_ENCRYPTION_KEY, as read by dotenv_read. Next decodes the Server Action key with
+# atob and imports it as a raw AES-GCM key the first time an action needs it; make env writes 32 bytes (AES-256) in
+# standard base64. A value edited into another shape stops the script here, rather than failing in the web pods later,
+# on some request. The check is on the text, not on what base64 -d makes of it: macOS base64 -d also decodes the
+# URL-safe alphabet (- and _), on which atob throws.
+check_next_key() {
+  [[ $NEXT_SERVER_ACTIONS_ENCRYPTION_KEY =~ ^[A-Za-z0-9+/]{43}=$ ]] ||
+    fail "NEXT_SERVER_ACTIONS_ENCRYPTION_KEY in .env is not the standard base64 of 32 bytes; empty it and run make env, then this again"
+}
+
+# check_notify_key FILE AGAIN: reads the GitHub App of Argo CD Notifications (it writes commit statuses on svp-gitops)
+# from .env FILE into SVP_ARGOCD_NOTIFY_APP_ID, SVP_ARGOCD_NOTIFY_INSTALLATION_ID and SVP_ARGOCD_NOTIFY_PRIVATE_KEY_B64,
+# and checks them; on a failure the message names AGAIN, the command to run once .env is fixed (make env cannot make a
+# GitHub App's key, so it writes none of them). Its ids are integers; its private key is the standard base64 of the PEM
+# file on one line, which the ExternalSecret decodes. The checks read the values without printing them.
+check_notify_key() {
+  dotenv_read "$1" SVP_ARGOCD_NOTIFY_APP_ID SVP_ARGOCD_NOTIFY_INSTALLATION_ID SVP_ARGOCD_NOTIFY_PRIVATE_KEY_B64
+  [ -z "$dotenv_missing" ] ||
+    fail ".env lacks or has empty:$dotenv_missing, which Argo CD Notifications needs (chart svp-cluster has externalSecrets.argocdNotifications on): set them from the GitHub App svp-argocd-notifier (.env.example), then run $2; no Secret was changed"
+  [[ $SVP_ARGOCD_NOTIFY_APP_ID =~ ^[0-9]+$ && $SVP_ARGOCD_NOTIFY_INSTALLATION_ID =~ ^[0-9]+$ ]] ||
+    fail "SVP_ARGOCD_NOTIFY_APP_ID and SVP_ARGOCD_NOTIFY_INSTALLATION_ID in .env must be the App's and its installation's numeric ids; no Secret was changed"
+  # Whole groups of four characters, padded: b64dec of the ExternalSecret (Go's standard encoding) refuses anything
+  # else and puts its error text in the Secret, where base64 -d here would decode a value cut short. Then the whole
+  # key, its END line included, as openssl reads it from the pipe; one with a passphrase fails, as Argo CD has none.
+  [[ $SVP_ARGOCD_NOTIFY_PRIVATE_KEY_B64 =~ ^[A-Za-z0-9+/]+={0,2}$ ]] && ((${#SVP_ARGOCD_NOTIFY_PRIVATE_KEY_B64} % 4 == 0)) &&
+    printf '%s' "$SVP_ARGOCD_NOTIFY_PRIVATE_KEY_B64" | base64 -d 2>/dev/null | openssl pkey -noout -passin pass: >/dev/null 2>&1 ||
+    fail "SVP_ARGOCD_NOTIFY_PRIVATE_KEY_B64 in .env is not the standard base64 of a PEM private key on one line (base64 < key.pem | tr -d '\\n'); no Secret was changed"
+}
+
+# Redpanda, unlike the object store, keeps its superuser svp-admin with its password in its own data: it creates it
+# from Secret redpanda-bootstrap once, when the cluster forms, and never reads that Secret again. Every container that
+# logs in as svp-admin (the broker's rpk, the sidecar that keeps the superusers in step, the redpanda-init Job) takes
+# the password from that Secret when it starts. A changed password applied to the Secret (or its source) alone would
+# lock all of them out as soon as they start again, with the password Redpanda knows gone from everywhere.
+#
+# redpanda_admin: makes Redpanda take SVP_KAFKA_ADMIN_PASSWORD (as read from .env) for svp-admin before any Secret or
+# source of one is written: first step of a changed secret, on a lab cluster (deploy/k8s/secrets.sh) and on EKS
+# (deploy/k8s/aws-secrets.sh) alike. Inside the broker container it logs in with that password; when that fails, with
+# the one of Secret redpanda-bootstrap, then with the one the container started with, and sets the new one. It stops
+# the script, before anything is written, when the password changes and no broker runs to take it; the messages name
+# $again, the command that runs the script again. The passwords go to the container on stdin; the new one is on rpk's
+# command line inside that container only, as in the redpanda-init Job.
+redpanda_admin() {
+  local current ready err rc=0
+  # No data volume yet: the cluster that forms takes svp-admin from the Secret written now.
+  kc -n svp-data get pvc datadir-redpanda-0 >/dev/null 2>&1 || return 0
+  current=$(kc -n svp-data get secret redpanda-bootstrap -o jsonpath='{.data.password}' 2>/dev/null | base64 -d) ||
+    current=
+  # The broker container is ready once the Admin API reports it ready (its startup probe); the sidecar's readiness
+  # needs svp-admin's login, so it is not waited for.
+  ready=$(kc -n svp-data get pod redpanda-0 \
+    -o jsonpath='{.status.containerStatuses[?(@.name=="redpanda")].ready}' 2>/dev/null) || true
+  if [ "$ready" != true ]; then
+    # Nothing changes for Redpanda when the Secret already holds this password. A missing Secret is written all the
+    # same: without it the broker cannot start at all.
+    if [ -z "$current" ] || [ "$current" = "$SVP_KAFKA_ADMIN_PASSWORD" ]; then return 0; fi
+    fail "SVP_KAFKA_ADMIN_PASSWORD in .env differs from Secret redpanda-bootstrap and broker redpanda-0 is not running to take it; no Secret was changed. Wait until it runs (scaled to 0: kubectl --context $kube_context -n svp-data scale statefulset redpanda --replicas=1) and run $again again, or put the previous value back in .env"
+  fi
+  # Exit 10 inside the container means "set", 3 "no password logs in", 4 "the update failed", 5 "the Admin API gave
+  # no answer on the password" (refused, timed out, anything but a rejected login); rpk's error, which holds no
+  # password, comes back on stderr.
+  err=$(printf '%s\n%s\n' "$SVP_KAFKA_ADMIN_PASSWORD" "$current" |
+    kc -n svp-data exec -i redpanda-0 -c redpanda -- bash -c '
+      IFS= read -r new; IFS= read -r secret
+      # The Admin API answers a superuser only. A wrong password is the HTTP 401 rpk reports as "Unauthorized"; any
+      # other failure says nothing about the password, so it stops here: trying the next password could not tell
+      # more, and only exit 3 may suggest starting over with new data.
+      login() {
+        out=$(RPK_PASS=$1 rpk security user list 2>&1) && return 0
+        case $out in *Unauthorized*) return 1 ;; esac
+        printf "%s\n" "$out" >&2
+        exit 5
+      }
+      login "$new" && exit 0
+      for old in "$secret" "$RPK_PASS"; do
+        if [ -n "$old" ] && login "$old"; then
+          out=$(RPK_PASS=$old rpk security user update svp-admin --new-password "$new" --mechanism SCRAM-SHA-256 2>&1) &&
+            login "$new" && exit 10
+          printf "%s\n" "$out" >&2
+          exit 4
+        fi
+      done
+      printf "%s\n" "$out" >&2
+      exit 3' 2>&1) || rc=$?
+  case $rc in
+    0) ;;
+    10) ok "password of svp-admin set in Redpanda from .env (logged in with the previous one)" ;;
+    3) fail "Redpanda takes none of these passwords for svp-admin: the one in .env, the one of Secret redpanda-bootstrap, the one redpanda-0 started with; no Secret was changed. Put the previous one back in .env, or start over with new data ($(if cloud_context; then echo "a new cluster $kube_context"; else echo "make k8s-down && make k8s-up"; fi)). rpk: $err" ;;
+    4) fail "set svp-admin's password in Redpanda from .env; no Secret was changed. rpk: $err" ;;
+    5) fail "Redpanda's Admin API in redpanda-0 did not answer whether svp-admin's password is right (not a rejected password); no Secret was changed. Run $again again once the broker answers. rpk: $err" ;;
+    *) fail "log in to Redpanda as svp-admin inside redpanda-0: $err" ;;
+  esac
+}
+
+# The source of the Secrets of an EKS cluster svp-<env>: entries svp/<env>/<entry> of AWS Secrets Manager in the
+# region below, whose shells the infrastructure repository makes, with no value (its module external-secrets), and
+# whose values deploy/k8s/aws-secrets.sh and glitchtip-init.sh write, as the learner, with the AWS profile of that
+# environment's account. Every aws call names that profile and the region on its command line (aws_), so neither the
+# profile's region nor credentials of the environment (AWS_ACCESS_KEY_ID...) take over, and no pager waits for a key
+# (AWS_PAGER empty). No value is ever an argument:
+# each entry's JSON goes to put-secret-value as file://<file> of a folder of mode 700 that the caller removes.
+aws_region=ap-southeast-1
+aws_() { AWS_PAGER= aws --profile "$AWS_PROFILE" --region "$aws_region" "$@"; }
+
+# aws_setup: for the EKS cluster kube_context (svp-<env>), sets aws_env and aws_prefix (svp/<env>/), checks that
+# AWS_PROFILE is set and that its account is the one of the environment, SVP_AWS_<ENV>_ACCOUNT_ID of the terminal of the
+# session (SVP_AWS_STG_ACCOUNT_ID, SVP_AWS_PRD_ACCOUNT_ID: never in a file), before any entry is read or written, and
+# makes aws_dir, the folder of the files of put-secret-value. The caller removes aws_dir on exit.
+aws_setup() {
+  local var want got
+  aws_env=${kube_context#svp-}
+  aws_prefix=svp/$aws_env/
+  [ -n "${AWS_PROFILE:-}" ] ||
+    fail "AWS_PROFILE is not set: the AWS profile of the account of $aws_env (AWS_PROFILE=anhnv-$aws_env make ...); nothing was written"
+  var=SVP_AWS_$(printf '%s' "$aws_env" | tr '[:lower:]' '[:upper:]')_ACCOUNT_ID
+  want=${!var:-}
+  [[ $want =~ ^[0-9]{12}$ ]] ||
+    fail "$var is not the 12-digit id of the account of $aws_env (export it in the terminal of the session); nothing was written"
+  got=$(aws_ sts get-caller-identity --query Account --output text) ||
+    fail "read the account of AWS profile $AWS_PROFILE (aws sso login --profile $AWS_PROFILE?); nothing was written"
+  [ "$got" = "$want" ] ||
+    fail "AWS profile $AWS_PROFILE is of account $got, not of $aws_env ($var=$want); nothing was written"
+  ok "AWS profile $AWS_PROFILE: account of $aws_env ($var), region $aws_region"
+  aws_dir=$(mktemp -d) && chmod 700 "$aws_dir" || fail "create a temporary directory"
+}
+
+# aws_put_entry ENTRY: writes a new value (version AWSCURRENT) of entry svp/<env>/ENTRY, a JSON map of the KEY and
+# VALUE lines on stdin (KEY, then its VALUE, one line each; a value is never of several lines). jq builds the map from
+# the lines it reads, so no value is on its command line either; the file is removed once written.
+aws_put_entry() {
+  local entry=$aws_prefix$1 file=$aws_dir/$1.json
+  (umask 077 && jq -nR '[inputs] as $l | [range(0; $l | length; 2) | {key: $l[.], value: ($l[. + 1] // "")}]
+    | from_entries' >"$file") || fail "write the value of entry $entry"
+  aws_ secretsmanager put-secret-value --secret-id "$entry" --secret-string "file://$file" \
+    --query VersionId --output text >/dev/null || fail "write entry $entry of AWS Secrets Manager"
+  rm -f "$file"
+}
+
 # The deployment configuration lives in its own repository, svp-gitops: base/ (the values of every component, the only
 # layer the dev path reads), envs/<env>/ (overlays, charts.yaml, images/) and argocd/ (components.json, the root chart,
 # AppProject, Argo CD's own install). Every script reads it through gitops_dir; this repository holds the charts.
@@ -484,11 +640,14 @@ web_clone() {
 }
 
 # argocd_root_app REPO_URL REVISION ENV CHART_REPO_URL: prints the root Application svp-root of the GitOps path, as
-# JSON for `kc apply -f -`: chart argocd/apps of svp-gitops (REPO_URL) at REVISION, which hands the same revision to
-# every Application it makes for its values files (its value targetRevision), reads the charts of this repository from
-# CHART_REPO_URL at the commit envs/ENV/charts.yaml pins (its value chartRepoURL) and adds the overlays of environment
-# ENV (its value env, a directory of envs/). REVISION is a full ref (refs/heads/<branch>) or a commit, never a short
-# name: Argo CD fetches every branch and tag and may resolve a short name to a tag of that name, so a tag named main
+# JSON for `kc apply -f -`: chart argocd/root of svp-gitops (REPO_URL) at REVISION, the first of the two levels of the
+# root. It reads envs/ENV/ (its value env, a directory of envs/) and renders Application svp-apps, chart argocd/apps at
+# the commit gitopsRevision of envs/ENV/charts.yaml pins, or at REVISION when the environment pins none (its value
+# targetRevision, which svp-apps hands to every Application it makes for its values files), with the charts of this
+# repository from CHART_REPO_URL at the commit charts.yaml pins (its value chartRepoURL) and the overlays of ENV. The
+# root of an EKS cluster is the same Application, made by the bootstrap of the infrastructure repository (an
+# ApplicationSet over the cluster's Secret) at refs/heads/main. REVISION is a full ref (refs/heads/<branch>) or a
+# commit, never a short name: Argo CD fetches every branch and tag and may resolve a short name to a tag of that name, so a tag named main
 # pushed with a stolen token could be deployed. Built by jq from --arg values, so the revision and the environment are always JSON
 # strings: a branch named 2026, true or 1e3 written into YAML as it is would be read as a number or a boolean, which the
 # Application CRD refuses (targetRevision is a string).
@@ -500,7 +659,7 @@ web_clone() {
 # The root compares with Argo CD's default diff, not with the server-side diff the controller uses for every other
 # Application (base/argo-cd.yaml of svp-gitops): the root applies its child Applications client-side (no
 # ServerSideApply=true), so their fields belong to a field manager of operation Update. A server-side dry run is an
-# Apply, which never removes a field another manager entry owns: a field deleted from chart argocd/apps (an
+# Apply, which never removes a field another manager entry owns: a field deleted from chart argocd/root (an
 # ignoreDifferences, a retry block, managedNamespaceMetadata) would stay in the predicted and the live Application
 # alike, so the root would stay Synced and the child keep the field for good. The default diff compares with the
 # kubectl.kubernetes.io/last-applied-configuration annotation of a client-side apply and sees the deletion. The
@@ -520,7 +679,7 @@ argocd_root_app() {
       source: {
         repoURL: $repo,
         targetRevision: $rev,
-        path: "argocd/apps",
+        path: "argocd/root",
         helm: {valuesObject: {targetRevision: $rev, env: $env, chartRepoURL: $charts}}
       },
       destination: {server: "https://kubernetes.default.svc", namespace: "argocd"},

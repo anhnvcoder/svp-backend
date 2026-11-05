@@ -110,13 +110,14 @@ Loại tài liệu (Diátaxis): **reference**, tra cứu khi cần một lệnh 
   canary rồi dừng, chờ Rollout `Healthy` có hạn; abort hay inconclusive thì FAIL kèm lệnh gỡ (**LOCAL LAB ONLY**: traffic
   xoá khoá rate limit đăng ký ở Valkey db 10 của cluster). `k8s-down` xoá cluster và registry (volume compose và Postgres
   native không bị đụng). `k8s-status` in container, node và pod mọi namespace trừ `kube-system`.
-- `make k8s-secrets`, `make k8s-glitchtip-init`, `make k8s-ca`: `k8s-secrets` tạo/cập nhật Secret từ `.env` bằng
+- `make k8s-secrets`, `make k8s-glitchtip-init`, `make k8s-ca`: chỉ cluster k3d (`secrets.sh`, `gitops.sh` từ chối context EKS; nguồn
+  Secret trên EKS là Secrets Manager, `make eks-secrets` ở [`eks.md`](eks.md)). `k8s-secrets` tạo/cập nhật Secret từ `.env` bằng
   `kubectl apply` qua stdin, không in giá trị (gồm `svp/web-env` chỉ chứa `NEXT_SERVER_ACTIONS_ENCRYPTION_KEY`, phải là base64
   chuẩn của 32 byte, sai dạng thì dừng; `svp/<service>-env` của gateway và bốn service gRPC có `JWT_VERIFY_KEYS` (khoá công khai,
   [ADR-0042](../adr/0042-caller-identity-grpc.md)), khoá ký chỉ ở `user-service-env`; ExternalSecret của đường GitOps dựng cùng
   key từ nguồn `jwt-verify`; `svp-data/pg-backup-s3` là đăng nhập của user `svp-pg-backup` của object store, chỉ sidecar của
   plugin Barman Cloud trong pod Postgres đọc); mật khẩu superuser Redpanda đổi thì đặt vào broker đang chạy trước khi apply
-  (cần `redpanda-0` chạy; Admin API không trả lời hay không nhận mật khẩu nào thì dừng, không đổi Secret nào), object store
+  (`redpanda_admin` của `deploy/k8s/lib.sh`, dùng chung với `make eks-secrets`; cần `redpanda-0` chạy; Admin API không trả lời hay không nhận mật khẩu nào thì dừng, không đổi Secret nào), object store
   (Secret `s3-root`, `s3-users`) hay Redpanda chạy với mật khẩu khác `.env` thì restart; sau đó `make k8s-up` để Job init đặt mật khẩu mới và restart service
   có Secret đổi (cluster GitOps: các bước tay ở đầu `deploy/k8s/gitops.sh`). **Hai chế độ, chọn theo namespace `svp-secrets`:**
   cluster dev (không có namespace đó) nhận chính các Secret như trên; cluster GitOps dựng từ revision mà overlay stg bật
@@ -190,7 +191,10 @@ Loại tài liệu (Diátaxis): **reference**, tra cứu khi cần một lệnh 
   đó; namespace `argocd`, PSA `restricted`) với plugin Gateway API
   của Argo Rollouts theo kiến trúc node (`nodeArch` đọc từ node, cluster lẫn kiến trúc thì dừng; bản amd64 ở
   `base/argo-rollouts-amd64.yaml`, cùng file `install.sh` của đường dev đọc), AppProject `svp` và `default` đã khoá
-  (`argocd/project.yaml`), root `svp-root` (`env=stg`); chờ mọi Application `Synced`, Healthy, sync cuối `Succeeded` (lỗi còn sau
+  (`argocd/project.yaml`), root `svp-root` (`env=stg`, chart `argocd/root` ở commit đã kiểm, render đúng một Application `svp-apps`
+  của chart `argocd/apps`; `follow_branch` đổi `targetRevision` của root và value `targetRevision` của nó, revision của `svp-apps`
+  khi env không ghim `gitopsRevision`); chờ mọi Application
+  (`svp-root`, `svp-apps` và mỗi component) `Synced`, Healthy, sync cuối `Succeeded` (lỗi còn sau
   180 s thì dừng). Hết hạn chờ thì in trạng thái từng Application, tài nguyên chưa Healthy của nó (đọc thẳng từ cluster: Argo CD 3.x
   không ghi health của tài nguyên vào Application; workload theo pod ready, Job, PVC, condition của CR), condition của CR `Prometheus`,
   `Alertmanager`, đuôi log operator của kube-prometheus-stack và sự kiện, rồi dừng. kube-prometheus-stack trong `svp-gitops` có sync

@@ -391,9 +391,14 @@ jobs:
       - run: deploy/ci/gitops-check-test.sh "$SVP_GITOPS_DIR"
       # The guard of the cloud context (deploy/k8s/lib.sh: k3d-svp unless the context is a cluster of the project) and
       # the scripts of the eks-* targets, which otherwise run only by hand against a cloud cluster: fake kubectl,
-      # docker, curl in a temporary directory, a throwaway copy of deploy/ and of svp-gitops; helm from the PATH set
-      # above runs helm template alone. bash, git, jq, openssl and perl: no network, no cluster, no cloud account.
+      # docker, aws, curl in a temporary directory, a throwaway copy of deploy/; helm from the PATH set above runs helm
+      # template alone. bash, jq, openssl and perl: no network, no cluster, no cloud account.
       - run: deploy/k8s/eks-context-test.sh
+      # The entries of AWS Secrets Manager that make eks-secrets and make eks-glitchtip-init write
+      # (deploy/k8s/aws-secrets.sh, glitchtip-init.sh): fake aws and kubectl logging every call in order, a throwaway
+      # copy of deploy/ with a fake .env; the account checked and every value read before any write, no value in an
+      # argument or the output. bash, jq, openssl, perl and helm template: no network, no cluster, no cloud account.
+      - run: deploy/k8s/aws-secrets-test.sh
       # k6 inspect of every profile in the pinned k6 image, with no network: a script that no longer loads or a profile
       # whose scenarios are malformed is caught here, without the compose stack the load runs need.
       - run: make k6-check

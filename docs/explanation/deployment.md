@@ -124,7 +124,8 @@ flowchart LR
   trong git. Trên đường GitOps ([ADR-0026](../adr/0026-secrets-gitops.md)) `secrets.sh` chỉ ghi nguồn vào namespace
   `svp-secrets`; External Secrets Operator (component `external-secrets`, wave 0, chỉ đường GitOps) dựng Secret từ ExternalSecret
   của chart `svp-cluster` (`deploy/helm/svp-cluster/templates/external-secrets.yaml`), mỗi namespace một SecretStore chỉ đọc đúng
-  entry của nó; prd trên EKS đọc AWS Secrets Manager ([AWS](#aws)). Repo chỉ có tên Secret, key và nguồn.
+  entry của nó; stg và prd trên EKS đọc AWS Secrets Manager, entry do `deploy/k8s/aws-secrets.sh` (`make eks-secrets`) ghi
+  ([AWS](#aws)). Repo chỉ có tên Secret, key và nguồn.
 - **Workload** (ADR-0014 §10): một chart chung `deploy/helm/svp-service` cho 6 service và web (probe, `requests`/`limits`,
   securityContext `restricted`, không token ServiceAccount); gateway 2 replica có PDB và HPA theo CPU, feed-service luôn 2
   replica (HPA 2–2) có PDB, ưu tiên trải hai node ([ADR-0031](../adr/0031-chaos-findings-feed-engagement-tempo.md) §1), web 2
@@ -228,12 +229,13 @@ flowchart LR
 | Vào hệ thống | Loopback, Envoy với CA tự ký | NLB L4 giữ IP client, Envoy với chứng chỉ Let's Encrypt, DNS Route 53 do ExternalDNS ghi |
 | NetworkPolicy | network policy controller của k3s | Network policy agent của VPC CNI |
 | StorageClass, metrics-server | `local-path`, metrics-server của k3s | `gp3` do chart `svp-cluster` tạo, addon `metrics-server` |
-| Secret | `.env` (compose), ESO provider `kubernetes` (k3d GitOps) | ESO provider `kubernetes` (stg); Secrets Manager + Pod Identity (prd) |
-| Hạ tầng | `make up`, `make k8s-up`, `make k8s-gitops-up` | Terraform `aws/envs/stg` của `svp-infra`, rồi `make eks-gitops-up` |
+| Secret | `.env` (compose), ESO provider `kubernetes` (k3d GitOps) | ESO provider `aws`: Secrets Manager + Pod Identity, giá trị từ `make eks-secrets` |
+| Hạ tầng | `make up`, `make k8s-up`, `make k8s-gitops-up` | Terraform `aws/envs/<env>` của `svp-infra`, `make eks-secrets`, rồi Terraform `aws/gitops/<env>` (Argo CD và root) |
 
 Version của k3s và EKS ghim ở `K3S_IMAGE_TAG` của [`Makefile`](../../Makefile) và ở cấu hình Terraform của `svp-infra`. Bảng đủ (kể
 cả thứ k3s có sẵn mà EKS không) ở ADR-0034 mục Quyết định 8. Khác biệt k3d/EKS nằm ở lớp `platforms/<platform>/` của `svp-gitops`
-cùng giá trị theo cluster `cluster.*` mà bootstrap đặt từ output Terraform; `envs/stg` dùng chung cho k3d stg và EKS stg.
+cùng giá trị theo cluster `cluster.*` mà root `aws/gitops/<env>` đặt từ output Terraform (annotation của cluster Secret của
+Argo CD); `envs/stg` dùng chung cho k3d stg và EKS stg.
 
 **Luồng upload → `READY` → feed → phát trên AWS:**
 

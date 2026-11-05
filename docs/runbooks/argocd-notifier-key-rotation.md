@@ -13,8 +13,8 @@ Argo CD Notifications ghi commit status `argocd/<env>` lên commit của `svp-gi
 **Commit statuses: Read and write**, cài chỉ trên `svp-gitops`). Khoá riêng của App đi theo đường:
 
 `.env` (`SVP_ARGOCD_NOTIFY_APP_ID`, `SVP_ARGOCD_NOTIFY_INSTALLATION_ID`, `SVP_ARGOCD_NOTIFY_PRIVATE_KEY_B64` = base64 một dòng của
-file `.pem`) → `make eks-secrets` (`deploy/k8s/secrets.sh`) ghi nguồn `svp-secrets/argocd-notifications` → External Secrets Operator
-dựng `argocd/argocd-notifications-secret` (khoá `github-appID`, `github-installationID`, `github-privateKey` đã giải base64,
+file `.pem`) → `make eks-secrets` (`deploy/k8s/aws-secrets.sh`) ghi entry `svp/<env>/argocd-notifications` của AWS Secrets Manager →
+External Secrets Operator dựng `argocd/argocd-notifications-secret` (khoá `github-appID`, `github-installationID`, `github-privateKey` đã giải base64,
 `telegram-token`) → controller notifications của Argo CD đọc lại Secret mỗi khi nó đổi, không cần restart.
 
 Chỉ cluster mà chart `svp-cluster` bật `externalSecrets.argocdNotifications` có Secret này (nền tảng `eks`); cluster k3d và đường dev
@@ -23,11 +23,14 @@ nằm trong log của controller notifications); triển khai vẫn chạy, cả
 
 ## Kiểm tra nhanh (5 phút)
 
-Không in `.env`, không in khoá. `<ctx>` là alias của cluster (`svp-stg`):
+Không in `.env`, không in khoá. `<env>` là `stg` hay `prd`, `<ctx>` là alias của cluster (`svp-<env>`):
 
 ```sh
 # ba biến có trong .env (đếm, không in)
 grep -c '^SVP_ARGOCD_NOTIFY_[A-Z_]*=.' .env                                     # 3
+# entry có version hiện tại (chỉ metadata, không giá trị)
+AWS_PROFILE=anhnv-<env> aws secretsmanager describe-secret --secret-id svp/<env>/argocd-notifications \
+  --region ap-southeast-1 --query '{changed: LastChangedDate, versions: VersionIdsToStages}'
 # App chỉ cài trên svp-gitops
 gh api /user/installations --jq '.installations[]|select(.app_slug=="svp-argocd-notifier")|.id'
 gh api /user/installations/<installation id>/repositories --jq '.repositories[].full_name'   # chỉ anhnvcoder/svp-gitops
@@ -61,8 +64,10 @@ cài đặt trên `anhnvcoder` → **Suspend** (mọi token của App ngừng ch
 1. Trang App → **Private keys** → **Generate a private key**; GitHub tải file `.pem` xuống. Nghi lộ thì xoá luôn khoá cũ ở đây.
 2. Ghi vào `.env` (mode 600) bằng trình soạn, thay giá trị `SVP_ARGOCD_NOTIFY_PRIVATE_KEY_B64` bằng output của
    `base64 < <file>.pem | tr -d '\n'` (`.env` không nhận giá trị nhiều dòng); xoá file `.pem`.
-3. `make eks-secrets CONTEXT=<ctx>`: kiểm khoá (base64 chuẩn, PEM đọc được, không passphrase; sai thì dừng, không đổi Secret nào), ghi
-   nguồn rồi dựng lại mọi ExternalSecret và chờ `Ready`.
+3. `AWS_PROFILE=anhnv-<env> make eks-secrets CONTEXT=<ctx>` (prd: tunnel tới API mở): kiểm account của profile và khoá (base64 chuẩn,
+   PEM đọc được, không passphrase; sai thì dừng, không ghi entry nào), ghi mọi entry rồi dựng lại mọi ExternalSecret và chờ `Ready`
+   ([`eks.md`](../reference/eks.md), mục "Đổi secret của env đang chạy"). Chỉ khoá này đổi thì không cần sync `svp-data` hay restart:
+   controller notifications đọc lại Secret.
 4. Xác nhận như mục dưới, rồi mới xoá khoá cũ ở **Private keys** (xoay định kỳ).
 
 ## Khôi phục và xác nhận
