@@ -13,6 +13,8 @@ kind: StatefulSet
 metadata:
   name: s3
   namespace: {{ .Release.Namespace }}
+  annotations:
+    secret.reloader.stakater.com/reload: s3-root
 spec:
   replicas: 1
   serviceName: s3
@@ -33,8 +35,8 @@ spec:
           image: {{ .Values.s3.image }}
           env:
             # The root credential exists only here and in the s3-init Job; services get their own users (UP-5). Secret
-            # s3-root names it without the store's own variables, mapped to them here. Read at start only:
-            # deploy/k8s/secrets.sh restarts the store when the password in the Secret changes.
+            # s3-root names it without the store's own variables, mapped to them here. Read at start only: Reloader
+            # restarts the store when the Secret's data changes (annotation of the StatefulSet).
             - name: RUSTFS_ACCESS_KEY
               valueFrom:
                 secretKeyRef: {name: s3-root, key: S3_ROOT_USER}

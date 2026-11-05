@@ -27,14 +27,16 @@ namespaces:
 # the controller create Jobs, update Deployments and pods. Every pod the pinned charts render with the project's values
 # meets "restricted" (helm template, checked rule by rule), and their controllers start no pod of their own here:
 # CloudNativePG runs its instances and Jobs in svp-data, KEDA starts Jobs only for a ScaledJob (none), Argo Rollouts the
-# gateway's pods in svp. The namespaces of wave 0 (cert-manager, envoy-gateway-system) must exist before this chart,
-# which needs their CRDs: deploy/k8s/install.sh and their Argo CD Applications label them; deploy/k8s/gitops.sh labels
-# argocd. Both scripts make the project's namespaces above too.
+# gateway's pods in svp. reloader: Reloader may patch the pod template of every workload of the namespaces it watches.
+# The namespaces of wave 0 (cert-manager, envoy-gateway-system) must exist before this chart, which needs their CRDs:
+# deploy/k8s/install.sh and their Argo CD Applications label them; deploy/k8s/gitops.sh labels argocd. Both scripts
+# make the project's namespaces above too.
 platformNamespaces:
   - name: argo-rollouts
   - name: cnpg-system
   - name: keda
   - name: kyverno
+  - name: reloader
 
 # Kyverno (wave 2), the one platform namespace whose pods also get
 # NetworkPolicies here: it verifies images against registries and Sigstore on the internet, and the API server sends it
@@ -63,6 +65,13 @@ kyverno:
     - 192.168.0.0/16
     - 100.64.0.0/10
     - 169.254.0.0/16
+
+# Reloader (component reloader): restarts the workloads that opt in by annotation when a Secret they name changes. Its
+# pods get NetworkPolicies here like the project's namespaces: default-deny, allow-dns, and allow-kube-api for its pods
+# labelled svp-kube-api=allow (base/reloader.yaml of svp-gitops). It talks to the API server only (watches Secrets,
+# patches workloads), and nothing comes in: nothing scrapes its metrics, and it serves no webhook.
+reloader:
+  namespace: reloader
 
 # Pod Security Standard version the admission controller checks against, pinned so a k3s upgrade does not tighten or
 # loosen it silently: the minor of the node image in deploy/k8s/k3d.yaml.
