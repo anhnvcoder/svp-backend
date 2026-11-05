@@ -55,6 +55,7 @@ done
 tree=$work/repo
 mkdir -p "$tree/deploy/k8s/drills" "$tree/deploy/ci"
 cp "$repo/deploy/k8s/lib.sh" "$tree/deploy/k8s/"
+cp "$repo/deploy/docker-bake.json" "$tree/deploy/"
 cp "$repo/deploy/k8s/drills/run.sh" "$tree/deploy/k8s/drills/"
 # a_test DRILL FOLDER [EXTRA LABEL LINE]
 a_test() {

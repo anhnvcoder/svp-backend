@@ -25,7 +25,8 @@
 #                      all six
 #   pull request       merge-base of HEAD with the PR's base branch
 #   workflow_dispatch  merge-base of HEAD with origin/main; input services (all, or names from the six this repository
-#                      builds: built_services of deploy/k8s/lib.sh, never web, which svp-frontend builds) overrides
+#                      builds: built_services of deploy/k8s/lib.sh, the targets of the image table
+#                      deploy/docker-bake.json; never web, which svp-frontend builds) overrides
 #
 # Another repository's tree (SVP_CODE_ROOT, code_root of common.sh, is not this checkout: the CI of another release
 # source runs this script from a pinned checkout of this one): its whole tree is the code of its images, so a build

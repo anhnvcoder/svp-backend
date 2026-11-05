@@ -87,6 +87,7 @@ tree=$work/tree
 mkdir -p "$tree/deploy/k8s" "$tree/deploy/helm/svp-policy"
 cp -R "$here" "$tree/deploy/ci"
 cp "$src/deploy/k8s/lib.sh" "$tree/deploy/k8s/"
+cp "$src/deploy/docker-bake.json" "$tree/deploy/"
 cp -R "$src/deploy/helm/svp-policy/values.yaml" "$src/deploy/helm/svp-policy/files" "$tree/deploy/helm/svp-policy/"
 digest_a=sha256:$(printf 'a%.0s' $(seq 64))
 digest_b=sha256:$(printf 'b%.0s' $(seq 64))

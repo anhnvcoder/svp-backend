@@ -12,6 +12,9 @@
 #     refused;
 #   - a push to main that builds no image: promote_charts when a file under deploy/helm/ or one a symbolic link there
 #     points to changed, not for docs/.
+#   - the image table deploy/docker-bake.json, read with jq: the same services with the same Dockerfile and context in
+#     built_services and dockerfile of deploy/k8s/lib.sh, the images and legs plan.sh hands on (the input image of the
+#     action image-leg) and the build image-guard.sh leg hands that action (with the build argument SERVICE);
 # Runs on macOS and Linux: no network, no Docker, no cluster.
 #
 # Usage, from anywhere: deploy/ci/plan-test.sh
@@ -64,14 +67,15 @@ on() {
 fresh() { : >"$work/output" && : >"$work/summary"; }
 mkdir -p "$work/home" "$work/runner-temp"
 
-# A throwaway checkout, with its own origin, of what plan.sh reads: deploy/ci/, deploy/k8s/lib.sh, the policy's values,
-# a chart file and a symbolic link of a chart to a file beside the charts. GIT_DIR is set for every git call of the test
-# itself, so git can never reach another repository.
+# A throwaway checkout, with its own origin, of what plan.sh reads: deploy/ci/, deploy/k8s/lib.sh, the image table, the
+# policy's values, a chart file and a symbolic link of a chart to a file beside the charts. GIT_DIR is set for every git
+# call of the test itself, so git can never reach another repository.
 tree=$work/tree
 mkdir -p "$tree/deploy/k8s" "$tree/deploy/helm/svp-policy" "$tree/deploy/helm/svp-observability/files" \
   "$tree/deploy/observability/otelcol" "$tree/docs"
 cp -R "$here" "$tree/deploy/ci"
 cp "$src/deploy/k8s/lib.sh" "$tree/deploy/k8s/"
+cp "$src/deploy/docker-bake.json" "$tree/deploy/"
 cp -R "$src/deploy/helm/svp-policy/values.yaml" "$src/deploy/helm/svp-policy/files" "$tree/deploy/helm/svp-policy/"
 echo "receivers: {}" >"$tree/deploy/observability/otelcol/k8s-config.yaml"
 ln -s ../../../observability/otelcol/k8s-config.yaml "$tree/deploy/helm/svp-observability/files/otelcol-k8s-config.yaml"
@@ -117,6 +121,45 @@ got=$(on local env EVENT_NAME=workflow_dispatch GIT_REF=refs/heads/main INPUT_DR
 same "plan.sh on a machine: summary then outputs on stdout" \
   "Mode: drill. Images: drill-vulnerable drill-unsigned drill-no-provenance."$'\n'"$want_plan" "$got"
 check "plan.sh on a machine: no file of a job was written" test ! -s "$work/output" -a ! -s "$work/summary"
+
+# The image table deploy/docker-bake.json, read with jq, is what every reader of it answers: built_services and
+# dockerfile of lib.sh, the images and legs plan.sh hands on for services all (the input image of the action
+# image-leg is the image of a leg), and the Dockerfile, context and build argument image-guard.sh leg hands that
+# action's build for each of them. A fake docker answers the host's architecture, the only docker call of leg.
+table_rows=$(jq -r '.group.default.targets[] as $s | .target[$s]
+  | "\($s) \(.dockerfile) \(.context) \(if .args.SERVICE then "SERVICE=\(.args.SERVICE)" else "-" end)"' \
+  "$tree/deploy/docker-bake.json")
+table_services=$(cut -d' ' -f1 <<<"$table_rows" | paste -sd' ' -)
+same "image table: group default lists the six services, each with its target" \
+  "gateway user-service video-service engagement-service feed-service media-worker" "$table_services"
+same "image table: lib.sh's built_services and dockerfile are the table's" "$(cut -d' ' -f1,2 <<<"$table_rows")" \
+  "$(bash -c '. "$1/deploy/k8s/lib.sh" && for s in "${built_services[@]}"; do echo "$s $(dockerfile "$s")"; done' _ "$tree")"
+fresh
+on github env "${backend_run[@]}" GITHUB_SHA="$base" EVENT_NAME=workflow_dispatch GIT_REF=refs/heads/main \
+  INPUT_SERVICES=all "$tree/deploy/ci/plan.sh" >/dev/null
+same "image table: plan.sh of services all hands on the table's services as images" \
+  "$(jq -c '.group.default.targets' "$tree/deploy/docker-bake.json")" "$(sed -n 's/^images=//p' "$work/output")"
+same "image table: each of them is the input image of the action image-leg on both architectures" \
+  "$(for s in $table_services; do printf '%s amd64\n%s arm64\n' "$s" "$s"; done)" \
+  "$(sed -n 's/^legs=//p' "$work/output" | jq -r '.include[] | "\(.image) \(.arch)"')"
+mkdir -p "$work/bin"
+printf '#!/usr/bin/env bash\n[ "$1 $2" = "version --format" ] && echo amd64\n' >"$work/bin/docker"
+chmod 755 "$work/bin/docker"
+want_legs= got_legs=
+while read -r svc file context arg; do
+  context=$tree/$context
+  want_legs+="$svc $tree/$file ${context%/.} ${arg/#-/}"$'\n'
+  fresh
+  if on github env "${backend_run[@]}" GITHUB_SHA="$base" PATH="$work/bin:$PATH" TRIVY_IMAGE=t@sha256:1 \
+    SYFT_IMAGE=s@sha256:2 GRYPE_IMAGE=g@sha256:3 "$tree/deploy/ci/image-guard.sh" leg "$svc" amd64 "$work/leg-$svc" \
+    >/dev/null 2>"$work/leg.err"; then
+    got_legs+="$svc $(sed -n 's/^dockerfile=//p' "$work/output") $(sed -n 's/^context=//p' "$work/output") $(sed -n 's/^build-arg=//p' "$work/output")"$'\n'
+  else
+    got_legs+="$svc refused: $(cat "$work/leg.err")"$'\n'
+  fi
+done <<<"$table_rows"
+same "image table: image-guard.sh leg hands image-leg's build the table's Dockerfile, context and build argument" \
+  "$want_legs" "$got_legs"
 
 # plan.sh of svp-frontend's run (SVP_CODE_ROOT its checkout, HEAD the run's commit): the services of its release source at
 # every run, no base, nothing to promote of the charts.

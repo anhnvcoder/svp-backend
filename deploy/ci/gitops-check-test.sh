@@ -87,6 +87,7 @@ fail() {
 ws=$work/ws
 mkdir -p "$ws/backend/deploy/k8s"
 cp "$repo_root/deploy/k8s/lib.sh" "$ws/backend/deploy/k8s/"
+cp "$repo_root/deploy/docker-bake.json" "$ws/backend/deploy/"
 gw() { git -C "$1" -c user.name=test -c user.email=test@example.invalid "${@:2}"; }
 git init -q "$ws/backend"
 gw "$ws/backend" add deploy
@@ -735,6 +736,7 @@ bad=$work/bad-policy
 mkdir -p "$bad/deploy/k8s"
 cp -R "$here" "$bad/deploy/ci"
 cp "$repo_root/deploy/k8s/lib.sh" "$bad/deploy/k8s/"
+cp "$repo_root/deploy/docker-bake.json" "$bad/deploy/"
 cp "$repo_root/Makefile" "$bad/"
 sed -i.bak 's/^    - expression: size(variables.unpinned) == 0$/    - expression: size(variables.unpinned) == "0"/' \
   "$bad/deploy/ci/gitops-policies/images-pinned.yaml" && rm "$bad/deploy/ci/gitops-policies/images-pinned.yaml.bak"
@@ -760,6 +762,7 @@ mkdir -p "$code/deploy/k8s" "$code/deploy/helm/svp-policy/files" "$code/deploy/h
   "$code/deploy/observability/otelcol"
 cp -R "$here" "$code/deploy/ci"
 cp "$repo_root/deploy/k8s/lib.sh" "$code/deploy/k8s/"
+cp "$repo_root/deploy/docker-bake.json" "$code/deploy/"
 cp "$repo_root/Makefile" "$code/"
 printf 'podSecurityVersion: v1.36\n' >"$code/deploy/helm/svp-cluster/values.yaml"
 echo "receivers: {}" >"$code/deploy/observability/otelcol/k8s-config.yaml"

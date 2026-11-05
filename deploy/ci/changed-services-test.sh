@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Tests for deploy/ci/changed-services.sh, in a throwaway git repository holding a copy of deploy/ci/, deploy/k8s/lib.sh,
-# the policy's values, the composite actions of the image pipeline, another action, a file under docs/ and a Makefile.
+# the image table deploy/docker-bake.json, the policy's values, the composite actions of the image pipeline, another action, a file under docs/ and a Makefile.
 # Checked: a change of common.sh, rescan.sh, image-guard.sh or of a file of one of the actions under
 # .github/actions/image-*/ builds all six images of this repository (never web, which svp-frontend builds), and so does
 # one of the GRYPE_IMAGE line of the Makefile; none is built for a change under web/ (a file added, then deleted), of
@@ -8,7 +8,9 @@
 # the scripts of the verification runs (verify-host.sh, verify-mask.sh, verify-collect.sh, the scripts of the steps
 # under deploy/ci/verify-steps/, ghcr-digest.sh), of the drills under deploy/k8s/drills/, of the scripts of svp-gitops's
 # check (gitops-check.sh with values-check.sh, verify-release.sh and its conftest policies), of the policy's values, of
-# docs/ or of another line of the Makefile.
+# docs/ or of another line of the Makefile. The image table: a change of one service's target builds that service
+# only, a change of the table's form alone (same JSON) builds nothing, and a change of group default, of a part of the
+# table outside the services' targets, or a table the base commit lacks builds all six.
 # Runs on macOS and Linux: no network, no Docker, no cluster.
 #
 # Usage, from anywhere: deploy/ci/changed-services-test.sh
@@ -39,6 +41,7 @@ cp -R "$src/.github/actions/image-leg" "$src/.github/actions/image-index" "$src/
   "$tree/.github/actions/"
 echo "name: other" >"$tree/.github/actions/other/action.yml"
 cp "$src/deploy/k8s/lib.sh" "$tree/deploy/k8s/"
+cp "$src/deploy/docker-bake.json" "$tree/deploy/"
 cp -R "$src/deploy/k8s/drills" "$tree/deploy/k8s/"
 cp -R "$src/deploy/helm/svp-policy/values.yaml" "$src/deploy/helm/svp-policy/files" "$tree/deploy/helm/svp-policy/"
 echo "# A decision" >"$tree/docs/decision.md"
@@ -101,6 +104,30 @@ sed 's/^GRYPE_IMAGE := grype@sha256:1$/GRYPE_IMAGE := grype@sha256:2/' "$tree/Ma
   cp "$work/Makefile" "$tree/Makefile" && g commit -qam "bump grype"
 same "changed-services: a change of the GRYPE_IMAGE line builds all six" "$all" "$(changed)"
 same "changed-services: a change of another line of the Makefile builds nothing" "" "$(changed_by Makefile)"
+
+# The image table, compared as JSON between the two commits.
+# table_change NAME JQ: rewrites the table with the jq filter JQ, commits it, then prints what changed-services.sh builds.
+table_change() {
+  jq "$2" "$tree/deploy/docker-bake.json" >"$work/table.json" && cp "$work/table.json" "$tree/deploy/docker-bake.json"
+  g commit -qam "image table: $1"
+  changed
+}
+same "changed-services: a build argument added to the target of video-service builds video-service only" \
+  video-service "$(table_change "an argument of video-service" '.target["video-service"].args.EXTRA = "1"')"
+same "changed-services: another Dockerfile in the target of media-worker builds media-worker only" media-worker \
+  "$(table_change "media-worker's Dockerfile" '.target["media-worker"].dockerfile = "deploy/docker/worker.Dockerfile"')"
+jq -c . "$tree/deploy/docker-bake.json" >"$work/table.json" && cp "$work/table.json" "$tree/deploy/docker-bake.json"
+g commit -qam "image table: on one line"
+same "changed-services: the table written in another form, the same JSON, builds nothing" "" "$(changed)"
+same "changed-services: the order of group default changed builds all six" "$all" \
+  "$(table_change "the group" '.group.default.targets |= reverse')"
+same "changed-services: a part of the table outside the targets of the services builds all six" "$all" \
+  "$(table_change "a variable" '.variable = {"TAG": {"default": "dev"}}')"
+same "changed-services: a target no service names builds all six" "$all" \
+  "$(table_change "a target of no service" '.target._base = {"context": "."}')"
+g rm -q deploy/docker-bake.json && g commit -qm "drop the image table"
+g checkout -q HEAD~1 -- deploy/docker-bake.json && g commit -qm "the image table again"
+same "changed-services: a table the base commit lacks builds all six" "$all" "$(changed)"
 
 if ((failures)); then
   echo "$failures check(s) failed" >&2

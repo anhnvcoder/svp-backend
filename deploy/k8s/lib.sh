@@ -1,7 +1,8 @@
 # shellcheck shell=bash
 # Helpers shared by the scripts and make targets of the local Kubernetes cluster `svp` (deploy/k8s/, deploy/k8s/k8s.mk):
 # the pinned docker/k3d/kubectl/helm calls, bounded waits, the registry and the cluster themselves, the CA export.
-# Written for bash 3.2 (the macOS /bin/bash). Sourcing it only defines things and exports the variables below.
+# Written for bash 3.2 (the macOS /bin/bash). Sourcing it only defines things, exports the variables below and reads
+# the image table (deploy/docker-bake.json, with jq).
 #
 # Rules every helper keeps: docker and k3d run without DOCKER_DEFAULT_PLATFORM (the global shell sets linux/amd64 for
 # another project; the nodes must run native arm64), kubectl and helm always name their context, k3d-svp unless
@@ -729,60 +730,6 @@ workload_kind() {
   if kc -n "$1" get rollouts.argoproj.io "$2" >/dev/null 2>&1; then echo rollout; else echo deployment; fi
 }
 
-# restart_workload NAMESPACE NAME: restarts the pods of Deployment or Rollout NAME without a new revision and waits
-# until the new pods are ready. A Deployment: `kubectl rollout restart`, which stamps its pod template (a rolling
-# update). A Rollout: not that, since any change of its template is a new revision and so a canary; spec.restartAt
-# instead, which Argo Rollouts reads as "evict every pod created before this time", one at a time and through the
-# PodDisruptionBudget, the template unchanged. It is done once status.restartedAt equals it and the Rollout is Healthy.
-# restartAt is a field no chart writes, so neither Helm nor Argo CD puts it back. A Rollout in a canary, before the
-# restart or once it has begun (a new release arriving meanwhile), stops it at once (rollout_not_canary).
-restart_workload() {
-  local ns=$1 name=$2 at deadline
-  if [ "$(workload_kind "$ns" "$name")" = rollout ]; then
-    rollout_not_canary "$ns" "$name"
-    at=$(date -u +%Y-%m-%dT%H:%M:%SZ)
-    kc -n "$ns" patch rollout "$name" --type merge -p "{\"spec\":{\"restartAt\":\"$at\"}}" >/dev/null ||
-      fail "restart rollout $ns/$name (spec.restartAt)"
-    deadline=$((SECONDS + 300))
-    until test_output "$at Healthy" kc -n "$ns" get rollout "$name" -o jsonpath='{.status.restartedAt} {.status.phase}' \
-      >/dev/null 2>&1; do
-      ((SECONDS < deadline)) || fail "rollout $ns/$name restarted (status.restartedAt $at) and Healthy within 300s"
-      rollout_not_canary "$ns" "$name"
-      sleep 2
-    done
-  else
-    kc -n "$ns" rollout restart deployment "$name" >/dev/null || fail "restart deployment $ns/$name"
-    kc -n "$ns" rollout status deployment "$name" --timeout=300s >/dev/null ||
-      fail "deployment $ns/$name ready again within 300s of its restart"
-  fi
-}
-
-# rollout_not_canary NAMESPACE NAME: fails, naming the canary and the ways out of it, when Rollout NAME runs one: a pod
-# template other than its stable one rolling out (status.currentPodHash is not status.stableRS), a pause or an abort.
-# Such a Rollout turns Healthy only once its canary is over, which its analysis decides from the traffic the canary
-# gets, so a restart waiting for Healthy would only run out its time and blame the restart.
-rollout_not_canary() {
-  local ns=$1 name=$2 json why
-  json=$(kc -n "$ns" get rollout "$name" -o json) || fail "read rollout $ns/$name"
-  why=$(jq -r '(.status // {}) as $s | [
-      if ($s.currentPodHash // "") != "" and ($s.stableRS // "") != "" and $s.currentPodHash != $s.stableRS then
-        "pod template \($s.currentPodHash) rolling out beside the stable \($s.stableRS), canary weight \($s.canary.weights.canary.weight // 0)%"
-      else empty end,
-      if (.spec.paused // false) or (($s.pauseConditions // []) | length > 0) then
-        "paused (\([$s.pauseConditions[]?.reason] | if length == 0 then "spec.paused" else join(", ") end))"
-      else empty end,
-      if $s.abort // false then "aborted" else empty end] | join("; ")' <<<"$json") || fail "read rollout $ns/$name"
-  [ -n "$why" ] || return 0
-  # An aborted Rollout keeps status.abort and the canary's template, so it stays Degraded until the template goes back
-  # to the stable one: aborting again cannot get it out.
-  case $why in
-  *aborted*)
-    fail "rollout $ns/$name runs a canary ($why): an aborted Rollout stays Degraded until its pod template goes back to the stable one, so its restart is not waited for. Revert the release (a pull request reverting its promote in svp-gitops on the GitOps path; make k8s-up on the dev path), then run this again"
-    ;;
-  esac
-  fail "rollout $ns/$name runs a canary ($why): it turns Healthy only once the canary is over, so its restart is not waited for. Let the canary finish (its analysis promotes it only under traffic: make k8s-traffic-start) or abort it (kubectl --context $kube_context -n $ns patch rollout $name --subresource status --type merge -p '{\"status\":{\"abort\":true}}'), then run this again"
-}
-
 # test_output WANT COMMAND...: true when COMMAND prints exactly WANT.
 test_output() {
   local want=$1 got
@@ -819,36 +766,6 @@ EOF
     [ "$SECONDS" -lt "$deadline" ] || fail "Backup svp-data/$name completed within 600s (phase '${state:-none}')"
     sleep 3
   done
-}
-
-# restart_on_secret_change NAMESPACE WORKLOAD SECRET [ANNOTATION [UNRECORDED]]: restarts Deployment or Rollout WORKLOAD
-# (restart_workload) when its pods started before the current version of SECRET, which they read as environment
-# variables (a process reads those only when it starts, and nothing restarts a pod when its Secret changes; no chart
-# can roll its pods by a checksum of the Secret either, since these Secrets are made outside Helm and Argo CD), and
-# waits until the new pods are ready.
-#
-# The version of the Secret the pods read is kept in annotation ANNOTATION (default svp-env-secret-version) of the
-# workload's own metadata, not of its pod template (Helm and Argo CD would see a template that differs from the chart
-# and roll it again; for the Rollout it would be a new revision): the Secret's resourceVersion, written once the
-# restarted pods are ready. A run that stops before that leaves the old version, so the next run restarts again; a
-# Secret deleted and made again has a new resourceVersion too. It holds no value or hash of a secret. A workload
-# without the annotation only gets it when UNRECORDED is annotate (the default: it was just created, its pods started
-# with the Secret as it is now), and is restarted when UNRECORDED is restart (it may have started before the Secret
-# existed).
-restart_on_secret_change() {
-  local ns=$1 workload=$2 name=$3 key=${4:-svp-env-secret-version} unrecorded=${5:-annotate} kind secret seen
-  kind=$(workload_kind "$ns" "$workload")
-  secret=$(kc -n "$ns" get secret "$name" -o jsonpath='{.metadata.resourceVersion}') ||
-    fail "read the resourceVersion of Secret $ns/$name"
-  seen=$(kc -n "$ns" get "$kind" "$workload" -o jsonpath="{.metadata.annotations.$key}") ||
-    fail "read $kind $ns/$workload"
-  [ "$seen" != "$secret" ] || return 0
-  if [ -n "$seen" ] || [ "$unrecorded" = restart ]; then
-    restart_workload "$ns" "$workload"
-    ok "$kind $workload restarted: Secret $name changed since its pods started"
-  fi
-  kc -n "$ns" annotate "$kind" "$workload" --overwrite "$key=$secret" >/dev/null ||
-    fail "record on $kind $ns/$workload the version of Secret $name its pods read"
 }
 
 # The namespaces whose containers' logs unready_report prints, and the only ones whose log lines
@@ -1062,21 +979,51 @@ gitops_timeout_report() {
     done
 }
 
+# The image table, deploy/docker-bake.json: the one place that names the images this repository builds from its own
+# tree, the six Go services whose releases its CI builds, signs and promotes (web is one of the seven releases, but its
+# source and its releases are svp-frontend's). It is a file of Docker Bake: group default lists the services in the
+# order the dev path builds them, and target <service> holds the Dockerfile, the context, the build arguments and the
+# local tag of its image, svp/<service>:dev (the name compose runs it by). JSON rather than HCL, so that the scripts read it with jq, without docker;
+# under deploy/, so that a test copying deploy/ has it. It is read here, once, as this file is sourced: built_services,
+# svp_services and dockerfile answer from it, for the image pipeline of CI (deploy/ci/plan.sh, changed-services.sh,
+# image-guard.sh, which hands the action image-leg its Dockerfile and context) as for make k8s-images, make k8s-up
+# and make up (build_dev_images, compose_images). Every context is the repository root ("."): the CI build
+# (image-guard.sh) and image_paths assume it, so a table with another context stops here instead of being built two
+# ways. A table missing, not JSON, or naming a service without a target, a Dockerfile or that context stops the
+# sourcing script here too.
+image_table=deploy/docker-bake.json
+image_rows=$(jq -er '.target as $t | .group.default.targets
+  | if type == "array" and length > 0 then .[] else error("group default lists no target") end
+  | . as $s
+  | if type == "string" and test("^[a-z][a-z0-9-]*$") then . else error("target name \(tojson) is not lowercase letters, digits and -") end
+  | ($t[$s] // error("group default names \($s), which has no target"))
+  | if .context != "." then error("target \($s): context \(.context | tojson) is not the repository root \".\"")
+    elif (.dockerfile | type) != "string" or (.dockerfile | test("^[A-Za-z0-9._/-]+$") | not) then
+      error("target \($s): no dockerfile, or one with characters outside letters, digits and . _ / -")
+    elif .tags != ["svp/\($s):dev"] then error("target \($s): tags is not [\"svp/\($s):dev\"]")
+    else "\($s) \(.dockerfile)" end' "$repo_root/$image_table") ||
+  fail "read the image table $image_table of $repo_root (jq names what is wrong above)"
+# The services whose images this repository builds from its own tree, in the order of group default.
+built_services=()
+while read -r image_svc _; do built_services+=("$image_svc"); done <<<"$image_rows"
+unset image_svc
 # The seven services whose images the cluster runs, in the order the dev path builds them: web last (from the clone of
 # svp-frontend, web_dir), since the six Go images share the Go module cache and build fast, so their errors show before
 # the web build, the longest of all. Every release set (stg, prd, the records of stg) names these seven.
-svp_services=(gateway user-service video-service engagement-service feed-service media-worker web)
-# The services whose images this repository builds from its own tree, and whose releases its CI builds, signs and
-# promotes: the six Go services. web is one of the seven releases, but its source and its releases are svp-frontend's.
-built_services=(gateway user-service video-service engagement-service feed-service media-worker)
+svp_services=("${built_services[@]}" web)
 
 # dockerfile SERVICE: the Dockerfile that builds SERVICE's image (one of built_services), relative to the repository
-# root.
+# root, its context; fails for a service the image table has no target for.
 dockerfile() {
-  case $1 in
-  media-worker) echo deploy/docker/media-worker.Dockerfile ;;
-  *) echo deploy/docker/service.Dockerfile ;;
-  esac
+  local svc file
+  while read -r svc file; do
+    [ "$svc" != "$1" ] || {
+      echo "$file"
+      return 0
+    }
+  done <<<"$image_rows"
+  echo "dockerfile: $1 is no target of the image table $image_table" >&2
+  return 1
 }
 
 # web_build_id: prints the build id of the web image on the dev path (SVP_BUILD_ID, which Next uses as its
@@ -1155,39 +1102,50 @@ web_build_id() {
   echo "dev-$(printf '%s\n' "$list" | shasum -a 256 | cut -c1-12)"
 }
 
-# build_image SERVICE CONTEXT: builds SERVICE's image from the source tree CONTEXT (native architecture, the
-# Dockerfiles compose uses) and sets image_id to its ID, without the sha256: prefix. The web image is built from
-# web_dir with web_dockerfile instead, whatever CONTEXT is, and gets SVP_BUILD_ID from web_build_id, which reads the
-# same folder.
-build_image() {
-  local args=(--file "$2/$(dockerfile "$1")") context=$2 id dir
-  case $1 in
-  media-worker) ;;
-  web)
-    dir=$(web_dir) || return 1
-    id=$(web_build_id) || return 1
-    args=(--file "$(web_dockerfile "$dir")" --build-arg "SVP_BUILD_ID=$id")
-    context=$dir
-    ;;
-  *) args+=(--build-arg "SERVICE=$1") ;;
-  esac
+# bake_images SERVICE...: builds the images of SERVICE... (targets of the image table) from the working tree with one
+# `docker buildx bake` of those targets, run from the repository root, for this machine's own architecture, loaded
+# into the local image store under their tags svp/<service>:dev; no provenance or SBOM, so each image is one plain
+# manifest, as the CI build makes it.
+bake_images() {
+  (cd "$repo_root" && docker_ buildx bake -f "$image_table" --load --provenance=false --sbom=false "$@")
+}
+
+# build_web_image: builds the web image from the clone of svp-frontend (web_dir, web_dockerfile; native architecture),
+# with SVP_BUILD_ID from web_build_id, which reads the same folder, and sets image_id to its ID, without the sha256:
+# prefix.
+build_web_image() {
+  local dir id
+  dir=$(web_dir) || return 1
+  id=$(web_build_id) || return 1
   # --quiet prints only the image ID; a failed build still prints its error.
-  image_id=$(docker_ build --quiet "${args[@]}" "$context") || return 1
+  image_id=$(docker_ build --quiet --file "$(web_dockerfile "$dir")" --build-arg "SVP_BUILD_ID=$id" "$dir") || return 1
   image_id=${image_id#sha256:}
 }
 
 # build_dev_images [SERVICE...]: builds the images of SERVICE... (default: the seven of svp_services) from the working
-# tree (web from the clone of svp-frontend, build_image), pushes each to the registry as
-# 127.0.0.1:5111/svp/<service>:dev-<first 12 hex digits of its image ID>, and sets dev_tag_<service with _ for -> to
-# that tag. The build cache gives the same image ID for the same inputs, so a run with no code
+# tree, those of the image table with bake_images, web from the clone of svp-frontend (build_web_image), pushes each to
+# the registry as 127.0.0.1:5111/svp/<service>:dev-<first 12 hex digits of its image ID>, and sets dev_tag_<service
+# with _ for -> to that tag. The build cache gives the same image ID for the same inputs, so a run with no code
 # change yields the same tags, the pod templates do not change, and no new ReplicaSet (later: no canary) starts. Run
 # after ensure_registry.
 build_dev_images() {
-  local svc id tag ref services=("$@")
+  local svc id tag ref services=("$@") targets=()
   [ $# -gt 0 ] || services=("${svp_services[@]}")
   for svc in "${services[@]}"; do
-    echo "build $svc"
-    build_image "$svc" "$repo_root" || fail "build the image of $svc"
+    [ "$svc" = web ] || targets+=("$svc")
+  done
+  if [ ${#targets[@]} -gt 0 ]; then
+    echo "build ${targets[*]} (docker buildx bake -f $image_table)"
+    bake_images "${targets[@]}" || fail "build the images of ${targets[*]} (docker buildx bake -f $image_table)"
+  fi
+  for svc in "${services[@]}"; do
+    if [ "$svc" = web ]; then
+      echo "build web"
+      build_web_image || fail "build the image of web"
+    else
+      image_id=$(docker_ image inspect --format '{{.Id}}' "svp/$svc:dev") || fail "read the ID of image svp/$svc:dev"
+      image_id=${image_id#sha256:}
+    fi
     id=$image_id
     tag="dev-${id:0:12}"
     ref="127.0.0.1:5111/svp/$svc:$tag"
@@ -1360,39 +1318,6 @@ values_field() {
   return "$rc"
 }
 
-# values_set_image REPOSITORY TAG DIGEST: reads a service's values file on stdin and prints it with image.repository,
-# image.tag and image.digest set to these values, every other line as it was. The three lines must already be there,
-# once each (values_field's rule), and the result must read back as exactly these values, or nothing is printed and it
-# fails. The tag and the digest are written in double quotes: a tag of 12 decimal digits would otherwise be a YAML
-# number.
-values_set_image() {
-  local out field want
-  out=$(awk -v repo="$1" -v tag="$2" -v digest="$3" '
-    /^image:/ { block = 1; buf = buf $0 "\n"; next }
-    /^[^ #]/ { block = 0 }
-    block && /^  repository:/ { n["repository"]++; buf = buf "  repository: " repo "\n"; next }
-    block && /^  tag:/ { n["tag"]++; buf = buf "  tag: \"" tag "\"\n"; next }
-    block && /^  digest:/ { n["digest"]++; buf = buf "  digest: \"" digest "\"\n"; next }
-    { buf = buf $0 "\n" }
-    END {
-      if (n["repository"] != 1 || n["tag"] != 1 || n["digest"] != 1) exit 3
-      printf "%s", buf
-    }' && echo x) || {
-    echo "image: repository, tag and digest are not one line each in the image block" >&2
-    return 1
-  }
-  # The x keeps the last newline, which command substitution would drop.
-  out=${out%x}
-  for field in repository tag digest; do
-    case $field in repository) want=$1 ;; tag) want=$2 ;; digest) want=$3 ;; esac
-    [ "$(values_field "$field" <<<"$out")" = "$want" ] || {
-      echo "image.$field: '$want' cannot be written as a value of that form" >&2
-      return 1
-    }
-  done
-  printf '%s' "$out"
-}
-
 # ghcr_manifest_status NAME DIGEST: prints the HTTP status GHCR answers an anonymous HEAD of manifest NAME@DIGEST
 # with (NAME without ghcr.io/), as a node pulling without credentials gets it: 200 when it can pull it. A package that
 # is private or does not exist is refused already by the token endpoint (403), whose status is printed then. 000 when
@@ -1493,23 +1418,25 @@ web_source() {
 }
 
 # compose_images: exports what deploy/compose/compose.yaml reads to pick the images of the application for `make up`
-# and `make compose-config`. IMAGES unset: the six backend services are built from the working tree, as they always
-# were; IMAGES=stg: they run their releases in staging (stg_release), their migrations the same images, so a stack of
-# this checkout runs exactly what staging runs, with no Go build. The web client as web_source says: built from
-# web_dir (its folder and Dockerfile), or a release. A release runs as already pulled (compose_up_images): pull policy
-# never, so compose neither pulls nor builds it. Sets compose_releases to every REPOSITORY@DIGEST to pull and
-# compose_notes to one line per choice; prints nothing.
+# and `make compose-config`. IMAGES unset: the six backend services run their images built from the working tree
+# (compose_up_images builds them with bake_images, under the tags of the image table, svp/<service>:dev);
+# IMAGES=stg: they run their releases in staging (stg_release), their migrations the same images, so a stack of
+# this checkout runs exactly what staging runs, with no Go build. Compose never builds or pulls any of the six (pull
+# policy never in compose.yaml). The web client as web_source says: built from web_dir (its folder and Dockerfile) by
+# compose, or a release. A release runs as already pulled (compose_up_images): pull policy never, so compose neither
+# pulls nor builds it. Sets compose_bake to the services compose_up_images builds, compose_releases to every
+# REPOSITORY@DIGEST to pull and compose_notes to one line per choice; prints nothing.
 compose_images() {
   local svc var ref dir gitops
-  compose_releases=() compose_notes=()
+  compose_bake=() compose_releases=() compose_notes=()
   case ${IMAGES:-} in
   '')
     for svc in "${built_services[@]}"; do
       var=SVP_$(printf '%s' "$svc" | tr 'a-z-' 'A-Z_')_IMAGE
       export "$var=svp/$svc:dev"
     done
-    export SVP_BACKEND_PULL_POLICY=build
-    compose_notes+=("the six backend services built from the working tree")
+    compose_bake=("${built_services[@]}")
+    compose_notes+=("the six backend services built from the working tree (docker buildx bake -f $image_table)")
     ;;
   stg)
     for svc in "${built_services[@]}"; do
@@ -1518,7 +1445,6 @@ compose_images() {
       export "$var=$ref"
       compose_releases+=("$ref")
     done
-    export SVP_BACKEND_PULL_POLICY=never
     gitops=$(gitops_dir) || exit 1
     compose_notes+=("the six backend services and their migrations run the releases of staging, envs/stg/images/ of svp-gitops at $(gitops_at "$gitops")")
     ;;
@@ -1541,12 +1467,17 @@ compose_images() {
   fi
 }
 
-# compose_up_images: compose_images, then pulls every release for this machine's own architecture (docker without
-# DOCKER_DEFAULT_PLATFORM picks it from the multi-architecture index), so that a release that cannot be pulled stops
-# `make up` before anything starts, and prints the choices.
+# compose_up_images: compose_images, then builds the backend images of compose_bake (bake_images) and pulls every
+# release for this machine's own architecture (docker without DOCKER_DEFAULT_PLATFORM picks it from the
+# multi-architecture index), so that a build that fails or a release that cannot be pulled stops `make up` before
+# anything starts, and prints the choices.
 compose_up_images() {
   local ref note
   compose_images
+  if [ ${#compose_bake[@]} -gt 0 ]; then
+    echo "build ${compose_bake[*]} (docker buildx bake -f $image_table)"
+    bake_images "${compose_bake[@]}" || fail "build the images of ${compose_bake[*]} (docker buildx bake -f $image_table)"
+  fi
   for ref in ${compose_releases[@]+"${compose_releases[@]}"}; do
     echo "pull $ref"
     docker_ pull --quiet "$ref" >/dev/null || fail "pull $ref"

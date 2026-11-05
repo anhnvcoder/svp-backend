@@ -32,6 +32,7 @@ mkdir -p "$tree/deploy/ci/verify-steps" "$tree/deploy/k8s" "$tree/deploy/helm/sv
 cp "$here/supplychain.sh" "$tree/deploy/ci/verify-steps/"
 cp "$src/deploy/ci/common.sh" "$tree/deploy/ci/"
 cp "$src/deploy/k8s/lib.sh" "$tree/deploy/k8s/"
+cp "$src/deploy/docker-bake.json" "$tree/deploy/"
 cp -R "$src/deploy/helm/svp-policy/values.yaml" "$src/deploy/helm/svp-policy/files" "$tree/deploy/helm/svp-policy/"
 cat >"$tree/deploy/ci/ghcr-digest.sh" <<'EOF'
 #!/usr/bin/env bash

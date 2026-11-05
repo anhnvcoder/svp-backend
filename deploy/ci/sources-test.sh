@@ -181,6 +181,7 @@ refused "an image name with a /" '.sources[1].drillImages = ["drill/x"]' \
 lk=$work/lookup
 mkdir -p "$lk/deploy/k8s" "$lk/deploy/helm/svp-policy/files"
 cp "$src/deploy/k8s/lib.sh" "$lk/deploy/k8s/"
+cp "$src/deploy/docker-bake.json" "$lk/deploy/"
 # lookup NAME JQ WANT_RC WANT FUNCTION ARGS...: FUNCTION of lib.sh with ARGS on the table of the working tree changed
 # by JQ (case_table) exits WANT_RC and prints WANT (stdout and stderr).
 lookup() {
@@ -223,6 +224,7 @@ lookup "release_source_of: two sources with one prefix" \
 wc=$work/webclone
 mkdir -p "$wc/deploy/k8s" "$wc/deploy/helm/svp-policy"
 cp "$src/deploy/k8s/lib.sh" "$wc/deploy/k8s/"
+cp "$src/deploy/docker-bake.json" "$wc/deploy/"
 cp -R "$src/deploy/helm/svp-policy/values.yaml" "$src/deploy/helm/svp-policy/files" "$wc/deploy/helm/svp-policy/"
 wg=$work/webclone-gitops
 fe=$work/frontend

@@ -83,8 +83,10 @@ runs:
         key: grype-db-${{ steps.day.outputs.day }}
         restore-keys: grype-db-
 
-    # Native architecture, no emulation, no cross-compiling; no BuildKit provenance or SBOM, so the image is one plain
-    # manifest; then the tar every scanner reads.
+    # The Dockerfile and context the guard hands on: for a service of this repository, its target of the image table
+    # deploy/docker-bake.json (dockerfile of deploy/k8s/lib.sh; the context is the tree's root), the same the dev builds
+    # bake. Native architecture, no emulation, no cross-compiling; no BuildKit provenance or SBOM, so the image is one
+    # plain manifest; then the tar every scanner reads.
     - name: Build
       id: build
       shell: bash
