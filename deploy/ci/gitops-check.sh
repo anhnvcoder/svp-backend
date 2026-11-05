@@ -9,43 +9,30 @@
 # revision they pin and what derives from it are svp-gitops's own check, and step 5 (the release images, which are
 # svp-gitops's) is left out.
 #
-#   1. The tree: envs/ holds exactly stg and prd. Each envs/<env>/charts.yaml holds exactly revision (a full commit of
-#      this repository on origin/main), podSecurityVersion and collectorConfigSha256, both equal to what that commit
-#      gives (podSecurityVersion of deploy/helm/svp-cluster/values.yaml, the sha256 of
-#      deploy/observability/otelcol/k8s-config.yaml). envs/<env>/images/ holds exactly one file per service, each the
-#      image block alone (repository, tag, digest), the repository that service's image of a release source of the
-#      table chart svp-policy reads at revision (release_source_of of deploy/k8s/lib.sh: what the policy of <env>
-#      admits); a revision from before that table fails. Whether the release is signed, and built from the commit its
-#      tag names, is step 5's.
-#      The platform layer: key platforms of argocd/apps/components.json maps each platform to the environments that run
-#      on it (envs, each of stg and prd on at least one platform) and whether its renders may name the lab's
-#      *.svp.localhost (localHosts, false when left out); a missing or malformed key fails. platforms/ holds exactly a
-#      folder per platform of that map, argocd/apps/files/platforms is a symlink to it, each file of
-#      platforms/<platform>/ is README.md, <name>.yaml or <name>.values.tpl with <name> a component that runs on that
-#      platform, or argo-cd.yaml, the platform's values of Argo CD (after argocd/bootstrap.json's), and platforms of a
-#      component in components.json, when set, lists platforms of the map, each once (no
-#      platforms: every platform). A tree without platforms/ fails.
-#      The author of a pull request, with BASE: a bot's pull request merges with no review where no code owner owns
-#      the files (envs/stg/), so a bot's token, leaked or misused, may change only what that bot promotes. Each file
-#      changed from BASE to HEAD of a pull request whose author is a bot (pull_request.user.login of the event in
-#      GITHUB_EVENT_PATH; on a machine, where GITHUB_EVENT_NAME is unset, SVP_CHANGE_REQUEST_AUTHOR) is judged with
-#      the table of release sources at the revision its environment pins at HEAD. The bot <promoter>[bot] of source N
-#      changes envs/stg/images/<svc>.yaml and envs/prd/images/<svc>.yaml with <svc> in N's services; the bot of
-#      backend, whose repository holds the charts, also envs/stg/charts.yaml, envs/prd/charts.yaml and every image
-#      file of envs/prd/images/ (the promote to prd copies the whole set of stg, web's included); nothing else, and no
-#      bot deletes a file. A bot that promotes no source (Renovate) changes nothing under envs/. A person's pull
-#      request is not limited here. A bot that caused the event (sender.login: who opened the pull request or pushed
-#      the commit checked) other than the author fails, since the files allowed are the author's. An author or sender
-#      that cannot be read fails; without BASE, or for a run of no pull request, the rule prints one skip line.
+#   1. The tree: the policies of deploy/ci/gitops-tree-policies/ (conftest in CONFTEST_IMAGE of the Makefile, without
+#      network; each rule and why in the policy, its cases in *_test.rego, make conftest-verify): the layout of the
+#      root chart and the bootstrap, envs/ (exactly prd and stg; charts.yaml with exactly its three keys, one line each,
+#      the values derived from its revision; images/ with one file per service, each the image block alone, a release
+#      of a source of the table at the revision), the platform layer (key platforms of argocd/apps/components.json,
+#      platforms/ and its files, a file of a platform held to an overlay's rules), and the author of a pull request
+#      (which files each bot may change). This step builds their input, one JSON document (see their lib.rego): the
+#      tree's entries and the text of its files; for each environment, whether its revision is a commit on origin/main
+#      of this repository (a FAIL line when not), the values that commit derives (podSecurityVersion of
+#      deploy/helm/svp-cluster/values.yaml, the sha256 of deploy/observability/otelcol/k8s-config.yaml) and its table of
+#      release sources (release_sources of deploy/k8s/lib.sh; a revision from before that table fails); and, with
+#      BASE, the pull request: its author (pull_request.user.login of the event in GITHUB_EVENT_PATH; on a machine,
+#      where GITHUB_EVENT_NAME is unset, SVP_CHANGE_REQUEST_AUTHOR), the sender of the event (sender.login) and, for a
+#      bot's, the files changed from BASE to HEAD. An author or sender that cannot be read fails; without BASE, or for
+#      a run of no pull request, the rule prints one skip line. A conftest that gives no answer, or none from one of
+#      the policies, fails the step. Whether a release is signed, and built from the commit its tag names, is step 5's.
 #      gitops-check.sh --tree GITOPS_DIR [BASE] runs this step alone (its test).
 #   2. The root chart argocd/apps for each environment on each platform the platform layer runs it on, on amd64 and
 #      arm64 nodes (helm lint and template). The root gets value platform, and on
 #      eks value cluster from deploy/ci/cluster-values.example.yaml, the form the bootstrap sets with the session's
-#      real values, which never go to git: argocd/apps/values.yaml sets no cluster (or an empty map), and no file of
-#      platforms/ sets a key cluster. A file of platforms/ is held to an overlay's rules: a YAML map, no image, canary or
-#      httpRoute.name for a release of chart svp-service (envs/<env>/images/ names its image), and the same for what
-#      the root renders from a template <name>.values.tpl (helm.valuesObject of the Application). The root fails when
-#      an overlay or an image file breaks its rules. It makes one Application per component that runs on the platform,
+#      real values, which never go to git (step 1 holds argocd/apps/values.yaml and the files of platforms/ to setting
+#      none). What the root renders from a template <name>.values.tpl (helm.valuesObject of the Application) is held to
+#      an overlay's rules: no image, canary or httpRoute.name for a release of chart svp-service (envs/<env>/images/
+#      names its image). The root fails when an overlay or an image file breaks its rules. It makes one Application per component that runs on the platform,
 #      each reading the values files base/ (and archValues of its architecture) < platforms/<platform>/<name>.yaml <
 #      envs/<env>/<name>.yaml < envs/<env>/images/<name>.yaml that exist, in that order, then a valuesObject exactly
 #      when platforms/<platform>/<name>.values.tpl exists. Every source it reads from svp-gitops names a full ref
@@ -124,8 +111,7 @@ else
   tree=$(cd "$1" 2>/dev/null && pwd -P) || fail "$1 is not a directory"
   base=${2:-}
   tools="git jq helm docker"
-  [ -z "$tree_only" ] || tools="git jq"
-  [ -z "$root_only" ] || tools="git jq helm"
+  [ -z "$tree_only" ] || tools="git jq docker"
 fi
 for tool in $tools; do
   command -v "$tool" >/dev/null || fail "$tool is not installed"
@@ -346,92 +332,10 @@ if [ -n "$policy_only" ]; then
   exit 0
 fi
 
-# --- 1. the tree
+# --- 1. the tree: the policies of deploy/ci/gitops-tree-policies/ (conftest) on one JSON document (see their lib.rego),
+# built here from the tree, from the code repository at the revision each environment pins and from the pull request.
 components=$tree/argocd/apps/components.json
-for f in argocd/apps/Chart.yaml argocd/apps/values.yaml argocd/apps/templates/applications.yaml \
-  argocd/apps/components.json argocd/project.yaml argocd/bootstrap.json; do
-  [ -f "$tree/$f" ] || problem "$f is missing"
-done
-[ "$(readlink "$tree/argocd/apps/files/envs" 2>/dev/null)" = ../../../envs ] ||
-  problem "argocd/apps/files/envs must be a symlink to ../../../envs, through which the root chart reads envs/"
-step "the layout of $tree"
-jq -e '.components | length > 0' "$components" >/dev/null || fail "argocd/apps/components.json lists no component"
-# The release checks read the policy's settings from its chart's values and envs/<env>/svp-policy.yaml alone.
-if jq -e '.components[] | select(.name == "svp-policy") | has("values")' "$components" >/dev/null; then
-  problem "component svp-policy names a values file: its settings are the chart's values and envs/<env>/svp-policy.yaml, the only ones the release checks read"
-fi
-
-dirs=$(cd "$tree/envs" 2>/dev/null && for d in */; do [ -d "$d" ] && echo "${d%/}"; done | sort | paste -sd ' ' -) || dirs=
-[ "$dirs" = "$envs" ] || problem "envs/ holds '$dirs': the environments are exactly prd and stg"
-step "the environments of $tree"
-
-# --- the platform layer (see the header): key platforms of components.json. targets: each environment with the
-# platform the root is rendered for, <env>:<platform>, in the order of the map.
-# The jq program of the check of key platforms, kept out of $(...), which bash 3.2 misreads with these quotes inside.
-# Every value is tested for its type before it is read, so a malformed one is named, never a jq error.
-platforms_jq='
-  ($envs | split(" ")) as $e
-  | if (.platforms | type) != "object" or (.platforms | length) == 0 then
-      "has no key platforms, a map of each platform to {envs, localHosts}"
-    else ([.platforms | to_entries[] | select((.key | test("^[a-z][a-z0-9]*$") | not)
-        or (.value | type) != "object" or ((.value | keys) - ["envs", "localHosts"] | length) > 0
-        or (.value.envs | type) != "array" or (.value.envs | length) == 0
-        or (.value.envs | unique | length) != (.value.envs | length) or (.value.envs - $e | length) > 0
-        or ((.value | has("localHosts")) and (.value.localHosts | type) != "boolean")) | .key] | join(" ")) as $bad
-    | if $bad != "" then
-        "platforms: \($bad) must each map a name of lowercase letters and digits to {envs: environments of \($envs), each once; localHosts: true or false, optional}"
-      else ($e - [.platforms[].envs[]] | join(" ")) as $none
-      | if $none != "" then "platforms: no platform runs \($none)" else "ok" end end end'
-verdict=$(jq -r --arg envs "$envs" "$platforms_jq" "$components" 2>/dev/null) || verdict="cannot be read"
-[ "$verdict" = ok ] || fail "argocd/apps/components.json: $verdict"
-platform_names=$(jq -r '.platforms | keys | join(" ")' "$components")
-targets=$(jq -r '[.platforms | to_entries[] | .key as $p | .value.envs[] | "\(.):\($p)"] | join(" ")' "$components")
-# local_hosts PLATFORM: the renders of PLATFORM may name the lab's *.svp.localhost (its localHosts).
-local_hosts() {
-  jq -e --arg p "$1" '.platforms[$p].localHosts == true' "$components" >/dev/null
-}
-# runs_on NAME PLATFORM: component NAME runs on PLATFORM (no platforms in components.json: on every one).
-runs_on() {
-  jq -e --arg n "$1" --arg p "$2" \
-    '.components[] | select(.name == $n) | select((has("platforms") | not) or (.platforms | index($p)) != null)' \
-    "$components" >/dev/null
-}
-bad=$(jq -r '(.platforms | keys) as $k | .components[] | select(has("platforms"))
-  | select(.platforms | if type != "array" then true
-      else length == 0 or (unique | length) != length or (. - $k | length) > 0 end) | .name' "$components" | paste -sd ' ' -)
-[ -z "$bad" ] ||
-  problem "components.json: platforms of $bad must list platforms of '$platform_names', each once (no platforms: every platform)"
-if [ ! -d "$tree/platforms" ]; then
-  fail "platforms/ is missing: the tree is from before the platform layer, which the root chart and this check read"
-fi
-pdirs=$(cd "$tree/platforms" && for d in */; do [ -d "$d" ] && echo "${d%/}"; done | sort | paste -sd ' ' -) || pdirs=
-[ "$pdirs" = "$platform_names" ] ||
-  problem "platforms/ holds '$pdirs': the platforms are exactly those of key platforms of components.json, '$platform_names'"
-[ "$(readlink "$tree/argocd/apps/files/platforms" 2>/dev/null)" = ../../../platforms ] ||
-  problem "argocd/apps/files/platforms must be a symlink to ../../../platforms, through which the root chart reads platforms/"
-for f in "$tree/platforms"/*; do
-  if [ -e "$f" ] && [ ! -d "$f" ] && [ "${f##*/}" != README.md ]; then
-    problem "platforms/${f##*/}: platforms/ holds a folder per platform (and README.md), the root reads nothing else there"
-  fi
-done
-for plat in $platform_names; do
-  for f in "$tree/platforms/$plat"/*; do
-    [ -e "$f" ] || continue
-    b=${f##*/}
-    case $b in
-    README.md | argo-cd.yaml) continue ;;
-    *.values.tpl) name=${b%.values.tpl} ;;
-    *.yaml) name=${b%.yaml} ;;
-    *) name= ;;
-    esac
-    if [ -d "$f" ] || [ -z "$name" ] || ! jq -e --arg n "$name" '.components[] | select(.name == $n)' "$components" >/dev/null; then
-      problem "platforms/$plat/$b: a file of a platform is README.md, <name>.yaml or <name>.values.tpl, <name> a component of components.json"
-    elif ! runs_on "$name" "$plat"; then
-      problem "platforms/$plat/$b: component $name does not run on $plat (its platforms in components.json)"
-    fi
-  done
-done
-step "the platforms of $tree"
+mkdir -p "$tmp/tree/in"
 
 # charts_field ENV KEY: the value of KEY in envs/ENV/charts.yaml.
 charts_field() {
@@ -478,182 +382,144 @@ pr_login() {
   echo "$login"
 }
 
-# author_rule: the author of a pull request (step 1, see the header).
-author_rule() {
-  local author sender login status path env rev src name svc promoters who bad=0 n=0
-  if [ -z "$base" ]; then
-    echo "skip  the author of a pull request: no base, so no change of a pull request to check"
-    return 0
-  fi
-  if ! author=$(pr_login .pull_request.user.login author); then
-    problem "the author of the pull request cannot be read (above): the files a bot may change depend on which bot it is"
-    return 0
-  fi
-  if [ -z "$author" ]; then
-    echo "skip  the author of a pull request: this run checks no pull request (on a machine, SVP_CHANGE_REQUEST_AUTHOR names the author of one)"
-    return 0
-  fi
-  if ! sender=$(pr_login .sender.login sender); then
-    problem "the sender of the pull request's event cannot be read (above): a bot other than the author may have pushed onto it"
-    return 0
-  fi
-  if [[ $sender == *'[bot]' ]] && [ "$sender" != "$author" ]; then
-    problem "the commit checked was pushed by $sender onto the pull request of $author: a bot pushes onto its own pull requests only, since the files allowed are the author's"
-    return 0
-  fi
-  if [[ $author != *'[bot]' ]]; then
-    echo "ok    the pull request is by $author, a person: the files it changes are not limited by the author's rule"
-    return 0
-  fi
-  # NUL-separated, so that a path git would quote (a byte outside ASCII, a tab) is read as it is.
-  if [ "$(git -C "$tree" rev-parse --show-toplevel 2>/dev/null)" != "$tree" ] ||
-    ! git -C "$tree" diff --name-status -z --no-renames "$base" HEAD >"$tmp/changed" 2>/dev/null; then
-    problem "list the files $author changed since $base in $tree (the top of a git repository that has that commit)"
-    return 0
-  fi
-  login=${author%'[bot]'}
-  # The table of release sources of each environment, at the revision it pins after the change.
-  for env in $envs; do
-    rev=$(charts_field "$env" revision 2>/dev/null) || rev=
-    if ! [[ $rev =~ ^[0-9a-f]{40}$ ]] || ! (release_sources "$rev") >"$tmp/sources-$env.json"; then
-      problem "the release sources of the charts of envs/$env cannot be read (above), so neither can which files $author may change"
-      return 0
-    fi
-  done
-  promoters=$(jq -r '.sources[] | select(has("promoter")) | .promoter' "$tmp"/sources-*.json | sort -u)
-  while IFS= read -r -d '' status && IFS= read -r -d '' path; do
-    n=$((n + 1))
-    if ! grep -qxF -- "$login" <<<"$promoters"; then
-      case $path in
-      envs/*)
-        problem "$path: changed by $author, a bot that promotes no release source: such a bot changes nothing under envs/"
-        bad=1
-        ;;
-      esac
-      continue
-    fi
-    env= svc=
-    case $path in
-    envs/stg/charts.yaml | envs/prd/charts.yaml) env=${path:5:3} ;;
-    envs/stg/images/*.yaml | envs/prd/images/*.yaml)
-      env=${path:5:3}
-      svc=${path#envs/???/images/}
-      svc=${svc%.yaml}
-      ;;
-    esac
-    if [ -z "$env" ]; then
-      problem "$path: changed by $author, the bot of a release source: it changes envs/<env>/images/<service>.yaml of its own services only (the bot of $chart_source also envs/<env>/charts.yaml and envs/prd/images/)"
-      bad=1
-      continue
-    fi
-    rev=$(charts_field "$env" revision)
-    src=$(jq -c --arg p "$login" '.sources[] | select(.promoter == $p)' "$tmp/sources-$env.json")
-    if [ -z "$src" ]; then
-      problem "$path: changed by $author, which promotes no release source of the charts envs/$env runs (${rev:0:12})"
-      bad=1
-      continue
-    fi
-    name=$(jq -r .name <<<"$src")
-    who="$author, the bot of release source $name"
-    if [ "$status" = D ]; then
-      problem "$path: deleted by $who: a bot changes files under envs/, never deletes one"
-      bad=1
-    elif [ -z "$svc" ]; then
-      if [ "$name" != "$chart_source" ]; then
-        problem "$path: changed by $who: only the bot of $chart_source, whose repository holds the charts, changes charts.yaml"
-        bad=1
-      fi
-    elif jq -e --arg s "$svc" '.services | index($s) != null' <<<"$src" >/dev/null; then
-      :
-    elif [ "$env" = prd ] && [ "$name" = "$chart_source" ] && [[ " ${svp_services[*]} " == *" $svc "* ]]; then
-      : # The promote to prd copies every image file of stg, those of other sources too.
-    else
-      problem "$path: changed by $who, which publishes $(jq -r '.services | join(" ")' <<<"$src"): it changes the image files of those services only"
-      bad=1
-    fi
-  done <"$tmp/changed"
-  [ "$bad" -eq 0 ] || return 0
-  if grep -qxF -- "$login" <<<"$promoters"; then
-    echo "ok    the pull request of $author, the promoter of a release source: its $n changed files are all files that bot may change"
+# The tree: every entry but .git, by its path, with what it resolves to, the target of a link, the text of a file.
+(cd "$tree" && find . -mindepth 1 -name .git -prune -o -print0) | while IFS= read -r -d '' path; do
+  path=${path#./}
+  args=(--arg p "$path" --arg link "$([ ! -L "$tree/$path" ] || readlink "$tree/$path")")
+  if [ -d "$tree/$path" ]; then
+    args+=(--arg type dir --arg text "")
+  elif [ -f "$tree/$path" ]; then
+    args+=(--arg type file --rawfile text "$tree/$path")
   else
-    echo "ok    the pull request of $author, a bot that promotes no release source: none of its $n changed files is under envs/"
+    args+=(--arg type other --arg text "")
   fi
-}
+  jq -cn "${args[@]}" '{($p): ({type: $type}
+    + if $type == "file" then {text: $text} else {} end + if $link == "" then {} else {link: $link} end)}' || exit 1
+done | jq -cs 'add // {}' >"$tmp/tree/entries.json" || fail "list the tree $tree"
 
+# Each environment's revision on main of this repository, what that commit derives (charts) and its table of release
+# sources (sources); the working tree's table for every environment with --worktree. A revision that is not 40 hex is
+# the policies' to name.
+charts='{}' sources='{}'
+if [ -n "$worktree" ] && ! table=$(release_sources); then
+  problem "the release sources of the working tree cannot be read (above)"
+fi
 for env in $envs; do
-  charts=$tree/envs/$env/charts.yaml
-  if [ ! -f "$charts" ]; then
-    problem "envs/$env/charts.yaml is missing: it pins the commit of this repository whose charts $env runs"
-    continue
-  fi
-  keys=$(grep -Ev '^[[:space:]]*(#.*)?$' "$charts" | sed 's/:.*//' | sort | paste -sd ' ' -)
-  if [ "$keys" != "collectorConfigSha256 podSecurityVersion revision" ]; then
-    problem "envs/$env/charts.yaml holds '$keys': exactly revision, podSecurityVersion and collectorConfigSha256, one line each"
+  [ -f "$tree/envs/$env/charts.yaml" ] || continue
+  if [ -n "$worktree" ]; then
+    [ -z "${table:-}" ] || sources=$(jq -c --arg e "$env" --argjson t "$table" '. + {($e): ($t + {revision: ""})}' <<<"$sources")
     continue
   fi
   rev=$(charts_field "$env" revision)
-  if [ -n "$worktree" ]; then
-    echo "ok    envs/$env/charts.yaml: revision, podSecurityVersion and collectorConfigSha256 (their values are svp-gitops's own check)"
-  elif ! [[ $rev =~ ^[0-9a-f]{40}$ ]]; then
-    problem "envs/$env/charts.yaml: revision is '$rev', the full commit (40 hex) of this repository whose charts $env runs"
-    continue
-  elif ! git -C "$repo_root" cat-file -e "$rev^{commit}" 2>/dev/null; then
+  [[ $rev =~ ^[0-9a-f]{40}$ ]] || continue
+  if ! git -C "$repo_root" cat-file -e "$rev^{commit}" 2>/dev/null; then
     problem "envs/$env/charts.yaml: revision $rev is no commit of this clone of the code repository (fetch its whole history)"
     continue
-  elif ! git -C "$repo_root" merge-base --is-ancestor "$rev" "$main" 2>/dev/null; then
+  fi
+  if ! table=$(release_sources "$rev"); then
+    problem "envs/$env/charts.yaml: the release sources of ${rev:0:12} cannot be read (above)"
+    continue
+  fi
+  sources=$(jq -c --arg e "$env" --arg r "$rev" --argjson t "$table" '. + {($e): ($t + {revision: $r})}' <<<"$sources")
+  if ! git -C "$repo_root" merge-base --is-ancestor "$rev" "$main" 2>/dev/null; then
     problem "envs/$env/charts.yaml: revision ${rev:0:12} is not on $main of the code repository"
     continue
-  else
-    if ! (release_sources "$rev" >/dev/null); then
-      problem "envs/$env/charts.yaml: the release sources of ${rev:0:12} cannot be read (above)"
-      continue
-    fi
-    want=$(git -C "$repo_root" show "$rev:deploy/helm/svp-cluster/values.yaml" | sed -n 's/^podSecurityVersion: *//p')
-    got=$(charts_field "$env" podSecurityVersion)
-    [ "$got" = "$want" ] ||
-      problem "envs/$env/charts.yaml: podSecurityVersion is '$got', deploy/helm/svp-cluster/values.yaml at ${rev:0:12} pins '$want'"
-    want=$(git -C "$repo_root" show "$rev:deploy/observability/otelcol/k8s-config.yaml" | shasum -a 256 | cut -d' ' -f1)
-    got=$(charts_field "$env" collectorConfigSha256)
-    [ "$got" = "$want" ] ||
-      problem "envs/$env/charts.yaml: collectorConfigSha256 is '$got', deploy/observability/otelcol/k8s-config.yaml at ${rev:0:12} has sha256 $want"
-    echo "ok    envs/$env/charts.yaml: charts of ${rev:0:12} on $main, podSecurityVersion and collectorConfigSha256 as that commit gives them"
   fi
+  charts=$(jq -c --arg e "$env" --arg r "$rev" \
+    --arg psv "$(git -C "$repo_root" show "$rev:deploy/helm/svp-cluster/values.yaml" | sed -n 's/^podSecurityVersion: *//p')" \
+    --arg sha "$(git -C "$repo_root" show "$rev:deploy/observability/otelcol/k8s-config.yaml" | shasum -a 256 | cut -d' ' -f1)" \
+    '. + {($e): {revision: $r, podSecurityVersion: $psv, collectorConfigSha256: $sha}}' <<<"$charts")
+done
 
-  images=$tree/envs/$env/images
-  want=$(for svc in "${svp_services[@]}"; do echo "$svc.yaml"; done | sort | paste -sd ' ' -)
-  got=$(cd "$images" 2>/dev/null && ls -A | sort | paste -sd ' ' -) || got=
-  if [ "$got" != "$want" ]; then
-    problem "envs/$env/images/ holds '$got': exactly one file per service, $want"
+# The pull request: its author and sender, and for a bot's the files it changes from BASE (NUL-separated, so that a path
+# git would quote, a byte outside ASCII or a tab, is read as it is). pr_ok: the line printed once the policies pass.
+pull_request=null pr_ok=
+if [ -z "$base" ]; then
+  echo "skip  the author of a pull request: no base, so no change of a pull request to check"
+elif ! author=$(pr_login .pull_request.user.login author); then
+  problem "the author of the pull request cannot be read (above): the files a bot may change depend on which bot it is"
+elif [ -z "$author" ]; then
+  echo "skip  the author of a pull request: this run checks no pull request (on a machine, SVP_CHANGE_REQUEST_AUTHOR names the author of one)"
+elif ! sender=$(pr_login .sender.login sender); then
+  problem "the sender of the pull request's event cannot be read (above): a bot other than the author may have pushed onto it"
+else
+  pull_request=$(jq -cn --arg a "$author" --arg s "$sender" '{author: $a, sender: $s}')
+  if [[ $author != *'[bot]' ]]; then
+    pr_ok="ok    the pull request is by $author, a person: the files it changes are not limited by the author's rule"
+  elif [ "$(git -C "$tree" rev-parse --show-toplevel 2>/dev/null)" != "$tree" ] ||
+    ! git -C "$tree" diff --name-status -z --no-renames "$base" HEAD >"$tmp/tree/changed" 2>/dev/null; then
+    problem "list the files $author changed since $base in $tree (the top of a git repository that has that commit)"
+  else
+    pull_request=$(jq -cRs --argjson pr "$pull_request" \
+      '$pr + {changes: (split("\u0000") | .[:-1] | [range(0; length; 2) as $i | {status: .[$i], path: .[$i + 1]}])}' \
+      "$tmp/tree/changed")
+    n=$(jq '.changes | length' <<<"$pull_request")
+    if jq -e --arg p "${author%'[bot]'}" '[.[].sources[].promoter] | index($p) != null' <<<"$sources" >/dev/null; then
+      pr_ok="ok    the pull request of $author, the promoter of a release source: its $n changed files are all files that bot may change"
+    else
+      pr_ok="ok    the pull request of $author, a bot that promotes no release source: none of its $n changed files is under envs/"
+    fi
   fi
-  for svc in "${svp_services[@]}"; do
-    file=envs/$env/images/$svc.yaml
-    [ -f "$tree/$file" ] || continue
-    other=$(grep -Ev '^([[:space:]]|#|$)' "$tree/$file" | grep -vx 'image:' || true)
-    if [ -n "$other" ]; then
-      problem "$file holds $(sed 's/:.*//' <<<"$other" | paste -sd ' ' -) besides image: an image file holds the image block alone"
-      continue
-    fi
-    if ! repo=$(values_field repository <"$tree/$file") || ! tag=$(values_field tag <"$tree/$file") ||
-      ! digest=$(values_field digest <"$tree/$file"); then
-      problem "$file: image.repository, tag and digest must each be one plain line in the image block"
-      continue
-    fi
-    # The table of release sources of the charts env runs (the working tree's with --worktree).
-    table_rev=$rev
-    [ -z "$worktree" ] || table_rev=
-    if ! release_source_of "$svc" "$repo" "$table_rev" >/dev/null || [ -z "$tag" ] || [ -z "$digest" ]; then
-      problem "$file: the image must be a release of $(release_repositories "$svc" "$table_rev") with its tag and digest, not '$repo' '$tag' '$digest'"
-    fi
-  done
+fi
+
+jq -n --argjson worktree "$([ -n "$worktree" ] && echo true || echo false)" --slurpfile tree "$tmp/tree/entries.json" \
+  --argjson charts "$charts" --argjson sources "$sources" --argjson pr "$pull_request" \
+  '{worktree: $worktree, tree: $tree[0], charts: $charts, sources: $sources}
+    + if $pr == null then {} else {pull_request: $pr} end' >"$tmp/tree/in/input.json" ||
+  fail "write the input of the policies on the tree"
+printf '%s\n' "${svp_services[@]}" | jq -cRn --arg envs "$envs" \
+  '{gitops_check: {environments: ($envs | split(" ")), services: [inputs]}}' >"$tmp/tree/in/data.json" ||
+  fail "write the data of the policies on the tree"
+
+# conftest from CONFTEST_IMAGE of the Makefile, without network, as the caller, with a read-only root file system, the
+# policies and the input mounted read-only. An answer that did not run every package (no result for one, or a result
+# with neither a success nor a failure: a package renamed or empty) is no answer, nor is a run that gives none (a policy
+# that does not compile).
+tree_packages="gitops.layout gitops.envs gitops.platforms gitops.author"
+args=()
+for package in $tree_packages; do args+=(--namespace "$package"); done
+image=$(tool_image CONFTEST_IMAGE)
+rc=0
+out=$(docker_ run --rm --network none --read-only --user "$(id -u):$(id -g)" \
+  -v "$ci_dir/gitops-tree-policies:/policy:ro" -v "$tmp/tree/in:/in:ro" -w /in "$image" test --policy /policy \
+  --data /in/data.json "${args[@]}" --output json --no-color input.json 2>"$tmp/tree/err") || rc=$?
+jq -e --arg want "$tree_packages" 'type == "array" and ([.[] | select((.successes // 0) + (.failures // [] | length) > 0)
+  | .namespace] | unique) == ($want | split(" ") | unique)' <<<"$out" >/dev/null 2>&1 || {
+  sed 's/^/    /' "$tmp/tree/err" >&2
+  fail "conftest could not check the tree with the policies of deploy/ci/gitops-tree-policies/ (above)"
+}
+jq -r '.[].failures[]?.msg' <<<"$out" >"$tmp/tree/broken"
+while IFS= read -r msg; do problem "$msg"; done <"$tmp/tree/broken"
+[ "$rc" -eq 0 ] || [ -s "$tmp/tree/broken" ] || fail "conftest failed on the tree without naming a rule: $(cat "$tmp/tree/err")"
+step "the tree $tree"
+echo "ok    the tree keeps the rules of deploy/ci/gitops-tree-policies/ (layout, environments, platform layer, author of a pull request)"
+for env in $envs; do
   if [ -n "$worktree" ]; then
+    echo "ok    envs/$env/charts.yaml: revision, podSecurityVersion and collectorConfigSha256 (their values are svp-gitops's own check)"
     echo "ok    envs/$env/images/: seven releases, each of a release source the policy admits"
   else
+    rev=$(revision_of "$env")
+    echo "ok    envs/$env/charts.yaml: charts of ${rev:0:12} on $main, podSecurityVersion and collectorConfigSha256 as that commit gives them"
     echo "ok    envs/$env/images/: seven releases, each of a release source the policy of ${rev:0:12} admits"
   fi
 done
-author_rule
-step "the tree $tree"
+[ -z "$pr_ok" ] || echo "$pr_ok"
 [ -z "$tree_only" ] || exit 0
+
+# The platform layer, as the policies hold it: targets is each environment with the platform the root is rendered
+# for, <env>:<platform>, in the order of the map.
+platform_names=$(jq -r '.platforms | keys | join(" ")' "$components")
+targets=$(jq -r '[.platforms | to_entries[] | .key as $p | .value.envs[] | "\(.):\($p)"] | join(" ")' "$components")
+# local_hosts PLATFORM: the renders of PLATFORM may name the lab's *.svp.localhost (its localHosts).
+local_hosts() {
+  jq -e --arg p "$1" '.platforms[$p].localHosts == true' "$components" >/dev/null
+}
+# runs_on NAME PLATFORM: component NAME runs on PLATFORM (no platforms in components.json: on every one).
+runs_on() {
+  jq -e --arg n "$1" --arg p "$2" \
+    '.components[] | select(.name == $n) | select((has("platforms") | not) or (.platforms | index($p)) != null)' \
+    "$components" >/dev/null
+}
 
 # The charts of this repository at each environment's revision, unpacked with git archive: neither the working tree
 # nor the index of this clone is read. All of deploy/, since files of the charts are symlinks to files beside them
@@ -709,38 +575,12 @@ values_files() {
   [ ! -f "$tree/envs/$1/images/$3.yaml" ] || echo "envs/$1/images/$3.yaml"
 }
 # overlay_keys JSON: the keys of a release's values that only envs/<env>/images/ (image) and the base (canary,
-# httpRoute.name, mirrored by canaryRoute of components.json) may set, those JSON sets.
+# httpRoute.name, mirrored by canaryRoute of components.json) may set, those JSON sets: the rule overlay_keys of
+# deploy/ci/gitops-tree-policies/lib.rego holds the files of platforms/ to, here on what the templates render.
 overlay_keys() {
   jq -r '[if has("image") then "image" else empty end, if has("canary") then "canary" else empty end,
     if (.httpRoute | type) == "object" and (.httpRoute | has("name")) then "httpRoute.name" else empty end] | join(", ")' <<<"$1"
 }
-
-# The root's value cluster: the bootstrap's alone, from the values of the session (the infrastructure repository's
-# output cluster_values), which never go to git.
-json=$(yaml_json "$tree/argocd/apps/values.yaml" | head -n 1)
-[ -n "$json" ] || json='{}'
-if [ "$(jq -r 'has("Error")' <<<"$json")" = true ]; then
-  problem "argocd/apps/values.yaml is no YAML map: $(jq -r .Error <<<"$json")"
-elif [ "$(jq -c '.cluster // {}' <<<"$json")" != '{}' ]; then
-  problem "argocd/apps/values.yaml sets cluster: the bootstrap alone sets it, from the values of the session, which never go to git (an empty map at most)"
-fi
-# The files of the platforms, held to an overlay's rules; what the templates render is held to them below.
-for f in "$tree"/platforms/*/*.yaml; do
-  [ -f "$f" ] || continue
-  file=${f#"$tree"/}
-  name=${f##*/}
-  name=${name%.yaml}
-  json=$(yaml_json "$f" | head -n 1)
-  [ -n "$json" ] || json='{}'
-  if [ "$(jq -r 'has("Error")' <<<"$json")" = true ]; then
-    problem "$file is no YAML map: $(jq -r .Error <<<"$json")"
-  elif [ "$(jq -r 'has("cluster")' <<<"$json")" = true ]; then
-    problem "$file sets cluster: what depends on the cluster reaches a component through platforms/<platform>/$name.values.tpl from the root's value cluster, which the bootstrap alone sets"
-  elif [ "$(component_field "$name" path)" = "$service_chart" ] && [ -n "$(overlay_keys "$json")" ]; then
-    problem "$file sets $(overlay_keys "$json"): a release's image is envs/<env>/images/$name.yaml, and every platform runs the base's canary"
-  fi
-done
-step "the values files of the platforms"
 
 { echo 'cluster:'; sed 's/^/  /' "$ci_dir/cluster-values.example.yaml"; } >"$tmp/cluster.yaml" ||
   fail "read deploy/ci/cluster-values.example.yaml"
@@ -902,11 +742,9 @@ for target in $targets; do
 done
 echo "ok    ${real_targets:-no render}: no svp.localhost in the render of the root or of any chart of the code repository (no localHosts on their platform); policy no-lab-hosts passes on the $lab_checked resources of those charts"
 
-# External Secrets of chart svp-cluster.
-eso=$(jq -r '.components[] | select(.name == "external-secrets") | "\(.repo) \(.chart) \(.version) \(.values)"' \
-  "$components")
-[ -n "$eso" ] || fail "no component external-secrets in argocd/apps/components.json"
-read -r eso_repo eso_chart eso_version eso_values <<<"$eso"
+# External Secrets of chart svp-cluster (component external-secrets: policy layout of step 1).
+read -r eso_repo eso_chart eso_version eso_values < <(jq -r '.components[] | select(.name == "external-secrets")
+  | "\(.repo) \(.chart) \(.version) \(.values)"' "$components")
 mkdir -p "$tmp/eso/crds" "$tmp/eso/schemas" "$tmp/eso/manifests" "$tmp/mv/templates"
 helm template external-secrets "$eso_chart" --repo "$eso_repo" --version "$eso_version" --namespace external-secrets \
   -f "$tree/$eso_values" --show-only templates/crds/externalsecret.yaml --show-only templates/crds/secretstore.yaml \
@@ -984,13 +822,11 @@ done
 
 # --- 4. image digests, per folder of charts (one per revision, or the working tree): every component with its base/
 # values and Argo CD as argocd/bootstrap.json installs it, then each component with values of a platform again with
-# them, and each with an overlay of an environment of those charts again with it.
+# them, and each with an overlay of an environment of those charts again with it. argocd/bootstrap.json installs chart
+# argo-cd of https://argoproj.github.io/argo-helm with a values file of the tree (policy layout of step 1).
 bootstrap=$tree/argocd/bootstrap.json
-[ "$(jq -r '"\(.repo) \(.chart)"' "$bootstrap")" = "https://argoproj.github.io/argo-helm argo-cd" ] ||
-  fail "argocd/bootstrap.json must install chart argo-cd of https://argoproj.github.io/argo-helm"
 argocd_version=$(jq -r '.version' "$bootstrap")
 argocd_values=$(jq -r '.values' "$bootstrap")
-[ -f "$tree/$argocd_values" ] || fail "argocd/bootstrap.json: values file $argocd_values is missing"
 
 # One line per component, fields separated by the ASCII unit separator so empty fields survive `read`; Argo CD last.
 sep=$'\x1f'

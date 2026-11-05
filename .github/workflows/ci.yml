@@ -319,7 +319,8 @@ jobs:
       # Only here does an expired entry fail (grype reads no date, so its rule would go on covering the match).
       # The same step holds the misconfigurations job trivy-config leaves out to their rules: paths, reason, at most 90
       # days. The rules are conftest policies (deploy/ci/ignorefile-policies/), run with yq from the images the Makefile
-      # pins, without network once pulled; no token. make conftest-verify runs their tests: every case that must fail.
+      # pins, without network once pulled; no token. make conftest-verify runs their tests, every case that must fail,
+      # and those of the policies deploy/ci/gitops-check.sh holds a tree of svp-gitops to (deploy/ci/gitops-tree-policies/).
       - run: make conftest-verify
       - run: deploy/ci/scan-gate.sh --check-ignorefile
       # The scripts of the image pipeline, which otherwise run only in images.yml (most of them on main only), each in a
@@ -382,10 +383,11 @@ jobs:
       # prefix, and web_clone of lib.sh, which reads the table, on repositories on disk. helm from the PATH set above,
       # bash, git and jq; no network.
       - run: deploy/ci/sources-test.sh
-      # The check that svp-gitops runs from a pinned commit of this repository, on the clone above: each negative case
-      # (a missing image file, an image newer than the charts, a set of prd that matches no record of stg, ...) must
-      # fail with its own message, and gitops_dir of deploy/k8s/lib.sh finds the clone of a draft workspace. Every case
-      # stops before the network (a fake gh lists the records); helm from the PATH set above.
+      # The check that svp-gitops runs from a pinned commit of this repository, on the clone above: the tests of its
+      # conftest policies, then each negative case of what it does around them and of its renders (a missing image file,
+      # a wrong value derived from the revision, a template rendering a release's image, a bot changing another's file,
+      # ...) must fail with its own message, and gitops_dir of deploy/k8s/lib.sh finds the clone of a draft workspace.
+      # Every case stops before the network; helm from the PATH set above, conftest and the Kyverno CLI through Docker.
       - run: deploy/ci/gitops-check-test.sh "$SVP_GITOPS_DIR"
       # The guard of the cloud context (deploy/k8s/lib.sh: k3d-svp unless the context is a cluster of the project) and
       # the scripts of the eks-* targets, which otherwise run only by hand against a cloud cluster: fake kubectl,

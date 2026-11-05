@@ -13,7 +13,8 @@
 # ghcr-digest.sh, which the GitOps scenario and the supply chain drill call), every test *-test.sh (run by the jobs
 # of ci.yml and on a machine), the scripts of svp-gitops's check:
 # gitops-check.sh (svp-gitops's check and make helm-check) with values-check.sh and verify-release.sh,
-# which only it, make k8s-gitops-up and the drills run, its Kyverno policies gitops-policies/,
+# which only it, make k8s-gitops-up and the drills run, its Kyverno policies gitops-policies/ and conftest policies
+# gitops-tree-policies/,
 # contract.sh (the version rule and
 # the publishing of the gateway's API contract: job contract of images.yml runs it, but it builds and promotes no
 # image), the conftest policies on the ignore files ignorefile-policies/ (the gate applies them, but job config checks
@@ -76,7 +77,7 @@ while IFS= read -r path; do
     deploy/ci/verify-mask.sh | deploy/ci/verify-collect.sh | deploy/ci/ghcr-digest.sh | \
     deploy/ci/verify/* | deploy/ci/*-test.sh | \
     deploy/ci/gitops-check.sh | deploy/ci/values-check.sh | deploy/ci/verify-release.sh | \
-    deploy/ci/contract.sh | deploy/ci/gitops-policies/* | deploy/ci/ignorefile-policies/*)
+    deploy/ci/contract.sh | deploy/ci/gitops-policies/* | deploy/ci/gitops-tree-policies/* | deploy/ci/ignorefile-policies/*)
     continue
     ;;
   esac

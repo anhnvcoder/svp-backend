@@ -4,7 +4,8 @@
 # builds all six images of this repository (never web, which svp-frontend builds), and so does one of the GRYPE_IMAGE
 # line of the Makefile; none is built for a change under web/ (a file added, then deleted), of a test under deploy/ci/, of
 # ghcr-digest.sh, of a scenario file under deploy/ci/verify/, of the scripts of svp-gitops's check (gitops-check.sh with
-# values-check.sh and verify-release.sh), of the policy's values, of docs/ or of another line of the Makefile.
+# values-check.sh, verify-release.sh and its conftest policies), of the policy's values, of docs/ or of another line of the
+# Makefile.
 # Runs on macOS and Linux: no network, no Docker, no cluster.
 #
 # Usage, from anywhere: deploy/ci/changed-services-test.sh
@@ -64,7 +65,8 @@ same "changed-services: the removal of web/ builds nothing" "" "$(changed)"
 # docs/.
 for f in changed-services-test.sh plan-test.sh promote-test.sh rescan-test.sh scan-gate-test.sh sign-image-test.sh \
   verify-release-test.sh vuln-predicate-test.sh ghcr-digest.sh ghcr-digest-test.sh verify/gitops.sh gitops-check.sh \
-  gitops-check-test.sh values-check.sh verify-release.sh ignorefile-policies/grypeignore.rego; do
+  gitops-check-test.sh values-check.sh verify-release.sh ignorefile-policies/grypeignore.rego \
+  gitops-tree-policies/author.rego; do
   same "changed-services: a change of $f builds nothing" "" "$(changed_by "deploy/ci/$f")"
 done
 same "changed-services: a change of the policy's values builds nothing" "" \

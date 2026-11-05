@@ -1,28 +1,25 @@
 #!/usr/bin/env bash
 # Negative cases of deploy/ci/gitops-check.sh and of the root chart argocd/apps of a tree of the deployment repository
-# svp-gitops. Each case changes one thing in a fresh copy of TREE and must fail with its own message; the root chart is
-# also rendered on its own (helm template), since Argo CD relies on its render failing, not on the check:
-#   - envs/stg/images/ with six of the seven image files;
-#   - an image file with a key besides image;
-#   - an overlay of a release of chart svp-service that sets image;
-#   - an unknown environment: a directory envs/qa for the check, env=nope for the chart;
-#   - an empty revision in envs/stg/charts.yaml;
-#   - a wrong collectorConfigSha256;
+# svp-gitops. The rules on the tree's files (step 1) are conftest policies, each case of them a test of
+# deploy/ci/gitops-tree-policies/ (make conftest-verify, run first here); this script checks what the script does around
+# them and the rules that need a render, a tool or git. Each case changes one thing in a fresh copy of TREE and must
+# fail with its own message; the root chart is also rendered on its own (helm template), since Argo CD relies on its
+# render failing, not on the check:
+#   - the policies on the tree, through the input the check builds: envs/stg/images/ with six of the seven image files
+#     (the tree's entries), an empty revision in envs/stg/charts.yaml (the text of a file), a wrong
+#     collectorConfigSha256 (the value the revision's commit derives), components.json without key platforms; a
+#     conftest that gives no answer (a policy that does not compile) or none from one policy (a package renamed) fails
+#     the check instead of passing;
+#   - the root chart: six image files of seven, an image file with a key besides image, an overlay of a release of
+#     chart svp-service that sets image, an unknown environment (env=nope), an empty revision;
 #   - a short targetRevision (main, not refs/heads/main) for the sources of svp-gitops in argocd/apps/values.yaml;
 #   - the platform layer (gitops-check.sh --root, steps 1 and 2, on copies of TREE, which must have platforms/): TREE
 #     passes, each environment on each platform of key platforms of components.json, with a line for each pair it
-#     leaves out; key platforms missing, an environment of no platform, an unknown environment, a localHosts that is
-#     no boolean, a key besides envs and localHosts, a platform that is no map, envs that is no list (each named, not
-#     a jq error), a platform of the map without its folder, a tree without
-#     platforms/, a file of a platform setting a release's image, a template rendering one, a file naming no
-#     component, a template of Argo CD's values (argo-cd.values.tpl), Argo CD's values of a platform (argo-cd.yaml)
-#     setting cluster, a file of k3d for a component of eks alone, cluster set in argocd/apps/values.yaml or in a file
-#     of a platform, an unknown platform directory, a component on an unknown platform, a root chart making
-#     Applications of another platform and one reading a platform's values after the environment's each fail with
-#     their own message, while argo-cd.yaml of a platform passes the check's rules and the root's render (a root
-#     chart that refuses the file made to leave it out);
-#     k3d without localHosts fails the whole check on the render of stg there naming svp.localhost (step 3, charts of
-#     this repository, no network);
+#     leaves out; a template of a platform rendering a release's image, a root chart making Applications of another
+#     platform and one reading a platform's values after the environment's each fail with their own message, while
+#     argo-cd.yaml of a platform passes the policies and the root's render (a root chart that refuses the file made to
+#     leave it out); k3d without localHosts fails the whole check on the render of stg there naming svp.localhost
+#     (step 3, charts of this repository, no network);
 #   - the Kyverno policies on rendered manifests (deploy/ci/gitops-policies/, the CLI of KYVERNO_CLI_IMAGE, no
 #     network once its image is pulled): their kyverno test (make kyverno-test); through gitops-check.sh --policy, a
 #     render with every image pinned passes, a document of comments alone and a CustomResourceDefinition left out; an
@@ -31,20 +28,21 @@
 #     that does not compile fails the check instead of passing;
 #   - the release sources of the image files (gitops-check.sh --tree, on a throwaway copy of this repository with a
 #     commit from before the table of release sources, one with the table of the rename (with the retired sources,
-#     which prd may still pin) and one with the table of the working tree): the table of the rename passes with the
-#     releases of the retired sources and with those of the new ones; the working tree's passes with the new ones and
-#     refuses a retired one; charts from before the table stop, naming the commit; values-check.sh refuses an image
-#     file naming the repository of another service before it verifies any release;
+#     which prd may still pin) and one with the table of the working tree), the tables the check reads at each
+#     revision: the table of the rename passes with the releases of the retired sources and with those of the new
+#     ones; the working tree's passes with the new ones and refuses a retired one; charts from before the table stop,
+#     naming the commit; values-check.sh refuses an image file naming the repository of another service before it
+#     verifies any release;
 #   - the author of a pull request (gitops-check.sh --tree TREE BASE on the same throwaway repository, the author in
-#     SVP_CHANGE_REQUEST_AUTHOR or in an event file): the bot of svp-frontend moves web of stg and of prd, the bot of
-#     backend promotes charts.yaml and the six services to stg and the whole set, web's included, to prd, a person
-#     changes anything, a bot that promotes no source changes base/: each passes; the bot of svp-frontend changing
-#     gateway.yaml of stg or prd, charts.yaml, an overlay, base/ or deleting web.yaml, the bot of backend changing
-#     web.yaml of stg, an overlay, a new overlay or the check's workflow, a bot that promotes no source changing an
-#     image file or a file of a name git quotes under envs/: each fails with its own message; an author that is no
-#     login, an event without one, an event file that cannot be read, a sender that is no login, a bot pushing onto
-#     another's pull request fail; a run of no pull request, of a push, or without BASE skips; the event's author
-#     wins over SVP_CHANGE_REQUEST_AUTHOR, and a person pushing onto a bot's pull request is judged by the bot's rule;
+#     SVP_CHANGE_REQUEST_AUTHOR or in an event file), how the check reads the author, the sender and the files changed:
+#     the bot of svp-frontend moves web of stg and of prd, the bot of backend promotes charts.yaml and the six services
+#     to stg and the whole set, web's included, to prd, a person changes anything, a bot that promotes no source
+#     changes base/: each passes; the bot of svp-frontend changing gateway.yaml of stg or deleting web.yaml, a bot that
+#     promotes no source adding a file of a name git quotes under envs/: each fails with its own message; an author
+#     that is no login, an event without one, an event file that cannot be read, a sender that is no login, a bot
+#     pushing onto another's pull request fail; a run of no pull request, of a push, or without BASE skips; the event's
+#     author wins over SVP_CHANGE_REQUEST_AUTHOR, and a person pushing onto a bot's pull request is judged by the bot's
+#     rule;
 #   - tag_provenance_mismatch of common.sh, which step 5 reads the release checks with (offline, synthetic checks):
 #     image.tag against the commit the provenance names, and a check that names no provenance commit in an environment
 #     requiring provenance (a reworded line of verify-release.sh) fails instead of passing.
@@ -57,7 +55,7 @@
 # the next run checks out the clone it left (no index, every file read as deleted) instead of refusing it; a change to
 # a checked-out clone is still refused.
 # Every case fails before the check reaches the network (chart repositories, GHCR): needs bash, git, jq, helm, docker
-# (the Kyverno CLI) and the history of this repository up to the tree's revisions (a full clone, origin/main fetched).
+# (conftest, the Kyverno CLI) and the history of this repository up to the tree's revisions (a full clone, origin/main fetched).
 #
 # Usage, from anywhere: deploy/ci/gitops-check-test.sh [TREE]
 #   TREE: a tree of svp-gitops (base/, envs/, argocd/), never written. Without it, main of
@@ -196,6 +194,13 @@ render() {
   fi
 }
 
+# --- the policies on the tree (deploy/ci/gitops-tree-policies/): their conftest verify first, every rule's cases;
+# then the input the check builds for them, one case per part of it, and a conftest that gives no answer.
+if out=$(make -s -C "$repo_root" conftest-verify 2>&1); then
+  ok "tree policies: conftest verify of deploy/ci/gitops-tree-policies/"
+else
+  fail "tree policies: conftest verify failed:"$'\n'"$(sed 's/^/      /' <<<"$out")"
+fi
 t=$(copy)
 rm "$t/envs/stg/images/web.yaml"
 check "six image files of seven" "$t" "envs/stg/images/ holds"
@@ -203,7 +208,6 @@ render "six image files of seven (root chart)" "$t" stg "envs/stg/images/web.yam
 
 t=$(copy)
 echo 'replicas: 2' >>"$t/envs/stg/images/gateway.yaml"
-check "an image file with another key" "$t" "envs/stg/images/gateway.yaml holds replicas besides image"
 render "an image file with another key (root chart)" "$t" stg \
   "envs/stg/images/gateway.yaml holds image, replicas: an image file holds the image block alone"
 
@@ -212,10 +216,7 @@ printf 'image:\n  tag: "000000000000"\n' >>"$t/envs/stg/gateway.yaml"
 check "an overlay that sets image" "$t" "envs/stg/gateway.yaml sets image, canary or httpRoute.name"
 render "an overlay that sets image (root chart)" "$t" stg "envs/stg/gateway.yaml sets image, canary or httpRoute.name"
 
-t=$(copy)
-cp -R "$t/envs/stg" "$t/envs/qa"
-check "an unknown environment" "$t" "envs/ holds 'prd qa stg': the environments are exactly prd and stg"
-render "an unknown environment (root chart)" "$t" nope 'env is "nope": envs/ has no directory of that name'
+render "an unknown environment (root chart)" "$(copy)" nope 'env is "nope": envs/ has no directory of that name'
 
 t=$(copy)
 sed -i.bak 's/^revision:.*/revision:/' "$t/envs/stg/charts.yaml" && rm "$t/envs/stg/charts.yaml.bak"
@@ -270,39 +271,23 @@ check_root "platforms: the tree, each environment on each platform of components
   "ok    argocd/apps for prd on eks on arm64 and amd64 nodes: one Application per component that runs there" "$(copy)"
 check_root "platforms: an environment left out of a platform is not rendered there, and says why" 0 \
   "skip  prd on k3d: prd is not in envs of platform k3d (key platforms of components.json)" "$(copy)"
-platforms_case "no key platforms" "argocd/apps/components.json: has no key platforms" 'del(.platforms)'
-platforms_case "an environment on no platform" "argocd/apps/components.json: platforms: no platform runs prd" \
-  '.platforms |= map_values(.envs -= ["prd"])'
-platforms_case "an unknown environment" "argocd/apps/components.json: platforms: eks must each map" \
-  '.platforms.eks.envs += ["qa"]'
-platforms_case "a localHosts that is no boolean" "argocd/apps/components.json: platforms: k3d must each map" \
-  '.platforms.k3d.localHosts = "yes"'
-platforms_case "a key besides envs and localHosts" "argocd/apps/components.json: platforms: eks must each map" \
-  '.platforms.eks.region = "ap-southeast-1"'
-platforms_case "a platform that is no map" "argocd/apps/components.json: platforms: k3d must each map" \
-  '.platforms.k3d = "x"'
-platforms_case "envs that is no list" "argocd/apps/components.json: platforms: k3d must each map" \
-  '.platforms.k3d.envs = "stg"'
-platforms_case "a platform of the map without its folder" \
-  "platforms/ holds 'eks k3d': the platforms are exactly those of key platforms of components.json, 'aks eks k3d'" \
-  '.platforms.aks = {envs: ["stg"]}'
+platforms_case "no key platforms, read by the policies" "argocd/apps/components.json: has no key platforms" 'del(.platforms)'
+# A platform whose folder is a link to another folder, behind which an overlay sets an image: the lister of the tree
+# does not walk into the link, so the check refuses the link itself rather than pass what lies behind it.
 t=$(copy)
-rm -rf "$t/platforms"
-check_root "platforms: a tree without platforms/" 1 "platforms/ is missing: the tree is from before the platform layer" "$t"
-t=$(copy)
-printf 'image:\n  tag: "000000000000"\n' >"$t/platforms/eks/gateway.yaml"
-check_root "platforms: a file of a platform that sets the image of a release" 1 \
-  "platforms/eks/gateway.yaml sets image: a release's image is envs/<env>/images/gateway.yaml" "$t"
+mkdir -p "$t/hidden"
+cp -R "$t/platforms/eks/." "$t/hidden/"
+printf 'image:\n  tag: "000000000000"\n' >"$t/hidden/gateway.yaml"
+rm -rf "$t/platforms/eks"
+ln -s ../hidden "$t/platforms/eks"
+check_root "platforms: a platform's folder that is a link to another folder" 1 \
+  "platforms/eks is a link to the folder ../hidden" "$t"
 t=$(copy)
 printf 'image:\n  tag: "000000000000"\n' >"$t/platforms/eks/gateway.values.tpl"
 check_root "platforms: a template of a platform that renders the image of a release" 1 \
   "platforms/eks/gateway.values.tpl renders image for stg on eks" "$t"
-t=$(copy)
-echo 'replicas: 2' >"$t/platforms/eks/nope.yaml"
-check_root "platforms: a file of a platform that names no component" 1 \
-  "platforms/eks/nope.yaml: a file of a platform is README.md, <name>.yaml or <name>.values.tpl, <name> a component of components.json" "$t"
 # Argo CD's values of a platform (deploy/k8s/gitops.sh installs Argo CD with them after argocd/bootstrap.json's): the
-# file argo-cd.yaml only, held to the rules of a platform's file.
+# file argo-cd.yaml, which the policies hold to the rules of a platform's file.
 # A root chart from before the file refuses it itself: the copy's leaves it out as it leaves README.md out, as one that
 # lets it through does, so the check's rules and the root's render must both pass.
 t=$(copy)
@@ -311,37 +296,6 @@ replace_once "$t/argocd/apps/templates/applications.yaml" '(ne $base "README.md"
   '(ne $base "README.md") (ne $base "argo-cd.yaml")' || :
 check_root "platforms: Argo CD's values of a platform, argo-cd.yaml" 0 \
   "ok    argocd/apps for prd on eks on arm64 and amd64 nodes: one Application per component that runs there" "$t"
-t=$(copy)
-printf 'cluster:\n  name: svp-stg\n' >"$t/platforms/eks/argo-cd.yaml"
-check_root "platforms: Argo CD's values of a platform set cluster" 1 "platforms/eks/argo-cd.yaml sets cluster" "$t"
-t=$(copy)
-printf 'notifications:\n  enabled: true\n' >"$t/platforms/eks/argo-cd.values.tpl"
-check_root "platforms: a template of Argo CD's values, which nothing renders" 1 \
-  "platforms/eks/argo-cd.values.tpl: a file of a platform is README.md, <name>.yaml or <name>.values.tpl, <name> a component of components.json" "$t"
-eks_only=$(jq -r '.components[] | select(.platforms == ["eks"]) | .name' "$components_json" | head -n 1)
-if [ -n "$eks_only" ]; then
-  t=$(copy)
-  echo 'replicas: 2' >"$t/platforms/k3d/$eks_only.yaml"
-  check_root "platforms: a file of k3d for a component of eks alone" 1 \
-    "platforms/k3d/$eks_only.yaml: component $eks_only does not run on k3d" "$t"
-else
-  fail "platforms: $tree has no component of eks alone, which a case needs"
-fi
-t=$(copy)
-printf 'cluster:\n  name: svp-stg\n' >>"$t/argocd/apps/values.yaml"
-check_root "platforms: the root's values in git set cluster" 1 \
-  "argocd/apps/values.yaml sets cluster: the bootstrap alone sets it" "$t"
-t=$(copy)
-printf 'cluster:\n  vpcId: vpc-00000000000000000\n' >"$t/platforms/eks/svp-data.yaml"
-check_root "platforms: a file of a platform sets cluster" 1 "platforms/eks/svp-data.yaml sets cluster" "$t"
-t=$(copy)
-mkdir "$t/platforms/aks"
-echo '# another platform' >"$t/platforms/aks/README.md"
-check_root "platforms: an unknown platform" 1 \
-  "platforms/ holds 'aks eks k3d': the platforms are exactly those of key platforms of components.json, 'eks k3d'" "$t"
-platforms_case "a component on an unknown platform" \
-  "components.json: platforms of keda must list platforms of 'eks k3d', each once" \
-  '.components |= map(if .name == "keda" then . + {platforms: ["aks"]} else . end)'
 # The root chart that leaves platforms out of components.json: an Application of eks alone on k3d.
 t=$(copy)
 if replace_once "$t/argocd/apps/templates/applications.yaml" '{{- if or (not (hasKey . "platforms")) (has $platform .platforms) }}' \
@@ -530,6 +484,7 @@ mkdir -p "$code/deploy/k8s" "$code/deploy/helm/svp-policy/files" "$code/deploy/h
   "$code/deploy/observability/otelcol"
 cp -R "$here" "$code/deploy/ci"
 cp "$repo_root/deploy/k8s/lib.sh" "$code/deploy/k8s/"
+cp "$repo_root/Makefile" "$code/"
 printf 'podSecurityVersion: v1.36\n' >"$code/deploy/helm/svp-cluster/values.yaml"
 echo "receivers: {}" >"$code/deploy/observability/otelcol/k8s-config.yaml"
 cat >"$code/deploy/helm/svp-policy/values.yaml" <<'VALUES'
@@ -656,6 +611,26 @@ tree_check "sources: charts from before the table stop, naming the commit" 1 \
   "FAIL  commit ${k0:0:12} has no deploy/helm/svp-policy/files/sources.json: it is from before the table of release sources" "$t"
 tree_check "sources: charts from before the table: the environment that pins them" 1 \
   "FAIL  envs/stg/charts.yaml: the release sources of ${k0:0:12} cannot be read (above)" "$t"
+# A conftest that gives no answer fails the check instead of passing: a policy that does not compile (conftest stops,
+# no result), a package renamed (no result from it). On copies of the throwaway repository.
+t=$(sources_tree "$k3" ghcr.io/anhnvcoder/svp-backend/ ghcr.io/anhnvcoder/svp-frontend/web)
+for broken in "syntax:s/^deny contains /deny contains contains /" "package:s/^package gitops.author$/package gitops.authors/"; do
+  bad=$work/bad-tree-${broken%%:*}
+  cp -R "$code" "$bad"
+  sed -i.bak "${broken#*:}" "$bad/deploy/ci/gitops-tree-policies/author.rego" && rm "$bad/deploy/ci/gitops-tree-policies/author.rego.bak"
+  if cmp -s "$code/deploy/ci/gitops-tree-policies/author.rego" "$bad/deploy/ci/gitops-tree-policies/author.rego"; then
+    fail "tree policies: author.rego no longer holds what the case of a broken policy (${broken%%:*}) changes"
+    continue
+  fi
+  rc=0
+  out=$(env GIT_ALLOW_PROTOCOL=file "$bad/deploy/ci/gitops-check.sh" --tree "$t" 2>&1) || rc=$?
+  if [ "$rc" = 1 ] && [[ $out == *"FAIL  conftest could not check the tree with the policies of deploy/ci/gitops-tree-policies/"* ]]; then
+    ok "tree policies: a conftest that gives no answer fails the check (${broken%%:*})"
+  else
+    fail "tree policies: a conftest that gives no answer (${broken%%:*}): exit $rc:"$'\n'"$(sed 's/^/      /' <<<"$out")"
+  fi
+done
+
 # values-check.sh on such a tree, as a machine runs it (env -i: no CI job's variables): the gateway's file naming the
 # repository of user-service is refused before any release is verified (no other file carries a digest, so cosign is
 # never asked).
@@ -718,7 +693,6 @@ author_case() {
   fi
 }
 promoted="the promoter of a release source: its"
-outside="the bot of a release source: it changes envs/<env>/images/<service>.yaml of its own services only"
 # What each bot promotes passes.
 from_a0
 image envs/stg/images/web.yaml ghcr.io/anhnvcoder/svp-frontend/web w1
@@ -751,58 +725,18 @@ echo '# changed' >>"$at/base/tempo.yaml"
 author_case "a bot that promotes no release source changes base/" 0 \
   "ok    the pull request of renovate[bot], a bot that promotes no release source: none of its 1 changed files is under envs/" \
   SVP_CHANGE_REQUEST_AUTHOR="renovate[bot]"
-# What a bot does not promote fails: another source's image, charts.yaml, an overlay, a new file, a deletion, a file
-# outside envs/.
+# What a bot does not promote fails (each rule a case of make conftest-verify): the files changed and how, as the check
+# lists them from git, reach the policy.
 from_a0
 image envs/stg/images/gateway.yaml ghcr.io/anhnvcoder/svp-backend/gateway x1
 author_case "the bot of svp-frontend changes gateway.yaml of stg" 1 \
   "envs/stg/images/gateway.yaml: changed by $web_bot, the bot of release source web, which publishes web: it changes the image files of those services only" \
   SVP_CHANGE_REQUEST_AUTHOR="$web_bot"
 from_a0
-image envs/prd/images/gateway.yaml ghcr.io/anhnvcoder/svp-backend/gateway x2
-author_case "the bot of svp-frontend changes gateway.yaml of prd" 1 \
-  "envs/prd/images/gateway.yaml: changed by $web_bot, the bot of release source web, which publishes web" \
-  SVP_CHANGE_REQUEST_AUTHOR="$web_bot"
-from_a0
-echo '# changed' >>"$at/envs/stg/charts.yaml"
-author_case "the bot of svp-frontend changes charts.yaml" 1 \
-  "envs/stg/charts.yaml: changed by $web_bot, the bot of release source web: only the bot of backend, whose repository holds the charts, changes charts.yaml" \
-  SVP_CHANGE_REQUEST_AUTHOR="$web_bot"
-from_a0
-image envs/stg/images/web.yaml ghcr.io/anhnvcoder/svp-frontend/web x3
-author_case "the bot of backend changes web.yaml of stg" 1 \
-  "envs/stg/images/web.yaml: changed by $backend_bot, the bot of release source backend, which publishes ${six[*]}" \
-  SVP_CHANGE_REQUEST_AUTHOR="$backend_bot"
-from_a0
-echo '# changed' >>"$at/envs/stg/svp-cluster.yaml"
-author_case "the bot of svp-frontend changes an overlay of stg" 1 "envs/stg/svp-cluster.yaml: changed by $web_bot, $outside" \
-  SVP_CHANGE_REQUEST_AUTHOR="$web_bot"
-from_a0
-echo 'replicas: 3' >>"$at/envs/stg/gateway.yaml"
-author_case "the bot of backend changes an overlay of stg" 1 "envs/stg/gateway.yaml: changed by $backend_bot, $outside" \
-  SVP_CHANGE_REQUEST_AUTHOR="$backend_bot"
-from_a0
-echo 'validationFailureAction: Audit' >"$at/envs/stg/kyverno.yaml"
-author_case "the bot of backend adds an overlay to stg" 1 "envs/stg/kyverno.yaml: changed by $backend_bot, $outside" \
-  SVP_CHANGE_REQUEST_AUTHOR="$backend_bot"
-from_a0
 rm "$at/envs/stg/images/web.yaml"
 author_case "the bot of svp-frontend deletes web.yaml" 1 \
   "envs/stg/images/web.yaml: deleted by $web_bot, the bot of release source web: a bot changes files under envs/, never deletes one" \
   SVP_CHANGE_REQUEST_AUTHOR="$web_bot"
-from_a0
-echo '# changed' >>"$at/base/tempo.yaml"
-author_case "the bot of svp-frontend changes base/" 1 "base/tempo.yaml: changed by $web_bot, $outside" \
-  SVP_CHANGE_REQUEST_AUTHOR="$web_bot"
-from_a0
-echo '# changed' >>"$at/.github/workflows/check.yml"
-author_case "the bot of backend changes the workflow of the check" 1 \
-  ".github/workflows/check.yml: changed by $backend_bot, $outside" SVP_CHANGE_REQUEST_AUTHOR="$backend_bot"
-from_a0
-image envs/stg/images/gateway.yaml ghcr.io/anhnvcoder/svp-backend/gateway r1
-author_case "a bot that promotes no release source changes an image file" 1 \
-  "envs/stg/images/gateway.yaml: changed by renovate[bot], a bot that promotes no release source: such a bot changes nothing under envs/" \
-  SVP_CHANGE_REQUEST_AUTHOR="renovate[bot]"
 # A path git would quote is read as it is, not let through as a path outside envs/.
 from_a0
 echo 'replicas: 3' >"$at/envs/stg/gätewäy.yaml"
