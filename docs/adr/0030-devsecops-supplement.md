@@ -127,7 +127,7 @@ Mã web ở repo `svp-frontend` ([ADR-0033](0033-svp-web-repo.md)); danh sách �
 
 - `Makefile` (`GOVULNCHECK_VERSION`, `GRYPE_IMAGE`, `SCHEMATHESIS_IMAGE`, `make vulncheck`, `make fuzz`, `make grype`), `renovate.json`, `go.mod`, `deploy/docker/service.Dockerfile`, `deploy/docker/media-worker.Dockerfile`, `tools/vulngate/` (mục 1).
 - `fuzz_test.go` ở `internal/pagetoken/`, `internal/authtoken/`, `internal/objstore/`, `services/gateway/internal/httpx/`, `services/user-service/internal/server/` (mục 2); `deploy/dast/`, `.github/workflows/ci.yml` (mục 3); cài đặt repo GitHub (mục 4).
-- `deploy/ci/common.sh`, `deploy/ci/build-image.sh`, `deploy/ci/scan-gate.sh`, `deploy/ci/changed-services.sh`, `.github/workflows/images.yml` (mục 6).
+- `deploy/ci/common.sh`, `.github/actions/image-leg/` (thay `build-image.sh` đã xoá), `deploy/ci/scan-gate.sh`, `deploy/ci/changed-services.sh`, `.github/workflows/images.yml` (mục 6).
 - Hiện trạng: [`explanation/delivery.md`](../explanation/delivery.md), [`reference/ci.md`](../reference/ci.md), [`ci-cd.md`](../ci-cd.md), [`threat-model.md`](../threat-model.md).
 
 ## Nguồn

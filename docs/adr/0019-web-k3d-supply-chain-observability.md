@@ -165,7 +165,7 @@ Chọn các phương án in đậm ở "Phương án đã cân nhắc" và tri�
 
 Từ 2026-10-30 ([ADR-0033](0033-svp-web-repo.md)) image `web` build, ký, promote ở CI của `svp-frontend`; từ 2026-10-31 mã web ở `svp-frontend` (mỗi đường `web/<x>` dưới đây là `<x>` của repo đó). Values của release `web` ở `base/services/web.yaml` của `svp-gitops`. Chi tiết theo §: phụ lục, mục "Hiện thực ở".
 
-- Image, release, canary (§1–§3): `deploy/docker/web.Dockerfile`, `deploy/ci/build-image.sh`, `deploy/k8s/k8s.mk`, `deploy/k8s/install.sh`, `deploy/k8s/values/services/web.yaml`, `deploy/helm/svp-service/`, `web/features/monitoring/skew-reload.ts`.
+- Image, release, canary (§1–§3): `deploy/docker/web.Dockerfile`, `.github/actions/image-leg/` với `deploy/ci/image-guard.sh` (`SVP_BUILD_ID`), `deploy/k8s/k8s.mk`, `deploy/k8s/install.sh`, `deploy/k8s/values/services/web.yaml`, `deploy/helm/svp-service/`, `web/features/monitoring/skew-reload.ts`.
 - NetworkPolicy, session, CORS (§4–§6): `deploy/k8s/values/services/web.yaml`, `deploy/helm/svp-data/templates/valkey.yaml`, `deploy/helm/svp-data/templates/s3.yaml`, `deploy/s3/init.sh`.
 - Trace context (§7): `services/gateway/internal/httpx/middleware.go` (`TRUST_TRACE_CONTEXT`), `deploy/helm/svp-service/templates/httproute.yaml`, `deploy/k8s/values/services/gateway.yaml`.
 - Lỗi, source map, OTel, RUM (§8–§11): `web/server/sentry/`, `web/features/monitoring/`, `web/instrumentation.ts`, `web/server/telemetry/`, `web/features/rum/`, `deploy/observability/glitchtip/`, `deploy/observability/grafana/dashboards/svp-web.json`.

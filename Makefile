@@ -57,11 +57,12 @@ HELM_LINUX_AMD64_SHA256    := 0403a88ae20913d11b10a2467b50087721fea7581736da6b9d
 TRIVY_IMAGE := ghcr.io/aquasecurity/trivy:0.76.0@sha256:2416d1f74045b57274df1a340eee6b510cacd73c66a6ccb8da092b117eb7d222
 # renovate: datasource=docker depName=ghcr.io/anchore/syft
 SYFT_IMAGE  := ghcr.io/anchore/syft:v1.54.1@sha256:3eb5379ba7b409c3f4069b686110527af0c47df993fa5c10d13e7cf34f49b1aa
-# Second vulnerability gate of every image, on the SBOM syft writes (deploy/ci/build-image.sh, make grype).
+# Second vulnerability gate of every image, on the SBOM syft writes (.github/actions/image-leg, make grype).
 # renovate: datasource=docker depName=ghcr.io/anchore/grype
 GRYPE_IMAGE := ghcr.io/anchore/grype:v0.121.0@sha256:621d56d1d68106b787022c81546f7e0a36202a25d1239f0c20195fab8c16f7ea
-# cosign on a dev machine, to verify releases only (deploy/ci/verify-release.sh, and `make k8s-gitops-up` before it
-# creates anything): signing happens in CI alone, with the cosign that sigstore/cosign-installer installs there.
+# cosign: in CI the signer of the image pipeline (.github/actions/image-sign runs this image); on a dev machine it only
+# verifies releases (deploy/ci/verify-release.sh, and `make k8s-gitops-up` before it creates anything): signing happens
+# in CI alone.
 # renovate: datasource=docker depName=ghcr.io/sigstore/cosign/cosign
 COSIGN_IMAGE := ghcr.io/sigstore/cosign/cosign:v3.1.3@sha256:9e5c2f2edc34351160407ca3416c61855bdf9403c3c5936e0f0be7fc261611b8
 # Load generator of the SLO scripts in deploy/k6/, from its official image

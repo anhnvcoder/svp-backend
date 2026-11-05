@@ -10,3 +10,12 @@ rules:
       # tool has no lockfile. The job has contents: read and no secret. zizmor no longer reports another ad-hoc install
       # added to ci.yml: the code owner of .github/ reads it in review.
       - ci.yml
+  self-repository:
+    ignore:
+      # images.yml calls the composite actions image-leg, image-index and image-sign as ./.github/actions/<name>,
+      # from the checkout of the run's commit, not as $/.github/actions/<name>: their guards (deploy/ci/image-guard.sh,
+      # beside them in that checkout) build from that checkout and check its HEAD is the run's commit, which a copy of
+      # the repository downloaded for $/ has no .git to show. svp-frontend calls the same actions from its checkout of
+      # .backend-commit, where $/ would name its own repository. File entry: the calls move with every edit of the
+      # jobs.
+      - images.yml

@@ -24,8 +24,10 @@ Loại tài liệu (Diátaxis): **reference**, tra cứu khi cần một lệnh 
     REST, [ADR-0033](../adr/0033-svp-web-repo.md) §1: `make api-contract-check BASE=<base>` với base tính như job `buf`, rồi
     `deploy/ci/contract-test.sh`), `config`
     (đủ lịch sử, `make gitops-clone` và `SVP_GITOPS_DIR` ở `env` của job; `make regal-lint`, `make conftest-verify`, `deploy/ci/scan-gate.sh --check-ignorefile`,
-    test của script pipeline image trong job giả của Actions và trên máy (`deploy/ci/plan-test.sh`, `scan-gate-test.sh`,
-    `vuln-predicate-test.sh`, `sign-image-test.sh` cùng hàm bundle của `common.sh` trên registry giả, `rescan-test.sh`,
+    test của script pipeline image trong job giả của Actions và trên máy (`deploy/ci/plan-test.sh`, `image-guard-test.sh` (guard và
+    bước của ba composite action, đọc từ file action, docker giả), `image-gate-test.sh` (bước cổng của `image-leg` bằng trivy, syft,
+    grype, conftest ghim thật trên fixture `deploy/ci/testdata/image-gate/`), `scan-gate-test.sh`,
+    `vuln-predicate-test.sh`, `sign-image-test.sh` (hàm bundle của `common.sh` trên registry giả), `rescan-test.sh`,
     `verify-release-test.sh` cùng `values-check.sh`, `changed-services-test.sh`), `deploy/ci/promote-test.sh`
     (guard của hai job promote, danh sách bản phát hành của rescan),
     `deploy/ci/verify-collect-test.sh`, test các bước của `verify.yml` (`deploy/ci/verify-steps/steps-test.sh`, `supplychain-test.sh`,
@@ -62,31 +64,35 @@ Loại tài liệu (Diátaxis): **reference**, tra cứu khi cần một lệnh 
     `verify.yml`, mọi test `*-test.sh`, `gitops-check.sh` cùng `values-check.sh`, `verify-release.sh`, policy `gitops-policies/` (chỉ check `svp-gitops`,
     `make k8s-gitops-up` và diễn tập chạy hai script này),
     `contract.sh`, `ghcr-digest.sh`: không job image nào đọc chúng), `deploy/k8s/lib.sh` hay dòng
-    `TRIVY_IMAGE`/`SYFT_IMAGE`/`GRYPE_IMAGE`/`COSIGN_IMAGE` của `Makefile` thì cả sáu; `build-image.sh web` trong checkout này bị từ
-    chối trước khi build). Base: push `main` so với lượt
+    `TRIVY_IMAGE`/`SYFT_IMAGE`/`GRYPE_IMAGE`/`COSIGN_IMAGE` của `Makefile` hay một file dưới `.github/actions/image-*/` thì cả sáu;
+    fixture `deploy/ci/testdata/` không build gì; chân `web` trong checkout này bị guard từ chối trước khi build). Base: push `main` so với lượt
     push `main` thành
     công cuối (lượt dispatch không đẩy base, nên thay đổi chỉ dispatch đã phát hành, như push GitHub không chạy workflow,
     được build lại ở push kế); PR so với merge-base với nhánh base; dispatch so với merge-base với `origin/main` (trên
     `main` là chính HEAD, nên không build gì), input `services` (`all` hay tên cách bằng khoảng trắng) ghi đè phép so. Mỗi
     service hai chân amd64, arm64 build native,
     cổng quét chạy **trước** push, một dòng tóm tắt mỗi lần quét
-    trong summary của job ([ADR-0039](../adr/0039-mainpath-drills-scan-gate-sourcemaps.md) §2; `deploy/ci/scan-gate.sh`, verdict là của hai công cụ,
-    script chỉ chọn cờ và đọc mã thoát): trivy (báo cáo JSON mọi mức, cũng là nguồn của attestation `vuln` và SARIF) đọc lại hai lần bằng
+    trong summary của job ([ADR-0039](../adr/0039-mainpath-drills-scan-gate-sourcemaps.md) §2; mỗi chân là composite action
+    `.github/actions/image-leg` ([ADR-0050](../adr/0050-bash-to-standard-tools.md)), các bước gọi thẳng `docker buildx build`, trivy, syft,
+    grype bằng image ghim của `Makefile`, verdict là mã thoát của công cụ, guard ở `deploy/ci/image-guard.sh`; bước đầu chạy
+    `scan-gate.sh --check-ignorefile`): trivy (báo cáo JSON mọi mức, cũng là nguồn của attestation `vuln` và SARIF) đọc lại hai lần bằng
     `trivy convert --exit-code`: bí mật mọi severity (không `--severity`, vì `--severity CRITICAL` giấu một bí mật HIGH), rồi lỗ hổng với `--severity
     CRITICAL --ignorefile .trivyignore.yaml`; grype ([ADR-0030](../adr/0030-devsecops-supplement.md) §6) quét SBOM syft của chân đó với `--fail-on critical`
     và `.grype.yaml` của cây được quét (`-c`), thấy cả binary ngoài trình quản lý gói (như `node` của image web, ở cổng của `svp-frontend`) mà
-    trivy không thấy. Chặn: bí mật, và CRITICAL còn lại sau ngoại lệ (cả chưa có bản vá) ở báo cáo trivy hay grype; `--allow-critical` chỉ
-    cho image diễn tập `drill-vulnerable` và rescan, không bao giờ cho bí mật; HIGH trở xuống chỉ đếm (`(trivy): CRITICAL n, HIGH n, secrets n`,
+    trivy không thấy. Chặn: bí mật, và CRITICAL còn lại sau ngoại lệ (cả chưa có bản vá) ở báo cáo trivy hay grype; cho qua CRITICAL chỉ
+    với image diễn tập `drill-vulnerable` (guard tính từ tên image) và rescan (`scan-gate.sh --allow-critical`), không bao giờ cho bí mật; HIGH trở xuống chỉ đếm (`(trivy): CRITICAL n, HIGH n, secrets n`,
     `(grype): Critical n, High n, excepted by .grype.yaml n`). Mã thoát 5 của `trivy convert` là có phát hiện, mã khác không đọc được báo cáo (thoát 2); grype
     `--fail-on` thoát 2 và vẫn ghi output. Hai file ngoại lệ được kiểm như ở mục `.trivyignore.yaml` dưới đây. DB grype cache theo ngày
     (`SVP_GRYPE_CACHE`), SARIF category `grype-image-<svc>-<arch>/` (chỉ HIGH, CRITICAL) lên tab Security ở `main`; push lên `ghcr.io/anhnvcoder/svp-backend/<svc>`
     đúng bản đã quét, ghép index, ký keyless bằng cosign kèm attestation `vuln` (kết quả trivy của hai nền tảng; attestation,
     Kyverno và rescan hằng ngày không đọc grype), SBOM syft mỗi nền tảng, mỗi thứ là một Sigstore bundle (referrer của
     digest; [ADR-0040](../adr/0040-sigstore-bundle-actions-attest.md)), và **build provenance** (chỉ bản phát hành, không image
-    diễn tập): `deploy/ci/sign-image.sh` ký và attest `vuln`, SBOM rồi in `repository`, `digest`, `provenance=true|false`; bước
+    diễn tập): composite action `.github/actions/image-index` ghép index, `.github/actions/image-sign` ký và attest `vuln`, SBOM bằng
+    cosign ghim `COSIGN_IMAGE` (guard `image-guard.sh sign` quyết trước loại nào cần ghi, output `repository`, `digest`,
+    `provenance=true|false`); bước
     `actions/attest` (ghim SHA; `subject-digest` là digest index, `push-to-registry: true`; `attestations: write` chỉ ở job `sign`) chạy sau
     chúng khi `provenance=true`, dựng predicate SLSA v1 từ claim của token OIDC của lượt (`builder.id`, workflow, commit); trước khi ký gì
-    `sign-image.sh` đòi `builder.id` bằng `subject` của nguồn phát hành của lượt trong `sources.json`, không thì không ký. Bundle không có
+    guard đòi `builder.id` bằng `subject` của nguồn phát hành của lượt trong `sources.json`, không thì không ký. Bundle không có
     `--replace`: job chạy lại (Re-run failed jobs) liệt kê referrer của từng digest trước và chỉ ghi loại chưa có; digest đã có `.sig` định
     dạng cũ thì bị từ chối. Mức SLSA là Build L2 (không L3: attest chạy trong job của chính workflow build). Lượt phát hành đầu ở định dạng
     bundle chưa chạy: **kiểm sau push** (ADR-0040 mục Xác nhận); rồi
@@ -310,14 +316,16 @@ Loại tài liệu (Diátaxis): **reference**, tra cứu khi cần một lệnh 
   - Chạy lại một job trên máy, từ gốc repo: `make check-go TESTFLAGS=-count=1`; `make generate-check`;
     `buf breaking --against '.git#ref=<base>'`; `make api-contract-check BASE=<base>`, `deploy/ci/contract-test.sh`;
     `make conftest-verify`, `deploy/ci/scan-gate.sh --check-ignorefile`,
-    `deploy/ci/plan-test.sh`, `scan-gate-test.sh`, `vuln-predicate-test.sh`, `sign-image-test.sh`, `rescan-test.sh`,
+    `deploy/ci/plan-test.sh`, `image-guard-test.sh`, `image-gate-test.sh`, `scan-gate-test.sh`, `vuln-predicate-test.sh`,
+    `sign-image-test.sh`, `rescan-test.sh`,
     `verify-release-test.sh`, `changed-services-test.sh`, `make slo-check`,
     `deploy/ci/promote-test.sh`,
     `make otelcol-validate`, `make compose-config`, `deploy/observability/glitchtip/dotenv-test.sh`, `make helm-check`, `make kyverno-test`, `deploy/ci/sources-test.sh`,
     `deploy/ci/gitops-check-test.sh ../gitops` (test của policy cây qua `make conftest-verify`, rồi ca của phần bash và render), `make k6-check`,
     `make cloud-check`; check của `svp-gitops` trên bản clone: `deploy/ci/gitops-check.sh ../gitops` (cần mạng tới repo chart, GHCR;
-    ~5 phút); `gitleaks git --redact --no-banner`; `make trivy-config`; một chân image (build, quét, cổng, không push):
-    `deploy/ci/build-image.sh <svc> arm64 "$(mktemp -d)"`; riêng cổng grype của một chân: `make grype IMAGE=<ref>@sha256:<digest>
+    ~5 phút); `gitleaks git --redact --no-banner`; `make trivy-config`; một chân image (build, quét, cổng) chỉ chạy trong Actions
+    (job `build-nopush` của PR), bước của nó thử trên máy bằng `deploy/ci/image-guard-test.sh`, `image-gate-test.sh`; riêng cổng grype của
+    một chân: `make grype IMAGE=<ref>@sha256:<digest>
     [ARCH=amd64|arm64]` (syft ghim đọc image từ registry, ẩn danh) hay `make grype SBOM=<đường tuyệt đối tới SPDX JSON>`, in số
     gói và binary ngoài trình quản lý gói; bước `dast` của job `stack`: `make dast` trên stack `make up`; service nào sẽ build: `deploy/ci/changed-services.sh <base>
     HEAD`; bộ lọc artifact của `verify.yml`: `deploy/ci/verify-collect-test.sh`; các bước của nó: `deploy/ci/verify-steps/*-test.sh`; diễn tập
@@ -325,17 +333,18 @@ Loại tài liệu (Diátaxis): **reference**, tra cứu khi cần một lệnh 
     trong CI: không đăng nhập GHCR hay Sigstore từ máy. Bước promote stg, prd
     chỉ chạy trong CI (token App); guard của chúng thử bằng `deploy/ci/promote-test.sh`.
   - **Script CI cho cây của nguồn khác** ([ADR-0033](../adr/0033-svp-web-repo.md) §5): CI của một nguồn phát hành khác (`svp-frontend`)
-    chạy `deploy/ci/*.sh` từ checkout ghim của repo này với `SVP_CODE_ROOT` trỏ checkout của chính nó. `common.sh` có hai gốc:
+    gọi composite action `./.backend/.github/actions/image-*` và chạy `deploy/ci/*.sh` từ checkout ghim `.backend/` của repo này, với
+    `code-root` (`SVP_CODE_ROOT`) trỏ checkout của chính nó. `common.sh` có hai gốc:
     `script_root` (checkout này: `lib.sh`, image ghim của `Makefile`, bảng nguồn) và `code_root` (`SVP_CODE_ROOT` nếu đặt, phải là
     thư mục; không thì checkout này). Nguồn của lượt là nguồn có `repository` bằng `run_repo_url` (`use_build_source`; repo không có
     trong bảng thì không build, đẩy hay ký gì); image phải thuộc `services`/`drillImages` của nguồn đó, đẩy dưới prefix của nó, nhãn
     OCI theo nguồn; HEAD của `code_root` phải bằng commit của lượt (`check_code_tree`). Cây repo khác: `Dockerfile` và context ở gốc,
     phải có `Dockerfile`, `pnpm-lock.yaml`, `.trivyignore.yaml`, `.grype.yaml` (cổng quét đọc file của cây đang build; thiếu một file là cây sai, không phải cây không ngoại lệ); `plan.sh` build mọi service
     của nguồn mỗi lượt, không base, `promote_charts=false`. Trên máy, repo của lượt (`run_repo_url`) đọc từ origin
-    github.com của `SVP_CODE_ROOT` (không có origin đó thì lỗi), commit là HEAD của nó. Thử một chân web từ cây khác:
-    `SVP_CODE_ROOT=<checkout svp-frontend> deploy/ci/build-image.sh web arm64 "$(mktemp -d)"`.
-    Image source map `web-sourcemaps` không còn ([ADR-0039](../adr/0039-mainpath-drills-scan-gate-sourcemaps.md) §3): `build-image.sh` không có
-    `--sourcemaps-artifact`; tải source map lúc build vào tracker chạy lâu dài làm khi có tracker đó. Digest mới nhất của image diễn tập
+    github.com của `SVP_CODE_ROOT` (không có origin đó thì lỗi), commit là HEAD của nó. Composite action nhận cây khác qua input
+    `code-root` (thành `SVP_CODE_ROOT` của bước); ca của chân, index và chữ ký web từ cây khác ở `deploy/ci/image-guard-test.sh`.
+    Image source map `web-sourcemaps` không còn ([ADR-0039](../adr/0039-mainpath-drills-scan-gate-sourcemaps.md) §3): `image-leg` không xuất
+    source map; tải source map lúc build vào tracker chạy lâu dài làm khi có tracker đó. Digest mới nhất của image diễn tập
     lấy bằng `deploy/ci/ghcr-digest.sh newest IMAGE` (đọc GHCR ẩn danh bằng ORAS ghim `ORAS_IMAGE`: `oras repo tags`, `oras resolve`).
   - `make helm-check` (`deploy/ci/gitops-check.sh --worktree`, cùng script với check của `svp-gitops`; cần bản clone `../gitops`
     hay `SVP_GITOPS_DIR`): `helm lint` và `helm template` mọi chart của working tree với `base/` của bản clone (`HELM_*_HOME` trong
@@ -370,7 +379,8 @@ Loại tài liệu (Diátaxis): **reference**, tra cứu khi cần một lệnh 
     hôm nay cố định) và của `deploy/ci/gitops-tree-policies/` (mỗi ca âm của luật cây `svp-gitops`, trên một cây viết trong test;
     `gitops-check-test.sh` gọi nó);
     govulncheck là công cụ Go ghim `GOVULNCHECK_VERSION`, cài bằng `make tools`. Riêng cosign, script (`cosign_` của `deploy/ci/common.sh`) dùng `cosign`
-    trên PATH trước nếu có (CI cài bằng `sigstore/cosign-installer`), không có thì `COSIGN_IMAGE`.
+    trên PATH trước nếu có (job `contract`, `rescan` cài bằng `sigstore/cosign-installer`), không có thì `COSIGN_IMAGE`; action
+    `image-sign` ký bằng `COSIGN_IMAGE`.
   - `.trivyignore.yaml` và `.grype.yaml` ở gốc repo ([ADR-0039](../adr/0039-mainpath-drills-scan-gate-sourcemaps.md) §2; cổng của image và `make grype` đọc; mỗi
     repo nguồn có hai tệp riêng ở gốc cây của nó, mục `@lhci/cli` của web ở `svp-frontend`; hiện có một mục: `CVE-2026-58016` của `glib` trong
     image `media-worker`, chưa có bản vá, ffmpeg không nạp `libgio` nơi có lỗi, [ADR-0030](../adr/0030-devsecops-supplement.md) §6).

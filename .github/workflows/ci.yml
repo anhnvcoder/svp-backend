@@ -326,10 +326,15 @@ jobs:
       - run: deploy/ci/scan-gate.sh --check-ignorefile
       # The scripts of the image pipeline, which otherwise run only in images.yml (most of them on main only), each in a
       # made-up job of GitHub Actions and on a machine, with fake gh, cosign and docker (trivy, grype, ORAS and a
-      # registry) in throwaway repositories: plan.sh, the scan gate, the vuln predicate, sign-image.sh with the
-      # Sigstore bundle helpers of common.sh, the daily rescan, verify-release.sh with values-check.sh, and which
-      # changes build which images. bash, git and jq: no network, no token; the scan gate's test runs the pinned
-      # conftest and yq through Docker.
+      # registry) in throwaway repositories: plan.sh, the guards of the composite actions image-leg, image-index and
+      # image-sign with their steps read from the action files (image-guard-test.sh), the scan gate of the rescan and of
+      # make grype, the vuln predicate, the Sigstore bundle helpers of common.sh, the daily rescan, verify-release.sh
+      # with values-check.sh, and which changes build which images. bash, git and jq: no network, no token; the scan
+      # gate's test runs the pinned conftest and yq through Docker, the guards' test the pinned yq. image-gate-test.sh
+      # runs the steps of image-leg with the real trivy, syft, grype and conftest the Makefile pins on small fixtures
+      # (deploy/ci/testdata/image-gate/): no image of a service, no registry login, no vulnerability DB.
+      - run: deploy/ci/image-guard-test.sh
+      - run: deploy/ci/image-gate-test.sh
       - run: deploy/ci/plan-test.sh
       - run: deploy/ci/scan-gate-test.sh
       - run: deploy/ci/vuln-predicate-test.sh

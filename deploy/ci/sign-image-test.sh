@@ -1,9 +1,8 @@
 #!/usr/bin/env bash
-# Tests for deploy/ci/sign-image.sh and the Sigstore bundle helpers of deploy/ci/common.sh the rescan uses
-# (bundle_referrers, release_format, replace_vuln_bundle), against a fake registry, in a throwaway checkout of what they
-# read and a checkout of svp-frontend beside it; the variables of a GitHub Actions job are made up. With them, the
-# guards push-image.sh, merge-index.sh and build-image.sh keep before docker is called in a run of svp-frontend. The
-# section's own comment below lists the cases. Runs on macOS and Linux: no network, no Docker, no cluster.
+# Tests for the Sigstore bundle helpers of deploy/ci/common.sh the rescan uses (bundle_referrers, release_format,
+# replace_vuln_bundle), against a fake registry, in a throwaway checkout of what they read; the variables of a GitHub
+# Actions job are made up. Signing itself (action image-sign and its guard) is tested by deploy/ci/image-guard-test.sh.
+# The section's own comment below lists the cases. Runs on macOS and Linux: no network, no Docker, no cluster.
 #
 # Usage, from anywhere: deploy/ci/sign-image-test.sh
 set -euo pipefail
@@ -55,9 +54,8 @@ on() {
 fresh() { : >"$work/output" && : >"$work/summary" && : >"$work/cosign.log"; }
 mkdir -p "$work/home" "$work/runner-temp"
 
-# A throwaway checkout of what the scripts read (deploy/ci/, deploy/k8s/lib.sh, the policy's values), and a checkout of
-# svp-frontend, another release source's repository, whose CI runs these scripts from a pinned checkout of this one
-# (SVP_CODE_ROOT). GIT_DIR is set for every git call of the test itself, so git can never reach another repository.
+# A throwaway checkout of what the scripts read (deploy/ci/, deploy/k8s/lib.sh, the policy's values). GIT_DIR is set for
+# every git call of the test itself, so git can never reach another repository.
 tree=$work/tree
 mkdir -p "$tree/deploy/k8s" "$tree/deploy/helm/svp-policy"
 cp -R "$here" "$tree/deploy/ci"
@@ -68,39 +66,16 @@ g() {
     -c user.email=test@example.invalid -c commit.gpgsign=false -c core.hooksPath=/dev/null "$@"
 }
 g init -q -b main && g add -A && g commit -qm base
-base=$(g rev-parse HEAD)
-webtree=$work/svp-frontend
-mkdir -p "$webtree"
-printf 'vulnerabilities: []\n' >"$webtree/.trivyignore.yaml"
-gw() {
-  GIT_DIR=$webtree/.git GIT_WORK_TREE=$webtree GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 git -c user.name=test \
-    -c user.email=test@example.invalid -c commit.gpgsign=false -c core.hooksPath=/dev/null "$@"
-}
-gw init -q -b main && gw add -A && gw commit -qm web
-gw remote add origin https://github.com/anhnvcoder/svp-frontend.git
-web_head=$(gw rev-parse HEAD)
 backend_run=(GITHUB_REPOSITORY=anhnvcoder/svp-backend GITHUB_SERVER_URL=https://github.com)
 
-# --- sign-image.sh and the Sigstore bundles of a release (bundle_referrers, release_format and replace_vuln_bundle of
-# common.sh). A fake registry under bundles/: a folder per subject digest holding one file per bundle referrer (named
-# by its digest, holding its predicate type), and a file <hex>.sig for a signature in cosign's older format. A fake
-# docker first on PATH serves the index (buildx imagetools inspect --raw) and answers ORAS: discover lists the
-# referrers with their dev.sigstore.bundle.predicateType annotation, manifest fetch --descriptor of a .sig tag finds
-# the older format or answers "not found", manifest delete takes the referrer off the list and still exits 1
-# "unsupported", as GHCR does (FAKE_DELETE_IGNORED: it leaves the list as it was). A fake cosign logs each call, adds a
-# referrer for each sign and attest in the bundle format, and verifies one vuln attestation per vuln referrer. Checked:
-#   - a release: signature, SBOM on each manifest, vuln on the index, all bundles, in that order, and provenance=true
-#     with the index as subject for the step of actions/attest; run again on the same digest (Re-run failed jobs):
-#     nothing written again; once the provenance is there: provenance=false; a run cut off before vuln: only vuln;
-#   - a digest in cosign's older format, or one the registry gives no answer for: nothing written;
-#   - a run on a machine or of another workflow: nothing written, naming the identity; the drill images: no provenance
-#     (also on a machine), drill-no-provenance refuses --allow-critical;
-#   - a run of svp-frontend (another release source's repository, running these scripts from a checkout of this one):
-#     its web release is signed with provenance=true; refused when its builder is the backend's subject, when the image
-#     is under the backend's prefix (or the backend's run signs under svp-frontend's), when the image is no service or
-#     drill image of svp-frontend's source, or when the run's repository is no source at all; push-image.sh and
-#     merge-index.sh of that run refuse an image svp-frontend does not publish and a tree whose HEAD is not the run's
-#     commit, build-image.sh a tree without its .trivyignore.yaml, before docker is called;
+# --- The Sigstore bundles of a release (bundle_referrers, release_format and replace_vuln_bundle of common.sh). A fake
+# registry under bundles/: a folder per subject digest holding one file per bundle referrer (named by its digest,
+# holding its predicate type), and a file <hex>.sig for a signature in cosign's older format. A fake docker first on
+# PATH answers ORAS: discover lists the referrers with their dev.sigstore.bundle.predicateType annotation, manifest
+# fetch --descriptor of a .sig tag finds the older format or answers "not found", manifest delete takes the referrer
+# off the list and still exits 1 "unsupported", as GHCR does (FAKE_DELETE_IGNORED: it leaves the list as it was). A
+# fake cosign logs each call, adds a referrer for each sign and attest in the bundle format, and verifies one vuln
+# attestation per vuln referrer. Checked:
 #   - replace_vuln_bundle (the rescan of a release in bundles): the new vuln bundle is kept and every older one taken
 #     off, the signature and the provenance never; a registry that keeps a bundle on the list, a second bundle that
 #     appears meanwhile, or cosign verifying another count than one fails it, naming the digest;
@@ -113,10 +88,6 @@ oras_image=fake.invalid/oras@sha256:$(printf '0%.0s' $(seq 64))
 cat >"$bb/docker" <<'EOF'
 #!/usr/bin/env bash
 printf '%s\n' "$*" >>"$FAKE_DOCKER_LOG"
-if [ "$1 $2 $3 $4" = "buildx imagetools inspect --raw" ]; then
-  cat "$FAKE_INDEX"
-  exit 0
-fi
 while [ $# -gt 0 ] && [ "$1" != "$FAKE_ORAS_IMAGE" ]; do shift; done
 [ $# -gt 0 ] || {
   echo "fake docker: unexpected call" >&2
@@ -214,32 +185,12 @@ verify-attestation)
 esac
 EOF
 chmod 755 "$bb/docker" "$bb/cosign"
-sign_amd64=sha256:$(printf '1%.0s' $(seq 64))
-sign_arm64=sha256:$(printf '2%.0s' $(seq 64))
-sign_config=sha256:$(printf '3%.0s' $(seq 64))
-jq -nc --arg a "$sign_amd64" --arg b "$sign_arm64" '{schemaVersion: 2,
-  mediaType: "application/vnd.oci.image.index.v1+json", manifests: [
-    {digest: $a, platform: {os: "linux", architecture: "amd64"}},
-    {digest: $b, platform: {os: "linux", architecture: "arm64"}}]}' >"$work/sign-index.json"
-sign_digest=sha256:$(shasum -a 256 "$work/sign-index.json" | cut -d' ' -f1)
+# The index digest of the release, and the predicate the rescan attests (any file: the fake cosign only copies it).
+sign_digest=sha256:$(printf '4%.0s' $(seq 64))
 hex=${sign_digest#sha256:}
-for arch in amd64 arm64; do
-  d=$work/sign-leg-$arch
-  mkdir -p "$d"
-  echo "linux/$arch" >"$d/platform"
-  if [ $arch = amd64 ]; then echo "$sign_amd64" >"$d/digest"; else echo "$sign_arm64" >"$d/digest"; fi
-  echo "$sign_config" >"$d/config-digest"
-  jq -n --arg c "$sign_config" '{SchemaVersion: 2, Metadata: {ImageID: $c}, Trivy: {Version: "0.76.0"}, Results: []}' \
-    >"$d/trivy.json"
-  for f in scan-started scan-finished db-updated-at; do echo 2026-10-29T01:02:03Z >"$d/$f"; done
-  echo '{"spdxVersion": "SPDX-2.3"}' >"$d/sbom.spdx.json"
-done
+echo '{"spdxVersion": "SPDX-2.3"}' >"$work/predicate.json"
 backend_subject=https://github.com/anhnvcoder/svp-backend/.github/workflows/images.yml@refs/heads/main
-web_subject=https://github.com/anhnvcoder/svp-frontend/.github/workflows/images.yml@refs/heads/main
 backend_sign=("${backend_run[@]}" GITHUB_WORKFLOW_REF=anhnvcoder/svp-backend/.github/workflows/images.yml@refs/heads/main)
-web_sign=(GITHUB_REPOSITORY=anhnvcoder/svp-frontend GITHUB_SERVER_URL=https://github.com
-  GITHUB_WORKFLOW_REF=anhnvcoder/svp-frontend/.github/workflows/images.yml@refs/heads/main GITHUB_SHA="$web_head"
-  SVP_CODE_ROOT="$webtree")
 # bundled WHERE [VAR=VALUE...] -- COMMAND...: COMMAND (on WHERE) with the fakes of this section first on PATH.
 bundled() {
   local where=$1 vars=()
@@ -247,179 +198,13 @@ bundled() {
   while [ "$1" != -- ]; do vars+=("$1") && shift; done
   shift
   on "$where" env PATH="$bb:$PATH" ORAS_IMAGE="$oras_image" FAKE_ORAS_IMAGE="$oras_image" \
-    FAKE_BUNDLES="$fb" FAKE_DOCKER_LOG="$work/docker.log" FAKE_INDEX="$work/sign-index.json" \
-    ${vars[@]+"${vars[@]}"} "$@"
+    FAKE_BUNDLES="$fb" FAKE_DOCKER_LOG="$work/docker.log" ${vars[@]+"${vars[@]}"} "$@"
 }
-# image NAME [PREFIX]: the index directory merge-index.sh would write for image NAME under PREFIX (the backend's
-# when empty).
-image() {
-  rm -rf "$work/sign-index" && mkdir -p "$work/sign-index"
-  echo "${2:-ghcr.io/anhnvcoder/svp-backend/}$1" >"$work/sign-index/repository"
-  echo "$sign_digest" >"$work/sign-index/digest"
-}
-# sign WHERE [VAR=VALUE...] -- [--allow-critical]: sign-image.sh on the image of the index directory; prints its
-# exit code. Its output in sign.out and sign.err, the outputs of a github run in output, cosign's calls in cosign.log.
-sign() {
-  local where=$1 vars=() rc=0
-  shift
-  while [ "$1" != -- ]; do vars+=("$1") && shift; done
-  shift
-  fresh
-  : >"$work/docker.log"
-  bundled "$where" ${vars[@]+"${vars[@]}"} -- "$tree/deploy/ci/sign-image.sh" "$@" "$work/sign-index" \
-    "$work/sign-leg-amd64" "$work/sign-leg-arm64" >"$work/sign.out" 2>"$work/sign.err" || rc=$?
-  echo "$rc"
-}
-# calls: what cosign was asked, comma separated: sign, or the type of an attestation and its subject (index, amd64 or
-# arm64).
-calls() {
-  sed -E "s/^(sign) .*/\1/; s/^attest .*--type ([a-z0-9]+) .*@(sha256:[0-9a-f]+)$/\1 \2/" "$work/cosign.log" |
-    sed "s/$sign_digest/index/; s/$sign_amd64/amd64/; s/$sign_arm64/arm64/" | paste -sd, -
-}
-# provenance_out: the provenance output of the last run, from GITHUB_OUTPUT on github or stdout on a machine.
-provenance_out() { grep -h '^provenance=' "$work/output" "$work/sign.out"; }
 # vuln_files: the referrers of the index that are vuln bundles.
 vuln_files() { grep -lx https://cosign.sigstore.dev/attestation/vuln/v1 "$fb/$hex"/* 2>/dev/null || true; }
 clean() { rm -rf "${fb:?}"/*; }
 bundle="--yes --new-bundle-format=true"
 repo=ghcr.io/anhnvcoder/svp-backend/gateway
-
-clean
-image gateway
-same "sign-image.sh, a release: signed and attested" 0 "$(sign github "${backend_sign[@]}" --)"
-same "sign-image.sh, a release: signature, SBOM on each manifest, vuln on the index, Sigstore bundles" \
-  "sign $bundle $repo@$sign_digest
-attest $bundle --type spdxjson --predicate $work/sign-leg-amd64/sbom.spdx.json $repo@$sign_amd64
-attest $bundle --type spdxjson --predicate $work/sign-leg-arm64/sbom.spdx.json $repo@$sign_arm64
-attest $bundle --type vuln --predicate PREDICATE $repo@$sign_digest" \
-  "$(sed -E 's/--predicate [^ ]*vuln\.json/--predicate PREDICATE/' "$work/cosign.log")"
-same "sign-image.sh, a release: the subject and provenance=true for actions/attest" \
-  "repository=$repo
-digest=$sign_digest
-provenance=true" "$(cat "$work/output")"
-same "sign-image.sh, a release: the vuln predicate is the scan's" '"0.76.0"' \
-  "$(jq -c .scanner.version "$fb/last-vuln.json")"
-check "sign-image.sh, a release: ORAS reads with the credentials of docker login, read-only" has "$work/docker.log" \
-  "-v $work/home/.docker/config.json:/auth/config.json:ro $oras_image discover --format json"
-same "sign-image.sh, run again on the same digest: signed (exit 0)" 0 "$(sign github "${backend_sign[@]}" --)"
-same "sign-image.sh, run again: nothing written again" "" "$(cat "$work/cosign.log")"
-same "sign-image.sh, run again: the index still has one signature and one vuln attestation" \
-  "1 https://cosign.sigstore.dev/attestation/vuln/v1,1 https://sigstore.dev/cosign/sign/v1" \
-  "$(cat "$fb/$hex"/* | sort | uniq -c | sed 's/^ *//' | paste -sd, -)"
-same "sign-image.sh, run again: provenance=true while the provenance is missing" provenance=true "$(provenance_out)"
-echo https://slsa.dev/provenance/v1 >"$fb/$hex/$(printf 'f%.0s' $(seq 64))"
-same "sign-image.sh, run again after actions/attest: signed (exit 0)" 0 "$(sign github "${backend_sign[@]}" --)"
-same "sign-image.sh, run again after actions/attest: provenance=false, nothing written" "provenance=false|" \
-  "$(provenance_out)|$(cat "$work/cosign.log")"
-for f in $(vuln_files); do rm -- "$f"; done
-same "sign-image.sh, a run cut off before vuln, run again: signed (exit 0)" 0 "$(sign github "${backend_sign[@]}" --)"
-same "sign-image.sh, a run cut off before vuln, run again: only vuln written" "vuln index" "$(calls)"
-
-clean
-: >"$fb/$hex.sig"
-same "sign-image.sh, a digest in cosign's older format: refused" 1 "$(sign github "${backend_sign[@]}" --)"
-same "sign-image.sh, a digest in cosign's older format: nothing written" "" "$(cat "$work/cosign.log")"
-check "sign-image.sh, a digest in cosign's older format: says so" has "$work/sign.err" \
-  "$repo@$sign_digest carries cosign's older format already: one digest never carries both, nothing written"
-clean
-same "sign-image.sh, the registry out of reach: refused" 1 "$(sign github "${backend_sign[@]}" FAKE_ORAS_DOWN=1 --)"
-same "sign-image.sh, the registry out of reach: nothing written" "" "$(cat "$work/cosign.log")"
-
-clean
-same "sign-image.sh, a release on a machine: refused (workflow local)" 1 "$(sign local --)"
-same "sign-image.sh, a release on a machine: nothing written" "" "$(cat "$work/cosign.log")"
-check "sign-image.sh, a release on a machine: names the workflow" has "$work/sign.err" \
-  "this run is the workflow 'local', but releases of source backend are signed only as $backend_subject"
-same "sign-image.sh, a release built by another workflow: refused" 1 \
-  "$(sign github "${backend_sign[@]}" GITHUB_WORKFLOW_REF=anhnvcoder/svp-backend/.github/workflows/ci.yml@refs/heads/main --)"
-same "sign-image.sh, a release built by another workflow: nothing written" "" "$(cat "$work/cosign.log")"
-
-image drill-vulnerable
-for how in github local; do
-  clean
-  same "sign-image.sh, the drill image ($how): signed and attested" 0 \
-    "$(sign "$how" "${backend_sign[@]}" -- --allow-critical)"
-  same "sign-image.sh, the drill image ($how): vuln, no provenance" \
-    "sign,spdxjson amd64,spdxjson arm64,vuln index|provenance=false" "$(calls)|$(provenance_out)"
-done
-image drill-no-provenance
-clean
-same "sign-image.sh, drill-no-provenance: signed and attested" 0 "$(sign github "${backend_sign[@]}" --)"
-same "sign-image.sh, drill-no-provenance: vuln, never provenance" \
-  "sign,spdxjson amd64,spdxjson arm64,vuln index|provenance=false" "$(calls)|$(provenance_out)"
-clean
-same "sign-image.sh, drill-no-provenance with --allow-critical: refused" 1 \
-  "$(sign github "${backend_sign[@]}" -- --allow-critical)"
-same "sign-image.sh, drill-no-provenance with --allow-critical: nothing written" "" "$(cat "$work/cosign.log")"
-
-# A run of svp-frontend: its own repository, commit and identity, its code in the checkout webtree.
-clean
-image web ghcr.io/anhnvcoder/svp-frontend/
-same "sign-image.sh of svp-frontend, its web release: signed and attested" 0 "$(sign github "${web_sign[@]}" --)"
-same "sign-image.sh of svp-frontend, its web release: signature, SBOMs, vuln, then provenance=true" \
-  "sign,spdxjson amd64,spdxjson arm64,vuln index|provenance=true" "$(calls)|$(provenance_out)"
-clean
-same "sign-image.sh of svp-frontend with the backend's workflow: refused" 1 \
-  "$(sign github "${web_sign[@]}" GITHUB_WORKFLOW_REF=anhnvcoder/svp-backend/.github/workflows/images.yml@refs/heads/main --)"
-same "sign-image.sh of svp-frontend with the backend's workflow: nothing written" "" "$(cat "$work/cosign.log")"
-check "sign-image.sh of svp-frontend with the backend's workflow: names the source's subject" has "$work/sign.err" \
-  "releases of source web are signed only as $web_subject"
-same "sign-image.sh, the backend's run on svp-frontend's image: refused" 1 "$(sign github "${backend_sign[@]}" --)"
-check "sign-image.sh, the backend's run on svp-frontend's image: names the prefix" has "$work/sign.err" \
-  "ghcr.io/anhnvcoder/svp-frontend/web is not under ghcr.io/anhnvcoder/svp-backend/"
-image web
-same "sign-image.sh of svp-frontend on the backend's web: refused" 1 "$(sign github "${web_sign[@]}" --)"
-check "sign-image.sh of svp-frontend on the backend's web: names svp-frontend's prefix" has "$work/sign.err" \
-  "is not under ghcr.io/anhnvcoder/svp-frontend/, the prefix of release source web"
-image gateway ghcr.io/anhnvcoder/svp-frontend/
-same "sign-image.sh of svp-frontend on a gateway under its prefix: refused" 1 "$(sign github "${web_sign[@]}" --)"
-check "sign-image.sh of svp-frontend on a gateway under its prefix: names what it publishes" has "$work/sign.err" \
-  "gateway is not an image of release source web (web)"
-image drill-vulnerable ghcr.io/anhnvcoder/svp-frontend/
-same "sign-image.sh of svp-frontend on a drill image under its prefix: refused" 1 \
-  "$(sign github "${web_sign[@]}" -- --allow-critical)"
-same "sign-image.sh of svp-frontend on a drill image under its prefix: nothing written" "" "$(cat "$work/cosign.log")"
-image web ghcr.io/anhnvcoder/svp-frontend/
-same "sign-image.sh of a repository no release source names: refused" 1 \
-  "$(sign github "${web_sign[@]}" GITHUB_REPOSITORY=octo/repo --)"
-check "sign-image.sh of a repository no release source names: says so" has "$work/sign.err" \
-  "this run is of https://github.com/octo/repo, which is the repository of 0 release sources"
-
-# push-image.sh, merge-index.sh and build-image.sh of svp-frontend's run: an image it does not publish, a tree that is
-# not the run's commit, or one without what its build reads, is refused before docker is called.
-# refused_early NAME WANT_MESSAGE [VAR=VALUE...] -- COMMAND...: COMMAND in svp-frontend's run changed by the
-# assignments exits 1 naming WANT_MESSAGE, docker never called.
-refused_early() {
-  local name=$1 want=$2 vars=() rc=0
-  shift 2
-  while [ "$1" != -- ]; do vars+=("$1") && shift; done
-  shift
-  : >"$work/docker.log"
-  bundled github "${web_sign[@]}" ${vars[@]+"${vars[@]}"} -- "$@" >/dev/null 2>"$work/early.err" || rc=$?
-  if [ "$rc" = 1 ] && grep -qF -- "$want" "$work/early.err" && [ ! -s "$work/docker.log" ]; then
-    ok "$name: refused before docker"
-  else
-    fail "$name: refused before docker (exit $rc; $(cat "$work/early.err"); docker: $(cat "$work/docker.log"))"
-  fi
-}
-mkdir -p "$work/leg-out"
-refused_early "push-image.sh of svp-frontend's run, image gateway" "gateway is not an image of release source web" -- \
-  "$tree/deploy/ci/push-image.sh" gateway amd64 "$work/leg-out"
-refused_early "merge-index.sh of svp-frontend's run, image gateway" "gateway is not an image of release source web" -- \
-  "$tree/deploy/ci/merge-index.sh" gateway "$work/sign-leg-amd64" "$work/sign-leg-arm64" "$work/index-out"
-refused_early "push-image.sh of svp-frontend's run, a tree at another commit" \
-  "HEAD of $webtree is $web_head, but this run builds $base of https://github.com/anhnvcoder/svp-frontend" \
-  GITHUB_SHA="$base" -- "$tree/deploy/ci/push-image.sh" web amd64 "$work/leg-out"
-refused_early "merge-index.sh of svp-frontend's run without SVP_CODE_ROOT (the backend's checkout)" \
-  "but this run builds $web_head of https://github.com/anhnvcoder/svp-frontend" SVP_CODE_ROOT= -- \
-  "$tree/deploy/ci/merge-index.sh" web "$work/sign-leg-amd64" "$work/sign-leg-arm64" "$work/index-out"
-printf 'FROM scratch\n' >"$webtree/Dockerfile"
-printf 'lockfileVersion: 9.0\n' >"$webtree/pnpm-lock.yaml"
-mv "$webtree/.trivyignore.yaml" "$work/web-trivyignore"
-refused_early "build-image.sh of svp-frontend's run, a tree without its .trivyignore.yaml" \
-  "$webtree has no file .trivyignore.yaml" -- "$tree/deploy/ci/build-image.sh" web amd64 "$work/leg-out"
-mv "$work/web-trivyignore" "$webtree/.trivyignore.yaml"
-rm -f "$webtree/Dockerfile" "$webtree/pnpm-lock.yaml"
 
 # replace_vuln_bundle on a release in bundles with its signature, its provenance and two vuln bundles of earlier
 # rescans, one of them with a digest that sorts after every other (the one Kyverno would read).
@@ -442,7 +227,7 @@ replace() {
   : >"$work/docker.log"
   # shellcheck disable=SC2016 # expanded by the inner shell
   bundled github "${backend_sign[@]}" "$@" -- "$BASH" -c '. "$1/deploy/ci/common.sh" && sign_identity backend &&
-    replace_vuln_bundle "$2" "$3" "$4"' _ "$tree" "$repo" "$sign_digest" "$work/sign-leg-amd64/sbom.spdx.json" \
+    replace_vuln_bundle "$2" "$3" "$4"' _ "$tree" "$repo" "$sign_digest" "$work/predicate.json" \
     >"$work/replace.out" 2>&1 || rc=$?
   same "replace_vuln_bundle: $name (exit $want)" "$want" "$rc"
 }

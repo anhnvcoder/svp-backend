@@ -6,12 +6,13 @@
 # so no change here ever builds it. A service is built when a changed path is one of its image paths (`image_paths` of
 # deploy/k8s/lib.sh: go.mod, go.sum, gen/, internal/, services/<svc>/, its Dockerfile, .dockerignore), or when the
 # pipeline that builds, scans and signs changed: then all six.
-# The pipeline is .github/workflows/images.yml, anything under deploy/ci/ but the files no image job reads:
+# The pipeline is .github/workflows/images.yml, the composite actions it builds, scans and signs with
+# (.github/actions/image-*/), anything under deploy/ci/ but the files no image job reads:
 # trivy-config-ignore.yaml (read only by make trivy-config, so renewing one of its entries, due every 90 days at most,
 # releases nothing), the scripts of the verification runs of .github/workflows/verify.yml (verify-host.sh,
 # verify-mask.sh, verify-collect.sh, the scripts of its steps under deploy/ci/verify-steps/, ghcr-digest.sh, which the
 # supply chain step and drill call), every test *-test.sh (run by the jobs
-# of ci.yml and on a machine), the scripts of svp-gitops's check:
+# of ci.yml and on a machine) and the fixtures of tests under testdata/, the scripts of svp-gitops's check:
 # gitops-check.sh (svp-gitops's check and make helm-check) with values-check.sh and verify-release.sh,
 # which only it, make k8s-gitops-up and the drills run, its Kyverno policies gitops-policies/ and conftest policies
 # gitops-tree-policies/,
@@ -75,13 +76,14 @@ while IFS= read -r path; do
   case $path in
   deploy/ci/trivy-config-ignore.yaml | deploy/ci/verify-host.sh | \
     deploy/ci/verify-mask.sh | deploy/ci/verify-collect.sh | deploy/ci/ghcr-digest.sh | \
-    deploy/ci/verify-steps/* | deploy/ci/*-test.sh | \
+    deploy/ci/verify-steps/* | deploy/ci/*-test.sh | deploy/ci/testdata/* | \
     deploy/ci/gitops-check.sh | deploy/ci/values-check.sh | deploy/ci/verify-release.sh | \
     deploy/ci/contract.sh | deploy/ci/gitops-policies/* | deploy/ci/gitops-tree-policies/* | deploy/ci/ignorefile-policies/*)
     continue
     ;;
   esac
-  if under "$path" .github/workflows/images.yml || under "$path" deploy/ci || under "$path" deploy/k8s/lib.sh; then
+  if under "$path" .github/workflows/images.yml || [[ $path == .github/actions/image-*/* ]] ||
+    under "$path" deploy/ci || under "$path" deploy/k8s/lib.sh; then
     all "the image pipeline changed ($path)"
   fi
 done <<<"$changed"
