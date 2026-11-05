@@ -22,7 +22,7 @@ required := [
 	"argocd/bootstrap.json",
 ]
 
-deny contains sprintf("%s is missing", [path]) if {
+deny contains $"{path} is missing" if {
 	some path in required
 	not gitops.is_file(path)
 }
@@ -38,26 +38,26 @@ deny contains msg if {
 	entry.type == "dir"
 	entry.link
 	not path in folder_links
-	msg := sprintf("%s is a link to the folder %s: write the files where they are, no rule of this check reads behind such a link", [path, entry.link])
+	msg := $"{path} is a link to the folder {entry.link}: write the files where they are, no rule of this check reads behind such a link"
 }
 
 deny contains "argocd/apps/files/envs must be a symlink to ../../../envs, through which the root chart reads envs/" if {
 	not gitops.links_to("argocd/apps/files/envs", "../../../envs")
 }
 
-deny contains sprintf("%s cannot be read: it is no JSON", [gitops.components_file]) if {
+deny contains $"{gitops.components_file} cannot be read: it is no JSON" if {
 	gitops.is_file(gitops.components_file)
 	not json.is_valid(gitops.text(gitops.components_file))
 }
 
 # A document that is valid JSON but no object (false, null, a list) would make every rule that reads it undefined, so the
 # tree would pass them silently.
-deny contains sprintf("%s must be a JSON object", [gitops.components_file]) if {
+deny contains $"{gitops.components_file} must be a JSON object" if {
 	json.is_valid(gitops.text(gitops.components_file))
 	not is_object(gitops.components_doc)
 }
 
-deny contains sprintf("%s lists no component", [gitops.components_file]) if {
+deny contains $"{gitops.components_file} lists no component" if {
 	json.is_valid(gitops.text(gitops.components_file))
 	not listed
 }
@@ -67,7 +67,7 @@ listed if {
 	count(gitops.components_doc.components) > 0
 }
 
-deny contains sprintf("no component external-secrets in %s", [gitops.components_file]) if {
+deny contains $"no component external-secrets in {gitops.components_file}" if {
 	listed
 	not gitops.component("external-secrets")
 }
@@ -91,7 +91,7 @@ installs_argo_cd if {
 	bootstrap.chart == "argo-cd"
 }
 
-deny contains sprintf("argocd/bootstrap.json: values file %v is missing", [values]) if {
+deny contains $"argocd/bootstrap.json: values file {values} is missing" if {
 	installs_argo_cd
 	values := object.get(bootstrap, "values", null)
 	not values_file(values)
@@ -104,7 +104,7 @@ values_file(v) if {
 
 root_values := "argocd/apps/values.yaml"
 
-deny contains sprintf("%s is no YAML map", [root_values]) if {
+deny contains $"{root_values} is no YAML map" if {
 	gitops.is_file(root_values)
 	not gitops.yaml_map(root_values)
 }
@@ -112,8 +112,5 @@ deny contains sprintf("%s is no YAML map", [root_values]) if {
 deny contains msg if {
 	doc := gitops.yaml_map(root_values)
 	not object.get(doc, "cluster", null) in [null, false, {}]
-	msg := sprintf(
-		"%s sets cluster: the bootstrap alone sets it, from the values of the session, which never go to git (an empty map at most)",
-		[root_values],
-	)
+	msg := $"{root_values} sets cluster: the bootstrap alone sets it, from the values of the session, which never go to git (an empty map at most)"
 }

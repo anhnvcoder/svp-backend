@@ -12,7 +12,8 @@
 # vulnerability, name and version must be YAML strings: grype drops a null from the rule, which then covers every
 # vulnerability, package or version, reads a number as other text (1.10 as 1.1) and refuses to start on a date. In
 # quotes such a value is text, but a date form (2026-1-2) is refused even in quotes: the parsed file no longer shows the
-# quotes. conftest parses YAML 1.1, so a plain yes, no, on or off is a bool here (text to grype): quote it. Each is plain (letters, digits and @._:+~/-, the name once unescaped). grype reads package.name as a regex
+# quotes. conftest parses YAML 1.1, so a plain yes, no, on or off is a bool here (text to grype): quote it.
+# Each is plain (letters, digits and @._:+~/-, the name once unescaped). grype reads package.name as a regex
 # anchored at both ends when it holds one of *+?[](){}|^$\ (mini.* covers minimist), so the name must be the purl's
 # name with each of .*+?[](){}|^$\ escaped by \ (socket\.io-parser, libstdc\+\+, golang\.org/x/net): that name covers
 # its one package whether grype reads it as a regex or as text, and no entry and rule pair (pkg:npm/.*@1.2.5 and .*)
@@ -46,7 +47,7 @@ field(r, "package.version") := r.package.version
 
 fields := ["vulnerability", "package.name", "package.version"]
 
-deny contains sprintf("%s: the file must be a mapping of the one key ignore", [file]) if {
+deny contains $"{file}: the file must be a mapping of the one key ignore" if {
 	ignorefiles.present(file)
 	not is_object(doc)
 }
@@ -55,28 +56,22 @@ deny contains msg if {
 	is_object(doc)
 	some k, _ in doc
 	k != "ignore"
-	msg := sprintf(
-		"%s: only the key ignore may be set (grype reads every key of this file, and some leave a vulnerability out with no entry): %s",
-		[file, k],
-	)
+	msg := $"{file}: only the key ignore may be set (grype reads every key of this file, and some leave a vulnerability out with no entry): {k}"
 }
 
-deny contains sprintf("%s: ignore must be a list (ignore: [] when nothing is excepted)", [file]) if {
+deny contains $"{file}: ignore must be a list (ignore: [] when nothing is excepted)" if {
 	is_object(doc)
 	not is_array(object.get(doc, "ignore", null))
 }
 
-deny contains sprintf("%s: rule #%d is not a mapping", [file, i + 1]) if {
+deny contains $"{file}: rule #{i + 1} is not a mapping" if {
 	some i, r in list
 	not is_object(r)
 }
 
 deny contains msg if {
 	some [i, k] in unexpected
-	msg := sprintf(
-		"%s: rule %s: unexpected key %s (a rule has only vulnerability, include-aliases, package.name, package.version)",
-		[file, name(i), k],
-	)
+	msg := $"{file}: rule {name(i)}: unexpected key {k} (a rule has only vulnerability, include-aliases, package.name, package.version)"
 }
 
 unexpected contains [i, k] if {
@@ -84,18 +79,18 @@ unexpected contains [i, k] if {
 	some k in ignorefiles.extra(r, {"vulnerability", "include-aliases", "package"})
 }
 
-unexpected contains [i, sprintf("package.%s", [k])] if {
+unexpected contains [i, $"package.{k}"] if {
 	some i, r in rules
 	is_object(r.package)
 	some k in ignorefiles.extra(r.package, {"name", "version"})
 }
 
-deny contains sprintf("%s: rule %s needs include-aliases: true", [file, name(i)]) if {
+deny contains $"{file}: rule {name(i)} needs include-aliases: true" if {
 	some i, r in rules
 	object.get(r, "include-aliases", null) != true
 }
 
-deny contains sprintf("%s: rule %s has no %s", [file, name(i), key]) if {
+deny contains $"{file}: rule {name(i)} has no {key}" if {
 	some i, r in rules
 	some key in fields
 	not has(r, key)
@@ -108,10 +103,7 @@ deny contains msg if {
 	some key in fields
 	v := field(r, key)
 	not is_string(v)
-	msg := sprintf(
-		"%s: rule %s: %s %v is a null, a bool, a number or a date to YAML, not text (grype would drop it from the rule or read another value): put it in quotes",
-		[file, name(i), key, v],
-	)
+	msg := $"{file}: rule {name(i)}: {key} {v} is a null, a bool, a number or a date to YAML, not text (grype would drop it from the rule or read another value): put it in quotes"
 }
 
 deny contains msg if {
@@ -119,13 +111,10 @@ deny contains msg if {
 	some key in fields
 	v := field(r, key)
 	date_form(v)
-	msg := sprintf(
-		"%s: rule %s: %s %s has the form of a date, which grype reads as a date unless it is quoted, and the check cannot see quotes: not accepted",
-		[file, name(i), key, v],
-	)
+	msg := $"{file}: rule {name(i)}: {key} {v} has the form of a date, which grype reads as a date unless it is quoted, and the check cannot see quotes: not accepted"
 }
 
-deny contains sprintf("%s: rule %s: %s %s is not plain (letters, digits, @._:+~/-)", [file, name(i), key, v]) if {
+deny contains $"{file}: rule {name(i)}: {key} {v} is not plain (letters, digits, @._:+~/-)" if {
 	some i, r in rules
 	some key in ["vulnerability", "package.version"]
 	v := field(r, key)
@@ -138,13 +127,13 @@ deny contains msg if {
 	v := r.package.name
 	is_string(v)
 	escape(unescape(v)) != v
-	msg := sprintf(
-		"%s: rule %s: package.name %s is not a purl name with each of .*+?[](){}|^$\\ escaped by \\ (grype reads the name as a regex, so it would cover other packages): write %s",
-		[file, name(i), v, escape(unescape(v))],
-	)
+	msg := concat("", [
+		$"{file}: rule {name(i)}: package.name {v} is not a purl name with each of .*+?[]()\{}|^$\\ escaped ",
+		$"by \\ (grype reads the name as a regex, so it would cover other packages): write {escape(unescape(v))}",
+	])
 }
 
-deny contains sprintf("%s: rule %s: package.name %s is not plain (letters, digits, @._:+~/- once unescaped)", [file, name(i), v]) if {
+deny contains $"{file}: rule {name(i)}: package.name {v} is not plain (letters, digits, @._:+~/- once unescaped)" if {
 	some i, r in rules
 	v := r.package.name
 	is_string(v)
@@ -166,10 +155,7 @@ deny contains msg if {
 		in_force(e)
 	])
 	n != 1
-	msg := sprintf(
-		"%s: rule %s %s@%s is %d entries of .trivyignore.yaml%s, not exactly one (same id, a purl of that name and version)",
-		[file, vuln, pname, version, n, in_force_note],
-	)
+	msg := $"{file}: rule {vuln} {pname}@{version} is {n} entries of .trivyignore.yaml{in_force_note}, not exactly one (same id, a purl of that name and version)"
 }
 
 # sound(r): r names its vulnerability and package by values the rules accept; only such a rule is matched against the
@@ -189,9 +175,9 @@ sound(r) if {
 # in_force(e): live, the entry is not expired; otherwise any entry.
 in_force(e) if not ignorefiles.expired(e.expired_at)
 
-in_force_note := " in force" if {
-	data.scan_gate.live == true
-} else := ""
+default in_force_note := ""
+
+in_force_note := " in force" if data.scan_gate.live == true
 
 plain(v) if regex.match(`^[A-Za-z0-9@._:+~/-]+$`, v)
 

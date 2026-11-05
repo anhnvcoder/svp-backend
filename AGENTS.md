@@ -124,13 +124,15 @@ Mọi lệnh chạy từ gốc repo (hay worktree của nó) qua `Makefile`; `ma
 - `make generate` sau khi sửa `proto/` hay SQL của sqlc (code sinh được commit); `make generate-check` kiểm không lệch.
 - `make api-contract-check`: luật version của hợp đồng REST `services/gateway/openapi.yaml`.
 - `deploy/ci/scan-gate.sh --check-ignorefile`: luật của `.trivyignore.yaml`, `.grype.yaml` (mỗi rule grype ứng một mục còn hạn của file trivy) và `deploy/ci/trivy-config-ignore.yaml`, viết bằng policy conftest ở `deploy/ci/ignorefile-policies/` (test: `make conftest-verify`); `make grype IMAGE=<ref>@sha256:<digest>`: cổng grype của một chân image ([ADR-0039](docs/adr/0039-mainpath-drills-scan-gate-sourcemaps.md) §2).
+- `make regal-lint`: Regal (linter Rego của dự án OPA, luật ở `.regal/config.yaml`) trên `deploy/ci/*-policies/`; `make regal-fix` ghi các
+  sửa tự động (`opa fmt`…) vào đó. Chạy cùng `make conftest-verify` khi sửa file `*.rego`.
 - `make zizmor`: lint bảo mật workflow (zizmor ghim; audit online khi có `GH_TOKEN`); ngoại lệ ở `.github/zizmor.yml`
   ([ADR-0041](docs/adr/0041-github-hardening.md) (g)).
 - `make helm-check`: lint, render mọi chart với `base/`, overlay của bản clone `svp-gitops` và policy Kyverno CLI.
 - `make compose-config`, `make otelcol-validate`, `make slo-check`, `make k6-check`, `make kyverno-test`, `make cloud-check`: kiểm
   cấu hình tĩnh khi sửa phần tương ứng.
 - `make env`, `make up [OBS=lgtm]`, `make smoke`, `make down`: dựng stack compose local và chạy luồng đầu-cuối.
-- `make hooks`: bật hook `pre-commit` (gofmt, golangci-lint, buf lint, gitleaks) một lần mỗi clone.
+- `make hooks`: bật hook `pre-commit` (gofmt, golangci-lint, buf lint, gitleaks, và `regal-lint` khi commit đổi `*.rego`) một lần mỗi clone.
 
 ## Tra cứu
 

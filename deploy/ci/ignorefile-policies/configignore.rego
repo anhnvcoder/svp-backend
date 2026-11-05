@@ -25,38 +25,38 @@ entries[i] := e if {
 
 name(i) := ignorefiles.label(i, object.get(entries[i], "id", null))
 
-deny contains sprintf("%s: the file must be a mapping of the one key misconfigurations", [file]) if {
+deny contains $"{file}: the file must be a mapping of the one key misconfigurations" if {
 	ignorefiles.present(file)
 	not is_object(doc)
 }
 
-deny contains sprintf("%s: only misconfigurations may be ignored here: %s", [file, k]) if {
+deny contains $"{file}: only misconfigurations may be ignored here: {k}" if {
 	is_object(doc)
 	some k, _ in doc
 	k != "misconfigurations"
 }
 
-deny contains sprintf("%s: misconfigurations must be a list", [file]) if {
+deny contains $"{file}: misconfigurations must be a list" if {
 	is_object(doc)
 	not is_array(object.get(doc, "misconfigurations", null))
 }
 
-deny contains sprintf("%s: entry #%d is not a mapping", [file, i + 1]) if {
+deny contains $"{file}: entry #{i + 1} is not a mapping" if {
 	some i, e in list
 	not is_object(e)
 }
 
-deny contains sprintf("%s: entry %s: unexpected key %s (only id, paths, statement, expired_at)", [file, name(i), k]) if {
+deny contains $"{file}: entry {name(i)}: unexpected key {k} (only id, paths, statement, expired_at)" if {
 	some i, e in entries
 	some k in ignorefiles.extra(e, keys)
 }
 
-deny contains sprintf("%s: entry %s: id is not a check id such as DS-0026 or KSV-0048", [file, name(i)]) if {
+deny contains $"{file}: entry {name(i)}: id is not a check id such as DS-0026 or KSV-0048" if {
 	some i, e in entries
 	not check_id(object.get(e, "id", null))
 }
 
-deny contains sprintf("%s: entry %s has no paths (an id is never ignored for the whole repository)", [file, name(i)]) if {
+deny contains $"{file}: entry {name(i)} has no paths (an id is never ignored for the whole repository)" if {
 	some i, e in entries
 	not ignorefiles.filled(object.get(e, "paths", null))
 }
@@ -65,15 +65,15 @@ deny contains msg if {
 	some i, e in entries
 	some p in ignorefiles.items(e.paths)
 	not plain_path(p)
-	msg := sprintf("%s: entry %s: path %v is not a plain relative path; name each file, no pattern", [file, name(i), p])
+	msg := $"{file}: entry {name(i)}: path {p} is not a plain relative path; name each file, no pattern"
 }
 
-deny contains sprintf("%s: entry %s has no statement (the reason it is ignored)", [file, name(i)]) if {
+deny contains $"{file}: entry {name(i)} has no statement (the reason it is ignored)" if {
 	some i, e in entries
 	not ignorefiles.text(object.get(e, "statement", null))
 }
 
-deny contains sprintf("%s: entry %s has no expired_at yyyy-mm-dd", [file, name(i)]) if {
+deny contains $"{file}: entry {name(i)} has no expired_at yyyy-mm-dd" if {
 	some i, e in entries
 	not ignorefiles.day(object.get(e, "expired_at", null))
 }
@@ -81,10 +81,7 @@ deny contains sprintf("%s: entry %s has no expired_at yyyy-mm-dd", [file, name(i
 deny contains msg if {
 	some i, e in entries
 	ignorefiles.expires_late(e.expired_at, 90)
-	msg := sprintf("%s: entry %s expires %s, more than 90 days from today (%s)", [
-		file, name(i), e.expired_at,
-		ignorefiles.after(90),
-	])
+	msg := $"{file}: entry {name(i)} expires {e.expired_at}, more than 90 days from today ({ignorefiles.after(90)})"
 }
 
 check_id(v) if {

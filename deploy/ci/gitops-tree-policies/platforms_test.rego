@@ -14,10 +14,10 @@ with_platforms(map) := fx.with_components(fx.tree_input, object.union(object.rem
 # with_platform(name, value): the fixture with platform name of the map holding value.
 with_platform(name, value) := with_platforms(object.union(fx.components.platforms, {name: value}))
 
-must_map(platform) := sprintf(
-	"argocd/apps/components.json: platforms: %s must each map a name of lowercase letters and digits to {envs: environments of prd stg, each once; localHosts: true or false, optional}",
-	[platform],
-)
+must_map(platform) := concat("", [
+	$"argocd/apps/components.json: platforms: {platform} must each map a name of ",
+	$"lowercase letters and digits to \{envs: environments of prd stg, each once; localHosts: true or false, optional}",
+])
 
 file_rule := "a file of a platform is README.md, <name>.yaml or <name>.values.tpl, <name> a component of components.json"
 
@@ -108,22 +108,22 @@ test_platforms_of_a_component_that_is_no_list if fx.says(
 
 test_a_file_naming_no_component if fx.says(
 	deny(fx.with_file(fx.tree_input, "platforms/eks/nope.yaml", "replicas: 2\n")),
-	concat("", ["platforms/eks/nope.yaml: ", file_rule]),
+	$"platforms/eks/nope.yaml: {file_rule}",
 )
 
 test_a_template_of_argo_cds_values if fx.says(
 	deny(fx.with_file(fx.tree_input, "platforms/eks/argo-cd.values.tpl", "notifications:\n  enabled: true\n")),
-	concat("", ["platforms/eks/argo-cd.values.tpl: ", file_rule]),
+	$"platforms/eks/argo-cd.values.tpl: {file_rule}",
 )
 
 test_a_file_of_another_extension if fx.says(
 	deny(fx.with_file(fx.tree_input, "platforms/eks/loki.yml", "loki: {}\n")),
-	concat("", ["platforms/eks/loki.yml: ", file_rule]),
+	$"platforms/eks/loki.yml: {file_rule}",
 )
 
 test_a_folder_inside_a_platform if fx.says(
 	deny(fx.with_entry(fx.tree_input, "platforms/eks/loki.yaml", fx.dir)),
-	concat("", ["platforms/eks/loki.yaml: ", file_rule]),
+	$"platforms/eks/loki.yaml: {file_rule}",
 )
 
 test_argo_cds_values_of_a_platform_pass if count(deny(fx.with_file(

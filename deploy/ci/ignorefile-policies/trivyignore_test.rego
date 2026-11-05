@@ -14,10 +14,7 @@ deny(text, mode) := msgs if {
 }
 
 # entry(id, expired_at, purl): one entry with a statement.
-entry(id, expired_at, purl) := sprintf(
-	"  - id: %s\n    statement: Accepted for the test.\n    expired_at: %s\n    purls:\n      - %s\n",
-	[id, expired_at, purl],
-)
+entry(id, expired_at, purl) := $"  - id: {id}\n    statement: Accepted for the test.\n    expired_at: {expired_at}\n    purls:\n      - {purl}\n"
 
 one(expired_at, purl) := concat("", ["vulnerabilities:\n", entry("CVE-2026-1111", expired_at, purl)])
 
@@ -66,7 +63,7 @@ test_a_secrets_section if says(
 test_an_entry_without_a_statement if {
 	every statement in ["", "    statement:\n", "    statement: null\n", "    statement: ''\n", "    statement: '   '\n"] {
 		says(
-			deny(sprintf("vulnerabilities:\n  - id: CVE-2026-1111\n%s    expired_at: 2026-11-15\n    purls:\n      - pkg:npm/a@1\n", [statement]), gate),
+			deny($"vulnerabilities:\n  - id: CVE-2026-1111\n{statement}    expired_at: 2026-11-15\n    purls:\n      - pkg:npm/a@1\n", gate),
 			"entry CVE-2026-1111 has no statement (the reason it is ignored)",
 		)
 	}

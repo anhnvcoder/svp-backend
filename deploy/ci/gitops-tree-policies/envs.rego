@@ -23,16 +23,16 @@ package gitops.envs
 
 import data.gitops
 
-envs := concat(" ", sort(gitops.environments))
+want_envs := concat(" ", sort(gitops.environments))
 
 deny contains sprintf("envs/ holds '%s': the environments are exactly %s", [got, concat(" and ", sort(gitops.environments))]) if {
 	got := gitops.folders("envs")
-	got != envs
+	got != want_envs
 }
 
-charts_path(env) := sprintf("envs/%s/charts.yaml", [env])
+charts_path(env) := $"envs/{env}/charts.yaml"
 
-deny contains sprintf("%s is missing: it pins the commit of this repository whose charts %s runs", [charts_path(env), env]) if {
+deny contains $"{charts_path(env)} is missing: it pins the commit of this repository whose charts {env} runs" if {
 	some env in gitops.environments
 	not gitops.is_file(charts_path(env))
 }
@@ -45,6 +45,7 @@ pinning_env := "prd"
 pinned_keys := "collectorConfigSha256 gitopsRevision podSecurityVersion revision"
 
 # allowed_keys(env): the sets of keys envs/<env>/charts.yaml may hold.
+# regal ignore:external-reference
 allowed_keys(env) := {charts_keys, pinned_keys} if env == pinning_env
 
 allowed_keys(env) := {charts_keys} if env != pinning_env
@@ -60,10 +61,7 @@ deny contains msg if {
 	gitops.is_file(charts_path(env))
 	not keys(env) in allowed_keys(env)
 	not stg_pins(env)
-	msg := sprintf(
-		"%s holds '%s': exactly revision, podSecurityVersion and collectorConfigSha256, one line each (and gitopsRevision in %s alone)",
-		[charts_path(env), keys(env), charts_path(pinning_env)],
-	)
+	msg := $"{charts_path(env)} holds '{keys(env)}': exactly revision, podSecurityVersion and collectorConfigSha256, one line each (and gitopsRevision in {charts_path(pinning_env)} alone)"
 }
 
 # stg_pins(env): env is not the pinning environment, and its charts.yaml holds exactly the pinned keys.
@@ -75,10 +73,7 @@ stg_pins(env) if {
 deny contains msg if {
 	some env in gitops.environments
 	stg_pins(env)
-	msg := sprintf(
-		"%s sets gitopsRevision: only %s pins a commit of svp-gitops (the one the promote to %s copied from stg); %s follows main",
-		[charts_path(env), pinning_env, pinning_env, env],
-	)
+	msg := $"{charts_path(env)} sets gitopsRevision: only {pinning_env} pins a commit of svp-gitops (the one the promote to {pinning_env} copied from stg); {env} follows main"
 }
 
 # Every line that is neither blank nor a comment is `key: value`, the value not empty: a key without its colon or value
@@ -91,14 +86,14 @@ deny contains msg if {
 	some line in gitops.lines(charts_path(env))
 	not regex.match(`^\s*(#.*)?$`, line)
 	not regex.match(`^[A-Za-z0-9]+: *\S`, line)
-	msg := sprintf("%s: line '%s' is not 'key: value' with a value", [charts_path(env), line])
+	msg := $"{charts_path(env)}: line '{line}' is not 'key: value' with a value"
 }
 
 # field(env, key): the value of key in envs/<env>/charts.yaml, once its keys are those of the file.
 field(env, key) := regex.replace(line, `^[^:]*: *`, "") if {
 	keys(env) in allowed_keys(env)
 	some line in gitops.lines(charts_path(env))
-	startswith(line, concat("", [key, ":"]))
+	startswith(line, $"{key}:")
 }
 
 deny contains msg if {
@@ -106,10 +101,7 @@ deny contains msg if {
 	some env in gitops.environments
 	rev := field(env, "revision")
 	not regex.match(`^[0-9a-f]{40}$`, rev)
-	msg := sprintf(
-		"%s: revision is '%s', the full commit (40 hex) of this repository whose charts %s runs",
-		[charts_path(env), rev, env],
-	)
+	msg := $"{charts_path(env)}: revision is '{rev}', the full commit (40 hex) of this repository whose charts {env} runs"
 }
 
 # gitopsRevision, with or without input.worktree: it names a commit of svp-gitops, which the working tree of this
@@ -117,10 +109,7 @@ deny contains msg if {
 deny contains msg if {
 	rev := field(pinning_env, "gitopsRevision")
 	not regex.match(`^[0-9a-f]{40}$`, rev)
-	msg := sprintf(
-		"%s: gitopsRevision is '%s', the full commit (40 hex) of svp-gitops at which %s renders argocd/apps, base/ and platforms/",
-		[charts_path(pinning_env), rev, pinning_env],
-	)
+	msg := $"{charts_path(pinning_env)}: gitopsRevision is '{rev}', the full commit (40 hex) of svp-gitops at which {pinning_env} renders argocd/apps, base/ and platforms/"
 }
 
 root_chart := "argocd/root/Chart.yaml"
@@ -128,10 +117,7 @@ root_chart := "argocd/root/Chart.yaml"
 deny contains msg if {
 	field(pinning_env, "gitopsRevision")
 	not gitops.is_file(root_chart)
-	msg := sprintf(
-		"%s sets gitopsRevision, which only the two-level root argocd/root reads: %s is missing",
-		[charts_path(pinning_env), root_chart],
-	)
+	msg := $"{charts_path(pinning_env)} sets gitopsRevision, which only the two-level root argocd/root reads: {root_chart} is missing"
 }
 
 derived := {
@@ -145,17 +131,14 @@ deny contains msg if {
 	some key, from in derived
 	got := field(env, key)
 	got != given[key]
-	msg := sprintf("%s: %s is '%s', %s", [
-		charts_path(env), key, got,
-		sprintf(from, [substring(given.revision, 0, 12), given[key]]),
-	])
+	msg := $"{charts_path(env)}: {key} is '{got}', {sprintf(from, [substring(given.revision, 0, 12), given[key]])}"
 }
 
-images_dir(env) := sprintf("envs/%s/images", [env])
+images_dir(env) := $"envs/{env}/images"
 
-want_images := concat(" ", sort([sprintf("%s.yaml", [svc]) | some svc in gitops.services]))
+want_images := concat(" ", sort([$"{svc}.yaml" | some svc in gitops.services]))
 
-deny contains sprintf("%s/ holds '%s': exactly one file per service, %s", [images_dir(env), got, want_images]) if {
+deny contains $"{images_dir(env)}/ holds '{got}': exactly one file per service, {want_images}" if {
 	some env in gitops.environments
 	got := concat(" ", sort(gitops.names(images_dir(env))))
 	got != want_images
@@ -165,7 +148,7 @@ deny contains sprintf("%s/ holds '%s': exactly one file per service, %s", [image
 image_files contains [env, svc, path] if {
 	some env in gitops.environments
 	some svc in gitops.services
-	path := sprintf("%s/%s.yaml", [images_dir(env), svc])
+	path := $"{images_dir(env)}/{svc}.yaml"
 	gitops.is_file(path)
 }
 
@@ -201,9 +184,9 @@ image(path) := {key: value |
 
 image_field(path, key) := value if {
 	lines := gitops.lines(path)
-	values := [unquote(regex.replace(line, sprintf(`^  %s: *`, [key]), "")) |
+	values := [unquote(regex.replace(line, $`^  {key}: *`, "")) |
 		some i, line in lines
-		startswith(line, sprintf("  %s:", [key]))
+		startswith(line, $"  {key}:")
 		in_image_block(lines, i)
 	]
 	count(values) == 1
@@ -222,7 +205,7 @@ unquote(v) := substring(v, 1, count(v) - 2) if regex.match(`^"[^"]*"$`, v)
 
 unquote(v) := v if not regex.match(`^"[^"]*"$`, v)
 
-deny contains sprintf("%s: image.repository, tag and digest must each be one plain line in the image block", [path]) if {
+deny contains $"{path}: image.repository, tag and digest must each be one plain line in the image block" if {
 	some [_, _, path] in image_files
 	count(others(path)) == 0
 	not image(path)
@@ -244,11 +227,11 @@ deny contains msg if {
 # values_files: each overlay envs/<env>/<name>.yaml (charts.yaml aside) and each image file envs/<env>/images/*.yaml.
 values_files contains path if {
 	some env in gitops.environments
-	some dir in [sprintf("envs/%s", [env]), images_dir(env)]
+	some dir in [$"envs/{env}", images_dir(env)]
 	some name in gitops.visible(dir)
 	name != "charts.yaml"
 	endswith(name, ".yaml")
-	path := concat("/", [dir, name])
+	path := $"{dir}/{name}"
 	gitops.is_file(path)
 }
 
@@ -258,10 +241,10 @@ deny contains msg if {
 	walk(doc, [at, value])
 	count(at) > 0
 	empty(value)
-	msg := sprintf(
-		"%s: %s is %s: an overlay or image file sets no null, {} or [], which the health check of Argo CD's Applications cannot tell from a key left out; leave the key out or give it a value",
-		[path, key_path(at), json.marshal(value)],
-	)
+	msg := concat("", [
+		$"{path}: {key_path(at)} is {json.marshal(value)}: an overlay or image file sets no null, \{} ",
+		$"or [], which the health check of Argo CD's Applications cannot tell from a key left out; leave the key out or give it a value",
+	])
 }
 
 empty(value) if is_null(value)
@@ -273,9 +256,9 @@ empty(value) if value == []
 # key_path(at): a path walk gives, as YAML names it: a.b[0].c.
 key_path(at) := trim_prefix(concat("", [segment(k) | some k in at]), ".")
 
-segment(k) := sprintf("[%d]", [k]) if is_number(k)
+segment(k) := $"[{k}]" if is_number(k)
 
-segment(k) := sprintf(".%s", [k]) if is_string(k)
+segment(k) := $".{k}" if is_string(k)
 
 # release(table, svc, img): img is a release of svc of exactly one source of table, with its tag and digest.
 release(table, svc, img) if {
