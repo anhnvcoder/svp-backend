@@ -14,28 +14,26 @@
 # On the GitOps path's staging (a cluster with namespace svp-secrets) those three Secrets are ExternalSecrets of chart
 # svp-cluster: the values go into their source instead, Secret svp-secrets/glitchtip-runtime (SENTRY_DSN,
 # SENTRY_AUTH_TOKEN, SENTRY_SOURCEMAPS_TOKEN, empty while GlitchTip has no such token), and the three ExternalSecrets
-# are built again from it (es_force_sync of deploy/k8s/lib.sh) before the restarts below. On an EKS cluster
+# are built again from it (es_force_sync of deploy/k8s/lib.sh). On an EKS cluster
 # (SVP_KUBE_CONTEXT svp-stg or svp-prd, `make eks-glitchtip-init`) the source is entry svp/<env>/glitchtip-runtime of
 # AWS Secrets Manager, written with the AWS profile AWS_PROFILE of that environment's account, checked before anything
 # is read (aws_setup and aws_put_entry of deploy/k8s/lib.sh: the values go through a file of mode 700, never on a
 # command line); the same three ExternalSecrets are built again from it.
 #
-# Then each service that reads Secret sentry restarts when its pods started before the Secret's current version, so
-# it reports errors from then on (restart_on_secret_change of deploy/k8s/lib.sh, annotation
-# svp-sentry-secret-version): a workload without that annotation may have started before the Secret existed (the
-# GitOps path starts the services beside GlitchTip), so it restarts too. For a Deployment `kubectl rollout restart`
-# only adds the annotation kubectl.kubernetes.io/restartedAt to the pod template, the same one Argo CD's own restart
-# action writes; the gateway, a Rollout, gets spec.restartAt instead, which restarts its pods without a new revision
-# (a changed template would be a canary); a Rollout running a canary stops this script at once, naming it. The version
-# goes into the workload's metadata. None of these is in the manifests in git, and Argo CD's diff, a three-way merge
-# against what it last applied, does not report fields it never applied, nor does a sync remove them. A workload whose template does not read Secret sentry yet (a release from
-# before error tracking) is left alone: its next upgrade rolls it with the new template, which reads the Secret then.
+# No restart here: each service that reports errors names Secret sentry in its annotation
+# secret.reloader.stakater.com/reload (chart svp-service), so Reloader (component reloader of svp-gitops) restarts it
+# when the DSN in that Secret changes, the gateway and the web client, Argo Rollouts Rollouts, through Argo Rollouts'
+# own restart (no new revision). Reloader does not restart anything when the Secret is first created (reloadOnCreate off,
+# base/reloader.yaml of svp-gitops): on the dev path this script creates it before the services' wave starts, and on
+# the GitOps path and EKS the Secret exists, empty, as soon as its ExternalSecret does, so the services read the DSN at
+# their start or Reloader restarts them when it is filled in. A workload whose template does not read Secret sentry
+# (media-worker) is left alone.
 #
 # Needs only GlitchTip ready (its init Job has run); run by deploy/k8s/install.sh after chart svp-observability, by
 # `make k8s-glitchtip-init` on its own (`make eks-glitchtip-init` on an EKS cluster, once Argo CD reports Application
 # svp-observability Healthy), and by the GitOps path of k3d once Argo CD reports GlitchTip healthy.
 # Idempotent: the DSN and tokens do not change between runs (bootstrap.py never makes a second key or token), so a
-# second run applies the same Secrets, which keep their resourceVersion, and restarts nothing.
+# second run applies the same Secrets, which keep their resourceVersion, and Reloader restarts nothing.
 set -euo pipefail
 
 # shellcheck source=deploy/k8s/lib.sh
@@ -124,12 +122,4 @@ else
   echo "skip  Secret svp-obs/glitchtip-sourcemaps: GlitchTip has no API token labelled svp-sourcemaps (its bootstrap.py predates it); make k8s-web-sourcemaps cannot upload until it does"
 fi
 
-for svc in "${svp_services[@]}"; do
-  kind=$(workload_kind svp "$svc")
-  ref=$(kc -n svp get "$kind" "$svc" --ignore-not-found \
-    -o jsonpath='{.spec.template.spec.containers[0].env[?(@.name=="SENTRY_DSN")].valueFrom.secretKeyRef.name}') ||
-    fail "read $kind svp/$svc"
-  [ "$ref" = sentry ] || continue
-  restart_on_secret_change svp "$svc" sentry svp-sentry-secret-version restart
-done
-ok "every service that reports errors runs with the current DSN"
+ok "Reloader restarts each service that reads Secret svp/sentry when the DSN in it changed (none when it did not); follow them with kubectl --context $kube_context -n svp get pods -w"

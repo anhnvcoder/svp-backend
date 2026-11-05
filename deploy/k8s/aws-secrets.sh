@@ -21,18 +21,22 @@
 # deploy/k8s/lib.sh). Each entry is one put-secret-value with its JSON in a file of a folder of mode 700, removed on
 # exit: no value is on a command line, on stdout or stderr.
 #
-# A run on an environment whose entry glitchtip-runtime has a version is a change of secrets of a running cluster, in
-# the order of a lab cluster's: (1) a changed password of Redpanda's superuser goes into the running broker first
-# (redpanda_admin of deploy/k8s/lib.sh), so the cluster must be reachable (svp-prd: through its tunnel); (2) the
-# entries are written; (3) every ExternalSecret is built again from them (es_force_sync: their refreshPolicy is
-# OnChange); (4) when a broker of Redpanda runs with another superuser password than the one now in its Secret, the
-# brokers are restarted one at a time (restart_brokers, below). The runbook goes on from there: a sync of Application
-# svp-data, whose init Jobs set the new passwords in Postgres and Redpanda, then a restart of each workload whose Secret
-# changed. A first run asks the cluster nothing: nothing reads the entries before Argo CD is installed.
+# A run on an environment whose entry glitchtip-runtime has a version is a whole change of credentials of a running
+# cluster, in the order of deploy/k8s/rotate.sh, as on a lab cluster: the cluster must be reachable (svp-prd: through
+# its tunnel) and run Reloader, with StatefulSet redpanda naming its Secrets for it (rotate_guard); a changed password
+# of Redpanda's superuser goes into the running broker first (redpanda_admin of deploy/k8s/lib.sh); the entries are
+# written; the ExternalSecrets of svp-data are built again from them (their refreshPolicy is OnChange) and the brokers
+# of Redpanda waited for until each runs with the new superuser password (Reloader restarts them); a sync of
+# Application svp-data runs the init Jobs, which set the new passwords in Postgres and Redpanda; then every other
+# ExternalSecret is built again, and Reloader restarts each workload whose Secret changed. A first run (entry
+# glitchtip-runtime without a version: a new environment) only writes the entries and asks the cluster nothing: nothing
+# reads them before Argo CD is installed.
 set -euo pipefail
 
 # shellcheck source=deploy/k8s/lib.sh
 . "$(dirname "$0")/lib.sh"
+# shellcheck source=deploy/k8s/rotate.sh
+. "$(dirname "$0")/rotate.sh"
 cloud_context ||
   fail "context $kube_context is the local cluster, whose Secrets come from .env (make k8s-secrets): this script writes those of an EKS cluster, SVP_KUBE_CONTEXT svp-stg or svp-prd"
 # Written for a cloud cluster: kc may reach the EKS cluster SVP_KUBE_CONTEXT names (deploy/k8s/lib.sh).
@@ -107,14 +111,16 @@ if jq -e 'has("glitchtip-runtime")' <<<"$entries" >/dev/null; then
     fail "read the versions of entry ${aws_prefix}glitchtip-runtime"
 fi
 
-# --- (1) on a running environment, Redpanda takes a changed password of its superuser first.
+# --- 1. the servers. On a running environment Reloader must run, StatefulSet redpanda must name its Secrets for it,
+# and Redpanda takes a changed password of its superuser first.
 if [ -n "$running" ]; then
   kc get --raw /readyz >/dev/null 2>&1 ||
     fail "cluster $kube_context is not reachable (svp-prd: open the tunnel of output api_tunnel_command of the infrastructure repository); its entries have values already, and a changed password of Redpanda's superuser must reach the broker before them; nothing was written"
+  rotate_guard argocd "Argo CD installs them with component reloader and the charts of svp-gitops: sync Application svp-apps to a revision that has them"
   redpanda_admin
 fi
 
-# --- (2) the entries.
+# The entries.
 written=
 for name in $names; do
   [ "$name" != glitchtip-runtime ] || continue
@@ -133,67 +139,24 @@ if jq -e 'has("glitchtip-runtime")' <<<"$entries" >/dev/null; then
   fi
 fi
 
-# --- (4) Redpanda's brokers read the superuser's password once, when they start: the broker's rpk and the sidecar take
-# it from their environment (RPK_PASS, from Secret redpanda-bootstrap). Once (1) has changed it in Redpanda, every
+# Redpanda's brokers read the superuser's password once, when they start: the broker's rpk and the sidecar take it from
+# their environment (RPK_PASS, from Secret redpanda-bootstrap). Once redpanda_admin has changed it in Redpanda, every
 # broker started before keeps logging in with the previous one: the sidecar's readiness probe, which asks the Admin API
-# with it, gets 401 and the broker turns NotReady, and so do the maintenance hooks of a broker of several. Hence a
-# restart, done here and not left to the runbook: the brokers are NotReady from (1) on, and Argo CD runs the PostSync
-# Jobs of svp-data (the runbook's next step, redpanda-init among them) only once its resources are healthy. It comes
-# after (3), once the Secret holds the new password, and only when a broker runs with another one: a restart of
-# brokers that already have it would move every partition's leadership for nothing.
-
-# broker_stale POD: true when the container redpanda of POD runs with an RPK_PASS other than SVP_KAFKA_ADMIN_PASSWORD.
-# The value goes to the container on stdin and is compared there, never printed nor on a command line (as stale of
-# deploy/k8s/secrets.sh). A pod that does not exist or does not run yet reads the Secret when it starts, so it is not
-# stale; a pod that cannot be read stops the script: taken as not stale, a broker with the previous password would
-# stay NotReady.
-broker_stale() {
-  local started err rc=0
-  started=$(kc -n svp-data get pod "$1" --ignore-not-found \
-    -o jsonpath='{.status.containerStatuses[?(@.name=="redpanda")].state.running.startedAt}') ||
-    fail "read pod svp-data/$1 (above), to know whether its broker runs with the superuser password of .env; run $again again"
-  [ -n "$started" ] || return 1
-  # Exit 3 inside the container means "differs", told apart from kubectl's own failures (exit 1).
-  err=$(printf '%s\n' "$SVP_KAFKA_ADMIN_PASSWORD" | kc -n svp-data exec -i "$1" -c redpanda -- \
-    sh -c 'IFS= read -r v; [ "$v" = "$RPK_PASS" ] || exit 3' 2>&1) || rc=$?
-  case $rc in
-    0) return 1 ;;
-    3) return 0 ;;
-    *) fail "compare RPK_PASS of $1 with SVP_KAFKA_ADMIN_PASSWORD of .env: $err" ;;
-  esac
-}
-
-# restart_brokers: restarts StatefulSet redpanda when any of its brokers is stale. Its RollingUpdate replaces one broker
-# at a time, the highest ordinal first, and waits until the new one is Ready before the next, so a cluster of three
-# keeps two brokers, a majority of every Raft group, all along; podManagementPolicy Parallel (the chart's) lets it begin
-# while the brokers are NotReady. The preStop hook of a broker started with the previous password cannot log in to
-# drain it (it gives up and lets the broker stop): the partitions it leads elect a new leader, which producers with
-# acks=all wait for and retry. Allowed 300 s per broker, as a lab cluster's single one.
-restart_brokers() {
-  local replicas i stale=
-  replicas=$(kc -n svp-data get statefulset redpanda -o jsonpath='{.spec.replicas}') || fail "read StatefulSet svp-data/redpanda"
-  for ((i = 0; i < ${replicas:-0}; i++)); do
-    if broker_stale "redpanda-$i"; then stale="$stale redpanda-$i"; fi
-  done
-  if [ -z "$stale" ]; then
-    echo "skip  restart of Redpanda's brokers: each runs with the superuser password of .env"
-    return 0
-  fi
-  kc -n svp-data rollout restart statefulset/redpanda >/dev/null || fail "restart statefulset/redpanda"
-  kc -n svp-data rollout status statefulset/redpanda --timeout="$((300 * replicas))s" >/dev/null ||
-    fail "statefulset/redpanda ready again within $((300 * replicas))s of its restart (one broker at a time); see kubectl --context $kube_context -n svp-data get pods -l app.kubernetes.io/name=redpanda, then run $again again"
-  ok "statefulset/redpanda restarted one broker at a time:$stale had started with another superuser password than the one in .env"
-}
-
-# --- (3) every ExternalSecret built again from the new values, then (4) the brokers.
+# with it, gets 401 and the broker turns NotReady, and so do the maintenance hooks of a broker of several. Reloader
+# restarts StatefulSet redpanda once its Secret changes, one broker at a time, the highest ordinal first, each Ready
+# before the next, so a cluster of three keeps two brokers, a majority of every Raft group, all along. The preStop hook
+# of a broker started with the previous password cannot log in to drain it (it gives up and lets the broker stop): the
+# partitions it leads elect a new leader, which producers with acks=all wait for and retry. The sync of svp-data waits
+# for that (rotate_barrier): Argo CD runs its PostSync Jobs only once its resources are healthy, and redpanda-init logs
+# in with the new password.
 if [ -z "$running" ]; then
   echo "skip  ExternalSecrets: a new environment; Argo CD creates them (chart svp-cluster), each built from the entries then"
-elif kc get crd externalsecrets.external-secrets.io >/dev/null 2>&1 &&
-  [ -n "$(kc get externalsecrets.external-secrets.io -A -o name)" ]; then
-  es_force_sync
-  ok "every ExternalSecret built again from the entries of $aws_prefix"
-  restart_brokers
-  ok "next: sync Application svp-data and wait for that sync, then restart each workload whose Secret changed (docs/reference/eks.md)"
-else
-  echo "skip  ExternalSecrets: none yet; Argo CD creates them (chart svp-cluster), each built from the entries then"
+  exit 0
 fi
+rotate_es_sync server
+rotate_barrier redpanda redpanda RPK_PASS "$SVP_KAFKA_ADMIN_PASSWORD"
+# --- 2. the init Jobs of svp-data.
+rotate_init_argocd
+# --- 3. the clients.
+rotate_es_sync clients
+rotate_clients_note

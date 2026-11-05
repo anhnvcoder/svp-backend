@@ -34,6 +34,12 @@ K3D_LDFLAGS                := -X github.com/k3d-io/k3d/v5/version.Version=$(K3D_
 # deploy/k8s/drills/.schemas/ holds the StepTemplate schema of this same tag (make chainsaw-lint fails when they differ).
 # renovate: datasource=go depName=github.com/kyverno/chainsaw
 CHAINSAW_VERSION           := v0.2.15
+# helmfile installs the releases of the dev path (make k8s-up: deploy/k8s/helmfile.yaml.gotmpl, ADR-0050). Its go.mod
+# holds replace directives, which `go install <module>@<version>` refuses: make tools downloads the module through the
+# Go module proxy (checked against the checksum database, as go install does) and builds it in its own folder, with the
+# version helmfile --version reports. Releases: github.com/helmfile/helmfile/releases.
+# renovate: datasource=go depName=github.com/helmfile/helmfile
+HELMFILE_VERSION           := v1.8.2
 # Linter of the GitHub Actions workflows, run by `make actionlint` inside `make check`. It also runs shellcheck on every
 # `run:` script when shellcheck is on PATH: the CI runner has it, a dev machine need not.
 # renovate: datasource=go depName=github.com/rhysd/actionlint
@@ -137,7 +143,7 @@ SVP_TEST_REDIS_URL ?= redis://127.0.0.1:6379/15
 help: ## List the targets
 	@grep -hE '^[a-zA-Z0-9_-]+:.*## ' $(MAKEFILE_LIST) | awk -F':.*## ' '{printf "  %-12s %s\n", $$1, $$2}'
 
-tools: ## Install the pinned code generators, linters, vulnerability and secret scanners, SLO generator, k3d and Chainsaw into GOBIN
+tools: ## Install the pinned code generators, linters, vulnerability and secret scanners, SLO generator, k3d, Chainsaw and helmfile into GOBIN
 	GOBIN=$(GOBIN) go install google.golang.org/protobuf/cmd/protoc-gen-go@$(PROTOC_GEN_GO_VERSION)
 	GOBIN=$(GOBIN) go install google.golang.org/grpc/cmd/protoc-gen-go-grpc@$(PROTOC_GEN_GO_GRPC_VERSION)
 	GOBIN=$(GOBIN) go install github.com/sqlc-dev/sqlc/cmd/sqlc@$(SQLC_VERSION)
@@ -149,6 +155,8 @@ tools: ## Install the pinned code generators, linters, vulnerability and secret 
 		github.com/slok/sloth/cmd/sloth@$(SLOTH_VERSION)
 	GOBIN=$(GOBIN) go install -ldflags='$(K3D_LDFLAGS)' github.com/k3d-io/k3d/v5@$(K3D_VERSION)
 	GOBIN=$(GOBIN) go install github.com/kyverno/chainsaw@$(CHAINSAW_VERSION)
+	dir=$$(cd / && go mod download -json github.com/helmfile/helmfile@$(HELMFILE_VERSION) | jq -r .Dir) && [ -n "$$dir" ] && \
+		cd "$$dir" && GOBIN=$(GOBIN) go install -ldflags='-X go.szostok.io/version.version=$(HELMFILE_VERSION)' .
 
 # Refuses anything but Linux x86_64: the Helm it installs is the linux-amd64 build, and GOBIN comes first on PATH, so on
 # a Mac it would shadow Homebrew's helm and break every helm call with "exec format error".

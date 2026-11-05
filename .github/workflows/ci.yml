@@ -362,10 +362,12 @@ jobs:
       - run: deploy/ci/verify-steps/admission-metrics-test.sh
       - run: deploy/ci/verify-steps/objstore-test.sh
       # The glue of make drill-k8s-* (fake chainsaw and kubectl: the context guard, the search for the Secret values
-      # in the drill's output, the images of the supply chain drill), and the restart of a workload whose Secret
-      # changed (fake kubectl, a Rollout's canary). bash and jq, no network, no cluster.
+      # in the drill's output, the images of the supply chain drill), and the order of a change of credentials of make
+      # k8s-secrets and make k8s-up (fake kubectl, helmfile and drill traffic: servers, barrier, init Jobs of svp-data,
+      # clients, a cluster without Reloader refused, the traffic of a canary). bash, git, jq, openssl and perl, no
+      # network, no cluster.
       - run: deploy/k8s/drills/run-test.sh
-      - run: deploy/k8s/restart-test.sh
+      - run: deploy/k8s/rotate-test.sh
       # The digest ghcr-digest.sh reads from GHCR for the supply chain drill (the newest drill image): a fake ghcr_oras
       # (the pinned ORAS) and a throwaway repository; bash and git, no network.
       - run: deploy/ci/ghcr-digest-test.sh

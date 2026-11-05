@@ -12,7 +12,8 @@
 #   - the scripts of the local cluster alone, deploy/k8s/gitops.sh and secrets.sh, refuse svp-stg before any call;
 #     deploy/k8s/aws-secrets.sh, for an EKS cluster alone, refuses k3d-svp (SVP_KUBE_CONTEXT unset or named) before
 #     any aws or kubectl call;
-#   - deploy/k8s/secrets.sh on k3d-svp as before (pg-superuser from .env, the store's sources, the same line);
+#   - deploy/k8s/secrets.sh on k3d-svp as before (pg-superuser from .env, the store's sources, the same line), on a
+#     cluster before Argo CD: nothing to wait for or sync yet, every kubectl call on context k3d-svp;
 #   - reset_register_limit of deploy/compose/lib.sh with SVP_STACK=eks: the context passed, every other one refused;
 #   - deploy/k8s/eks-seed.sh with a fake API behind curl: every request to https://api.<domain> or the form's URL, and
 #     a stop when explore holds fewer than 30 videos.
@@ -59,7 +60,10 @@ case $args in
   "get --raw /readyz") ;;
   "get namespace "*) grep -qx "${args#get namespace }" "$s/namespaces" ;;
   "apply "* | "create -f -") { echo "---"; cat; echo; } >>"$s/applied.yaml" ;;
-  "get pvc "* | "get secret glitchtip-runtime" | "get crd "*) exit 1 ;;
+  "get pvc "* | "get secret glitchtip-runtime") exit 1 ;;
+  # A cluster before Argo CD (deploy/k8s/gitops.sh): no StatefulSet, no CRD of External Secrets or Argo CD yet.
+  "get statefulsets -o name" | "get statefulset "*" --ignore-not-found -o jsonpath={.spec.replicas}") ;;
+  "get crd "*" --ignore-not-found -o name") ;;
   "get pod "*) ;;
   "exec deploy/valkey -c valkey -- valkey-cli -n 10 --scan --pattern svp:gw:rl:register:*") printf 'svp:gw:rl:register:a\nsvp:gw:rl:register:b\n' ;;
   "exec deploy/valkey -c valkey -- valkey-cli -n 10 DEL "*) echo 1 ;;
