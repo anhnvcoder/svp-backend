@@ -177,7 +177,14 @@ templatePatch: |
 
 Chạy 2026-11-05, Helm v4.3.1, trên bản sao `git archive origin/main` của `svp-gitops` trong thư mục tạm (không đổi repo nào): thêm chart
 `argocd/root` (đọc `files/envs/<env>/*`, render một Application `svp-apps`) và sửa `argocd/apps/templates/applications.yaml` của bản sao để đọc
-`envFiles` từ values, ghi overlay, image bằng `$env/` và thêm source `ref: env` ở `envRevision`. Cluster là `deploy/ci/cluster-values.example.yaml`.
+`envFiles` từ values. Cluster là `deploy/ci/cluster-values.example.yaml`.
+
+Bản đầu ghi overlay, image bằng `$env/` qua một source `ref: env` ở `refs/heads/main` bên cạnh `ref: values` ở commit ghim. `helm template` render
+được, nhưng repo-server của Argo CD v3.5.5 từ chối khi sinh manifest: các source `ref` mà file values trỏ tới cùng một repo phải cùng
+`targetRevision` [N21], nên prd có khoá sẽ `ComparisonError` ở mọi Application có overlay hay image. Bản dùng: tầng 1 chuyển nội dung overlay,
+image (`envFiles.overlays`, `envFiles.images`: tên file → nội dung), tầng 2 gộp chúng cùng phần mẫu sinh ra vào `valuesObject` (`mustMergeOverwrite`
+trên bản sao, cùng kết quả với cách Helm gộp file values: thử với `false`, `""`, `0`, `null`, list rỗng, map đổi thành scalar và ngược lại, so với
+`*` của jq), mỗi Application chỉ còn một source `svp-gitops`.
 
 ```sh
 helm template svp-root argocd/root --namespace argocd --set env=prd --set platform=eks --values cluster.yaml   # charts.yaml của bản sao có gitopsRevision
@@ -186,13 +193,15 @@ helm template svp-root argocd/apps --namespace argocd --set env=prd --set platfo
   --set targetRevision=refs/heads/main --values cluster.yaml                                                    # render một tầng hiện nay, để so
 ```
 
-- prd có khoá: `svp-apps` có `targetRevision` là commit ghim, `envRevision: refs/heads/main`, `envFiles` gồm ba khoá của `charts.yaml` (không
-  `gitopsRevision`), 9 overlay, 7 image. Tầng 2 ra 25 Application; Application `gateway` đọc `$values/base/services/gateway.yaml` (ref `values` ở
-  commit ghim) rồi `$env/envs/prd/gateway.yaml`, `$env/envs/prd/images/gateway.yaml` (ref `env` ở `refs/heads/main`).
-- Tên Application, file values (bỏ tiền tố `$values`/`$env`) và revision chart giống hệt render một tầng hiện nay, ở prd có khoá và stg không khoá
-  (stg: cả hai tầng ở `refs/heads/main`).
-- Ca âm: `gitopsRevision: main` làm tầng 1 fail (`gitopsRevision is "main"`); một overlay `envs/prd/no-such.yaml` làm tầng 2 fail (`names no
-  component of components.json`).
+- prd có khoá: `svp-apps` có `targetRevision` là commit ghim, `envFiles` gồm ba khoá của `charts.yaml` (không `gitopsRevision`), nội dung 9
+  overlay, 7 image. Tầng 2 ra 25 Application, mỗi Application nhiều nhất một source `svp-gitops` (`ref: values` ở commit ghim); Application
+  `gateway` đọc `$values/base/services/gateway.yaml`, `valuesObject` là overlay `env.SENTRY_ENVIRONMENT`, khối `image` rồi phần mẫu sinh ra.
+- Với mỗi Application, values đã ghép (file values theo thứ tự rồi `valuesObject`, Helm tự ghép) và phần còn lại của Application giống hệt render
+  một tầng hiện nay ở stg trên k3d (25/25); trên eks chỉ khác ở phần nhánh thay đổi có chủ đích (store `aws` của `svp-cluster`; ở prd thêm
+  `redpanda`, `svp-data`).
+- Ca âm: `gitopsRevision: main` làm tầng 1 fail (`gitopsRevision is "main"`); một overlay `envs/prd/no-such.yaml` làm tầng 2 fail (`an overlay
+  is <name>.yaml, name a component of components.json`); `envFiles.overlays` là danh sách tên (dạng của bản đầu) làm tầng 2 fail
+  (`envFiles.overlays is no map of a file's name to its content`).
 
 ## Chi phí
 
@@ -276,3 +285,6 @@ Riêng phần chưa gồm Kafka: 4 × H₀ + O₀ ≈ $6,4 mỗi buổi; trần 
 - [N18] AWS Organizations FAQ và IAM Identity Center FAQ (không tính phí): <https://aws.amazon.com/organizations/faqs/>, <https://aws.amazon.com/iam/identity-center/faqs/>
 - [N19] EKS Blueprints, GitOps getting started (Argo CD, metadata của cluster thành annotation): <https://github.com/aws-ia/terraform-aws-eks-blueprints/blob/main/patterns/gitops/getting-started-argocd/README.md>
 - [N20] Argo CD v3.5.5, cluster khai báo bằng Secret: <https://github.com/argoproj/argo-cd/blob/v3.5.5/docs/operator-manual/declarative-setup.md>
+- [N21] Argo CD v3.5.5, repo-server: các source `ref` mà file values trỏ tới cùng một repo phải cùng `targetRevision` (`cannot reference multiple
+  revisions for the same repository`): <https://github.com/argoproj/argo-cd/blob/v3.5.5/reposerver/repository/repository.go#L807-L812>; thứ tự
+  `parameters > valuesObject > values > valueFiles`: <https://github.com/argoproj/argo-cd/blob/v3.5.5/docs/user-guide/helm.md>

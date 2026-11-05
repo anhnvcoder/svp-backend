@@ -126,13 +126,18 @@ Chọn các phương án in đậm; `<env>` là `stg` hay `prd`, `<miền>` là 
 
 - Khoá `gitopsRevision` (commit 40 hex của `svp-gitops`, tuỳ chọn) trong `envs/<env>/charts.yaml`, file bot ghi: chỉ job `promote-prd` đặt nó.
 - `svp-root` (tầng 1, chart `argocd/root` ở `refs/heads/main`) đọc `envs/<env>/` qua `files/envs`: kiểm `charts.yaml` (ba khoá cũ, `gitopsRevision` nếu có
-  là 40 hex), lấy tên overlay và tên file `images/`, render đúng một Application `svp-apps`.
+  là 40 hex), lấy nội dung từng overlay và từng file `images/`, render đúng một Application `svp-apps`.
 - `svp-apps` (tầng 2, không finalizer): chart `argocd/apps` ở R = `gitopsRevision`, khoá vắng thì `refs/heads/main`; values `targetRevision: R`,
-  `envRevision: refs/heads/main`, `envFiles` (`charts` bỏ `gitopsRevision`, `overlays`, `images`), `env`, `platform`, `nodeArch`, `cluster`.
-- Application mỗi component: chart upstream theo `components.json` ở R, chart backend ở `revision` của `envFiles.charts`; source `ref: values` ở R
-  (`base/`, `platforms/`, mẫu `.values.tpl` cũng ở R); source `ref: env` ở `envRevision` (`$env/envs/<env>/<tên>.yaml`, `$env/envs/<env>/images/<tên>.yaml`).
+  `envFiles` (`charts` bỏ `gitopsRevision`; `overlays`, `images`: tên file → nội dung), `env`, `platform`, `nodeArch`, `cluster`.
+- Application mỗi component: chart upstream theo `components.json` ở R, chart backend ở `revision` của `envFiles.charts`; một nguồn `svp-gitops` duy
+  nhất, `ref: values` ở R (`base/`, `platforms/`, mẫu `.values.tpl` cũng ở R); overlay, image của `envFiles` và phần mẫu sinh ra gộp vào
+  `valuesObject` theo thứ tự đó (gộp như Helm gộp file values: map gộp từng khoá, giá trị khác kể cả list thay hẳn), Argo CD đọc sau mọi file
+  values, nên thứ tự chung vẫn là `base/` < `platforms/` < overlay < image < mẫu. Không thêm nguồn `svp-gitops` thứ hai ở `refs/heads/main` cho
+  `envs/<env>/`: repo-server của Argo CD v3.5.5 từ chối file values trỏ một repo ở hai revision (`cannot reference multiple revisions for the
+  same repository`) [N21].
 - Check của `svp-gitops`: render tầng 1 trên cây của PR; có khoá thì tầng 2 trên `git archive R` với `envs/<env>/` của PR, khoá phải là commit trên `main`;
-  khoá vắng thì một cây, như hiện nay (stg luôn vắng).
+  khoá vắng thì một cây, như hiện nay (stg luôn vắng). `valuesObject` của mỗi Application phải bằng overlay < image của cây < phần mẫu sinh ra; mọi
+  nguồn `svp-gitops` của một Application cùng một revision.
 - Rollback: lượt `promote-prd` với `stg_ref` cũ mở PR đặt lại `gitopsRevision` cùng image, chart của commit đó (Code Owner duyệt); R của `svp-apps` đổi,
   mọi component sync lại bản cũ.
 - Vì sao hai tầng: generator của ApplicationSet chỉ đưa nội dung một file thành tham số, nên chart ở R sẽ đọc `envs/<env>/` cũ một lần promote; hai tầng
@@ -181,9 +186,10 @@ Buổi T = 4 giờ. H₀ (theo giờ khi prd chạy, chưa gồm Kafka) ~$0,90/g
 
 ## Nguồn
 
-Đọc 2026-11-05; đủ [N1]–[N20] và giá ở phụ lục. [N1] <https://docs.aws.amazon.com/organizations/latest/userguide/orgs_best-practices_mgmt-acct.html>,
+Đọc 2026-11-05; đủ [N1]–[N21] và giá ở phụ lục. [N1] <https://docs.aws.amazon.com/organizations/latest/userguide/orgs_best-practices_mgmt-acct.html>,
 [N5] <https://github.com/hashicorp/terraform-provider-kubernetes/blob/main/docs/index.md>, [N13] <https://github.com/gitops-bridge-dev/gitops-bridge>,
-[N15] <https://github.com/argoproj/argo-cd/blob/v3.5.5/docs/operator-manual/applicationset/Generators-Cluster.md>.
+[N15] <https://github.com/argoproj/argo-cd/blob/v3.5.5/docs/operator-manual/applicationset/Generators-Cluster.md>,
+[N21] <https://github.com/argoproj/argo-cd/blob/v3.5.5/reposerver/repository/repository.go#L807-L812>.
 
 ## Thông tin thêm
 
