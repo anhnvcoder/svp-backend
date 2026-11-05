@@ -303,9 +303,11 @@ jobs:
       contents: read
     # The deployment configuration this job checks the charts against: main of svp-gitops, which make gitops-clone
     # clones anonymously into this folder (gitignored) below; every script reads it there through gitops_dir of
-    # deploy/k8s/lib.sh.
+    # deploy/k8s/lib.sh. GITOPS_REF pins the commit of svp-gitops that holds the tree these checks expect (the two-level root
+    # and the pinned prd) until that pull request of svp-gitops is on its main; it goes back to main right after.
     env:
       SVP_GITOPS_DIR: ${{ github.workspace }}/.gitops/svp-gitops
+      GITOPS_REF: 94c35230beca11f95d8e915ffac03065787c9b40
     steps:
       # The whole history: the test of gitops-check.sh reads the commits that the tree of svp-gitops pins.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
