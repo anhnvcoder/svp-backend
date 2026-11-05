@@ -4,9 +4,9 @@
 # policy's release sources, the actions) and a checkout of svp-frontend beside it; the variables of a GitHub Actions
 # job are made up. The steps are read from the action files with the pinned yq (never copied here) and run as the
 # runner runs a step of shell bash, each given only keys of its env:. A fake docker first on PATH stands in for the
-# daemon, the registry (manifests read back, ORAS listing the Sigstore bundle referrers of a digest), grype and the
-# pinned cosign, which records each call and adds a referrer for each signature and attestation; there is no cosign on
-# PATH. Every run has DOCKER_DEFAULT_PLATFORM=linux/amd64, as the shell of this machine sets it for other projects, and
+# daemon, the registry (manifests read back, ORAS listing the Sigstore bundle referrers of a digest and reading the
+# bundles), grype and the pinned cosign, which records each call and adds a referrer for each signature and
+# attestation; there is no cosign on PATH. Every run has DOCKER_DEFAULT_PLATFORM=linux/amd64, as the shell of this machine sets it for other projects, and
 # the fake docker refuses a call that still carries it. Checked:
 #   - every step of the three actions that calls docker unsets DOCKER_DEFAULT_PLATFORM first, and no docker call of a
 #     step or guard run here gets it;
@@ -22,8 +22,9 @@
 #     another repository or platform, or an index read back with other digests fails;
 #   - sign: what sign-image.sh did, now guard and step: signature, SBOM on each manifest, vuln on the index, all
 #     bundles, in that order, by the pinned cosign with the credentials of docker login read-only and the job's OIDC
-#     token request by name only, and provenance=true for actions/attest; run again: nothing written twice; a digest in
-#     cosign's older format or a registry out of reach: nothing written; a run on a machine, of another workflow, or of
+#     token request by name only, and provenance=true for actions/attest; run again: nothing written twice, cosign's
+#     bundles listed without annotation read for their type, and a bundle that cannot be read writes nothing; a digest
+#     in cosign's older format or a registry out of reach: nothing written; a run on a machine, of another workflow, or of
 #     another source's repository or prefix: nothing written; a CRITICAL is signed only for drill-vulnerable; drill
 #     images get no provenance.
 # Runs on macOS and Linux: Docker only for the pinned yq; no network, no cluster.
@@ -70,8 +71,8 @@ on() {
     -u TRIVY_IMAGE -u SYFT_IMAGE -u GRYPE_IMAGE -u COSIGN_IMAGE DOCKER_DEFAULT_PLATFORM=linux/amd64
     PATH="$work/bin:$PATH" HOME="$work/home" GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1
     ORAS_IMAGE="$oras_image" FAKE_ORAS_IMAGE="$oras_image" FAKE_COSIGN_IMAGE="$cosign_image" FAKE_COSIGN="$work/cosign"
-    FAKE_BUNDLES="$fb" FAKE_DOCKER_LOG="$work/docker.log" FAKE_PLATFORM_LOG="$work/platform.log"
-    FAKE_COSIGN_LOG="$work/cosign.log" FAKE_RAW="$work/raw.json")
+    FAKE_BUNDLES="$fb" FAKE_TESTDATA="$here/testdata/sigstore-bundle" FAKE_DOCKER_LOG="$work/docker.log"
+    FAKE_PLATFORM_LOG="$work/platform.log" FAKE_COSIGN_LOG="$work/cosign.log" FAKE_RAW="$work/raw.json")
   case $where in
   github)
     "${base[@]}" GITHUB_ACTIONS=true GITHUB_OUTPUT="$work/output" GITHUB_STEP_SUMMARY="$work/summary" \
@@ -133,7 +134,10 @@ tools=(TRIVY_IMAGE=fake.invalid/trivy@sha256:1 SYFT_IMAGE=fake.invalid/syft@sha2
 # push and imagetools create succeed, imagetools inspect --raw answers FAKE_RAW; grype on the SBOM writes FAKE_GRYPE_JSON
 # and exits FAKE_GRYPE; ORAS lists the referrers of a fake registry under bundles/ (a folder per subject digest holding
 # one file per bundle referrer, named by its digest, holding its predicate type; <hex>.sig for cosign's older format),
-# and is out of reach with FAKE_ORAS_DOWN; a run of the cosign image runs the fake cosign with what follows the image.
+# and is out of reach with FAKE_ORAS_DOWN; the annotation of the type only on the bundles of the types in FAKE_ANNOTATED
+# (as GHCR lists them: the provenance of actions/attest only; all: every one), the bundles themselves the files of
+# testdata/sigstore-bundle/ (FAKE_BUNDLE_FILE picks one for all, FAKE_BLOB_DOWN makes them unreadable, and as in
+# deploy/ci/sign-image-test.sh); a run of the cosign image runs the fake cosign with what follows the image.
 # Every call in docker.log; a call with DOCKER_DEFAULT_PLATFORM set also in platform.log, and refused. cosign: logs each
 # call and adds a referrer for each sign and attest; keeps the last predicate of each type.
 oras_image=fake.invalid/oras@sha256:$(printf '0%.0s' $(seq 64))
@@ -189,20 +193,58 @@ case "$1 $2" in
   hex=${ref##*@sha256:}
   for f in "$store/$hex"/*; do
     [ -f "$f" ] || continue
-    jq -n --arg d "sha256:${f##*/}" --arg t "$(cat "$f")" \
-      '{digest: $d, artifactType: "application/vnd.dev.sigstore.bundle.v0.3+json",
-        annotations: {"dev.sigstore.bundle.predicateType": $t}}'
+    t=$(cat "$f")
+    case " ${FAKE_ANNOTATED-https://slsa.dev/provenance/v1} " in
+    " all " | *" $t "*) a='{"dev.sigstore.bundle.predicateType": $t}' ;;
+    *) a='{"dev.sigstore.bundle.content": "dsse-envelope"}' ;;
+    esac
+    jq -n --arg d "sha256:${f##*/}" --arg t "$t" \
+      "{digest: \$d, artifactType: \"application/vnd.dev.sigstore.bundle.v0.3+json\", annotations: $a}"
   done | jq -s --arg r "$ref" '{reference: $r, referrers: .}'
   ;;
 "manifest fetch")
-  hex=${ref##*:sha256-}
-  hex=${hex%.sig}
-  if [ -f "$store/$hex.sig" ]; then
-    echo '{"mediaType": "application/vnd.oci.image.manifest.v1+json"}'
+  if [ "$3" = --descriptor ]; then
+    hex=${ref##*:sha256-}
+    hex=${hex%.sig}
+    if [ -f "$store/$hex.sig" ]; then
+      echo '{"mediaType": "application/vnd.oci.image.manifest.v1+json"}'
+    else
+      echo "Error response from registry: failed to find \"$ref\": $ref: not found" >&2
+      exit 1
+    fi
   else
-    echo "Error response from registry: failed to find \"$ref\": $ref: not found" >&2
-    exit 1
+    # The manifest of a bundle referrer: one layer, the fixture of its predicate type.
+    for f in "$store"/*/"${ref##*@sha256:}"; do [ -f "$f" ] && break; done
+    [ -f "$f" ] && [ -z "${FAKE_MANIFEST_DOWN:-}" ] || {
+      echo "Error response from registry: $ref: not found" >&2
+      exit 1
+    }
+    case $(cat "$f") in
+    https://sigstore.dev/cosign/sign/v1) b=${FAKE_SIGN_BUNDLE:-cosign-sign.json} ;;
+    https://spdx.dev/Document) b=cosign-spdx.json ;;
+    https://cosign.sigstore.dev/attestation/vuln/v1) b=cosign-vuln.json ;;
+    https://slsa.dev/provenance/v1) b=attest-provenance.json ;;
+    esac
+    b=$FAKE_TESTDATA/${FAKE_BUNDLE_FILE:-$b}
+    jq -n --arg l "sha256:$(shasum -a 256 "$b" | cut -c1-64)" --argjson s "$(($(wc -c <"$b")))" \
+      --arg m "${FAKE_LAYER_TYPE:-application/vnd.dev.sigstore.bundle.v0.3+json}" \
+      '{schemaVersion: 2, mediaType: "application/vnd.oci.image.manifest.v1+json",
+        artifactType: "application/vnd.dev.sigstore.bundle.v0.3+json",
+        config: {mediaType: "application/vnd.oci.empty.v1+json", size: 2,
+          digest: "sha256:44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"},
+        layers: [{mediaType: $m, digest: $l, size: $s}]}'
   fi
+  ;;
+"blob fetch")
+  [ -z "${FAKE_BLOB_DOWN:-}" ] || {
+    echo "Error: failed to fetch $ref: unexpected status 500" >&2
+    exit 1
+  }
+  for b in "$FAKE_TESTDATA"/*.json; do
+    [ "sha256:$(shasum -a 256 "$b" | cut -c1-64)" != "${ref##*@}" ] || exec cat "$b"
+  done
+  echo "Error: $ref: not found" >&2
+  exit 1
   ;;
 *)
   echo "fake docker: unexpected ORAS command: $*" >&2
@@ -630,6 +672,8 @@ check "sign, a release: cosign gets the job's OIDC token request by name" has "$
 check "sign, a release: the OIDC request token never on a command line" lacks "$work/docker.log" fake-oidc-request-token
 run_sign "sign, run again on the same digest" github gateway "${backend_run[@]}"
 same "sign, run again: nothing written again" "" "$(cat "$work/cosign.log")"
+check "sign, run again: the type of cosign's bundles, listed without annotation, read from the bundles" \
+  has "$work/docker.log" "$oras_image blob fetch --output - $repo@sha256:"
 same "sign, run again: the index still has one signature and one vuln attestation" \
   "1 https://cosign.sigstore.dev/attestation/vuln/v1,1 https://sigstore.dev/cosign/sign/v1" \
   "$(cat "$fb/$hex"/* | sort | uniq -c | sed 's/^ *//' | paste -sd, -)"
@@ -638,6 +682,17 @@ echo https://slsa.dev/provenance/v1 >"$fb/$hex/$(printf 'f%.0s' $(seq 64))"
 run_sign "sign, run again after actions/attest" github gateway "${backend_run[@]}"
 same "sign, run again after actions/attest: provenance=false, nothing written" "false|" \
   "$provenance|$(cat "$work/cosign.log")"
+run_sign "sign, run again, every bundle annotated" github gateway "${backend_run[@]}" FAKE_ANNOTATED=all
+same "sign, run again, every bundle annotated: nothing written, no bundle read" "false||0" \
+  "$provenance|$(cat "$work/cosign.log")|$(grep -c ' blob fetch ' "$work/docker.log")"
+want=1 run_sign "sign, run again, a bundle the registry does not give" github gateway "${backend_run[@]}" FAKE_BLOB_DOWN=1
+same "sign, run again, a bundle the registry does not give: nothing written" "" "$(cat "$work/cosign.log")"
+check "sign, run again, a bundle the registry does not give: says so" has "$work/run.err" "FAIL  read the bundle sha256:"
+want=1 run_sign "sign, run again, a bundle that is no Sigstore bundle" github gateway "${backend_run[@]}" \
+  FAKE_BUNDLE_FILE=not-a-bundle.json
+same "sign, run again, a bundle that is no Sigstore bundle: nothing written" "" "$(cat "$work/cosign.log")"
+check "sign, run again, a bundle that is no Sigstore bundle: says so" has "$work/run.err" \
+  "FAIL  read the predicate type of the bundle $repo@sha256:"
 for f in $(vuln_files); do rm -- "$f"; done
 run_sign "sign, a run cut off before vuln, run again" github gateway "${backend_run[@]}"
 same "sign, a run cut off before vuln, run again: only vuln written" "vuln index" "$(calls)"

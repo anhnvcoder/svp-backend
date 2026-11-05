@@ -712,20 +712,61 @@ registry_oras() {
 }
 
 # bundle_referrers IMAGE: prints one line "<digest> <predicate type>" per Sigstore bundle referrer of IMAGE
-# (REPOSITORY@DIGEST), the type as its annotation dev.sigstore.bundle.predicateType names it (cosign and actions/attest
-# both write it); nothing when it has none. Not verified: it tells what is there, never what is trusted.
+# (REPOSITORY@DIGEST); nothing when it has none. The type is the annotation dev.sigstore.bundle.predicateType of the
+# referrer in the list when it carries one (the bundles of actions/attest do), otherwise what the bundle itself says
+# (bundle_type): on GHCR the bundles of cosign carry no annotation in the list. Fails rather than leave a type out.
+# Not verified: it tells what is there, never what is trusted.
 bundle_referrers() {
-  local out
+  local out list digest type
   out=$(registry_oras discover --format json --artifact-type "$bundle_artifact_type" "$1") || {
     echo "FAIL  list the referrers of $1" >&2
     return 1
   }
-  jq -r 'if (.referrers | type) == "array"
-    then .referrers[] | "\(.digest) \(.annotations["dev.sigstore.bundle.predicateType"] // "-")"
-    else error("no referrers") end' <<<"$out" 2>/dev/null || {
+  list=$(jq -r 'if (.referrers | type) == "array"
+    then .referrers[] | "\(.digest) \(.annotations["dev.sigstore.bundle.predicateType"] // "" | if . == "" then "-" else . end)"
+    else error("no referrers") end' <<<"$out" 2>/dev/null) || {
     echo "FAIL  read the referrers of $1 from what oras answered" >&2
     return 1
   }
+  while read -r digest type; do
+    [ -n "$digest" ] || continue
+    if [ "$type" = - ]; then
+      type=$(bundle_type "${1%@*}@$digest" </dev/null) || return 1
+    fi
+    echo "$digest $type"
+  done <<<"$list"
+}
+
+# bundle_type REFERRER: prints the predicate type of the Sigstore bundle REFERRER (REPOSITORY@DIGEST of its manifest),
+# read from the bundle itself, the one layer of the manifest: the predicateType of the in-toto statement its DSSE
+# envelope carries, or the signature of cosign sign for a bare message signature. Fails when any of it is not there.
+bundle_type() {
+  local manifest layer bundle type
+  manifest=$(registry_oras manifest fetch "$1") || {
+    echo "FAIL  read the manifest of the bundle $1" >&2
+    return 1
+  }
+  layer=$(jq -r --arg t "$bundle_artifact_type" '[.layers[]? | select(.mediaType == $t) | .digest]
+    | if length == 1 and (.[0] | test("^sha256:[0-9a-f]{64}$")) then .[0]
+      else error("not one bundle layer") end' <<<"$manifest" 2>/dev/null) || {
+    echo "FAIL  $1 is not a manifest of one Sigstore bundle layer" >&2
+    return 1
+  }
+  bundle=$(registry_oras blob fetch --output - "${1%@*}@$layer") || {
+    echo "FAIL  read the bundle $layer of $1" >&2
+    return 1
+  }
+  type=$(jq -r --arg sign "$sign_predicate_type" '
+    if .dsseEnvelope != null then
+      if .dsseEnvelope.payloadType != "application/vnd.in-toto+json" then error("not an in-toto statement")
+      else .dsseEnvelope.payload | @base64d | fromjson | .predicateType
+        | if type == "string" and test("^\\S+$") then . else error("no predicate type") end end
+    elif .messageSignature != null then $sign
+    else error("neither a DSSE envelope nor a message signature") end' <<<"$bundle" 2>/dev/null) || {
+    echo "FAIL  read the predicate type of the bundle $1 ($layer)" >&2
+    return 1
+  }
+  echo "$type"
 }
 
 # bundles_of TYPE: reads lines of bundle_referrers on stdin and prints the digest of each bundle of predicate type TYPE.
