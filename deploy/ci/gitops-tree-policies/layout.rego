@@ -49,8 +49,15 @@ deny contains sprintf("%s cannot be read: it is no JSON", [gitops.components_fil
 	not json.is_valid(gitops.text(gitops.components_file))
 }
 
+# A document that is valid JSON but no object (false, null, a list) would make every rule that reads it undefined, so the
+# tree would pass them silently.
+deny contains sprintf("%s must be a JSON object", [gitops.components_file]) if {
+	json.is_valid(gitops.text(gitops.components_file))
+	not is_object(gitops.components_doc)
+}
+
 deny contains sprintf("%s lists no component", [gitops.components_file]) if {
-	gitops.components_doc
+	json.is_valid(gitops.text(gitops.components_file))
 	not listed
 }
 

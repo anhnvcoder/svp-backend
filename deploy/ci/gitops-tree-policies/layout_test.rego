@@ -41,6 +41,21 @@ test_no_component if fx.says(
 	"argocd/apps/components.json lists no component",
 )
 
+test_components_that_is_false if fx.says(
+	deny(fx.with_file(fx.tree_input, "argocd/apps/components.json", "false")),
+	"argocd/apps/components.json must be a JSON object",
+)
+
+test_components_that_is_null if fx.says(
+	deny(fx.with_file(fx.tree_input, "argocd/apps/components.json", "null")),
+	"argocd/apps/components.json lists no component",
+)
+
+test_components_that_is_a_list if fx.says(
+	deny(fx.with_file(fx.tree_input, "argocd/apps/components.json", "[]")),
+	"argocd/apps/components.json must be a JSON object",
+)
+
 test_components_that_is_no_list if fx.says(
 	deny(fx.with_components(fx.tree_input, object.union(fx.components, {"components": {"name": "keda"}}))),
 	"argocd/apps/components.json lists no component",
