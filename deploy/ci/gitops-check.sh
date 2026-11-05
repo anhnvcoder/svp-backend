@@ -25,16 +25,30 @@
 #      bot's, the files changed from BASE to HEAD. An author or sender that cannot be read fails; without BASE, or for
 #      a run of no pull request, the rule prints one skip line. A conftest that gives no answer, or none from one of
 #      the policies, fails the step. Whether a release is signed, and built from the commit its tag names, is step 5's.
-#      gitops-check.sh --tree GITOPS_DIR [BASE] runs this step alone (its test).
+#      An environment that pins a commit of svp-gitops (gitopsRevision of its charts.yaml; prd alone, the policies)
+#      needs that commit in GITOPS_DIR, a clone with its history: on origin/main, holding argocd/apps/Chart.yaml (a FAIL
+#      line when not). gitops-check.sh --tree GITOPS_DIR [BASE] runs this step alone (its test).
 #   2. The root chart argocd/apps for each environment on each platform the platform layer runs it on, on amd64 and
 #      arm64 nodes (helm lint and template). The root gets value platform, and on
-#      eks value cluster from deploy/ci/cluster-values.example.yaml, the form the bootstrap sets with the session's
-#      real values, which never go to git (step 1 holds argocd/apps/values.yaml and the files of platforms/ to setting
-#      none). What the root renders from a template <name>.values.tpl (helm.valuesObject of the Application) is held to
+#      eks value cluster from deploy/ci/cluster-values.example.yaml, the form the GitOps Bridge sets with the session's
+#      real values (annotation svp.io/cluster-values of the cluster Secret), which never go to git (step 1 holds
+#      argocd/apps/values.yaml and the files of platforms/ to setting none). A tree with the two-level root argocd/root
+#      is rendered as Argo CD renders it: level 1, argocd/root of the tree with those values, makes exactly one
+#      Application, svp-apps, whose one source is argocd/apps of svp-gitops at the commit the environment pins
+#      (refs/heads/main for one that pins none), that revision its valuesObject's targetRevision too; level 2 is
+#      argocd/apps with that valuesObject. An environment that pins a commit runs steps 2 to 4 on its own, with
+#      argocd/, base/ and platforms/ (the bootstrap of Argo CD included) of that commit unpacked with git archive and
+#      envs/<env>/ of the tree: there every source of svp-gitops with ref values names the commit and every one with ref
+#      env refs/heads/main, and each values file is read through the source of the revision Argo CD must read it at:
+#      base/ and platforms/ at the commit ($values/), envs/<env>/ on refs/heads/main ($env/), so neither a change of
+#      base/ or platforms/ on main nor an old envs/ reaches the environment. The other environments run them on the
+#      tree. In every environment (without --worktree) a chart of this repository is read at the revision of
+#      envs/<env>/charts.yaml of the tree. What the root renders from a template <name>.values.tpl (helm.valuesObject of the Application) is held to
 #      an overlay's rules: no image, canary or httpRoute.name for a release of chart svp-service (envs/<env>/images/
 #      names its image). The root fails when an overlay or an image file breaks its rules. It makes one Application per component that runs on the platform,
 #      each reading the values files base/ (and archValues of its architecture) < platforms/<platform>/<name>.yaml <
-#      envs/<env>/<name>.yaml < envs/<env>/images/<name>.yaml that exist, in that order, then a valuesObject exactly
+#      envs/<env>/<name>.yaml < envs/<env>/images/<name>.yaml that exist, in that order (named without the ref of their
+#      source, $values/ or $env/), then a valuesObject exactly
 #      when platforms/<platform>/<name>.values.tpl exists. Every source it reads from svp-gitops names a full ref
 #      (refs/heads/<branch>) or a commit as targetRevision, never a short name, which Argo CD may resolve to a tag of
 #      that name. Argo Rollouts gets exactly one traffic router plugin on each architecture, the asset built for it,
@@ -462,6 +476,31 @@ else
   fi
 fi
 
+# The commit of svp-gitops each environment pins (gitopsRevision of its charts.yaml, prd's alone: the policies),
+# which must be a commit on main of svp-gitops (origin/main of GITOPS_DIR, a clone with that history) holding
+# argocd/apps: the set of argocd/, base/ and platforms/ that stg ran, which the promote to prd copied. pins: one line
+# "<env> <commit>" per environment that pins one.
+pins=
+for env in $envs; do
+  [ -f "$tree/envs/$env/charts.yaml" ] || continue
+  pin=$(charts_field "$env" gitopsRevision)
+  [[ $pin =~ ^[0-9a-f]{40}$ ]] || continue
+  if [ "$(git -C "$tree" rev-parse --show-toplevel 2>/dev/null)" != "$tree" ] ||
+    ! git -C "$tree" cat-file -e "$pin^{commit}" 2>/dev/null; then
+    problem "envs/$env/charts.yaml: gitopsRevision $pin is no commit of $tree (the top of a clone of svp-gitops with its history)"
+  elif ! git -C "$tree" merge-base --is-ancestor "$pin" "$main" 2>/dev/null; then
+    problem "envs/$env/charts.yaml: gitopsRevision ${pin:0:12} is not on $main of svp-gitops: $env runs only a set that main held"
+  elif ! git -C "$tree" cat-file -e "$pin:argocd/apps/Chart.yaml" 2>/dev/null; then
+    problem "envs/$env/charts.yaml: gitopsRevision ${pin:0:12} holds no argocd/apps/Chart.yaml: there is no root for $env to render at it"
+  else
+    pins+="$env $pin"$'\n'
+  fi
+done
+# pinned_commit ENV: the commit ENV pins, nothing when it pins none.
+pinned_commit() {
+  awk -v e="$1" '$1 == e { print $2 }' <<<"$pins"
+}
+
 jq -n --argjson worktree "$([ -n "$worktree" ] && echo true || echo false)" --slurpfile tree "$tmp/tree/entries.json" \
   --argjson charts "$charts" --argjson sources "$sources" --argjson pr "$pull_request" \
   '{worktree: $worktree, tree: $tree[0], charts: $charts, sources: $sources}
@@ -503,479 +542,590 @@ for env in $envs; do
     echo "ok    envs/$env/images/: seven releases, each of a release source the policy of ${rev:0:12} admits"
   fi
 done
+for env in $envs; do
+  pin=$(pinned_commit "$env")
+  [ -z "$pin" ] ||
+    echo "ok    envs/$env/charts.yaml: gitopsRevision ${pin:0:12}, a commit on $main of svp-gitops holding argocd/apps"
+done
 [ -z "$pr_ok" ] || echo "$pr_ok"
 [ -z "$tree_only" ] || exit 0
 
-# The platform layer, as the policies hold it: targets is each environment with the platform the root is rendered
-# for, <env>:<platform>, in the order of the map.
-platform_names=$(jq -r '.platforms | keys | join(" ")' "$components")
-targets=$(jq -r '[.platforms | to_entries[] | .key as $p | .value.envs[] | "\(.):\($p)"] | join(" ")' "$components")
-# local_hosts PLATFORM: the renders of PLATFORM may name the lab's *.svp.localhost (its localHosts).
-local_hosts() {
-  jq -e --arg p "$1" '.platforms[$p].localHosts == true' "$components" >/dev/null
-}
-# runs_on NAME PLATFORM: component NAME runs on PLATFORM (no platforms in components.json: on every one).
-runs_on() {
-  jq -e --arg n "$1" --arg p "$2" \
-    '.components[] | select(.name == $n) | select((has("platforms") | not) or (.platforms | index($p)) != null)' \
-    "$components" >/dev/null
+# at PATH: where the values file PATH of the tree (relative to its top) is read for the environments render_tree
+# renders: envs/ in the tree, anything else in GTREE (the tree, or the commit an environment pins).
+at() {
+  case $1 in
+  envs/*) echo "$tree/$1" ;;
+  *) echo "$gtree/$1" ;;
+  esac
 }
 
-# The charts of this repository at each environment's revision, unpacked with git archive: neither the working tree
-# nor the index of this clone is read. All of deploy/, since files of the charts are symlinks to files beside them
-# (deploy/postgres/bootstrap.sql, the Collector's config, the Prometheus rules).
-for env in $envs; do
-  [ -z "$worktree" ] || break
-  rev=$(revision_of "$env")
-  [ -d "$tmp/code/$rev" ] && continue
-  mkdir -p "$tmp/code/$rev"
-  git -C "$repo_root" archive "$rev" deploy | tar -x -C "$tmp/code/$rev" ||
-    fail "unpack deploy/ of ${rev:0:12} with git archive"
-done
+# short_refs FILE...: the targetRevision of each source of svp-gitops in the rendered FILEs (the one right after its
+# repoURL, as the charts write a source) that is neither a full ref (refs/heads/<branch>) nor a commit, once each.
+short_refs() {
+  awk -v url="$gitops_url" '$0 ~ "repoURL: " url "$" { want = 1; next }
+    want && /targetRevision:/ { v = $2; gsub(/"/, "", v)
+      if (v !~ /^refs\/heads\/./ && !(v ~ /^[0-9a-f]+$/ && length(v) == 40)) print v; want = 0 }
+    want && /^ *- / { want = 0 }' "$@" | sort -u | paste -sd ' ' -
+}
 
-# --- 2. the root chart
-mkdir -p "$tmp/render" "$tmp/values" "$tmp/plugins/templates" "$tmp/yj/templates"
-printf 'apiVersion: v2\nname: plugins\nversion: 0.1.0\n' >"$tmp/plugins/Chart.yaml"
-# The plugins of Argo Rollouts' values, one line each, as its chart reads them.
-printf '%s\n' '{{- range .Values.controller.trafficRouterPlugins }}' \
-  '# plugin {{ .name }} {{ .location }} {{ .sha256 }}' '{{- end }}' >"$tmp/plugins/templates/plugins.yaml"
-# yaml_json FILE: prints each YAML document of FILE ("---" lines between them, as in a render) as one line of JSON,
-# {"Error": "..."} for a document that is no YAML map; a document of comments alone is left out. Helm reads the YAML,
-# as Argo CD's and the charts' own reading does, so the check needs no YAML tool of its own.
-printf 'apiVersion: v2\nname: yj\nversion: 0.1.0\n' >"$tmp/yj/Chart.yaml"
-printf '%s\n' '{{- range $doc := regexSplit `(?m)^---.*$` (.Files.Get "in/doc") -1 }}' \
-  '{{- if regexMatch `(?m)^[^#\s]` $doc }}' '# json {{ fromYaml $doc | toJson }}' '{{- end }}' '{{- end }}' \
-  >"$tmp/yj/templates/json.yaml"
-yaml_json() {
-  mkdir -p "$tmp/yj/in" && cp "$1" "$tmp/yj/in/doc" && helm template yj "$tmp/yj" | sed -n 's/^# json //p'
-}
-# One line per component: name, path, values, the values file of amd64 and of arm64 nodes (archValues), "" for none.
-jq -r '.components[] | [.name, (.path // ""), (.values // ""), ((.archValues // {}).amd64 // ""),
-  ((.archValues // {}).arm64 // "")] | join("\u001f")' "$components" >"$tmp/components" ||
-  fail "read argocd/apps/components.json"
-# component_field NAME FIELD: FIELD (path, values, amd64, arm64) of component NAME.
-component_field() {
-  awk -F $'\x1f' -v n="$1" -v f="$2" 'BEGIN { c["path"] = 2; c["values"] = 3; c["amd64"] = 4; c["arm64"] = 5 }
-    $1 == n { print $c[f] }' "$tmp/components"
-}
-# values_files ENV PLATFORM NAME ARCH: the values files of component NAME that the root gives its Application in ENV
-# on PLATFORM on ARCH nodes, relative to the tree, in the order Argo CD reads them:
-# base/ and then archValues of ARCH (only with a base/ file), platforms/<platform>/<name>.yaml, envs/<env>/<name>.yaml,
-# envs/<env>/images/<name>.yaml, those that exist.
-values_files() {
-  local v a
-  v=$(component_field "$3" values)
-  if [ -n "$v" ]; then
-    echo "$v"
-    a=$(component_field "$3" "$4")
-    [ -z "$a" ] || echo "$a"
+# level_one ENV PLATFORM ARCH ARG...: level 1 of the two-level root, argocd/root of the tree with the values the
+# bootstrap gives the root (ARGs), as Argo CD renders svp-root on main. It makes exactly one Application, svp-apps,
+# whose one source is argocd/apps of svp-gitops at the commit ENV pins (refs/heads/main for an environment that pins
+# none), with that revision as targetRevision of its valuesObject too, the values of level 2: written to
+# $tmp/render/level2-<env>-<platform>-<arch>.json.
+level_one() {
+  local env=$1 plat=$2 arch=$3 want top got source
+  shift 3
+  want=$(pinned_commit "$env")
+  want=${want:-refs/heads/main}
+  top=$tmp/render/level1-$env-$plat-$arch.yaml
+  if ! helm lint --quiet "$tree/argocd/root" "$@" >"$tmp/err" 2>&1 ||
+    ! helm template svp-root "$tree/argocd/root" "$@" >"$top" 2>"$tmp/err"; then
+    grep -v 'found symbolic link in path' "$tmp/err" >&2 || true
+    fail "helm lint and template of argocd/root for $env on $plat on $arch nodes"
   fi
-  [ ! -f "$tree/platforms/$2/$3.yaml" ] || echo "platforms/$2/$3.yaml"
-  [ ! -f "$tree/envs/$1/$3.yaml" ] || echo "envs/$1/$3.yaml"
-  [ ! -f "$tree/envs/$1/images/$3.yaml" ] || echo "envs/$1/images/$3.yaml"
-}
-# overlay_keys JSON: the keys of a release's values that only envs/<env>/images/ (image) and the base (canary,
-# httpRoute.name, mirrored by canaryRoute of components.json) may set, those JSON sets: the rule overlay_keys of
-# deploy/ci/gitops-tree-policies/lib.rego holds the files of platforms/ to, here on what the templates render.
-overlay_keys() {
-  jq -r '[if has("image") then "image" else empty end, if has("canary") then "canary" else empty end,
-    if (.httpRoute | type) == "object" and (.httpRoute | has("name")) then "httpRoute.name" else empty end] | join(", ")' <<<"$1"
+  yaml_json "$top" | jq -cs '[.[] | select(.kind == "Application")]' >"$tmp/render/level1-$env-$plat-$arch.json" ||
+    fail "read the Applications of argocd/root for $env on $plat on $arch nodes"
+  got=$(jq -r '[.[].metadata.name] | join(" ")' "$tmp/render/level1-$env-$plat-$arch.json")
+  [ "$got" = svp-apps ] ||
+    fail "argocd/root for $env on $plat on $arch nodes makes the Applications '$got', want svp-apps alone"
+  got=$(short_refs "$top")
+  [ -z "$got" ] ||
+    fail "argocd/root for $env on $plat on $arch nodes: every source of $gitops_url must name a full ref (refs/heads/<branch>) or a commit as targetRevision, not $got (Argo CD may resolve a short name to a tag of that name)"
+  source=$(jq -r '.[0].spec | if has("sources") then "several sources" else
+    [.source.repoURL, .source.path, .source.targetRevision, .source.helm.valuesObject.targetRevision] | map(. // "") | join(" ") end' \
+    "$tmp/render/level1-$env-$plat-$arch.json")
+  [ "$source" = "$gitops_url argocd/apps $want $want" ] ||
+    fail "argocd/root for $env on $plat on $arch nodes: svp-apps has '$source' (repoURL, path, targetRevision, valuesObject.targetRevision), want '$gitops_url argocd/apps $want $want': the commit envs/$env/charts.yaml pins as gitopsRevision, refs/heads/main without one"
+  jq -e '.[0].spec.source.helm.valuesObject | objects' "$tmp/render/level1-$env-$plat-$arch.json" >"$tmp/render/level2-$env-$plat-$arch.json" ||
+    fail "argocd/root for $env on $plat on $arch nodes: svp-apps has no valuesObject"
 }
 
-{ echo 'cluster:'; sed 's/^/  /' "$ci_dir/cluster-values.example.yaml"; } >"$tmp/cluster.yaml" ||
-  fail "read deploy/ci/cluster-values.example.yaml"
-for plat in $platform_names; do
+# render_tree GTREE ENVS PIN: steps 2 to 4 for the environments ENVS, whose argocd/, base/ and platforms/ are those of
+# GTREE (the tree, or the commit PIN of svp-gitops the one environment of ENVS pins, unpacked), their envs/<env>/ the
+# tree's.
+render_tree() {
+  local gtree=$1 envs=$2 pin=$3 apps=argocd/apps vt
+  [ -z "$pin" ] || apps="argocd/apps at ${pin:0:12}"
+  vt=$(mktemp -d "$tmp/view.XXXXXX") || fail "create a directory for the render of $envs"
+  components=$gtree/argocd/apps/components.json
+
+  # The platform layer, as the policies hold it: targets is each environment with the platform the root is rendered
+  # for, <env>:<platform>, in the order of the map.
+  platform_names=$(jq -r '.platforms | keys | join(" ")' "$components")
+  targets=$(jq -r --arg envs " $envs " '[.platforms | to_entries[] | .key as $p | .value.envs[] as $e
+    | select($envs | contains(" \($e) ")) | "\($e):\($p)"] | join(" ")' "$components")
+  # local_hosts PLATFORM: the renders of PLATFORM may name the lab's *.svp.localhost (its localHosts).
+  local_hosts() {
+    jq -e --arg p "$1" '.platforms[$p].localHosts == true' "$components" >/dev/null
+  }
+  # runs_on NAME PLATFORM: component NAME runs on PLATFORM (no platforms in components.json: on every one).
+  runs_on() {
+    jq -e --arg n "$1" --arg p "$2" \
+      '.components[] | select(.name == $n) | select((has("platforms") | not) or (.platforms | index($p)) != null)' \
+      "$components" >/dev/null
+  }
+
+  # The charts of this repository at each environment's revision, unpacked with git archive: neither the working tree
+  # nor the index of this clone is read. All of deploy/, since files of the charts are symlinks to files beside them
+  # (deploy/postgres/bootstrap.sql, the Collector's config, the Prometheus rules).
   for env in $envs; do
-    [[ " $targets " == *" $env:$plat "* ]] ||
-      echo "skip  $env on $plat: $env is not in envs of platform $plat (key platforms of components.json), so its root is not rendered there"
+    [ -z "$worktree" ] || break
+    rev=$(revision_of "$env")
+    [ -d "$tmp/code/$rev" ] && continue
+    mkdir -p "$tmp/code/$rev"
+    git -C "$repo_root" archive "$rev" deploy | tar -x -C "$tmp/code/$rev" ||
+      fail "unpack deploy/ of ${rev:0:12} with git archive"
   done
-done
-for target in $targets; do
-  env=${target%%:*} plat=${target#*:}
-  tag=$env-$plat label="$env on $plat"
-  for arch in arm64 amd64; do
-    root=$tmp/render/root-$tag-$arch.yaml
-    set -- --namespace argocd --set-string "env=$env" --set "nodeArch=$arch" --set-string "platform=$plat"
-    [ "$plat" != eks ] || set -- "$@" -f "$tmp/cluster.yaml"
-    if ! helm lint --quiet "$tree/argocd/apps" "$@" >"$tmp/err" 2>&1 ||
-      ! helm template svp-root "$tree/argocd/apps" "$@" >"$root" 2>"$tmp/err"; then
-      grep -v 'found symbolic link in path' "$tmp/err" >&2 || true
-      fail "helm lint and template of argocd/apps for $label on $arch nodes"
+
+  # --- 2. the root chart
+  mkdir -p "$tmp/render" "$tmp/values" "$tmp/plugins/templates" "$tmp/yj/templates"
+  printf 'apiVersion: v2\nname: plugins\nversion: 0.1.0\n' >"$tmp/plugins/Chart.yaml"
+  # The plugins of Argo Rollouts' values, one line each, as its chart reads them.
+  printf '%s\n' '{{- range .Values.controller.trafficRouterPlugins }}' \
+    '# plugin {{ .name }} {{ .location }} {{ .sha256 }}' '{{- end }}' >"$tmp/plugins/templates/plugins.yaml"
+  # yaml_json FILE: prints each YAML document of FILE ("---" lines between them, as in a render) as one line of JSON,
+  # {"Error": "..."} for a document that is no YAML map; a document of comments alone is left out. Helm reads the YAML,
+  # as Argo CD's and the charts' own reading does, so the check needs no YAML tool of its own.
+  printf 'apiVersion: v2\nname: yj\nversion: 0.1.0\n' >"$tmp/yj/Chart.yaml"
+  printf '%s\n' '{{- range $doc := regexSplit `(?m)^---.*$` (.Files.Get "in/doc") -1 }}' \
+    '{{- if regexMatch `(?m)^[^#\s]` $doc }}' '# json {{ fromYaml $doc | toJson }}' '{{- end }}' '{{- end }}' \
+    >"$tmp/yj/templates/json.yaml"
+  yaml_json() {
+    mkdir -p "$tmp/yj/in" && cp "$1" "$tmp/yj/in/doc" && helm template yj "$tmp/yj" | sed -n 's/^# json //p'
+  }
+  # One line per component: name, path, values, the values file of amd64 and of arm64 nodes (archValues), "" for none.
+  jq -r '.components[] | [.name, (.path // ""), (.values // ""), ((.archValues // {}).amd64 // ""),
+    ((.archValues // {}).arm64 // "")] | join("\u001f")' "$components" >"$vt/components" ||
+    fail "read argocd/apps/components.json"
+  # component_field NAME FIELD: FIELD (path, values, amd64, arm64) of component NAME.
+  component_field() {
+    awk -F $'\x1f' -v n="$1" -v f="$2" 'BEGIN { c["path"] = 2; c["values"] = 3; c["amd64"] = 4; c["arm64"] = 5 }
+      $1 == n { print $c[f] }' "$vt/components"
+  }
+  # values_files ENV PLATFORM NAME ARCH: the values files of component NAME that the root gives its Application in ENV
+  # on PLATFORM on ARCH nodes, relative to the tree, in the order Argo CD reads them:
+  # base/ and then archValues of ARCH (only with a base/ file), platforms/<platform>/<name>.yaml, envs/<env>/<name>.yaml,
+  # envs/<env>/images/<name>.yaml, those that exist.
+  values_files() {
+    local v a
+    v=$(component_field "$3" values)
+    if [ -n "$v" ]; then
+      echo "$v"
+      a=$(component_field "$3" "$4")
+      [ -z "$a" ] || echo "$a"
     fi
-    # The targetRevision right after each repoURL of svp-gitops, as the chart writes a source.
-    short=$(awk -v url="$gitops_url" '$0 ~ "repoURL: " url "$" { want = 1; next }
-      want && /targetRevision:/ { v = $2; gsub(/"/, "", v)
-        if (v !~ /^refs\/heads\/./ && !(v ~ /^[0-9a-f]+$/ && length(v) == 40)) print v; want = 0 }
-      want && /^ *- / { want = 0 }' "$root" | sort -u | paste -sd ' ' -)
-    [ "$(grep -c "repoURL: $gitops_url\$" "$root" || true)" -gt 0 ] ||
-      fail "argocd/apps for $label on $arch nodes reads no values from $gitops_url"
-    [ -z "$short" ] ||
-      fail "argocd/apps for $label on $arch nodes: every source of $gitops_url must name a full ref (refs/heads/<branch>) or a commit as targetRevision, not $short (Argo CD may resolve a short name to a tag of that name)"
-    # Each Application: its name, the values files of its source with helm, its valuesObject ("" for none).
-    yaml_json "$root" | jq -r 'select(.kind == "Application") | [.spec.sources[] | select(.helm)][0].helm as $h
-      | [.metadata.name, ([($h.valueFiles // [])[] | sub("^\\$values/"; "")] | join(" ")),
-         (if $h | has("valuesObject") then $h.valuesObject | tojson else "" end)] | join("\u001f")' \
-      >"$tmp/render/apps-$tag-$arch" || fail "read the Applications of argocd/apps for $label on $arch nodes"
-    got=$(cut -d $'\x1f' -f1 "$tmp/render/apps-$tag-$arch" | sort | paste -sd ' ' -)
-    want=$(cut -d $'\x1f' -f1 "$tmp/components" | while IFS= read -r name; do
-      if runs_on "$name" "$plat"; then echo "$name"; fi
-    done | sort | paste -sd ' ' -)
-    [ "$got" = "$want" ] ||
-      fail "argocd/apps for $label on $arch nodes makes the Applications '$got', want one per component of components.json that runs on $plat: '$want'"
-    while IFS=$'\x1f' read -r name files object; do
-      want=$(values_files "$env" "$plat" "$name" "$arch" | paste -sd ' ' -)
-      [ "$files" = "$want" ] ||
-        problem "argocd/apps for $label on $arch nodes: Application $name reads the values files '$files', want '$want' (base/ < platforms/<platform>/ < envs/<env>/ < envs/<env>/images/, those that exist)"
-      if [ -f "$tree/platforms/$plat/$name.values.tpl" ]; then
-        if [ "$(jq -r type <<<"${object:-null}")" != object ]; then
-          problem "argocd/apps for $label on $arch nodes: Application $name has no helm.valuesObject, the render of platforms/$plat/$name.values.tpl"
-        elif [ "$(component_field "$name" path)" = "$service_chart" ] && [ -n "$(overlay_keys "$object")" ]; then
-          problem "platforms/$plat/$name.values.tpl renders $(overlay_keys "$object") for $label: a release's image is envs/<env>/images/$name.yaml, and every platform runs the base's canary"
-        else
-          echo "$object" >"$tmp/values/$tag-$name.json"
-        fi
-      elif [ -n "$object" ]; then
-        problem "argocd/apps for $label on $arch nodes: Application $name has a helm.valuesObject, but no platforms/$plat/$name.values.tpl renders one"
-      fi
-    done <"$tmp/render/apps-$tag-$arch"
-    step "the Applications of argocd/apps for $label on $arch nodes"
-    files=()
-    for f in $(awk -F $'\x1f' '$1 == "argo-rollouts" { print $2 }' "$tmp/render/apps-$tag-$arch"); do
-      files+=(-f "$tree/$f")
+    [ ! -f "$gtree/platforms/$2/$3.yaml" ] || echo "platforms/$2/$3.yaml"
+    [ ! -f "$tree/envs/$1/$3.yaml" ] || echo "envs/$1/$3.yaml"
+    [ ! -f "$tree/envs/$1/images/$3.yaml" ] || echo "envs/$1/images/$3.yaml"
+  }
+  # overlay_keys JSON: the keys of a release's values that only envs/<env>/images/ (image) and the base (canary,
+  # httpRoute.name, mirrored by canaryRoute of components.json) may set, those JSON sets: the rule overlay_keys of
+  # deploy/ci/gitops-tree-policies/lib.rego holds the files of platforms/ to, here on what the templates render.
+  overlay_keys() {
+    jq -r '[if has("image") then "image" else empty end, if has("canary") then "canary" else empty end,
+      if (.httpRoute | type) == "object" and (.httpRoute | has("name")) then "httpRoute.name" else empty end] | join(", ")' <<<"$1"
+  }
+
+  { echo 'cluster:'; sed 's/^/  /' "$ci_dir/cluster-values.example.yaml"; } >"$tmp/cluster.yaml" ||
+    fail "read deploy/ci/cluster-values.example.yaml"
+  for plat in $platform_names; do
+    for env in $envs; do
+      [[ " $targets " == *" $env:$plat "* ]] ||
+        echo "skip  $env on $plat: $env is not in envs of platform $plat (key platforms of components.json), so its root is not rendered there"
     done
-    [ ${#files[@]} -gt 0 ] || fail "Application argo-rollouts names no values file on $arch nodes for $label"
-    helm template plugins "$tmp/plugins" "${files[@]}" | sed -n 's/^# plugin //p' >"$tmp/plugin-$arch" ||
-      fail "read the plugins of Argo Rollouts on $arch nodes for $label"
-    [ "$(grep -c . "$tmp/plugin-$arch")" = 1 ] &&
-      grep -Eq "^[^ ]+ https://[^ ]+/[^ /]+-linux-$arch [0-9a-f]{64}$" "$tmp/plugin-$arch" ||
-      fail "Argo Rollouts on $arch nodes for $label must get exactly one plugin, the asset built for linux-$arch: $(cat "$tmp/plugin-$arch")"
   done
-  read -r arm_name arm_loc arm_sum <"$tmp/plugin-arm64"
-  read -r amd_name amd_loc amd_sum <"$tmp/plugin-amd64"
-  [ "$arm_name" = "$amd_name" ] && [ "${arm_loc%/*}" = "${amd_loc%/*}" ] && [ "$arm_sum" != "$amd_sum" ] ||
-    fail "Argo Rollouts gets $arm_name of ${arm_loc%/*} on arm64 nodes, $amd_name of ${amd_loc%/*} on amd64 nodes for $label: pin the two assets of one release"
-  echo "ok    argocd/apps for $label on arm64 and amd64 nodes: one Application per component that runs there, each with its values files in order; its sources of svp-gitops name full refs; Argo Rollouts gets plugin $arm_name of ${arm_loc%/*}, the asset built for each"
+  for target in $targets; do
+    env=${target%%:*} plat=${target#*:}
+    tag=$env-$plat label="$env on $plat"
+    for arch in arm64 amd64; do
+      root=$tmp/render/root-$tag-$arch.yaml
+      # The values the bootstrap gives the root: on eks the GitOps Bridge sets cluster from the cluster Secret's
+      # annotation, the fixture standing for it here.
+      set -- --namespace argocd --set-string "env=$env" --set "nodeArch=$arch" --set-string "platform=$plat"
+      [ "$plat" != eks ] || set -- "$@" -f "$tmp/cluster.yaml"
+      if [ -f "$tree/argocd/root/Chart.yaml" ]; then
+        level_one "$env" "$plat" "$arch" "$@"
+        set -- --namespace argocd -f "$tmp/render/level2-$tag-$arch.json"
+      fi
+      if ! helm lint --quiet "$gtree/argocd/apps" "$@" >"$tmp/err" 2>&1 ||
+        ! helm template svp-root "$gtree/argocd/apps" "$@" >"$root" 2>"$tmp/err"; then
+        grep -v 'found symbolic link in path' "$tmp/err" >&2 || true
+        fail "helm lint and template of $apps for $label on $arch nodes"
+      fi
+      short=$(short_refs "$root")
+      [ "$(grep -c "repoURL: $gitops_url\$" "$root" || true)" -gt 0 ] ||
+        fail "$apps for $label on $arch nodes reads no values from $gitops_url"
+      [ -z "$short" ] ||
+        fail "$apps for $label on $arch nodes: every source of $gitops_url must name a full ref (refs/heads/<branch>) or a commit as targetRevision, not $short (Argo CD may resolve a short name to a tag of that name)"
+      # A pinned environment reads base/ and platforms/ (ref values) at its commit, and its own files (ref env) on main.
+      if [ -n "$pin" ]; then
+        stale=$(awk -v url="$gitops_url" -v pin="$pin" '$0 ~ "repoURL: " url "$" { want = 1; rev = ""; next }
+          want && /targetRevision:/ { rev = $2; gsub(/"/, "", rev); next }
+          want && /ref:/ { if ($2 == "values" && rev != pin || $2 == "env" && rev != "refs/heads/main") print "ref " $2 " at " rev; want = 0 }
+          want && /^ *- / { want = 0 }' "$root" | sort -u | paste -sd ',' -)
+        [ -z "$stale" ] ||
+          fail "$apps for $label on $arch nodes: a source of $gitops_url with ${stale//,/, }; want ref values at the pinned commit $pin and ref env at refs/heads/main"
+      fi
+      # Each Application: its name, the values files of its source with helm (without the ref of their source, values or
+      # env), its valuesObject ("" for none), and the revision of its chart of this repository ("" for an upstream
+      # chart). In an environment that pins a commit, also each values file read at another revision than its part of
+      # the tree is: base/ and platforms/ at the commit, envs/ on refs/heads/main, through the source of svp-gitops whose
+      # ref the file names ("<file> at <revision>", that source's targetRevision, or "no source" for a file named
+      # without the ref of one).
+      yaml_json "$root" | jq -r --arg url "$gitops_url" --arg pin "$pin" 'select(.kind == "Application")
+        | ([.spec.sources[] | select(.repoURL == $url and .ref) | {(.ref): (.targetRevision // "")}] | add // {}) as $refs
+        | [.spec.sources[] | select(.helm)][0] as $s | $s.helm as $h
+        | [.metadata.name, ([($h.valueFiles // [])[] | sub("^\\$(values|env)/"; "")] | join(" ")),
+           (if $h | has("valuesObject") then $h.valuesObject | tojson else "" end),
+           (if $s.path then $s.targetRevision else "" end),
+           (if $pin == "" then "" else [($h.valueFiles // [])[]
+             | (capture("^\\$(?<ref>[^/]+)/(?<path>.*)$") // {ref: "", path: .})
+             | (if .path | startswith("envs/") then "refs/heads/main" else $pin end) as $want
+             | (if .ref == "" then null else $refs[.ref] end) as $rev
+             | select($rev != $want) | "\(.path) at \($rev // "no source")"] | join(", ") end)] | join("\u001f")' \
+        >"$tmp/render/apps-$tag-$arch" || fail "read the Applications of $apps for $label on $arch nodes"
+      got=$(cut -d $'\x1f' -f1 "$tmp/render/apps-$tag-$arch" | sort | paste -sd ' ' -)
+      want=$(cut -d $'\x1f' -f1 "$vt/components" | while IFS= read -r name; do
+        if runs_on "$name" "$plat"; then echo "$name"; fi
+      done | sort | paste -sd ' ' -)
+      [ "$got" = "$want" ] ||
+        fail "$apps for $label on $arch nodes makes the Applications '$got', want one per component of components.json that runs on $plat: '$want'"
+      while IFS=$'\x1f' read -r name files object chart_rev misread; do
+        want=$(values_files "$env" "$plat" "$name" "$arch" | paste -sd ' ' -)
+        [ "$files" = "$want" ] ||
+          problem "$apps for $label on $arch nodes: Application $name reads the values files '$files', want '$want' (base/ < platforms/<platform>/ < envs/<env>/ < envs/<env>/images/, those that exist)"
+        [ -z "$misread" ] ||
+          problem "$apps for $label on $arch nodes: Application $name reads $misread; want base/ and platforms/ at the pinned commit $pin (\$values/, ref values) and envs/$env/ on refs/heads/main (\$env/, ref env)"
+        [ -n "$worktree" ] || [ -z "$chart_rev" ] || [ "$chart_rev" = "$(revision_of "$env")" ] ||
+          problem "$apps for $label on $arch nodes: Application $name takes its chart at $chart_rev, want the revision of envs/$env/charts.yaml, $(revision_of "$env")"
+        if [ -f "$gtree/platforms/$plat/$name.values.tpl" ]; then
+          if [ "$(jq -r type <<<"${object:-null}")" != object ]; then
+            problem "$apps for $label on $arch nodes: Application $name has no helm.valuesObject, the render of platforms/$plat/$name.values.tpl"
+          elif [ "$(component_field "$name" path)" = "$service_chart" ] && [ -n "$(overlay_keys "$object")" ]; then
+            problem "platforms/$plat/$name.values.tpl renders $(overlay_keys "$object") for $label: a release's image is envs/<env>/images/$name.yaml, and every platform runs the base's canary"
+          else
+            echo "$object" >"$tmp/values/$tag-$name.json"
+          fi
+        elif [ -n "$object" ]; then
+          problem "$apps for $label on $arch nodes: Application $name has a helm.valuesObject, but no platforms/$plat/$name.values.tpl renders one"
+        fi
+      done <"$tmp/render/apps-$tag-$arch"
+      step "the Applications of $apps for $label on $arch nodes"
+      files=()
+      for f in $(awk -F $'\x1f' '$1 == "argo-rollouts" { print $2 }' "$tmp/render/apps-$tag-$arch"); do
+        files+=(-f "$(at "$f")")
+      done
+      [ ${#files[@]} -gt 0 ] || fail "Application argo-rollouts names no values file on $arch nodes for $label"
+      helm template plugins "$tmp/plugins" "${files[@]}" | sed -n 's/^# plugin //p' >"$tmp/plugin-$arch" ||
+        fail "read the plugins of Argo Rollouts on $arch nodes for $label"
+      [ "$(grep -c . "$tmp/plugin-$arch")" = 1 ] &&
+        grep -Eq "^[^ ]+ https://[^ ]+/[^ /]+-linux-$arch [0-9a-f]{64}$" "$tmp/plugin-$arch" ||
+        fail "Argo Rollouts on $arch nodes for $label must get exactly one plugin, the asset built for linux-$arch: $(cat "$tmp/plugin-$arch")"
+    done
+    read -r arm_name arm_loc arm_sum <"$tmp/plugin-arm64"
+    read -r amd_name amd_loc amd_sum <"$tmp/plugin-amd64"
+    [ "$arm_name" = "$amd_name" ] && [ "${arm_loc%/*}" = "${amd_loc%/*}" ] && [ "$arm_sum" != "$amd_sum" ] ||
+      fail "Argo Rollouts gets $arm_name of ${arm_loc%/*} on arm64 nodes, $amd_name of ${amd_loc%/*} on amd64 nodes for $label: pin the two assets of one release"
+    echo "ok    $apps for $label on arm64 and amd64 nodes: one Application per component that runs there, each with its values files in order; its sources of svp-gitops name full refs; Argo Rollouts gets plugin $arm_name of ${arm_loc%/*}, the asset built for each"
+  done
+  [ -z "$root_only" ] || return 0
+
+  # target_values ENV PLATFORM NAME: the values files of component NAME as Argo CD reads them in ENV on PLATFORM, one
+  # absolute path per line: those of values_files (archValues of arm64 nodes: a chart of this repository has none), then
+  # the valuesObject the root renders from platforms/<platform>/<name>.values.tpl, when it does.
+  target_values() {
+    local f
+    values_files "$1" "$2" "$3" arm64 | while IFS= read -r f; do at "$f"; done
+    f=$tmp/values/$1-$2-$3.json
+    [ ! -f "$f" ] || echo "$f"
+  }
+
+  # placeholder_repo SERVICE REV: the repository of SERVICE's release that a render with base/ alone gets: the first of
+  # the release sources that publish it in the table at REV (the working tree's for "worktree"), so the render's image is
+  # a service image of those charts, as an environment's would be.
+  placeholder_repo() {
+    local rev=$2
+    [ "$rev" != worktree ] || rev=
+    release_repositories "$1" "$rev" | sed 's/ or .*//'
+  }
+
+  # --- 3. the charts of this repository
+  jq -r '.components[] | select(.path) | [.name, .namespace, .path, (.values // "")] | @tsv' "$components" >"$vt/charts"
+  while IFS=$'\t' read -r name ns path values; do
+    for env in $envs; do
+      chart=$(code_of "$env")/$path
+      [ -d "$chart" ] || fail "component $name: no chart $path at $(label_of "$env") (charts of envs/$env)"
+      # base/ alone, as the dev path installs a component of k3d. Alone, base/ has no image for a release of chart
+      # svp-service: a placeholder renders it as the dev path's does.
+      if runs_on "$name" "$dev_platform"; then
+        args=(--namespace "$ns")
+        [ -z "$values" ] || args+=(-f "$gtree/$values")
+        [ "$path" != "$service_chart" ] || args+=(--set-string "image.repository=$(placeholder_repo "$name" "$(revision_of "$env")")"
+          --set-string image.tag=000000000000 --set-string "image.digest=$zero_digest")
+        if ! helm lint --quiet "$chart" "${args[@]}" >"$tmp/err" 2>&1 ||
+          ! helm template "$name" "$chart" "${args[@]}" >"$tmp/render/base-$env-$name.yaml" 2>"$tmp/err"; then
+          cat "$tmp/err" >&2
+          fail "helm lint and template of $name ($path at $(label_of "$env")) with the values of base"
+        fi
+      fi
+      for target in $targets; do
+        [ "${target%%:*}" = "$env" ] || continue
+        plat=${target#*:}
+        runs_on "$name" "$plat" || continue
+        args=(--namespace "$ns")
+        while IFS= read -r f; do args+=(-f "$f"); done < <(target_values "$env" "$plat" "$name")
+        if ! helm lint --quiet "$chart" "${args[@]}" >"$tmp/err" 2>&1 ||
+          ! helm template "$name" "$chart" "${args[@]}" >"$tmp/render/t-$env-$plat-$name.yaml" 2>"$tmp/err"; then
+          cat "$tmp/err" >&2
+          fail "helm lint and template of $name ($path at $(label_of "$env")) with the values of $env on $plat"
+        fi
+      done
+    done
+    echo "ok    $name: $path with base/ alone and with the values of each environment on each platform"
+  done <"$vt/charts"
+  # Real names in every render of a platform without localHosts.
+  real=() real_targets=
+  for target in $targets; do
+    env=${target%%:*} plat=${target#*:}
+    ! local_hosts "$plat" || continue
+    real_targets+="${real_targets:+, }$env on $plat"
+    for f in "$tmp/render/t-$env-$plat"-*.yaml "$tmp/render/root-$env-$plat"-*.yaml; do
+      [ ! -f "$f" ] || real+=("$f")
+    done
+  done
+  if [ ${#real[@]} -gt 0 ] && grep -n 'svp\.localhost' "${real[@]}" >"$tmp/leftover"; then
+    sed "s|^$tmp/render/||" "$tmp/leftover" >&2
+    fail "the render above still names svp.localhost on a platform without localHosts in components.json: override it in envs/<env>/ or platforms/<platform>/"
+  fi
+  # The same rule as a policy, where traffic comes in and in the settings of a service, on the charts' renders of each
+  # such environment on its platform (the grep above reads every byte; the policy reads the fields).
+  lab_checked=0
+  for target in $targets; do
+    env=${target%%:*} plat=${target#*:}
+    ! local_hosts "$plat" || continue
+    set -- "$tmp/render/t-$env-$plat"-*.yaml
+    [ -f "$1" ] || continue
+    kyverno_apply "$tmp/render" no-lab-hosts "$@" >"$tmp/lab" ||
+      { cat "$tmp/lab" >&2; fail "policy no-lab-hosts: the render of $env on $plat above names svp.localhost where traffic comes in or in a setting of a service"; }
+    lab_checked=$((lab_checked + kyverno_checked))
+  done
+  echo "ok    ${real_targets:-no render}: no svp.localhost in the render of the root or of any chart of the code repository (no localHosts on their platform); policy no-lab-hosts passes on the $lab_checked resources of those charts"
+
+  # External Secrets of chart svp-cluster (component external-secrets: policy layout of step 1).
+  read -r eso_repo eso_chart eso_version eso_values < <(jq -r '.components[] | select(.name == "external-secrets")
+    | "\(.repo) \(.chart) \(.version) \(.values)"' "$components")
+  mkdir -p "$vt/eso/crds" "$vt/eso/schemas" "$vt/eso/manifests" "$vt/mv/templates"
+  helm template external-secrets "$eso_chart" --repo "$eso_repo" --version "$eso_version" --namespace external-secrets \
+    -f "$gtree/$eso_values" --show-only templates/crds/externalsecret.yaml --show-only templates/crds/secretstore.yaml \
+    >"$vt/eso/crds/crds.yaml" || fail "render the CRDs of external-secrets $eso_version"
+  kubeconform=$(tool_image KUBECONFORM_IMAGE)
+  docker_ run --rm --user "$(id -u):$(id -g)" --network none -v "$vt/eso/crds:/crds:ro" -v "$vt/eso/schemas:/schemas" \
+    --workdir /schemas -e 'FILENAME_FORMAT={kind}-{fullgroup}-{version}' -e DENY_ROOT_ADDITIONAL_PROPERTIES=1 \
+    --entrypoint /openapi2jsonschema "$kubeconform" /crds/crds.yaml >"$vt/eso/o2j.log" 2>&1 ||
+    { cat "$vt/eso/o2j.log" >&2; fail "schemas from the CRDs of external-secrets $eso_version"; }
+  # openapi2jsonschema turns provider crd of SecretStore into a schema no manifest can pass; no store uses it.
+  ss_schema=$vt/eso/schemas/secretstore-external-secrets.io-v1.json
+  jq -e '.properties.spec.properties.provider.properties.crd' "$ss_schema" >/dev/null ||
+    fail "no provider crd in ${ss_schema##*/}: drop the step that removes it"
+  jq 'del(.properties.spec.properties.provider.properties.crd)' "$ss_schema" >"$vt/eso/ss.json" &&
+    mv "$vt/eso/ss.json" "$ss_schema"
+  for env in $envs; do
+    if [ -f "$tmp/render/base-$env-svp-cluster.yaml" ] &&
+      grep -Eq '^kind: (ExternalSecret|SecretStore)$' "$tmp/render/base-$env-svp-cluster.yaml"; then
+      fail "svp-cluster at $(label_of "$env") with base/ alone (the dev path's) renders an ExternalSecret or a SecretStore"
+    fi
+  done
+  # The chart's merged values, read by a chart holding its values.yaml and printing them: s3.mode decides which entries of
+  # files/external-secrets.yaml exist (a chart from before s3.mode has one object store, in the cluster).
+  printf 'apiVersion: v2\nname: mv\nversion: 0.1.0\n' >"$vt/mv/Chart.yaml"
+  printf '%s\n' '# json {{ toJson .Values }}' >"$vt/mv/templates/values.yaml"
+  for target in $targets; do
+    env=${target%%:*} plat=${target#*:}
+    tag=$env-$plat label="$env on $plat"
+    runs_on svp-cluster "$plat" || continue
+    code=$(code_of "$env")
+    args=(--namespace cert-manager)
+    while IFS= read -r f; do args+=(-f "$f"); done < <(target_values "$env" "$plat" svp-cluster)
+    cp "$code/deploy/helm/svp-cluster/values.yaml" "$vt/mv/values.yaml"
+    merged=$(helm template mv "$vt/mv" "${args[@]}" | sed -n 's/^# json //p') && [ -n "$merged" ] ||
+      fail "read the values of svp-cluster for $label"
+    mode=$(jq -r '.s3.mode // "cluster"' <<<"$merged") || fail "read s3.mode of svp-cluster for $label"
+    # The keys of externalSecrets that are true, which turn on the entries naming them in enabledBy.
+    enabled=$(jq -r '.externalSecrets // {} | to_entries[] | select(.value == true) | .key' <<<"$merged" | paste -sd ' ' -) ||
+      fail "read externalSecrets of svp-cluster for $label"
+    list=$code/deploy/helm/svp-cluster/files/external-secrets.yaml
+    # One ExternalSecret per entry, one SecretStore per namespace of the entries; with a managed object store
+    # (s3.mode external) no entry with inClusterObjectStore: true; no entry whose enabledBy is not true.
+    read -r want_es want_ss < <(awk -v external="$([ "$mode" = external ] && echo 1)" -v enabled=" $enabled " '
+      function entry() { if (n && !(external && flagged) && (by == "" || index(enabled, " " by " "))) { es++; seen[ns] = 1 } }
+      /^- namespace: / { entry(); n = 1; ns = $3; flagged = 0; by = ""; next }
+      /^  inClusterObjectStore: true/ { flagged = 1 }
+      /^  enabledBy: / { by = $2 }
+      END { entry(); for (k in seen) ss++; print es + 0, ss + 0 }' "$list")
+    f=$tmp/render/t-$tag-svp-cluster.yaml
+    es=$(grep -c '^kind: ExternalSecret$' "$f" || true)
+    ss=$(grep -c '^kind: SecretStore$' "$f" || true)
+    [ "$es" = "$want_es" ] && [ "$ss" = "$want_ss" ] ||
+      fail "svp-cluster for $label (object store $mode) renders $es ExternalSecrets and $ss SecretStores, want $want_es and $want_ss"
+    provider=$(awk '/^kind: SecretStore$/ { s = 1 } s && /^    [a-z]+:$/ { sub(/:$/, ""); print $1; s = 0 }' "$f" |
+      sort -u | paste -sd ' ' -)
+    if [ "$env" = prd ]; then
+      [ "$provider" = aws ] || fail "the SecretStores of $label use provider '$provider', want aws"
+      if grep -n 'svp-secrets' "$f" >&2; then
+        fail "the render of svp-cluster for $label above still names svp-secrets, the lab's source namespace"
+      fi
+    else
+      [ "$provider" = kubernetes ] || fail "the SecretStores of $label use provider '$provider', want kubernetes"
+    fi
+    helm template svp-cluster "$code/deploy/helm/svp-cluster" "${args[@]}" --show-only templates/external-secrets.yaml \
+      >"$vt/eso/manifests/$tag.yaml" || fail "render the ExternalSecrets of svp-cluster for $label"
+    docker_ run --rm --user "$(id -u):$(id -g)" --network none -v "$vt/eso/manifests:/manifests:ro" \
+      -v "$vt/eso/schemas:/schemas:ro" "$kubeconform" -strict -summary \
+      -skip ServiceAccount,Role,RoleBinding,ValidatingAdmissionPolicy,ValidatingAdmissionPolicyBinding \
+      -schema-location '/schemas/{{.ResourceKind}}-{{.Group}}-{{.ResourceAPIVersion}}.json' "/manifests/$tag.yaml" \
+      >"$vt/eso/kubeconform.log" 2>&1 || { cat "$vt/eso/kubeconform.log" >&2; fail "kubeconform on the ExternalSecrets and SecretStores for $label"; }
+    grep -q "Valid: $((es + ss)), Invalid: 0, Errors: 0" "$vt/eso/kubeconform.log" ||
+      { cat "$vt/eso/kubeconform.log" >&2; fail "kubeconform did not find $((es + ss)) valid ExternalSecrets and SecretStores for $label"; }
+    echo "ok    svp-cluster for $label: $es ExternalSecrets, $ss SecretStores (provider $provider, object store $mode), valid against the CRDs of external-secrets $eso_version; none with base/ alone"
+  done
+
+  # --- 4. image digests, per folder of charts (one per revision, or the working tree): every component with its base/
+  # values and Argo CD as argocd/bootstrap.json installs it, then each component with values of a platform again with
+  # them, and each with an overlay of an environment of those charts again with it. argocd/bootstrap.json installs chart
+  # argo-cd of https://argoproj.github.io/argo-helm with a values file of the tree (policy layout of step 1).
+  bootstrap=$gtree/argocd/bootstrap.json
+  argocd_version=$(jq -r '.version' "$bootstrap")
+  argocd_values=$(jq -r '.values' "$bootstrap")
+
+  # One line per component, fields separated by the ASCII unit separator so empty fields survive `read`; Argo CD last.
+  sep=$'\x1f'
+  list=$(jq -r '.components[] | [.name, .namespace, (.path // ""), (.repo // ""), (.chart // ""), (.version // ""),
+    (.values // "")] | join("\u001f")' "$components") || fail "read argocd/apps/components.json"
+  list+=$'\n'"argocd${sep}argocd${sep}${sep}https://argoproj.github.io/argo-helm${sep}argo-cd${sep}$argocd_version${sep}$argocd_values"
+  digest_problems=
+  for rev in $(for env in $envs; do revision_of "$env"; done | sort -u); do
+    out=$vt/digests/$rev
+    mkdir -p "$out/base"
+    code=
+    rev_targets=
+    for target in $targets; do
+      env=${target%%:*} plat=${target#*:}
+      if [ "$(revision_of "$env")" = "$rev" ]; then
+        code=$(code_of "$env") label=$(label_of "$env")
+        rev_targets+=" $target"
+        mkdir -p "$out/env/$env-$plat" "$out/platform/$plat"
+      fi
+    done
+    rev_platforms=$(for target in $rev_targets; do echo "${target#*:}"; done | grep . | sort -u | paste -sd ' ' -) || true
+    rendered=0 platformed=0 overlays=0
+    while IFS=$sep read -r name namespace path repo chart version values; do
+      args=(template "$name" --namespace "$namespace" --include-crds)
+      if [ -n "$path" ]; then
+        args+=("$code/$path")
+      elif [[ $repo == oci://* ]]; then
+        args+=("$repo/$chart" --version "$version")
+      else
+        args+=("$chart" --repo "$repo" --version "$version")
+      fi
+      if [ -n "$values" ]; then args+=(--values "$gtree/$values"); fi
+      # base/ has no image for a release of chart svp-service: the placeholder of step 3, a release's form with a zero
+      # digest, which the pin check below holds to a digest like every other image.
+      if [ "$path" = "$service_chart" ]; then
+        args+=(--set-string "image.repository=$(placeholder_repo "$name" "$rev")" --set-string image.tag=000000000000
+          --set-string "image.digest=$zero_digest")
+      fi
+      # base/ alone: Argo CD and every component of k3d, the platform of the dev path, which installs it so.
+      if [ "$name" = argocd ] || runs_on "$name" "$dev_platform"; then
+        helm "${args[@]}" >"$out/base/$name.yaml" 2>"$tmp/err" || { cat "$tmp/err" >&2; fail "helm template $name ($label)"; }
+        rendered=$((rendered + 1))
+      fi
+      # Argo CD with the values of each platform that has some (platforms/<platform>/argo-cd.yaml after the bootstrap's),
+      # as deploy/k8s/gitops.sh installs it on that platform.
+      if [ "$name" = argocd ]; then
+        for plat in $rev_platforms; do
+          [ -f "$gtree/platforms/$plat/argo-cd.yaml" ] || continue
+          helm "${args[@]}" --values "$gtree/platforms/$plat/argo-cd.yaml" >"$out/platform/$plat/$name.yaml" 2>"$tmp/err" ||
+            { cat "$tmp/err" >&2; fail "helm template $name ($label) with the values of platform $plat"; }
+          platformed=$((platformed + 1))
+        done
+        continue
+      fi
+      # With the values of each platform (its file, then what the root renders from its template for the first
+      # environment on it): a component that has some, or none on k3d, whose base/ alone no cluster installs.
+      for plat in $rev_platforms; do
+        runs_on "$name" "$plat" || continue
+        pargs=()
+        [ ! -f "$gtree/platforms/$plat/$name.yaml" ] || pargs+=(--values "$gtree/platforms/$plat/$name.yaml")
+        for target in $rev_targets; do
+          [ "${target#*:}" = "$plat" ] || continue
+          f=$tmp/values/${target%%:*}-$plat-$name.json
+          [ ! -f "$f" ] || pargs+=(--values "$f")
+          break
+        done
+        [ ${#pargs[@]} -gt 0 ] || [ ! -f "$out/base/$name.yaml" ] || continue
+        helm "${args[@]}" ${pargs[@]+"${pargs[@]}"} >"$out/platform/$plat/$name.yaml" 2>"$tmp/err" ||
+          { cat "$tmp/err" >&2; fail "helm template $name ($label) with the values of platform $plat"; }
+        platformed=$((platformed + 1))
+      done
+      # With each environment's overlay, the values in the order Argo CD reads them, as step 3 renders them
+      # (target_values): the file of its platform, the overlay, then what the root renders from the platform's template,
+      # which a valuesObject puts after every values file. base/ is in args already; the image file is left out: base/
+      # has the placeholder.
+      for target in $rev_targets; do
+        env=${target%%:*} plat=${target#*:}
+        [ -f "$tree/envs/$env/$name.yaml" ] && runs_on "$name" "$plat" || continue
+        eargs=()
+        while IFS= read -r f; do
+          case $f in "$gtree/$values" | "$tree/envs/$env/images/$name.yaml") ;; *) eargs+=(--values "$f") ;; esac
+        done < <(target_values "$env" "$plat" "$name")
+        helm "${args[@]}" "${eargs[@]}" \
+          >"$out/env/$env-$plat/$name.yaml" 2>"$tmp/err" ||
+          { cat "$tmp/err" >&2; fail "helm template $name ($label) with envs/$env/$name.yaml on $plat"; }
+        overlays=$((overlays + 1))
+      done
+    done <<<"$list"
+
+    # Each render against the one it adds to, the service images included. An environment's overlay against its
+    # platform's render (the base's where the platform has no values for the component): exactly the same images. A
+    # platform's render against the base's (none for a component that does not run on k3d): no other version of an image
+    # the base runs (another tag or digest of one of its repositories), while it may run fewer (an object store the cloud
+    # provides) or others, which the pin check holds to their digests like every image.
+    drift=
+    for f in "$out"/platform/*/*.yaml "$out"/env/*/*.yaml; do
+      [ -f "$f" ] || continue
+      name=$(basename "$f" .yaml)
+      dir=$(basename "$(dirname "$f")")
+      case $f in
+      "$out"/platform/*)
+        ref=$out/base/$name.yaml
+        [ -f "$ref" ] || continue
+        image_refs "$name" "$ref" | sort -u >"$tmp/ref-images"
+        image_refs "$name" "$f" | sort -u >"$tmp/env-images"
+        # The images of the platform's render whose repository the base runs at another reference, each with the
+        # base's: a repository is the reference without its digest and without a tag after its last "/".
+        other=$(awk -F '\t' 'function repo(r) { sub(/@.*/, "", r); if (match(r, /:[^\/]*$/)) r = substr(r, 1, RSTART - 1); return r }
+          NR == FNR { have[$2] = 1; base[repo($2)] = base[repo($2)] " " $2; next }
+          !($2 in have) && (repo($2) in base) { print "    > " $2 " (base:" base[repo($2)] ")" }' "$tmp/ref-images" "$tmp/env-images")
+        [ -z "$other" ] || drift+="  the values of platform $dir for $name run another version of an image of the base:"$'\n'"$other"$'\n'
+        continue
+        ;;
+      *)
+        env=${dir%%-*} plat=${dir#*-}
+        ref=$out/base/$name.yaml
+        [ ! -f "$out/platform/$plat/$name.yaml" ] || ref=$out/platform/$plat/$name.yaml
+        what="envs/$env/$name.yaml on $plat (< $plat or base, > $env on $plat)"
+        ;;
+      esac
+      [ -f "$ref" ] || continue
+      image_refs "$name" "$ref" | sort -u >"$tmp/ref-images"
+      image_refs "$name" "$f" | sort -u >"$tmp/env-images"
+      if ! diff=$(diff "$tmp/ref-images" "$tmp/env-images"); then
+        drift+="  $what:"$'\n'"$(sed 's/^/    /' <<<"$diff")"$'\n'
+      fi
+    done
+
+    # Every image of every render pinned by digest (pin_check), the CLI run once per folder: a folder holds each
+    # resource once (the base, a platform, an environment on a platform).
+    missing= checked=0
+    for d in "$out"/base "$out"/platform/* "$out"/env/*; do
+      set -- "$d"/*.yaml
+      [ -f "$1" ] || continue
+      pin_check "$out" "$@" >"$tmp/pin-out" || missing+=$(cat "$tmp/pin-out")$'\n'
+      checked=$((checked + kyverno_checked))
+    done
+
+    echo "image digests with the charts of $label: charts rendered: $rendered, with a platform's values: $platformed, with an environment's overlay: $overlays; resources of their renders checked by policy images-pinned: $checked"
+    if [ -n "$drift" ]; then
+      printf 'FAIL  values of an environment or a platform whose render runs other images than the render they add to (charts of %s):\n%s' "$label" "$drift" >&2
+    fi
+    if [ -n "$missing" ]; then
+      printf 'FAIL  images without exactly one @sha256:<64 hex> (charts of %s):\n%s' "$label" "$missing" >&2
+    fi
+    [ -z "$drift$missing" ] || digest_problems=1
+  done
+  [ -z "$digest_problems" ] || fail "image digests (above)"
+  echo "ok    every image is pinned by digest (policy images-pinned); every overlay runs the images of what it adds to"
+}
+
+# Each environment that pins a commit renders on its own, at that commit unpacked with git archive (neither the
+# working tree nor the index of GITOPS_DIR is read); the others together on the tree.
+unpinned=
+for env in $envs; do
+  pin=$(pinned_commit "$env")
+  if [ -z "$pin" ]; then
+    unpinned+="${unpinned:+ }$env"
+    continue
+  fi
+  mkdir -p "$tmp/gitops/$env"
+  git -C "$tree" archive "$pin" | tar -x -C "$tmp/gitops/$env" || fail "unpack ${pin:0:12} of svp-gitops with git archive"
+  render_tree "$tmp/gitops/$env" "$env" "$pin"
 done
+[ -z "$unpinned" ] || render_tree "$tree" "$unpinned" ""
 if [ -n "$root_only" ]; then
   echo "ok    $tree: the tree and its root chart"
   exit 0
 fi
-
-# target_values ENV PLATFORM NAME: the values files of component NAME as Argo CD reads them in ENV on PLATFORM, one
-# absolute path per line: those of values_files (archValues of arm64 nodes: a chart of this repository has none), then
-# the valuesObject the root renders from platforms/<platform>/<name>.values.tpl, when it does.
-target_values() {
-  local f
-  values_files "$1" "$2" "$3" arm64 | while IFS= read -r f; do echo "$tree/$f"; done
-  f=$tmp/values/$1-$2-$3.json
-  [ ! -f "$f" ] || echo "$f"
-}
-
-# placeholder_repo SERVICE REV: the repository of SERVICE's release that a render with base/ alone gets: the first of
-# the release sources that publish it in the table at REV (the working tree's for "worktree"), so the render's image is
-# a service image of those charts, as an environment's would be.
-placeholder_repo() {
-  local rev=$2
-  [ "$rev" != worktree ] || rev=
-  release_repositories "$1" "$rev" | sed 's/ or .*//'
-}
-
-# --- 3. the charts of this repository
-jq -r '.components[] | select(.path) | [.name, .namespace, .path, (.values // "")] | @tsv' "$components" >"$tmp/charts"
-while IFS=$'\t' read -r name ns path values; do
-  for env in $envs; do
-    chart=$(code_of "$env")/$path
-    [ -d "$chart" ] || fail "component $name: no chart $path at $(label_of "$env") (charts of envs/$env)"
-    # base/ alone, as the dev path installs a component of k3d. Alone, base/ has no image for a release of chart
-    # svp-service: a placeholder renders it as the dev path's does.
-    if runs_on "$name" "$dev_platform"; then
-      args=(--namespace "$ns")
-      [ -z "$values" ] || args+=(-f "$tree/$values")
-      [ "$path" != "$service_chart" ] || args+=(--set-string "image.repository=$(placeholder_repo "$name" "$(revision_of "$env")")"
-        --set-string image.tag=000000000000 --set-string "image.digest=$zero_digest")
-      if ! helm lint --quiet "$chart" "${args[@]}" >"$tmp/err" 2>&1 ||
-        ! helm template "$name" "$chart" "${args[@]}" >"$tmp/render/base-$env-$name.yaml" 2>"$tmp/err"; then
-        cat "$tmp/err" >&2
-        fail "helm lint and template of $name ($path at $(label_of "$env")) with the values of base"
-      fi
-    fi
-    for target in $targets; do
-      [ "${target%%:*}" = "$env" ] || continue
-      plat=${target#*:}
-      runs_on "$name" "$plat" || continue
-      args=(--namespace "$ns")
-      while IFS= read -r f; do args+=(-f "$f"); done < <(target_values "$env" "$plat" "$name")
-      if ! helm lint --quiet "$chart" "${args[@]}" >"$tmp/err" 2>&1 ||
-        ! helm template "$name" "$chart" "${args[@]}" >"$tmp/render/t-$env-$plat-$name.yaml" 2>"$tmp/err"; then
-        cat "$tmp/err" >&2
-        fail "helm lint and template of $name ($path at $(label_of "$env")) with the values of $env on $plat"
-      fi
-    done
-  done
-  echo "ok    $name: $path with base/ alone and with the values of each environment on each platform"
-done <"$tmp/charts"
-# Real names in every render of a platform without localHosts.
-real=() real_targets=
-for target in $targets; do
-  env=${target%%:*} plat=${target#*:}
-  ! local_hosts "$plat" || continue
-  real_targets+="${real_targets:+, }$env on $plat"
-  for f in "$tmp/render/t-$env-$plat"-*.yaml "$tmp/render/root-$env-$plat"-*.yaml; do
-    [ ! -f "$f" ] || real+=("$f")
-  done
-done
-if [ ${#real[@]} -gt 0 ] && grep -n 'svp\.localhost' "${real[@]}" >"$tmp/leftover"; then
-  sed "s|^$tmp/render/||" "$tmp/leftover" >&2
-  fail "the render above still names svp.localhost on a platform without localHosts in components.json: override it in envs/<env>/ or platforms/<platform>/"
-fi
-# The same rule as a policy, where traffic comes in and in the settings of a service, on the charts' renders of each
-# such environment on its platform (the grep above reads every byte; the policy reads the fields).
-lab_checked=0
-for target in $targets; do
-  env=${target%%:*} plat=${target#*:}
-  ! local_hosts "$plat" || continue
-  set -- "$tmp/render/t-$env-$plat"-*.yaml
-  [ -f "$1" ] || continue
-  kyverno_apply "$tmp/render" no-lab-hosts "$@" >"$tmp/lab" ||
-    { cat "$tmp/lab" >&2; fail "policy no-lab-hosts: the render of $env on $plat above names svp.localhost where traffic comes in or in a setting of a service"; }
-  lab_checked=$((lab_checked + kyverno_checked))
-done
-echo "ok    ${real_targets:-no render}: no svp.localhost in the render of the root or of any chart of the code repository (no localHosts on their platform); policy no-lab-hosts passes on the $lab_checked resources of those charts"
-
-# External Secrets of chart svp-cluster (component external-secrets: policy layout of step 1).
-read -r eso_repo eso_chart eso_version eso_values < <(jq -r '.components[] | select(.name == "external-secrets")
-  | "\(.repo) \(.chart) \(.version) \(.values)"' "$components")
-mkdir -p "$tmp/eso/crds" "$tmp/eso/schemas" "$tmp/eso/manifests" "$tmp/mv/templates"
-helm template external-secrets "$eso_chart" --repo "$eso_repo" --version "$eso_version" --namespace external-secrets \
-  -f "$tree/$eso_values" --show-only templates/crds/externalsecret.yaml --show-only templates/crds/secretstore.yaml \
-  >"$tmp/eso/crds/crds.yaml" || fail "render the CRDs of external-secrets $eso_version"
-kubeconform=$(tool_image KUBECONFORM_IMAGE)
-docker_ run --rm --user "$(id -u):$(id -g)" --network none -v "$tmp/eso/crds:/crds:ro" -v "$tmp/eso/schemas:/schemas" \
-  --workdir /schemas -e 'FILENAME_FORMAT={kind}-{fullgroup}-{version}' -e DENY_ROOT_ADDITIONAL_PROPERTIES=1 \
-  --entrypoint /openapi2jsonschema "$kubeconform" /crds/crds.yaml >"$tmp/eso/o2j.log" 2>&1 ||
-  { cat "$tmp/eso/o2j.log" >&2; fail "schemas from the CRDs of external-secrets $eso_version"; }
-# openapi2jsonschema turns provider crd of SecretStore into a schema no manifest can pass; no store uses it.
-ss_schema=$tmp/eso/schemas/secretstore-external-secrets.io-v1.json
-jq -e '.properties.spec.properties.provider.properties.crd' "$ss_schema" >/dev/null ||
-  fail "no provider crd in ${ss_schema##*/}: drop the step that removes it"
-jq 'del(.properties.spec.properties.provider.properties.crd)' "$ss_schema" >"$tmp/eso/ss.json" &&
-  mv "$tmp/eso/ss.json" "$ss_schema"
-for env in $envs; do
-  if [ -f "$tmp/render/base-$env-svp-cluster.yaml" ] &&
-    grep -Eq '^kind: (ExternalSecret|SecretStore)$' "$tmp/render/base-$env-svp-cluster.yaml"; then
-    fail "svp-cluster at $(label_of "$env") with base/ alone (the dev path's) renders an ExternalSecret or a SecretStore"
-  fi
-done
-# The chart's merged values, read by a chart holding its values.yaml and printing them: s3.mode decides which entries of
-# files/external-secrets.yaml exist (a chart from before s3.mode has one object store, in the cluster).
-printf 'apiVersion: v2\nname: mv\nversion: 0.1.0\n' >"$tmp/mv/Chart.yaml"
-printf '%s\n' '# json {{ toJson .Values }}' >"$tmp/mv/templates/values.yaml"
-for target in $targets; do
-  env=${target%%:*} plat=${target#*:}
-  tag=$env-$plat label="$env on $plat"
-  runs_on svp-cluster "$plat" || continue
-  code=$(code_of "$env")
-  args=(--namespace cert-manager)
-  while IFS= read -r f; do args+=(-f "$f"); done < <(target_values "$env" "$plat" svp-cluster)
-  cp "$code/deploy/helm/svp-cluster/values.yaml" "$tmp/mv/values.yaml"
-  merged=$(helm template mv "$tmp/mv" "${args[@]}" | sed -n 's/^# json //p') && [ -n "$merged" ] ||
-    fail "read the values of svp-cluster for $label"
-  mode=$(jq -r '.s3.mode // "cluster"' <<<"$merged") || fail "read s3.mode of svp-cluster for $label"
-  # The keys of externalSecrets that are true, which turn on the entries naming them in enabledBy.
-  enabled=$(jq -r '.externalSecrets // {} | to_entries[] | select(.value == true) | .key' <<<"$merged" | paste -sd ' ' -) ||
-    fail "read externalSecrets of svp-cluster for $label"
-  list=$code/deploy/helm/svp-cluster/files/external-secrets.yaml
-  # One ExternalSecret per entry, one SecretStore per namespace of the entries; with a managed object store
-  # (s3.mode external) no entry with inClusterObjectStore: true; no entry whose enabledBy is not true.
-  read -r want_es want_ss < <(awk -v external="$([ "$mode" = external ] && echo 1)" -v enabled=" $enabled " '
-    function entry() { if (n && !(external && flagged) && (by == "" || index(enabled, " " by " "))) { es++; seen[ns] = 1 } }
-    /^- namespace: / { entry(); n = 1; ns = $3; flagged = 0; by = ""; next }
-    /^  inClusterObjectStore: true/ { flagged = 1 }
-    /^  enabledBy: / { by = $2 }
-    END { entry(); for (k in seen) ss++; print es + 0, ss + 0 }' "$list")
-  f=$tmp/render/t-$tag-svp-cluster.yaml
-  es=$(grep -c '^kind: ExternalSecret$' "$f" || true)
-  ss=$(grep -c '^kind: SecretStore$' "$f" || true)
-  [ "$es" = "$want_es" ] && [ "$ss" = "$want_ss" ] ||
-    fail "svp-cluster for $label (object store $mode) renders $es ExternalSecrets and $ss SecretStores, want $want_es and $want_ss"
-  provider=$(awk '/^kind: SecretStore$/ { s = 1 } s && /^    [a-z]+:$/ { sub(/:$/, ""); print $1; s = 0 }' "$f" |
-    sort -u | paste -sd ' ' -)
-  if [ "$env" = prd ]; then
-    [ "$provider" = aws ] || fail "the SecretStores of $label use provider '$provider', want aws"
-    if grep -n 'svp-secrets' "$f" >&2; then
-      fail "the render of svp-cluster for $label above still names svp-secrets, the lab's source namespace"
-    fi
-  else
-    [ "$provider" = kubernetes ] || fail "the SecretStores of $label use provider '$provider', want kubernetes"
-  fi
-  helm template svp-cluster "$code/deploy/helm/svp-cluster" "${args[@]}" --show-only templates/external-secrets.yaml \
-    >"$tmp/eso/manifests/$tag.yaml" || fail "render the ExternalSecrets of svp-cluster for $label"
-  docker_ run --rm --user "$(id -u):$(id -g)" --network none -v "$tmp/eso/manifests:/manifests:ro" \
-    -v "$tmp/eso/schemas:/schemas:ro" "$kubeconform" -strict -summary \
-    -skip ServiceAccount,Role,RoleBinding,ValidatingAdmissionPolicy,ValidatingAdmissionPolicyBinding \
-    -schema-location '/schemas/{{.ResourceKind}}-{{.Group}}-{{.ResourceAPIVersion}}.json' "/manifests/$tag.yaml" \
-    >"$tmp/eso/kubeconform.log" 2>&1 || { cat "$tmp/eso/kubeconform.log" >&2; fail "kubeconform on the ExternalSecrets and SecretStores for $label"; }
-  grep -q "Valid: $((es + ss)), Invalid: 0, Errors: 0" "$tmp/eso/kubeconform.log" ||
-    { cat "$tmp/eso/kubeconform.log" >&2; fail "kubeconform did not find $((es + ss)) valid ExternalSecrets and SecretStores for $label"; }
-  echo "ok    svp-cluster for $label: $es ExternalSecrets, $ss SecretStores (provider $provider, object store $mode), valid against the CRDs of external-secrets $eso_version; none with base/ alone"
-done
-
-# --- 4. image digests, per folder of charts (one per revision, or the working tree): every component with its base/
-# values and Argo CD as argocd/bootstrap.json installs it, then each component with values of a platform again with
-# them, and each with an overlay of an environment of those charts again with it. argocd/bootstrap.json installs chart
-# argo-cd of https://argoproj.github.io/argo-helm with a values file of the tree (policy layout of step 1).
-bootstrap=$tree/argocd/bootstrap.json
-argocd_version=$(jq -r '.version' "$bootstrap")
-argocd_values=$(jq -r '.values' "$bootstrap")
-
-# One line per component, fields separated by the ASCII unit separator so empty fields survive `read`; Argo CD last.
-sep=$'\x1f'
-list=$(jq -r '.components[] | [.name, .namespace, (.path // ""), (.repo // ""), (.chart // ""), (.version // ""),
-  (.values // "")] | join("\u001f")' "$components") || fail "read argocd/apps/components.json"
-list+=$'\n'"argocd${sep}argocd${sep}${sep}https://argoproj.github.io/argo-helm${sep}argo-cd${sep}$argocd_version${sep}$argocd_values"
-digest_problems=
-for rev in $(for env in $envs; do revision_of "$env"; done | sort -u); do
-  out=$tmp/digests/$rev
-  mkdir -p "$out/base"
-  code=
-  rev_targets=
-  for target in $targets; do
-    env=${target%%:*} plat=${target#*:}
-    if [ "$(revision_of "$env")" = "$rev" ]; then
-      code=$(code_of "$env") label=$(label_of "$env")
-      rev_targets+=" $target"
-      mkdir -p "$out/env/$env-$plat" "$out/platform/$plat"
-    fi
-  done
-  rev_platforms=$(for target in $rev_targets; do echo "${target#*:}"; done | grep . | sort -u | paste -sd ' ' -) || true
-  rendered=0 platformed=0 overlays=0
-  while IFS=$sep read -r name namespace path repo chart version values; do
-    args=(template "$name" --namespace "$namespace" --include-crds)
-    if [ -n "$path" ]; then
-      args+=("$code/$path")
-    elif [[ $repo == oci://* ]]; then
-      args+=("$repo/$chart" --version "$version")
-    else
-      args+=("$chart" --repo "$repo" --version "$version")
-    fi
-    if [ -n "$values" ]; then args+=(--values "$tree/$values"); fi
-    # base/ has no image for a release of chart svp-service: the placeholder of step 3, a release's form with a zero
-    # digest, which the pin check below holds to a digest like every other image.
-    if [ "$path" = "$service_chart" ]; then
-      args+=(--set-string "image.repository=$(placeholder_repo "$name" "$rev")" --set-string image.tag=000000000000
-        --set-string "image.digest=$zero_digest")
-    fi
-    # base/ alone: Argo CD and every component of k3d, the platform of the dev path, which installs it so.
-    if [ "$name" = argocd ] || runs_on "$name" "$dev_platform"; then
-      helm "${args[@]}" >"$out/base/$name.yaml" 2>"$tmp/err" || { cat "$tmp/err" >&2; fail "helm template $name ($label)"; }
-      rendered=$((rendered + 1))
-    fi
-    # Argo CD with the values of each platform that has some (platforms/<platform>/argo-cd.yaml after the bootstrap's),
-    # as deploy/k8s/gitops.sh installs it on that platform.
-    if [ "$name" = argocd ]; then
-      for plat in $rev_platforms; do
-        [ -f "$tree/platforms/$plat/argo-cd.yaml" ] || continue
-        helm "${args[@]}" --values "$tree/platforms/$plat/argo-cd.yaml" >"$out/platform/$plat/$name.yaml" 2>"$tmp/err" ||
-          { cat "$tmp/err" >&2; fail "helm template $name ($label) with the values of platform $plat"; }
-        platformed=$((platformed + 1))
-      done
-      continue
-    fi
-    # With the values of each platform (its file, then what the root renders from its template for the first
-    # environment on it): a component that has some, or none on k3d, whose base/ alone no cluster installs.
-    for plat in $rev_platforms; do
-      runs_on "$name" "$plat" || continue
-      pargs=()
-      [ ! -f "$tree/platforms/$plat/$name.yaml" ] || pargs+=(--values "$tree/platforms/$plat/$name.yaml")
-      for target in $rev_targets; do
-        [ "${target#*:}" = "$plat" ] || continue
-        f=$tmp/values/${target%%:*}-$plat-$name.json
-        [ ! -f "$f" ] || pargs+=(--values "$f")
-        break
-      done
-      [ ${#pargs[@]} -gt 0 ] || [ ! -f "$out/base/$name.yaml" ] || continue
-      helm "${args[@]}" ${pargs[@]+"${pargs[@]}"} >"$out/platform/$plat/$name.yaml" 2>"$tmp/err" ||
-        { cat "$tmp/err" >&2; fail "helm template $name ($label) with the values of platform $plat"; }
-      platformed=$((platformed + 1))
-    done
-    # With each environment's overlay, the values in the order Argo CD reads them, as step 3 renders them
-    # (target_values): the file of its platform, the overlay, then what the root renders from the platform's template,
-    # which a valuesObject puts after every values file. base/ is in args already; the image file is left out: base/
-    # has the placeholder.
-    for target in $rev_targets; do
-      env=${target%%:*} plat=${target#*:}
-      [ -f "$tree/envs/$env/$name.yaml" ] && runs_on "$name" "$plat" || continue
-      eargs=()
-      while IFS= read -r f; do
-        case $f in "$tree/$values" | "$tree/envs/$env/images/$name.yaml") ;; *) eargs+=(--values "$f") ;; esac
-      done < <(target_values "$env" "$plat" "$name")
-      helm "${args[@]}" "${eargs[@]}" \
-        >"$out/env/$env-$plat/$name.yaml" 2>"$tmp/err" ||
-        { cat "$tmp/err" >&2; fail "helm template $name ($label) with envs/$env/$name.yaml on $plat"; }
-      overlays=$((overlays + 1))
-    done
-  done <<<"$list"
-
-  # Each render against the one it adds to, the service images included. An environment's overlay against its
-  # platform's render (the base's where the platform has no values for the component): exactly the same images. A
-  # platform's render against the base's (none for a component that does not run on k3d): no other version of an image
-  # the base runs (another tag or digest of one of its repositories), while it may run fewer (an object store the cloud
-  # provides) or others, which the pin check holds to their digests like every image.
-  drift=
-  for f in "$out"/platform/*/*.yaml "$out"/env/*/*.yaml; do
-    [ -f "$f" ] || continue
-    name=$(basename "$f" .yaml)
-    dir=$(basename "$(dirname "$f")")
-    case $f in
-    "$out"/platform/*)
-      ref=$out/base/$name.yaml
-      [ -f "$ref" ] || continue
-      image_refs "$name" "$ref" | sort -u >"$tmp/ref-images"
-      image_refs "$name" "$f" | sort -u >"$tmp/env-images"
-      # The images of the platform's render whose repository the base runs at another reference, each with the
-      # base's: a repository is the reference without its digest and without a tag after its last "/".
-      other=$(awk -F '\t' 'function repo(r) { sub(/@.*/, "", r); if (match(r, /:[^\/]*$/)) r = substr(r, 1, RSTART - 1); return r }
-        NR == FNR { have[$2] = 1; base[repo($2)] = base[repo($2)] " " $2; next }
-        !($2 in have) && (repo($2) in base) { print "    > " $2 " (base:" base[repo($2)] ")" }' "$tmp/ref-images" "$tmp/env-images")
-      [ -z "$other" ] || drift+="  the values of platform $dir for $name run another version of an image of the base:"$'\n'"$other"$'\n'
-      continue
-      ;;
-    *)
-      env=${dir%%-*} plat=${dir#*-}
-      ref=$out/base/$name.yaml
-      [ ! -f "$out/platform/$plat/$name.yaml" ] || ref=$out/platform/$plat/$name.yaml
-      what="envs/$env/$name.yaml on $plat (< $plat or base, > $env on $plat)"
-      ;;
-    esac
-    [ -f "$ref" ] || continue
-    image_refs "$name" "$ref" | sort -u >"$tmp/ref-images"
-    image_refs "$name" "$f" | sort -u >"$tmp/env-images"
-    if ! diff=$(diff "$tmp/ref-images" "$tmp/env-images"); then
-      drift+="  $what:"$'\n'"$(sed 's/^/    /' <<<"$diff")"$'\n'
-    fi
-  done
-
-  # Every image of every render pinned by digest (pin_check), the CLI run once per folder: a folder holds each
-  # resource once (the base, a platform, an environment on a platform).
-  missing= checked=0
-  for d in "$out"/base "$out"/platform/* "$out"/env/*; do
-    set -- "$d"/*.yaml
-    [ -f "$1" ] || continue
-    pin_check "$out" "$@" >"$tmp/pin-out" || missing+=$(cat "$tmp/pin-out")$'\n'
-    checked=$((checked + kyverno_checked))
-  done
-
-  echo "image digests with the charts of $label: charts rendered: $rendered, with a platform's values: $platformed, with an environment's overlay: $overlays; resources of their renders checked by policy images-pinned: $checked"
-  if [ -n "$drift" ]; then
-    printf 'FAIL  values of an environment or a platform whose render runs other images than the render they add to (charts of %s):\n%s' "$label" "$drift" >&2
-  fi
-  if [ -n "$missing" ]; then
-    printf 'FAIL  images without exactly one @sha256:<64 hex> (charts of %s):\n%s' "$label" "$missing" >&2
-  fi
-  [ -z "$drift$missing" ] || digest_problems=1
-done
-[ -z "$digest_problems" ] || fail "image digests (above)"
-echo "ok    every image is pinned by digest (policy images-pinned); every overlay runs the images of what it adds to"
 
 # --- 5. the release images
 if [ -n "$worktree" ]; then

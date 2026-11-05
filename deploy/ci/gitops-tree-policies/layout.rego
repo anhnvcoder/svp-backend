@@ -29,8 +29,9 @@ deny contains sprintf("%s is missing", [path]) if {
 
 # The bash that lists the tree does not walk into a link to a folder, so what lies behind one would be checked by no
 # rule (an overlay of platforms/<platform> linked to another folder). The two links the root chart needs are the only
-# links to a folder the tree may hold; their targets, envs/ and platforms/, are listed where they are.
-folder_links := {"argocd/apps/files/envs", "argocd/apps/files/platforms"}
+# links to a folder the tree may hold, with the two-level root's link to envs/ (argocd/root reads envs/<env>/ through
+# it); their targets, envs/ and platforms/, are listed where they are.
+folder_links := {"argocd/apps/files/envs", "argocd/apps/files/platforms", "argocd/root/files/envs"}
 
 deny contains msg if {
 	some path, entry in input.tree

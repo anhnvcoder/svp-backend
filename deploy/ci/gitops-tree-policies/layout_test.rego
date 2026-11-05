@@ -114,6 +114,11 @@ test_the_roots_values_that_are_no_yaml if fx.says(
 	"argocd/apps/values.yaml is no YAML map",
 )
 
+# The two-level root reads envs/ through its own link.
+test_the_link_of_the_two_level_root_passes if count(deny(fx.with_entry(
+	fx.tree_input, "argocd/root/files/envs", {"type": "dir", "link": "../../../envs"},
+))) == 0
+
 # A link to a folder anywhere else hides its files from every rule: refused.
 test_a_platform_that_is_a_link_to_a_folder if fx.says(
 	deny(fx.with_entry(fx.tree_input, "platforms/eks", {"type": "dir", "link": "../base"})),

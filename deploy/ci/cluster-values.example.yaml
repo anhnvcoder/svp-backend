@@ -4,7 +4,7 @@
 # values of each component. deploy/ci/gitops-check.sh renders the platform eks with this file in its place, so every
 # key of the contract is here, each with a value of the right form that names nothing real: a private VPC range
 # (RFC 1918), documentation address ranges for the public ones (RFC 5737), identifiers and an account of zeros, the
-# reserved domain example (RFC 2606).
+# reserved domain example (RFC 2606), and the fake account 111111111111 in the roles' ARNs.
 # A key added to the contract is added here, to that output, to the templates and to the table of the contract.
 name: svp-stg
 region: ap-southeast-1
@@ -24,3 +24,11 @@ mediaDomain: d000000000000.cloudfront.net
 s3Cidrs:
   - 198.51.100.0/24
   - 203.0.113.0/24
+# The IAM role the SecretStore of each namespace assumes (a map, the only key that is one): exactly svp, svp-data,
+# svp-obs, keda and argocd.
+externalSecretsRoles:
+  svp: arn:aws:iam::111111111111:role/svp-stg-external-secrets-svp
+  svp-data: arn:aws:iam::111111111111:role/svp-stg-external-secrets-svp-data
+  svp-obs: arn:aws:iam::111111111111:role/svp-stg-external-secrets-svp-obs
+  keda: arn:aws:iam::111111111111:role/svp-stg-external-secrets-keda
+  argocd: arn:aws:iam::111111111111:role/svp-stg-external-secrets-argocd

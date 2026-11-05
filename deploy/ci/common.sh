@@ -374,6 +374,25 @@ promote_stg_ref() {
   echo "$commit"
 }
 
+# promote_stg_evidence COMMIT: the second guard of the promote to prd, run before anything is written. Fails unless
+# COMMIT of svp-gitops (the full commit promote_stg_ref gave) has commit status argocd/stg in state success, the newest
+# of that context: Argo CD Notifications of stg writes it on the commit stg synced and found Healthy, so only a set stg
+# ran reaches prd, a rollback to an older one included. Reads every status of the commit (all pages, 100 each) with gh
+# and the token of the job (svp-gitops is public); a read that fails, or an answer that is no list of pages, fails too:
+# read as "no status", an outage would look like a set stg never ran.
+promote_stg_evidence() {
+  local pages state
+  pages=$(gh api --paginate --slurp "repos/$gitops_repo/commits/$1/statuses?per_page=100") ||
+    fail "read the commit statuses of ${1:0:12} in $gitops_repo"
+  state=$(jq -er --arg context "argocd/stg" 'if type == "array" and all(.[]; type == "array") then
+    [add // [] | .[] | select(.context == $context)] | max_by(.id) | .state // "" else error("no list of pages") end' \
+    <<<"$pages" 2>/dev/null) || fail "read the commit statuses of ${1:0:12} in $gitops_repo: the answer is no list of pages of statuses"
+  [ -n "$state" ] ||
+    fail "${1:0:12} of $gitops_repo has no commit status argocd/stg: stg never ran that set, so it does not go to prd"
+  [ "$state" = success ] ||
+    fail "the newest commit status argocd/stg of ${1:0:12} in $gitops_repo is $state, not success: only a set stg ran healthy goes to prd"
+}
+
 # promote_open_pr REPO BRANCH APP: prints the number of the open pull request from BRANCH into main of REPO
 # (owner/name) that GitHub App APP opened, or nothing: a fork's or a person's from a branch of that name is never the
 # app's. GitHub's --head matches the bare branch name, so forks' pull requests from such a branch are listed too, and gh

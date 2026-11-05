@@ -145,10 +145,12 @@ flowchart LR
   `actions/attest`, Build L2): **kiểm sau push**, cùng phép đo admission thật của [ADR-0040](adr/0040-sigstore-bundle-actions-attest.md) §6.
 - `-f promote_prd=true [-f stg_ref=<main|SHA đủ 40 hex>]` (chỉ `main`, một mình): job `promote-prd` mở PR `bot/promote-prd` trong
   `svp-gitops` chép giá trị khối `image` của bảy file và ba khoá `charts.yaml` của `envs/stg/` ở commit `stg_ref` (mặc định `main`;
-  commit cũ hơn của `main` là rollback prd; nhánh, SHA ngắn, commit ngoài `main` bị từ chối) sang `envs/prd/`, không auto-merge; job
-  dừng chờ người học duyệt environment `promote-prd` trước khi lấy khoá App (Reject thì không PR nào mở), rồi người học duyệt PR (Code Owner). Không còn
-  bản ghi stg ([ADR-0037](adr/0037-mainpath-standard-tools.md) §6): hai lần duyệt là cổng, `stg_ref`
-  không bảo đảm stg đã chạy và smoke qua với đúng bộ đó.
+  commit cũ hơn của `main` là rollback prd; nhánh, SHA ngắn, commit ngoài `main` bị từ chối) sang `envs/prd/` và ghim
+  `gitopsRevision` của `envs/prd/charts.yaml` vào chính commit đó (prd render `argocd/apps`, `base/`, `platforms/` ở đó), không
+  auto-merge; job dừng chờ người học duyệt environment `promote-prd`, rồi kiểm **bằng chứng stg** trước khi lấy khoá App: commit đó phải
+  có commit status `argocd/stg` mới nhất là `success` (Argo CD Notifications của stg ghi khi đồng bộ xong và Healthy,
+  [ADR-0032](adr/0032-argocd-deploy-status.md)), không thì đỏ và không PR nào mở; Reject environment cũng vậy. Rồi người học duyệt PR
+  (Code Owner). Buổi prd vì vậy cần buổi stg đã đồng bộ đúng commit sẽ promote; rollback là một lượt với `stg_ref` cũ có status đó.
 - `verify.yml` nhận `--ref main` hay nhánh `feat/stage6b-*`, ref khác dừng ở bước đầu; `targets` rỗng là mọi bước, bước dựng
   (`up`, `k8s-gitops-up`) luôn chạy. Không còn input `web_ref`: workflow không clone `svp-frontend`, hai kịch bản chạy image web của bản phát hành stg. Lệnh đầy đủ ở [`reference/ci.md`](reference/ci.md).
 
@@ -170,10 +172,13 @@ flowchart LR
 ```
 
 - Check `gitops-ok` (ruleset `main` của `svp-gitops` bắt buộc, không ai bypass), bản rút gọn của
-  [ADR-0037](adr/0037-mainpath-standard-tools.md) §4–§6: cây, `charts.yaml` (commit chart trên `main` repo này, hai giá trị dẫn xuất),
+  [ADR-0037](adr/0037-mainpath-standard-tools.md) §4–§6: cây, `charts.yaml` (commit chart trên `main` repo này, hai giá trị dẫn xuất;
+  ở prd thêm ghim `gitopsRevision`, phải là commit trên `main` của `svp-gitops` có `argocd/apps`),
   mỗi file image là bản của một nguồn có service đó theo bảng nguồn ở `revision` của env ([ADR-0033](adr/0033-svp-web-repo.md) §3),
   render mọi env × nền tảng × kiến trúc (env nào trên nền tảng nào và nền tảng nào được nêu `svp.localhost` đọc từ khoá `platforms` của
-  `argocd/apps/components.json`), luật trên manifest đã render bằng policy Kyverno CLI (`deploy/ci/gitops-policies/`: `images-pinned`
+  `argocd/apps/components.json`; nền tảng `eks` nhận `cluster` từ `deploy/ci/cluster-values.example.yaml`, thay giá trị GitOps Bridge đặt;
+  cây có `argocd/root` thì render hai tầng như Argo CD, env có ghim render `argocd/apps`, `base/`, `platforms/` ở commit ghim và
+  `envs/<env>/` của PR, chi tiết ở [`reference/ci.md`](reference/ci.md)), luật trên manifest đã render bằng policy Kyverno CLI (`deploy/ci/gitops-policies/`: `images-pinned`
   mọi image ghim digest, `no-lab-hosts`), chữ ký và attestation của digest đổi. Luật trên file của cây (cây, `charts.yaml`, file image,
   lớp nền tảng, luật tác giả dưới đây) là policy conftest ở `deploy/ci/gitops-tree-policies/`; script chỉ dựng input cho chúng từ cây,
   từ git của repo này và từ sự kiện PR. Đã bỏ: PR đổi `envs/prd/` phải bằng một bản ghi stg (bước

@@ -12,8 +12,8 @@
 #
 # Steps that are not a make target of their own:
 #   gitops-env             the overlays of envs/stg of svp-gitops reached the cluster: Application gateway reads
-#                          envs/stg/gateway.yaml after its values, and every running gateway pod has
-#                          SENTRY_ENVIRONMENT=stg (the only variable of the pod spec read)
+#                          envs/stg/gateway.yaml on main (source ref env) after its values, and every running gateway
+#                          pod has SENTRY_ENVIRONMENT=stg (the only variable of the pod spec read)
 #   gitops-external-secrets the cluster's ExternalSecrets are exactly those of files/external-secrets.yaml of chart
 #                          svp-cluster at the commit the cluster runs its charts at (envs/stg/charts.yaml of
 #                          svp-gitops at origin/main of the clone), an entry with enabledBy (off unless the values turn
@@ -85,8 +85,8 @@ gitops_charts_rev() {
 
 # gitops_env: see gitops-env in the header.
 gitops_env() {
-  # shellcheck disable=SC2016 # $values is Argo CD's name of the values source, written as it is
-  local want='$values/envs/stg/gateway.yaml' files pods values
+  # shellcheck disable=SC2016 # $env is Argo CD's name of the source of envs/ on main (level 2 of the root), as it is
+  local want='$env/envs/stg/gateway.yaml' files pods values
   files=$(kc -n argocd get applications.argoproj.io gateway -o json |
     jq -r '[.spec.sources[] | .helm.valueFiles // [] | .[]] | join(" ")') || {
     echo "FAIL  gitops-env: read Application gateway"

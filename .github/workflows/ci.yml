@@ -337,9 +337,10 @@ jobs:
       - run: deploy/ci/verify-release-test.sh
       - run: deploy/ci/changed-services-test.sh
       # The guards of the promote jobs of images.yml, which otherwise run only on main with the app's token (a run older
-      # than stg's charts, a stg_ref off main of svp-gitops), and the list of releases the daily rescan reads in
-      # svp-gitops: throwaway repositories on disk stand for this repository and svp-gitops, a fake gh answers the open
-      # pull requests. bash, git and jq: no network, no token.
+      # than stg's charts, a stg_ref off main of svp-gitops, a stg_ref without stg's commit status success), and the list
+      # of releases the daily rescan reads in svp-gitops: throwaway repositories on disk stand for this repository and
+      # svp-gitops, a fake gh answers the open pull requests and the commit statuses. bash, git and jq: no network, no
+      # token.
       - run: deploy/ci/promote-test.sh
       # The filter of the public artifact of verify.yml and the masks of its job's log, which only the weekly run on main
       # would use otherwise: a pull request that breaks one of their rules fails here. Fake secrets, kubectl, docker and
@@ -399,6 +400,10 @@ jobs:
       # copy of deploy/ with a fake .env; the account checked and every value read before any write, no value in an
       # argument or the output. bash, jq, openssl, perl and helm template: no network, no cluster, no cloud account.
       - run: deploy/k8s/aws-secrets-test.sh
+      # The Job of chart svp-data that creates the topics (deploy/redpanda/create-topics.sh): the replicas of a topic
+      # from TOPIC_REPLICAS, one by default, and a topic that exists left as it is; a fake rpk on PATH logs every call.
+      # bash alone: no network, no broker.
+      - run: deploy/helm/svp-data/files/create-topics-test.sh
       # k6 inspect of every profile in the pinned k6 image, with no network: a script that no longer loads or a profile
       # whose scenarios are malformed is caught here, without the compose stack the load runs need.
       - run: make k6-check

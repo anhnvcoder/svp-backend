@@ -63,6 +63,51 @@ test_the_keys_with_the_working_tree if fx.says(
 	"envs/stg/charts.yaml holds 'collectorConfigSha256 podSecurityVersion replicas revision'",
 )
 
+# pinned(given, env, rev): given with gitopsRevision rev added to envs/<env>/charts.yaml, and the two-level root.
+pinned(given, env, rev) := fx.with_file(
+	with_charts(given, env, sprintf("%s# The commit of svp-gitops prd renders at.\ngitopsRevision: %s\n", [fx.charts_text, rev])),
+	"argocd/root/Chart.yaml",
+	"apiVersion: v2\nname: svp-root\nversion: 0.1.0\n",
+)
+
+gitops_commit := "5d2b1c7e9f0a3b4c5d6e7f8091a2b3c4d5e6f708"
+
+test_prd_pinned_to_a_commit_passes if count(deny(pinned(fx.tree_input, "prd", gitops_commit))) == 0
+
+test_prd_pinned_with_the_working_tree_passes if count(deny(pinned(worktree, "prd", gitops_commit))) == 0
+
+test_stg_pinned if fx.says(
+	deny(pinned(fx.tree_input, "stg", gitops_commit)),
+	"envs/stg/charts.yaml sets gitopsRevision: only prd pins a commit of svp-gitops (the one the promote to prd copied from stg); stg follows main",
+)
+
+test_stg_pinned_names_no_other_rule if count(deny(pinned(fx.tree_input, "stg", gitops_commit))) == 1
+
+test_a_pin_that_is_a_branch if fx.says(
+	deny(pinned(fx.tree_input, "prd", "main")),
+	"envs/prd/charts.yaml: gitopsRevision is 'main', the full commit (40 hex) of svp-gitops at which prd renders argocd/apps, base/ and platforms/",
+)
+
+test_a_short_pin if fx.says(
+	deny(pinned(fx.tree_input, "prd", substring(gitops_commit, 0, 12))),
+	"envs/prd/charts.yaml: gitopsRevision is '5d2b1c7e9f0a', the full commit (40 hex)",
+)
+
+test_a_short_pin_with_the_working_tree if fx.says(
+	deny(pinned(worktree, "prd", substring(gitops_commit, 0, 12))),
+	"envs/prd/charts.yaml: gitopsRevision is '5d2b1c7e9f0a'",
+)
+
+test_a_pin_without_the_two_level_root if fx.says(
+	deny(fx.without(pinned(fx.tree_input, "prd", gitops_commit), "argocd/root")),
+	"envs/prd/charts.yaml sets gitopsRevision, which only the two-level root argocd/root reads: argocd/root/Chart.yaml is missing",
+)
+
+test_a_pin_twice if fx.says(
+	deny(with_charts(pinned(fx.tree_input, "prd", gitops_commit), "prd", sprintf("%sgitopsRevision: %s\ngitopsRevision: %s\n", [fx.charts_text, gitops_commit, gitops_commit]))),
+	"envs/prd/charts.yaml holds 'collectorConfigSha256 gitopsRevision gitopsRevision podSecurityVersion revision': exactly revision, podSecurityVersion and collectorConfigSha256, one line each (and gitopsRevision in envs/prd/charts.yaml alone)",
+)
+
 test_an_empty_revision if fx.says(
 	deny(with_charts(fx.tree_input, "stg", replace(fx.charts_text, fx.revision, ""))),
 	"envs/stg/charts.yaml: revision is '', the full commit (40 hex) of this repository whose charts stg runs",
