@@ -218,7 +218,7 @@ spec:
           . ../lib.sh
           [ -n "$(st argo-paused)" ] || exit 0
           argo_restore || {
-            echo "FAIL  (g) turn the automated sync back on: kubectl --context k3d-svp -n argocd patch applications.argoproj.io <svp-root|kyverno> (syncPolicy of git: automated prune and selfHeal)" >&2
+            echo "FAIL  (g) turn the automated sync back on: kubectl --context k3d-svp -n argocd patch applications.argoproj.io <svp-root|svp-apps|kyverno> (syncPolicy of git: automated prune and selfHeal)" >&2
             exit 1
           }
   - name: g-webhooks-back

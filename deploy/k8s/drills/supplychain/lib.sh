@@ -450,13 +450,13 @@ ephemeral() {
       readOnlyRootFilesystem: true, capabilities: {drop: ["ALL"]}, seccompProfile: {type: "RuntimeDefault"}}}]}}'
 }
 
-# Argo CD on the GitOps cluster (case g): the root svp-root makes Application kyverno with automated sync and selfHeal,
-# and would put back what the case changes. argo_pause turns off the automated sync of the root, then of kyverno, each
-# once no sync of it runs; argo_restore puts the syncPolicy each had back, kyverno first, and checks it is the same as
-# before.
+# Argo CD on the GitOps cluster (case g): the root svp-root makes Application svp-apps, which makes Application kyverno,
+# each with automated sync and selfHeal; any of them would put back what the case changes (svp-apps the syncPolicy of
+# kyverno, kyverno the admission controller). argo_pause turns off the automated sync of each, top down, once no sync of
+# it runs; argo_restore puts the syncPolicy each had back, bottom up, and checks it is the same as before.
 argo_pause() {
   local app deadline
-  for app in svp-root kyverno; do
+  for app in svp-root svp-apps kyverno; do
     kc -n argocd get applications.argoproj.io "$app" -o json | jq -S -c '.spec.syncPolicy' >"$state/syncpolicy-$app" ||
       fail "read the syncPolicy of Application argocd/$app"
     st_set argo-paused "$app $(st argo-paused)"
