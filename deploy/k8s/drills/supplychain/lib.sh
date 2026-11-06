@@ -393,6 +393,7 @@ unsigned_image() {
 
 # bad_image: the image h and i send as "unsigned", with bad_rule the message that refuses it: the unsigned image
 # (unsigned_image; the signature rule), or the dev image of the local registry when there is none (the prefix rule).
+# Case h then calls ephemeral_rule, for the images its target pod runs already.
 bad_image() {
   bad=$(unsigned_image)
   if [ -n "$bad" ]; then
@@ -409,6 +410,35 @@ target_pod() {
     -o jsonpath='{.items[0].metadata.name}') || target=
   [[ -n $target ]] || fail "a Running pod of svp (app.kubernetes.io/component=server) to patch in cases h and i"
   target_container=$(kc -n svp get pod "$target" -o jsonpath='{.spec.containers[0].name}')
+}
+
+# foreign_images POD: the images of pod POD of svp (its containers, init containers and ephemeral containers) that the
+# policy's first check refuses, one per line: not <imagePrefix><name>[:tag]@sha256:<64 hex> of a release source (the
+# dev path's k3d-svp-registry:5111/… images, for one).
+foreign_images() {
+  local images image
+  images=$(kc -n svp get pod "$1" -o json |
+    jq -r '.spec | ((.containers // []) + (.initContainers // []) + (.ephemeralContainers // []))[].image') ||
+    fail "read the images of pod svp/$1"
+  while IFS= read -r image; do
+    [ -n "$image" ] || continue
+    [[ $image =~ ^([a-z0-9._/-]+)(:[A-Za-z0-9._-]+)?@sha256:[0-9a-f]{64}$ ]] &&
+      grep -qxF -- "${BASH_REMATCH[1]}" <<<"$admitted_names" ||
+      printf '%s\n' "$image"
+  done <<<"$images"
+}
+
+# ephemeral_rule (case h, after target_pod and bad_image): the policy reads every image of the pod, the ones it runs
+# already too, and its first check (the prefix rule) comes before the signature rule. When pod target runs an image
+# outside every release source, that check refuses the ephemeral container whatever its image: bad_rule becomes the
+# prefix rule. Case i needs none of this: it sets the image of the pod's one container (a server pod of chart
+# svp-service has no other), so the pod it sends keeps no image of before.
+ephemeral_rule() {
+  local foreign
+  foreign=$(foreign_images "$target") || exit 1
+  [ -n "$foreign" ] || return 0
+  bad_rule="image not allowed in namespace svp"
+  ok "($CASE) pod svp/$target runs images outside every release source ($(paste -sd ' ' - <<<"$foreign")): the prefix rule refuses first"
 }
 
 # ephemeral IMAGE (case h): the patch that adds ephemeral container drill-debug with IMAGE to pod target, as kubectl
