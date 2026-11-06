@@ -213,7 +213,7 @@ Loại tài liệu (Diátaxis): **reference**, tra cứu khi cần một lệnh 
       trước), `make k8s-smoke`, `make drill-k8s-reloader`, `drill-k8s-supplychain` (như kịch bản `gitops`, với `SUPPLYCHAIN_ENFORCE_TMP=1`:
       policy Audit của đường dev sang Enforce cho từng ca rồi trả lại, và ca (k), ca chỉ đường dev chạy được). Input `gitops_ref`: `main`
       (mặc định) hay SHA đủ 40 hex của `svp-gitops`, để chạy với nhánh chưa merge; khác thì job đỏ trước khi dựng gì, không in lại giá trị.
-    - Đã rời `verify.yml`, nay là bài lab `drills/` của `svp-labs` (hoặc script diễn tập compose chạy tay): bản đo một lần của kịch bản `dev-k3d` (RAM, KEDA, PDB, canary, backup), các kịch bản `web-canary`, `k6-cloud-mini`, `chaos`, `velero`, phần còn lại của `compose-obs` (load-local,
+    - Đã rời `verify.yml`, nay là bài lab `drills/` của `svp-labs` (cả script diễn tập compose, [ADR-0050](../adr/0050-bash-to-standard-tools.md)): bản đo một lần của kịch bản `dev-k3d` (RAM, KEDA, PDB, canary, backup), các kịch bản `web-canary`, `k6-cloud-mini`, `chaos`, `velero`, phần còn lại của `compose-obs` (load-local,
       Lighthouse, `drill-duplicates`, `drill-kill-worker`, `drill-upload-cleanup`, `measure-upload`, `drill-alert-to-sentry`, đường quay lại
       `object-store-roundtrip`), bước chờ phát hành và `measure-gitops`, `verify-sample.sh`, `verify-tempo.sh`. Số đo và id lượt chạy ở các ADR 0014, 0017, 0019, 0020, 0021, 0022, 0031. Bản clone
       `svp-frontend`, Node, pnpm, Playwright và image source map không còn trong workflow; `web_ref` không còn là input.

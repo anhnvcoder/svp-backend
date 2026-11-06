@@ -56,7 +56,7 @@ READY / FAILED p50 / p95", "Transcode duration p50 / p95".
    (Postgres của service, object store `s3` với media-worker và video-service). Hết số lần thử thì record vào DLQ
    ([kafka-dlq-records.md](kafka-dlq-records.md)) và lag tự hết.
 3. **Xử lý chậm hơn tốc độ vào** (thường là media-worker): burst upload, máy bận CPU. Số tham chiếu: một video 60 s 1080p tới
-   `READY` 41,5–41,7 s trên compose `core`, p50 54,8 s trên `OBS=lgtm` (`make measure-ready N=5`); trên k3d lúc
+   `READY` 41,5–41,7 s trên compose `core`, p50 54,8 s trên `OBS=lgtm` (`measure-ready N=5` của bài lab `drills/` của `svp-labs`); trên k3d lúc
    máy chạy pin và Low Power Mode một video mất 91–253 s.
 4. **Rebalance liên tục**: pod bị restart lặp (probe, OOM), group không giữ được partition.
 
@@ -98,6 +98,6 @@ phải tới `READY` hay `FAILED` (`make smoke` chứng minh luồng mới chạ
 - Dashboard: `svp-pipeline`.
 - ADR: [ADR-0011](../adr/0011-observability-stage3.md) §8, §11; [ADR-0008](../adr/0008-async-upload-pipeline-stage2a.md)
   (pipeline upload); [ADR-0017](../adr/0017-gitops-capacity-media-worker-max2.md) (media-worker tối đa 2).
-- Diễn tập gần nhất: không có diễn tập giữ lag đủ 2 m/20 m để cảnh báo cháy. `make drill-kill-worker` (worker bị kill giữa
+- Diễn tập gần nhất: không có diễn tập giữ lag đủ 2 m/20 m để cảnh báo cháy. `drill-kill-worker` (worker bị kill giữa
   lúc transcode, video vẫn `READY` đúng một lần) và `drill-k8s-keda N=9` của bài lab `drills/` của `svp-labs` (k3d: lag đỉnh, KEDA scale lên 2 rồi về 1) tạo
   lag ngắn.

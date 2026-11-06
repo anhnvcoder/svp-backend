@@ -1011,7 +1011,7 @@ repo hay diễn tập ứng dụng vì thay đổi này chỉ là ADR; các test
 - Hạn của pool và vòng nền (§11): `internal/pgpool/`, `internal/kafkax/consumer.go`, `internal/outbox/`,
   `services/engagement-service/internal/server/`, `services/feed-service/`, `services/video-service/internal/server/`,
   `services/video-service/migrations/00004_add_processing_at.sql`, `deploy/redpanda/create-topics.sh`.
-- Diễn tập giai đoạn 3: `deploy/compose/drills/alert-to-sentry.sh`, `deploy/compose/drills/obs-threats.sh`,
+- Diễn tập giai đoạn 3: [`deploy/compose/drills/alert-to-sentry.sh`](https://github.com/anhnvcoder/svp-labs/blob/main/drills/svp-backend/deploy/compose/drills/alert-to-sentry.sh) (bản đóng băng ở bài lab `drills/` của `svp-labs`, [ADR-0050](../0050-bash-to-standard-tools.md)), `deploy/compose/drills/obs-threats.sh`,
   `deploy/compose/drills/common.sh`.
 - Trong cluster k3d: `deploy/helm/svp-observability/` (`templates/glitchtip.yaml`, `values.yaml`), `deploy/helm/svp-service/values.yaml`,
   `deploy/k8s/values/kube-prometheus-stack.yaml`, `deploy/k8s/secrets.sh`.

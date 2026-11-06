@@ -96,5 +96,5 @@ Tuổi của vòng quay về dưới một chu kỳ, cảnh báo hết ở lần
 - ADR: [ADR-0011](../adr/0011-observability-stage3.md) §8 (ngưỡng từng vòng), §11 (hạn của pool và vòng nền);
   [ADR-0003](../adr/0003-async-events-outbox.md) (outbox), [ADR-0010](../adr/0010-redis-ratelimit-cache-resilience-stage2c.md) §5
   (job dọn upload).
-- Diễn tập: chưa có diễn tập làm vòng đứng đủ lâu để cảnh báo cháy. `make drill-upload-cleanup` chạy `upload-sweep` với hạn
+- Diễn tập: chưa có diễn tập làm vòng đứng đủ lâu để cảnh báo cháy. `drill-upload-cleanup` của bài lab `drills/` của `svp-labs` chạy `upload-sweep` với hạn
   ngắn (video bỏ dở `FAILED`, object bị xoá) để kiểm vòng còn làm việc.

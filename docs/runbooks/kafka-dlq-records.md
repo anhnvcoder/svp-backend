@@ -69,7 +69,7 @@ Dòng log có `trace_id`: mở trace đó trong Grafana Explore → Tempo để 
 ## Khôi phục và xác nhận
 
 Xử lý lại record đã bỏ qua, **sau khi đã sửa nguyên nhân** và chỉ khi người trực quyết: handler của dự án idempotent (diễn
-tập `make drill-duplicates`, `make drill-duplicates-feed` phát lại event mà không gì đổi), nên có thể đưa offset của group về
+tập `drill-duplicates`, `drill-duplicates-feed` của bài lab `drills/` của `svp-labs` phát lại event mà không gì đổi), nên có thể đưa offset của group về
 offset gốc ghi trong header/log (`dlq-topic`, `dlq-partition`, `dlq-offset`). `rpk group seek` chỉ chạy khi group không có
 member, và phát lại **mọi** record từ offset đó trên partition đó:
 
@@ -155,5 +155,5 @@ trong feed), cảnh báo hết sau 10 phút.
 - Dashboard: `svp-pipeline` (DLQ records, consumer lag).
 - ADR: [ADR-0003](../adr/0003-async-events-outbox.md) (DLQ `<topic>.dlq`), [ADR-0011](../adr/0011-observability-stage3.md)
   §8 (rule), §11 (hạn ghi DLQ).
-- Diễn tập tái hiện: chưa có diễn tập đưa record vào DLQ. Phát lại an toàn: `make drill-duplicates`,
-  `make drill-duplicates-feed`.
+- Diễn tập tái hiện: chưa có diễn tập đưa record vào DLQ. Phát lại an toàn: `drill-duplicates`,
+  `drill-duplicates-feed` của bài lab `drills/` của `svp-labs`.

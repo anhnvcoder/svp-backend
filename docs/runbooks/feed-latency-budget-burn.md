@@ -68,10 +68,9 @@ dài. `svp-use`: pool Postgres (chờ kết nối), pool Redis.
 
 ```sh
 curl -sG "$PROM/api/v1/query" --data-urlencode 'query=slo:sli_error:ratio_rate5m{sloth_slo="feed-latency"}' | jq -c '.data.result[] | .value[1]'
-make measure-explore-cache N=100    # compose: p50/p95 hai sóng, số lần đọc Postgres (LOCAL LAB ONLY: xoá svp:feed:explore:* ở db 14)
 ```
 
-Tỉ lệ request chậm 5 phút dưới 1% và page hết trong tối đa ~30 phút. Số tham chiếu `measure-explore-cache` (compose `core`):
+Tỉ lệ request chậm 5 phút dưới 1% và page hết trong tối đa ~30 phút. Số tham chiếu của bài đo `measure-explore-cache` (bài lab `drills/` của `svp-labs`, compose `core`):
 sóng 1 p50 181,3 / p95 203,0 ms, sóng 2 p50 97,1 / p95 118,6 ms.
 
 ## Leo thang
@@ -86,5 +85,5 @@ sóng 1 p50 181,3 / p95 203,0 ms, sóng 2 p50 97,1 / p95 118,6 ms.
 - Dashboard: `svp-slo`, `svp-red`, `svp-use`.
 - ADR: [ADR-0011](../adr/0011-observability-stage3.md) §8, [ADR-0009](../adr/0009-engagement-feed-stage2b.md) (feed, hạn
   `GetStats` 100 ms), [ADR-0010](../adr/0010-redis-ratelimit-cache-resilience-stage2c.md) §3–4.
-- Diễn tập, đo: `make measure-explore-cache N=100`; tải theo SLO `make load-local` (k6, ADR-0020 §2). Chưa có diễn tập làm cảnh
+- Diễn tập, đo: `measure-explore-cache N=100` của bài lab `drills/` của `svp-labs`; tải theo SLO `make load-local` (k6, ADR-0020 §2). Chưa có diễn tập làm cảnh
   báo này cháy.

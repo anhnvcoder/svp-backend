@@ -56,7 +56,7 @@ lag. Log của media-worker và video-service có `video_id`, `trace_id` (UP-8).
 3. **Transcode chậm vì CPU**: máy chạy pin, Low Power Mode, nhiệt; k3d trên pin một video 60 s 1080p mất 91–253 s thay vì
    ~45–64 s.
 4. **media-worker chết hay restart giữa chừng**: video được worker khác (hay lần chạy sau) làm lại, chậm thêm một lần transcode
-   (diễn tập `make drill-kill-worker`: `READY` 80 s sau khi worker khởi động lại).
+   (diễn tập `drill-kill-worker` của bài lab `drills/` của `svp-labs`: `READY` 80 s sau khi worker khởi động lại).
 5. **video-service không đọc `media.transcodes.v1`**: worker xong nhưng video không đổi trạng thái; lag group `video-service`
    ([kafka-consumer-lag-high.md](kafka-consumer-lag-high.md)).
 
@@ -72,11 +72,10 @@ lag. Log của media-worker và video-service có `video_id`, `trace_id` (UP-8).
 ```sh
 make smoke                       # compose: một video tới READY và phát HLS (LOCAL LAB ONLY)
 make k8s-smoke                   # k3d
-make measure-ready N=5           # compose: p50, p95, max CompleteUpload -> READY, CPU/RAM worker
 ```
 
 Lag media-worker về 0, video kẹt tới `READY` (hay `FAILED` có lý do), page hết trong tối đa ~30 phút. Số tham chiếu
-`measure-ready N=5`: 41,5–41,7 s trên `core`, p50 54,8 s, p95 64,2 s trên `OBS=lgtm`.
+`measure-ready N=5` (bài lab `drills/` của `svp-labs`): 41,5–41,7 s trên `core`, p50 54,8 s, p95 64,2 s trên `OBS=lgtm`.
 
 ## Leo thang
 
@@ -89,4 +88,4 @@ Lag media-worker về 0, video kẹt tới `READY` (hay `FAILED` có lý do), pa
 - Dashboard: `svp-slo`, `svp-pipeline`.
 - ADR: [ADR-0011](../adr/0011-observability-stage3.md) §8, [ADR-0008](../adr/0008-async-upload-pipeline-stage2a.md) (pipeline
   upload, transcode), [ADR-0017](../adr/0017-gitops-capacity-media-worker-max2.md).
-- Diễn tập, đo: `make measure-ready N=5`, `make drill-kill-worker`, `make drill-duplicates`; k3d `drill-k8s-keda N=9` của bài lab `drills/` của `svp-labs`.
+- Diễn tập, đo: compose `measure-ready N=5`, `drill-kill-worker`, `drill-duplicates`, k3d `drill-k8s-keda N=9` của bài lab `drills/` của `svp-labs`.

@@ -186,7 +186,7 @@ Chọn **B**. Ngoài phần A (ghi lại ở Hệ quả): job dọn upload bỏ 
 - Outbox một relay (§7): `internal/outbox/`, `services/video-service/migrations/00002_create_outbox.sql`.
 - media-worker, HLS và ffmpeg (§9, §10): `services/media-worker/` (`cmd/media-worker/main.go`, `internal/worker/`, `internal/transcode/`), `deploy/docker/media-worker.Dockerfile`; trên k3d `deploy/k8s/values/services/media-worker.yaml`, `deploy/k8s/drills/keda.sh`.
 - Cấu hình mới, cổng và RAM (§11, §12): `services/video-service/cmd/video-service/main.go`, `services/video-service/internal/server/server.go`, `deploy/compose/compose.yaml`.
-- Diễn tập: `deploy/compose/drills/kill-worker.sh`, `deploy/compose/drills/duplicate-events.sh`, `deploy/compose/drills/measure-ready.sh`.
+- Diễn tập (bản đóng băng ở bài lab `drills/` của `svp-labs`, [0050](0050-bash-to-standard-tools.md)): [`deploy/compose/drills/kill-worker.sh`](https://github.com/anhnvcoder/svp-labs/blob/main/drills/svp-backend/deploy/compose/drills/kill-worker.sh), [`deploy/compose/drills/duplicate-events.sh`](https://github.com/anhnvcoder/svp-labs/blob/main/drills/svp-backend/deploy/compose/drills/duplicate-events.sh), [`deploy/compose/drills/measure-ready.sh`](https://github.com/anhnvcoder/svp-labs/blob/main/drills/svp-backend/deploy/compose/drills/measure-ready.sh).
 
 ## Thông tin thêm
 

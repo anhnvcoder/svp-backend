@@ -20,8 +20,8 @@
 #          object store's S3 API), 19092 (redpanda), 3000 (lgtm: Grafana), 8000 (glitchtip) and 9093
 #          (alertmanager), each to the same container port (every binding on the loopback), so the
 #          Collector, Prometheus, Tempo, Loki and Pyroscope publish nothing;
-#   RL-2   the gateway recreated with REDIS_URL on an unresolvable .invalid host (as in
-#          drill-rate-limit; the native Redis is never stopped): after three logins Prometheus has
+#   RL-2   the gateway recreated with REDIS_URL on an unresolvable .invalid host (the native
+#          Redis is never stopped): after three logins Prometheus has
 #          svp_ratelimit_decisions_total{store="fallback"} > 0 for the new gateway instance, and
 #          Alertmanager a new RateLimitFallbackActive alert within 4 minutes of the first login;
 #          the gateway is recreated with its default settings;
@@ -57,7 +57,7 @@ base=${1:-http://127.0.0.1:8080}
 # shellcheck source=deploy/compose/drills/common.sh
 source "$(dirname "$0")/common.sh"
 
-# The Redis-down setting of drill-rate-limit: .invalid never resolves (RFC 2606).
+# The Redis-down setting of the gateway: .invalid never resolves (RFC 2606).
 redis_down_url=redis://redis-down.invalid:6379/10
 fallback_alert_timeout=240
 jwt8_5xx='http_server_request_duration_seconds_count{service_name="gateway",http_route=~"/auth/login|/me/following/.+",http_response_status_code=~"5.."}'
@@ -376,7 +376,7 @@ form_fields() {
 # JavaScript does, with the fields of FIELDS_FILE (a JSON object; the values reach curl in a private config file, never
 # on a command line) and the app's own origin; the answer goes to $work/form.out and form_status is set to the HTTP
 # status: 303 when the action redirects (signed in), 200 when the form comes back with an error. Sets a variable
-# instead of printing, like key_records: a fail inside $(...) would only end the subshell.
+# instead of printing, like prom_query: a fail inside $(...) would only end the subshell.
 web_form() {
   local status
   status=$(web_get "$1" "$work/form.html")

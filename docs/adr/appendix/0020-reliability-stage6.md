@@ -1277,7 +1277,7 @@ trước mục tiêu) ([40145677985](https://github.com/anhnvcoder/svp-backend/a
   `charts.json`), target `cloud-check` của `deploy/k8s/k8s.mk`, nhóm chart cloud của `renovate.json`.
 - Probe của chart `svp-service` (§10): `deploy/helm/svp-service/templates/deployment.yaml`.
 - Thử lại kết nối Postgres (§11): `internal/pgretry/`, `internal/pgpool/`, `internal/dbmigrate/`.
-- Game day (§13): `deploy/compose/drills/gameday.sh`, `deploy/compose/compose.mk`.
+- Game day (§13; bản đóng băng ở bài lab `drills/` của `svp-labs`, [ADR-0050](../0050-bash-to-standard-tools.md)): [`deploy/compose/drills/gameday.sh`](https://github.com/anhnvcoder/svp-labs/blob/main/drills/svp-backend/deploy/compose/drills/gameday.sh), [`deploy/compose/compose.mk`](https://github.com/anhnvcoder/svp-labs/blob/main/drills/svp-backend/deploy/compose/compose.mk) (trích đoạn target).
 - Job `stack` của CI (§15): `.github/workflows/ci.yml`, target `ci-bridge-check` của `Makefile`.
 
 ## Chi tiết rút khỏi ADR
