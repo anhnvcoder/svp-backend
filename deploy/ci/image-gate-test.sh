@@ -1,21 +1,9 @@
 #!/usr/bin/env bash
 # Tests of the gates of the image pipeline with the real tools: the steps of .github/actions/image-leg/action.yml, read
-# from that file with the pinned yq (never copied here), run as the runner runs a step of shell bash, with the trivy,
-# syft, grype and conftest the Makefile pins, on the fixtures of deploy/ci/testdata/image-gate/ (trivy reports, an SPDX
-# document, a tar that is no image). No image of a service is built, no registry is logged in to, no vulnerability DB
-# is downloaded: trivy convert reads a report with no DB, and grype runs with its network cut, as when its DB cannot be
-# fetched. Checked, each a negative case of the pipeline's gates beside its control:
-#   - trivy gate: a CRITICAL blocks, unless allow-critical (drill-vulnerable); an entry of .trivyignore.yaml in force
-#     covers it, an expired one no longer does; a HIGH secret blocks (no --severity on the secret pass), with
-#     allow-critical too, and only its rule, file and line are printed; a report that is not trivy's, or one trivy
-#     cannot read (an exit code that is neither 0 nor 5), is no pass;
-#   - grype: no DB it can fetch (exit 1) is no pass, with allow-critical too;
-#   - syft: a tar it cannot read fails the leg; a real image tar gives an SPDX document;
-#   - the rules of the ignore files the leg checks first: an expired entry blocks;
-#   - no docker call of these steps gets DOCKER_DEFAULT_PLATFORM: each step runs with it set to linux/amd64, as the shell
-#     of this machine sets it for other projects, and a docker first on PATH refuses a call that still carries it.
-# Runs on macOS and Linux with Docker (the pinned images pulled once).
-#
+# with the pinned yq and run as the runner runs them, on the fixtures of deploy/ci/testdata/image-gate/. No image is
+# built, no registry logged in to, no DB downloaded: trivy convert reads a report with no DB, and grype runs with its
+# network cut, as when its DB cannot be fetched. Runs on macOS and Linux with Docker (the pinned images pulled once).
+
 # Usage, from anywhere: deploy/ci/image-gate-test.sh
 set -euo pipefail
 

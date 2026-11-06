@@ -1,13 +1,7 @@
 #!/usr/bin/env bash
-# Tests for deploy/ci/ghcr-digest.sh. Each case sources the script in a subshell and replaces ghcr_oras (the pinned ORAS
-# against GHCR) with a fake that serves made-up answers, so nothing reaches the network. A throwaway git repository stands for the code
-# repository, with a build commit and a later one. Checked:
-#   - newest picks the tag of the newest commit of the clone, past tags that are no commit of it, and prints the
-#     digest oras resolve answers for it;
-#   - an answer of oras resolve that is no sha256 digest fails;
-#   - newest of a name that is no image name fails.
-# Runs on macOS and Linux: no network, no Docker, no cluster.
-#
+# Tests for deploy/ci/ghcr-digest.sh: each case sources the script in a subshell with a fake ghcr_oras (the pinned ORAS
+# against GHCR) and a throwaway git repository for the code repository. Runs on macOS and Linux: no network, no Docker.
+
 # Usage, from anywhere: deploy/ci/ghcr-digest-test.sh
 set -euo pipefail
 

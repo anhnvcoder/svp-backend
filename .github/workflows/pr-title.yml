@@ -1,11 +1,9 @@
-# The title of every pull request follows Conventional Commits 1.0.0 (https://www.conventionalcommits.org/en/v1.0.0/;
-# ADR-0041 (h)): main takes squash merges only, and the title becomes the commit's title. The grammar, not a list of
-# scopes, so the bots' titles pass as they are (chore(stg): and chore(prd): of the promote app, chore(deps): and
-# fix(deps): of Renovate), and so does GitHub's Revert button (Revert "<title>"). The same pattern and test set run in
-# the four repositories with CI (svp-backend, svp-frontend, svp-gitops, svp-infra).
-#
-# A workflow of its own, not a job of ci.yml: editing a title runs this alone, not the whole CI. No permission, no
-# checkout, no code of the pull request: the title reaches the script through env only, never through ${{ }} in run:.
+# Pull request titles follow Conventional Commits 1.0.0: squash merges only, so the title is the commit's title.
+# The grammar, not a list of scopes, so bot titles pass as they are:
+# chore(stg):, chore(prd):, chore(deps):, fix(deps):, and GitHub's Revert button (Revert "<title>").
+# The title reaches the script through env only, never through ${{ }} in run:; no permission, no checkout.
+# The same pattern and test set run in the four repositories with CI.
+# Design notes: docs/ci-cd.md.
 name: pr-title
 
 on:
@@ -28,7 +26,7 @@ jobs:
           TITLE: ${{ github.event.pull_request.title }}
         run: |
           re='^(feat|fix|chore|docs|refactor|test|ci|build|perf|revert)(\([^)]+\))?!?: .+|^Revert ".+"$'
-          # The shared test set of ADR-0041 (h) first: a pattern broken here fails every pull request, not a lucky few.
+          # Test set first: a pattern broken here fails every pull request, not a lucky few.
           good=(
             'feat(feed): thêm phân trang explore'
             'feat(api)!: bỏ trường cũ'

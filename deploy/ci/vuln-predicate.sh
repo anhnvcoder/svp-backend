@@ -1,25 +1,15 @@
 #!/usr/bin/env bash
 # vuln-predicate.sh [--allow-critical] OUT DIR DIR: writes to OUT the predicate of the `vuln` attestation of a
-# multi-arch index, from the two scans that gated its two
-# manifests. Shared by the build (after the gate) and the daily rescan.
-#
-# Each DIR describes one manifest of the index (a leg artifact of .github/actions/image-leg, or the rescan's):
-#   platform       linux/amd64 or linux/arm64 (one DIR each)
-#   digest         sha256:<64 hex> of the manifest inside the signed index
-#   config-digest  sha256:<64 hex> of its config; must equal Metadata.ImageID of the report
-#   trivy.json     the whole trivy report of that scan (after .trivyignore.yaml)
-#   scan-started, scan-finished, db-updated-at   RFC 3339 UTC
-#
-# The contract Kyverno reads (paths from the in-toto statement): predicate.scanner.result.platforms is exactly
-# [linux/amd64, linux/arm64] in that order, each {platform, digest, report}; a CRITICAL anywhere in
-# predicate.scanner.result.platforms[].report.Results[].Vulnerabilities[].Severity is refused;
-# predicate.metadata.scanFinishedOn is when the OLDER of the two scans finished, so the attestation is as old as its
-# oldest result; it must be RFC 3339 (cosign parses it into CosignVulnPredicate and fails otherwise).
-#
-# Exit 0: OUT written. Exit 2: an input breaks the contract (missing or extra platform, bad digest, ImageID that does
-# not match, not a trivy report, bad time); nothing written. Exit 3: a report lists CRITICAL; nothing written, unless
-# --allow-critical, which writes OUT with the real findings and exits 0 (only for the rescan, which then fails its job
-# after attesting, and for the drill image drill-vulnerable).
+# multi-arch index, from the two scans that gated its manifests; shared by the build (after the gate) and the daily
+# rescan. Each DIR holds one manifest: platform, digest, config-digest (equal to Metadata.ImageID of trivy.json),
+# trivy.json, scan-started, scan-finished and db-updated-at (RFC 3339 UTC).
+
+# Kyverno reads predicate.scanner.result.platforms: exactly [linux/amd64, linux/arm64] in that order; a CRITICAL in any
+# report is refused; scanFinishedOn is when the older scan finished, so the attestation is as old as its oldest result;
+# it must be RFC 3339 (cosign parses it and fails otherwise).
+
+# Exit 0: OUT written. 2: an input breaks the contract. 3: a CRITICAL; nothing written, unless --allow-critical (the
+# rescan, which then fails its job after attesting, and drill-vulnerable).
 set -euo pipefail
 
 # shellcheck source=deploy/ci/common.sh

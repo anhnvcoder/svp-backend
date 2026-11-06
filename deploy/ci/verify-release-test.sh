@@ -1,29 +1,9 @@
 #!/usr/bin/env bash
-# Tests for deploy/ci/verify-release.sh, for deploy/ci/values-check.sh, which runs it on the releases of a pull request
-# of svp-gitops, and for the release sources in deploy/ci/common.sh. A fake cosign first on PATH answers from fixtures,
-# on a tree laid out as svp-gitops beside a throwaway checkout of what the scripts read; the variables of a GitHub
-# Actions job are made up. Checked:
-#   - verify-release.sh: without requireProvenance in the policy's values at the commit charts.yaml pins or in the
-#     overlays only the signature and the vuln attestation are asked for; with it on (in the values at that commit, in
-#     the overlay of an environment, at a commit of the tree with --rev, for one environment with --env, in the clone
-#     gitops_dir finds) the release also needs exactly one provenance attestation whose builder.id, workflow repository
-#     and ref match the policy and whose commit the certificate names, each fault with its own message; an overlay
-#     holding anything else, and a charts.yaml naming no commit, are refused; a provenance cosign cannot read (registry
-#     out of reach, or a first call that failed and a second that verified) asks to check again, never for a new
-#     release; the ok line it prints is the one tag_provenance_mismatch of common.sh reads (image.tag against the
-#     provenance's commit); an image is verified with the identity of the release source whose prefix it is under, in
-#     the table at the commit an environment's charts.yaml pins (a commit from before the table stops the check, naming
-#     it), a service its source does not publish is refused before cosign, and every environment must admit it without
-#     --env;
-#   - the release sources in common.sh: sign_identity and provenance_source without a source name are backend's,
-#     oci_labels names its source's repository and the commit of SVP_CODE_ROOT, and drill_images is drillImages of
-#     source backend;
-#   - values-check.sh --gitops on a pull request of that tree: one that turns provenance on in an overlay, or moves an
-#     environment's charts.yaml, checks every release of that environment and none of the other; one of an image file
-#     checks that file; one of another file checks none; a failure names the dispatch that refreshes the attestations,
-#     in the log and in the job's summary.
-# Runs on macOS and Linux: no network, no Docker, no cluster.
-#
+# Tests for verify-release.sh, for values-check.sh (which runs it on the releases of a pull request of svp-gitops) and
+# for the release sources in common.sh. A fake cosign first on PATH answers from fixtures, on a tree laid out as
+# svp-gitops beside a throwaway checkout of what the scripts read: no network, no Docker, no cluster; runs on macOS
+# and Linux.
+
 # Usage, from anywhere: deploy/ci/verify-release-test.sh
 set -euo pipefail
 

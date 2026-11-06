@@ -1,28 +1,8 @@
 #!/usr/bin/env bash
-# Tests for deploy/ci/contract.sh. Everything runs in a throwaway checkout (deploy/ci/, deploy/k8s/lib.sh, the policy's
-# values, the Makefile's pins and the gateway's spec, in a git repository of its own), every script under `env -i` so
-# no variable of the job running the test (a CI job is one) reaches it.
-#
-# check, with the pinned oasdiff (Docker, --network none; the image is pulled once if missing):
-#   - nothing to compare: the spec unchanged, a base of all zeros (a push that created the branch), a base without the
-#     spec: exit 0;
-#   - a description changed: red without a raise, green with a patch;
-#   - an operation added: red with only a patch, green with a minor;
-#   - an operation removed (breaking): red with the version kept or only a minor, green with a major; below 1.0.0
-#     green with a minor;
-#   - the version lowered, or not MAJOR.MINOR.PATCH: red; a base that is no commit: red.
-# publish, against a fake registry (a fake docker answers the ORAS commands from files) and a fake cosign that records
-# what it signs, so nothing reaches GHCR or Sigstore. The context of a CI run is the variables a GitHub Actions job of
-# the workflow it names would have; a run "local" has none of them, as on a machine:
-#   - a dry run of a version not published: says it would push, pushes and signs nothing, sends no credentials;
-#   - a run that is not the signing workflow (a machine, another workflow): nothing pushed;
-#   - the signing workflow: pushed with the artifact type, one OpenAPI layer and the source annotation, with the
-#     credentials of docker login, then signed in the older format on the pushed digest;
-#   - the same again: nothing pushed, nothing signed; the version published but not signed: signed, not pushed again;
-#   - the same version with other content: refused, the registry and the signatures unchanged (also as a dry run);
-#   - the tag holding something that is no contract, or a registry out of reach: refused, nothing pushed.
-# Runs on macOS and Linux; needs Docker for the check cases.
-#
+# Tests for deploy/ci/contract.sh in a throwaway checkout of its own, every script under env -i so no variable of a CI
+# job reaches it. check runs the pinned oasdiff in Docker (--network none); publish runs against a fake docker and a
+# fake cosign: nothing reaches GHCR or Sigstore. Needs Docker for the check cases; runs on macOS and Linux.
+
 # Usage, from anywhere: deploy/ci/contract-test.sh
 set -euo pipefail
 

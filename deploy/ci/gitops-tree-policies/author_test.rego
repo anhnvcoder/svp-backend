@@ -20,7 +20,6 @@ outside := "the bot of a release source: it changes envs/<env>/images/<service>.
 
 test_no_pull_request_passes if count(deny(fx.tree_input)) == 0
 
-# What each bot promotes passes.
 test_the_bot_of_svp_frontend_moves_web_of_stg if count(by(web_bot, [["M", "envs/stg/images/web.yaml"]])) == 0
 
 test_the_bot_of_svp_frontend_moves_web_of_prd if count(by(web_bot, [["M", "envs/prd/images/web.yaml"]])) == 0
@@ -48,13 +47,11 @@ test_a_person_pushes_onto_the_pull_request_of_a_bot if count(deny(fx.pull_reques
 	[["M", "envs/stg/images/gateway.yaml"]],
 ))) == 0
 
-# A person pushing onto a bot's pull request does not lift the bot's rule.
 test_a_person_pushing_onto_the_pull_request_of_a_bot_is_held_to_the_bots_rule if fx.says(
 	deny(fx.pull_request(fx.tree_input, web_bot, "anhnvcoder", [["M", "envs/stg/images/gateway.yaml"]])),
 	"envs/stg/images/gateway.yaml: changed by svp-web-promoter[bot], the bot of release source web",
 )
 
-# What a bot does not promote fails.
 test_the_bot_of_svp_frontend_changes_gateway_of_stg if fx.says(
 	by(web_bot, [["M", "envs/stg/images/gateway.yaml"]]),
 	"envs/stg/images/gateway.yaml: changed by svp-web-promoter[bot], the bot of release source web, which publishes web: it changes the image files of those services only",
@@ -141,7 +138,6 @@ test_every_file_is_named if count(by(web_bot, [
 	["M", "base/tempo.yaml"],
 ])) == 2
 
-# Which bot pushed the commit checked.
 test_a_bot_pushes_onto_the_pull_request_of_another_bot if fx.says(
 	deny(fx.pull_request(fx.tree_input, backend_bot, web_bot, [["M", "envs/stg/images/web.yaml"]])),
 	"the commit checked was pushed by svp-web-promoter[bot] onto the pull request of svp-gitops-promoter[bot]: a bot pushes onto its own pull requests only, since the files allowed are the author's",
@@ -157,7 +153,6 @@ test_a_bot_pushes_onto_the_pull_request_of_a_person if fx.says(
 	"the commit checked was pushed by renovate[bot] onto the pull request of anhnvcoder",
 )
 
-# The tables the rule is judged with.
 test_a_table_that_cannot_be_read if fx.says(
 	deny(fx.pull_request(json.remove(fx.tree_input, ["sources/prd"]), web_bot, web_bot, [["M", "envs/stg/images/web.yaml"]])),
 	"the release sources of the charts of envs/prd cannot be read (above), so neither can which files svp-web-promoter[bot] may change",

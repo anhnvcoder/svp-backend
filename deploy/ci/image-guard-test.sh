@@ -1,34 +1,9 @@
 #!/usr/bin/env bash
-# Tests of the guards of the image pipeline (deploy/ci/image-guard.sh) and of the steps of the composite actions under
-# .github/actions/image-*/ around them, in a throwaway copy of what they read (deploy/ci/, deploy/k8s/lib.sh, the
-# policy's release sources, the actions) and a checkout of svp-frontend beside it; the variables of a GitHub Actions
-# job are made up. The steps are read from the action files with the pinned yq (never copied here) and run as the
-# runner runs a step of shell bash, each given only keys of its env:. A fake docker first on PATH stands in for the
-# daemon, the registry (manifests read back, ORAS listing the Sigstore bundle referrers of a digest and reading the
-# bundles), grype and the pinned cosign, which records each call and adds a referrer for each signature and
-# attestation; there is no cosign on PATH. Every run has DOCKER_DEFAULT_PLATFORM=linux/amd64, as the shell of this machine sets it for other projects, and
-# the fake docker refuses a call that still carries it. Checked:
-#   - every step of the three actions that calls docker unsets DOCKER_DEFAULT_PLATFORM first, and no docker call of a
-#     step or guard run here gets it;
-#   - leg: the build of each kind of image (service, media-worker, drill images, svp-frontend's web); an image the
-#     run's release source does not publish, a tree that is not the run's commit, another repository's tree without what
-#     its build and gates read, a repository that is no release source, or another architecture than the host's, is
-#     refused before docker builds anything; only drill-vulnerable gets allow-critical;
-#   - grype (step grype): --fail-on critical and the tree's .grype.yaml; a Critical blocks unless allow-critical; a
-#     grype that fails is no pass; one summary line, the Critical under it, never the report;
-#   - push: exactly the scanned image is pushed, and a manifest read back with another config (or no single manifest), a
-#     local image tagged anew since the scan, or a leg of another platform fails the leg;
-#   - index: exactly the two scanned manifests of the image's own repository, one per platform; a missing leg, a leg of
-#     another repository or platform, or an index read back with other digests fails;
-#   - sign: what sign-image.sh did, now guard and step: signature, SBOM on each manifest, vuln on the index, all
-#     bundles, in that order, by the pinned cosign with the credentials of docker login read-only and the job's OIDC
-#     token request by name only, and provenance=true for actions/attest; run again: nothing written twice, cosign's
-#     bundles listed without annotation read for their type, and a bundle that cannot be read writes nothing; a digest
-#     in cosign's older format or a registry out of reach: nothing written; a run on a machine, of another workflow, or of
-#     another source's repository or prefix: nothing written; a CRITICAL is signed only for drill-vulnerable; drill
-#     images get no provenance.
-# Runs on macOS and Linux: Docker only for the pinned yq; no network, no cluster.
-#
+# Tests of deploy/ci/image-guard.sh and of the steps of the composite actions image-* around it, in a throwaway copy of
+# what they read; the steps are read from the action files with the pinned yq, never copied. A fake docker first on PATH
+# stands in for the daemon, the registry, grype and cosign, and refuses a call with DOCKER_DEFAULT_PLATFORM, which every
+# run sets as the shell of this machine does. Runs on macOS and Linux: Docker only for the pinned yq; no network.
+
 # Usage, from anywhere: deploy/ci/image-guard-test.sh
 set -euo pipefail
 
@@ -131,16 +106,13 @@ cosign_image=fake.invalid/cosign@sha256:$(printf '5%.0s' $(seq 64))
 tools=(TRIVY_IMAGE=fake.invalid/trivy@sha256:1 SYFT_IMAGE=fake.invalid/syft@sha256:2 GRYPE_IMAGE=fake.invalid/grype@sha256:3
   COSIGN_IMAGE="$cosign_image")
 
-# The fakes. docker: the host's architecture (FAKE_ARCH, amd64), the id of a local image (FAKE_IMAGE_ID), login, tag,
-# push and imagetools create succeed, imagetools inspect --raw answers FAKE_RAW; grype on the SBOM writes FAKE_GRYPE_JSON
-# and exits FAKE_GRYPE; ORAS lists the referrers of a fake registry under bundles/ (a folder per subject digest holding
-# one file per bundle referrer, named by its digest, holding its predicate type; <hex>.sig for cosign's older format),
-# and is out of reach with FAKE_ORAS_DOWN; the annotation of the type only on the bundles of the types in FAKE_ANNOTATED
-# (as GHCR lists them: the provenance of actions/attest only; all: every one), the bundles themselves the files of
-# testdata/sigstore-bundle/ (FAKE_BUNDLE_FILE picks one for all, FAKE_BLOB_DOWN makes them unreadable, and as in
-# deploy/ci/sign-image-test.sh); a run of the cosign image runs the fake cosign with what follows the image.
-# Every call in docker.log; a call with DOCKER_DEFAULT_PLATFORM set also in platform.log, and refused. cosign: logs each
-# call and adds a referrer for each sign and attest; keeps the last predicate of each type.
+# The fakes. docker: the host's architecture, login, tag, push and imagetools create succeed; imagetools inspect --raw
+# answers FAKE_RAW; grype on the SBOM writes FAKE_GRYPE_JSON and exits FAKE_GRYPE; every call goes to docker.log, one
+# with DOCKER_DEFAULT_PLATFORM set also to platform.log, and is refused. cosign: logs each call, adds a referrer.
+
+# ORAS lists the referrers of a fake registry under bundles/ (a folder per subject digest, one file per bundle, holding
+# its predicate type; <hex>.sig for cosign's older format), with the annotation of the type only on the types in
+# FAKE_ANNOTATED, as GHCR lists them (the provenance of actions/attest only); the bundles are testdata/sigstore-bundle/.
 oras_image=fake.invalid/oras@sha256:$(printf '0%.0s' $(seq 64))
 fb=$work/bundles
 mkdir -p "$fb"

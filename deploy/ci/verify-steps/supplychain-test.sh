@@ -1,15 +1,7 @@
 #!/usr/bin/env bash
-# Tests for deploy/ci/verify-steps/supplychain.sh, from a copy in a throwaway tree (the script, deploy/ci/common.sh,
-# deploy/k8s/lib.sh, the values and release sources of chart svp-policy) with a stub ghcr-digest.sh beside it that answers
-# for GHCR (failing for the image named in FAKE_GHCR_MISSING), a fake make that records its arguments and exits with
-# FAKE_MAKE_RC, and a fake cosign that answers verify-attestation with one envelope scanned FAKE_SCAN_HOURS ago
-# (FAKE_SCAN_HOURS_C, FAKE_SCAN_HOURS_L for the image of case c, l alone) or fails with FAKE_COSIGN_FAIL=1.
-# Checked: the three images handed to the drill, SUPPLYCHAIN_ENFORCE_TMP handed on as it is (job dev-k3d sets it), an
-# image GHCR does not give failing the step (case l then none, never empty), the drill's own failure, and on a scheduled
-# run only, case c or l left out with a NOTE when its vuln attestation is past the policy's maximum age less an hour
-# (kept within it, or when cosign does not answer).
+# Tests for supplychain.sh with stubs for GHCR, make, and cosign in a temporary tree.
+# Verifies image resolution, SUPPLYCHAIN_ENFORCE_TMP propagation, and scheduled run attestation age expiration.
 # Runs on macOS and Linux: no network, no Docker, no cluster.
-#
 # Usage, from anywhere: deploy/ci/verify-steps/supplychain-test.sh
 set -euo pipefail
 
@@ -64,8 +56,7 @@ dun=ghcr.io/anhnvcoder/svp-backend/drill-unsigned@$digest
 dvu=ghcr.io/anhnvcoder/svp-backend/drill-vulnerable@$digest
 dnp=ghcr.io/anhnvcoder/svp-backend/drill-no-provenance@$digest
 
-# run NAME [VAR=VALUE...]: the copy of supplychain.sh, as on a machine (no variable of a CI); its output in
-# $work/NAME.log, make's arguments in $work/NAME-make.log, cosign's calls in $work/NAME-cosign.log; prints its status.
+# run NAME [VAR=VALUE...]: runs supplychain.sh with test stubs, logging output and tool arguments.
 run() {
   local name=$1 rc=0
   shift
@@ -76,14 +67,13 @@ run() {
     >"$work/$name.log" 2>&1 </dev/null || rc=$?
   echo "$rc"
 }
-# made NAME: the arguments make got in run NAME, one per line.
+# made NAME: outputs recorded arguments passed to make for run NAME.
 made() { cat "$work/$1-make.log"; }
 args() {
   printf '%s\n' drill-k8s-supplychain "SUPPLYCHAIN_UNSIGNED=$1" "SUPPLYCHAIN_VULNERABLE=$2" "SUPPLYCHAIN_NO_PROVENANCE=$3" \
     "SUPPLYCHAIN_ENFORCE_TMP=${4:-}"
 }
 
-# --- A dispatched run.
 same "supplychain: every image on GHCR, the drill passing, passes" 0 "$(run all)"
 same "supplychain: the drill gets the newest drill-unsigned, drill-vulnerable and drill-no-provenance" \
   "$(args "$dun" "$dvu" "$dnp")" "$(made all)"
@@ -109,7 +99,6 @@ same "supplychain: drill-vulnerable not on GHCR fails the step, the drill passin
   "$(run no-vulnerable FAKE_GHCR_MISSING=drill-vulnerable)"
 same "supplychain: drill-vulnerable not on GHCR: case c gets it empty" "$(args "$dun" "" "$dnp")" "$(made no-vulnerable)"
 
-# --- A scheduled run: case c or l left out when its attestation is too old.
 same "supplychain: scheduled, an attestation of c older than 72h leaves case c out, failing nothing" 0 \
   "$(run old-c SVP_VERIFY_SCHEDULED=true FAKE_SCAN_HOURS_C=100)"
 same "supplychain: ... c gets it empty, l kept" "$(args "$dun" "" "$dnp")" "$(made old-c)"

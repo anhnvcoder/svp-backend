@@ -1,25 +1,7 @@
-# Rules of .grype.yaml, the vulnerabilities grype leaves out of the scan of each image's SBOM (grype -c of
-# deploy/ci/scan-gate.sh --grype). grype reads the whole file, and several keys it knows leave a CRITICAL out with no
-# entry and no date (only-fixed, only-notfixed and ignore-wontfix at the root, vex-documents, a rule naming only
-# fix-state or package.type, or one without package); a key it does not know it ignores without a word. So the file
-# holds only this shape, anything else is refused:
-#   ignore:                            # the one root key, a list (ignore: [] when nothing is excepted)
-#     - vulnerability: CVE-2026-12345  # exactly these keys in a rule
-#       include-aliases: true          # covers the match grype reports under a related id (a GHSA for the CVE)
-#       package:
-#         name: ffmpeg                 # exactly name and version
-#         version: 8.0.1-r0
-# vulnerability, name and version must be YAML strings: grype drops a null from the rule, which then covers every
-# vulnerability, package or version, reads a number as other text (1.10 as 1.1) and refuses to start on a date. In
-# quotes such a value is text, but a date form (2026-1-2) is refused even in quotes: the parsed file no longer shows the
-# quotes. conftest parses YAML 1.1, so a plain yes, no, on or off is a bool here (text to grype): quote it.
-# Each is plain (letters, digits and @._:+~/-, the name once unescaped). grype reads package.name as a regex
-# anchored at both ends when it holds one of *+?[](){}|^$\ (mini.* covers minimist), so the name must be the purl's
-# name with each of .*+?[](){}|^$\ escaped by \ (socket\.io-parser, libstdc\+\+, golang\.org/x/net): that name covers
-# its one package whether grype reads it as a regex or as text, and no entry and rule pair (pkg:npm/.*@1.2.5 and .*)
-# covers every package at a version. Each rule must be exactly one purl of an entry of .trivyignore.yaml
-# (trivyignore.packages): the same id, the purl's name as grype names the package, the same version; live (job config),
-# of an entry still in force. So grype never has an exception trivy does not, with its reason and its date there.
+# Rules of .grype.yaml, the vulnerabilities grype leaves out of each image's SBOM scan; each deny message says why.
+# grype reads every key of the file, and several leave a CRITICAL out with no entry or date: only `ignore` is accepted.
+# Each rule must be one purl of an entry of .trivyignore.yaml (in force, in job config): no exception trivy has not.
+# Design notes: docs/reference/ci.md.
 package grypeignore
 
 import data.ignorefiles
@@ -122,6 +104,7 @@ deny contains $"{file}: rule {name(i)}: {key} {v} is not plain (letters, digits,
 	not plain(v)
 }
 
+# grype reads package.name as a regex anchored at both ends (mini.* covers minimist): escape each metacharacter.
 deny contains msg if {
 	some i, r in rules
 	v := r.package.name
@@ -172,7 +155,6 @@ sound(r) if {
 	plain(unescape(r.package.name))
 }
 
-# in_force(e): live, the entry is not expired; otherwise any entry.
 in_force(e) if not ignorefiles.expired(e.expired_at)
 
 default in_force_note := ""
@@ -187,7 +169,6 @@ date_form(v) if {
 	regex.match(`^[0-9]{4}-[0-9]{1,2}-[0-9]{1,2}([Tt].*)?$`, v)
 }
 
-# escape(s): s with each character a regex reads as more than itself escaped by a backslash.
 escape(s) := regex.replace(s, `[.*+?\[\](){}|^$\\]`, `\$0`)
 
 # unescape(s): s with the backslash before each character dropped; escape(unescape(s)) == s only when s escapes every

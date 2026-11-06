@@ -1,12 +1,7 @@
 #!/usr/bin/env bash
-# A digest GHCR serves to anyone, for the supply chain drill (step drill-k8s-supplychain of .github/workflows/verify.yml, deploy/ci/verify-steps/supplychain.sh, and
-# deploy/k8s/drills/run.sh with the tests of deploy/k8s/drills/supplychain/ for cases b, h, i and l):
-#   ghcr-digest.sh newest IMAGE
-#       Prints ghcr.io/anhnvcoder/svp-backend/IMAGE@<digest> of the newest index of IMAGE (drill-vulnerable,
-#       drill-unsigned, drill-no-provenance) on GHCR: its tags of 12 hex digits name the commit of main that CI built
-#       them at, and the newest commit of this clone among them wins.
-# GHCR is read like a node pulls, anonymously, with the pinned ORAS (ORAS_IMAGE of the Makefile): oras repo tags for
-# the tags, oras resolve for the digest of one. Written for bash 3.2 too (macOS).
+# ghcr-digest.sh newest IMAGE: prints ghcr.io/anhnvcoder/svp-backend/IMAGE@<digest> of the newest index of a drill
+# image, the one tagged (12 hex) with the newest commit of this clone, read from GHCR anonymously, as a node pulls. bash
+# 3.2 too.
 set -euo pipefail
 
 # shellcheck source=deploy/ci/common.sh

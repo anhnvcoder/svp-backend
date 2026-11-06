@@ -1,23 +1,14 @@
 # shellcheck shell=bash
-# Helpers shared by the image pipeline scripts under deploy/ci/.
-# Sourcing it only defines things. It sources deploy/k8s/lib.sh for the list of services, the Dockerfile of each and
-# the paths each image is built from, so CI and `make k8s-up` never disagree on them. Written for bash 3.2 too (the
-# scripts are tried on macOS before they run on the Ubuntu runners).
-#
-# Rules every script keeps: docker runs without DOCKER_DEFAULT_PLATFORM (the image must be the runner's own
-# architecture, never emulated), trivy and syft run from the images pinned in the Makefile, nothing prints a secret
-# (trivy masks secrets in its findings; scripts print rule, file and line, never the raw report).
+# Release pipeline helpers; sourcing only defines functions and variables and loads deploy/k8s/lib.sh. Bash 3.2 too.
+# Invariants: docker without DOCKER_DEFAULT_PLATFORM, pinned tool images, no secrets printed.
+# Design notes: docs/reference/ci.md.
 
 ci_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 # shellcheck source=deploy/k8s/lib.sh
 . "$ci_dir/../k8s/lib.sh"
 
-# The scripts run in GitHub Actions and read its variables directly. On a machine, where none is set, an output or a
-# summary line is printed instead, and the run is one of the repository of code_root at its HEAD, by the workflow
-# "local".
-# step_output KEY VALUE: hands VALUE (one line) to the steps and jobs after this one under KEY ($GITHUB_OUTPUT). Not
-# >>/dev/stdout on a machine: on Linux that opens anew the file stdout goes to, and the next line the script prints
-# would write over the one appended.
+# step_output KEY VALUE: hands VALUE to later steps ($GITHUB_OUTPUT); prints KEY=VALUE on a machine.
+# Not >>/dev/stdout on a machine: on Linux that reopens stdout's file and the next line overwrites it.
 step_output() {
   if [ -n "${GITHUB_OUTPUT:-}" ]; then printf '%s=%s\n' "$1" "$2" >>"$GITHUB_OUTPUT"; else printf '%s=%s\n' "$1" "$2"; fi
 }
@@ -33,11 +24,8 @@ step_summary() {
 }
 # step_summary_tee: copies stdin to stdout and, in a job, to its summary page too.
 step_summary_tee() { if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then tee -a "$GITHUB_STEP_SUMMARY"; else cat; fi; }
-# run_repo_url: the web address of the repository this run is of. On a machine, this repository's on GitHub, or, when
-# SVP_CODE_ROOT names the checkout of another repository, that checkout's, read from its remote origin on github.com as
-# a job of that repository would see it; a checkout without such an origin fails, as its repository cannot be named
-# without a guess. The error shows the origin without its userinfo: a URL may carry a credential
-# (https://user:token@host/...).
+# run_repo_url: prints repository URL on GitHub (from $GITHUB_REPOSITORY, or remote origin of SVP_CODE_ROOT).
+# Strips userinfo from error messages: URLs may carry credentials (user:token@host).
 run_repo_url() {
   local url shown
   if [ -n "${GITHUB_REPOSITORY:-}" ]; then
@@ -56,8 +44,7 @@ run_repo_url() {
     fi
   fi
 }
-# run_builder_id: the workflow file running this job at the ref it ran from, as a URL: the builder an attestation
-# names, and the subject of the keyless certificate the job gets.
+# run_builder_id: prints workflow URL at its ref; builder in attestations and subject in keyless certificates.
 run_builder_id() {
   if [ -n "${GITHUB_WORKFLOW_REF:-}" ]; then
     echo "${GITHUB_SERVER_URL:-https://github.com}/$GITHUB_WORKFLOW_REF"
@@ -66,12 +53,8 @@ run_builder_id() {
   fi
 }
 
-# Two roots, the same folder unless this repository's scripts build another repository's code:
-#   script_root  the checkout of this repository whose deploy/ci/ runs: deploy/k8s/lib.sh, the Makefile's pinned
-#                tools and the table of release sources are read there;
-#   code_root    the tree whose code is built and released: SVP_CODE_ROOT when set (a checkout of another release
-#                source's repository, whose CI runs these scripts from a pinned checkout of this one), this checkout
-#                otherwise.
+# script_root is this repo (lib.sh, tools, sources table); code_root is the tree built (SVP_CODE_ROOT when set).
+# Separate roots let external repositories run these scripts from a pinned checkout of this repository.
 # shellcheck disable=SC2034 # read by the scripts that source this file
 script_root=$repo_root
 if [ -n "${SVP_CODE_ROOT:-}" ]; then
@@ -80,11 +63,8 @@ else
   code_root=$repo_root
 fi
 
-# require_code_files PATH...: in the tree of another repository (code_root is not script_root), fails naming the first
-# PATH, relative to code_root, that is no file there: a checkout of the wrong tree, or one missing what its build reads
-# (its Dockerfile, the lockfile, its own .trivyignore.yaml), stops before anything is built or scanned, instead of
-# building what is there. In this repository the files are where they always were, and their absence is left to the
-# step that reads them, as before.
+# require_code_files PATH...: fails if PATH is missing in code_root when building another repository.
+# Stops before build/scan if external tree is wrong or lacks Dockerfile, lockfile, or .trivyignore.yaml.
 require_code_files() {
   local path
   [ "$code_root" != "$script_root" ] || return 0
@@ -93,12 +73,9 @@ require_code_files() {
   done
 }
 
-# use_build_source [IMAGE]: sets, for the release source this CI run builds for, build_source (compact JSON),
-# build_source_name and build_prefix (its imagePrefix, ending in /). That source is the one whose repository is the
-# repository of this run (run_repo_url), read from the table of this checkout, so a run of a repository the table does
-# not name builds, pushes and signs nothing. With IMAGE, also fails unless IMAGE is one of the services or drillImages
-# of that source: its image can only go under that source's prefix, where the policy admits it with that source's
-# identity.
+# use_build_source [IMAGE]: sets build_source, build_source_name, and build_prefix for this run's repository.
+# Fails if repository is not in sources table, or if IMAGE is not in services/drillImages of that source.
+# Policy only admits an image under its source prefix matching that source's identity.
 use_build_source() {
   local url table found
   url=$(run_repo_url) || exit 1
@@ -115,9 +92,8 @@ use_build_source() {
   fi
 }
 
-# check_code_tree: fails unless HEAD of code_root is the commit this run builds ($GITHUB_SHA; HEAD on a machine): a
-# job of another repository that forgot SVP_CODE_ROOT would otherwise build, tag and label this checkout as that
-# repository's commit.
+# check_code_tree: fails unless HEAD of code_root matches $GITHUB_SHA.
+# Prevents another repository from building and labeling this checkout if SVP_CODE_ROOT was forgotten.
 check_code_tree() {
   local commit head
   head=$(git -C "$code_root" rev-parse --verify HEAD) || fail "read the commit at HEAD of $code_root"
@@ -126,19 +102,12 @@ check_code_tree() {
     fail "HEAD of $code_root is $head, but this run builds $commit of $(run_repo_url): set SVP_CODE_ROOT to the checkout of that commit"
 }
 
-# The images of this repository live under ghcr_prefix (deploy/k8s/lib.sh), those of every release source under its
-# imagePrefix (release_sources of deploy/k8s/lib.sh).
-# The images built only to drill admission: never run by any chart, and named by no image file of svp-gitops, so the
-# daily rescan never attests them again. The same list is drillImages of release source backend, which the policy
-# admits under its prefix (deploy/ci/verify-release-test.sh checks the two agree).
+# drill_images: images built only to drill admission, never run by charts or listed in svp-gitops (no rescan).
+# Must match drillImages in release source backend; admitted under its prefix.
 # shellcheck disable=SC2034 # read by the scripts that source this file
 drill_images=(drill-vulnerable drill-unsigned drill-no-provenance)
-# use_release_source SOURCE: sets, from SOURCE (one release source as compact JSON, release_source of
-# deploy/k8s/lib.sh), source_name, sign_issuer and sign_subject (the keyless identity every signature and attestation
-# of its images must carry: the OIDC issuer of the CI platform, and the workflow that signs its releases on main) and
-# provenance_repository and provenance_ref (what the workflow of its build provenance must name). Kyverno checks the
-# same values; files/sources.json of chart svp-policy is the one place to change them. Fails unless the identity and
-# the repository are each one https:// URL and the ref one refs/... without a space.
+# use_release_source SOURCE: sets source_name, sign_issuer, sign_subject, provenance_repository, provenance_ref.
+# Kyverno checks the same values; files/sources.json of chart svp-policy is the one place to change them.
 use_release_source() {
   local fields
   fields=$(jq -r '[.name, .issuer, .subject, .repository, .provenanceRef] | map(. // "") | join("\t")' <<<"$1") ||
@@ -149,20 +118,17 @@ use_release_source() {
   [[ ${provenance_repository:-} =~ ^https://[^[:space:]]+$ && ${provenance_ref:-} =~ ^refs/[^[:space:]]+$ ]] ||
     fail "repository and provenanceRef of release source ${source_name:-?} must be one https:// URL and one refs/... each"
 }
-# sign_identity [SOURCE]: sets sign_issuer and sign_subject (use_release_source) of release source SOURCE, backend
-# when empty, as the working tree writes it. Read when a check needs them, not when this file is sourced: most scripts
-# never verify a signature.
+# sign_identity [SOURCE]: sets sign_issuer and sign_subject for SOURCE (default backend) from working tree.
+# Loaded on demand because most scripts never verify signatures.
 sign_identity() {
   local src
   src=$(release_source "${1:-backend}") || exit 1
   use_release_source "$src"
 }
-# provenance_source [SOURCE]: sets provenance_repository and provenance_ref (use_release_source) of release source
-# SOURCE, backend when empty, as the working tree writes it.
+# provenance_source [SOURCE]: sets provenance_repository and provenance_ref for SOURCE (default backend).
 provenance_source() { sign_identity "$@"; }
 
-# _config_file DIR REV PATH: prints file PATH of the configuration tree DIR (a clone of svp-gitops, or any folder laid
-# out as one) at its commit REV, or as it is on disk when REV is empty; status 1 when there is no such file.
+# _config_file DIR REV PATH: prints PATH from gitops tree DIR at REV (or on disk if REV empty); status 1 if missing.
 _config_file() {
   if [ -n "$2" ]; then
     git -C "$1" cat-file -e "$2:$3" 2>/dev/null || return 1
@@ -173,11 +139,8 @@ _config_file() {
   fi
 }
 
-# _require_provenance WHERE [OVERLAY]: reads a values file of chart svp-policy on stdin and prints true or false, the
-# value of its line `  requireProvenance: ...` in the top-level imageVerification block, or nothing without one. Only
-# that shape is read (the value bare, no quote or comment after it); another line naming requireProvenance fails,
-# naming WHERE, rather than guess what Kyverno gets. With OVERLAY set the file may hold nothing else (blank lines and
-# comments aside): an overlay setting another key of the policy would make Kyverno check what no script here reads.
+# _require_provenance WHERE [OVERLAY]: reads svp-policy values on stdin, prints requireProvenance boolean.
+# Strict parser: fails on unexpected shapes or overlay keys to avoid guessing Kyverno behavior.
 _require_provenance() {
   local value rc=0
   value=$(awk -v overlay="${2:-}" '
@@ -208,15 +171,10 @@ _require_provenance() {
   echo "$value"
 }
 
-# provenance_required [REV [ENV [DIR]]]: prints true when chart svp-policy checks build provenance (requireProvenance)
-# in environment ENV of the deployment configuration DIR (a tree of svp-gitops; gitops_dir of deploy/k8s/lib.sh when
-# empty) at its commit REV (as DIR is on disk when REV is empty), false otherwise, from the files Argo CD hands the chart
-# there: deploy/helm/svp-policy/values.yaml of this repository at the commit envs/ENV/charts.yaml pins, then
-# envs/ENV/svp-policy.yaml when there is one. Without ENV: true when any environment of envs/ turns it on, as the
-# release images are the same in every environment; the working tree's values.yaml alone when DIR has no environment.
-# A charts.yaml pinning a commit from before the key reads false. Fails, printing nothing on stdout, when a file is not
-# of the shape _require_provenance reads, or when charts.yaml names no commit of this clone holding the chart: callers
-# must stop then, not read it as false.
+# provenance_required [REV [ENV [DIR]]]: prints true when svp-policy requires build provenance in ENV (any env when
+# empty), false otherwise: values.yaml at the commit charts.yaml pins, then the svp-policy.yaml overlay.
+# Fails printing nothing on stdout when a file is malformed or the pinned commit is missing: callers must stop then,
+# not read it as false.
 provenance_required() {
   local rev=${1:-} env=${2:-} dir=${3:-} at=${1:+ at ${1:0:12}} file content base value envs e charts chart
   chart=deploy/helm/svp-policy/values.yaml
@@ -256,13 +214,8 @@ provenance_required() {
   echo false
 }
 
-# release_source_in REPOSITORY [REV [ENV [DIR]]]: prints, as compact JSON, the release source REPOSITORY is a release
-# of (<imagePrefix><service> of a source whose services name <service>: release_source_of of deploy/k8s/lib.sh) in
-# the table chart svp-policy reads where provenance_required reads its values: in environment ENV of DIR at REV, the
-# table of this repository at the commit envs/ENV/charts.yaml pins (release_sources, which refuses a commit from
-# before the table). Without ENV every environment of envs/, which must all admit REPOSITORY with
-# the same source and identity; the working tree's table when DIR has no environment. Fails, printing nothing on
-# stdout, otherwise.
+# release_source_in REPOSITORY [REV [ENV [DIR]]]: prints release source JSON for REPOSITORY at pinned commit.
+# When ENV is omitted, every environment must admit REPOSITORY with identical source and identity.
 release_source_in() {
   local repo=$1 rev=${2:-} env=${3:-} dir=${4:-} at=${2:+ at ${2:0:12}} svc=${1##*/} envs e charts src found= first= key
   if [ -z "$dir" ]; then
@@ -301,14 +254,9 @@ release_source_in() {
   echo "$found"
 }
 
-# tag_provenance_mismatch TREE CHECKED PROVENANCE_ENVS: prints one problem per line, nothing when every release
-# agrees. CHECKED is the output of values-check.sh --gitops on TREE (a tree of svp-gitops): a line "check <file>" per
-# image file it verified, then that release's "ok" line from verify-release.sh. PROVENANCE_ENVS lists the environments
-# whose policy requires provenance (provenance_required), space separated. A release checked in one of them must name
-# the commit of its provenance ("provenance of <commit> by"), and image.tag of its file must be that commit: image.tag is
-# what the rule "no image newer than its charts" reads, so a tag edited by hand would pass it for a newer build. An ok
-# line that names no readable commit where provenance is required is a problem too, never a pass: a reworded line of
-# verify-release.sh must not let every release through unchecked.
+# tag_provenance_mismatch TREE CHECKED PROVENANCE_ENVS: prints one problem per line, nothing when every release agrees.
+# Guard: image.tag drives "no image newer than charts", so manual tag edits must not disguise builds.
+# In provenance-required environments, missing provenance commit in ok lines is rejected.
 tag_provenance_mismatch() {
   awk -v tree="$1" -v envs=" $3 " '
     /^check / { file = $2; next }
@@ -327,27 +275,20 @@ tag_provenance_mismatch() {
     }' "$2"
 }
 
-# The files of the deployment configuration (git pathspecs in a tree of svp-gitops) that decide what the releases of
-# an environment must carry: its overlay of chart svp-policy, and its charts.yaml, which pins the commit whose
-# values.yaml of the chart applies. A change of one can change what every release of that environment must carry
-# (turning requireProvenance on, above all), so values-check.sh then checks every release of that environment.
+# Gitops paths that decide release requirements; changes trigger checking every release in that environment.
 # shellcheck disable=SC2034 # read by the scripts that source this file
 policy_values_paths=('envs/*/svp-policy.yaml' 'envs/*/charts.yaml')
 
-# The deployment repository (owner/name on its host, from gitops_url of deploy/k8s/lib.sh) and the branch the promote
-# of stg rebuilds there.
+# Deployment repository owner/name and bot branch rebuilt by stg promote.
 # shellcheck disable=SC2034 # read by the scripts that source this file
 gitops_repo=${gitops_url#https://github.com/}
 gitops_repo=${gitops_repo%.git}
 # shellcheck disable=SC2034
 gitops_promote_branch=bot/promote-stg
 
-# promote_not_behind COMMIT REVISION: the guard of the promote to stg (job promote of images.yml). Fails when COMMIT,
-# the commit of the run, is a proper ancestor of REVISION, the commit of this repository whose charts stg runs (the
-# revision of envs/stg/charts.yaml in svp-gitops): a run started again, or a dispatch of an older commit, would take
-# stg's charts, migrations and images back. The same commit passes (a dispatch that builds again at that commit
-# replaces its releases), and so does a newer one. Also fails when REVISION is not a full commit this clone has: what
-# stg runs cannot then be compared, and is not guessed.
+# promote_not_behind COMMIT REVISION: guard of promote to stg (job promote in images.yml).
+# Fails when COMMIT is a proper ancestor of REVISION (prevents rolling stg back); same or newer commit passes.
+# Also fails when REVISION is not a full commit this clone has.
 promote_not_behind() {
   [[ $2 =~ ^[0-9a-f]{40}$ ]] || fail "stg's charts name revision '$2', not a full commit of this repository"
   git -C "$repo_root" cat-file -e "$2^{commit}" 2>/dev/null ||
@@ -356,10 +297,8 @@ promote_not_behind() {
     fail "this run's commit ${1:0:12} is older than ${2:0:12}, whose charts stg runs: promoting it would take stg back"
 }
 
-# promote_stg_ref REF CLONE: the guard of the promote to prd (job promote-prd of images.yml). Prints the full commit of
-# svp-gitops that REF names, read in CLONE (a clone of svp-gitops): REF is main or a full commit (40 hex digits), and
-# the commit must be on main of svp-gitops, so only a set that main of stg held reaches prd (an older one is a
-# rollback); a branch, a short SHA, or a commit only of another branch (the bot's, a pull request's) is refused.
+# promote_stg_ref REF CLONE: guard of promote-prd; prints full commit of svp-gitops REF.
+# Blocks refs not on main of svp-gitops (short SHAs, other branches, PRs): only commits held by stg main reach prd.
 promote_stg_ref() {
   local commit
   if [ "$1" = main ]; then
@@ -374,12 +313,8 @@ promote_stg_ref() {
   echo "$commit"
 }
 
-# promote_stg_evidence COMMIT: the second guard of the promote to prd, run before anything is written. Fails unless
-# COMMIT of svp-gitops (the full commit promote_stg_ref gave) has commit status argocd/stg in state success, the newest
-# of that context: Argo CD Notifications of stg writes it on the commit stg synced and found Healthy, so only a set stg
-# ran reaches prd, a rollback to an older one included. Reads every status of the commit (all pages, 100 each) with gh
-# and the token of the job (svp-gitops is public); a read that fails, or an answer that is no list of pages, fails too:
-# read as "no status", an outage would look like a set stg never ran.
+# promote_stg_evidence COMMIT: guard of promote-prd; verifies COMMIT in svp-gitops has argocd/stg status success.
+# Blocks promoting sets that stg never synced and found Healthy; paginates all statuses via gh.
 promote_stg_evidence() {
   local pages state
   pages=$(gh api --paginate --slurp "repos/$gitops_repo/commits/$1/statuses?per_page=100") ||
@@ -393,11 +328,8 @@ promote_stg_evidence() {
     fail "the newest commit status argocd/stg of ${1:0:12} in $gitops_repo is $state, not success: only a set stg ran healthy goes to prd"
 }
 
-# promote_open_pr REPO BRANCH APP: prints the number of the open pull request from BRANCH into main of REPO
-# (owner/name) that GitHub App APP opened, or nothing: a fork's or a person's from a branch of that name is never the
-# app's. GitHub's --head matches the bare branch name, so forks' pull requests from such a branch are listed too, and gh
-# lists 30 by default, newest first: the list goes up to 500, and a full one fails rather than guess. A gh that fails
-# fails too: read as "no pull request", an outage would drop the releases the open one holds.
+# promote_open_pr REPO BRANCH APP: prints open PR number created by GitHub App APP from BRANCH into main of REPO.
+# Guards against forks/personal PRs matching branch name; fails if list reaches 500 rather than dropping releases.
 promote_open_pr() {
   local list
   list=$(gh pr list --repo "$1" --head "$2" --base main --state open --limit 500 \
@@ -408,9 +340,7 @@ promote_open_pr() {
     '[.[] | select(.isCrossRepository == false and .author.login == $author)][0].number // empty' <<<"$list"
 }
 
-# promote_image_row SERVICE REPOSITORY TAG DIGEST: prints one row of the table of a promote pull request (Service, Commit,
-# Image). REPOSITORY is ghcr.io/<owner>/<repo>/<name>; the commit links to TAG in that repo, the image to its package
-# page, with the digest cut to 12 hex digits for reading (the full digest stays in the commit message).
+# promote_image_row SERVICE REPOSITORY TAG DIGEST: prints Markdown table row for promote PR with links and short digest.
 promote_image_row() {
   [[ $2 =~ ^ghcr\.io/([^/]+)/([^/]+)/([^/]+)$ ]] || fail "image '$2' of $1 is no ghcr.io/<owner>/<repo>/<name>"
   local owner=${BASH_REMATCH[1]} repo=${BASH_REMATCH[2]} name=${BASH_REMATCH[3]}
@@ -419,11 +349,8 @@ promote_image_row() {
     "$1" "$3" "$owner" "$repo" "$3" "$2" "${4:0:19}" "$owner" "$repo" "$repo" "$name"
 }
 
-# yq_ [NAME=VALUE...] ARGS...: the pinned yq (YQ_IMAGE of the Makefile) with ARGS, without network, as the calling
-# user, with the current directory as its working directory (so yq -i edits a file there, named by a relative path)
-# and stdin passed through (never call it inside a loop that reads its list from stdin: docker would read the rest of
-# it). Each leading NAME=VALUE is set in its environment alone, for strenv(NAME) in an expression: a value never
-# becomes part of the expression.
+# yq_ [NAME=VALUE...] ARGS...: runs pinned yq without network as calling user with PWD as workdir.
+# Passes NAME=VALUE into container env for strenv(); never run inside loops reading stdin.
 yq_() {
   local image env=()
   image=$(tool_image YQ_IMAGE) || return 1
@@ -435,11 +362,8 @@ yq_() {
     ${env[@]+"${env[@]}"} "$image" "$@"
 }
 
-# provenance_absent ISSUER SUBJECT IMAGE: status 0 when cosign verifies attestations of that identity on IMAGE
-# (REPOSITORY@DIGEST) and none of them is a build provenance (cosign's "none of the attestations matched the predicate
-# type", what a release from before CI attested provenance answers, as it carries vuln), 1 when one is, 2 when cosign
-# could not tell (registry or Sigstore out of reach, no attestation of the identity at all), its last line on stderr.
-# Only that answer of cosign counts as no provenance: an error never does.
+# provenance_absent ISSUER SUBJECT IMAGE: status 0 if verified attestations lack provenance, 1 if present, 2 on error.
+# Only cosign's specific predicate mismatch message counts as absent provenance; errors never pass.
 provenance_absent() {
   local err rc=0
   err=$(cosign_ verify-attestation --type slsaprovenance1 --certificate-oidc-issuer "$1" --certificate-identity "$2" \
@@ -450,12 +374,10 @@ provenance_absent() {
   return 2
 }
 
-# check_provenance_statement DIGEST: reads one in-toto statement (the decoded payload of a provenance attestation) on
-# stdin and checks what Kyverno checks when requireProvenance is on: predicate type SLSA v1, subject DIGEST,
-# runDetails.builder.id the signing subject, buildDefinition.externalParameters.workflow the repository and ref of
-# provenance_source; and that resolvedDependencies names exactly one source commit (40 hex). Prints that commit when
-# all hold, the first problem otherwise (status 1). Needs the release source of the image set first (sign_identity
-# and provenance_source with its name, or use_release_source), as Kyverno checks each image against its own source.
+# check_provenance_statement DIGEST: checks in-toto statement on stdin against Kyverno requireProvenance rules.
+# Validates SLSA v1, subject DIGEST, builder ID, workflow repo/ref, and single source gitCommit; prints the commit,
+# or the first problem (status 1). Needs the image's release source set first (sign_identity and provenance_source,
+# or use_release_source): Kyverno checks each image against its own source.
 check_provenance_statement() {
   local verdict
   verdict=$(jq -r --arg d "${1#sha256:}" --arg builder "$sign_subject" --arg repo "$provenance_repository" \
@@ -478,18 +400,14 @@ check_provenance_statement() {
     ;;
   esac
 }
-# Where trivy looks for its vulnerability DB, in this order (its default for v0.76.0, written out so the attestation
-# can name it): mirror.gcr.io first, GHCR on 429 or 5xx.
+# Vulnerability DB order for trivy (mirror.gcr.io, then GHCR on 429 or 5xx), recorded in vuln attestations.
 trivy_db_repository=mirror.gcr.io/aquasec/trivy-db:2,ghcr.io/aquasecurity/trivy-db:2
-# The accepted risks of the tree being built: its own file, so each repository keeps the list of its own packages.
+# Accepted risks for code_root; each repository maintains its own package exceptions.
 trivyignore=$code_root/.trivyignore.yaml
-# The same exceptions for grype, read by grype itself (grype_sbom); scan-gate.sh checks each rule is an entry of the
-# file above.
+# Grype exceptions read directly by grype_sbom; scan-gate.sh checks each matches an entry in trivyignore.
 grypeignore=$code_root/.grype.yaml
 
-# tool_image NAME: prints the pinned image reference NAME (TRIVY_IMAGE, SYFT_IMAGE, COSIGN_IMAGE): from the
-# environment when set, otherwise from the line `NAME := ...` of the Makefile, so the machine and CI run the very same
-# digest. Fails unless the reference carries a digest.
+# tool_image NAME: prints pinned image reference with digest from env or Makefile, ensuring identical CI and local runs.
 tool_image() {
   local ref=${!1:-}
   [ -n "$ref" ] || ref=$(sed -n "s/^$1[[:space:]]*:=[[:space:]]*//p" "$repo_root/Makefile")
@@ -499,7 +417,7 @@ tool_image() {
   esac
 }
 
-# runner_arch: the architecture docker builds for on this host, as amd64 or arm64.
+# runner_arch: prints Docker server architecture as amd64 or arm64.
 runner_arch() {
   case $(docker_ version --format '{{.Server.Arch}}') in
   amd64 | x86_64) echo amd64 ;;
@@ -508,10 +426,10 @@ runner_arch() {
   esac
 }
 
-# now_utc: the current time in RFC 3339, UTC, to the second: the form cosign's vuln predicate requires.
+# now_utc: prints current time in RFC 3339 UTC to the second, matching cosign vuln predicate requirements.
 now_utc() { date -u +%Y-%m-%dT%H:%M:%SZ; }
 
-# trivy_cache: the directory trivy keeps its DB in (CI saves it with actions/cache, one key per day).
+# trivy_cache: prints trivy DB directory ($SVP_TRIVY_CACHE or ${TMPDIR:-/tmp}/svp-trivy-cache).
 trivy_cache() {
   local dir=${SVP_TRIVY_CACHE:-${TMPDIR:-/tmp}/svp-trivy-cache}
   mkdir -p "$dir" || fail "create the trivy cache $dir"
@@ -529,36 +447,29 @@ trivy_() {
     ${trivy_mounts[@]+"${trivy_mounts[@]}"} "$image" "$@" --cache-dir /cache
 }
 
-# trivy_scan_args: the scan flags, the same for the build gate and the rescan: vulnerabilities
-# and secrets, every severity, JSON. The ignore file is passed only when it exists (trivy fails on a missing one); it is
-# mounted at /ignore.yaml by the caller.
+# trivy_scan_args: prints shared scan flags for gate and rescan (vuln, secret, JSON, ignorefile if present).
 trivy_scan_args() {
   printf '%s\n' --scanners vuln,secret --db-repository "$trivy_db_repository" --format json
   [ -f "$trivyignore" ] && printf '%s\n' --ignorefile /ignore.yaml
   return 0
 }
 
-# trivy_db_updated_at: prints UpdatedAt of the DB in the cache (RFC 3339), the version the vuln predicate records.
+# trivy_db_updated_at: prints DB UpdatedAt in RFC 3339 seconds for vuln predicates.
 trivy_db_updated_at() {
-  # Trivy writes nanoseconds; cut to seconds so every time in the predicate has one form.
+  # Cuts nanoseconds so every timestamp in the predicate uses uniform RFC 3339 second precision.
   trivy_ version --format json | jq -er '.VulnerabilityDB.UpdatedAt | sub("\\.[0-9]+"; "")' ||
     fail "read the trivy DB version"
 }
 
-# grype_cache: the directory grype keeps its DB in (CI saves it with actions/cache, one key per day, like trivy's).
+# grype_cache: prints grype DB cache directory.
 grype_cache() {
   local dir=${SVP_GRYPE_CACHE:-${TMPDIR:-/tmp}/svp-grype-cache}
   mkdir -p "$dir" || fail "create the grype cache $dir"
   echo "$dir"
 }
 
-# grype_sbom DIR [ARGS...]: runs the pinned grype on DIR/sbom.spdx.json (the SPDX document syft wrote, never the image
-# again) with ARGS (scan-gate.sh --grype passes --fail-on critical) and writes DIR/grype.json and DIR/grype.sarif.raw;
-# exits as grype does (2 for a match at or above --fail-on). Runs as the calling user, with the network only to fetch
-# the DB. The DB must be fetched or the update check succeed (GRYPE_DB_REQUIRE_UPDATE_CHECK), and grype's own check
-# that the DB was built at most five days ago stays on: never a scan against a DB of unknown age. The only
-# configuration grype reads is .grype.yaml of the tree being built, passed with -c: the working directory and HOME are
-# an empty tmpfs, so no other file of grype's can reach the scan. scan-gate.sh holds that file to its rules.
+# grype_sbom DIR [ARGS...]: runs pinned grype on DIR/sbom.spdx.json, writing grype.json and grype.sarif.raw.
+# Network only for DB fetch; fails if DB >5 days old; isolated with empty tmpfs HOME/workdir so only -c config is read.
 grype_sbom() {
   local dir=$1 image mounts=() config=()
   shift
@@ -575,10 +486,7 @@ grype_sbom() {
     sbom:/out/sbom.spdx.json ${config[@]+"${config[@]}"} "$@" -o json=/out/grype.json -o sarif=/out/grype.sarif.raw -q
 }
 
-# grype_sarif DIR CATEGORY: writes DIR/grype.sarif from DIR/grype.sarif.raw: only the HIGH and CRITICAL matches, as
-# trivy's SARIF holds (grype has already left out the matches .grype.yaml covers), under CATEGORY. grype names a rule
-# <vulnerability>-<package name> and its results carry no purl, so a result is kept when any match of that rule is High
-# or Critical.
+# grype_sarif DIR CATEGORY: filters DIR/grype.sarif.raw to HIGH/CRITICAL matches, matching trivy SARIF format.
 grype_sarif() {
   local dir=$1 category=$2
   jq --slurpfile g "$dir/grype.json" --arg c "$category" '
@@ -592,17 +500,13 @@ grype_sarif() {
   rm -f "$dir/grype.sarif.raw"
 }
 
-# sbom_binaries FILE: prints, on one line, the packages of the SPDX document FILE that syft found outside any package
-# manager (purl pkg:generic/..., such as node@26.12.0 of the web image), as name@version; empty when there are none.
+# sbom_binaries FILE: prints comma-separated packages from SPDX FILE without package managers (pkg:generic/...).
 sbom_binaries() {
   jq -r '[.packages[]? | .versionInfo as $v | select(any(.externalRefs[]?; .referenceType == "purl"
     and (.referenceLocator | startswith("pkg:generic/")))) | "\(.name)@\($v)"] | unique | join(", ")' "$1"
 }
 
-# grype_check SBOM IMAGE ARCH (make grype): grype and its gate on one SBOM, from a machine. Exactly one of SBOM (the
-# absolute path of an SPDX JSON document, copied so grype never writes beside it) and IMAGE (a reference pinned by
-# digest, read anonymously from its registry by the pinned syft for linux/ARCH, amd64 when empty) is set. Exits as
-# scan-gate.sh --grype does, which runs grype.
+# grype_check SBOM IMAGE ARCH: runs grype gate locally on an SPDX file or digest-pinned image via syft.
 grype_check() {
   local sbom=$1 image=$2 arch=${3:-amd64} tmp label syft_image
   tmp=$(mktemp -d) || fail "create a temporary directory"
@@ -631,9 +535,7 @@ grype_check() {
   "$ci_dir/scan-gate.sh" --grype "$label" "$tmp"
 }
 
-# oci_labels [SOURCE]: prints the OCI labels of the commit at HEAD of code_root as key=value lines: the repository of
-# release source SOURCE (backend when empty), the commit, and the commit time in UTC, so the same commit always gets
-# the same labels whatever the build time.
+# oci_labels [SOURCE]: prints OCI labels (source, revision, created) for HEAD of code_root in UTC.
 oci_labels() {
   local rev created src
   src=$(release_source "${1:-backend}") || exit 1
@@ -648,19 +550,16 @@ oci_labels() {
 # is_digest VALUE: true when VALUE is sha256:<64 lowercase hex>.
 is_digest() { [[ $1 =~ ^sha256:[0-9a-f]{64}$ ]]; }
 
-# fetch_manifest REF FILE: writes to FILE the manifest (or index) REF points to, byte for byte as the registry stores
-# it (a file, not a shell variable, which would drop a trailing newline and change the digest), and prints the sha256
-# digest of those bytes.
+# fetch_manifest REF FILE: writes raw manifest for REF to FILE byte-for-byte and prints its sha256 digest.
+# Avoids shell variables which drop trailing newlines and alter digests.
 fetch_manifest() {
   docker_ buildx imagetools inspect --raw "$1" >"$2" || return 1
   echo "sha256:$(shasum -a 256 "$2" | cut -d' ' -f1)"
 }
 
-# values_field (the strict reader of image.repository, image.tag and image.digest in a service's values file) is in
-# deploy/k8s/lib.sh, shared with the GitOps path.
+# values_field reader is defined in deploy/k8s/lib.sh.
 
-# cosign_ ARGS...: cosign from PATH (CI installs it with sigstore/cosign-installer), otherwise the pinned image
-# COSIGN_IMAGE (machine: verification only, never signing).
+# cosign_ ARGS...: executes cosign from PATH or pinned COSIGN_IMAGE (local: verification only, never signing).
 cosign_() {
   if command -v cosign >/dev/null 2>&1; then
     cosign "$@"
@@ -671,8 +570,7 @@ cosign_() {
   fi
 }
 
-# verify_signature REPOSITORY DIGEST: true when REPOSITORY@DIGEST carries a signature of the identity of the release
-# source whose prefix REPOSITORY lies under (source_of_repository; sign_issuer and sign_subject are left set to it).
+# verify_signature REPOSITORY DIGEST: true if REPOSITORY@DIGEST is signed by its release source keyless identity.
 verify_signature() {
   local name
   name=$(source_of_repository "$1") || return 1
@@ -680,15 +578,11 @@ verify_signature() {
   cosign_ verify --certificate-oidc-issuer "$sign_issuer" --certificate-identity "$sign_subject" "$1@$2" >/dev/null
 }
 
-# Sigstore bundles. A release is signed and attested in Sigstore bundles (cosign sign and attest, actions/attest), each
-# an OCI referrer of the digest it is about; GHCR has no referrers API, so the clients keep the list in the fallback tag
-# sha256-<hex> (OCI distribution spec 1.1). The releases signed before keep cosign's older format, a .sig and an .att
-# image beside the digest (tags sha256-<hex>.sig and .att), and the same cosign commands verify either. A digest never
-# carries both: once it has one bundle, Kyverno and cosign read bundles only, and refuse what is missing there.
+# Sigstore bundles: OCI referrers stored via fallback tag sha256-<hex> (GHCR lacks referrers API).
+# Releases have either bundles or legacy .sig/.att, never both: once a bundle exists, Kyverno/cosign require bundles.
 # shellcheck disable=SC2034 # read by the scripts that source this file
 bundle_artifact_type=application/vnd.dev.sigstore.bundle.v0.3+json
-# The predicate type of each bundle a release carries: the signature of cosign sign, the SBOM (cosign attest --type
-# spdxjson, on each manifest), the scan result (--type vuln) and the build provenance (actions/attest).
+# Predicate types for release bundles: cosign signature, SBOM, vuln scan, and SLSA provenance.
 # shellcheck disable=SC2034
 sign_predicate_type=https://sigstore.dev/cosign/sign/v1
 # shellcheck disable=SC2034
@@ -697,8 +591,7 @@ vuln_predicate_type=https://cosign.sigstore.dev/attestation/vuln/v1
 # shellcheck disable=SC2034
 provenance_predicate_type=https://slsa.dev/provenance/v1
 
-# registry_oras ARGS...: the pinned ORAS (ORAS_IMAGE of the Makefile) as the calling user, with the credentials docker
-# login wrote (the file only, read-only): for the jobs that sign, which log in to the registry first.
+# registry_oras ARGS...: runs pinned ORAS with docker login credentials mounted read-only for signing jobs.
 registry_oras() {
   local image config
   image=$(tool_image ORAS_IMAGE) || return 1
@@ -711,11 +604,8 @@ registry_oras() {
     --registry-config /auth/config.json
 }
 
-# bundle_referrers IMAGE: prints one line "<digest> <predicate type>" per Sigstore bundle referrer of IMAGE
-# (REPOSITORY@DIGEST); nothing when it has none. The type is the annotation dev.sigstore.bundle.predicateType of the
-# referrer in the list when it carries one (the bundles of actions/attest do), otherwise what the bundle itself says
-# (bundle_type): on GHCR the bundles of cosign carry no annotation in the list. Fails rather than leave a type out.
-# Not verified: it tells what is there, never what is trusted.
+# bundle_referrers IMAGE: prints "<digest> <predicate type>" per bundle referrer of IMAGE (unverified listing).
+# Reads predicateType annotation or inspects bundle layer directly (GHCR cosign bundles lack annotations).
 bundle_referrers() {
   local out list digest type
   out=$(registry_oras discover --format json --artifact-type "$bundle_artifact_type" "$1") || {
@@ -737,9 +627,7 @@ bundle_referrers() {
   done <<<"$list"
 }
 
-# bundle_type REFERRER: prints the predicate type of the Sigstore bundle REFERRER (REPOSITORY@DIGEST of its manifest),
-# read from the bundle itself, the one layer of the manifest: the predicateType of the in-toto statement its DSSE
-# envelope carries, or the signature of cosign sign for a bare message signature. Fails when any of it is not there.
+# bundle_type REFERRER: prints predicate type from bundle payload (in-toto statement or messageSignature).
 bundle_type() {
   local manifest layer bundle type
   manifest=$(registry_oras manifest fetch "$1") || {
@@ -772,9 +660,7 @@ bundle_type() {
 # bundles_of TYPE: reads lines of bundle_referrers on stdin and prints the digest of each bundle of predicate type TYPE.
 bundles_of() { awk -v t="$1" '$2 == t { print $1 }'; }
 
-# release_format IMAGE: prints how IMAGE (REPOSITORY@DIGEST) is signed: bundle (Sigstore bundle referrers), legacy
-# (cosign's older .sig image) or none. Fails when it carries both, or when the registry gives no clear answer (only its
-# "not found" for the tag of the .sig image counts as none).
+# release_format IMAGE: prints signing format (bundle, legacy, none); fails if both are present or registry errors.
 release_format() {
   local bundles err tag=${1%@*}:sha256-${1##*@sha256:}.sig legacy=false
   bundles=$(bundle_referrers "$1") || return 1
@@ -797,19 +683,10 @@ release_format() {
   if [ -n "$bundles" ]; then echo bundle; elif [ "$legacy" = true ]; then echo legacy; else echo none; fi
 }
 
-# replace_vuln_bundle REPOSITORY DIGEST PREDICATE: attests PREDICATE as the vuln attestation of REPOSITORY@DIGEST, a
-# release signed in Sigstore bundles, and takes every other vuln bundle off it, so it carries exactly one again. Each
-# attest adds a bundle (--replace does nothing for bundles), cosign verify-attestation returns all of them, and Kyverno
-# v1.19.1 reads the one last in the referrer list, which GHCR keeps sorted by digest, not by age: an older one left
-# there could be what Kyverno reads, and refuse every new pod once it is past the maximum age. The one kept is the one
-# this call wrote (the vuln bundle that was not listed before it), never one picked by what an unverified bundle says.
-# GHCR deletes no manifest through the registry API (oras manifest delete answers "unsupported", exit 1), but oras has
-# rewritten the fallback tag by then, which takes the bundle off the list (its manifest stays in the package,
-# untagged); so the exit code is not trusted and the list is read again: only the new vuln bundle may be left, and
-# cosign must verify exactly one vuln attestation of the identity of the release's source (sign_issuer and
-# sign_subject, set first). Only vuln bundles are ever taken off: never the signature, the SBOM or the provenance. For a
-# few seconds the digest carries two: verify-release.sh refuses it then, Kyverno reads either (both within the age).
-# Fails naming what is wrong; needs `docker login` (registry_oras) and the id-token of the job (cosign attest).
+# replace_vuln_bundle REPOSITORY DIGEST PREDICATE: attests new vuln bundle and removes older ones via ORAS.
+# GHCR sorts referrers by digest not age; leaves exactly one vuln bundle so Kyverno reads the fresh attestation.
+# Keeps the bundle this call wrote, never one picked by an unverified bundle's content; takes off only vuln bundles.
+# Needs sign_issuer and sign_subject set first; cosign must verify exactly one vuln attestation of that identity.
 replace_vuln_bundle() {
   local ref=$1@$2 before after new d left count
   before=$(bundle_referrers "$ref") || fail "list the bundles of $ref"
@@ -833,10 +710,8 @@ replace_vuln_bundle() {
   echo "ok    $ref: one vuln bundle, $new"
 }
 
-# check_index REPOSITORY DIGEST DIR DIR: true when REPOSITORY@DIGEST, read back from the registry, is an index of
-# exactly two manifests, linux/amd64 and linux/arm64, whose digests are the `digest` files of the two DIRs (one per
-# platform, named in their `platform` files), and when DIGEST really is the digest of those bytes. What gets signed
-# and attested is then exactly what was scanned.
+# check_index REPOSITORY DIGEST DIR DIR: guard that what is signed and attested is exactly what was scanned.
+# Verifies remote index matches scanned amd64 and arm64 manifest digests.
 check_index() {
   local raw want got
   raw=$(mktemp) || return 1
@@ -850,9 +725,8 @@ check_index() {
   [ -n "${want:-}" ] && [ "$want" = "$got" ]
 }
 
-# attest_max_age: the oldest vuln attestation a release may carry when it enters main, in seconds: 48 hours, which
-# leaves at least 24 hours before Kyverno's 72-hour limit for the merge and the sync. Only drills
-# lower it, through SVP_ATTEST_MAX_AGE (<number>s, m or h; never set in .env).
+# attest_max_age: max vuln attestation age entering main (default 48h, leaves 24h margin for Kyverno 72h limit).
+# SVP_ATTEST_MAX_AGE overrides for drills only (never set in .env).
 attest_max_age() {
   local age=${SVP_ATTEST_MAX_AGE:-48h}
   [[ $age =~ ^[0-9]+[smh]$ ]] || fail "SVP_ATTEST_MAX_AGE must look like 48h, 15m or 90s, not '$age'"
@@ -863,10 +737,8 @@ attest_max_age() {
   esac
 }
 
-# check_vuln_statement DIGEST MAX_AGE_SECONDS: reads one in-toto statement (the decoded payload of a vuln
-# attestation) on stdin and checks what Kyverno will check, with the tighter age: predicate type, subject DIGEST,
-# exactly linux/amd64 then linux/arm64, no CRITICAL, scanFinishedOn at most MAX_AGE_SECONDS old. Prints the first
-# problem.
+# check_vuln_statement DIGEST MAX_AGE_SECONDS: checks in-toto vuln statement against Kyverno rules and age limit.
+# Validates vuln predicate type, subject DIGEST, amd64/arm64 platforms, zero CRITICALs, and scanFinishedOn age.
 check_vuln_statement() {
   local verdict
   verdict=$(jq -r --arg d "${1#sha256:}" --argjson max "$2" '

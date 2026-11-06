@@ -1,49 +1,10 @@
-# Deferred verification on a fresh GitHub-hosted runner
-# of the public repository: one scenario per run dispatched by hand, and once a week compose-obs and gitops side by
-# side on main, every step. It builds the compose stack or the k3d cluster with the same make targets as a dev
-# machine and runs what that machine cannot hold (16 GB): the threat model drills, the object store's tests against the
-# stack, the change of credentials and the supply chain drill on the cluster of either path. Not a check of pull
-# requests: no ruleset requires it, and nothing but the dispatch and the weekly schedule triggers it.
-#
-#   gh workflow run verify.yml --ref <main or feat/stage6b-...> -f scenario=<scenario> [-f targets='<step> ...']
-#     [-f gitops_ref=<main or a commit of svp-gitops>]   (dev-k3d only)
-#
-# Scenarios: compose-obs (job compose: the compose stack with OBS=lgtm), gitops (job gitops: the cluster Argo CD builds
-# from this repository and svp-gitops) and dev-k3d (job dev-k3d, dispatched only: the cluster of the dev path, make
-# k8s-up, at the commit gitops_ref of svp-gitops). Each target of a scenario is a step of its job, with a
-# timeout-minutes of its own; the step's id is the target's name, and the job's SVP_VERIFY_STEP_NAMES lists them in
-# order, the first being the build step (make up OBS=lgtm, make k8s-gitops-up, make k8s-up) that builds what the others
-# use. A step after the build step runs when the build step succeeded, whatever the steps between gave (!cancelled()),
-# and only when targets is empty or names it; the job fails when a step that ran failed. The targets are checked before
-# anything is built (deploy/ci/verify-steps/steps.sh check), then each step's if: compares them as an expression, never
-# in a shell; a step that reads another's result is named with it (drill-k8s-threats and drill-k8s-reloader read the
-# READY video of k8s-smoke). gitops_ref is checked as well, through env and a case, before anything is built.
-#
-# The repository is public, so the log and the artifact of every run are too, red or not:
-# - only workflow_dispatch (write access to the repository needed) and schedule (the code of main, no input), never
-#   pull_request_target or workflow_run; every job has contents: read and nothing more. No job holds a secret or an
-#   environment;
-# - every action is GitHub's own and pinned to a full commit SHA; checkout never leaves the token in .git/config;
-# - the inputs targets and gitops_ref reach the scripts only through env (SVP_VERIFY_TARGETS, SVP_GITOPS_REF), each
-#   checked again with a case before use (steps.sh, the step Check gitops_ref); if: compares the scenario and the
-#   targets as expressions. A scheduled run has no inputs: each job runs its own scenario, every step;
-# - no code of another repository runs: the deployment configuration svp-gitops is cloned anonymously from GitHub (make
-#   gitops-clone) and only read, its images pulled by digest;
-# - make env writes a .env of fresh random secrets that lives on this runner until the job ends; the build step makes
-#   more (GlitchTip's tokens, the cluster's Secrets). deploy/ci/verify-mask.sh masks them in the log after make env and
-#   after the build step; the new values of drill-k8s-reloader (which it writes into .env) are made and masked by
-#   deploy/k8s/drills/reloader/new-values.sh in a step of their own before the build step, into a private file of
-#   $RUNNER_TEMP/verify-reloader that the drill reads (SVP_DRILL_NEW_VALUES); every step's output goes to a file under
-#   $RUNNER_TEMP/verify/logs instead of the log; and
-#   deploy/ci/verify-collect.sh copies into the artifact only results machines read (the table of the steps, the
-#   drills' JUnit reports, the verdict lines of drill-obs-threats, the admission figures) that pass a scan for every
-#   known secret value and for token patterns (it drops the doubtful ones, with a warning). Nothing is ever printed
-#   with set -x, env or kubectl get secret.
-#
-# Time: each job's timeout-minutes holds 20 minutes of setup (17 measured on a slow runner), the sum of its steps'
-# timeout-minutes, and 25 minutes for the steps that collect, filter, upload and take the stack down
-# (deploy/ci/verify-steps/steps-test.sh checks the sum), so those always have time to run: they run once the ref check
-# passed, also after a failure, a timeout or a cancel (always()).
+# Deferred verification on a hosted runner of what 16 GB machines cannot hold; not a check of pull requests.
+# Public repository: log and artifact are public, so everything printed is masked;
+# - no job holds a secret or an environment; .env of fresh random secrets lives only on runner;
+# - only workflow_dispatch and schedule; contents: read only, no pull_request_target or workflow_run;
+# - actions pinned to a full commit SHA; checkout with persist-credentials: false;
+# - untrusted inputs reach scripts through env:, never ${{ }} inside run:; svp-gitops only read.
+# Design notes: docs/ci-cd.md.
 name: verify
 
 on:
@@ -67,27 +28,21 @@ on:
         type: string
         required: false
         default: main
-  # Saturday 00:37 UTC, 07:37 in Vietnam (UTC+7), off the top of the hour (busy for GitHub's scheduler, which may delay
-  # or drop a run then). GitHub runs it on the latest commit of main only, and turns it off after 60 days without any
-  # activity in a public repository.
+  # Off the top of the hour (busy for GitHub's scheduler, which may delay or drop a run).
+  # Runs on latest commit of main only; GitHub turns schedule off after 60 days without activity.
   schedule:
     - cron: "37 0 * * 6"
 
 permissions: {}
 
-# One run of each scenario at a time, the two scenarios side by side: each has a runner of its own, so a fix rarely
-# waits on the other's run. A third dispatch of a scenario while one runs and one waits replaces the waiting one. The
-# scheduled run (both jobs) is a group of its own, verify-schedule: a dispatch during it runs beside it, on its own
-# runner.
+# One run per scenario at a time (each on its own runner; a third dispatch replaces the waiting one).
+# Scheduled run and dispatches use separate groups to run side by side; cancel-in-progress: false.
 concurrency:
   group: verify-${{ inputs.scenario || github.event_name }}
   cancel-in-progress: false
 
 jobs:
-  # The compose stack with the LGTM observability profile, as job stack of ci.yml builds it: make up OBS=lgtm (GlitchTip
-  # included), make smoke, make drill-obs-threats, then make test-stack of internal/objstore against the stack's object
-  # store (no test may skip). The LOCAL LAB ONLY resets of smoke and the drill (they delete the gateway's register rate
-  # limit keys in Redis db 10) touch only the Redis service container below, which belongs to this run.
+  # Rate-limit key resets during smoke and drill touch only this run's Redis service container.
   compose:
     if: github.event_name == 'schedule' || inputs.scenario == 'compose-obs'
     runs-on: ubuntu-24.04
@@ -99,9 +54,7 @@ jobs:
       SVP_VERIFY_TARGETS: ${{ inputs.targets }}
       SVP_VERIFY_STEP_NAMES: up smoke drill-obs-threats test-stack-objstore
     services:
-      # As in job stack of ci.yml: published on loopback (the scripts on the runner) and on the gateway of Docker's
-      # default bridge, 172.17.0.1, where the compose services reach them as host.docker.internal; never on every
-      # interface.
+      # Published on loopback and Docker bridge gateway (172.17.0.1) for host.docker.internal; never 0.0.0.0.
       postgres:
         image: docker.io/library/postgres:15.19-trixie@sha256:64b99032e218b66b1d1a6334995056e1aa57f50a0c522cc856e72dff0e4b0d63
         env:
@@ -125,9 +78,7 @@ jobs:
           --health-timeout 5s
           --health-retries 20
     steps:
-      # Before anything else: a dispatch of another branch (an old one, perhaps without the fixes of main) stops here, and
-      # so does a scheduled run anywhere but main (GitHub runs it on the default branch, which is main). An accident
-      # guard, not a security boundary: whoever can dispatch can also push a branch of that name.
+      # Accident guard, not a security boundary (whoever can dispatch can push a branch of that name).
       - name: Check the ref
         id: ref
         run: |
@@ -142,21 +93,18 @@ jobs:
           persist-credentials: false
       - name: Check the targets
         run: deploy/ci/verify-steps/steps.sh check
-      # make env runs go run ./tools/jwtkey for the JWT key pair, make test-stack runs go test -race against the stack;
-      # the Makefile also asks go for GOPATH.
+      # Needed for jwtkey generation in make env and go test -race in test-stack-objstore.
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version: 1.27.3
           cache-dependency-path: go.sum
       - run: make ci-bridge-check
-      # psql of the Postgres bootstrap, redis-cli of the rate limit resets, ffmpeg for the test video of smoke, jq
-      # everywhere.
+      # CLI tools for Postgres bootstrap, Redis rate-limit resets, and smoke test video generation.
       - name: Install the tools of the scripts
         run: |
           sudo apt-get update -q
           sudo apt-get install -y -q --no-install-recommends postgresql-client redis-tools ffmpeg jq
-      # main of the deployment configuration svp-gitops (the web release of staging for make up), read through
-      # SVP_GITOPS_DIR by every step after this one (deploy/k8s/lib.sh, gitops_dir).
+      # Clones svp-gitops to obtain staging web release configuration for make up.
       - name: make gitops-clone
         run: |
           make gitops-clone
@@ -204,22 +152,15 @@ jobs:
           path: ${{ runner.temp }}/verify-artifact/
           retention-days: 30
           if-no-files-found: warn
-      # make down reads .env; without one (a run cancelled before make env) no stack was ever started.
+      # Without .env (cancelled before make env), no compose stack was started.
       - name: make down
         if: always() && steps.ref.outcome == 'success'
         run: |
           if [ -f .env ]; then make down; else echo "no .env: make env never ran, so no stack was started"; fi
 
-  # The GitOps path: make k8s-gitops-up builds a new cluster from the branch this run checked out, Argo CD reading the
-  # public repository over anonymous HTTPS (no deploy key, no secret) and running the signed release images of GHCR by
-  # digest under Kyverno's Enforce policy, at the commit of main of svp-gitops that make gitops-clone fetched (the
-  # cluster runs as staging and stays at that commit through every step, so a release merged meanwhile changes nothing
-  # the steps read). Then the staging overlay, the ExternalSecrets and Argo CD's metrics (make drill-k8s-gitops, the
-  # Chainsaw tests of deploy/k8s/drills/gitops/), the admission figures of the first sync, make k8s-smoke, the change of
-  # credentials through External Secrets (make drill-k8s-reloader, the steps after it run on the new credentials), the
-  # supply chain and threat model drills. Dispatched, and weekly on main beside job compose: SVP_VERIFY_SCHEDULED tells
-  # the supply chain step a run is the scheduled one, which leaves out the drill's cases whose drill-only image is past
-  # its maximum age (nobody rescans those before it).
+  # Builds cluster via Argo CD over anonymous HTTPS with signed images by digest under Kyverno Enforce.
+  # Pinned to the fetched commit of svp-gitops so subsequent releases do not alter test state.
+  # SVP_VERIFY_SCHEDULED skips drill cases with expired attestations on scheduled runs.
   gitops:
     if: github.event_name == 'schedule' || inputs.scenario == 'gitops'
     runs-on: ubuntu-24.04
@@ -231,7 +172,6 @@ jobs:
       SVP_VERIFY_TARGETS: ${{ inputs.targets }}
       SVP_VERIFY_STEP_NAMES: k8s-gitops-up drill-k8s-gitops gitops-admission-metrics k8s-smoke drill-k8s-reloader drill-k8s-supplychain drill-k8s-threats
     steps:
-      # As in job compose.
       - name: Check the ref
         id: ref
         run: |
@@ -241,8 +181,7 @@ jobs:
           esac
           echo "SVP_VERIFY_OUT=$RUNNER_TEMP/verify" >>"$GITHUB_ENV"
           mkdir -p "$RUNNER_TEMP/verify/logs"
-      # The whole history: make k8s-gitops-up checks the release at origin/<branch>, and the tests of drill-k8s-gitops
-      # read the charts at the commit the cluster runs them at.
+      # Full history: needed for git revision checks in k8s-gitops-up and chart checks in drill-k8s-gitops.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
@@ -253,7 +192,6 @@ jobs:
         with:
           go-version: 1.27.3
           cache-dependency-path: go.sum
-      # k3d, Helm, Chainsaw and the other pinned tools, as in job config of ci.yml.
       - id: tools
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
@@ -262,16 +200,14 @@ jobs:
       - name: Install the pinned tools
         if: steps.tools.outputs.cache-hit != 'true'
         run: make tools ci-tools
-      # k3d, Helm and Chainsaw for the bootstrap and the drills, which call them by name; kubectl is the runner image's
-      # (deploy/ci/verify-host.sh checks its version against k3s).
+      # Put installed tools on PATH; kubectl comes from runner image and is verified by verify-host.sh.
       - run: echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
-      # ffmpeg for the test video of smoke, jq everywhere, nc for the drills' port checks.
+      # ffmpeg for smoke test video generation, jq for JSON parsing, netcat for port checks.
       - name: Install the tools of the scripts
         run: |
           sudo apt-get update -q
           sudo apt-get install -y -q --no-install-recommends ffmpeg jq netcat-openbsd
-      # main of the deployment configuration svp-gitops, read through SVP_GITOPS_DIR by every step after this one
-      # (deploy/k8s/lib.sh, gitops_dir); the cluster is built at the commit of origin/main it fetched, SVP_GITOPS_SHA.
+      # svp-gitops commit SHA is pinned to ensure every subsequent step targets the exact same commit.
       - name: make gitops-clone
         run: |
           make gitops-clone
@@ -295,8 +231,8 @@ jobs:
         id: k8s-gitops-up
         timeout-minutes: 60
         run: make k8s-gitops-up GITOPS_REV="$SVP_GITOPS_SHA" >"$SVP_VERIFY_OUT/logs/k8s-gitops-up.log" 2>&1 </dev/null
-      # The cluster's Secrets (namespaces svp, svp-data, svp-obs, argocd, svp-secrets) and what the bootstrap added to
-      # .env; each read bounded in time, a cluster that does not answer leaves its list as it was.
+      # Masks cluster Secrets (svp, svp-data, svp-obs, argocd, svp-secrets) and additions to .env.
+      # Each read is bounded in time; a cluster that does not answer leaves its list as it was.
       - name: Mask what the build step added
         if: always() && steps.ref.outcome == 'success'
         timeout-minutes: 3
@@ -319,7 +255,7 @@ jobs:
         if: ${{ !cancelled() && steps.k8s-gitops-up.outcome == 'success' && (!inputs.targets || contains(format(' {0} ', inputs.targets), ' k8s-smoke ')) }}
         timeout-minutes: 15
         run: make k8s-smoke >"$SVP_VERIFY_OUT/logs/k8s-smoke.log" 2>&1 </dev/null
-      # A change of credentials with make k8s-secrets, which Reloader carries to the workloads; the new values stay.
+      # Tests credential rotation via Reloader; subsequent steps continue running on the new credentials.
       - name: make drill-k8s-reloader
         id: drill-k8s-reloader
         if: ${{ !cancelled() && steps.k8s-gitops-up.outcome == 'success' && (!inputs.targets || contains(format(' {0} ', inputs.targets), ' drill-k8s-reloader ')) }}
@@ -357,13 +293,9 @@ jobs:
         if: always() && steps.ref.outcome == 'success'
         run: make k8s-down
 
-  # The dev path: make k8s-up builds the cluster as a dev machine does, from this checkout (the six backend images built
-  # here with docker buildx bake, the web client's staging release pulled from GHCR) and the clone of svp-gitops at
-  # gitops_ref, main or the commit of a branch not merged yet, installed with helmfile. Then make k8s-smoke, the change
-  # of credentials (make drill-k8s-reloader) and the supply chain drill with SUPPLYCHAIN_ENFORCE_TMP=1, which puts the
-  # dev path's image policy, Audit, in Enforce for its cases and back, and runs case k, the one case only the dev path
-  # can run (a vendor's image under a keyless policy, admitted while the policy audits). Dispatched only, never
-  # scheduled: the weekly runs keep the path that staging and production follow.
+  # Dev path cluster: built with local images and svp-gitops at gitops_ref via helmfile.
+  # Supply chain drill sets SUPPLYCHAIN_ENFORCE_TMP=1 to temporarily put Audit policy into Enforce.
+  # Dispatched only; scheduled runs verify staging/production paths only.
   dev-k3d:
     if: inputs.scenario == 'dev-k3d'
     runs-on: ubuntu-24.04
@@ -376,7 +308,6 @@ jobs:
       SVP_VERIFY_STEP_NAMES: k8s-up k8s-smoke drill-k8s-reloader drill-k8s-supplychain
       SVP_GITOPS_REF: ${{ inputs.gitops_ref }}
     steps:
-      # As in job compose.
       - name: Check the ref
         id: ref
         run: |
@@ -392,7 +323,7 @@ jobs:
           persist-credentials: false
       - name: Check the targets
         run: deploy/ci/verify-steps/steps.sh check
-      # The value is never printed back (a line of the log that starts with :: is a command).
+      # Rejected value is never printed back: a log line starting with :: would execute as a workflow command.
       - name: Check gitops_ref
         run: |
           case $SVP_GITOPS_REF in
@@ -408,7 +339,6 @@ jobs:
         with:
           go-version: 1.27.3
           cache-dependency-path: go.sum
-      # k3d, Helm, helmfile, Chainsaw and the other pinned tools, as in job gitops.
       - id: tools
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
@@ -418,13 +348,12 @@ jobs:
         if: steps.tools.outputs.cache-hit != 'true'
         run: make tools ci-tools
       - run: echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
-      # ffmpeg for the test video of smoke, jq everywhere, nc for the drills' port checks.
+      # ffmpeg for smoke test video generation, jq for JSON parsing, netcat for port checks.
       - name: Install the tools of the scripts
         run: |
           sudo apt-get update -q
           sudo apt-get install -y -q --no-install-recommends ffmpeg jq netcat-openbsd
-      # svp-gitops at gitops_ref, read through SVP_GITOPS_DIR by every step after this one (deploy/k8s/lib.sh,
-      # gitops_dir): the components, their base/ values and the web release of staging.
+      # Clones svp-gitops at gitops_ref for base values and staging web client release.
       - name: make gitops-clone
         run: |
           make gitops-clone GITOPS_REF="$SVP_GITOPS_REF"
@@ -446,7 +375,7 @@ jobs:
         id: k8s-up
         timeout-minutes: 60
         run: make k8s-up >"$SVP_VERIFY_OUT/logs/k8s-up.log" 2>&1 </dev/null
-      # As in job gitops: the cluster's Secrets and what make k8s-up added to .env (GlitchTip's tokens).
+      # Masks cluster Secrets (svp, svp-data, svp-obs, argocd, svp-secrets) and additions to .env.
       - name: Mask what the build step added
         if: always() && steps.ref.outcome == 'success'
         timeout-minutes: 3
@@ -458,13 +387,13 @@ jobs:
         if: ${{ !cancelled() && steps.k8s-up.outcome == 'success' && (!inputs.targets || contains(format(' {0} ', inputs.targets), ' k8s-smoke ')) }}
         timeout-minutes: 15
         run: make k8s-smoke >"$SVP_VERIFY_OUT/logs/k8s-smoke.log" 2>&1 </dev/null
-      # A change of credentials with make k8s-secrets, which Reloader carries to the workloads; the new values stay.
+      # Tests credential rotation via Reloader; subsequent steps continue running on the new credentials.
       - name: make drill-k8s-reloader
         id: drill-k8s-reloader
         if: ${{ !cancelled() && steps.k8s-up.outcome == 'success' && (!inputs.targets || contains(format(' {0} ', inputs.targets), ' drill-k8s-reloader ')) }}
         timeout-minutes: 45
         run: make drill-k8s-reloader >"$SVP_VERIFY_OUT/logs/drill-k8s-reloader.log" 2>&1 </dev/null
-      # The images of job gitops' step (deploy/ci/verify-steps/supplychain.sh), the policy in Enforce for each case.
+      # Runs supply chain drill with Audit policy temporarily switched to Enforce.
       - name: drill-k8s-supplychain
         id: drill-k8s-supplychain
         if: ${{ !cancelled() && steps.k8s-up.outcome == 'success' && (!inputs.targets || contains(format(' {0} ', inputs.targets), ' drill-k8s-supplychain ')) }}

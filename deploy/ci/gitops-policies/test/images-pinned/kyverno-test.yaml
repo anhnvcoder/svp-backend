@@ -1,5 +1,4 @@
-# kyverno test of policy images-pinned (from backend/: make kyverno-test): each resource of resources.yaml named fail-…
-# fails, each named pass-… passes.
+# Test of policy images-pinned: resources named fail-… fail, pass-… pass.
 apiVersion: cli.kyverno.io/v1alpha1
 kind: Test
 metadata:

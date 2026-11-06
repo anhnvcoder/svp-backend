@@ -1,37 +1,17 @@
 #!/usr/bin/env bash
-# changed-services.sh BASE HEAD: prints, on one line in alphabetical order, the services whose image must be built
-# for the changes from commit BASE to commit HEAD; the reason goes to stderr.
-#
-# The services are the six this repository builds (built_services of deploy/k8s/lib.sh, the targets of the image table
-# deploy/docker-bake.json): web is built by svp-frontend, so no change here ever builds it. A service is built when a
-# changed path is one of its image paths (`image_paths` of deploy/k8s/lib.sh: go.mod, go.sum, gen/, internal/,
-# services/<svc>/, its Dockerfile, .dockerignore), when its target of the image table changed (compared as JSON between
-# the two commits), or when the pipeline that builds, scans and signs changed: then all six. Any other change of the
-# image table (group default, a target no service of either commit names, anything outside the targets), or a table
-# that BASE does not have, is a change of the pipeline too.
-# The pipeline is .github/workflows/images.yml, the composite actions it builds, scans and signs with
-# (.github/actions/image-*/), anything under deploy/ci/ but the files no image job reads:
-# trivy-config-ignore.yaml (read only by make trivy-config, so renewing one of its entries, due every 90 days at most,
-# releases nothing), the scripts of the verification runs of .github/workflows/verify.yml (verify-host.sh,
-# verify-mask.sh, verify-collect.sh, the scripts of its steps under deploy/ci/verify-steps/, ghcr-digest.sh, which the
-# supply chain step and drill call), every test *-test.sh (run by the jobs
-# of ci.yml and on a machine) and the fixtures of tests under testdata/, the scripts of svp-gitops's check:
-# gitops-check.sh (svp-gitops's check and make helm-check) with values-check.sh and verify-release.sh,
-# which only it, make k8s-gitops-up and the drills run, its Kyverno policies gitops-policies/ and conftest policies
-# gitops-tree-policies/,
-# contract.sh (the version rule and
-# the publishing of the gateway's API contract: job contract of images.yml runs it, but it builds and promotes no
-# image), the conftest policies on the ignore files ignorefile-policies/ (the gate applies them, but job config checks
-# the files with them on every pull request, as it does a change of the files themselves); the helpers deploy/ci/ sources from deploy/k8s/lib.sh still count (docker_, values_field,
-# ghcr_prefix, the image table), and the lines of the Makefile pinning the images the gate runs (TRIVY_IMAGE,
-# SYFT_IMAGE, GRYPE_IMAGE, COSIGN_IMAGE); other Makefile changes do not count. So the weekly Renovate pull request that
-# bumps those tools builds and scans every image with the new trivy or grype before it merges, instead of the next
-# daily rescan on main meeting it first. The cost is on main too: such a change releases all six images again (and opens their promote
-# pull request) although no service code changed. Comparing is only done when BASE is HEAD or an ancestor of it:
-#   - BASE empty, all zeros, unknown to this clone, or not comparable with HEAD (force push, rewritten history): all
-#     six. Building too much costs runner minutes; missing a change would ship an image without it.
-#   - HEAD a proper ancestor of BASE (an older run started again after a newer one succeeded): nothing, the newer run
-#     built every change up to its own commit.
+# changed-services.sh BASE HEAD: prints, on one line in alphabetical order, the services whose image must be built for
+# the changes from commit BASE to commit HEAD; the reason goes to stderr.
+# Design notes: docs/reference/ci.md.
+
+# The services are the six of built_services (deploy/k8s/lib.sh); web is built by svp-frontend, so no change here builds
+# it. A service is built when a changed path is in its image_paths or its target of the image table changed; a change of
+# the pipeline that builds, scans and signs (images.yml, the actions image-*, deploy/ci/ but the files no image job
+# reads, deploy/k8s/lib.sh, the tool images pinned in the Makefile, the rest of the image table) builds all six.
+
+# So a Renovate bump of trivy or grype builds and scans every image before it merges, not the daily rescan on main
+# first; the cost is a full release on main too. BASE empty, unknown or not comparable with HEAD (force push): all six,
+# since a missed change would ship an image without it. HEAD a proper ancestor of BASE (an older run started again):
+# nothing.
 set -euo pipefail
 
 # shellcheck source=deploy/ci/common.sh

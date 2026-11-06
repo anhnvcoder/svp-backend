@@ -1,23 +1,13 @@
 #!/usr/bin/env bash
-# verify-release.sh [--gitops DIR] [--rev REV] [--env ENV] REPOSITORY DIGEST: true when the release REPOSITORY@DIGEST
-# may enter an environment of the deployment configuration: REPOSITORY is <imagePrefix><service> of a release source
-# whose services name <service>, DIGEST carries a signature and exactly one vuln attestation of that source's
-# images.yml on main, and that attestation covers linux/amd64 and linux/arm64, lists no CRITICAL and is at most 48
-# hours old (SVP_ATTEST_MAX_AGE in drills). 48 hours leaves at least 24 before Kyverno refuses new pods at 72.
-# Anonymous: needs no token, so a pull request job (contents: read) and a machine can run it; cosign from PATH,
-# otherwise COSIGN_IMAGE.
-# The policy of an environment is chart svp-policy at the commit its envs/ENV/charts.yaml pins, in environment ENV
-# (every environment without --env) of the deployment configuration DIR (a tree of svp-gitops; gitops_dir of
-# deploy/k8s/lib.sh without --gitops) at its commit REV (DIR as it is on disk without --rev). Its table of release
-# sources decides the source, so the identity, of REPOSITORY (release_source_in of common.sh), as Kyverno picks the
-# attestor by prefix. When it checks build provenance (requireProvenance: its values.yaml, then envs/ENV/svp-policy.yaml,
-# provenance_required of common.sh), the release must also carry exactly one provenance attestation of the same
-# identity that passes what Kyverno checks (builder.id, workflow repository and ref of its source), whose source commit
-# is the commit the certificate of its signature names (cosign --certificate-github-workflow-sha): a provenance that
-# claims another commit than the run that signed it is refused.
-# The same cosign commands read a release signed in Sigstore bundles (the provenance written by actions/attest) and one
-# in cosign's older format (.sig, .att images), so the releases of both pass while environments still run the older
-# ones; a digest carries one format only (release_format of common.sh).
+# verify-release.sh [--gitops DIR] [--rev REV] [--env ENV] REPOSITORY DIGEST: true when the release may be deployed.
+# It needs a signature and one vuln attestation of the release source's images.yml on main (both platforms, no
+# CRITICAL, at most 48 hours old: 24 spare before Kyverno's 72) and, where the policy requires it, one provenance.
+# Anonymous, so a pull request job can run it.
+
+# The policy, and with it the release source and its identity, is read from the svp-gitops tree as Kyverno reads it.
+# The provenance must name the commit the signing certificate names: one claiming another commit is refused.
+# The same cosign commands read releases in Sigstore bundles and in cosign's older format; a digest carries one only.
+# Design notes: docs/reference/ci.md.
 set -euo pipefail
 
 # shellcheck source=deploy/ci/common.sh

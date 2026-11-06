@@ -1,23 +1,8 @@
 #!/usr/bin/env bash
-# Tests for deploy/ci/scan-gate.sh, in a throwaway copy of what it reads (deploy/ci/, deploy/k8s/lib.sh, the policy's
-# values, the tree's .trivyignore.yaml and .grype.yaml) and a checkout of svp-frontend beside it; the variables of a
-# GitHub Actions job are made up. A fake docker first on PATH stands in for trivy and grype, and hands the pinned
-# conftest and yq of the ignore-file check to the real docker. Checked:
-#   - the flags each pass gets (trivy convert of the secrets with no --severity and no ignore file, of the
-#     vulnerabilities with --severity CRITICAL and the tree's .trivyignore.yaml, each reading only its own findings;
-#     grype with --fail-on critical and the tree's .grype.yaml);
-#   - a secret blocks even with --allow-critical (the rescan), a CRITICAL blocks unless --allow-critical, which grype's
-#     gate (make grype) refuses, a scanner that fails or a report that is not trivy's exits 2; one summary line per
-#     scan, in the job's summary (and the log) in a job, in the log on a machine;
-#   - the check of the ignore files around their conftest policies (each rule is a case of make conftest-verify):
-#     conftest and yq without network, as the caller, on the files read-only; a policy's message in the output; job
-#     config refuses an expired entry and its grype rule, the gates of a report (here "the image gate": the rescan's,
-#     make grype's) refuse a broken file but leave an expired entry to trivy and job config; a key written twice, a
-#     file YAML cannot read, a misconfiguration for a path that is no file fail;
-#   - another repository's tree (SVP_CODE_ROOT, svp-frontend's checkout): its own .trivyignore.yaml and .grype.yaml
-#     are read, and the gate stops, naming the file, when the tree has either not.
-# Runs on macOS and Linux: Docker for conftest and yq (pulled once, then no network), no cluster.
-#
+# Tests for deploy/ci/scan-gate.sh in a throwaway copy of what it reads and a checkout of svp-frontend beside it;
+# the variables of a GitHub Actions job are made up. A fake docker first on PATH stands in for trivy and grype;
+# conftest and yq go to the real one. Runs on macOS and Linux: Docker for them (pulled once, no network), no cluster.
+
 # Usage, from anywhere: deploy/ci/scan-gate-test.sh
 set -euo pipefail
 
@@ -65,7 +50,6 @@ on() {
 fresh() { : >"$work/output" && : >"$work/summary"; }
 mkdir -p "$work/bin" "$work/home" "$work/runner-temp"
 
-# The throwaway copy, and the checkout of svp-frontend (SVP_CODE_ROOT of its runs).
 tree=$work/tree
 mkdir -p "$tree/deploy/k8s" "$tree/deploy/helm/svp-policy"
 cp -R "$here" "$tree/deploy/ci"
@@ -76,13 +60,10 @@ webtree=$work/svp-frontend
 mkdir -p "$webtree"
 digest_b=sha256:$(printf 'b%.0s' $(seq 64))
 
-# scan-gate.sh. The verdicts are trivy's and grype's: here a fake docker stands in for both, records each call in
-# docker.log (one line of arguments) and answers with the exit code the case sets: FAKE_TRIVY_VULNS for trivy convert
-# with --severity (the vulnerability pass), FAKE_TRIVY_SECRETS for the one without (the secret pass), FAKE_GRYPE for
-# grype, which also gets FAKE_GRYPE_JSON as its report. Each convert input is kept in fake/ to check what each pass
-# reads. What the scanners do with these flags (an entry covering exactly its package version, a HIGH secret found
-# without --severity, include-aliases) was run with the pinned images, not here.
-# The pinned conftest and yq run for real (their calls in tools.log).
+# The verdicts are trivy's and grype's: a fake docker stands in for both and records each call in docker.log, answering
+# with FAKE_TRIVY_VULNS (convert with --severity), FAKE_TRIVY_SECRETS (without), FAKE_GRYPE (report: FAKE_GRYPE_JSON).
+# What the scanners do with these flags (an entry covering exactly its package version, a HIGH secret found without
+# --severity, include-aliases) was run with the pinned images, not here. The pinned conftest and yq run for real.
 conftest_image=$(sed -n 's/^CONFTEST_IMAGE[[:space:]]*:=[[:space:]]*//p' "$src/Makefile")
 yq_image=$(sed -n 's/^YQ_IMAGE[[:space:]]*:=[[:space:]]*//p' "$src/Makefile")
 real_docker=$(command -v docker)
@@ -163,7 +144,6 @@ ignore_files() {
   { echo "ignore:" && grype_rule CVE-2026-1111 left-pad 1.0.0; } >"$tree/.grype.yaml"
 }
 
-# The trivy gate on a report with one HIGH vulnerability and one secret.
 jq -n --arg c "$digest_b" '{SchemaVersion: 2, Metadata: {ImageID: $c}, Results: [{Target: "app",
   Vulnerabilities: [{Severity: "HIGH"}], Secrets: [{RuleID: "aws-key", Severity: "HIGH", StartLine: 3}]}]}' \
   >"$work/report.json"
@@ -212,7 +192,6 @@ gate local "scan-gate.sh: this tree without ignore files passes" 0 -- "gw linux/
 check "scan-gate.sh: without .trivyignore.yaml trivy reads no ignore file" grep -qF -- \
   "--severity CRITICAL --ignorefile  /in/vulnerabilities.json" "$work/docker.log"
 
-# The grype gate: grype runs on DIR/sbom.spdx.json with .grype.yaml and --fail-on critical (exit 2 when it finds one).
 # match ID SEVERITY PURL: one match of a grype report.
 match() {
   jq -n --arg id "$1" --arg sev "$2" --arg purl "$3" '{
@@ -256,11 +235,9 @@ grype_gate local "scan-gate.sh --grype: grype failing (a DB it cannot fetch) is 
   "web linux/arm64" "$work/leg"
 check "scan-gate.sh --grype: grype failing is said" has "$work/gate.err" "FAIL  web linux/arm64: grype could not scan"
 
-# The ignore files. Their rules are conftest policies, each case of them a test of deploy/ci/ignorefile-policies/
-# (make conftest-verify); here what scan-gate.sh does around them: the pinned conftest and yq run without network, as the
-# caller, on the files mounted read-only, the three files together; a policy's message reaches the output; job config
-# (--check-ignorefile) checks with today, so an expired entry fails, the image gates do not and refuse a broken file;
-# a key written twice and a file YAML cannot read fail; each path of trivy-config-ignore.yaml must be a file.
+# The rules are conftest policies (make conftest-verify); here what scan-gate.sh does around them. Job config checks
+# with today, so an expired entry fails there; the image gates leave it to trivy and refuse only a broken file.
+
 # ignorefiles NAME WANT_EXIT [WANT_LINE]: --check-ignorefile on the tree's files; ok when it exits WANT_EXIT and, when
 # given, prints WANT_LINE.
 ignorefiles() {
@@ -294,7 +271,6 @@ gate local "scan-gate.sh: the image gate checks .trivyignore.yaml and .grype.yam
 check "scan-gate.sh: the image gate leaves trivy-config-ignore.yaml to job config" lacks "$work/tools.log" \
   trivy-config-ignore.yaml
 
-# A broken file: the policy's message, in job config and in each image gate.
 printf 'secrets:\n  - id: aws-access-key-id\n' >>"$tree/.trivyignore.yaml"
 ignorefiles "a secrets section" 1 \
   "FAIL  .trivyignore.yaml: only vulnerabilities may be ignored, never secrets or anything else: secrets"
@@ -337,7 +313,6 @@ gate local "scan-gate.sh: the image gate leaves an expired entry to trivy" 0 -- 
 grype_gate local "scan-gate.sh --grype: the image gate leaves an expired entry to job config" 0 -- --grype \
   "web linux/arm64" "$work/leg"
 
-# Each path of trivy-config-ignore.yaml is a file of the repository: not a file gone, not a directory (a whole tree).
 ignore_files
 config_ignore deploy/ci/gone.sh
 ignorefiles "a misconfiguration for a file gone" 1 \
@@ -348,7 +323,6 @@ ignorefiles "a misconfiguration for a directory" 1 \
 config_ignore deploy/ci/common.sh
 rm -f "$tree/.trivyignore.yaml" "$tree/.grype.yaml"
 
-# Another repository's tree (SVP_CODE_ROOT): its own .trivyignore.yaml and .grype.yaml, which must both be there.
 { echo "vulnerabilities:" && ignore_entry CVE-2026-1111 "$soon" pkg:npm/left-pad@1.0.0; } >"$webtree/.trivyignore.yaml"
 { echo "ignore:" && grype_rule CVE-2026-1111 left-pad 1.0.0; } >"$webtree/.grype.yaml"
 grype_gate local "scan-gate.sh --grype, svp-frontend's tree: its files pass" 0 SVP_CODE_ROOT="$webtree" -- --grype \

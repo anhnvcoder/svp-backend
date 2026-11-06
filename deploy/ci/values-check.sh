@@ -1,23 +1,8 @@
 #!/usr/bin/env bash
-# values-check.sh --gitops DIR BASE: the release check of a tree of the deployment repository svp-gitops
-# (gitops-check.sh runs it in that repository's check; the bootstrap of the GitOps path runs it too), whose release
-# images are envs/<env>/images/<service>.yaml. For every such file of DIR's git repository that changed from commit BASE
-# to HEAD, a non-empty image.digest must name a release that may enter that environment: the service's repository of
-# a release source the policy of that environment admits (release_source_in of common.sh: the table of chart
-# svp-policy at the commit envs/<env>/charts.yaml pins), signed by that source's images.yml on main, one vuln
-# attestation covering both platforms, no CRITICAL, at most 48 hours old, and a build
-# provenance attestation when chart svp-policy checks provenance in that environment (verify-release.sh --gitops DIR
-# --env <env>: the chart's values.yaml at the commit envs/<env>/charts.yaml pins, then envs/<env>/svp-policy.yaml of
-# DIR, as Argo CD hands them to the chart). Every image file of an environment whose policy changed since BASE (its
-# envs/<env>/svp-policy.yaml or envs/<env>/charts.yaml: policy_values_paths of common.sh), since what every release
-# there must carry may have changed: the pull request that turns provenance on fails while a release of that
-# environment has none. Every image file of every environment when BASE is empty (DIR need not be a git repository
-# then). Kyverno accepts attestations up to 72 hours, so a digest that enters an environment with an older one (a
-# rolled-up promote PR, a revert to an old digest) would have its new pods refused; this check catches it before the
-# merge. Uses no token.
-#
-# On failure prints the dispatch of the code repository's images.yml that refreshes the vuln attestations of the
-# releases svp-gitops names.
+# values-check.sh --gitops DIR BASE: checks release images in svp-gitops (envs/<env>/images/) meet environment policy.
+# Checks changed image files, every image file of an environment whose policy changed, all when BASE is empty:
+# signature, vuln attestation, provenance.
+# Design notes: docs/reference/ci.md.
 set -euo pipefail
 
 # shellcheck source=deploy/ci/common.sh

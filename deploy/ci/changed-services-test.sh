@@ -1,18 +1,8 @@
 #!/usr/bin/env bash
-# Tests for deploy/ci/changed-services.sh, in a throwaway git repository holding a copy of deploy/ci/, deploy/k8s/lib.sh,
-# the image table deploy/docker-bake.json, the policy's values, the composite actions of the image pipeline, another action, a file under docs/ and a Makefile.
-# Checked: a change of common.sh, rescan.sh, image-guard.sh or of a file of one of the actions under
-# .github/actions/image-*/ builds all six images of this repository (never web, which svp-frontend builds), and so does
-# one of the GRYPE_IMAGE line of the Makefile; none is built for a change under web/ (a file added, then deleted), of
-# another action under .github/actions/, of a test under deploy/ci/ or its fixtures under testdata/, of
-# the scripts of the verification runs (verify-host.sh, verify-mask.sh, verify-collect.sh, the scripts of the steps
-# under deploy/ci/verify-steps/, ghcr-digest.sh), of the drills under deploy/k8s/drills/, of the scripts of svp-gitops's
-# check (gitops-check.sh with values-check.sh, verify-release.sh and its conftest policies), of the policy's values, of
-# docs/ or of another line of the Makefile. The image table: a change of one service's target builds that service
-# only, a change of the table's form alone (same JSON) builds nothing, and a change of group default, of a part of the
-# table outside the services' targets, or a table the base commit lacks builds all six.
+# Tests for deploy/ci/changed-services.sh, in a throwaway git repository holding a copy of what it reads (deploy/ci/,
+# deploy/k8s/lib.sh, the image table, the policy's values, the composite actions, docs/ and a Makefile).
 # Runs on macOS and Linux: no network, no Docker, no cluster.
-#
+
 # Usage, from anywhere: deploy/ci/changed-services-test.sh
 set -euo pipefail
 

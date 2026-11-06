@@ -1,11 +1,5 @@
-# A render for a platform whose renders may not name the lab's *.svp.localhost (no localHosts in key platforms of
-# argocd/apps/components.json of svp-gitops) names a real host where traffic comes in and where a service is told its
-# own address: deploy/ci/gitops-check.sh gives the Kyverno CLI (kyverno apply, no cluster) the renders of those
-# platforms alone, after its grep of their whole text for svp.localhost.
-#
-# Read: spec.hostnames of HTTPRoute, GRPCRoute, TLSRoute; spec.listeners[].hostname of Gateway; spec.rules[].host and
-# spec.tls[].hosts of Ingress; the env values of each container of a pod template (Pod, CronJob, and every kind with
-# spec.template.spec), which the values of a chart turn into a service's settings (APP_ORIGIN, MEDIA_ORIGIN).
+# Platforms without localHosts forbid *.svp.localhost: traffic and service origins must use real hosts.
+# Design notes: docs/reference/ci.md.
 apiVersion: policies.kyverno.io/v1
 kind: ValidatingPolicy
 metadata:

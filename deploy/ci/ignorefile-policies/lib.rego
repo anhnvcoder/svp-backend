@@ -1,10 +1,8 @@
 # Helpers of the policies on the ignore files of the scan gate (packages trivyignore, grypeignore, configignore).
-# deploy/ci/scan-gate.sh runs them with conftest test --combine, so input is a list of {path, contents}, one per file
-# passed, and gives data.scan_gate: today (yyyy-mm-dd, UTC) and live (true in job config, false in the image gates).
-# make conftest-verify runs the tests beside them (*_test.rego).
+# Input: a list of {path, contents} from deploy/ci/scan-gate.sh (conftest --combine); data.scan_gate: today, live.
+# Design notes: docs/reference/ci.md.
 package ignorefiles
 
-# present(path): the file path is one of the inputs.
 present(path) if {
 	some d in input
 	d.path == path
@@ -22,13 +20,11 @@ after(days) := time.format([
 	"UTC", "2006-01-02",
 ])
 
-# day(v): v is a date written yyyy-mm-dd.
 day(v) if {
 	is_string(v)
 	regex.match(`^[0-9]{4}-[0-9]{2}-[0-9]{2}$`, v)
 }
 
-# expires_late(v, days): v is a date more than days days after today.
 expires_late(v, days) if {
 	day(v)
 	v > after(days)
@@ -41,13 +37,11 @@ expired(v) if {
 	v <= data.scan_gate.today
 }
 
-# text(v): v is a string with more than blanks in it.
 text(v) if {
 	is_string(v)
 	trim_space(v) != ""
 }
 
-# filled(v): v is a list with at least one item.
 filled(v) if {
 	is_array(v)
 	count(v) > 0
@@ -56,7 +50,6 @@ filled(v) if {
 # items(v): the items of v with their index, when v is a list; nothing otherwise (a mapping is not iterated).
 items(v) := {i: x | some i, x in v} if is_array(v)
 
-# extra(obj, keys): the keys of obj outside keys.
 extra(obj, keys) := {k | some k, _ in obj; not k in keys}
 
 # label(i, v): how a message names item i: v when it is a string (the item's id), its place in the list otherwise.

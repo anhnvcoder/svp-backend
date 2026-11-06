@@ -1,26 +1,9 @@
-# One leg of the image pipeline: one image on this runner's own architecture. Builds it from its Dockerfile, saves it to a
-# tar, scans that very tar with trivy (vulnerabilities and secrets) and its SBOM (syft) with grype, gates both, and with
-# push: true pushes exactly the scanned image (compared by config digest) and hands the leg on as artifacts
-# leg-<image>-<arch> and sarif-<image>-<arch>. Used by images.yml of this repository (./.github/actions/image-leg) and of
-# svp-frontend (./.backend/.github/actions/image-leg, the checkout of .backend-commit, with code-root its own checkout).
-#
-# The tools run from the images the Makefile of this repository pins by digest, each step calling its tool directly;
-# the guards around them are deploy/ci/image-guard.sh (the image is a service or drill image of the release source of
-# the run's repository, the tree is the run's commit, the pushed config is the scanned one), and the rules of the
-# ignore files deploy/ci/scan-gate.sh --check-ignorefile. Every step that calls docker unsets DOCKER_DEFAULT_PLATFORM
-# first, as every docker call of this repository does: the leg is built and scanned for the runner's own
-# architecture, never emulated. The verdicts are the scanners' exit codes:
-#   - trivy convert --exit-code 5 of the secrets, with no --severity (a severity filter would hide a HIGH secret) and no
-#     ignore file: any secret blocks, drill-vulnerable too;
-#   - trivy convert --exit-code 5 --severity CRITICAL with the tree's .trivyignore.yaml (trivy drops an expired entry):
-#     a CRITICAL blocks, unless the image is drill-vulnerable;
-#   - grype --fail-on critical with the tree's .grype.yaml (exit 2): a Critical blocks, unless drill-vulnerable;
-#   - any other exit code of a scanner, a DB that cannot be fetched, a tar syft cannot read: the leg fails.
-# Both gates run whatever the other found, so the job summary shows both; nothing is pushed unless every step passed.
-#
-# Security rules: inputs reach the steps through env:, never ${{ }} inside run:; nothing here is cached but the trivy
-# and grype DBs (one entry per day); the token is the job's GITHUB_TOKEN, used only by docker login when pushing (the
-# job grants packages: write only then).
+# Builds, scans and gates one image for the runner's architecture; used by backend and svp-frontend images.yml.
+# image-guard.sh validates image/tree upfront and verifies pushed config digest matches scanned tar.
+# Gates secrets (no --severity, no ignore: any secret blocks even drill-vulnerable) and CRITICAL with trivy and grype.
+# Pushes only if all gates pass; inputs reach steps via env:, never ${{ }} inside run:; unsets DOCKER_DEFAULT_PLATFORM.
+# Daily cache for scanner DBs only.
+# Design notes: docs/ci-cd.md.
 name: image-leg
 description: "Build, scan and gate one image for this runner's architecture; push exactly what was scanned"
 
@@ -83,10 +66,8 @@ runs:
         key: grype-db-${{ steps.day.outputs.day }}
         restore-keys: grype-db-
 
-    # The Dockerfile and context the guard hands on: for a service of this repository, its target of the image table
-    # deploy/docker-bake.json (dockerfile of deploy/k8s/lib.sh; the context is the tree's root), the same the dev builds
-    # bake. Native architecture, no emulation, no cross-compiling; no BuildKit provenance or SBOM, so the image is one
-    # plain manifest; then the tar every scanner reads.
+    # Builds on native architecture (no emulation) with provenance=false and sbom=false, so the image is one plain
+    # manifest; then saves it to the tar every scanner reads.
     - name: Build
       id: build
       shell: bash
@@ -109,9 +90,8 @@ runs:
         rm -f "$OUT/image.tar"
         docker save --output "$OUT/image.tar" "$TAG"
 
-    # trivy on the tar (read-only), vulnerabilities and secrets, every severity, as JSON: the record the gate, the SARIF
-    # and the vuln attestation are made from. A DB that cannot be downloaded fails the scan, never a scan against a DB
-    # of unknown age. Its ImageID is the config digest the push is compared with.
+    # Scans tar for secrets and vulnerabilities; ImageID records config digest to verify against push.
+    # Fails if vulnerability DB cannot be downloaded, preventing scans against stale data.
     - name: Scan with trivy
       id: scan
       shell: bash
@@ -155,11 +135,10 @@ runs:
           exit 1
         }
 
-    # grype on that SBOM: a second matcher and DB, and it sees what syft found outside any package manager (the node
-    # binary of the web image), which trivy does not list. grype exits 2 for a match at or above --fail-on, 1 when it
-    # could not scan (a DB it cannot fetch: the update check is required, and grype refuses a DB built more than five
-    # days ago). The only configuration it reads is .grype.yaml of the tree, passed with -c: the working directory and
-    # HOME are an empty tmpfs. Exit 1: blocked; exit 2: grype could not scan.
+    # Scans the SBOM with grype, a second matcher that also sees binaries outside package managers (node of web);
+    # reads only the tree's .grype.yaml. A DB it cannot fetch or built more than five days ago fails the scan.
+    # grype exits 2 on a Critical match, 1 when it could not scan; this step exits 1 when blocked, 2 when grype
+    # could not scan.
     - name: Scan the SBOM with grype, gate
       id: grype
       shell: bash

@@ -1,19 +1,10 @@
-# Findings of make trivy-config that are deliberate choices, ignored for a limited time.
-# A finding that can be fixed without changing behaviour is
-# fixed, not listed here. make trivy-config passes this file to trivy config with --ignorefile; it is never read by the
-# image gate, so nothing here can let a vulnerability or a secret through.
-#
-# Rules, checked on every pull request by deploy/ci/scan-gate.sh --check-ignorefile (job config of ci.yml): only the
-# misconfigurations section; each entry has an id (DS-..., KSV-...), the paths it applies to (an id is never ignored for
-# the whole repository), a statement giving the reason and an expired_at (yyyy-mm-dd) at most 90 days after the day of
-# the check. A misconfiguration changes only when the repository does, so 90 days, about one stage, instead of the 30 of
-# a vulnerability. On expired_at trivy drops the entry and the finding shows again on the next run of main.
+# Misconfigurations of make trivy-config that are deliberate choices, ignored for a limited time; the image gate never
+# reads this file. A finding fixable without changing behaviour is fixed, not listed. Each entry needs an id, its paths
+# (never the whole repository), a statement and an expired_at within 90 days (a misconfiguration changes with the repo).
+# Design notes: docs/reference/ci.md.
 misconfigurations:
-  # Kubernetes and compose check health, never the image: Kubernetes ignores HEALTHCHECK, and compose gives each
-  # container its own (/app healthcheck for the Go services, a fetch of /healthz with node for the web client, none for
-  # the one-shot migrate containers, which run the service images with command migrate, and none for media-worker, a
-  # consumer with no port). A HEALTHCHECK in the image would start checks in containers that have none today, the
-  # migrate ones marked unhealthy while they run. The drill image never runs.
+  # Kubernetes ignores HEALTHCHECK and compose gives each container its own; one in the image would start checks in
+  # containers that have none today (one-shot migrate containers would show unhealthy). The drill image never runs.
   - id: DS-0026
     paths:
       - deploy/docker/service.Dockerfile
@@ -61,9 +52,8 @@ misconfigurations:
       svp-pg (internal/controller/cluster_create.go, cluster_pki.go); cnpg-system: it creates and renews its own CA
       Secret (pkg/certs/k8s.go), and policy svp-cnpg-operator-secrets admits no other Secret it writes there
     expired_at: 2027-01-22
-  # Images of the data charts come from their upstream publishers, pinned by the digest of their multi-arch index
-  # (step 4 of deploy/ci/gitops-check.sh, Renovate proposes each new digest). The check trusts only ECR, GCR and ACR, so
-  # trusting a registry here means copying the image into a private one, a decision of the cloud stage.
+  # Images of the data charts come from their upstream publishers, pinned by index digest. The check trusts only ECR,
+  # GCR and ACR, so trusting a registry here means copying the image into a private one, a decision of the cloud stage.
   - id: KSV-0125
     paths:
       - deploy/helm/svp-data/templates/valkey.yaml

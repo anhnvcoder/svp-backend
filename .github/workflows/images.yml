@@ -1,28 +1,10 @@
-# Images of the six backend services (the web client's are svp-frontend's): build only what changed,
-# on native amd64 and arm64 runners; scan the local image with trivy, and its SBOM with grype, and block secrets and
-# CRITICAL vulnerabilities BEFORE anything is pushed; push exactly what was scanned; join a multi-arch index; sign it keyless with cosign and
-# attest the SBOM (syft), the scan result and the build provenance; promote the signed digests to stg through a pull request in the
-# deployment repository svp-gitops; rescan released digests daily. Also publishes the gateway's API contract
-# (services/gateway/openapi.yaml) as a signed OCI artifact, so the web client builds from a signed version of it.
-# Building, scanning, pushing, joining and signing an image are the composite actions .github/actions/image-leg,
-# image-index and image-sign (svp-frontend's images.yml calls the same ones), which call the pinned tools directly
-# around the guards of deploy/ci/image-guard.sh; the other logic lives in deploy/ci/*.sh, which also run on a machine.
-# This file wires jobs, permissions and artifacts.
-#
-# Security rules of this file:
-#   - permissions: {} here, and each job declares only what it needs. Every job that runs on a pull request has only
-#     contents: read: a pull request runs its own scripts before anyone has read them. Jobs that can write (packages,
-#     id-token, security-events) or read the Actions API run only on main, outside pull_request.
-#   - Only jobs promote and promote-prd write to another repository, each from an environment of its own that holds a
-#     key of the GitHub App installed on svp-gitops alone (deployment branch main only): promote (stg) and promote-prd,
-#     whose required reviewer approves every run before the job gets its key, with no admin bypass. Each job turns its
-#     key into a token of one hour for svp-gitops with contents and pull-requests write only. No job of a pull request
-#     names either environment.
-#   - Every action is pinned to a full commit SHA (the tag in the comment is for people and Renovate); only GitHub's
-#     own actions, sigstore/cosign-installer and the local actions under .github/actions/ (this commit's checkout).
-#   - Untrusted values (inputs, branch names, matrix values from plan) reach scripts through env:, never ${{ }} inside
-#     run:.
-#   - actions/checkout never keeps the token in .git/config: no job pushes to this repository.
+# Builds, gates and releases backend container images; push exactly what was scanned, never rebuild between.
+# permissions: {} at workflow root; jobs on pull requests have contents: read only; write jobs run on main.
+# Actions pinned to full commit SHA; checkout persist-credentials: false.
+# Untrusted values reach scripts via env:, never ${{ }} inside run:.
+# promote and promote-prd gate GitHub App keys by environment; promote-prd waits for reviewer approval.
+# 1-hour token scoped to svp-gitops only; no pull request job names either environment.
+# Design notes: docs/ci-cd.md.
 name: images
 
 on:
@@ -30,8 +12,7 @@ on:
   push:
     branches: [main]
   schedule:
-    # Daily rescan, off the top of the hour (busy for GitHub's scheduler). Kyverno accepts an attestation for 72 hours,
-    # so two missed days are still fine.
+    # Off the hour (busy for GitHub's scheduler); Kyverno accepts an attestation 72 hours, so two missed days are fine.
     - cron: "17 1 * * *"
   workflow_dispatch:
     inputs:
@@ -62,10 +43,9 @@ on:
 
 permissions: {}
 
-# One group per ref and mode: the scheduled rescan and the drill also run on refs/heads/main, and sharing the build's
-# group would let them replace a queued push run. A run on main is never cancelled: cancelling one half-way through
-# signing would leave a pushed digest without its signature. Runs on main follow each other, so each sees the result
-# of the one before when it picks its base.
+# One group per ref and mode so rescan/drill do not cancel queued push runs. Runs on main are never cancelled:
+# cancelling mid-signing leaves pushed digests unsigned. Runs on main follow each other, so each sees the result of
+# the one before when it picks its base.
 concurrency:
   group: >-
     images-${{ github.ref }}-${{ (github.event_name == 'schedule' || inputs.rescan) && 'rescan'
@@ -74,9 +54,8 @@ concurrency:
 
 jobs:
   last-success:
-    # The base of a push build: head_sha of the newest successful push run of this workflow on main. A job
-    # of its own because only it reads the Actions API; it checks out nothing and runs no code of the repository. When
-    # the API fails the output stays empty and the job green: plan then builds all six (too much, never too little).
+    # Dedicated job so only it reads the Actions API; runs no repository code.
+    # On API failure, output stays empty and green so plan falls back to building all services safely.
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-24.04
     timeout-minutes: 5
@@ -90,7 +69,6 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
         run: |
-          # The API filters by branch, event and status; plan.sh takes the answer only when it is a full commit SHA.
           runs_url="repos/$REPO/actions/workflows/images.yml/runs?branch=main&event=push&status=success&per_page=1"
           if sha=$(gh api "$runs_url" --jq '.workflow_runs[0].head_sha // ""'); then
             echo "sha=$sha" >>"$GITHUB_OUTPUT"
@@ -99,11 +77,9 @@ jobs:
           fi
 
   plan:
-    # What this run does: mode (build, rescan, drill), base, images, matrix of legs (deploy/ci/plan.sh).
-    # Every job after it starts its if: with a status function (!cancelled() && needs.plan.result == 'success'): an if:
-    # without one gets an implicit success(), which is false when any job up the needs chain was skipped, and
-    # last-success is skipped on every event but push. Skipped in a dispatch with promote_prd, and with it every job
-    # that needs it: that run only promotes to prd (job promote-prd).
+    # Downstream jobs require explicit status functions (!cancelled()) because implicit success()
+    # evaluates to false if any job up the needs chain was skipped (last-success skips on non-push).
+    # Skipped on promote_prd dispatches since that mode only promotes to prd.
     needs: last-success
     if: ${{ !cancelled() && !inputs.promote_prd }}
     runs-on: ubuntu-24.04
@@ -164,10 +140,8 @@ jobs:
           out: ${{ runner.temp }}/leg
 
   build:
-    # main: the same build, scan and gate, then push exactly the scanned image (by config digest) and hand the leg to
-    # the jobs after it as the artifacts leg-<image>-<arch> and sarif-<image>-<arch> (action image-leg). A blocked image
-    # stops the leg before the push. The caches of the trivy and grype DBs are the only shared state, and no job holding
-    # id-token uses them.
+    # main: push exactly the scanned image by config digest; a blocked image stops the leg before push.
+    # trivy/grype DB caches are the only shared state; no job holding id-token touches them.
     needs: plan
     if: >-
       ${{ !cancelled() && needs.plan.result == 'success'
@@ -191,9 +165,7 @@ jobs:
           out: ${{ runner.temp }}/leg
 
   merge:
-    # One index per image from its two scanned manifests, handed on as the artifact index-<image> (action image-index).
-    # Runs per image even when another image failed; an image with a failed leg has no two artifacts and fails here:
-    # no index, no signature, no release.
+    # Runs per image even if another failed; an image missing a leg artifact fails here, preventing release.
     needs: [plan, build]
     if: >-
       ${{ !cancelled() && needs.plan.outputs.mode == 'build' && needs.plan.outputs.has_images == 'true'
@@ -215,13 +187,8 @@ jobs:
           out: ${{ runner.temp }}/merge
 
   sign:
-    # Keyless signature on the index digest, SBOM attestation on each manifest and vuln attestation (both scans) on the
-    # index, as Sigstore bundles, with the cosign the Makefile pins; then the build provenance (SLSA v1, built by
-    # actions/attest from the claims of this run's OIDC token) on the index, after the signature and the vuln
-    # attestation (action image-sign). The only build-path job with id-token: write, and the only one with
-    # attestations: write (the provenance also goes to the repository's attestations); it uses no cache. Its artifact
-    # release-<image> (repository, tag, digest of the signed index) is what promotion to envs/stg/images/ of svp-gitops
-    # reads.
+    # Signs index keyless and attests SBOM, vuln and SLSA provenance via Sigstore bundles.
+    # The only build-path job with id-token: write and the only one with attestations: write; uses no cache.
     needs: [plan, merge]
     if: >-
       ${{ !cancelled() && needs.plan.outputs.mode == 'build' && needs.plan.outputs.has_images == 'true'
@@ -245,16 +212,9 @@ jobs:
           out: ${{ runner.temp }}/sign
 
   promote:
-    # Promotes to stg in svp-gitops: rebuilds its branch bot/promote-stg as one commit of the app's bot on top of main
-    # there, with the image block of envs/stg/images/<service>.yaml for every image signed in this run and
-    # envs/stg/charts.yaml at this commit, opens or updates its pull request and turns on auto-merge; svp-gitops merges
-    # it once its check gitops-ok is green, with no review (no code owner owns envs/stg/). Runs when signing an image
-    # failed too: every image signed in this run is promoted, the failed one is red in sign. Runs with no image too when
-    # the charts changed (plan's promote_charts): only charts.yaml moves. Runs of main follow each other (the
-    # concurrency group of builds never cancels), so a later run never promotes before an earlier one; the guard
-    # promote_not_behind of deploy/ci/common.sh refuses a run of a commit older than the charts stg runs (a run started
-    # again, a dispatch of an old commit). The token is the app's, for svp-gitops alone; GITHUB_TOKEN only reads this
-    # repository. No id-token, no packages.
+    # Promotes signed images and charts to svp-gitops stg; auto-merges on gitops-ok (envs/stg/ has no owner).
+    # Runs even if some images failed sign (promotes successful ones); promote_not_behind guards revision order.
+    # App token scoped to svp-gitops only; no id-token or packages permissions.
     needs: [plan, sign]
     if: >-
       ${{ !cancelled() && needs.plan.outputs.mode == 'build'
@@ -412,21 +372,10 @@ jobs:
           gh pr merge "$now" --repo "$repo" --auto --squash --match-head-commit "$(git rev-parse HEAD)"
 
   promote-prd:
-    # Promotes to prd in svp-gitops what envs/stg/ held at a commit of its main (input stg_ref, main when empty; an
-    # older commit is a rollback): the image block of the seven envs/stg/images/*.yaml and the three values of
-    # envs/stg/charts.yaml go into the same files of envs/prd/, every other line of them (the comments) kept, with
-    # gitopsRevision of envs/prd/charts.yaml set to that commit, at which prd then renders argocd/apps, base/ and
-    # platforms/; all on branch bot/promote-prd, one commit of the app's bot on top of main there, and its pull request
-    # is opened or updated. No auto-merge: a code owner approves it. Two stops on the way to prd: environment
-    # promote-prd waits for its required reviewer before the job starts (no admin bypass), so no key and no token exist
-    # until someone approves the run, and the pull request waits for its code owner. Two guards of
-    # deploy/ci/common.sh run before the app's token is made: promote_stg_ref takes main or a full commit on main of
-    # svp-gitops only, and promote_stg_evidence wants commit status argocd/stg success on that commit (stg synced it and
-    # found it Healthy). Runs alone: plan skips every other job of a dispatch with promote_prd, and this job refuses one
-    # that also asks to build, rescan or drill, so one run does one thing.
-    # The token is the app's, for svp-gitops alone, from the second key of the app that only promote-prd holds;
-    # GITHUB_TOKEN reads this repository and the commit statuses of svp-gitops, a public repository. No id-token, no
-    # packages.
+    # Promotes stg commit (stg_ref) to prd in svp-gitops; no auto-merge (requires code owner approval).
+    # environment: promote-prd reviewer must approve before GitHub App key is accessed (no admin bypass).
+    # promote_stg_evidence verifies argocd/stg Healthy status on the commit before minting the 1-hour token.
+    # Dedicated run: plan skips all other jobs so prd promotion runs strictly in isolation.
     if: >-
       ${{ github.event_name == 'workflow_dispatch' && inputs.promote_prd && github.ref == 'refs/heads/main' }}
     runs-on: ubuntu-24.04
@@ -555,17 +504,9 @@ jobs:
           fi
 
   contract:
-    # Publishes info.version of services/gateway/openapi.yaml as an OCI artifact (deploy/ci/contract.sh publish):
-    # ghcr.io/anhnvcoder/svp-backend/api/gateway:<version>, signed keyless by this workflow on main, the
-    # identity every verifier of the contract checks. Runs on every build run of main (push, or a dispatch that neither
-    # rescans, drills nor promotes to prd): a version already published with this very file is left alone (signed if
-    # its signature is missing), the same version with other content fails and nothing is overwritten. Those runs share
-    # the concurrency group of builds on main, which never cancels and runs them one after the other, so two runs never
-    # check and push the same tag at once. A version is published at most once: GitHub replaces a run waiting in that
-    # group with a newer one, so a version merged while a build of main runs and followed by another before it starts
-    # is never published; the later version contains it, and publishing every missing version from the history of the
-    # spec would only add releases no client asked for. Needs no image of this run and uses no cache: the job holds
-    # id-token.
+    # Publishes gateway OpenAPI as OCI artifact signed keyless by this workflow on main.
+    # Idempotent: identical version is kept, modified content fails; serial runs prevent concurrent tag pushes.
+    # Uses no cache because the job holds id-token.
     needs: plan
     if: >-
       ${{ !cancelled() && needs.plan.result == 'success' && needs.plan.outputs.mode == 'build'
@@ -590,13 +531,9 @@ jobs:
           deploy/ci/contract.sh publish
 
   rescan:
-    # Daily (and on dispatch rescan=true): every released digest svp-gitops names (envs/*/images/ at its main, at the
-    # open promote pull request bot/promote-stg, and at the dispatch input values_ref) is scanned again, manifest by
-    # manifest, and its vuln attestation replaced with the real result (in the format the digest is signed in; for a
-    # Sigstore bundle the older vuln bundles are taken off with packages: write); a CRITICAL is recorded first, then
-    # fails the job, which mails the owner; a secret fails the job before anything is attested (deploy/ci/rescan.sh). svp-gitops
-    # is cloned anonymously and its files read as data, never run; GITHUB_TOKEN only asks whether its promote pull
-    # request is open (a read of a public repository). No cache: the job holds id-token.
+    # Daily/dispatch rescan of released digests in svp-gitops; replaces vuln attestations with fresh scans.
+    # Older vuln bundles removed via packages: write; CRITICAL records then fails job; secrets fail immediately.
+    # svp-gitops cloned anonymously as data; uses no cache because the job holds id-token.
     needs: plan
     if: >-
       ${{ !cancelled() && needs.plan.result == 'success' && needs.plan.outputs.mode == 'rescan'
@@ -630,14 +567,10 @@ jobs:
           if-no-files-found: ignore
           retention-days: 7
 
-  # Admission drill images: drill-vulnerable (an old base with CRITICAL on both architectures, signed
-  # and attested like a release), drill-unsigned (a clean build pushed with no signature) and drill-no-provenance (the
-  # same clean build, signed and attested vuln like a release, with no build provenance). They exist only so the
-  # cluster can be shown refusing them; no chart points to them and they never run. They go through the very same
-  # steps as a release (YAML aliases of the build and merge jobs), so CRITICAL, the signature and the provenance are
-  # the only differences; only drill-vulnerable gets past the CRITICAL gate, and the secret gate holds for all three.
-  # No image file of svp-gitops names them, so the daily rescan never attests them again: a drill reads them within
-  # the policy's maximum age after this dispatch.
+  # Built here because keyless signing identity is this workflow on main, the only identity Kyverno trusts.
+  # YAML aliases (*release-leg, *merge, *sign) reuse release steps so only vuln, signature or provenance differ.
+  # Drill images (drill-vulnerable, drill-unsigned, drill-no-provenance) test admission rejection; never run.
+  # svp-gitops never names them so daily rescan never re-attests; drills read them within policy maximum age.
   drill-build:
     needs: plan
     if: >-
@@ -670,10 +603,9 @@ jobs:
     steps: *merge
 
   drill-sign:
-    # drill-vulnerable and drill-no-provenance: drill-unsigned stays unsigned on purpose. No build provenance for either
-    # (deploy/ci/image-guard.sh sign hands provenance=false for a drill image, so the step of actions/attest in
-    # image-sign is skipped, and this job has no attestations: write): a drill image is no release, and
-    # drill-no-provenance exists to lack it.
+    # drill-unsigned stays unsigned. Drill images get no build provenance: image-guard.sh sign hands provenance=false
+    # for them, so image-sign skips actions/attest: a drill image is no release, and drill-no-provenance exists to
+    # lack it.
     needs: [plan, drill-merge]
     if: >-
       ${{ !cancelled() && needs.plan.outputs.mode == 'drill'
@@ -691,12 +623,8 @@ jobs:
     steps: *sign
 
   sarif:
-    # Uploads the SARIF of main's builds and rescans to the Security tab, one category per tool, image and architecture.
-    # One upload per tool: upload-sarif merges every file it is given into a single SARIF log, and GitHub rejects a log
-    # with more than 20 runs. Each leg writes one trivy and one grype run, so all six images (12 legs) would make 24
-    # runs in one log; per tool it is at most 14 (a rescan writes trivy runs only and never shares a run with a build).
-    # The only job with security-events: write; it runs no code of the repository. A report, not a check: not in
-    # images-ok (a failed upload still turns the run red).
+    # Uploads SARIF to Security tab split by tool: GitHub rejects logs with >20 runs (12 legs would yield 24).
+    # Only job with security-events: write; runs no repo code; not in images-ok (reporting only).
     needs: [plan, build, rescan]
     if: >-
       ${{ !cancelled() && github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
@@ -712,9 +640,7 @@ jobs:
           pattern: sarif-*
           path: ${{ runner.temp }}/sarif
       - id: split
-        # Sorts the files into one directory per tool and counts the runs with the runner's jq, so that a log over the
-        # limit stops here with its count instead of GitHub's rejection. A tool over the limit is not uploaded; the
-        # other one still is.
+        # Splits SARIF by tool and counts runs with jq so logs exceeding 20 runs fail early with clear counts.
         run: |
           mkdir -p "$RUNNER_TEMP/sarif-trivy" "$RUNNER_TEMP/sarif-grype"
           while IFS= read -r -d '' f; do
@@ -760,10 +686,8 @@ jobs:
           sarif_file: ${{ runner.temp }}/sarif-grype
 
   images-ok:
-    # The required check of this workflow. Green only when every job succeeded or was skipped for a reason this job
-    # recomputes from the event, the ref and plan's outputs: a skip from a wrong if: is red, and so are
-    # failure and cancelled. Never skipped itself (GitHub counts a skipped required check as passed). Needs no
-    # permission and runs no code of the repository.
+    # Required check: recomputes expected skips from event, ref and plan outputs; unexpected skips turn red.
+    # Runs always() and never skips itself (GitHub treats skipped checks as passed); runs no repository code.
     needs:
       - last-success
       - plan

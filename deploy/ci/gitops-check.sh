@@ -1,101 +1,8 @@
 #!/usr/bin/env bash
-# gitops-check.sh GITOPS_DIR [BASE]: the check of a tree of the deployment repository svp-gitops (base/, envs/,
-# argocd/), run by that repository's workflow from a checkout of this repository at a pinned commit, and on a machine
-# against a clone. Exit 0 when every step passes; each step prints one line per thing it checked, FAIL lines on stderr.
-#
-# gitops-check.sh --worktree GITOPS_DIR: the same render of a clone of svp-gitops (main, in CI), with the charts of this
-# repository's working tree standing for the revision of every environment: what `make helm-check` runs on a change of
-# the charts before it is merged. Step 1 then checks the shape of charts.yaml and of the image files only, since the
-# revision they pin and what derives from it are svp-gitops's own check, and step 5 (the release images, which are
-# svp-gitops's) is left out.
-#
-#   1. The tree: the policies of deploy/ci/gitops-tree-policies/ (conftest in CONFTEST_IMAGE of the Makefile, without
-#      network; each rule and why in the policy, its cases in *_test.rego, make conftest-verify): the layout of the
-#      root chart and the bootstrap, envs/ (exactly prd and stg; charts.yaml with exactly its three keys, one line each,
-#      the values derived from its revision; images/ with one file per service, each the image block alone, a release
-#      of a source of the table at the revision), the platform layer (key platforms of argocd/apps/components.json,
-#      platforms/ and its files, a file of a platform held to an overlay's rules), and the author of a pull request
-#      (which files each bot may change). This step builds their input, one JSON document (see their lib.rego): the
-#      tree's entries and the text of its files; for each environment, whether its revision is a commit on origin/main
-#      of this repository (a FAIL line when not), the values that commit derives (podSecurityVersion of
-#      deploy/helm/svp-cluster/values.yaml, the sha256 of deploy/observability/otelcol/k8s-config.yaml) and its table of
-#      release sources (release_sources of deploy/k8s/lib.sh; a revision from before that table fails); and, with
-#      BASE, the pull request: its author (pull_request.user.login of the event in GITHUB_EVENT_PATH; on a machine,
-#      where GITHUB_EVENT_NAME is unset, SVP_CHANGE_REQUEST_AUTHOR), the sender of the event (sender.login) and, for a
-#      bot's, the files changed from BASE to HEAD. An author or sender that cannot be read fails; without BASE, or for
-#      a run of no pull request, the rule prints one skip line. A conftest that gives no answer, or none from one of
-#      the policies, fails the step. Whether a release is signed, and built from the commit its tag names, is step 5's.
-#      An environment that pins a commit of svp-gitops (gitopsRevision of its charts.yaml; prd alone, the policies)
-#      needs that commit in GITOPS_DIR, a clone with its history: on origin/main, holding argocd/apps/Chart.yaml (a FAIL
-#      line when not). gitops-check.sh --tree GITOPS_DIR [BASE] runs this step alone (its test).
-#   2. The root chart argocd/apps for each environment on each platform the platform layer runs it on, on amd64 and
-#      arm64 nodes (helm lint and template). The root gets value platform, and on
-#      eks value cluster from deploy/ci/cluster-values.example.yaml, the form the GitOps Bridge sets with the session's
-#      real values (annotation svp.io/cluster-values of the cluster Secret), which never go to git (step 1 holds
-#      argocd/apps/values.yaml and the files of platforms/ to setting none). A tree with the two-level root argocd/root
-#      is rendered as Argo CD renders it: level 1, argocd/root of the tree with those values, makes exactly one
-#      Application, svp-apps, whose one source is argocd/apps of svp-gitops at the commit the environment pins
-#      (refs/heads/main for one that pins none), that revision its valuesObject's targetRevision too; level 2 is
-#      argocd/apps with that valuesObject. An environment that pins a commit runs steps 2 to 4 on its own, with
-#      argocd/, base/ and platforms/ (the bootstrap of Argo CD included) of that commit unpacked with git archive and
-#      envs/<env>/ of the tree: there every source of svp-gitops names the commit and every values file is read through
-#      one (ref values), so a change of base/ or platforms/ on main does not reach the environment. The other
-#      environments run them on the tree. In every environment (without --worktree) a chart of this repository is read
-#      at the revision of envs/<env>/charts.yaml of the tree. What the root renders from a template <name>.values.tpl is
-#      held to an overlay's rules: no image, canary or httpRoute.name for a release of chart svp-service
-#      (envs/<env>/images/ names its image). The root fails when an overlay or an image file breaks its rules. It makes
-#      one Application per component that runs on the platform, each reading the values files base/ (and archValues of
-#      its architecture) < platforms/<platform>/<name>.yaml < envs/<env>/<name>.yaml < envs/<env>/images/<name>.yaml that
-#      exist, in that order (named without the ref of their source), then a valuesObject exactly when
-#      platforms/<platform>/<name>.values.tpl exists. On a two-level root the files of envs/<env>/ are no values files:
-#      level 1 hands their content over, and the valuesObject of each Application is its overlay < its image file < the
-#      template's render (the render of level 2 with the content of envs/<env>/ emptied), merged as Helm merges values
-#      files (jq's *), against the files of the tree, so neither an old envs/ nor another order reaches the cluster.
-#      Every source it reads from svp-gitops names a full ref (refs/heads/<branch>) or a commit as targetRevision, never
-#      a short name, which Argo CD may resolve to a tag of that name, and the sources of svp-gitops of one Application
-#      name one revision: Argo CD's repo-server refuses values files that reference one repository at two revisions.
-#      Argo Rollouts gets exactly one traffic router plugin on each architecture, the asset built for it, both of one
-#      release. gitops-check.sh --root GITOPS_DIR runs steps 1 and 2 alone (their test, no network).
-#   3. The charts of this repository (deploy/helm/*, at the revision of each environment) with base/ alone and with
-#      the values each environment on each platform reads, as Argo CD reads them (helm lint and template); no render on
-#      a platform without localHosts names svp.localhost: a grep of their whole text, and policy no-lab-hosts of
-#      deploy/ci/gitops-policies/ on the charts' renders (hosts of routes, Gateways and Ingresses, the env values of
-#      containers). Chart svp-cluster: no ExternalSecret or SecretStore with base/
-#      alone (the dev path's), one ExternalSecret per entry of its files/external-secrets.yaml and one SecretStore per
-#      namespace there in each environment on each platform, the entries with inClusterObjectStore left out where its
-#      s3.mode is external and those with enabledBy where that key of externalSecrets is not true (provider
-#      kubernetes on k3d, aws on eks, no svp-secrets on eks), valid against the CRDs of the External Secrets chart
-#      components.json pins (kubeconform -strict in KUBECONFORM_IMAGE of the Makefile).
-#   4. Every image pinned by digest. Renders, with `helm template --include-crds`, every component of
-#      components.json with its base/ values (upstream charts at their pinned versions, the charts of this repository
-#      at each revision; a component that does not run on k3d, the dev path's platform, with its platform's values
-#      instead) and Argo CD as argocd/bootstrap.json installs it, then again with each platform's argo-cd.yaml, as
-#      deploy/k8s/gitops.sh installs it there. Policy images-pinned of deploy/ci/gitops-policies/
-#      holds every image of those renders to exactly one digest: image fields of containers, image settings in their
-#      env, args and command (an operator's --xxx-image=... flag, an env value it starts pods from), image keys of a
-#      custom resource's spec, image settings in a ConfigMap (see the policy). Kyverno checks only the release images
-#      of namespace svp at admission, so the images of the platform namespaces are held to their digests here instead:
-#      a tag can be pushed again to other content, a digest cannot. Under the policy, a scan of the renders' text
-#      (image_refs) for any other image reference without its digest fails it as outside the policy. Every environment
-#      runs the images built once for the base: each component with values of a platform (platforms/<platform>/) is
-#      rendered again with them, and that render runs no other version (tag or digest) of an image the base runs,
-#      though it may run fewer or others (the cloud's object store instead of the cluster's, a controller of the
-#      cloud); each component with an overlay in envs/<env>/ is rendered again with it after those, and the images of
-#      that render, the seven service images included, must be exactly those of the render it adds to (the
-#      platform's, else the base's), compared on the images image_refs reads. The images of every render are held to
-#      their digests.
-#   5. deploy/ci/values-check.sh --gitops on the image files changed from commit BASE to HEAD of GITOPS_DIR (every one
-#      without BASE): signed release, vuln attestation, and the build provenance the environment's policy asks for.
-#      For a release whose provenance was checked, image.tag must be the 12 hex of the commit the provenance names
-#      (tag_provenance_mismatch of common.sh); in an environment that requires provenance, a check of a release that
-#      names no provenance commit fails too.
-#
-# gitops-check.sh --policy images-pinned|no-lab-hosts FILE...: the rule of step 4 or of step 3's policy alone, on
-# rendered manifests as they are (its test).
-#
-# GITOPS_DIR is read, never written: everything else happens in a temporary directory. Needs bash, git, jq, helm,
-# docker and network access (chart repositories, GHCR), and, without --worktree, the history of this repository up to
-# every revision (a full clone, origin/main fetched). With BASE, GITOPS_DIR must be the top of its own git repository.
+# gitops-check.sh GITOPS_DIR [BASE]: validates the svp-gitops deployment tree across 5 steps.
+# --worktree tests working charts; --tree tests step 1 alone; --root tests steps 1-2;
+# --policy images-pinned|no-lab-hosts tests a single policy on rendered manifests.
+# Design notes: docs/reference/ci.md.
 set -euo pipefail
 
 # shellcheck source=deploy/ci/common.sh
@@ -164,13 +71,8 @@ step() {
 # KYVERNO_CLI_IMAGE of the Makefile, without a cluster or network.
 policies=$ci_dir/gitops-policies
 pinned_re='^[^@]+@sha256:[0-9a-f]{64}$'
-# kyverno_apply ROOT POLICY FILE...: policy POLICY on the resources of the rendered FILEs, which must not hold one
-# resource twice (the CLI's fake cluster stops at a second copy). Prints one line per resource that does not pass,
-# "  <file, relative to ROOT>: <kind> <namespace>/<name>: <message>", and returns 1 then, or when the CLI gives no
-# report, or one without a result for every resource (a policy that does not compile applies to nothing), or when
-# two resources of one kind and name are rendered without a namespace (named before the CLI is run). FILEs with no
-# resource left once comments and CustomResourceDefinitions are dropped: the CLI is not run, one "ok" line. Sets
-# kyverno_checked to the number of resources.
+# kyverno_apply ROOT POLICY FILE...: applies Kyverno POLICY on resources of rendered FILEs; sets kyverno_checked.
+# CLI fake cluster stops on duplicate resources; returns 1 on violation or missing result.
 kyverno_apply() {
   local root=$1 policy=$2 dir n=0 f image args=() want got
   shift 2
@@ -553,8 +455,7 @@ done
 [ -z "$pr_ok" ] || echo "$pr_ok"
 [ -z "$tree_only" ] || exit 0
 
-# two_level: the tree has the two-level root, argocd/root and then argocd/apps with the values level 1 gives it; empty for
-# a root of one level, argocd/apps alone.
+# two_level: non-empty when tree has two-level root (argocd/root then argocd/apps with level 1 values).
 two_level=
 [ ! -f "$tree/argocd/root/Chart.yaml" ] || two_level=1
 
@@ -576,11 +477,8 @@ short_refs() {
     want && /^ *- / { want = 0 }' "$@" | sort -u | paste -sd ' ' -
 }
 
-# level_one ENV PLATFORM ARCH ARG...: level 1 of the two-level root, argocd/root of the tree with the values the
-# bootstrap gives the root (ARGs), as Argo CD renders svp-root on main. It makes exactly one Application, svp-apps,
-# whose one source is argocd/apps of svp-gitops at the commit ENV pins (refs/heads/main for an environment that pins
-# none), with that revision as targetRevision of its valuesObject too, the values of level 2: written to
-# $tmp/render/level2-<env>-<platform>-<arch>.json.
+# level_one ENV PLATFORM ARCH ARG...: renders level 1 (argocd/root); writes level 2 valuesObject to JSON.
+# Guards that level 1 yields exactly one Application svp-apps at the pinned commit (refs/heads/main if unpinned).
 level_one() {
   local env=$1 plat=$2 arch=$3 want top got source
   shift 3
@@ -691,8 +589,7 @@ render_tree() {
   app_files() {
     if [ -n "$two_level" ]; then values_files "$@" | grep -v '^envs/' || true; else values_files "$@"; fi
   }
-  # env_values ENV FILE: envs/ENV/FILE of the tree as one line of JSON, {} for a file that is not there or holds comments
-  # alone; each file read once.
+  # env_values ENV FILE: envs/ENV/FILE of the tree as one line of JSON, {} if missing or comments-only.
   env_values() {
     local f=$tree/envs/$1/$2 c=$tmp/env-values/$1/${2//\//-}.json
     if [ ! -f "$c" ]; then
@@ -757,11 +654,7 @@ render_tree() {
           | join("\u001f")' >"$tmp/render/tpl-$tag-$arch" ||
           fail "read the Applications of $apps for $label on $arch nodes with the overlays and image files emptied"
       fi
-      # Each Application: its name, the values files of its source with helm (without the ref of their source), its
-      # valuesObject ("" for none), the revision of its chart of this repository ("" for an upstream chart), each values
-      # file read at another revision than the commit an environment pins ("<file> at <revision>", the targetRevision of
-      # the source of svp-gitops whose ref the file names, or "no source" for a file named without the ref of one; ""
-      # for an environment that pins none), and the revisions its sources of svp-gitops name, once each.
+      # Extracts each Application's values files, valuesObject, chart revision, and gitops source revisions.
       yaml_json "$root" | jq -r --arg url "$gitops_url" --arg pin "$pin" 'select(.kind == "Application")
         | ([.spec.sources[] | select(.repoURL == $url and .ref) | {(.ref): (.targetRevision // "")}] | add // {}) as $refs
         | [.spec.sources[] | select(.helm)][0] as $s | $s.helm as $h
@@ -852,8 +745,7 @@ render_tree() {
     f=$tmp/values/$1-$2-$3.object.json
     [ ! -f "$f" ] || echo "$f"
   }
-  # layer_values ENV PLATFORM NAME: the same values one layer per file: those of values_files, then what the root renders
-  # from platforms/<platform>/<name>.values.tpl, when it does.
+  # layer_values ENV PLATFORM NAME: values one layer per file, with valuesObject from platform template if present.
   layer_values() {
     local f
     values_files "$1" "$2" "$3" arm64 | while IFS= read -r f; do at "$f"; done
@@ -861,9 +753,8 @@ render_tree() {
     [ ! -f "$f" ] || echo "$f"
   }
 
-  # placeholder_repo SERVICE REV: the repository of SERVICE's release that a render with base/ alone gets: the first of
-  # the release sources that publish it in the table at REV (the working tree's for "worktree"), so the render's image is
-  # a service image of those charts, as an environment's would be.
+  # placeholder_repo SERVICE REV: repository of SERVICE's release for base/ renders from release sources at REV,
+  # so the render's image is a service image of those charts, as an environment's would be.
   placeholder_repo() {
     local rev=$2
     [ "$rev" != worktree ] || rev=
@@ -956,8 +847,8 @@ render_tree() {
       fail "svp-cluster at $(label_of "$env") with base/ alone (the dev path's) renders an ExternalSecret or a SecretStore"
     fi
   done
-  # The chart's merged values, read by a chart holding its values.yaml and printing them: s3.mode decides which entries of
-  # files/external-secrets.yaml exist (a chart from before s3.mode has one object store, in the cluster).
+  # Reads merged chart values: s3.mode decides which entries of files/external-secrets.yaml exist
+  # (a chart from before s3.mode has one object store, in the cluster).
   printf 'apiVersion: v2\nname: mv\nversion: 0.1.0\n' >"$vt/mv/Chart.yaml"
   printf '%s\n' '# json {{ toJson .Values }}' >"$vt/mv/templates/values.yaml"
   for target in $targets; do
@@ -1060,8 +951,7 @@ render_tree() {
         helm "${args[@]}" >"$out/base/$name.yaml" 2>"$tmp/err" || { cat "$tmp/err" >&2; fail "helm template $name ($label)"; }
         rendered=$((rendered + 1))
       fi
-      # Argo CD with the values of each platform that has some (platforms/<platform>/argo-cd.yaml after the bootstrap's),
-      # as deploy/k8s/gitops.sh installs it on that platform.
+      # Argo CD with platform values (platforms/<platform>/argo-cd.yaml), as deploy/k8s/gitops.sh installs it.
       if [ "$name" = argocd ]; then
         for plat in $rev_platforms; do
           [ -f "$gtree/platforms/$plat/argo-cd.yaml" ] || continue
@@ -1105,11 +995,9 @@ render_tree() {
       done
     done <<<"$list"
 
-    # Each render against the one it adds to, the service images included. An environment's overlay against its
-    # platform's render (the base's where the platform has no values for the component): exactly the same images. A
-    # platform's render against the base's (none for a component that does not run on k3d): no other version of an image
-    # the base runs (another tag or digest of one of its repositories), while it may run fewer (an object store the cloud
-    # provides) or others, which the pin check holds to their digests like every image.
+    # Compares overlay images against platform render, and platform render against base.
+    # Overlay keeps exact images; platform cannot change base image versions, but may omit or add images
+    # (which the pin check holds to their digests like every image).
     drift=
     for f in "$out"/platform/*/*.yaml "$out"/env/*/*.yaml; do
       [ -f "$f" ] || continue

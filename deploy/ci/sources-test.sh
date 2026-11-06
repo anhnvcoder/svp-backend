@@ -1,29 +1,9 @@
 #!/usr/bin/env bash
-# Tests for the rules on the table of release sources (deploy/helm/svp-policy/files/sources.json), written once, in the
-# template of chart svp-policy, which fails the render of a table the policy would get wrong; the scripts read the
-# table (release_sources of deploy/k8s/lib.sh) without checking those rules again. Each broken table below must fail
-# the render with the template's own message:
-#   - an imagePrefix that starts with another source's, or equals it;
-#   - a service in three sources (one of them a retired source too);
-#   - a quote, a backslash or white space in a value (they go into CEL string literals);
-#   - two sources with one name, or one promoter (a retired source given another's promoter too);
-#   - a promoter that is empty, a number or null (a retired source leaves the key out);
-#   - a file that is not JSON, a list sources that is empty, an entry that is not an object, a field left out;
-#   - an imagePrefix that does not end in /, a provenanceRef that is not a refs/... ref, an issuer that is not an
-#     https:// URL, a name that is not a lowercase letter then letters and digits;
-#   - an empty list services, an image name with a /.
-# The table of the working tree renders, every source of it has a promoter (the retired sources, without one, were
-# dropped from it), and its render selects exactly two globs per published name (matchImageReferences) and has one
-# attestor per source, named after it. A source without promoter, retired, still renders, as the tables of older
-# commits an environment may pin have such sources. Each case renders a copy of the chart with its own table, under
-# Helm homes in a temporary directory, so no cache or repository of the machine is read or written.
-# Then the lookups of deploy/k8s/lib.sh that pick a source by the prefix of an image, the one rule the scripts keep:
-# source_of_repository and release_source_of fail when more than one source matches, and release_sources fails on a
-# file that is not JSON. Last, web_clone of deploy/k8s/lib.sh, which reads the table: without WEB_REF it checks out the
-# commit of the web release stg runs when it is a release of source web, and refuses one under another prefix before
-# anything is cloned.
-# Needs bash, git, jq and helm: no network, no cluster.
-#
+# Tests for the rules on the table of release sources (deploy/helm/svp-policy/files/sources.json), which the template
+# of chart svp-policy enforces by failing the render with its own message, and for the lookups of deploy/k8s/lib.sh
+# that read the table. Each case renders a copy of the chart with its own table under temporary Helm homes. Needs
+# bash, git, jq and helm: no network.
+
 # Usage, from anywhere: deploy/ci/sources-test.sh
 set -euo pipefail
 
@@ -217,10 +197,9 @@ lookup "release_source_of: two sources with one prefix" \
   "imagePrefix ghcr.io/anhnvcoder/svp-backend/ starts with imagePrefix ghcr.io/anhnvcoder/svp-backend/" \
   release_source_of web ghcr.io/anhnvcoder/svp-backend/web
 
-# --- web_clone of deploy/k8s/lib.sh without WEB_REF: the commit of the web release stg runs, when that release is
-# <imagePrefix>web of a source of the table: web. A release under another prefix is refused before anything is cloned.
-# In a copy of lib.sh and the policy's chart files; the clone of svp-frontend comes from a repository on disk
-# (url.insteadOf of a git config of its own), the clone of svp-gitops is a repository on disk too.
+# --- web_clone of deploy/k8s/lib.sh without WEB_REF: it checks out the commit of the web release stg runs, and
+# refuses one under another prefix before anything is cloned. The clones of svp-frontend and svp-gitops are
+# repositories on disk.
 wc=$work/webclone
 mkdir -p "$wc/deploy/k8s" "$wc/deploy/helm/svp-policy"
 cp "$src/deploy/k8s/lib.sh" "$wc/deploy/k8s/"

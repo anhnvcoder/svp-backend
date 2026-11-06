@@ -1,50 +1,31 @@
-# Checks of every pull request and of every push to main: the whole local check list (make check-go, generated
-# code, buf breaking, the version rule of the API contract, compose, Collector, Prometheus rules, charts) plus the
-# secret scan of the whole git history, the misconfiguration scan, the security lint of the workflows (zizmor), the Markdown
-# lint and internal links (make docs-check) and, on pull requests, the review of the dependencies they change. Job ci-ok is the only check the ruleset of main requires
-# from this workflow, so the other jobs can be renamed or added without touching it. Job stack runs the whole
-# compose stack end to end as a report outside ci-ok, so a flaky run on a shared runner never blocks a merge.
-#
-# The repository is public and a pull request from a fork runs this workflow with the fork's code, so:
-# - no pull_request_target and no workflow_run: a pull request never runs with a write token or with secrets;
-# - every job that runs code of the repository has contents: read and nothing else. The only job with a write
-#   permission (sarif, security-events: write) runs on main outside pull requests and executes nothing of the
-#   repository: it uploads the SARIF reports the other jobs left as artifacts;
-# - every action is GitHub's own and pinned to a full commit SHA: a tag moved to other code changes nothing here;
-# - checkout never leaves the token in .git/config (persist-credentials: false);
-# - values an outsider controls (branch names, titles) never go into a script through ${{ }}: only through env.
+# Checks of every pull request and push to main; ci-ok is the only check the ruleset requires.
+# Public repository: a fork's pull request runs this file with its own code, so:
+# - no pull_request_target or workflow_run: no write token or secret reaches a pull request;
+# - jobs that run repository code get contents: read only; the one write job (sarif) runs on main and runs none of it;
+# - actions pinned to a full commit SHA; checkout with persist-credentials: false;
+# - untrusted values (branch names, titles) reach scripts through env:, never ${{ }}.
+# Design notes: docs/ci-cd.md.
 name: ci
 
 on:
   pull_request:
   push:
     branches: [main]
-  # Run by hand on any branch. No paths filter on any trigger: a required check whose workflow does not run is never
-  # reported and leaves the pull request waiting.
+  # No paths filter on any trigger: a required check whose workflow never runs leaves the pull request waiting.
   workflow_dispatch:
 
 permissions: {}
 
 concurrency:
   group: ci-${{ github.ref }}
-  # A new push to a pull request makes its previous run useless. On main a running run is never cancelled, but the
-  # group holds one running and one pending run: a newer push replaces the pending one, so with several merges during
-  # one run the commits in between get no result of their own (the newest commit's run checks the code they led to).
+  # On main a running run is never cancelled, but the group holds one running and one pending run: a newer push replaces
+  # the pending one, so with several merges during one run the commits in between get no result of their own
+  # (the newest commit's run checks the code they led to).
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
-  # Which areas a pull request changes, so a job whose area it leaves alone skips and ci-ok accepts that skip. Each
-  # output is true or false:
-  #   code       any file but documentation: Markdown (a chart's README.md excepted: helm-docs writes it and job
-  #              generate checks it), docs/, LICENSE. Jobs check, generate, config, trivy-config;
-  #   proto      proto/ or buf's own files: job buf;
-  #   api        the REST contract services/gateway/openapi.yaml or the scripts that check it: job api-contract;
-  #   workflows  .github/: job zizmor;
-  #   stack      anything the compose stack runs from: every file but documentation, deploy/helm/, deploy/ci/ and the
-  #              cluster drills (deploy/k8s/drills/, deploy/k8s/cloud/), which no target of job stack reads.
-  # gitleaks, docs and dependency-review always run. A change of the Makefile, of a *.mk file or of this workflow,
-  # a push and a dispatch turn every output true: when in doubt, run. The list comes from GitHub's API for the pull
-  # request, not from git, so no history is fetched.
+  # Outputs say which area a pull request changed; untouched areas skip and ci-ok accepts the skip.
+  # Makefile, *.mk, this workflow, push and dispatch turn every output true: when in doubt, run.
   changes:
     runs-on: ubuntu-24.04
     timeout-minutes: 5
@@ -68,8 +49,8 @@ jobs:
           docs='^docs/|^LICENSE$|\.md$'
           generated='^deploy/helm/[^/]+/README\.md$'
           if [ "$EVENT" = pull_request ]; then
-            # Both names of a renamed file. The API lists at most 3000 files of a pull request: a list shorter than the
-            # pull request's count of changed files is incomplete, and then every job runs.
+            # Both names of a renamed file, so a rename out of an area still runs its job.
+            # The API lists at most 3000 files: a list shorter than changed_files is incomplete, so every job runs.
             listed=$(gh api --paginate "repos/$REPO/pulls/$PR/files" --jq '.[] | [.filename, (.previous_filename // "")] | @tsv')
             count=$(printf '%s\n' "$listed" | grep -c . || true)
             if [ "$count" -eq "$CHANGED" ]; then
@@ -101,9 +82,7 @@ jobs:
             fi
           } | tee -a "$GITHUB_OUTPUT"
 
-  # make check-go: gofmt, go vet, golangci-lint (gosec included), actionlint, buf lint and build, go test -race. The
-  # integration tests reach Postgres and Redis on the same 127.0.0.1 addresses as on a dev machine, the only ones
-  # internal/pgtest and internal/redistest accept, through the two service containers below.
+  # Tests reach Postgres and Redis on 127.0.0.1, the only addresses internal/pgtest and internal/redistest accept.
   check:
     needs: changes
     if: needs.changes.outputs.code == 'true'
@@ -111,8 +90,8 @@ jobs:
     permissions:
       contents: read
     services:
-      # Major 15 like the dev machine's Postgres and the cluster's; superuser postgres/postgres, the default
-      # SVP_TEST_POSTGRES_URL of the Makefile. Tests create their own svp_*_test databases from it.
+      # Major 15 like the dev machine's Postgres and the cluster's. postgres/postgres is the Makefile's default
+      # SVP_TEST_POSTGRES_URL; tests create their own svp_*_test databases from it.
       postgres:
         image: docker.io/library/postgres:15.19-trixie@sha256:64b99032e218b66b1d1a6334995056e1aa57f50a0c522cc856e72dff0e4b0d63
         env:
@@ -125,7 +104,7 @@ jobs:
           --health-interval 5s
           --health-timeout 5s
           --health-retries 20
-      # Same 8.8 line as the dev machine's Redis; tests use db 15 (default SVP_TEST_REDIS_URL of the Makefile).
+      # Same 8.8 line as the dev machine's Redis; tests use db 15, the default SVP_TEST_REDIS_URL of the Makefile.
       redis:
         image: docker.io/library/redis:8.8.3-trixie@sha256:418e397fd48d66e450af13baab123397f2d2580b07ef310c3a5dbe96c3d731f1
         ports:
@@ -139,13 +118,11 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      # The Go of the Dockerfiles' builder image and of the dev machine. Caches modules and the build cache, keyed on
-      # go.sum.
+      # Go matches Dockerfiles' builder image and dev machines. Caches modules and build cache, keyed on go.sum.
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version: 1.27.3
           cache-dependency-path: go.sum
-      # The binaries of make tools and make ci-tools, rebuilt only when the Makefile (their pinned versions) changes.
       - id: tools
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
@@ -154,14 +131,12 @@ jobs:
       - name: Install the pinned tools
         if: steps.tools.outputs.cache-hit != 'true'
         run: make tools ci-tools
-      # The transcode tests of media-worker skip without ffmpeg and ffprobe, which the runner lacks. Ubuntu 24.04 ships
-      # 6.1, older than the image's (Alpine 3.24); the tests use long-standing flags only.
+      # Transcode tests skip without ffmpeg/ffprobe (silent green). Ubuntu 24.04 ships 6.1; tests use stable flags only.
       - name: Install ffmpeg
         run: |
           sudo apt-get update -q
           sudo apt-get install -y -q --no-install-recommends ffmpeg
-      # -count=1: the restored build cache would otherwise report cached test results and run nothing. golangci-lint
-      # runs once and writes a SARIF report beside its text output; the path is filled in here because a $ left in
+      # -count=1 avoids cached test results. The SARIF path is filled in with ${{ runner.temp }} here: a $ left in
       # the value would be read by make as one of its variables.
       - name: make check-go
         env:
@@ -189,7 +164,6 @@ jobs:
           path: ${{ runner.temp }}/golangci-lint.sarif
           if-no-files-found: ignore
 
-  # make generate in a scratch copy, compared with the files as committed (the working tree is never written).
   generate:
     needs: changes
     if: needs.changes.outputs.code == 'true'
@@ -214,7 +188,6 @@ jobs:
         run: make tools ci-tools
       - run: make generate-check
 
-  # Breaking changes of the proto contracts. buf lint and buf build already run in make check.
   buf:
     needs: changes
     if: needs.changes.outputs.proto == 'true'
@@ -239,9 +212,8 @@ jobs:
       - name: Install the pinned tools
         if: steps.tools.outputs.cache-hit != 'true'
         run: make tools ci-tools
-      # Base of the comparison: a pull request, the merge base with its base branch; a push to main, main as it was
-      # before the push (all zeros when the branch did not exist: nothing to compare with); a manual run, the merge
-      # base with main, as images.yml does (its before is empty, not zeros).
+      # Comparison base: merge-base for PR/dispatch (a dispatch's before is empty, not zeros); before for push
+      # (all zeros when the branch is new: nothing to compare).
       - name: buf breaking
         env:
           EVENT_NAME: ${{ github.event_name }}
@@ -261,9 +233,7 @@ jobs:
           echo "buf breaking against $base"
           "$(go env GOPATH)/bin/buf" breaking --against ".git#ref=$base"
 
-  # The version rule of the gateway's REST contract (services/gateway/openapi.yaml), which clients in other repositories
-  # pin by version: the file changed means info.version went up, and enough (oasdiff, pinned in the Makefile, no
-  # network). Then the tests of deploy/ci/contract.sh, its publishing included, against a fake registry and cosign.
+  # External clients pin gateway's REST contract by version: changes require info.version to increase accordingly.
   api-contract:
     needs: changes
     if: needs.changes.outputs.api == 'true'
@@ -276,9 +246,7 @@ jobs:
         with:
           persist-credentials: false
           fetch-depth: 0
-      # The base as for buf breaking: a pull request, the merge base with its base branch; a push to main, main as it
-      # was before the push (all zeros when the branch did not exist: the script then has nothing to compare and
-      # says so); a manual run, the merge base with main.
+      # Comparison base as for buf breaking: merge-base for PR/dispatch (before is empty there); before for a push.
       - name: make api-contract-check
         env:
           EVENT_NAME: ${{ github.event_name }}
@@ -292,18 +260,14 @@ jobs:
           make api-contract-check BASE="$base"
       - run: deploy/ci/contract-test.sh
 
-  # The configuration that no Go test covers: the rules of .trivyignore.yaml, .grype.yaml and deploy/ci/trivy-config-ignore.yaml,
-  # Prometheus rules and their tests, the three Collector configs, the compose file of every profile, every chart of the
-  # repository, the digests of third-party images, the k6 scripts with each profile and the cloud cluster's manifests.
+  # Configuration, manifests, charts and CI scripts that no Go test covers.
   config:
     needs: changes
     if: needs.changes.outputs.code == 'true'
     runs-on: ubuntu-24.04
     permissions:
       contents: read
-    # The deployment configuration this job checks the charts against: main of svp-gitops, which make gitops-clone
-    # clones anonymously into this folder (gitignored) below; every script reads it there through gitops_dir of
-    # deploy/k8s/lib.sh.
+    # Deployment configuration the charts are checked against, read through gitops_dir of deploy/k8s/lib.sh.
     env:
       SVP_GITOPS_DIR: ${{ github.workspace }}/.gitops/svp-gitops
     steps:
@@ -314,25 +278,15 @@ jobs:
           fetch-depth: 0
       # Public repository, over HTTPS without credentials: no token, no secret.
       - run: make gitops-clone
-      # Here and not only in the image gate: a pull request that changes nothing but .trivyignore.yaml or .grype.yaml
-      # builds no image, and a broken entry merged into main would stop the daily rescan from attesting every service.
-      # Only here does an expired entry fail (grype reads no date, so its rule would go on covering the match).
-      # The same step holds the misconfigurations job trivy-config leaves out to their rules: paths, reason, at most 90
-      # days. The rules are conftest policies (deploy/ci/ignorefile-policies/), run with yq from the images the Makefile
-      # pins, without network once pulled; no token. make conftest-verify runs their tests, every case that must fail,
-      # and those of the policies deploy/ci/gitops-check.sh holds a tree of svp-gitops to (deploy/ci/gitops-tree-policies/).
+      # Checked here because PRs changing only ignorefiles build no image. Broken entries would stop daily rescan;
+      # expired entries fail only here (grype reads no date, covering matches forever). trivy-config rules <= 90 days.
       - run: make regal-lint
       - run: make conftest-verify
       - run: deploy/ci/scan-gate.sh --check-ignorefile
-      # The scripts of the image pipeline, which otherwise run only in images.yml (most of them on main only), each in a
-      # made-up job of GitHub Actions and on a machine, with fake gh, cosign and docker (trivy, grype, ORAS and a
-      # registry) in throwaway repositories: plan.sh, the guards of the composite actions image-leg, image-index and
-      # image-sign with their steps read from the action files (image-guard-test.sh), the scan gate of the rescan and of
-      # make grype, the vuln predicate, the Sigstore bundle helpers of common.sh, the daily rescan, verify-release.sh
-      # with values-check.sh, and which changes build which images. bash, git and jq: no network, no token; the scan
-      # gate's test runs the pinned conftest and yq through Docker, the guards' test the pinned yq. image-gate-test.sh
-      # runs the steps of image-leg with the real trivy, syft, grype and conftest the Makefile pins on small fixtures
-      # (deploy/ci/testdata/image-gate/): no image of a service, no registry login, no vulnerability DB.
+      # Image pipeline scripts, which otherwise run only in images.yml (mostly on main), in throwaway repositories with
+      # fake gh, cosign and docker: no network, no token. scan-gate-test.sh runs the pinned conftest and yq through
+      # Docker; image-gate-test.sh runs the pinned trivy, syft, grype and conftest on small fixtures (no service image,
+      # no registry login, no vulnerability DB).
       - run: deploy/ci/image-guard-test.sh
       - run: deploy/ci/image-gate-test.sh
       - run: deploy/ci/plan-test.sh
@@ -342,34 +296,21 @@ jobs:
       - run: deploy/ci/rescan-test.sh
       - run: deploy/ci/verify-release-test.sh
       - run: deploy/ci/changed-services-test.sh
-      # The guards of the promote jobs of images.yml, which otherwise run only on main with the app's token (a run older
-      # than stg's charts, a stg_ref off main of svp-gitops, a stg_ref without stg's commit status success), and the list
-      # of releases the daily rescan reads in svp-gitops: throwaway repositories on disk stand for this repository and
-      # svp-gitops, a fake gh answers the open pull requests and the commit statuses. bash, git and jq: no network, no
-      # token.
+      # Promote guards, which otherwise run only on main with the app's token, in throwaway repositories with fake gh:
+      # no network, no token.
       - run: deploy/ci/promote-test.sh
-      # The filter of the public artifact of verify.yml and the masks of its job's log, which only the weekly run on main
-      # would use otherwise: a pull request that breaks one of their rules fails here. Fake secrets, kubectl, docker and
-      # make in a temporary directory; bash, git, jq and openssl, no network.
+      # verify.yml artifact filter and log masks, otherwise used only by the weekly run on main: a pull request that
+      # breaks one of their rules fails here. Fake tools, no network.
       - run: deploy/ci/verify-collect-test.sh
-      # The steps of verify.yml: the check of its input targets and the table of its steps, and the shape of its two
-      # jobs (each target a step with its if:, its timeout-minutes and its output to a file, the time kept for the
-      # steps after them; yq through Docker), the supply chain step with the age of its drill images on a scheduled
-      # run, the admission figures, the gate of the object store's tests; fake make, cosign, kubectl, curl and nc,
-      # no network.
+      # verify.yml step guards with fake tools: no network.
       - run: deploy/ci/verify-steps/steps-test.sh
       - run: deploy/ci/verify-steps/supplychain-test.sh
       - run: deploy/ci/verify-steps/admission-metrics-test.sh
       - run: deploy/ci/verify-steps/objstore-test.sh
-      # The glue of make drill-k8s-* (fake chainsaw and kubectl: the context guard, the search for the Secret values
-      # in the drill's output, the images of the supply chain drill), and the order of a change of credentials of make
-      # k8s-secrets and make k8s-up (fake kubectl, helmfile and drill traffic: servers, barrier, init Jobs of svp-data,
-      # clients, a cluster without Reloader refused, the traffic of a canary). bash, git, jq, openssl and perl, no
-      # network, no cluster.
+      # Drills and credential rotation tested without a cluster: no network.
       - run: deploy/k8s/drills/run-test.sh
       - run: deploy/k8s/rotate-test.sh
-      # The digest ghcr-digest.sh reads from GHCR for the supply chain drill (the newest drill image): a fake ghcr_oras
-      # (the pinned ORAS) and a throwaway repository; bash and git, no network.
+      # ghcr-digest.sh tested with fake ORAS in a throwaway repository: no network.
       - run: deploy/ci/ghcr-digest-test.sh
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
@@ -385,63 +326,41 @@ jobs:
         run: make tools ci-tools
       # Helm for gitops-check-test.sh below; make targets put GOBIN on PATH themselves.
       - run: echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
-      # The Chainsaw drills without a cluster: chainsaw lint and kubeconform of every file under deploy/k8s/drills/, then
-      # the tests of drill-k8s-gitops run with chainsaw test --no-cluster over a fake kubectl, and their assertions
-      # through chainsaw assert on made-up objects (yq through Docker). No network but the pinned images.
+      # Chainsaw drills tested without a cluster: fake kubectl, no network.
       - run: make chainsaw-lint
       - run: deploy/k8s/drills/gitops/gitops-test.sh
       - run: make slo-check
       - run: make otelcol-validate
-      # make env writes a .env of fresh random secrets (mode 600) that lives on this runner until the job ends: it is
-      # never printed or uploaded, and compose config --quiet does not print the file with the secrets filled in.
+      # make env writes random secrets (mode 600) for this job only; never printed or uploaded, and compose config
+      # does not print secrets.
       - name: make compose-config
         run: |
           make env
           make compose-config
-      # The strict rule of .env files (deploy/observability/glitchtip/dotenv.sh) and its users: init.sh, make env,
-      # make db-bootstrap, make test-stack, the profile check of make up and compose config --hash, on fixtures in a
-      # temporary directory with fake psql, go and docker (the docker CLI only parses the compose file). The checkout's
-      # .env is never read. bash, make, git, openssl and shasum: no network, no Docker daemon.
+      # Strict .env parsing tested on fixtures: checkout's .env never read, no network.
       - run: deploy/observability/glitchtip/dotenv-test.sh
       # The working tree's charts with main of svp-gitops (deploy/ci/gitops-check.sh --worktree), every third-party
       # image pinned by digest among them; needs network: chart repositories.
       - run: make helm-check
-      # The rules on the table of release sources, written once, in the template of chart svp-policy: every broken table
-      # must fail the render with its own message; then the lookups of deploy/k8s/lib.sh that pick a source by image
-      # prefix, and web_clone of lib.sh, which reads the table, on repositories on disk. helm from the PATH set above,
-      # bash, git and jq; no network.
+      # Release sources table rules and lookups: no network.
       - run: deploy/ci/sources-test.sh
-      # The check that svp-gitops runs from a pinned commit of this repository, on the clone above: the tests of its
-      # conftest policies, then each negative case of what it does around them and of its renders (a missing image file,
-      # a wrong value derived from the revision, a template rendering a release's image, a bot changing another's file,
-      # ...) must fail with its own message, and gitops_dir of deploy/k8s/lib.sh finds the clone of a draft workspace.
-      # Every case stops before the network; helm from the PATH set above, conftest and the Kyverno CLI through Docker.
+      # Negative render cases and conftest policies of svp-gitops check: stops before network.
       - run: deploy/ci/gitops-check-test.sh "$SVP_GITOPS_DIR"
-      # The guard of the cloud context (deploy/k8s/lib.sh: k3d-svp unless the context is a cluster of the project) and
-      # the scripts of the eks-* targets, which otherwise run only by hand against a cloud cluster: fake kubectl,
-      # docker, aws, curl in a temporary directory, a throwaway copy of deploy/; helm from the PATH set above runs helm
-      # template alone. bash, jq, openssl and perl: no network, no cluster, no cloud account.
+      # Cloud context guard and eks-* scripts, which otherwise run only by hand against a cloud cluster: fake tools,
+      # no cloud account.
       - run: deploy/k8s/eks-context-test.sh
-      # The entries of AWS Secrets Manager that make eks-secrets and make eks-glitchtip-init write
-      # (deploy/k8s/aws-secrets.sh, glitchtip-init.sh): fake aws and kubectl logging every call in order, a throwaway
-      # copy of deploy/ with a fake .env; the account checked and every value read before any write, no value in an
-      # argument or the output. bash, jq, openssl, perl and helm template: no network, no cluster, no cloud account.
+      # AWS Secrets Manager scripts tested with fake tools (no secret leaks in args/output): no cloud account.
       - run: deploy/k8s/aws-secrets-test.sh
-      # The Job of chart svp-data that creates the topics (deploy/redpanda/create-topics.sh): the replicas of a topic
-      # from TOPIC_REPLICAS, one by default, and a topic that exists left as it is; a fake rpk on PATH logs every call.
-      # bash alone: no network, no broker.
+      # Topic creation tested with fake rpk: no network, no broker.
       - run: deploy/helm/svp-data/files/create-topics-test.sh
-      # k6 inspect of every profile in the pinned k6 image, with no network: a script that no longer loads or a profile
-      # whose scenarios are malformed is caught here, without the compose stack the load runs need.
+      # k6 inspect catches malformed scenarios: no network, no compose stack.
       - run: make k6-check
       # kubeconform -strict of the k6 Job of the cloud cluster (deploy/k6/cloud/render.sh): a wrong field or kind is
       # caught here, without a cluster; every image must be pinned by digest. Needs network: the pinned Kubernetes schemas.
       - run: make cloud-check
 
-  # gitleaks over the whole history of every ref (no --log-opts: setting it drops gitleaks's default --full-history
-  # --all), at the version make tools pins. Any finding fails the job. --redact keeps the secret out of the log and the
-  # report, which anyone can read on a public repository. A false positive (a test fixture) is allowed only in
-  # .gitleaks.toml, narrowly, with the reason beside it.
+  # Scans whole history of every ref (no --log-opts, which would drop --full-history --all). Any finding fails.
+  # --redact keeps secrets out of logs and reports on public repo. False positives allowed only in .gitleaks.toml.
   gitleaks:
     runs-on: ubuntu-24.04
     permissions:
@@ -481,9 +400,8 @@ jobs:
           path: ${{ runner.temp }}/gitleaks.sarif
           if-no-files-found: ignore
 
-  # trivy config on the Dockerfiles, charts and manifests with the pinned trivy image, less the findings
-  # deploy/ci/trivy-config-ignore.yaml leaves out until their expired_at. Report only: it never fails the job on a
-  # finding.
+  # Scans Dockerfiles, charts, and manifests for misconfigurations. Report only: findings never fail the job;
+  # deploy/ci/trivy-config-ignore.yaml entries apply until expired_at.
   trivy-config:
     needs: changes
     if: needs.changes.outputs.code == 'true'
@@ -509,11 +427,9 @@ jobs:
           path: ${{ runner.temp }}/trivy-config.sarif
           if-no-files-found: ignore
 
-  # Security lint of every workflow with the pinned zizmor (make zizmor, ADR-0041 (g)): any finding not left out in
-  # .github/zizmor.yml fails the job, shown as annotations on the lines. GITHUB_TOKEN, read-only here, turns on the
-  # online audits (impostor commits, actions with known vulnerabilities); zizmor only reads public data with it. No
-  # condition: ci-ok is red when this job is red or skipped. The SARIF report beside it is for the code scanning
-  # upload of job sarif and never fails.
+  # Workflow security linter: findings not excepted in .github/zizmor.yml fail the job. GITHUB_TOKEN (read-only)
+  # enables online audits (impostor commits, known action vulnerabilities); reads public data only.
+  # The SARIF report beside it is for job sarif on main and never fails.
   zizmor:
     needs: changes
     if: needs.changes.outputs.workflows == 'true'
@@ -542,8 +458,7 @@ jobs:
           path: ${{ runner.temp }}/zizmor.sarif
           if-no-files-found: ignore
 
-  # Style of every Markdown file and its relative links and heading anchors (make docs-check): markdownlint-cli2 and
-  # lychee --offline from images pinned by digest in the Makefile, run without network.
+  # Checks Markdown style, internal links and heading anchors (make docs-check): pinned images, offline, no network.
   docs:
     runs-on: ubuntu-24.04
     timeout-minutes: 10
@@ -555,11 +470,9 @@ jobs:
           persist-credentials: false
       - run: make docs-check
 
-  # The dependencies a pull request adds or changes (go.mod, and every other manifest GitHub's dependency graph reads),
-  # against the GitHub Advisory Database: a known vulnerability of severity high or critical fails the job before
-  # trivy and grype see it in an image (ADR-0041 (k)). Licenses only show in the job summary. Pull requests only:
-  # the action compares the pull request's base and head, so on any other event the job is skipped, and ci-ok takes
-  # that skip for this job alone.
+  # Fails on added/changed dependencies with high or critical vulnerabilities before trivy and grype see them in an
+  # image.
+  # Pull requests only: compares base and head; on other events the job is skipped and ci-ok accepts the skip.
   dependency-review:
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-24.04
@@ -571,40 +484,27 @@ jobs:
         with:
           fail-on-severity: high
 
-  # The whole compose stack of make up on the runner, driven as on a dev machine: make smoke, the web client's
-  # end-to-end tests, the k6 profile ci (error thresholds only: a shared runner says nothing about latency), Lighthouse
-  # and Schemathesis against the gateway's OpenAPI contract. The six backend services are built from the pull
-  # request's code; the web client is the release staging runs (make up's default, named in main of svp-gitops and
-  # pulled anonymously from GHCR), and its end-to-end tests and Lighthouse run are the code of svp-frontend at that very
-  # release's commit (make web-clone), so a change of the backend that breaks the web client shows here. A report, not a
-  # check: ci-ok does not need it, so a red stack (a flaky end-to-end test on a shared runner) never blocks a merge;
-  # whoever reads the pull request sees its result under this name. It builds and runs the pull request's code like
-  # the other jobs, with contents: read and no secret: make env writes a .env of fresh random secrets that lives on this
-  # runner until the job ends, never printed or uploaded. The LOCAL LAB ONLY resets of smoke, e2e, k6, Lighthouse and
-  # DAST (they delete the gateway's register rate limit keys in Redis db 10) touch only the Redis service container
-  # below, which belongs to this run.
+  # End-to-end compose stack report outside ci-ok: flaky runs on shared runners must not block a merge.
+  # Six backend services built from PR, web client from staging release.
+  # make env writes random secrets that are never printed/uploaded; rate-limit resets touch only runner's Redis.
   stack:
     name: stack (end-to-end, report only)
     needs: changes
     if: needs.changes.outputs.stack == 'true'
     runs-on: ubuntu-24.04
-    # Six image builds, the pull of the web release, the e2e seed (21 READY videos), two browsers: about 15 to 25
-    # minutes. The limit leaves room for a slow runner and stops a hung step long before GitHub's default of 6 hours.
+    # The job takes about 15-25 minutes; the limit leaves room for a slow runner and stops a hang long before the
+    # 6-hour default.
     timeout-minutes: 45
     permissions:
       contents: read
-    # The deployment configuration that names the web release of staging: main of svp-gitops, which make gitops-clone
-    # clones anonymously into this folder (gitignored) below, as in job config. The web client's code at that release's
-    # commit: svp-frontend, which make web-clone clones anonymously into the other folder (gitignored).
+    # Clones svp-gitops for the staging web release tag, and svp-frontend at that commit for tests.
     env:
       SVP_GITOPS_DIR: ${{ github.workspace }}/.gitops/svp-gitops
       SVP_WEB_DIR: ${{ github.workspace }}/.web/svp-frontend
     services:
-      # The images of job check. There the tests reach them on loopback only; here the compose containers reach them as
-      # host.docker.internal, which compose's host-gateway maps to the gateway of Docker's default bridge (docker0,
-      # 172.17.0.1). So each is published on that address and on loopback (psql of deploy/postgres/bootstrap.sh and
-      # redis-cli of the scripts run on the runner), never on every interface. The compose services log in to Postgres
-      # with the role passwords make up bootstraps (the image asks for a password on every TCP connection).
+      # Published on 127.0.0.1 (runner) and 172.17.0.1 (docker0 gateway for host.docker.internal), never on every
+      # interface; Postgres 15.
+      # Compose services log in with role passwords bootstrapped by make up (TCP requires password).
       postgres:
         image: docker.io/library/postgres:15.19-trixie@sha256:64b99032e218b66b1d1a6334995056e1aa57f50a0c522cc856e72dff0e4b0d63
         env:
@@ -632,18 +532,14 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      # make env runs go run ./tools/jwtkey for the JWT key pair; the Makefile also asks go for GOPATH.
+      # Needed for go run ./tools/jwtkey (generating JWT keys in make env) and GOPATH.
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version: 1.27.3
           cache-dependency-path: go.sum
-      # host-gateway is the gateway of the default bridge (unless the daemon sets host-gateway-ip), and the services
-      # above are published on 172.17.0.1: if the two differ, every compose service fails to reach Postgres and Redis
-      # with a timeout far from its cause. Said here, before anything is built.
+      # Fails early if host-gateway differs from 172.17.0.1, preventing hard-to-diagnose connection timeouts.
       - run: make ci-bridge-check
-      # What the scripts run on the runner, from Ubuntu's archive (no third-party action): psql of the Postgres
-      # bootstrap (16 here; bootstrap.sql needs 15 or later for \getenv), redis-cli of the rate limit reset, ffmpeg for
-      # the test videos of smoke, the e2e seed and Lighthouse, jq everywhere. curl and openssl come with the image.
+      # Script tools from Ubuntu archive (no third-party action): psql (needs >= 15 for \getenv), redis-cli, ffmpeg, jq.
       - name: Install the tools of the scripts
         run: |
           sudo apt-get update -q
@@ -652,9 +548,7 @@ jobs:
       # release of staging (image.tag of envs/stg/images/web.yaml in that clone of svp-gitops).
       - run: make gitops-clone
       - run: make web-clone
-      # The Node major of the clone's .nvmrc and the pnpm of its packageManager, as svp-frontend's own CI and Dockerfile
-      # take them: Node 25 and later ship no Corepack, and the repository allows no third-party action
-      # (pnpm/action-setup). No cache: setup-node's pnpm cache needs pnpm on PATH before Node is there.
+      # Node/pnpm match .nvmrc/packageManager. No Corepack (dropped in Node 25+); no cache (pnpm not yet on PATH).
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version-file: .web/svp-frontend/.nvmrc
@@ -663,8 +557,6 @@ jobs:
         run: |
           version=$(node -p 'require("./package.json").packageManager.split("@")[1]')
           npm install -g "pnpm@$version"
-      # Its packages exactly as its pnpm-lock.yaml pins them, then the browsers of its playwright.config.ts at that
-      # version, with their system libraries (apt, through sudo).
       - name: Install the web client's packages
         working-directory: .web/svp-frontend
         run: make install
@@ -679,10 +571,7 @@ jobs:
       - run: make web-e2e
       - id: k6
         run: make load-ci
-      # make web-lighthouse launches Playwright's Chromium with Chrome's sandbox, which needs unprivileged user
-      # namespaces. Ubuntu 24.04 restricts those through AppArmor for every binary without a profile of its own, and
-      # Playwright's download has none, so Chrome stops with "No usable sandbox". The restriction is lifted on this
-      # throwaway runner, so the sandbox stays on; the e2e tests turn it off themselves.
+      # Ubuntu 24.04 AppArmor restricts unprivileged userns; lifted so Chrome's sandbox stays on (e2e disable it).
       - name: Let Chrome's sandbox use user namespaces
         run: |
           if [ "$(sysctl -n kernel.apparmor_restrict_unprivileged_userns 2>/dev/null || echo absent)" = 1 ]; then
@@ -694,9 +583,8 @@ jobs:
       - id: lighthouse
         run: make web-lighthouse
         continue-on-error: true
-      # DAST of the gateway against its OpenAPI contract (deploy/dast/run.sh). Report only, like Lighthouse. Last of the
-      # checks: it uses up the gateway's per-IP and per-user rate limits. Its output stays in .dast/ on the runner;
-      # the log shows only the summary it prints from the files it found clean.
+      # DAST runs last because it exhausts gateway rate limits. Report only. Raw Schemathesis output stays on the
+      # runner; only clean summary is logged.
       - id: dast
         run: make dast
         continue-on-error: true
@@ -704,9 +592,8 @@ jobs:
       - name: Container state
         if: failure()
         run: make ps
-      # deploy/k6/load.sh fails the run when its results hold a token, cookie or password but leaves them in place: the
-      # same check again here, so summary.json reaches the public artifact only when it is clean. machine.json and the
-      # rest stay on the runner. Skipped when the step was cancelled (a timeout) or never ran.
+      # load.sh fails on secret leak but leaves files in place: re-checked here so summary.json uploads only if clean.
+      # machine.json and other raw results stay on runner.
       - name: Pick the k6 summary
         if: always() && (steps.k6.outcome == 'success' || steps.k6.outcome == 'failure')
         run: |
@@ -726,11 +613,8 @@ jobs:
           name: k6-summary
           path: ${{ runner.temp }}/k6-summary/
           if-no-files-found: ignore
-      # The reports lighthouse/run.sh of svp-frontend wrote at the top of test-results/lighthouse/ of the clone after
-      # replacing the session cookie in them (it deletes them when a cookie value is still found), copied out of the
-      # clone's folder, a hidden one, which upload-artifact would leave out. Its .lighthouseci/ subfolder, with the
-      # results before that replacement, is matched by neither pattern. Skipped when the step was cancelled mid-run or
-      # never ran.
+      # lighthouse/run.sh sanitizes/deletes reports with cookies. Copied from hidden dir; globs intentionally exclude
+      # .lighthouseci/ (raw results).
       - name: Pick the Lighthouse reports
         if: always() && (steps.lighthouse.outcome == 'success' || steps.lighthouse.outcome == 'failure')
         run: |
@@ -746,10 +630,8 @@ jobs:
           name: lighthouse
           path: ${{ runner.temp }}/lighthouse/
           if-no-files-found: ignore
-      # Only report.json (counts, failure titles, seed) and summary.json (requests by status and operation) may leave
-      # the runner; schemathesis.log, junit.xml and requests.har hold response bodies with tokens and presigned forms.
-      # deploy/dast/run.sh fails the run when either of the two holds a secret but leaves them in place: the same check
-      # again here, so they reach the public artifact only when clean. Skipped when the step was cancelled or never ran.
+      # dast/run.sh fails on secrets but leaves dirty files in place: re-checked here. Only clean report/summary.json
+      # leave runner; logs and HAR with response bodies/tokens stay on runner.
       - name: Pick the DAST reports
         if: always() && (steps.dast.outcome == 'success' || steps.dast.outcome == 'failure')
         run: |
@@ -774,12 +656,8 @@ jobs:
         if: always()
         run: make down
 
-  # The code scanning upload, the one job with a write permission. Only on main outside pull requests: a pull request
-  # (from a branch of the repository or from a fork) runs its own code before anyone has read it, so it never gets
-  # security-events: write; its findings stay in the artifacts and job summaries. This job checks the code out only so
-  # upload-sarif can read the lines of each finding and fingerprint it (an alert then survives a line shift with its
-  # history and dismissal): it runs nothing of the repository. It is a report, not a check: ci-ok does not need it,
-  # and a failed upload still turns the run red.
+  # Single job with write permission (security-events: write). Runs only on main outside pull requests and executes
+  # no repository code (checkout is only for fingerprinting findings). Report outside ci-ok, but failure turns run red.
   sarif:
     needs: [check, gitleaks, trivy-config, zizmor]
     if: always() && github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
@@ -818,11 +696,9 @@ jobs:
           sarif_file: sarif/sarif-zizmor/zizmor.sarif
           category: zizmor
 
-  # The required check. It runs whatever happened before it (always()) and fails unless every check job succeeded:
-  # GitHub counts a skipped required check as passed, and a job that failed or was cancelled does not fail the jobs
-  # that need it by itself. Two kinds of skip are part of a run: dependency-review outside pull requests, and a job
-  # whose area job changes found untouched (changes succeeded and set that job's output to false). Any other skip can
-  # only mean a wrong if: and is red too. No condition may ever skip ci-ok itself.
+  # Required check running on always(): GitHub treats skipped required checks as passed. Fails unless all jobs
+  # succeeded or were validly skipped (dependency-review outside PR, or area untouched by changes).
+  # Any unexpected skip is red; no condition may skip ci-ok itself.
   ci-ok:
     needs: [changes, check, generate, buf, api-contract, config, gitleaks, trivy-config, zizmor, dependency-review, docs]
     if: always()

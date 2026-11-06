@@ -1,18 +1,7 @@
 #!/usr/bin/env bash
-# Tests for the artifact filter of the verification runs, deploy/ci/verify-collect.sh, and for deploy/ci/verify-mask.sh
-# it calls. Everything is a fixture in a temporary directory: a fake checkout with a fake .env (the repository's .env is
-# never read), a fake results folder, and a fake kubectl first on PATH that lists made-up Secrets or fails. The fake
-# secrets, the JWT and the private key header are made at run time, so no file of the repository holds one. Before the
-# filter, unready_report and gitops_timeout_report of deploy/k8s/lib.sh, with the same fake kubectl listing made-up pods
-# and their logs, mark_log of the same file, and deploy/k8s/gitops.sh follow with a fake kubectl of its own; their
-# output is part of a fake step's output, which no artifact may hold. verify-mask.sh cluster on a binary value of
-# 200 KiB, timed, and on small ones against the cut it made before. Then the filter over the results of a run of each
-# scenario: what it keeps (the table of the steps, the verdict lines of drill-obs-threats, the admission figures, the
-# JUnit reports and JSON of the drills, the drill traffic's log), what it refuses whole (every other step's output),
-# and the scan of what it keeps (a secret value of .env or of the cluster, raw, in base64 or a piece of a binary value,
-# a JWT, Bearer, Set-Cookie, a private key, the session cookie). Runs on macOS and Linux, no network, no Docker, no
-# cluster.
-#
+# Tests verify-collect.sh, verify-mask.sh, deploy/k8s/lib.sh reports, and gitops.sh follow with fake fixtures.
+# Fake secrets are generated at run time so no repository file holds one; fake kubectl isolates the run.
+# Runs on macOS and Linux: no network, Docker, or cluster needed.
 # Usage, from anywhere: deploy/ci/verify-collect-test.sh
 set -euo pipefail
 
@@ -29,8 +18,6 @@ fail() {
 }
 b64() { printf '%s' "$1" | base64 | tr -d '\n'; }
 
-# --- The fake secrets: three of .env (one with special characters), one of a cluster Secret, one line of a cluster
-# Secret of several lines; values that are not secrets, or too short to count; a JWT and a private key header.
 env_secret=$(openssl rand -hex 16)
 quoted_secret="p!a#s%s&w*o(r)d-$(openssl rand -hex 4)"
 dsn_secret="http://$(openssl rand -hex 16)@127.0.0.1:8000/1"
@@ -38,8 +25,7 @@ cluster_secret=$(openssl rand -hex 20)
 kafka_secret=$(openssl rand -hex 20)
 line_secret="token-$(openssl rand -hex 12)"
 helm_payload="H4sIAAAAAAAC$(openssl rand -hex 12)"
-# A binary value of a cluster Secret: secrets between a carriage return, other control characters, a newline and bytes
-# that are not UTF-8. Each must be masked on a line of its own, and no mask line may hold a control character.
+# Binary cluster Secret test value contains control chars, newlines, and non-UTF-8 bytes.
 cr_secret="cr-$(openssl rand -hex 8)"
 ctl_secret="ctl-$(openssl rand -hex 8)"
 nl_secret="nl-$(openssl rand -hex 8)"
@@ -68,13 +54,7 @@ SENTRY_DSN=$dsn_secret
 JWT_SIGNING_KID=kid-of-the-signing-key
 EOF
 
-# The fake kubectl: kubectl --context k3d-svp --request-timeout=10s -n NS get secrets -o json. FAKE_KUBECTL_FAIL=1
-# makes it fail, as for a cluster that no longer answers. For unready_report: kubectl --context k3d-svp -n NS get pods
-# -o json prints pods-NS.json; kubectl --context k3d-svp -n NS logs POD -c CONTAINER [--previous] --tail=N prints
-# logs/NS.POD.CONTAINER[.previous]; both are recorded in calls. For gitops_timeout_report, kubectl --context k3d-svp
-# [-n NS] get TYPE [NAME...] [flags] prints the list of TYPE-NS.json (cluster.TYPE.json without -n), or fails as for a
-# resource type the server does not have; given names, as kubectl with --ignore-not-found: the one object for one name,
-# a List for several, nothing when none is there. Recorded in calls too.
+# Fake kubectl fixture: handles get secrets, get pods, logs, and get resources with mock responses.
 cat >"$work/bin/kubectl" <<'EOF'
 #!/usr/bin/env bash
 [ "${FAKE_KUBECTL_FAIL:-}" = 1 ] && { echo "The connection to the server was refused" >&2; exit 1; }
@@ -110,8 +90,7 @@ b64v() {
   local kv
   for kv in "$@"; do jq -n --arg k "${kv%%=*}" --arg v "$(b64 "${kv#*=}")" '{($k): $v}'; done | jq -s 'add'
 }
-# Shaped like deploy/k8s/secrets.sh: next to each secret, the identifiers it stores under keys of their own (user
-# names, an email, a key id, a SASL mechanism), which the drills print and must stay unmasked and searchable.
+# Includes identifier keys alongside secrets to verify they remain unmasked and searchable.
 jq -n --argjson backup "$(b64v ACCESS_KEY_ID=svp-pg-backup "ACCESS_SECRET_KEY=$cluster_secret" "username=$role_name")" \
   --argjson s3root "$(b64v S3_ROOT_USER=svp-admin "S3_ROOT_PASSWORD=$cluster_secret")" \
   --argjson keda "$(b64v sasl=scram_sha256 tls=disable username=svp-keda "password=$kafka_secret")" \
@@ -139,10 +118,6 @@ identifiers="svp-pg-backup svp-admin scram_sha256 svp-keda svp-feed-service svp-
 admin-of-grafana kid-of-the-signing-key"
 export FAKE_KUBECTL_DIR=$work/kube
 
-# --- unready_report of deploy/k8s/lib.sh: which containers it reports, and whose log it prints. In svp-data a Redpanda
-# broker in a crash loop (its log, and the attempt before, printed), its ready sidecar (not reported), a Postgres pod
-# of CloudNativePG and a completed Job; in svp-obs GlitchTip; in svp two services. Every log the fake kubectl could
-# print is a marker, so what reaches the output shows.
 # unready_pods ITEMS NAMESPACE: the pods NAMESPACE lists, ITEMS a jq expression of their array.
 unready_pods() {
   jq -n "{items: $1}" >"$work/kube/pods-$2.json"
@@ -224,16 +199,7 @@ case $shown in
   *) ok "unready: log_tail_namespaces has neither svp, Envoy nor kube-system, and is not empty" ;;
 esac
 
-# --- gitops_timeout_report of deploy/k8s/lib.sh, which deploy/k8s/gitops.sh prints when its wait for the Applications
-# runs out. The Applications as Argo CD 3 writes them: no health on their resources. Two waited for that are not
-# Healthy (one Healthy left out, one not waited for left out), their resources read from the cluster and judged: a
-# Deployment not ready beside a ready one and a missing one (one call, a List), a DaemonSet of a generation not
-# observed, a Prometheus object without status beside a ready Alertmanager (one object each), a cluster-scoped
-# ClusterIssuer not Ready, an HTTPRoute whose parent has ResolvedRefs False, a PersistentVolumeClaim Pending, a failed
-# Job, a kind the server does not have; a hook, a Secret, a ConfigMap and a CRD never read. Then the CRDs of the
-# Prometheus and Alertmanager objects, by name (another group's left out, a missing one skipped), a Prometheus object
-# no controller reconciled beside a reconciled Alertmanager, and the operator's log and its attempt before, marked with
-# svp-obs (GlitchTip's pod beside it is not the operator's). Then the same with neither the CRDs nor any pod.
+# Applications as Argo CD 3 writes them: no health on their resources.
 gk=$work/kube-gitops
 mkdir -p "$gk/logs"
 jq -n '{items: [
@@ -380,9 +346,6 @@ grep -qF 'gitops_timeout_report "$want_apps" || true' "$here/../k8s/gitops.sh" &
   ok "timeout report: gitops.sh prints it when its wait runs out" ||
   fail "timeout report: gitops.sh prints it when its wait runs out"
 
-# --- mark_log of deploy/k8s/lib.sh, which marks the log of a failed migrate Job in deploy/k8s/install.sh: every line
-# marked, an empty one, one with control characters and bytes that are not UTF-8, and the last one without a newline
-# (given one); an empty log prints nothing.
 # mark_log_of NAMESPACE < LOG: mark_log of lib.sh itself.
 mark_log_of() { (. "$here/../k8s/lib.sh" && mark_log "$1"); }
 printf 'first\n\npanic: x\r\001y\377z\nlast' | mark_log_of svp >"$work/marked"
@@ -397,11 +360,6 @@ grep -qF 'mark_log "$namespace" <"$migrate_log" >&2' "$here/../k8s/install.sh" &
   ok "mark_log: install.sh marks a failed migrate Job's log with it" ||
   fail "mark_log: install.sh marks a failed migrate Job's log with it"
 
-# --- deploy/k8s/gitops.sh follow BRANCH, with a fake kubectl of its own (bin-follow): Application argocd/svp-root at
-# revision FROM (from), compared at the target its last patch gave (Synced), at revision NOW (now) once patched. The
-# branch unchanged: one patch of both targetRevisions to refs/heads/main, the wait until Argo CD compares and syncs it
-# there, an ok line. The branch moved: the note line with both commits and the canary, no wait for Synced (the fake
-# stays OutOfSync then). A short or broken name is refused before any call to the cluster.
 fk=$work/kube-follow
 mkdir -p "$work/bin-follow"
 cat >"$work/bin-follow/kubectl" <<'EOF'
@@ -433,8 +391,7 @@ EOF
 chmod 755 "$work/bin-follow/kubectl"
 built=0a9dec9fb641cd3fd0be6e1ce4ceb8e9d1be5380
 newer=cb7ebf2fa0b6581c5c15b3010fcc6456eb007bda
-# follow_case NAME FROM NOW ARG...: deploy/k8s/gitops.sh ARG... over the fake; output in NAME.out, exit status and
-# seconds taken in NAME.rc, the calls in NAME.calls.
+# follow_case NAME FROM NOW ARG...: runs gitops.sh ARG... against the fake kubectl fixture.
 follow_case() {
   local name=$1 rc=0 start=$SECONDS
   rm -rf "$fk" && mkdir -p "$fk" && echo "$2" >"$fk/from" && echo "$3" >"$fk/now" && : >"$fk/calls"
@@ -469,15 +426,12 @@ follow_case follow-none "$built" "$built" follow
   ok "gitops.sh follow: a broken branch name or none is refused, nothing patched" ||
   fail "gitops.sh follow: a broken branch name or none is refused, nothing patched"
 
-# The bootstrap builds at the commit it checked and follows the branch only after its wait.
 grep -qF 'argocd_root_app "$gitops_url" "$sha" "$env" "$chart_repo_url"' "$here/../k8s/gitops.sh" &&
   [ "$(grep -n -e '^ok "$want Applications Synced and Healthy' -e '^\[ -z "$branch" \] || follow_branch "$branch"$' \
     "$here/../k8s/gitops.sh" | cut -d: -f1 | awk 'NR == 1 { a = $1 } NR == 2 { print ($1 == a + 1) }')" = 1 ] &&
   ok "gitops.sh: the root is applied at the commit checked, follows the branch after the wait" ||
   fail "gitops.sh: the root is applied at the commit checked, follows the branch after the wait"
 
-# The root carries the label the subscriptions of Argo CD Notifications select, and gets a Telegram chat only through
-# argocd_root_telegram, as a string, beside the annotations it had.
 root=$(. "$here/../k8s/lib.sh" && argocd_root_app https://github.com/o/svp-gitops "$built" stg https://github.com/o/c)
 root_tg=$(. "$here/../k8s/lib.sh" && argocd_root_telegram -1001234 <<<"$root")
 [ "$(jq -r '.metadata.labels["svp.io/notify"]' <<<"$root")" = root ] &&
@@ -486,25 +440,18 @@ root_tg=$(. "$here/../k8s/lib.sh" && argocd_root_telegram -1001234 <<<"$root")
   [ "$(jq -c 'del(.metadata.annotations)' <<<"$root_tg")" = "$(jq -c 'del(.metadata.annotations)' <<<"$root")" ] &&
   ok "argocd_root_app labels the root svp.io/notify=root; argocd_root_telegram adds only the chat's two subscriptions" ||
   fail "argocd_root_app labels the root svp.io/notify=root; argocd_root_telegram adds only the chat's two subscriptions ($root_tg)"
-# gitops.sh subscribes the chat only with notifications on, and before it applies the root.
 [ "$(grep -n -e '^if \[ "$notify" = on \]; then$' -e 'root_app=$(argocd_root_telegram "$telegram_chat"' \
   -e '^kc apply --server-side --field-manager=svp-gitops -f - <<<"$root_app"' "$here/../k8s/gitops.sh" |
   cut -d: -f1 | awk 'NR > 1 && $1 <= p { bad = 1 } { p = $1; n++ } END { print (n == 3 && !bad) }')" = 1 ] &&
   ok "gitops.sh: the Telegram chat is added with notifications on, before the root is applied" ||
   fail "gitops.sh: the Telegram chat is added with notifications on, before the root is applied"
 
-# --- The fake results of a k3d run: the table of the steps, and the output of each step as the workflow writes it,
-# $SVP_VERIFY_OUT/logs/<step>.log. Only the verdict lines of drill-obs-threats and the admission figures may reach the
-# artifact; every other step's output is refused whole, whatever it holds.
 out=$work/out
 mkdir -p "$out/logs/sub"
 echo gitops >"$out/scenario"
 printf 'step\toutcome\tnote\n' >"$out/results.tsv"
 printf '%s\t%s\t%s\n' k8s-gitops-up failure '' k8s-smoke failure '' drill-k8s-gitops failure '' \
   drill-k8s-threats failure '' drill-obs-threats failure '' gitops-admission-metrics success '' >>"$out/results.tsv"
-# The build step's output: a failed migrate Job's log (JSON records, one with a secret, and a panic) marked by mark_log
-# as install.sh marks it, the report of unready_report and the timeout report above (log tails of svp-data and
-# svp-obs), and log lines of namespace svp and of Envoy, as a mistake of unready_report would print them.
 {
   echo "ok    cluster ready"
   echo "Job svp/feed-service-migrate failed; log of its last failed attempt, copied before its pod was deleted:"
@@ -519,27 +466,22 @@ printf '%s\t%s\t%s\n' k8s-gitops-up failure '' k8s-smoke failure '' drill-k8s-gi
   echo "    [envoy-gateway-system] ENVOY-MARKER"
   echo "FAIL  install redpanda"
 } >"$out/logs/k8s-gitops-up.log"
-# A failed step that printed a secret on stdout and a JWT on stderr, both into its file as the workflow sends them.
 {
   echo "ok    step 1"
   echo "response body: password=$quoted_secret"
   echo "Authorization header seen: $jwt" >&2
   echo "FAIL  step 2"
 } >"$out/logs/k8s-smoke.log" 2>&1
-# A failed step's long output, nothing secret in it.
 {
   for i in $(seq 1 60); do echo "sample $i lag 3"; done
   echo "FAIL  KEDA-TAIL-MARKER scale down took too long"
 } >"$out/logs/drill-k8s-gitops.log"
-# The output of a Chainsaw drill: what its scripts printed, a probe's answer among it.
 {
   echo "    | 08:00:00 | in-2-in-4 | IN-2/IN-4: probe | SCRIPT | LOG |"
   echo "        === STDOUT"
   echo "        ok    IN-4: svp-feed-service may only read its topics (svp-admin)"
   echo "        probe answered: PROBE-BODY-MARKER"
 } >"$out/logs/drill-k8s-threats.log"
-# The output of drill-obs-threats: verdicts (one naming the session cookie in prose, one failed), what the probes got
-# back, a JSON log record that starts like a verdict, bash's own error line, the closing line.
 {
   echo "ok    OPS-1: 8 loopback ports"
   echo "probe answered: PROBE-OBS-MARKER"
@@ -553,10 +495,8 @@ printf '%s\n' "kyverno_admission_review_duration_seconds: _count 45, _sum 90.000
   "NOTE  kyverno: no free port on 127.0.0.1 between 19100 and 19120 for a port-forward" >"$out/logs/gitops-admission-metrics.log"
 echo "nested" >"$out/logs/sub/x.log"
 echo '{}' >"$out/.hidden.json"
-# A file of the results folder that is not on the allow list.
 echo '{"label":"start"}' >"$out/ram-rest-start.json"
 
-# --- The fake checkout's results.
 d=$repo/.k8s/drills
 echo '{"result":"PASS","screenshot":"data:image/jpeg;base64,/9j/eyJabcdefghijklmnopqrstuvwxyz0123"}' >"$d/canary-drill-1.json"
 echo "{\"restored\":true,\"s3\":\"$cluster_secret\"}" >"$d/backup-1.json"
@@ -569,8 +509,6 @@ echo "{\"kafka\":\"$kafka_secret\"}" >"$d/kafka-1.json"
 # A JWT and nothing else: the only file whose drop the jwt rule alone decides.
 echo "{\"t\":\"$jwt\"}" >"$d/jwt-1.json"
 echo "{\"frame\":\"$bin_secret\"}" >"$d/binary-piece-1.json"
-# JUnit reports of the Chainsaw drills: a clean one; one per token pattern; one naming the session cookie in prose
-# (outside the verdict lines of drill-obs-threats, svp_sid at all is refused); one with a cluster secret.
 junit() { printf '<testsuites><testsuite name="%s"><testcase name="%s">%s</testcase></testsuite></testsuites>\n' "$1" "$2" "$3"; }
 junit threats in-2-in-4 "" >"$d/threats-20261105T000000Z.xml"
 junit gitops gitops-env "<failure message=\"sent Bearer abc\"/>" >"$d/bearer-1.xml"
@@ -578,8 +516,6 @@ junit gitops gitops-env "<failure message=\"got Set-Cookie: x\"/>" >"$d/set-cook
 junit gitops gitops-env "<failure message=\"$private_key_header\"/>" >"$d/private-key-1.xml"
 junit threats web-7-web-2 "<system-out>ok    session cookie __Host-Http-svp_sid in the jar</system-out>" >"$d/prose-1.xml"
 junit supplychain case-l "<failure message=\"s3 $cluster_secret\"/>" >"$d/supplychain-1.xml"
-# The list of the SKIPs of a Chainsaw drill (deploy/k8s/drills/run.sh): a clean one; one with a token pattern; one
-# with a cluster secret.
 printf 'case-b\tno drill-unsigned on GHCR\ntotal\t1\n' >"$d/threats-skips.tsv"
 printf 'case-l\tsent Bearer abc\ntotal\t1\n' >"$d/supplychain-skips.tsv"
 printf 'gitops-env\treason with %s\ntotal\t1\n' "$cluster_secret" >"$d/gitops-skips.tsv"
@@ -589,15 +525,12 @@ head -c 6000000 /dev/zero | tr '\0' a >"$d/big-1.json"
 ln -s ../../.env "$d/link-1.json"
 mkdir -p "$d/sub" && echo '{}' >"$d/sub/nested-1.json"
 echo "CA" >"$repo/.k8s/ca.crt"
-# Results of the checkout outside .k8s/drills, which the filter does not even look at.
 echo '{"metrics":{"http_reqs":{"count":10}}}' >"$repo/.k6/local-1/summary.json"
 echo '{"audits":{}}' >"$repo/.web/svp-frontend/test-results/lighthouse/b.report.json"
 
-# job: the variables a GitHub Actions job runs the two scripts with (they print masks and warnings as the runner's
-# commands only there), with the job's temp directory in $work.
+# job: sets environment to emulate a GitHub Actions runner environment.
 job=(GITHUB_ACTIONS=true RUNNER_TEMP="$work")
-# collect NAME SECRETS_DIR [VAR=VALUE...]: runs verify-collect.sh into $work/art-NAME, its stdout and stderr in
-# $work/NAME.log.
+# collect NAME SECRETS_DIR [VAR=VALUE...]: runs verify-collect.sh into $work/art-NAME.
 collect() {
   local name=$1 secrets=$2
   shift 2
@@ -613,8 +546,7 @@ expect() {
   got=$(awk -F '\t' -v s="$2" '$2 == s { print ($1 == "kept" ? "kept" : $3) }' "$work/art-$1/files.txt")
   if [ "$got" = "$3" ]; then ok "$1: $2 $3"; else fail "$1: $2: want $3, got '${got:-not listed}'"; fi
 }
-# no_leak NAME [LIST]: no fake secret (of LIST, default all of them) in the output of run NAME outside the
-# ::add-mask:: lines, none in its artifact.
+# no_leak NAME [LIST]: asserts no fake secret leaked into logs or artifacts outside ::add-mask::.
 no_leak() {
   local list=$work/${2:-all-secrets}
   if grep -v '^::add-mask::' "$work/$1.log" | grep -qF -f "$list"; then
@@ -632,13 +564,12 @@ has() { if grep -qF -- "$3" "$work/$1.log"; then ok "$1: $2"; else fail "$1: $2"
 lacks() { if grep -qF -- "$3" "$work/$1.log"; then fail "$1: $2"; else ok "$1: $2"; fi; }
 same() { if [ "$3" = "$2" ]; then ok "$1"; else fail "$1: want '$2', got '$3'"; fi; }
 
-# --- verify-mask.sh env on its own: what it masks, what it keeps, and the marker only once.
 mask() {
   env "${job[@]}" SVP_VERIFY_REPO="$repo" SVP_VERIFY_SECRETS="$work/mask-secrets" "$here/verify-mask.sh" env \
     >"$work/$1.log" 2>&1
 }
 mask mask1
-# A % of a value goes out as %25, which the runner reads back as %.
+# A % in secret values is encoded as %25 so Actions runner decodes it back to %.
 for v in "$env_secret" "${quoted_secret//%/%25}" "$dsn_secret" "$(b64 "$quoted_secret")"; do
   grep -qxF "::add-mask::$v" "$work/mask1.log" || fail "mask: a secret of .env (or its base64) is masked"
 done
@@ -651,7 +582,7 @@ ok "mask: a short value, the admin email, the org and a key id are not masked"
 marker=$(sed -n 's/^mask-check: //p' "$work/mask1.log")
 grep -qxF "::add-mask::$marker" "$work/mask1.log" && ok "mask: the marker is masked before it is printed" ||
   fail "mask: the marker is masked before it is printed"
-# GNU stat first: BSD stat rejects -c, while GNU stat takes -f too, for something else.
+# GNU stat first: BSD stat rejects -c, while GNU stat accepts -f for another meaning (reversing breaks on Linux).
 [ "$(stat -c %a "$work/mask-secrets/env.values" 2>/dev/null || stat -f %Lp "$work/mask-secrets/env.values")" = 600 ] &&
   ok "mask: env.values has mode 600" || fail "mask: env.values has mode 600"
 mask mask2
@@ -661,12 +592,7 @@ else
   ok "mask: a second call masks nothing new and prints no marker"
 fi
 
-# --- verify-mask.sh cluster on binary values, each a Secret of namespace svp-obs of a cluster of its own. The cut it
-# made with jq's splits() took minutes for 200 KiB (its time grows with the square of the value): a value that size is
-# done in seconds now. On small values it keeps what that cut kept: random bytes, and text with CR, NUL, tab, the C1
-# control NEL, U+FFFD itself, a byte that is not UTF-8, blanks around a line, several lines.
-# mask_cluster NAME DIR FILE...: verify-mask.sh cluster with a fake kubectl listing one Secret per FILE (raw bytes), in a
-# list of its own ($work/NAME.secrets/cluster.values); its output in $work/NAME.log.
+# mask_cluster NAME DIR FILE...: runs verify-mask.sh cluster with mock Secret files.
 mask_cluster() {
   local name=$1 dir=$2 f i=0
   shift 2
@@ -686,7 +612,7 @@ mask_cluster mask-big "$mb/kube-big" "$mb/big"
 took=$((SECONDS - started))
 [ "$took" -le 10 ] && ok "mask: a binary value of 200 KiB is cut in ${took} s (10 at most)" ||
   fail "mask: a binary value of 200 KiB is cut in ${took} s (10 at most)"
-# comm, not grep -xF: BSD grep runs out of memory on a pattern that long.
+# Uses comm instead of grep -xF to avoid BSD grep memory exhaustion on large patterns.
 { base64 <"$mb/big" | tr -d '\n'; echo; } >"$mb/big.b64"
 [ "$(LC_ALL=C comm -12 "$mb/big.b64" "$work/mask-big.secrets/cluster.values" | grep -c .)" = 1 ] &&
   ok "mask: the binary value of 200 KiB is kept whole in base64" || fail "mask: the binary value of 200 KiB is kept whole in base64"
@@ -696,7 +622,6 @@ printf '  lead-and-trail-%s  \r\ncr-nul-%s\000tab-%s\tnel-%s\302\205fffd-%s\357\
   "$(openssl rand -hex 4)" "$(openssl rand -hex 4)" "$(openssl rand -hex 4)" "$(openssl rand -hex 4)" \
   "$(openssl rand -hex 4)" "$(openssl rand -hex 4)" >"$mb/small-5"
 mask_cluster mask-small "$mb/kube-small" "$mb"/small-*
-# The cut as it was, with the length rule of verify-mask.sh, over the same values.
 for f in "$mb"/small-*; do base64 <"$f" | tr -d '\n'; echo; done |
   jq -R -r '., (@base64d | [splits("[[:cntrl:]\ufffd]")][] | gsub("^\\s+|\\s+$"; ""))' |
   while IFS= read -r v || [ -n "$v" ]; do [ "${#v}" -lt 8 ] || printf '%s\n' "$v"; done | LC_ALL=C sort -u >"$mb/want"
@@ -704,7 +629,6 @@ cmp -s "$mb/want" "$work/mask-small.secrets/cluster.values" &&
   ok "mask: small binary and text values give the pieces the regex cut gave ($(wc -l <"$mb/want" | tr -d ' ') lines)" ||
   fail "mask: small binary and text values give the pieces the regex cut gave"
 
-# --- k3d run, cluster readable.
 collect k3d "$work/secrets-k3d"
 for src in '$SVP_VERIFY_OUT/results.tsv' '$SVP_VERIFY_OUT/scenario' \
   '$SVP_VERIFY_OUT/logs/drill-obs-threats.log (verdict lines)' '$SVP_VERIFY_OUT/logs/gitops-admission-metrics.log' \
@@ -712,8 +636,6 @@ for src in '$SVP_VERIFY_OUT/results.tsv' '$SVP_VERIFY_OUT/scenario' \
   .k8s/drills/threats-20261105T000000Z.xml .k8s/drills/threats-skips.tsv; do
   expect k3d "$src" kept
 done
-# The output of every other step is refused whole: the build step's log tails of every namespace (third-party ones
-# included) and the services' log records, a secret, a JWT, a long output, a Chainsaw drill's probe answers.
 for step in k8s-gitops-up k8s-smoke drill-k8s-gitops drill-k8s-threats; do
   expect k3d "\$SVP_VERIFY_OUT/logs/$step.log" not-allowed
 done
@@ -798,15 +720,12 @@ done
 [ "$masked" = 1 ] &&
   ok "k3d: each piece of a binary value between control characters or bytes not UTF-8 is masked, and the value whole" ||
   fail "k3d: each piece of a binary value between control characters or bytes not UTF-8 is masked, and the value whole"
-# The replacement character U+FFFD in UTF-8: what a byte that is not UTF-8 becomes when decoded as text.
 if grep -a '^::add-mask::' "$work/k3d.log" | LC_ALL=C grep -q -e '[[:cntrl:]]' -e $'\xef\xbf\xbd'; then
   fail "k3d: no mask line holds a control character or U+FFFD"
 else
   ok "k3d: no mask line holds a control character or U+FFFD"
 fi
 
-# --- The verdict lines of drill-obs-threats holding the session cookie in a form its value is written in, one run
-# each: a header, a cookie jar line, JSON, and the name ending a line.
 cookie=0
 for line in 'FAIL  WEB-2: sent Cookie: __Host-Http-svp_sid=SID-MARKER' \
   "$(printf 'ok    jar: svp.localhost\tFALSE\t/\tTRUE\t0\t__Host-Http-svp_sid\tSID-MARKER')" \
@@ -820,7 +739,6 @@ for line in 'FAIL  WEB-2: sent Cookie: __Host-Http-svp_sid=SID-MARKER' \
   grep -rqa SID-MARKER "$work/art-cookie-$cookie" && fail "cookie-$cookie: no session cookie value in the artifact" ||
     ok "cookie-$cookie: no session cookie value in the artifact"
 done
-# The admission figures and the verdict lines are scanned like any file from the cluster.
 ao=$work/out-scanned
 mkdir -p "$ao/logs" && echo gitops >"$ao/scenario"
 printf 'kyverno: %s\n' "$kafka_secret" >"$ao/logs/gitops-admission-metrics.log"
@@ -830,7 +748,6 @@ expect scanned '$SVP_VERIFY_OUT/logs/gitops-admission-metrics.log' secret-value
 expect scanned '$SVP_VERIFY_OUT/logs/drill-obs-threats.log (verdict lines)' jwt
 no_leak scanned
 
-# --- k3d run, the cluster never read: only the files written on the runner itself.
 collect dead "$work/secrets-dead" FAKE_KUBECTL_FAIL=1
 for src in '$SVP_VERIFY_OUT/results.tsv' '$SVP_VERIFY_OUT/scenario'; do
   expect dead "$src" kept
@@ -843,14 +760,12 @@ no_leak dead
 lacks dead "no verdict line is printed" 'FAIL  JWT-8'
 has dead "the missing list is a warning" '::warning::verify-collect: a secret list could not be read'
 
-# --- k3d run, cluster gone at the end but read while it ran: that list still counts.
 collect late "$work/secrets-k3d" FAKE_KUBECTL_FAIL=1
 expect late .k8s/drills/backup-1.json secret-value
 expect late .k8s/drills/canary-drill-1.json kept
 has late "it says the earlier list is used" 'the list read while it ran is used'
 no_leak late
 
-# --- k3d run, a Secret made again with a new value: both values are searched for.
 rebuilt_secret=$(openssl rand -hex 20)
 printf '%s\n' "$rebuilt_secret" >>"$work/all-secrets"
 cp -R "$work/kube" "$work/kube.orig"
@@ -866,10 +781,7 @@ no_leak rebuilt
 rm -rf "$work/kube" "$d/rebuilt-1.json"
 mv "$work/kube.orig" "$work/kube"
 
-# --- compose-obs run: no cluster list needed, .env's still applies.
 echo compose-obs >"$out/scenario"
-# The object store's tests and the build step of a compose-obs run (refused whole like every step's output), and the
-# verdict lines of drill-obs-threats with the store's root password (a value of .env).
 printf '%s\n' '--- PASS: TestIntegrationPresignedPost (0.20s)' \
   'object store tests: 39 passed, 0 failed, 0 skipped (tests and subtests); make test-stack exit 0' \
   >"$out/logs/test-stack-objstore.log"
@@ -887,7 +799,6 @@ expect compose .k8s/drills/backup-1.json kept
 no_leak compose env-secrets
 cp "$work/obs.good" "$out/logs/drill-obs-threats.log"
 
-# --- An .env that breaks its rule: nothing masked, no value printed, nothing from the stack copied.
 cp "$repo/.env" "$work/env.good"
 printf 'SVP_BROKEN_PASSWORD=$%s\n' "$env_secret" >>"$repo/.env"
 collect broken "$work/secrets-broken"

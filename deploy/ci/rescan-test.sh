@@ -1,16 +1,8 @@
 #!/usr/bin/env bash
-# Tests for deploy/ci/rescan.sh run and rescan_one, in a throwaway checkout of what they read and a clone of a made-up
-# svp-gitops; the variables of a GitHub Actions job are made up, and a fake gh and a fake cosign first on PATH record
-# their arguments, so no test reaches GitHub, a registry or Sigstore. Checked:
-#   - rescan.sh run attests only the releases of the source of the run's repository, as that source's signing
-#     workflow: a run of svp-frontend without --source web, a run of backend with --source web, and a run of
-#     svp-frontend from another workflow fail, naming both sources (or the identity), before the host or cosign is
-#     asked anything; the scheduled run of backend and the run of svp-frontend with --source web each read their own
-#     promote pull request and ask cosign for their own releases only, leaving the other source's to it; on a machine
-#     the run is refused first;
-#   - rescan_one picks its branch by the format the digest is signed in (below).
-# Runs on macOS and Linux: no network, no Docker, no cluster.
-#
+# Tests for deploy/ci/rescan.sh run and rescan_one in a throwaway checkout of what they read and a clone of a made-up
+# svp-gitops. The variables of a GitHub Actions job are made up; a fake gh and a fake cosign first on PATH record their
+# arguments, so no test reaches GitHub, a registry or Sigstore. Runs on macOS and Linux: no network, Docker or cluster.
+
 # Usage, from anywhere: deploy/ci/rescan-test.sh
 set -euo pipefail
 
@@ -38,8 +30,7 @@ same() {
 has() { grep -qF -- "$2" "$1"; }
 lacks() { ! grep -qF -- "$2" "$1"; }
 
-# --- Fakes. gh writes each call to gh.log, one line of %q-quoted arguments, and answers pr list from gh/prs.json.
-# cosign records its arguments, refuses every signature and takes every attestation.
+# --- Fakes: gh answers pr list from gh/prs.json; cosign refuses every signature and takes every attestation.
 mkdir -p "$work/bin" "$work/gh" "$work/home" "$work/runner-temp"
 cat >"$work/bin/gh" <<'EOF'
 #!/usr/bin/env bash
@@ -82,7 +73,6 @@ on() {
 # fresh: empties the files of a job and the logs of the fakes.
 fresh() { : >"$work/output" && : >"$work/summary" && : >"$work/gh.log" && : >"$work/cosign.log"; }
 
-# A throwaway checkout of what rescan.sh reads: deploy/ci/, deploy/k8s/lib.sh and the policy's values.
 tree=$work/tree
 mkdir -p "$tree/deploy/k8s" "$tree/deploy/helm/svp-policy"
 cp -R "$here" "$tree/deploy/ci"
@@ -93,9 +83,8 @@ digest_a=sha256:$(printf 'a%.0s' $(seq 64))
 digest_b=sha256:$(printf 'b%.0s' $(seq 64))
 backend_run=(GITHUB_REPOSITORY=anhnvcoder/svp-backend GITHUB_SERVER_URL=https://github.com)
 
-# --- rescan.sh run: a run attests only the releases of the source of its own repository, as the identity of that
-# source's signing workflow. A clone of svp-gitops on disk whose main names a gateway of backend and a web of svp-frontend;
-# gh lists no open promote pull request; the fake cosign refuses every signature, so nothing is ever attested.
+# --- rescan.sh run: a run attests only the releases of its own repository's source, as that source's signing workflow.
+# A clone of svp-gitops whose main names a gateway of backend and a web of svp-frontend; cosign refuses every signature.
 rg=$work/rescan-gitops
 gr() {
   GIT_DIR=$rg/.git GIT_WORK_TREE=$rg GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 git -c user.name=test \
@@ -174,11 +163,9 @@ on local "$tree/deploy/ci/rescan.sh" run "$work/rescan-local" "$rg" >"$work/resc
 same "rescan.sh run on a machine: refused first, as CI only" \
   "1 FAIL  rescan.sh run attests with the workflow's identity: CI only" "$rc $(cat "$work/rescan-local.out")"
 
-# --- rescan_one picks its branch by the format the digest is signed in: cosign's older format keeps `attest
-# --replace`, a release in bundles goes to replace_vuln_bundle, and the two never swap. rescan.sh is sourced (its
-# dispatch only runs when it is executed) and what rescan_one calls around the branch is replaced: the signature check,
-# the scan, the gate and the predicate (the scripts of ci_dir), release_format (answering what the case gives),
-# replace_vuln_bundle (logging its call). The fake cosign logs `attest ... --replace`.
+# --- rescan_one picks its branch by the format the digest is signed in; the two never swap. rescan.sh is sourced (its
+# dispatch only runs when executed) and what rescan_one calls around the branch is replaced: signature check, scan,
+# gate, predicate, release_format and replace_vuln_bundle (logging its call). The fake cosign logs `attest --replace`.
 repo=ghcr.io/anhnvcoder/svp-backend/gateway
 rescan_ci=$work/rescan-ci
 mkdir -p "$rescan_ci"

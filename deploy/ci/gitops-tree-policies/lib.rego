@@ -1,23 +1,6 @@
-# Helpers of the policies on a tree of the deployment repository svp-gitops (packages gitops.layout, gitops.envs,
-# gitops.platforms, gitops.author). deploy/ci/gitops-check.sh runs them with conftest test on one JSON document it
-# builds from the tree, the code repository and the pull request (step 1 of the check):
-#   worktree      true for gitops-check.sh --worktree, where the working tree of the code repository stands for the
-#                 revision of every environment, so the revision and the values charts.yaml derives from it are not
-#                 checked (svp-gitops's own check does)
-#   tree          every entry of the tree but .git, by its path from the top: type, what the path resolves to (file, dir
-#                 or other, as test -f and test -d of the shell see it); link, the target of a symbolic link; text, the
-#                 contents of a file
-#   charts        by environment, what the commit its envs/<env>/charts.yaml pins gives: revision, podSecurityVersion
-#                 (of deploy/helm/svp-cluster/values.yaml there) and collectorConfigSha256 (the sha256 of
-#                 deploy/observability/otelcol/k8s-config.yaml there); an environment whose revision is no commit on
-#                 main of the code repository is left out, and the script names why
-#   sources       by environment, revision (empty with worktree) and sources, the table of release sources
-#                 (deploy/helm/svp-policy/files/sources.json) of the code repository at that revision, of its working
-#                 tree with worktree; left out when it cannot be read, and the script names why
-#   pull_request  only for a pull request: author and sender (logins: who opened it, who caused the event checked), and
-#                 for a bot's, changes: [{status, path}], the files git diff --name-status --no-renames lists from its base
-# data.gitops_check: environments (["prd", "stg"]) and services (the seven services with a release image).
-# make conftest-verify runs the tests beside them (*_test.rego).
+# Helpers of the policies on a tree of svp-gitops (packages gitops.*); gitops-check.sh builds their one JSON input.
+# Input keys: worktree, tree, charts, sources, pull_request; data.gitops_check holds environments and services.
+# Design notes: docs/reference/ci.md.
 package gitops
 
 environments := data.gitops_check.environments
@@ -34,7 +17,6 @@ is_file(path) if input.tree[path].type == "file"
 
 is_dir(path) if input.tree[path].type == "dir"
 
-# links_to(path, target): path is a symbolic link to target.
 links_to(path, target) if input.tree[path].link == target
 
 text(path) := input.tree[path].text
@@ -87,13 +69,10 @@ sets(values, "httpRoute.name") if {
 
 components_file := "argocd/apps/components.json"
 
-# components_doc: argocd/apps/components.json, when it is JSON.
 components_doc := json.unmarshal(text(components_file)) if json.is_valid(text(components_file))
 
-# components: its list of components (each a map with a name).
 components := [c | some c in components_doc.components; is_object(c)]
 
-# component(name): the component named name.
 component(name) := c if {
 	some c in components
 	c.name == name

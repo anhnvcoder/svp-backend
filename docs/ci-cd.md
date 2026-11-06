@@ -317,6 +317,136 @@ và không còn ở workflow: bản đo một lần của `dev-k3d`, `web-canary
   `images.yml`: policy Kyverno và mọi phép kiểm chữ ký phải đổi theo, và mọi workflow trên `main` gọi được file đó đều ký ra cùng
   danh tính, nên phải kiểm thêm workflow gọi (điểm này suy từ cách GitHub định nghĩa claim `job_workflow_ref`, chưa thử trong
   repo). ADR-0015 §1 đã cân nhắc phương án này cho việc tách quyền PR/`main`. Xem lại khi có workflow thứ hai cần ký image.
+- **Giá trị bên ngoài vào script qua `env:`.** Input của dispatch, tên nhánh, tiêu đề PR và giá trị ma trận do `plan` sinh tới script bằng
+  `env:`, không qua `${{ }}` trong `run:`: biểu thức được thay vào mã shell trước khi shell chạy, nên một giá trị có dấu nháy hay
+  `$(...)` thành lệnh. Mọi `actions/checkout` đặt `persist-credentials: false` để token không nằm lại trong `.git/config`; không job
+  nào của `images.yml` push vào repo này.
+- **Job giữ `id-token: write` không dùng cache.** `sign`, `rescan`, `contract` và action `image-sign` không khôi phục hay lưu cache. `sign` là
+  job duy nhất của đường build có `id-token: write` và `attestations: write` (provenance cũng vào attestation của repo); artifact
+  `release-<image>` (repository, tag, digest của index đã ký) là thứ bước promote đọc.
+- **`last-success` là job riêng, và `plan` chỉ nhận SHA đủ.** Chỉ job này đọc Actions API nên nó không checkout và không chạy code của repo.
+  API lỗi thì output rỗng và job vẫn xanh: `plan` build cả sáu image (thừa chứ không thiếu). API lọc theo nhánh, sự kiện, trạng thái;
+  `plan.sh` chỉ nhận đáp án khi nó là SHA commit đủ.
+- **`promote` chạy cả khi ký một image lỗi.** Mọi image đã ký ở lượt này vẫn được promote, image lỗi đỏ ở `sign`. Job cũng chạy khi không
+  có image mà chart đổi (`promote_charts` của `plan`): chỉ `charts.yaml` dịch chuyển. `GITHUB_TOKEN` của `promote` chỉ đọc repo này, token
+  App chỉ cho `svp-gitops`, không có `id-token` hay `packages`. `promote-prd` cũng vậy, `GITHUB_TOKEN` còn đọc được commit status của
+  `svp-gitops` (repo public), và token App lấy từ khoá thứ hai của App mà chỉ job này giữ.
+- **Hợp đồng REST được phát hành tối đa một lần mỗi version.** Job `contract` chạy ở mọi lượt build của `main` (push, hay dispatch không
+  `rescan`, `drill`, `promote_prd`), chung nhóm concurrency không huỷ của build, nên các lượt chạy lần lượt và hai lượt không kiểm rồi đẩy
+  cùng một tag cùng lúc (kiểm và đẩy là hai request). GitHub thay lượt đang chờ trong nhóm bằng lượt mới hơn: version merge khi một lượt
+  build của `main` đang chạy, rồi có version khác merge trước khi lượt chờ bắt đầu, thì version đầu không bao giờ được phát hành. Chấp nhận
+  vậy vì version sau đã chứa nó, còn phát hành bù mọi version thiếu từ lịch sử spec chỉ thêm các bản không client nào hỏi. Job không
+  cần image của lượt và không dùng cache.
+- **Rescan đọc `svp-gitops` như dữ liệu.** Job `rescan` clone `svp-gitops` ẩn danh và chỉ đọc file của nó, không chạy gì từ đó;
+  `GITHUB_TOKEN` chỉ dùng để hỏi PR promote có đang mở không (đọc repo public).
+- **Báo cáo SARIF của `images.yml` tải một lần mỗi công cụ.** `upload-sarif` gộp mọi file nhận được thành một log SARIF và GitHub từ chối
+  log quá 20 run. Mỗi chân ghi một run trivy và một run grype, nên sáu image (12 chân) gộp cả hai công cụ ra 24 run; tách theo công cụ thì
+  tối đa 14 (rescan chỉ ghi run trivy và không chung log với build). Bước đầu của job xếp file vào một thư mục mỗi công cụ và đếm run
+  bằng `jq` của runner, để log vượt giới hạn dừng ở đó kèm số đếm thay vì bị GitHub từ chối; công cụ vượt giới hạn không được tải, công cụ
+  kia vẫn tải. Job là báo cáo chứ không phải check: nằm ngoài `images-ok`, nhưng tải lỗi vẫn làm lượt đỏ.
+- **Job `sarif` của `ci.yml`.** Job duy nhất có quyền ghi (`security-events: write`) trong `ci.yml`, chỉ chạy trên `main` ngoài PR: PR (từ nhánh
+  của repo hay từ fork) chạy code của chính nó trước khi ai đọc, nên không bao giờ có quyền này; phát hiện của PR ở lại trong artifact và
+  summary. Job checkout code chỉ để `upload-sarif` đọc dòng của từng phát hiện và tính fingerprint (cảnh báo nhờ đó giữ lịch sử và trạng
+  thái dismiss khi dòng dịch chuyển), không chạy gì của repo. Là báo cáo chứ không phải check: `ci-ok` không cần nó, nhưng tải lỗi vẫn
+  làm lượt đỏ.
+- **Image có một chân lỗi thì không có bản phát hành.** Action `image-index` ghép hai manifest đã quét của một image thành một index
+  đa kiến trúc (nhãn OCI theo commit), đọc lại index và kiểm nó có đúng hai manifest đó (`deploy/ci/image-guard.sh index`, `index-check`), rồi
+  giao artifact `index-<image>` (repository, tag, digest): digest được ký, attest và promote. Image có chân lỗi không đủ hai artifact
+  `leg-<image>-amd64`, `-arm64` nên đỏ ở đây: không index, không chữ ký, không bản phát hành. Action dùng chung với `images.yml` của
+  `svp-frontend`. Job cấp `contents: read` và `packages: write`; `GITHUB_TOKEN` chỉ dùng cho `docker login`.
+- **Cổng quét của một chân (`image-leg`).** Chân build image theo kiến trúc native của runner (không giả lập, không cross-compile), lưu
+  thành tar rồi quét đúng tar đó: image đẩy lên là image đã quét. Dockerfile và context do guard trao, theo target của bảng image
+  `deploy/docker-bake.json`, cùng target mà đường dev build bằng bake; không dùng provenance hay SBOM của BuildKit nên image là một manifest
+  thuần. Hai cổng (trivy, grype) chạy bất kể cổng kia thấy gì để summary hiện cả hai, và không có gì được đẩy trừ khi mọi bước qua; mã
+  thoát lạ của scanner, DB không tải được, hay tar mà syft không đọc được thì chân đỏ. trivy quét tar (chỉ đọc), cả lỗ hổng lẫn bí mật,
+  mọi mức, ra JSON: bản ghi để làm cổng, SARIF và attestation `vuln`; DB không tải được thì scan lỗi, không bao giờ quét với DB không rõ
+  tuổi; `ImageID` của báo cáo là config digest mà bước push so. grype quét SBOM đó là bộ khớp và DB thứ hai, thấy cả thứ syft tìm được
+  ngoài trình quản lý gói (binary `node` của image web) mà trivy không liệt kê; grype thoát 2 khi có match từ `--fail-on` trở lên, thoát 1 khi
+  không quét được (kiểm tra cập nhật DB là bắt buộc và grype từ chối DB build quá năm ngày); cấu hình duy nhất nó đọc là `.grype.yaml` của
+  cây, truyền bằng `-c`, vì thư mục làm việc và `HOME` là tmpfs rỗng. Chỉ DB của trivy và grype được cache (một mục mỗi ngày); token của
+  job chỉ dùng cho `docker login` lúc push, và job chỉ được cấp `packages: write` khi đó.
+- **Ký keyless và cách chạy cosign trong `image-sign`.** Không có khoá để lộ hay xoay: cosign xin chứng chỉ ngắn hạn của Fulcio cho danh tính
+  OIDC của workflow gọi và ghi từng mục vào Rekor. Bước của composite action chạy trong job của bên gọi nên danh tính là workflow của
+  bên gọi, subject là cái mà nguồn phát hành nêu. Chữ ký đặt trên digest index (pod chạy digest index nên Kyverno xác minh nó); SBOM attest
+  trên digest manifest của từng nền tảng; `vuln` (từ hai lượt quét đã qua cổng, `deploy/ci/vuln-predicate.sh`) và provenance (cuối cùng)
+  trên digest index. Mỗi thứ là một Sigstore bundle; `deploy/ci/image-guard.sh sign` quyết trước khi ghi gì. Image diễn tập không có
+  provenance: `drill-no-provenance` được ký chỉ để cho thấy policy từ chối image đã ký, sạch mà thiếu provenance. cosign chạy từ `COSIGN_IMAGE`
+  ghim digest, bằng user của runner, với file credential do `docker login` ghi (chỉ đọc), thư mục làm việc chỉ đọc ở đúng đường dẫn của
+  nó và yêu cầu token OIDC của job (`ACTIONS_ID_TOKEN_REQUEST_URL`, `ACTIONS_ID_TOKEN_REQUEST_TOKEN`, truyền theo tên chứ không theo giá
+  trị) để cosign tự xin token. Action chỉ dùng trong job có `id-token: write`, `packages: write`, `attestations: write` trên `main`, job không
+  chạy code của PR; `GITHUB_TOKEN` chỉ dùng cho `docker login` (cho cosign, ORAS liệt kê referrer và `actions/attest`). Mọi bước gọi docker
+  bỏ `DOCKER_DEFAULT_PLATFORM` như mọi lệnh docker của repo.
+- **Phép kiểm file ngoại lệ chạy ở job `config`, không chỉ ở cổng image.** PR chỉ đổi `.trivyignore.yaml` hay `.grype.yaml` không build image,
+  và một mục hỏng merge vào `main` sẽ làm rescan hằng ngày không attest được service nào. Chỉ ở `config` mục hết hạn mới đỏ (grype không đọc
+  ngày, nên rule của nó vẫn che match). Bước đó cũng giữ luật của các misconfiguration mà `trivy-config` bỏ qua: đường dẫn, lý do, tối đa
+  90 ngày. Luật là policy conftest (`deploy/ci/ignorefile-policies/`) chạy với `yq` từ image `Makefile` ghim, không mạng sau khi pull,
+  không token. `make conftest-verify` chạy test của chúng (mọi ca phải đỏ) và test của policy mà `deploy/ci/gitops-check.sh` áp lên cây
+  `svp-gitops` (`deploy/ci/gitops-tree-policies/`).
+- **`check`: bản Go và service container.** Bản Go là bản của image builder trong các Dockerfile và của máy dev; cache module và cache build,
+  khoá theo `go.sum`. Test transcode của `media-worker` bị skip khi thiếu `ffmpeg` và `ffprobe`, mà runner không có; ffmpeg của Ubuntu
+  cũ hơn bản trong image nên test chỉ dùng cờ lâu đời. Postgres service container cùng major với Postgres của máy dev và của cluster, superuser
+  `postgres`/`postgres` là mặc định của `SVP_TEST_POSTGRES_URL` trong `Makefile`; test tự tạo các database `svp_*_test` từ đó. Redis cùng dòng
+  với Redis của máy dev; test dùng db 15 (mặc định của `SVP_TEST_REDIS_URL`).
+- **Job `stack`: cách chạy và vì sao.** Dựng cả stack `make up` trên runner như trên máy dev rồi chạy `make smoke`, e2e của web, k6 profile `ci` (chỉ ngưỡng
+  lỗi: runner dùng chung không nói gì về độ trễ), Lighthouse và Schemathesis theo hợp đồng OpenAPI của gateway. Sáu service build từ code của
+  PR; web là bản phát hành mà stg chạy (mặc định của `make up`, ghi ở `main` của `svp-gitops`, kéo ẩn danh từ GHCR), và e2e, Lighthouse
+  là code của `svp-frontend` ở đúng commit của bản phát hành đó (`make web-clone`), nên thay đổi backend làm hỏng web hiện ở đây. Job build và chạy code của PR
+  như các job khác, với `contents: read` và không secret: `make env` ghi `.env` gồm secret ngẫu nhiên mới, chỉ sống trên runner tới hết job,
+  không in, không tải lên. Các thao tác đặt lại "LOCAL LAB ONLY" của smoke, e2e, k6, Lighthouse, DAST (xoá khoá rate limit đăng ký của gateway ở
+  Redis db 10) chỉ chạm Redis service container của lượt này. Job chạy khoảng 15 đến 25 phút (sáu lần build image, kéo bản web phát hành, seed e2e
+  (video READY), hai trình duyệt); `timeout-minutes: 45` chừa chỗ cho runner chậm và dừng một bước treo xa trước mặc định 6 giờ của
+  GitHub.
+- **Job `stack`: môi trường của runner.** Postgres và Redis của job là service container publish trên đúng hai địa chỉ: container compose gọi chúng là
+  `host.docker.internal`, mà `host-gateway` của compose ánh xạ tới gateway của bridge mặc định của Docker (`docker0`, `172.17.0.1`), còn `psql` của
+  `deploy/postgres/bootstrap.sh` và `redis-cli` của script chạy ngay trên runner nên cần loopback; không publish trên mọi interface. Service
+  compose đăng nhập Postgres bằng mật khẩu role do `make up` bootstrap (image đòi mật khẩu ở mọi kết nối TCP). Gói apt từ kho Ubuntu (không action bên thứ ba)
+  cho script chạy trên runner: `psql` của bootstrap Postgres (`bootstrap.sql` cần bản 15 trở lên vì `\getenv`), `redis-cli` để đặt lại rate limit,
+  `ffmpeg` cho video thử của smoke, seed e2e và Lighthouse, `jq` ở mọi nơi; `curl`, `openssl` có sẵn trong image runner. Node theo major của
+  `.nvmrc` và pnpm theo `packageManager` của bản clone, như CI và Dockerfile của `svp-frontend`: Node 25 trở lên không còn Corepack, và repo
+  không cho action bên thứ ba (`pnpm/action-setup`); không cache vì cache pnpm của `setup-node` cần pnpm trên `PATH` trước khi Node có
+  mặt. Trước `make web-lighthouse` job bỏ hạn chế AppArmor `kernel.apparmor_restrict_unprivileged_userns`: Lighthouse mở Chromium của Playwright
+  với sandbox của Chrome, cần user namespace không đặc quyền; Ubuntu 24.04 hạn chế chúng qua AppArmor cho mọi binary không có profile riêng,
+  bản tải của Playwright không có, nên Chrome dừng với "No usable sandbox". Hạn chế bỏ trên runner dùng một lần này, nhờ đó sandbox vẫn bật;
+  e2e tự tắt sandbox.
+- **Artifact công khai của `stack` chỉ nhận báo cáo đã dò bí mật; k6 và DAST dò hai lần, Lighthouse một lần.** `deploy/k6/load.sh` làm lượt chạy đỏ khi kết quả của nó có token, cookie hay
+  mật khẩu nhưng vẫn để nguyên chúng; job dò lại một lần nữa để `summary.json` chỉ vào artifact công khai khi sạch (`machine.json` và phần
+  còn lại ở trên runner). Với Lighthouse, bước của job chỉ chép, không dò: việc dò là của `lighthouse/run.sh` của `svp-frontend`, ghi báo cáo ở đầu
+  `test-results/lighthouse/` của bản clone sau khi thay cookie phiên và xoá chúng nếu còn thấy giá trị cookie. Job chép các báo cáo đó ra khỏi
+  thư mục ẩn của bản clone, vì `upload-artifact` bỏ qua thư mục ẩn;
+  thư mục con `.lighthouseci/` (kết quả trước khi thay cookie) không khớp mẫu nào nên không lên. Với `dast` chỉ `report.json` (đếm,
+  tiêu đề lỗi, seed) và `summary.json` (request theo status và operation) được rời runner; `schemathesis.log`, `junit.xml`, `requests.har` có body
+  response kèm token và form presigned. `deploy/dast/run.sh` làm lượt đỏ khi một trong hai file có bí mật nhưng để nguyên chúng; job dò lại
+  để chúng chỉ vào artifact công khai khi sạch. Mỗi bước tải bị bỏ qua khi bước nguồn bị huỷ (quá hạn) hay không chạy.
+- **Log và artifact của `verify.yml` công khai, nên bảo vệ nhiều lớp.** Repo public: log và artifact của mọi lượt, đỏ hay không, ai cũng đọc được.
+  Lớp một là luật không script nào in bí mật (không bao giờ `set -x`, `env` hay `kubectl get secret`); lớp hai là mask giá trị bí mật trong log
+  (`deploy/ci/verify-mask.sh`, sau `make env` và sau bước dựng); lớp ba là output của từng bước vào file dưới `$RUNNER_TEMP/verify/logs` thay vì log
+  job, và `deploy/ci/verify-collect.sh` chỉ chép vào artifact những kết quả máy đọc, đã qua dò mọi giá trị bí mật đã biết và mẫu token (file nghi bị
+  bỏ kèm cảnh báo). `make env` ghi `.env` gồm secret ngẫu nhiên mới sống trên runner tới hết job; bước dựng sinh thêm (token GlitchTip, Secret của cluster).
+  Giá trị mới của `drill-k8s-reloader` (ghi vào `.env`) sinh và mask ở một bước riêng trước bước dựng, vào file riêng ở `$RUNNER_TEMP/verify-reloader`. Không code của repo khác chạy: `svp-gitops` được clone
+  ẩn danh (`make gitops-clone`) và chỉ đọc, image kéo theo digest. `targets` và `gitops_ref` tới script chỉ qua `env` (`SVP_VERIFY_TARGETS`,
+  `SVP_GITOPS_REF`), mỗi cái được kiểm lại bằng `case` trước khi dùng; `if:` so kịch bản và `targets` như biểu thức. Lượt lịch không có
+  input: mỗi job chạy kịch bản của nó, mọi bước.
+- **Kiểm ref đầu tiên, concurrency và `dev-k3d` của `verify.yml`.** Bước kiểm ref chạy trước mọi thứ và dừng dispatch của nhánh khác (cũ, có thể thiếu
+  bản sửa của `main`) lẫn lượt lịch ngoài `main`. Đó là rào chắn tai nạn, không phải ranh giới bảo mật: ai dispatch được cũng
+  push được nhánh có tên đó. Mỗi kịch bản có nhóm concurrency riêng nên một lượt tại một thời điểm, hai kịch bản song song, mỗi cái một
+  runner, bản sửa hiếm khi chờ lượt kia; dispatch thứ ba của một kịch bản khi một lượt đang chạy và một đang chờ thay lượt đang chờ. Lượt lịch
+  (cả hai job) là nhóm riêng `verify-schedule`: dispatch trong lúc đó chạy cạnh nó, trên runner riêng. `dev-k3d` chỉ dispatch, không bao giờ theo lịch:
+  lượt hằng tuần giữ đường mà stg và prd theo. Job `compose` dựng stack giống job `stack` của `ci.yml`; `gitops` và `dev-k3d` dựng cluster theo hai đường nêu ở mục 2.
+- **Giờ lịch lệch khỏi đầu giờ.** Lịch của `verify.yml` (thứ Bảy 00:37 UTC, tức 07:37 giờ Việt Nam) và của `images.yml` (01:17 UTC) cố ý ở phút lẻ: đầu giờ
+  là lúc bộ lập lịch của GitHub bận, có thể trễ hay bỏ lượt. Attestation `vuln` Kyverno nhận trong 72 giờ nên hai ngày lỡ lượt rescan vẫn ổn.
+- **`pr-title.yml`.** Tiêu đề PR theo Conventional Commits 1.0.0: `main` chỉ nhận squash merge và tiêu đề thành tiêu đề commit. Kiểm theo ngữ
+  pháp, không theo danh sách scope, nên tiêu đề của bot qua nguyên trạng (`chore(stg):`, `chore(prd):` của App promote, `chore(deps):`, `fix(deps):` của
+  Renovate), và cả nút Revert của GitHub (`Revert "<tiêu đề>"`). Cùng mẫu và bộ test chạy ở bốn repo có CI (`svp-backend`, `svp-frontend`, `svp-gitops`,
+  `svp-infra`). Là workflow riêng, không phải job của `ci.yml`: sửa tiêu đề chạy riêng nó chứ không chạy cả CI. Không quyền, không checkout, không code của PR: tiêu đề
+  tới script chỉ qua `env`.
+- **`scorecard.yml`.** OpenSSF Scorecard của repo: ghim, quyền của token, ruleset, mẫu workflow nguy hiểm và các check khác (danh sách ở tài liệu của
+  Scorecard), chạy mỗi push `main`, hằng tuần và khi một luật branch protection cổ điển đổi. Kết quả công khai ở API Scorecard (`publish_results: true`, huy hiệu và trang
+  xem) và tải lên code scanning. Không trigger `pull_request`: đây không phải check của PR. Branch-Protection đọc ruleset bằng `GITHUB_TOKEN`
+  nên không `repo_token`. Việc công khai ràng buộc file này theo các luật mà API Scorecard kiểm trước khi nhận kết quả ("Workflow Restrictions" trong README của
+  `ossf/scorecard-action`): không `env` hay `defaults` ở mức workflow và không có trong job; không quyền ghi ở mức workflow; `id-token: write` chỉ ở job Scorecard; không
+  container hay service; một nhãn runner Ubuntu do GitHub host (`ubuntu-latest` hay `ubuntu-YY.MM`, 22.04 trở lên); và các step của job đó chỉ gồm
+  `actions/checkout`, `actions/upload-artifact`, `github/codeql-action/upload-sarif`, `ossf/scorecard-action`, `step-security/harden-runner`, mỗi step là `uses:` (không step `run:`).
+  Kết quả được API nhận hay không hiện ở log của step Scorecard. Mọi action ghim SHA commit đầy đủ; checkout không để token ở `.git/config`.
 
 ## 4. Đọc một lượt chạy
 

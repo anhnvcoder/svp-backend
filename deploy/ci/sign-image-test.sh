@@ -1,9 +1,8 @@
 #!/usr/bin/env bash
 # Tests for the Sigstore bundle helpers of deploy/ci/common.sh the rescan uses (bundle_referrers, release_format,
-# replace_vuln_bundle), against a fake registry, in a throwaway checkout of what they read; the variables of a GitHub
-# Actions job are made up. Signing itself (action image-sign and its guard) is tested by deploy/ci/image-guard-test.sh.
-# The section's own comment below lists the cases. Runs on macOS and Linux: no network, no Docker, no cluster.
-#
+# replace_vuln_bundle), against a fake registry, in a throwaway checkout of what they read. Signing itself is tested by
+# deploy/ci/image-guard-test.sh. Runs on macOS and Linux: no network, no Docker, no cluster.
+
 # Usage, from anywhere: deploy/ci/sign-image-test.sh
 set -euo pipefail
 
@@ -69,25 +68,14 @@ g() {
 g init -q -b main && g add -A && g commit -qm base
 backend_run=(GITHUB_REPOSITORY=anhnvcoder/svp-backend GITHUB_SERVER_URL=https://github.com)
 
-# --- The Sigstore bundles of a release (bundle_referrers, release_format and replace_vuln_bundle of common.sh). A fake
-# registry under bundles/: a folder per subject digest holding one file per bundle referrer (named by its digest,
-# holding its predicate type), and a file <hex>.sig for a signature in cosign's older format. A fake docker first on
-# PATH answers ORAS: discover lists the referrers, with their dev.sigstore.bundle.predicateType annotation only for the
-# types in FAKE_ANNOTATED (as GHCR lists them: the provenance of actions/attest only; all: every one), manifest fetch
-# of a referrer answers a manifest of one bundle layer and blob fetch that layer, the bundle under
-# testdata/sigstore-bundle/ of its type (FAKE_SIGN_BUNDLE, FAKE_BUNDLE_FILE pick another; FAKE_MANIFEST_DOWN,
-# FAKE_LAYER_TYPE, FAKE_BLOB_DOWN break a step), manifest fetch --descriptor of a .sig tag finds the older format or
-# answers "not found", manifest delete takes the referrer off the list and still exits 1 "unsupported", as GHCR does
-# (FAKE_DELETE_IGNORED: it leaves the list as it was). A
-# fake cosign logs each call, adds a referrer for each sign and attest in the bundle format, and verifies one vuln
-# attestation per vuln referrer. Checked:
-#   - replace_vuln_bundle (the rescan of a release in bundles): the new vuln bundle is kept and every older one taken
-#     off, the signature and the provenance never; a registry that keeps a bundle on the list, a second bundle that
-#     appears meanwhile, or cosign verifying another count than one fails it, naming the digest;
-#   - bundle_referrers: the type of each bundle from its annotation, or else from the bundle itself (the predicateType
-#     of the statement in its DSSE envelope; cosign's signature as a bare message signature or a statement); a bundle
-#     that cannot be read (manifest, layer, blob, envelope, statement) fails it, never leaves it out;
-#   - release_format: bundle, legacy or none, and a digest carrying both is refused.
+# --- The Sigstore bundles of a release. A fake registry under bundles/: a folder per subject digest, one file per
+# bundle referrer (named by its digest, holding its predicate type), <hex>.sig for cosign's older format. A fake docker
+# on PATH answers ORAS; discover gives the annotation of the type only for FAKE_ANNOTATED types, as GHCR does
+# (provenance only).
+
+# manifest delete takes the referrer off the list but exits 1 "unsupported", as GHCR does (FAKE_DELETE_IGNORED: it
+# stays). The fake cosign logs each call, adds a referrer per sign and attest, and verifies one vuln attestation per
+# vuln referrer.
 bb=$work/bundle-bin
 fb=$work/bundles
 mkdir -p "$bb" "$fb" "$work/home/.docker"
