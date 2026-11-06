@@ -1,58 +1,25 @@
 #!/usr/bin/env bash
-# rescan.sh: the daily rescan of released images. A release was
-# clean when it was built; new vulnerabilities are published every day, and Kyverno accepts a vuln attestation for
-# 72 hours only, so every released digest is scanned again with the newest DB and its attestation replaced.
-# A digest keeps the format it was signed in: one in cosign's older format (.sig, .att images) gets its vuln
-# attestation replaced in that format with --replace, as when it was built; one in Sigstore bundles gets a new vuln
-# bundle and every older vuln bundle taken off (replace_vuln_bundle of common.sh). Never the other format: a digest
-# that carries both is read by its bundles alone. The older branch goes once no environment names such a digest.
-#
-#   rescan.sh scan-index REPOSITORY DIGEST OUT
-#     Reads the index REPOSITORY@DIGEST from the registry, finds its two manifests (linux/amd64, linux/arm64) and scans
-#     EACH from the registry with the gate's flags (trivy reads one platform per scan, so scanning the index would
-#     prove nothing about arm64). Writes OUT/amd64 and OUT/arm64 in the layout vuln-predicate.sh reads and prints the
-#     two manifest digests.
-#
-#   rescan.sh run [--source NAME] OUT GITOPS_DIR [VALUES_REF]   (CI only: it attests)
-#     NAME must be the release source of the repository running the job (use_build_source of common.sh), and the job
-#     the workflow that source signs with (run_builder_id against its subject): checked before anything is read, as
-#     the vuln attestation is replaced whoever signed the old one (cosign attest --replace, or the older vuln bundles
-#     taken off), so a run of one repository naming another's source (or forgetting --source) would replace that
-#     source's attestations with its own identity, and Kyverno would then refuse every new pod of those releases. For every release `list` prints: an empty digest is skipped; a repository other than the service's image of
-#     release source NAME (backend, this repository, when not given; deploy/helm/svp-policy/files/sources.json of this
-#     checkout), a malformed digest, or a digest without a signature of that source's images.yml on main is not attested
-#     and fails the run, so whatever a ref lists, only digests the workflow running this signed on main get a fresh
-#     attestation: no repository attests another's releases. Each digest left is scanned (scan-index), its predicate
-#     built by vuln-predicate.sh --allow-critical and attested as the one vuln attestation of the digest, in the
-#     format it is signed in (above), so the attestation always holds the real result: a CRITICAL found today is recorded (Kyverno then refuses new pods
-#     because of it, not because of an old attestation) and fails the run, which mails the owner. A secret found today
-#     is never attested: it fails the run before anything is written, as at build time. SARIF of the digests of main of
-#     svp-gitops go to OUT/sarif for the Security tab. The drill images are in no image file, so they are never
-#     rescanned.
-#
-#   rescan.sh list [--source NAME] GITOPS_DIR [VALUES_REF]
-#     Prints the releases a run of source NAME rescans, one per line: service, repository, digest (both empty when not
-#     released) and where it was read, separated by tabs. Read as data with `git show`, never run: image.repository
-#     and image.digest of envs/<env>/images/<service>.yaml of every environment of the deployment repository
-#     svp-gitops, at its main, at the promote branch of that source (bot/promote-stg for backend,
-#     bot/promote-stg-<NAME> otherwise) while its pull request is open there (the source's promoter app's own, never a
-#     fork's from a branch of that name), and at VALUES_REF when given (a branch, a full commit or refs/pull/<n>/head
-#     of svp-gitops). A file naming a release of another source is left out with a line on stderr (that source's CI
-#     rescans it); one under the prefix of no source is listed, so the run fails on it. For backend only, a VALUES_REF
-#     that svp-gitops has not, and that is a full commit of this repository from before svp-gitops held the releases,
-#     is read there instead, from deploy/k8s/values/services/<service>.yaml; every release that history names is under
-#     the prefix this repository had before its rename, which no source of the table names any more, so the run fails
-#     on it. GITOPS_DIR is a clone of svp-gitops (CI's, from make gitops-clone): the refs are
-#     fetched into it under refs/svp/rescan/, anonymously; the open pull request is asked of the repository's host with
-#     the job's own token, a read of a public repository. Fails, after printing every release it could read, when a file
-#     cannot be read or the host does not say whether the pull request is open (main and VALUES_REF are still listed);
-#     fails at once when VALUES_REF is neither.
+# rescan.sh: the daily rescan of released images. Kyverno accepts a vuln attestation for 72 hours only, so every
+# released digest is scanned again with the newest DB and its vuln attestation replaced, in the format it was signed in:
+# cosign's older format with --replace, Sigstore bundles with replace_vuln_bundle. Never the other: a digest with both
+# is read by its bundles alone.
+
+# rescan.sh scan-index REPOSITORY DIGEST OUT: scans each platform manifest of the index (trivy reads one per scan).
+# rescan.sh run [--source NAME] OUT GITOPS_DIR [VALUES_REF]: attests the releases `list` prints (CI only).
+# rescan.sh list [--source NAME] GITOPS_DIR [VALUES_REF]: prints the releases of source NAME, one per line.
+
+# run attests only digests signed on main by the images.yml of source NAME, the repository running the job: an old
+# attestation is replaced whoever signed it, so another source's run would replace it with its own identity and Kyverno
+# would refuse every new pod of those releases. A secret found today is never attested.
+# Design notes: docs/reference/ci.md.
 set -euo pipefail
 
 # shellcheck source=deploy/ci/common.sh
 . "$(dirname "${BASH_SOURCE[0]}")/common.sh"
 
-# scan_index REPOSITORY DIGEST OUT: see scan-index above.
+# scan_index REPOSITORY DIGEST OUT: scans the index's two manifests from the registry with the gate's flags into
+# OUT/amd64 and OUT/arm64 (the layout vuln-predicate.sh reads); prints the two manifest digests. Each on its own:
+# trivy reads one platform per scan, so scanning the index would prove nothing about arm64.
 scan_index() {
   local repo=$1 digest=$2 out=$3 index arch child dir args a
   mkdir -p "$out" || fail "create $out"
@@ -133,7 +100,9 @@ keep_own() {
   done
 }
 
-# list GITOPS_DIR [VALUES_REF]: see `list` above (source_args first).
+# list GITOPS_DIR [VALUES_REF]: prints the releases a run of the source rescans (source_args first), one per line:
+# service, repository, digest and where it was read, tab-separated. Fails, after printing every release it could read,
+# when a file cannot be read or the host does not say whether the promote pull request is open.
 list() {
   local dir=$1 values_ref=${2:-} refs=() labels=() open i ref e svc file status=0 code=
   [ "$(git -C "$dir" rev-parse --show-toplevel 2>/dev/null)" = "$(cd "$dir" 2>/dev/null && pwd -P)" ] ||

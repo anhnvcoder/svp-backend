@@ -1,35 +1,14 @@
 #!/usr/bin/env bash
-# The REST contract of the gateway, services/gateway/openapi.yaml, as a versioned release: the web client builds its
-# types from a published, signed version of it, not from a file of this repository. Two commands:
-#
-#   contract.sh check BASE
-#       The check of a pull request (make api-contract-check, job api-contract of ci.yml). Compares the spec of the
-#       working tree with the spec at commit BASE, by bytes and with oasdiff (OASDIFF_IMAGE of the Makefile, no
-#       network, external $refs refused), and fails when the version rule written at the top of the spec is broken:
-#         - info.version of either side is not MAJOR.MINOR.PATCH;
-#         - the file changed and info.version is not greater than at BASE;
-#         - oasdiff finds a breaking change while the major stays (from 1.0.0 on; below it every change may break,
-#           as semver allows) or the version went down: its checks api-version-not-bumped,
-#           api-major-version-not-bumped and api-version-decreased, raised from INFO to ERR here;
-#         - the changelog of oasdiff is not empty (an operation, a field, an enum value...) and only PATCH went up.
-#       BASE all zeros (a push that created the branch), or a BASE without the spec: nothing to compare, a line in the
-#       job summary and exit 0. The changelog goes to the log and the job summary.
-#
-#   contract.sh publish [--dry-run]
-#       The release, on main only. Pushes the spec as an OCI artifact (ORAS_IMAGE of the Makefile) to
-#       <ghcr_prefix>/api/gateway:<info.version>, then signs that digest keyless with cosign in the same older format
-#       as the images (the identity of release source backend in files/sources.json of chart svp-policy, read by
-#       sign_identity of common.sh, the one Kyverno and every verifier read). A version is never published twice: a
-#       tag that already holds this very file (same layer digest) is left as it is, only signed if its signature is
-#       missing; a tag holding anything else fails and nothing is written (the next version has to be published
-#       instead). Before anything is pushed, the run must be one that signs as that identity (run_builder_id), so a
-#       run of another workflow, a branch or a machine never pushes a version it cannot sign. --dry-run reads the
-#       registry without credentials and only says what it would do. Needs `docker login` to the registry and the
-#       id-token of the job (cosign on PATH) when not a dry run.
-#       Two runs must not publish at once: the check above and the push are two requests, so the workflow runs them
-#       one after the other (a concurrency group that never cancels on main).
-#
+# The gateway's REST contract (services/gateway/openapi.yaml) as a signed release the web client builds its types
+# from. contract.sh check BASE is the pull request check (make api-contract-check); contract.sh publish [--dry-run]
+# runs on main only.
+
+# Version rule, written at the top of the spec: a changed file needs a higher info.version, a breaking change a higher
+# major (below 1.0.0 any change may break), any other changelog entry at least a minor. A version is never published
+# twice; only the identity of release source backend publishes, and runs must not overlap.
+
 # Written for bash 3.2 too (macOS).
+# Design notes: docs/reference/ci.md.
 set -euo pipefail
 
 # shellcheck source=deploy/ci/common.sh
@@ -159,11 +138,10 @@ oras_() {
     "$image" "$@"
 }
 
-# published AUTH REF: writes to $work/manifest.json the manifest REF names and prints its digest; prints nothing when
-# REF does not exist. GHCR answers "not found" for a tag missing from a package, and "denied" for a package that does
-# not exist yet (or is private and read without credentials). A denied read can only be taken as "absent" because the
-# push after it needs write access, which includes read: with credentials that can read, a denied answer means no
-# package. Any other error fails, so a registry out of reach is never taken for a version not yet published.
+# published AUTH REF: writes the manifest REF names to $work/manifest.json and prints its digest; nothing when REF
+# does not exist. GHCR answers "not found" for a missing tag and "denied" for a package that does not exist yet (or is
+# private and read without credentials, as --dry-run reads); the push needs write access, which includes read, so with
+# credentials denied means no package. Any other error fails: an outage is never read as unpublished.
 published() {
   local err rc=0 flag=()
   [ "$1" = true ] && flag=(--auth)

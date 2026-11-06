@@ -1,7 +1,4 @@
-# Resources of the test of policy images-pinned: one that fails per kind and field where the renders of svp-gitops
-# name an image (deploy/ci/gitops-check.sh lists them), each with one image left without its digest, then resources
-# that pass. Names: fail-<kind>-<field>, pass-<what>.
-# --- containers[].image of a Pod
+# Test resources for policy images-pinned: unpinned images fail, pinned images pass.
 apiVersion: v1
 kind: Pod
 metadata:
@@ -12,7 +9,6 @@ spec:
     - name: c
       image: busybox:1.37
 ---
-# containers[].image of a Deployment
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -25,7 +21,6 @@ spec:
         - name: c
           image: ghcr.io/kyverno/kyverno:v1.19.1
 ---
-# initContainers[].image of a Deployment
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -41,7 +36,6 @@ spec:
         - name: c
           image: ghcr.io/kyverno/kyverno:v1.19.1@sha256:b31d8511ae5fd6010e2a01ea72ebae08eb82fa51d91af14a1d9fe989949b4edb
 ---
-# containers[].image of a StatefulSet
 apiVersion: apps/v1
 kind: StatefulSet
 metadata:
@@ -54,7 +48,6 @@ spec:
         - name: c
           image: docker.io/redpandadata/redpanda:v26.1.1
 ---
-# initContainers[].image of a StatefulSet
 apiVersion: apps/v1
 kind: StatefulSet
 metadata:
@@ -70,7 +63,6 @@ spec:
         - name: c
           image: busybox:1.37@sha256:1111111111111111111111111111111111111111111111111111111111111111
 ---
-# containers[].image of a Job
 apiVersion: batch/v1
 kind: Job
 metadata:
@@ -83,7 +75,6 @@ spec:
         - name: c
           image: quay.io/minio/mc:latest
 ---
-# containers[].image of a CronJob
 apiVersion: batch/v1
 kind: CronJob
 metadata:
@@ -99,7 +90,6 @@ spec:
             - name: c
               image: alpine
 ---
-# containers[].image of an Argo Rollouts Rollout
 apiVersion: argoproj.io/v1alpha1
 kind: Rollout
 metadata:
@@ -112,7 +102,6 @@ spec:
         - name: c
           image: ghcr.io/anhnvcoder/svp-frontend/web:abcdef123456
 ---
-# containers[].ephemeralContainers[].image of a Pod
 apiVersion: v1
 kind: Pod
 metadata:
@@ -126,7 +115,7 @@ spec:
     - name: debug
       image: busybox:1.37
 ---
-# containers[].env[].value of a Deployment: an env name that says it holds an image (CloudNativePG's operator)
+# Env name that says it holds an image (OPERATOR_IMAGE_NAME) without digest.
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -142,7 +131,7 @@ spec:
             - name: OPERATOR_IMAGE_NAME
               value: ghcr.io/cloudnative-pg/cloudnative-pg:1.30.1
 ---
-# containers[].env[].value of a Deployment: a bare name under an image env name
+# Bare image name (alpine) under an image env name without digest.
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -158,7 +147,7 @@ spec:
             - name: RELATED_IMAGE_HELPER
               value: alpine
 ---
-# containers[].args[] of a Deployment: a flag whose name holds "image" (cert-manager's ACME solver)
+# Flag whose name holds "image" (--acme-http01-solver-image) without digest.
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -174,7 +163,7 @@ spec:
             - --v=2
             - --acme-http01-solver-image=quay.io/jetstack/cert-manager-acmesolver:v1.21.2
 ---
-# containers[].args[] of a Deployment: registry/path:tag after a flag of another name (the Prometheus operator)
+# Dotted registry/path:tag after a flag of another name without digest.
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -189,7 +178,6 @@ spec:
           args:
             - --prometheus-config-reloader=quay.io/prometheus-operator/prometheus-config-reloader:v0.94.1
 ---
-# containers[].command[] of a Deployment
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -203,7 +191,6 @@ spec:
           image: busybox@sha256:1111111111111111111111111111111111111111111111111111111111111111
           command: [/manager, --thanos-default-base-image=quay.io/thanos/thanos:v0.42.4]
 ---
-# spec.image of a Prometheus
 apiVersion: monitoring.coreos.com/v1
 kind: Prometheus
 metadata:
@@ -212,7 +199,6 @@ metadata:
 spec:
   image: quay.io/prometheus/prometheus:v3.15.0-distroless
 ---
-# spec.image of an Alertmanager
 apiVersion: monitoring.coreos.com/v1
 kind: Alertmanager
 metadata:
@@ -221,7 +207,6 @@ metadata:
 spec:
   image: quay.io/prometheus/alertmanager:v0.34.1
 ---
-# spec.imageName of a CloudNativePG Cluster
 apiVersion: postgresql.cnpg.io/v1
 kind: Cluster
 metadata:
@@ -231,7 +216,7 @@ spec:
   instances: 1
   imageName: ghcr.io/cloudnative-pg/postgresql:15.19-minimal-trixie
 ---
-# data of a ConfigMap: a key that says it holds an image (the Barman Cloud plugin's sidecar)
+# ConfigMap key that says it holds an image (SIDECAR_IMAGE) without digest.
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -240,7 +225,7 @@ metadata:
 data:
   SIDECAR_IMAGE: ghcr.io/cloudnative-pg/plugin-barman-cloud-sidecar:v0.15.1
 ---
-# data of a ConfigMap: an image: line of a configuration file (Envoy Gateway's envoy-gateway.yaml)
+# ConfigMap data containing an unpinned image: line (Envoy Gateway configuration).
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -256,7 +241,7 @@ data:
         shutdownManager:
           image: docker.io/envoyproxy/gateway:v1.9.3@sha256:192fc9bdadb6d2462e8cf7bd702ce3dd9648f3310c6038787448a1f509b7cd9f
 ---
-# Two digests, which no runtime pulls (a chart appending its digest to a tag that holds one)
+# Two digests: runtime cannot pull multiple digests.
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -269,7 +254,7 @@ spec:
         - name: c
           image: busybox:1.37@sha256:1111111111111111111111111111111111111111111111111111111111111111@sha256:1111111111111111111111111111111111111111111111111111111111111111
 ---
-# A digest that is not 64 hex
+# Short digest: digest must be exactly 64 hex characters.
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -282,8 +267,7 @@ spec:
         - name: c
           image: busybox:1.37@sha256:1111
 ---
-# Every image pinned, and what only looks like one: settings of an image, a number under a flag with "image", a URL,
-# and an env list rendered as null.
+# Pinned images and non-image settings: pull policy, numbers, URLs, and null env lists.
 apiVersion: apps/v1
 kind: Deployment
 metadata:

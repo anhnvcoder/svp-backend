@@ -1,14 +1,5 @@
-# The platform layer. Key platforms of argocd/apps/components.json maps each platform to the environments that run on
-# it (envs, each of prd and stg on at least one platform) and whether its renders may name the lab's *.svp.localhost
-# (localHosts, false when left out); platforms of a component, when set, lists platforms of that map, each once (no
-# platforms: every platform). platforms/ holds exactly a folder per platform of the map (and README.md), and
-# argocd/apps/files/platforms is a symbolic link to it. Each file of platforms/<platform>/ is README.md, argo-cd.yaml
-# (the platform's values of Argo CD, after argocd/bootstrap.json's), or <name>.yaml or <name>.values.tpl with <name> a
-# component that runs on that platform. A file platforms/<platform>/*.yaml is held to an overlay's rules: a YAML map
-# that sets no key cluster (what depends on the cluster reaches a component through a template <name>.values.tpl,
-# from the root's value cluster), and for a release of chart svp-service no image, canary or httpRoute.name (a release's
-# image is envs/<env>/images/<name>.yaml, and every platform runs the base's canary). What the templates render is
-# checked on the root's render (step 2 of the check).
+# The platform layer: key platforms of argocd/apps/components.json, platforms/ and the files of each platform.
+# Design notes: docs/reference/ci.md.
 package gitops.platforms
 
 import data.gitops
@@ -110,13 +101,10 @@ deny contains $"platforms/{name}: platforms/ holds a folder per platform (and RE
 	not gitops.is_dir($"platforms/{name}")
 }
 
-# component_of(name): the component a file of a platform is for, by its name.
 component_of(name) := trim_suffix(name, ".values.tpl") if endswith(name, ".values.tpl")
 
 component_of(name) := trim_suffix(name, ".yaml") if endswith(name, ".yaml")
 
-# platform_files: [platform, name] of each entry of the folder of a platform of the map, README.md and argo-cd.yaml
-# aside.
 platform_files contains [platform, name] if {
 	some platform in platform_list
 	some name in gitops.visible($"platforms/{platform}")
@@ -141,7 +129,6 @@ deny contains $"platforms/{platform}/{name}: component {c} does not run on {plat
 	not gitops.runs_on(c, platform)
 }
 
-# values_files: [path, name] of each file platforms/<platform>/<name>.yaml of any folder of platforms/.
 values_files contains [path, trim_suffix(name, ".yaml")] if {
 	some platform in gitops.visible("platforms")
 	some name in gitops.visible($"platforms/{platform}")

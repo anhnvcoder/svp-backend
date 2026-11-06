@@ -1,44 +1,13 @@
 #!/usr/bin/env bash
-# scan-gate.sh: the scan gate outside the image pipeline (whose legs gate in the composite action
-# .github/actions/image-leg, the scanners' own exit codes read in its steps), and the rules of the ignore files both
-# share. The verdict is the scanners' own, from their flags; this script picks the flags, reads the exit codes and
-# prints one line per scan for the job summary.
-#
-#   scan-gate.sh [--allow-critical] LABEL REPORT
-#     The daily rescan (deploy/ci/rescan.sh, with --allow-critical: it records the real result). REPORT is the JSON of
-#     `trivy image --scanners vuln,secret` with every severity and .trivyignore.yaml (the record the vuln attestation
-#     and the SARIF are made from); LABEL names the image in the output (gateway linux/amd64). trivy convert reads it
-#     twice: the vulnerabilities with --severity CRITICAL --ignorefile .trivyignore.yaml --exit-code, the secrets with
-#     --exit-code and no --severity (a severity filter would hide a HIGH secret). Each pass gets only its own part of
-#     the report, so neither counts the other's findings.
-#   scan-gate.sh --grype LABEL DIR
-#     make grype (grype_check of common.sh). Runs grype (grype_sbom of common.sh) on DIR/sbom.spdx.json, an SPDX SBOM
-#     syft wrote, with --fail-on critical and .grype.yaml, and writes DIR/grype.json and DIR/grype.sarif.raw. syft
-#     finds what was installed without a package manager, such as the node binary of the web image, which trivy does
-#     not list.
-#   scan-gate.sh --check-ignorefile
-#     Checks the rules of .trivyignore.yaml and .grype.yaml (check_ignorefiles below, the rules themselves in
-#     deploy/ci/ignorefile-policies/), with no image and no report, and those of deploy/ci/trivy-config-ignore.yaml, the
-#     misconfigurations make trivy-config leaves out. Job config of ci.yml runs it on every pull request and push (a
-#     pull request that changes nothing but an ignore file builds no image), and so does each leg of image-leg before
-#     it builds.
-#
-# Blocks (exit 1) on:
-#   - any secret, whatever its severity: a public package and its signature cannot be taken back, so a secret pushed
-#     once is leaked for good. There is no way around it: .trivyignore.yaml may hold only vulnerabilities, and no
-#     --skip-files, --skip-dirs or --secret-config is ever passed to trivy.
-#   - any CRITICAL vulnerability left after the exceptions, fixed upstream or not, in trivy's report or grype's.
-#     --allow-critical lets CRITICAL through in trivy's report (the rescan); it never lets a secret through.
-#   - an ignore file that breaks its rules (below; an expired entry aside, which only --check-ignorefile fails on).
-# HIGH and below are only reported: counts in the job summary, details in the SARIF. Exit 2: the scan could not be
-# read or run (REPORT is not a trivy image report, trivy or grype failed, the grype DB could not be fetched).
-#
-# Prints counts and, for findings that block, trivy's table of the CRITICAL vulnerabilities, and rule, file and line of
-# each secret: never the matched text (trivy masks secrets in its findings anyway; the raw report is never printed).
-#
-# The exceptions are those of the tree being scanned (code_root of common.sh): this checkout's, or those of the checkout
-# of another repository named by SVP_CODE_ROOT (its CI runs this script from a pinned checkout of this one), where both
-# files must exist: a tree without them is the wrong tree, not one without exceptions.
+# scan-gate.sh: the scan gate outside the image pipeline (image-leg gates its own legs) and the ignore-file check.
+# Usage: scan-gate.sh [--allow-critical] LABEL REPORT | --grype LABEL DIR | --check-ignorefile
+# --allow-critical (the daily rescan) lets CRITICAL through in trivy's report, never a secret.
+# Never prints the raw report: counts, CRITICAL findings, and rule, file and line of each secret.
+
+# Blocks (exit 1) on any secret, whatever its severity (a pushed package cannot be taken back, so nothing ignores one),
+# on any CRITICAL vulnerability left after .trivyignore.yaml and .grype.yaml, and on an ignore file breaking its rules.
+# Exit 2: the scan could not be read or run. Each rule of .grype.yaml must match an entry of .trivyignore.yaml.
+# Design notes: docs/reference/ci.md.
 set -euo pipefail
 
 # shellcheck source=deploy/ci/common.sh
@@ -65,15 +34,9 @@ label=${1:-} input=${2:-}
 tmp=$(mktemp -d) || fail "create a temporary directory"
 trap 'rm -rf "$tmp"' EXIT
 
-# check_ignorefiles live|gate: the rules of .trivyignore.yaml and .grype.yaml of the tree (each when present) and, live
-# (job config), of deploy/ci/trivy-config-ignore.yaml too. The rules are conftest policies on the parsed files, written
-# and explained in deploy/ci/ignorefile-policies/ (tested by make conftest-verify), run on the files together
-# (--combine: each rule of .grype.yaml must be an entry of .trivyignore.yaml). Live, an expired entry breaks the rules;
-# the gates of a report (the rescan, make grype) leave it to trivy, which drops it. Two checks stay here, as the
-# policies cannot make them: no mapping of a file has a key twice (conftest's parser keeps the last one, trivy and
-# grype refuse the file; yq sees every key), and each path of trivy-config-ignore.yaml is a file of the repository.
-# conftest and yq run from the images the Makefile pins (CONFTEST_IMAGE, YQ_IMAGE), without network, as the caller,
-# with the files mounted read-only. Prints a FAIL line per broken rule; live, an ok line when none is.
+# check_ignorefiles live|gate: checks .trivyignore.yaml and .grype.yaml (live, also trivy-config-ignore.yaml) with the
+# conftest policies of ignorefile-policies/, plus what they cannot: a key written twice, and a path that is no file.
+# Live (job config) an expired entry fails; the gates of a report leave it to trivy. conftest and yq run offline.
 check_ignorefiles() {
   local live=false files=() mounts=() image failed=0 out rc=0 path config=${config_ignore#"$repo_root"/}
   [ "$1" = gate ] || live=true

@@ -1,12 +1,8 @@
 #!/usr/bin/env bash
-# Step test-stack-objstore of job compose of .github/workflows/verify.yml: the object store's own tests against the
-# stack's object store (make test-stack PKGS=./internal/objstore/..., go test -race -count=1 -v), the one place they run
-# instead of skipping. Its output counted: fails when make test-stack exits non-zero, when go test reports a FAIL,
-# when any test or subtest SKIPs (a skipped case proves nothing about the store), or when one of the integration tests
-# (presigned POST, worker and video-service permissions, DeletePrefix, multipart with CRC32, Cache-Control read back
-# anonymously, create only once, the worker listing and reading media/) did not PASS, each named.
-#
-# make is the one on PATH. Usage, from the repo root, the stack up: deploy/ci/verify-steps/objstore.sh
+# Runs internal/objstore integration tests against the compose stack; no test may skip.
+# Fails on non-zero exit, test failure, skipped tests, or missing integration test cases.
+# Usage, from the repo root with stack up: deploy/ci/verify-steps/objstore.sh
+# Design notes: docs/reference/ci.md.
 set -uo pipefail
 
 tmp=$(mktemp)

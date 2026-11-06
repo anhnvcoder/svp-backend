@@ -228,7 +228,6 @@ test_a_repository_of_no_source if fx.says(
 	"envs/stg/images/gateway.yaml: the image must be a release of ghcr.io/anhnvcoder/svp-backend/gateway",
 )
 
-# The table of the rename: the retired sources still listed, without promoter.
 renamed := object.union(fx.tree_input, {"sources": {"stg": {"revision": fx.revision, "sources": array.concat(fx.table, fx.retired)}}})
 
 test_the_table_of_the_rename_admits_the_releases_of_the_retired_sources if count(deny(object.union_n([
@@ -254,7 +253,6 @@ test_the_working_tree_table_refuses_a_release_of_a_retired_source if fx.says(
 	"envs/prd/images/web.yaml: the image must be a release of ghcr.io/anhnvcoder/svp-frontend/web",
 )
 
-# Without the table of an environment (the script names why), its image files are held to their shape alone.
 test_without_the_table_the_shape_alone if count(deny(with_image(
 	json.remove(fx.tree_input, ["sources/stg"]),
 	"stg", "web", fx.image_text("ghcr.io/anhnvcoder/svp-web/web"),

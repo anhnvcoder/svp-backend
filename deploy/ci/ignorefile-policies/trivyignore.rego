@@ -1,15 +1,7 @@
-# Rules of .trivyignore.yaml, the vulnerabilities trivy leaves out of every image scan of the tree (trivy convert
-# --ignorefile of deploy/ci/scan-gate.sh, the daily rescan):
-#   - only the section vulnerabilities, a list (vulnerabilities: [] when nothing is excepted): the format also has
-#     secrets, misconfigurations and licenses, and trivy would apply them, so a secret could be let through;
-#   - each entry exactly id, statement (the reason, text), expired_at (yyyy-mm-dd) at most 30 days after today (UTC), so
-#     no exception lives longer than 30 days without another reviewed change, and purls: the package versions it covers,
-#     each pkg:<type>/<name>@<version> (a purl with no version is every version to trivy; the same id in another
-#     package or version is still reported). No paths;
-#   - live (job config): an entry trivy no longer applies (from its expired_at day on) breaks the rules too, since grype
-#     reads no date and the rule .grype.yaml has for it would go on covering the match until the entry is renewed or
-#     removed. The image gates leave an expired entry to trivy, which drops it.
-# packages hands the purls to the rules of .grype.yaml (grypeignore.rego), each rule of which must be one of them.
+# Rules of .trivyignore.yaml, the vulnerabilities trivy leaves out of every image scan; each deny message says why.
+# Only vulnerabilities: trivy would also apply secrets, so a secret could be let through. At most 30 days each.
+# `packages` hands the purls to the rules of .grype.yaml (grypeignore.rego), each of which must be one of them.
+# Design notes: docs/reference/ci.md.
 package trivyignore
 
 import data.ignorefiles

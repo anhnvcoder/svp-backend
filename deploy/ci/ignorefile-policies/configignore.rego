@@ -1,11 +1,7 @@
-# Rules of deploy/ci/trivy-config-ignore.yaml, the misconfigurations make trivy-config leaves out:
-#   - only the section misconfigurations, a list;
-#   - each entry exactly id (a check id: DS-0026, KSV-0048), paths, statement (the reason, text; folded with >- or not)
-#     and expired_at (yyyy-mm-dd) at most 90 days after today (UTC): a misconfiguration changes only when the
-#     repository does, so it gets about 90 days, not the 30 of a vulnerability;
-#   - paths: at least one, each a plain relative path of a file (letters, digits, ._/-; no pattern, no . or ..), so an
-#     id is never left out for the whole repository. That each path is a file of the repository (not a directory,
-#     which would cover a tree, not a file gone) deploy/ci/scan-gate.sh checks after these rules: Rego sees no files.
+# Rules of deploy/ci/trivy-config-ignore.yaml, the misconfigurations make trivy-config leaves out; each deny message
+# states its rule. A misconfiguration changes only when the repository does, so 90 days, not the 30 of a vulnerability.
+# That each path is a file of the repository is checked by deploy/ci/scan-gate.sh: Rego sees no files.
+# Design notes: docs/reference/ci.md.
 package configignore
 
 import data.ignorefiles

@@ -1,14 +1,5 @@
-# The layout of the tree: the files the root chart argocd/apps and the bootstrap read, and the settings of those files
-# that no render shows.
-#   - argocd/apps/Chart.yaml, values.yaml, templates/applications.yaml, components.json, argocd/project.yaml and
-#     argocd/bootstrap.json are files; argocd/apps/files/envs is a symbolic link to ../../../envs, through which the root
-#     chart reads envs/.
-#   - components.json is JSON with a list of components, external-secrets among them (step 3 of the check validates
-#     the External Secrets of chart svp-cluster against its CRDs); component svp-policy names no values file, since the
-#     release checks read its settings from the chart's values and envs/<env>/svp-policy.yaml alone.
-#   - argocd/bootstrap.json installs chart argo-cd of https://argoproj.github.io/argo-helm with a values file of the tree.
-#   - argocd/apps/values.yaml is a YAML map that sets no value cluster (an empty map at most): the bootstrap alone sets
-#     it, from the values of the session (the infrastructure repository's output cluster_values), which never go to git.
+# Layout of a tree of svp-gitops: the files the root chart and the bootstrap read, and settings no render shows.
+# Design notes: docs/reference/ci.md.
 package gitops.layout
 
 import data.gitops
@@ -27,10 +18,8 @@ deny contains $"{path} is missing" if {
 	not gitops.is_file(path)
 }
 
-# The bash that lists the tree does not walk into a link to a folder, so what lies behind one would be checked by no
-# rule (an overlay of platforms/<platform> linked to another folder). The two links the root chart needs are the only
-# links to a folder the tree may hold, with the two-level root's link to envs/ (argocd/root reads envs/<env>/ through
-# it); their targets, envs/ and platforms/, are listed where they are.
+# The shell that lists the tree does not follow a link to a folder: no rule would check what lies behind one.
+# The links to a folder the root charts need are the only such links a tree may hold.
 folder_links := {"argocd/apps/files/envs", "argocd/apps/files/platforms", "argocd/root/files/envs"}
 
 deny contains msg if {
@@ -50,8 +39,7 @@ deny contains $"{gitops.components_file} cannot be read: it is no JSON" if {
 	not json.is_valid(gitops.text(gitops.components_file))
 }
 
-# A document that is valid JSON but no object (false, null, a list) would make every rule that reads it undefined, so the
-# tree would pass them silently.
+# A JSON document that is no object (false, null, a list) leaves every rule that reads it undefined: a silent pass.
 deny contains $"{gitops.components_file} must be a JSON object" if {
 	json.is_valid(gitops.text(gitops.components_file))
 	not is_object(gitops.components_doc)

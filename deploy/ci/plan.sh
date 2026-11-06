@@ -1,40 +1,25 @@
 #!/usr/bin/env bash
-# plan.sh: the first job of images.yml. Decides what
-# this run does and hands it to the jobs after it as outputs (step_output of common.sh; stdout on a machine):
-#   mode            build | rescan | drill
-#   images          JSON array of the images to build (build: changed services; drill: the drill images)
-#   legs            JSON matrix {"include": [{image, arch, runner}]}, every image on amd64 and arm64 (native runners)
-#   has_images      true | false
-#   base            the commit the changes were compared with ("" when none could be used)
-#   promote_charts  true on a build of main that builds no image but changes what the charts of this repository read
-#                   (a file under deploy/helm/, or a file a symbolic link there points to, such as
-#                   deploy/observability/otelcol/k8s-config.yaml) since base: job promote still runs and moves the
-#                   charts stg runs (envs/stg/charts.yaml of svp-gitops) to this commit
-#   values_ref      the dispatch input values_ref, checked (rescan only): a ref of svp-gitops, or a commit of this
-#                   repository from before svp-gitops held the releases
-#
-# Inputs come from the environment only, never interpolated into a script: EVENT_NAME, GIT_REF (github.ref),
-# PR_BASE_REF (github.base_ref), INPUT_SERVICES, INPUT_RESCAN, INPUT_DRILL, INPUT_VALUES_REF, LAST_SUCCESS_SHA (the
-# head_sha job last-success read from the Actions API, possibly empty).
-#
-# Mode: rescan on schedule or dispatch rescan=true; drill on dispatch drill=true; otherwise build. Both inputs at once,
-# rescan or drill off main, services outside build or values_ref outside rescan: refused (the run fails), never
-# guessed. Base of the build (never github.event.before, which loses the changes of a queued run that was
-# replaced and of a run that failed):
-#   push to main       head_sha of the newest successful push run of images.yml on main (LAST_SUCCESS_SHA); none or not a full SHA →
-#                      all six
-#   pull request       merge-base of HEAD with the PR's base branch
-#   workflow_dispatch  merge-base of HEAD with origin/main; input services (all, or names from the six this repository
-#                      builds: built_services of deploy/k8s/lib.sh, the targets of the image table
-#                      deploy/docker-bake.json; never web, which svp-frontend builds) overrides
-#
-# Another repository's tree (SVP_CODE_ROOT, code_root of common.sh, is not this checkout: the CI of another release
-# source runs this script from a pinned checkout of this one): its whole tree is the code of its images, so a build
-# builds every service of the release source the run builds for (use_build_source of common.sh; HEAD of the tree must
-# be the run's commit), with no base and no comparison; input services may name only those services (or all). A drill
-# builds its drillImages and is refused when it has none; the charts are this repository's, so promote_charts stays
-# false. Either tree, the run must be of the repository of one release source and HEAD of the tree its commit: a job
-# of another source that forgot SVP_CODE_ROOT stops here, not with a plan made from the diff of this checkout.
+# plan.sh: the first job of images.yml. Decides what this run does and hands it to the jobs after it as outputs
+# (step_output of common.sh): mode (build | rescan | drill), images (JSON array to build), legs (JSON matrix of image,
+# arch, runner: both architectures on native runners), has_images, base (the commit compared with, "" if none).
+
+# promote_charts: true on a build of main that builds no image but changes what the charts read since base (deploy/helm/
+# or a file a link there points to): job promote still moves the charts stg runs to this commit. values_ref: the
+# dispatch input of the rescan, checked.
+
+# Inputs come from the environment only, never interpolated into a script: EVENT_NAME, GIT_REF, PR_BASE_REF,
+# INPUT_SERVICES, INPUT_RESCAN, INPUT_DRILL, INPUT_VALUES_REF, LAST_SUCCESS_SHA (the head_sha job last-success read,
+# maybe empty).
+
+# Mode: rescan on schedule or dispatch rescan=true; drill on dispatch drill=true; otherwise build; contradictory inputs
+# fail. Base of a build, never github.event.before (it loses the changes of a replaced queued run and of a failed one):
+# push to main the head_sha of the last successful push run (none or not a full SHA: all six); pull request the
+# merge-base with the PR's base branch; dispatch the merge-base with origin/main, which the input services overrides.
+
+# Another repository's tree (SVP_CODE_ROOT is not this checkout): a build builds every service of its release source, no
+# base; a drill its drillImages; promote_charts stays false. Either tree: the run is of one release source's repository
+# and HEAD is its commit, so a job that forgot SVP_CODE_ROOT stops here.
+# Design notes: docs/reference/ci.md.
 set -euo pipefail
 
 # shellcheck source=deploy/ci/common.sh

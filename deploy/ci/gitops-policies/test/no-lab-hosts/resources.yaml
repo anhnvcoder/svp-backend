@@ -1,5 +1,4 @@
-# Resources of the test of policy no-lab-hosts: one that fails per kind and field it reads, each naming the lab's
-# svp.localhost, then resources with real hosts that pass. Names: fail-<kind>-<field>, pass-<kind>.
+# Test resources for policy no-lab-hosts: fail-* name svp.localhost; pass-* use real hosts.
 apiVersion: gateway.networking.k8s.io/v1
 kind: HTTPRoute
 metadata:

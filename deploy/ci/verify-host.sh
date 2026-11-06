@@ -1,25 +1,8 @@
 #!/usr/bin/env bash
-# Checks and prepares the machine of a verification run before any make target: the GitHub runner
-# ubuntu-24.04, or the rented Linux VM that stands in for it. Fails
-# with the numbers, so a run that would have died hours later for want of disk or a name stops here.
-#
-#   verify-host.sh compose-obs|gitops
-#
-# 1. Disk: free space of the filesystem of Docker's data directory must be at least need + 15% of its size + 2 GiB,
-#    need being what the scenario adds (16 GiB for compose-obs: 1.25 times the 12.7 GiB its first run on the runner
-#    used; 30 GiB for gitops: the release images and those of about 40 third-party containers in the containerd store
-#    of two nodes, volumes). The 15% keeps kubelet below its default image garbage collection threshold (85%). Short of
-#    it, the toolsets of the runner image that this repository never uses are deleted (Android, .NET, GHC, CodeQL; not
-#    the Go of the hosted tool cache that setup-go uses), then it measures again and fails if still short. df and
-#    docker system df go to $SVP_VERIFY_OUT/df-before.txt and to the log.
-# 2. k3d only: the line "127.0.0.1 svp.localhost api.svp.localhost s3.svp.localhost" in /etc/hosts (the drills reach
-#    Envoy by those names, and k3d publishes 127.0.0.1:8443 only, so a name that also resolves to ::1 costs a refused
-#    connection or a failure), then getent ahosts of each name must give 127.0.0.1 and nothing else.
-# 3. k3d only: kubectl of the machine within one minor version of the cluster's k3s (K3S_IMAGE_TAG of the Makefile),
-#    as kubectl's version skew policy allows.
-# 4. k3d only: prints vm.min_free_kbytes. Seastar takes it off the broker's cgroup limit before it checks --memory, and
-#    base/redpanda.yaml of svp-gitops leaves room for it (66 MiB on an x86_64 runner, 44 MiB in Docker Desktop's VM).
-# It writes the scenario's name to $SVP_VERIFY_OUT/scenario for deploy/ci/verify-collect.sh. Linux only (GNU df).
+# verify-host.sh compose-obs|gitops: validates runner environment before verification make targets; Linux only (GNU df).
+# Disk: free >= need (16 GiB compose-obs, 30 gitops) + 15% to stay under kubelet's 85% image GC threshold + 2 GiB.
+# Memory: logs vm.min_free_kbytes which Seastar takes off broker cgroup limit; redpanda.yaml leaves room for it.
+# Design notes: docs/reference/ci.md.
 set -euo pipefail
 
 here=$(cd "$(dirname "$0")" && pwd)
@@ -34,8 +17,7 @@ fail() {
   echo "FAIL  verify-host: $1" >&2
   exit 1
 }
-# Docker without DOCKER_DEFAULT_PLATFORM, as every docker call of the repository (inherited, that variable makes docker
-# pull and run images of another architecture, emulated).
+# Docker without DOCKER_DEFAULT_PLATFORM to avoid emulating foreign-architecture container images.
 docker_() { env -u DOCKER_DEFAULT_PLATFORM docker "$@"; }
 
 scenario=${1:-}
@@ -82,8 +64,8 @@ echo "hosts: svp.localhost, api.svp.localhost, s3.svp.localhost resolve to 127.0
 
 k3s_minor=$(sed -n 's/^K3S_IMAGE_TAG *:= *v1\.\([0-9][0-9]*\)\..*/\1/p' "$repo/Makefile")
 [ -n "$k3s_minor" ] || fail "read the minor version of K3S_IMAGE_TAG in the Makefile"
-# --client asks no server, and a context the kubeconfig does not hold yet (before make k8s-up) does not fail it; the
-# context is named all the same, as in every kubectl call of the repository.
+# --client asks no server, so a context the kubeconfig does not hold yet (before make k8s-up) does not fail it;
+# the context is named all the same, as in every kubectl call of the repository.
 client_minor=$(kubectl --context k3d-svp version --client -o json | jq -r '.clientVersion.minor' | tr -dc '0-9')
 [ -n "$client_minor" ] || fail "read the minor version of kubectl"
 skew=$((client_minor - k3s_minor))

@@ -1,13 +1,7 @@
-# The author of a pull request (input.pull_request). A bot's pull request merges with no review where no code owner
-# owns the files (envs/stg/), so a bot's token, leaked or misused, may change only what that bot promotes. Each file
-# the pull request of a bot (a login ending in [bot]) changes is judged with the table of release sources of the
-# revision its environment pins (input.sources): the bot <promoter>[bot] of source N changes envs/stg/images/<svc>.yaml
-# and envs/prd/images/<svc>.yaml with <svc> in N's services; the bot of backend, whose repository holds the charts,
-# also envs/stg/charts.yaml, envs/prd/charts.yaml and every image file of envs/prd/images/ (the promote to prd copies
-# the whole set of stg, web's included); nothing else, and no such bot deletes a file. A bot that promotes no source
-# (Renovate) changes nothing under envs/. A person's pull request is not limited here. A bot that caused the event
-# (the sender: who opened the pull request or pushed the commit checked) other than the author fails, since the files
-# allowed are the author's.
+# Pull requests of bots (a login ending in [bot]) merge with no review where no code owner owns the files (envs/stg/),
+# so a bot may change only what it promotes under envs/, and delete nothing; a person's pull request is not limited.
+# A bot that caused the event (the sender) other than the author fails, since the files allowed are the author's.
+# Design notes: docs/reference/ci.md.
 package gitops.author
 
 import data.gitops
@@ -65,7 +59,6 @@ deny contains $"{c.path}: changed by {pr.author}, a bot that promotes no release
 	startswith(c.path, "envs/")
 }
 
-# target(path): the environment of a file a promoter may change, with the service of an image file.
 target(path) := {"env": env} if {
 	some env in gitops.environments
 	path == $"envs/{env}/charts.yaml"
@@ -90,7 +83,6 @@ deny contains msg if {
 	])
 }
 
-# source(env): the release source of the environment's table that the author promotes.
 source(env) := s if {
 	some s in input.sources[env].sources
 	s.promoter == login
@@ -104,7 +96,6 @@ deny contains msg if {
 	msg := $"{c.path}: changed by {pr.author}, which promotes no release source of the charts envs/{env} runs ({substring(input.sources[env].revision, 0, 12)})"
 }
 
-# judged_changes: [change, its target, the source the author promotes there].
 judged_changes contains [c, t, s] if {
 	promoter
 	some c in changes

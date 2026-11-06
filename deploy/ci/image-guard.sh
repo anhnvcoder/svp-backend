@@ -1,30 +1,13 @@
 #!/usr/bin/env bash
-# image-guard.sh: the guards of the image pipeline, around the tools the composite actions under .github/actions/image-*/
-# call directly (docker buildx, trivy, syft, grype, cosign). Each subcommand checks what a step must not get wrong, and
-# hands the step what it needs as outputs ($GITHUB_OUTPUT; printed key=value on a machine). The verdict of a scan stays
-# the scanner's own exit code, read in the step; nothing here runs a scanner.
-#
-#   image-guard.sh leg IMAGE ARCH OUT       before the build of one leg (action image-leg)
-#   image-guard.sh trivy-report LABEL OUT   before the trivy gate: OUT/trivy.json is a trivy image report
-#   image-guard.sh grype-summary LABEL OUT  after grype: counts and the Critical matches of OUT/grype.json
-#   image-guard.sh sarif IMAGE ARCH OUT     the SARIF of both scans, one category per image and architecture
-#   image-guard.sh push IMAGE ARCH OUT      before the push: prints the tag to push the scanned image as
-#   image-guard.sh pushed IMAGE ARCH OUT    after the push: the manifest read back holds the scanned config
-#   image-guard.sh index IMAGE LEGS         before the index is joined (action image-index)
-#   image-guard.sh index-check IMAGE LEGS OUT   after: the index read back holds exactly the two scanned manifests
-#   image-guard.sh sign IMAGE OUT           before signing (action image-sign): what to write, and the vuln predicate
-#
-# The rules every subcommand keeps, as the pipeline did before (ADR-0015, 0039 §2, 0040):
-#   - IMAGE is a service or drill image of the release source whose repository runs the job (use_build_source of
-#     common.sh); the code is that of code_root (SVP_CODE_ROOT, the input code-root of the actions: svp-frontend's
-#     checkout in its runs) and its HEAD is the commit of the run (check_code_tree). Both are checked before docker is
-#     called.
-#   - What is pushed is what was scanned: the config digest of the pushed manifest is the ImageID of the trivy report.
-#   - The index holds exactly the two scanned manifests; what is signed and attested is the index read back.
-#   - Only drill-vulnerable passes CRITICAL vulnerabilities (allow-critical); a secret blocks every image.
-#   - A release is signed only when the workflow of the run is the identity of its source; each bundle (signature, SBOM,
-#     vuln, provenance) is written only when the digest has none of its type, and a digest in cosign's older format
-#     (.sig) is refused.
+# image-guard.sh leg|trivy-report|grype-summary|sarif|push|pushed|index|index-check|sign ARGS...: the guards of the
+# image pipeline around the tools the composite actions image-* call; each subcommand checks what its step must not get
+# wrong and hands it what it needs as outputs. A scan's verdict stays the scanner's own exit code, read in the step.
+# Design notes: docs/reference/ci.md.
+
+# Guards: the image and the code tree are the run's own, checked before docker is called; what is pushed is the scanned
+# image; the index holds exactly the two scanned manifests and the index read back is what is signed; only
+# drill-vulnerable passes CRITICAL, a secret blocks every image; a release is signed only as its source's workflow, each
+# bundle once per digest, and a digest in cosign's older format is refused.
 set -euo pipefail
 
 # shellcheck source=deploy/ci/common.sh
@@ -36,12 +19,9 @@ summary() {
   [ -z "${GITHUB_STEP_SUMMARY:-}" ] || echo "$1"
 }
 
-# leg IMAGE ARCH OUT: the image is the source's and the tree the run's commit, then the arguments of the build: the
-# Dockerfile and context (this checkout's service.Dockerfile or media-worker.Dockerfile, a drill Dockerfile, or the
-# Dockerfile at the top of another repository's tree, which must hold what its build and gates read), the one build
-# argument, the OCI labels of the commit, the local tag; ARCH must be this host's architecture (the pipeline never
-# emulates). Hands on the pinned tool images, the scan flags (shared with the rescan), the ignore files of the tree and
-# allow-critical. Writes OUT/local-tag and OUT/platform.
+# leg IMAGE ARCH OUT: checks that the image is the source's and the tree the run's commit, then hands on the build (the
+# Dockerfile and context, the build argument, the OCI labels, the local tag), the pinned tool images, the scan flags and
+# the ignore files. ARCH must be this host's: the pipeline never emulates. Writes OUT/local-tag and OUT/platform.
 leg() {
   [ $# -eq 3 ] || fail "usage: image-guard.sh leg IMAGE ARCH OUT"
   local image=$1 arch=$2 out=$3 rev file build_arg='' context=$code_root allow=false labels
@@ -50,9 +30,8 @@ leg() {
   rev=$(git -C "$code_root" rev-parse HEAD)
   case $image in
   drill-vulnerable) file=$script_root/deploy/ci/drill/vulnerable.Dockerfile allow=true ;;
-  # Built exactly like a clean service (the gateway's code) so the only difference with a release is what CI leaves
-  # out: drill-unsigned is pushed with no signature, drill-no-provenance is signed and attested vuln like a release but
-  # never attested provenance.
+  # Built like a clean service (the gateway's code); drill-unsigned is pushed with no signature, drill-no-provenance is
+  # signed and attested vuln like a release but never attested provenance.
   drill-unsigned | drill-no-provenance) file=$script_root/$(dockerfile gateway) build_arg=SERVICE=gateway ;;
   *)
     if [ "$code_root" = "$script_root" ]; then
@@ -66,8 +45,7 @@ leg() {
     fi
     case $image in
     media-worker) ;;
-    # Both architectures of a commit get the same id, which Next uses as its deploymentId and the server as its
-    # release name.
+    # The same id on both architectures of a commit: Next uses it as its deploymentId, the server as its release name.
     web) build_arg=SVP_BUILD_ID=${rev:0:12} ;;
     *) build_arg=SERVICE=$image ;;
     esac
@@ -234,14 +212,10 @@ index_check() {
   echo "ok    $repo:${rev:0:12} is index $digest of linux/amd64 and linux/arm64"
 }
 
-# sign IMAGE OUT: OUT/index (the artifact index-IMAGE) and OUT/legs (leg-IMAGE-*) as image-sign downloads them. The
-# index lies under the prefix of the run's source and is IMAGE; a release (not a drill image) is signed only by the
-# source's workflow; the index read back holds exactly the two scanned manifests. Writes the vuln predicate of the two
-# gating scans to OUT/vuln.json (vuln-predicate.sh, with --allow-critical only for drill-vulnerable), then reads the
-# bundles each digest has, and hands on what to write: sign, sbom-amd64, sbom-arm64, vuln (true when none of that type
-# is there), provenance (a release whose index has no provenance yet), with repository, digest, amd64, arm64,
-# predicate, out (OUT as an absolute path, which the cosign container mounts at that path) and cosign-image (the
-# pinned COSIGN_IMAGE).
+# sign IMAGE OUT: OUT/index and OUT/legs as image-sign downloads them; a release is signed only by its source's
+# workflow. Writes OUT/vuln.json (vuln-predicate.sh, --allow-critical only for drill-vulnerable), then hands on what to
+# write: sign, sbom-<arch>, vuln, provenance (true when missing), and repository, digest, amd64, arm64, predicate,
+# cosign-image, out (absolute: the cosign container mounts it at that path).
 sign() {
   [ $# -eq 2 ] || fail "usage: image-guard.sh sign IMAGE OUT"
   local image=$1 out=$2 repo digest name release=true flags=() builder format have have_child child dir arch a b cosign

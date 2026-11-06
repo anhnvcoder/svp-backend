@@ -1,24 +1,5 @@
-# The environments: envs/ holds exactly a folder per environment (prd and stg), and in each of them:
-#   - charts.yaml holds exactly the keys revision, podSecurityVersion and collectorConfigSha256, one line each (the
-#     script reads them with sed). revision is the full commit (40 hex) of the code repository whose charts the
-#     environment runs; podSecurityVersion and collectorConfigSha256 equal what that commit gives (input.charts, which
-#     the script derives with git). With input.worktree only the keys are checked.
-#   - envs/prd/charts.yaml alone may add gitopsRevision, the full commit (40 hex) of this repository (svp-gitops) at which
-#     prd renders argocd/apps, base/ and platforms/ while its own envs/prd/ is read on main; only the promote to prd
-#     writes it, the commit of main that stg ran. stg follows main and never pins one. The two-level root argocd/root is
-#     what reads the key, so a tree that sets it has that root. Whether the commit is on main of this repository, and
-#     holds argocd/apps, the script checks with git.
-#   - images/ holds exactly one file per service, <service>.yaml, each the image block alone: no top-level line besides
-#     image:, and image.repository, tag and digest each exactly one line of the block, as values_field of
-#     deploy/k8s/lib.sh reads them (the promote jobs and values-check.sh read the files so). The repository is that
-#     service's of exactly one release source of the table at the environment's revision (input.sources), so a release
-#     the policy of that environment admits; tag and digest are set. Whether the release is signed, and built from the
-#     commit its tag names, is step 5 of the check (values-check.sh).
-#   - no overlay envs/<env>/<name>.yaml nor image file sets a value null, {} or [], at any depth: the root hands their
-#     content to the Applications of argocd/apps in valuesObject, and the health check of an Application
-#     (argoproj.io_Application of base/argo-cd.yaml) compares the spec it reads with the one the controller compared,
-#     in Lua, where null is a key left out and {} and [] are one empty table. Such a change would leave the
-#     Application Healthy on the previous spec's status, and the root report the new commit deployed before it runs.
+# Rules of envs/ in a tree of svp-gitops; each deny message states its rule.
+# Design notes: docs/reference/ci.md.
 package gitops.envs
 
 import data.gitops
@@ -64,7 +45,6 @@ deny contains msg if {
 	msg := $"{charts_path(env)} holds '{keys(env)}': exactly revision, podSecurityVersion and collectorConfigSha256, one line each (and gitopsRevision in {charts_path(pinning_env)} alone)"
 }
 
-# stg_pins(env): env is not the pinning environment, and its charts.yaml holds exactly the pinned keys.
 stg_pins(env) if {
 	env != pinning_env
 	keys(env) == pinned_keys
@@ -89,7 +69,6 @@ deny contains msg if {
 	msg := $"{charts_path(env)}: line '{line}' is not 'key: value' with a value"
 }
 
-# field(env, key): the value of key in envs/<env>/charts.yaml, once its keys are those of the file.
 field(env, key) := regex.replace(line, `^[^:]*: *`, "") if {
 	keys(env) in allowed_keys(env)
 	some line in gitops.lines(charts_path(env))
@@ -144,7 +123,6 @@ deny contains $"{images_dir(env)}/ holds '{got}': exactly one file per service, 
 	got != want_images
 }
 
-# image_files: [env, service, path] of each image file of the tree.
 image_files contains [env, svc, path] if {
 	some env in gitops.environments
 	some svc in gitops.services
@@ -152,7 +130,6 @@ image_files contains [env, svc, path] if {
 	gitops.is_file(path)
 }
 
-# others(path): the top-level lines of an image file besides image:, up to their colon.
 others(path) := [regex.replace(line, `:.*`, "") |
 	some line in gitops.lines(path)
 	not regex.match(`^(\s|#|$)`, line)
@@ -170,9 +147,8 @@ forms := {
 	"digest": `^(sha256:[0-9a-f]{64})?$`,
 }
 
-# image(path): image.repository, tag and digest of an image file, read as values_field of deploy/k8s/lib.sh reads
-# them: each exactly one line "  <key>: <value>" inside the top-level block image:, the value bare or in double
-# quotes and of the key's form ("" when empty); undefined when one is not so.
+# image(path): image.repository, tag and digest of an image file, read as values_field of deploy/k8s/lib.sh reads them:
+# each one plain line of the block image:; undefined when one is not so.
 image(path) := {key: value |
 	some key, _ in forms
 	value := image_field(path, key)
@@ -194,7 +170,6 @@ image_field(path, key) := value if {
 	regex.match(forms[key], value)
 }
 
-# in_image_block(lines, i): line i lies inside the top-level block image: (the top-level line before it is image:).
 in_image_block(lines, i) if {
 	tops := [j | some j, line in lines; j < i; regex.match(`^[^ #]`, line)]
 	count(tops) > 0
@@ -224,7 +199,6 @@ deny contains msg if {
 	])
 }
 
-# values_files: each overlay envs/<env>/<name>.yaml (charts.yaml aside) and each image file envs/<env>/images/*.yaml.
 values_files contains path if {
 	some env in gitops.environments
 	some dir in [$"envs/{env}", images_dir(env)]
@@ -235,6 +209,7 @@ values_files contains path if {
 	gitops.is_file(path)
 }
 
+# null, {} and [] read as one empty Lua table in Argo CD's health check: the app would stay Healthy on the old spec.
 deny contains msg if {
 	some path in values_files
 	doc := gitops.yaml_map(path)
@@ -253,7 +228,6 @@ empty(value) if value == {}
 
 empty(value) if value == []
 
-# key_path(at): a path walk gives, as YAML names it: a.b[0].c.
 key_path(at) := trim_prefix(concat("", [segment(k) | some k in at]), ".")
 
 segment(k) := $"[{k}]" if is_number(k)

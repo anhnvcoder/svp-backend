@@ -122,10 +122,8 @@ tree_input := {
 	"sources": {env: {"revision": revision, "sources": table} | some env in envs},
 }
 
-# with_file(given, path, text): given with the file path holding text.
 with_file(given, path, text) := object.union(given, {"tree": {path: file(text)}})
 
-# with_entry(given, path, entry): given with the entry path of the tree.
 with_entry(given, path, entry) := object.union(given, {"tree": {path: entry}})
 
 # without(given, path): given without the entry path of the tree and what lies under it.
@@ -135,7 +133,6 @@ without(given, path) := object.union(object.remove(given, ["tree"]), {"tree": {p
 	not startswith(p, $"{path}/")
 }})
 
-# with_components(given, doc): given with argocd/apps/components.json holding doc.
 with_components(given, doc) := with_file(given, "argocd/apps/components.json", json.marshal(doc))
 
 # with_component(given, name, fields): given with component name of components.json merged with fields.

@@ -1,40 +1,8 @@
 #!/usr/bin/env bash
-# Masks the secret values of a verification run in the log of its GitHub Actions job and keeps them, in a private
-# directory, for deploy/ci/verify-collect.sh to search the artifact with. The repository is public, so the job's log
-# is too, red or not: masking is the second layer, after the rule that no script prints a secret.
-#
-#   verify-mask.sh env       the values of .env whose name ends in PASSWORD, SECRET, SECRET_KEY, TOKEN, _KEY or _KEYS,
-#                            and SENTRY_DSN, read by the rule of deploy/observability/glitchtip/dotenv.sh (never
-#                            sourced); the first call of a job also masks a random marker and prints
-#                            "mask-check: <marker>", so the raw log shows the mask works without knowing any secret
-#   verify-mask.sh cluster   every value of every Secret in namespaces svp, svp-data, svp-obs, argocd and svp-secrets
-#                            (the source External Secrets Operator builds the GitOps path's Secrets from) of cluster
-#                            k3d-svp, each line of a value of several lines on its own (each run of text between
-#                            control characters, for a binary value)
-#
-# Each value is kept as it is and in base64 (a Secret's own form, and what a JSON dump of it shows). Only values of at
-# least 8 characters count: a shorter one (svp, a port, a user name of four letters) is no secret worth the name, and
-# masking or searching for it would hide or drop half the log and every file that mentions it. For the same reason the
-# keys that hold identifiers by design are left out of the cluster's list: username, user, dbname, host, port, the
-# public certificates ca.crt and tls.crt, KEDA's sasl and tls (a mechanism, a mode), and any key whose name ends in
-# username, _user or -user (KAFKA_SASL_USERNAME, S3_ROOT_USER, Grafana's admin-user), email
-# (GLITCHTIP_ADMIN_EMAIL), _key_id (ACCESS_KEY_ID, the S3 user name) or _kid (JWT_SIGNING_KID, the key's public id).
-# The drills print those names (drill-k8s-threats names the Kafka users and svp-admin in its verdicts), and
-# deploy/k8s/secrets.sh never stores a password, key or token under such a key. Secrets of type helm.sh/release.v1
-# are left out too: their value is a whole compressed release, a single line of megabytes, and the cluster's
-# credentials come from deploy/k8s/secrets.sh, not from chart values.
-#
-# Output: a mask (an ::add-mask:: line on stdout on GitHub Actions, which the runner hides; nothing on a machine)
-# for each value not masked before in this job (a mask set twice is harmless), and one fixed
-# line saying how many there were. Never set -x here: the trace would print every value. The values go to
-# $SVP_VERIFY_SECRETS (default verify-secrets in $RUNNER_TEMP, /tmp on a machine; mode 700): env.values
-# and cluster.values, one per line, mode 600, never uploaded. Each list only grows: a call adds what it read to what
-# the earlier calls of the job kept, so a Secret made again during the run with a new value is still searched for in
-# the files written before. A run that cannot read
-# its source exits 1 and leaves the list as it was (verify-collect.sh then decides what it may copy).
-#
-# SVP_VERIFY_REPO (default: this checkout) and SVP_VERIFY_ENV_FILE (default: .env of it) let
-# deploy/ci/verify-collect-test.sh point it at a fake .env; kubectl is the one on PATH.
+# verify-mask.sh env|cluster: masks secret-named .env or cluster Secret values (>=8 chars, raw, base64) in the job log
+# and keeps them for verify-collect.sh. The repository is public, so the job log is too: masking is the second layer.
+# Skips non-secret keys and Helm blobs. Values kept in a private dir, mode 600, never uploaded. Never set -x.
+# Design notes: docs/reference/ci.md.
 set -euo pipefail
 
 here=$(cd "$(dirname "$0")" && pwd)
@@ -42,8 +10,7 @@ repo=${SVP_VERIFY_REPO:-$(cd "$here/../.." && pwd)}
 env_file=${SVP_VERIFY_ENV_FILE:-$repo/.env}
 # The job's own temp directory on GitHub Actions, emptied when the job ends; /tmp on a machine.
 tmp_root=${RUNNER_TEMP:-/tmp}
-# mask VALUE: hides VALUE wherever the job's log shows it from now on (the data of the command reads %25 as %). On a
-# machine it prints nothing: there it would print the value.
+# mask VALUE: prints ::add-mask:: on Actions (%25 decodes to % in runner data); silent locally to avoid printing VALUE.
 mask() { [ "${GITHUB_ACTIONS:-}" != true ] || printf '::add-mask::%s\n' "${1//%/%25}"; }
 secrets=${SVP_VERIFY_SECRETS:-$tmp_root/verify-secrets}
 min_len=8
@@ -100,8 +67,7 @@ case ${1:-} in
       keep env
       exit 0
     fi
-    # The whole file must keep the rule before any value is trusted: dotenv_value names the first line that breaks
-    # it and the variable it sets, never a value.
+    # dotenv_value validates syntax and names any invalid variable without exposing secret values.
     dotenv_value "$env_file" SVP_VERIFY_NO_SUCH_NAME >/dev/null || fail "$env_file breaks the .env rule: nothing masked"
     names=$(LC_ALL=C sed -n 's/^\([A-Za-z_][A-Za-z0-9_]*\)=.*/\1/p' "$env_file")
     : >"$work/raw"
@@ -122,8 +88,7 @@ case ${1:-} in
   cluster)
     : >"$work/b64"
     for ns in $namespaces; do
-      # A namespace that does not exist lists no Secret and is not an error; an unreachable cluster is. The request is
-      # bounded: a cluster too busy to answer must not hold the scenario past its deadline.
+      # Request timeout prevents hanging the scenario; nonexistent namespaces are ignored safely.
       kubectl --context k3d-svp --request-timeout=10s -n "$ns" get secrets -o json >"$work/list.json" 2>/dev/null ||
         fail "read the Secrets of namespace $ns of cluster k3d-svp: the previous list stays"
       jq -r '.items[] | select(.type != "helm.sh/release.v1") | (.data // {}) | to_entries[]
@@ -132,15 +97,8 @@ case ${1:-} in
           | not) | .value' \
         "$work/list.json" >>"$work/b64" || fail "read the Secret list of namespace $ns as JSON"
     done
-    # Each value as stored (base64) and decoded: whole when it is one line, line by line (blanks around a line taken
-    # off) when it is several. The decoded value is cut at every control character, not only at a newline: a mask is
-    # one line of the job's log, which a carriage return or any other control character in it would break, leaving
-    # the rest of the value unmasked. It is cut at U+FFFD too, what jq decodes a byte that is not UTF-8 to: a piece
-    # holding one would never match the bytes a log or a file shows. A binary value (a gzipped config) gets cut into
-    # many short pieces that way; masking those is harmless, and the value as stored, plain base64, is masked whole
-    # all the same. The cut points are the code points jq's [[:cntrl:]] matches (U+0000-001F, U+007F-009F) and
-    # U+FFFD, each turned into a newline and split on, in time proportional to the value: jq's splits() with a regex
-    # takes time that grows with the square of it, minutes for a binary value of 200 KiB.
+    # Decoded values split on control chars and U+FFFD so control chars cannot break log line masking.
+    # Replaces control chars with newlines via explode/implode for O(N) performance on binary values.
     jq -R -r '., (@base64d | explode | map(if . < 32 or (. >= 127 and . < 160) or . == 65533 then 10 else . end)
       | implode | split("\n")[] | gsub("^\\s+|\\s+$"; ""))' "$work/b64" |
       while IFS= read -r v || [ -n "$v" ]; do [ "${#v}" -lt "$min_len" ] || printf '%s\n' "$v"; done >"$work/cluster"

@@ -1,29 +1,9 @@
-# Signs and attests one image, keyless: cosign gets a short-lived certificate from Fulcio for the OIDC identity of the
-# calling workflow (the steps of a composite action run in the caller's job, so the identity is the caller's workflow,
-# the subject its release source names) and records each entry in Rekor; there is no key to leak or rotate. Downloads the
-# artifacts index-<image> and leg-<image>-*, then, each a Sigstore bundle (an OCI referrer of its digest):
-#   - cosign sign on the index digest (pods run the index digest, so that is what Kyverno verifies);
-#   - cosign attest --type spdxjson of each platform's SBOM on that platform's manifest digest;
-#   - cosign attest --type vuln of the predicate built from the two gating scans (deploy/ci/vuln-predicate.sh) on the
-#     index digest;
-#   - the build provenance (SLSA v1, actions/attest from the claims of the run's OIDC token) on the index digest, last.
-# deploy/ci/image-guard.sh sign decides before anything is written: the index is the image's, under the prefix of the
-# run's release source; a release is signed only when the calling workflow is the identity of that source; the index
-# read back holds exactly the two scanned manifests; only drill-vulnerable may carry CRITICAL into its predicate; a
-# digest in cosign's older format (.sig) is refused; and each bundle is written only when its digest has none of that
-# type, so a run started again (bundles have no --replace) writes nothing twice. A drill image gets no provenance
-# (drill-no-provenance is signed only to show the policy refusing a signed, clean image that lacks it). Hands on the
-# artifact release-<image> (repository, tag, digest of the signed index), which promotion reads.
-#
-# cosign runs from COSIGN_IMAGE, the image the Makefile pins by digest, as the runner's user, with the credentials docker
-# login wrote (the file, read-only), the working folder read-only at its own path, and the job's OIDC token request
-# (ACTIONS_ID_TOKEN_REQUEST_URL and ACTIONS_ID_TOKEN_REQUEST_TOKEN, passed by name, never by value), with which cosign
-# asks for its token itself.
-#
-# Used only in a job with id-token: write (and packages: write, attestations: write) on main, which runs no code of a
-# pull request and uses no cache: nothing here restores or saves one. Inputs reach the steps through env:, never ${{ }}
-# inside run:; GITHUB_TOKEN is used only by docker login (for cosign, ORAS listing the referrers, and actions/attest).
-# Every step that calls docker unsets DOCKER_DEFAULT_PLATFORM first, as every docker call of this repository does.
+# Signs and attests an image index keyless; used by images.yml of backend and svp-frontend.
+# image-guard.sh verifies caller workflow identity, index manifests and bundle idempotence before signing.
+# Signs index, attests per-platform SBOMs, vuln predicate and SLSA provenance as Sigstore bundles.
+# Runs only on main with id-token: write and attestations: write; uses no cache.
+# Inputs reach steps via env:, never ${{ }} inside run:.
+# Design notes: docs/ci-cd.md.
 name: image-sign
 description: "Sign the index of an image and attest its SBOMs, scan result and build provenance, once each"
 

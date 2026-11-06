@@ -1,9 +1,7 @@
 #!/usr/bin/env bash
-# Tests for deploy/ci/verify-steps/objstore.sh over the output of a fake make first on PATH (it logs its arguments,
-# prints a made-up go test -v output and exits with the status asked for): a unit test and the eight integration tests
-# pass, one with a subtest; then a subtest skipped, an integration test missing, go test failing. Runs on macOS and
-# Linux: no network, no Docker, no stack.
-#
+# Tests for objstore.sh using a fake make returning mocked go test output.
+# Verifies handling of passes, skipped subtests, missing integration tests, and failures without a real stack.
+# Runs on macOS and Linux: no network, no Docker, no stack.
 # Usage, from anywhere: deploy/ci/verify-steps/objstore-test.sh
 set -euo pipefail
 
@@ -28,9 +26,7 @@ exit "${FAKE_MAKE_RC:-0}"
 EOF
 chmod 755 "$work/bin/make"
 
-# objstore NAME [LINE...]: objstore.sh over the passing output plus LINEs (DROP_TEST leaves a test out, FAKE_FAIL makes
-# make fail with 2); prints ok or fail, then its summary line. Its output in $work/NAME.log, the make calls in
-# $work/NAME.make.
+# objstore NAME [LINE...]: runs objstore.sh with fake make and returns status and summary line.
 objstore() {
   local name=$1 t status=ok
   shift

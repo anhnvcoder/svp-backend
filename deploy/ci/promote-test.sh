@@ -1,35 +1,7 @@
 #!/usr/bin/env bash
-# Tests for the guards of the promote jobs of .github/workflows/images.yml (promote_not_behind, promote_stg_ref,
-# promote_stg_evidence and promote_open_pr of deploy/ci/common.sh), and for the list of releases deploy/ci/rescan.sh reads in svp-gitops. Throwaway repositories on
-# disk stand for this repository (deploy/ci/, lib.sh and the policy's release sources, with its own origin) and for
-# svp-gitops (envs/stg and envs/prd with charts.yaml and images/, reached as file://); a fake gh first on PATH records
-# its arguments and answers the open pull requests from a fixture, so no test reaches GitHub. Checked:
-#   - promote_not_behind: a run of a commit older than the revision of stg's charts is refused, naming both; the same
-#     commit passes (a dispatch that builds again at that commit), and so does a newer one; a revision that is not a
-#     full commit, or one this clone has not, is refused;
-#   - promote_stg_ref: main gives the commit of main of svp-gitops, and a full commit on main (an older one, a rollback)
-#     is given back; a branch name (the bot's, refs/heads/main), a short SHA, a full commit only of the bot's branch and
-#     a full commit svp-gitops has not are refused, each with its own message;
-#   - promote_stg_evidence: a commit whose newest commit status argocd/stg is success passes (a rollback to an older one
-#     too), read from every page; a newest failure or pending (an older success notwithstanding), no status of stg, an
-#     answer that is no list of pages and a gh that fails are refused, each with its own message;
-#   - promote_open_pr: the app's own open pull request of the branch, never a fork's or a person's from a branch of that
-#     name, asked for up to 500; nothing when the app has none; a full list of 500, and a gh that fails, are refused;
-#   - promote_image_row: the row of a release in the table of a promote pull request, linked to the commit and the package
-#     of its own repository; an image outside ghcr.io/<owner>/<repo>/<name> is refused;
-#   - rescan.sh list: the releases of every environment of main of svp-gitops, of bot/promote-stg while the app's pull
-#     request is open, of a values_ref of svp-gitops, and of a values_ref that is a commit of this repository from
-#     before svp-gitops (deploy/k8s/values/services/); a values_ref that is neither fails; a host that does not answer
-#     whether the pull request is open fails the list after main's and values_ref's releases are printed;
-#   - rescan.sh list of release source web: backend leaves the release of svp-frontend out, saying so, and
-#     rescan.sh list --source web lists it alone, from main and from bot/promote-stg-web of its own app;
-#   - after the rename, its retired sources dropped: rescan.sh list finds no source oldweb, and a release on main of
-#     svp-gitops under the former prefix of this repository is under the prefix of no source, so it is listed (and the
-#     run fails on it); a commit of this repository from before svp-gitops is read as values_ref, its releases (under
-#     the former prefix) listed.
-# Every run is a machine's: env -i leaves none of a CI job's variables to the
-# scripts. Runs on macOS and Linux: no network, no Docker, no cluster.
-#
+# Tests for the promote guards of deploy/ci/common.sh and the release list of deploy/ci/rescan.sh.
+# Throwaway repositories stand for this repository and svp-gitops; a fake gh answers from fixtures: no network.
+
 # Usage, from anywhere: deploy/ci/promote-test.sh
 set -euo pipefail
 

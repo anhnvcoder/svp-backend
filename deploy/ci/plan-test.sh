@@ -1,22 +1,7 @@
 #!/usr/bin/env bash
 # Tests for deploy/ci/plan.sh, the first job of images.yml, in a throwaway checkout with its own origin; the variables
-# of a GitHub Actions job are made up. Checked:
-#   - a drill run on main: the seven outputs in GITHUB_OUTPUT and the summary in GITHUB_STEP_SUMMARY in a job; on a
-#     machine, the summary then the outputs on stdout;
-#   - a run of svp-frontend (SVP_CODE_ROOT its checkout, HEAD the run's commit): the services of its release source at
-#     every run, no base, nothing to promote of the charts; a service or a drill its source does not have, and a tree
-#     whose HEAD is not the run's commit, are refused; on a machine the run is of the repository of that checkout's
-#     origin on github.com (run_repo_url of common.sh), and one off github.com is refused without showing a credential;
-#   - in this checkout: a run of svp-frontend that forgot SVP_CODE_ROOT, a run of a fork and a run of this repository
-#     under its name before the rename (no source names it) are refused; services all builds the six, services web is
-#     refused;
-#   - a push to main that builds no image: promote_charts when a file under deploy/helm/ or one a symbolic link there
-#     points to changed, not for docs/.
-#   - the image table deploy/docker-bake.json, read with jq: the same services with the same Dockerfile and context in
-#     built_services and dockerfile of deploy/k8s/lib.sh, the images and legs plan.sh hands on (the input image of the
-#     action image-leg) and the build image-guard.sh leg hands that action (with the build argument SERVICE);
-# Runs on macOS and Linux: no network, no Docker, no cluster.
-#
+# of a GitHub Actions job are made up. Runs on macOS and Linux: no network, no Docker, no cluster.
+
 # Usage, from anywhere: deploy/ci/plan-test.sh
 set -euo pipefail
 
@@ -122,10 +107,8 @@ same "plan.sh on a machine: summary then outputs on stdout" \
   "Mode: drill. Images: drill-vulnerable drill-unsigned drill-no-provenance."$'\n'"$want_plan" "$got"
 check "plan.sh on a machine: no file of a job was written" test ! -s "$work/output" -a ! -s "$work/summary"
 
-# The image table deploy/docker-bake.json, read with jq, is what every reader of it answers: built_services and
-# dockerfile of lib.sh, the images and legs plan.sh hands on for services all (the input image of the action
-# image-leg is the image of a leg), and the Dockerfile, context and build argument image-guard.sh leg hands that
-# action's build for each of them. A fake docker answers the host's architecture, the only docker call of leg.
+# The image table docker-bake.json, read with jq, is what every reader answers: built_services and dockerfile of lib.sh,
+# the images and legs of plan.sh, and the Dockerfile, context and build argument of image-guard.sh leg for each of them.
 table_rows=$(jq -r '.group.default.targets[] as $s | .target[$s]
   | "\($s) \(.dockerfile) \(.context) \(if .args.SERVICE then "SERVICE=\(.args.SERVICE)" else "-" end)"' \
   "$tree/deploy/docker-bake.json")
@@ -161,9 +144,8 @@ done <<<"$table_rows"
 same "image table: image-guard.sh leg hands image-leg's build the table's Dockerfile, context and build argument" \
   "$want_legs" "$got_legs"
 
-# plan.sh of svp-frontend's run (SVP_CODE_ROOT its checkout, HEAD the run's commit): the services of its release source at
-# every run, no base, nothing to promote of the charts.
-# web_plan NAME WANT_RC VAR=VALUE...: plan.sh in a made-up job of svp-frontend, its outputs in output.
+# web_plan NAME WANT_RC VAR=VALUE...: plan.sh in a made-up job of svp-frontend (SVP_CODE_ROOT its checkout), outputs in
+# output.
 web_plan() {
   local name=$1 want=$2 rc=0
   shift 2
@@ -196,9 +178,9 @@ same "plan.sh of svp-frontend: a rescan builds nothing" 'mode=rescan has_images=
 web_plan "a tree at another commit than the run's" 1 EVENT_NAME=push GITHUB_SHA="$base"
 check "plan.sh of svp-frontend: a tree at another commit: names SVP_CODE_ROOT" has "$work/plan.err" \
   "HEAD of $webtree is $web_head, but this run builds $base of https://github.com/anhnvcoder/svp-frontend: set SVP_CODE_ROOT"
-# On a machine with SVP_CODE_ROOT the checkout of svp-frontend, the run is of that checkout's repository, read from its
-# origin on github.com (https or ssh), at its HEAD; an origin off github.com is refused, a credential in it never shown.
-# repo_of: run_repo_url of common.sh so, with its errors.
+# On a machine with SVP_CODE_ROOT, the run is of the checkout's repository, read from its origin on github.com (https or
+# ssh) at its HEAD; an origin off github.com is refused and a credential in it never shown. repo_of: run_repo_url of
+# common.sh.
 # shellcheck disable=SC2016 # expanded by the inner shell
 repo_of() { on local env SVP_CODE_ROOT="$webtree" bash -c '. "$1/deploy/ci/common.sh" && run_repo_url' _ "$tree" 2>&1; }
 same "run_repo_url on a machine, SVP_CODE_ROOT: the checkout's repository" https://github.com/anhnvcoder/svp-frontend \
@@ -243,9 +225,7 @@ check "plan.sh in this checkout: a run under the name before the rename: no rele
   "this run is of https://github.com/anhnvcoder/short-video-platform, which is the repository of 0 release sources"
 lacks "$work/output" "images=" && ok "plan.sh in this checkout: a run under the name before the rename: no output" ||
   fail "plan.sh in this checkout: a run under the name before the rename: no output"
-# web is no service of release source backend (svp-frontend publishes it), and this repository holds no source of it:
-# a dispatch builds the six, never web (the leg of image-leg refuses web before anything is built:
-# deploy/ci/image-guard-test.sh).
+# web is no service of release source backend (svp-frontend publishes it): a dispatch builds the six, never web.
 plan_own "a dispatch with services all" 0 "${backend_run[@]}" GITHUB_SHA="$base" EVENT_NAME=workflow_dispatch \
   INPUT_SERVICES=all
 same "plan.sh in this checkout: services all builds the six, not web" \

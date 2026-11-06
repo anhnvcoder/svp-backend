@@ -1,13 +1,7 @@
 #!/usr/bin/env bash
-# Tests for deploy/ci/verify-steps/admission-metrics.sh with a fake kubectl, curl and nc first on PATH: kubectl lists
-# the webhooks of FAKE_WEBHOOKS (one name per line) in kyverno-resource-validating-webhook-cfg, answers get --raw
-# /metrics with the file FAKE_APISERVER and runs a port-forward that only sleeps; curl answers with the file
-# FAKE_KYVERNO once that port-forward has started; nc finds every port free unless FAKE_PORTS_BUSY=1. FAKE_KUBECTL_FAIL=1 makes kubectl fail as for a
-# cluster that does not answer. The sample has the real buckets: the apiserver's 10, 25 and +Inf (two series of the
-# Kyverno webhook, rejected false and true, and one of another webhook that must not count), Kyverno's 20 and 30
-# (policy svp-images, and another policy). Every case exits 0: the measurement is evidence, not a gate. Runs on macOS
-# and Linux: no network, no Docker, no cluster.
-#
+# Tests for admission-metrics.sh using fake kubectl, curl, and nc on PATH.
+# Validates Prometheus metric parsing, webhook filtering, missing metrics, and cluster down scenarios without network.
+# Runs on macOS and Linux: no network, no Docker, no cluster.
 # Usage, from anywhere: deploy/ci/verify-steps/admission-metrics-test.sh
 set -euo pipefail
 
@@ -89,8 +83,7 @@ kyverno_image_validating_policy_execution_duration_seconds_count{policy_name="ot
 SAMPLE
 printf '%s\n' "$hook" "validate.kyverno.svc-fail-finegrained-svp-policy" >"$work/webhooks.txt"
 
-# run NAME [VAR=VALUE...]: admission-metrics.sh with the fakes over the samples (VAR=VALUE overrides a fake's file or
-# switch); its output in $work/NAME.log. A status other than 0 is a failed check.
+# run NAME [VAR=VALUE...]: runs admission-metrics.sh with fake tools and logs output to $work/NAME.log.
 run() {
   local name=$1 rc=0
   shift

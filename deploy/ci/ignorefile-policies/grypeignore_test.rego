@@ -8,8 +8,7 @@ live := {"today": "2026-11-05", "live": true}
 
 gate := {"today": "2026-11-05", "live": false}
 
-# deny(trivy, grype, mode): the messages of the rules on .grype.yaml holding grype, beside a .trivyignore.yaml holding
-# trivy, in mode (live or gate).
+# deny(trivy, grype, mode): the messages of the rules on .grype.yaml beside a .trivyignore.yaml, in mode (live or gate).
 deny(trivy, grype, mode) := msgs if {
 	msgs := grypeignore.deny with input as [
 		{"path": ".trivyignore.yaml", "contents": yaml.unmarshal(trivy)},
@@ -31,7 +30,6 @@ says(msgs, want) if {
 	contains(m, want)
 }
 
-# matched(msgs): a message says the rule was matched against the entries.
 matched(msgs) if says(msgs, "entries of .trivyignore.yaml")
 
 test_an_entry_and_its_rule_pass if count(deny(left_pad, rule("CVE-2026-1111", "left-pad", "1.0.0"), live)) == 0
@@ -98,9 +96,8 @@ test_a_rule_two_entries_cover if says(
 	"rule CVE-2026-1111 left-pad@1.0.0 is 2 entries of .trivyignore.yaml, not exactly one",
 )
 
-# grype reads package.name as a regex anchored at both ends: a name must be the purl's name with each metacharacter
-# escaped by a backslash. Written any other way it is refused even when an entry of that very name exists (.* would
-# cover every package at the version, mini.* and minimis[t] cover minimist), and is not matched against the entries.
+# grype reads package.name as a regex anchored at both ends (mini.* covers minimist): an unescaped name is refused,
+# even when an entry of that very name exists, and is not matched against the entries.
 test_a_name_that_is_not_the_escaped_purl_name if {
 	every name in [".*", `"mini.*"`, "minimis.", "minimis[t]", "libstdc++", "socket.io-parser", `mini\st`] {
 		plain := trim(name, `"`)
@@ -132,9 +129,8 @@ test_an_escaped_name_that_is_not_the_entry if says(
 	"rule CVE-2021-44906 socket.io-parsers@1.2.5 is 0 entries",
 )
 
-# The name of a purl is the one grype gives its package: with its namespace (an npm scope, a Go module path), except for
-# a distribution's package (apk, deb, rpm), whose namespace is the distribution. A rule for foo would cover the
-# unscoped foo too, one for net any package named net.
+# The name is the one grype gives the package: with its namespace (npm scope, Go module path), but a distribution's
+# package (apk, deb, rpm) without it; otherwise a rule for foo would cover the unscoped foo too.
 test_a_name_without_the_namespace_grype_gives if {
 	every case in [["foo", "pkg:npm/%40scope/foo"], ["net", "pkg:golang/golang.org/x/net"], ["alpine/glib", "pkg:apk/alpine/glib"]] {
 		says(
@@ -153,9 +149,8 @@ test_a_distribution_package_with_qualifiers_and_percent_escapes if {
 	}
 }
 
-# A plain value YAML reads as a null, a bool or a number is not the text it shows: grype drops a null from the rule (as
-# the version it covers every version of the package, as the name every package) and reads 1.10 as 1.1. Refused in
-# vulnerability, name and version even with an entry of that very text, and not matched; quoted it is text.
+# A value YAML reads as null, bool or number is not the text it shows: grype drops a null (the rule would cover every
+# version or package) and reads 1.10 as 1.1. Refused even with an entry of that text; quoted it is text.
 test_a_version_that_is_no_text if {
 	every value in ["null", "NULL", "~", "true", "False", "1.10", "017", "0x1F", "0o17", "0b101", "1e5", "1_000"] {
 		msgs := deny(entry("CVE-2021-44906", "2026-11-15", $"pkg:npm/minimist@{value}"), rule("CVE-2021-44906", "minimist", value), live)
@@ -195,8 +190,7 @@ test_a_vulnerability_that_is_no_text if {
 	}
 }
 
-# 1:20 is text to every parser here (no base 60). yes is text to grype and to yaml.unmarshal of these tests, but a bool
-# to the parser conftest reads the files with (YAML 1.1), so a name yes is quoted.
+# yes is text to grype but a bool to the YAML 1.1 parser conftest uses, so such a name is quoted.
 test_a_version_with_a_colon_passes if count(deny(
 	entry("CVE-2021-44906", "2026-11-15", "pkg:deb/debian/yes@1:20"),
 	rule("CVE-2021-44906", "'yes'", "1:20"),
@@ -214,8 +208,7 @@ test_a_value_that_is_not_plain if {
 	)
 }
 
-# Live (job config) a rule must be an entry still in force: grype reads no date, so the rule of an expired entry would
-# go on covering the match. The image gates leave the expired entry to trivy.
+# Live (job config) the rule of an expired entry is refused: grype reads no date; the image gates leave it to trivy.
 test_the_rule_of_an_expired_entry if {
 	expired := entry("CVE-2026-1111", "2026-11-05", "pkg:npm/left-pad@1.0.0")
 	says(

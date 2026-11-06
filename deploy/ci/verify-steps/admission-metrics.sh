@@ -1,29 +1,15 @@
 #!/usr/bin/env bash
-# Step gitops-admission-metrics of job gitops of .github/workflows/verify.yml: the admission time of the first sync of
-# the cluster, kept as evidence (the condition of ADR-0040 §6: 20 s without cache, the webhook's timeout 30 s). The
-# step runs right after the build step, before k8s-smoke and the drills, so the histograms hold the first sync only.
-#
-# Prints, from the apiserver (kubectl get --raw /metrics), the summary of
-# apiserver_admission_webhook_admission_duration_seconds for the webhooks of the image policies in
-# kyverno-resource-validating-webhook-cfg (names ivpol.*; that histogram has the buckets 10, 25 and +Inf only: _count,
-# _sum, the mean, <= 10, <= 25, > 25), and from Kyverno (a port-forward of Service kyverno-svc-metrics on a free port
-# of 127.0.0.1 between 19100 and 19120, as the namespace's default-deny NetworkPolicy shuts the apiserver's proxy) the
-# same for kyverno_admission_review_duration_seconds and, of policy svp-images (label policy_name; svp-policy is the
-# chart and webhook name), kyverno_image_validating_policy_execution_duration_seconds (<= 20, <= 30; the buckets of the
-# chart at the pinned version are 0.005 ... 10, 15, 20, 25, 30). Each histogram is added up over every label set of
-# the series asked for, as it is split by labels the question does not ask about. A metric, a bucket or a port that is
-# missing is a NOTE line: the measurement is evidence, not a gate, and the step never fails.
-#
-# kubectl, curl and nc are those on PATH; kubectl always on context k3d-svp. Usage, from anywhere:
-# deploy/ci/verify-steps/admission-metrics.sh
+# Measures admission webhook duration of the cluster's first sync for evidence.
+# Reads apiserver metrics for image policy webhooks and Kyverno Prometheus metrics via port-forward.
+# Usage, from anywhere: deploy/ci/verify-steps/admission-metrics.sh
+# Design notes: docs/reference/ci.md.
 set -uo pipefail
 
 kc() { kubectl --context k3d-svp "$@"; }
 
-# histogram METRIC LABEL PAIRS LE...: reads Prometheus text on stdin and prints one line for the histogram METRIC named
-# LABEL: _count, _sum, the mean, the number of observations <= each LE, and the number above the last LE (_count less
-# its bucket), added up over every series that holds one of PAIRS (name="value" pairs separated by |; empty: every
-# series). A NOTE line instead when it has no series for PAIRS or lacks one of the buckets.
+# histogram METRIC LABEL PAIRS LE...: parses Prometheus histogram text from stdin and prints summary.
+# Sums _count, _sum, mean, and cumulative buckets <= each LE for series matching PAIRS (or all).
+# Outputs a NOTE line if required series or buckets are missing; never exits non-zero.
 histogram() {
   awk -v metric="$1" -v label="$2" -v pairs="$3" -v les="${*:4}" '
     BEGIN { np = split(pairs, pr, "|"); nl = split(les, want, " ") }
@@ -61,7 +47,6 @@ histogram() {
     }'
 }
 
-# --- The apiserver's view of the webhooks of the image policies.
 names=$(kc get validatingwebhookconfiguration kyverno-resource-validating-webhook-cfg -o json 2>/dev/null |
   jq -r '.webhooks[].name | select(startswith("ivpol."))') || names=
 if [ -z "$names" ]; then
@@ -74,7 +59,6 @@ else
   echo "NOTE  that histogram has buckets up to 2.5, then 10, 25 and +Inf only: 20 s lies between le=10 and le=25, the 30 s timeout of the webhook between le=25 and +Inf; the mean is the only exact figure"
 fi
 
-# --- Kyverno's own view: the whole review, and the execution of policy svp-images.
 port=19100
 while nc -z -w 1 127.0.0.1 "$port" >/dev/null 2>&1 && [ "$port" -lt 19120 ]; do port=$((port + 1)); done
 if nc -z -w 1 127.0.0.1 "$port" >/dev/null 2>&1; then

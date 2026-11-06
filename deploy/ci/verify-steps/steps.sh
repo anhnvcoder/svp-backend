@@ -1,26 +1,8 @@
 #!/usr/bin/env bash
-# The step list of a job of .github/workflows/verify.yml: one step per target, whose id is the target's name, the first
-# of them the build step (up, k8s-gitops-up, k8s-up) that builds what the others use. The job names them in order in
-# SVP_VERIFY_STEP_NAMES; the dispatch's input targets reaches here only through SVP_VERIFY_TARGETS (empty on a
-# scheduled run: every step).
-#
-#   steps.sh check   before anything is built: every name of SVP_VERIFY_TARGETS (separated by spaces) is a step of
-#                    the job, the build step's included (it always runs); a character other than a-z, 0-9, - and space,
-#                    or a name the job does not have, exits 2. The rejected list is never printed back: the job's log
-#                    reads a line that starts with :: as a command. Filtering is the steps' own if: (the name in
-#                    targets, the build step's outcome success); nothing is added to what the dispatch names, so a
-#                    step that reads another's result (drill-k8s-threats reads the READY video of k8s-smoke) is named
-#                    with it.
-#   steps.sh table   once the steps have run (whatever their outcome): $SVP_VERIFY_OUT/results.tsv, one line per step
-#                    of SVP_VERIFY_STEP_NAMES in order, "step outcome note", printed to the log too. The outcome is the
-#                    step's own, from SVP_VERIFY_STEPS (the job's steps context as JSON: toJSON(steps)): success,
-#                    failure (a step that ran out of its timeout-minutes too), cancelled or skipped; absent when the
-#                    job has no step of that id. A skipped step's note says why: not in targets, build step failed, or
-#                    not run (the run was cancelled, or a step before the build failed). Only the outcome of each
-#                    step is read from that JSON, never an output.
-#
-# SVP_VERIFY_OUT defaults to verify in $RUNNER_TEMP (/tmp on a machine). Usage, from anywhere:
-# deploy/ci/verify-steps/steps.sh check|table
+# Validates and tabulates step targets for verify.yml jobs (SVP_VERIFY_STEP_NAMES, SVP_VERIFY_TARGETS).
+# check validates step names; table parses step outcomes from SVP_VERIFY_STEPS JSON into results.tsv.
+# Usage, from anywhere: deploy/ci/verify-steps/steps.sh check|table
+# Design notes: docs/reference/ci.md.
 set -euo pipefail
 
 names=${SVP_VERIFY_STEP_NAMES:-}
@@ -34,7 +16,7 @@ fail() {
 
 [ -n "$build" ] || fail "SVP_VERIFY_STEP_NAMES names no step"
 
-# chosen NAME: whether step NAME runs in this run.
+# chosen NAME: returns 0 if step NAME runs in this execution, 1 otherwise.
 chosen() {
   [ -z "$targets" ] || [ "$1" = "$build" ] && return 0
   case " $targets " in *" $1 "*) return 0 ;; esac

@@ -1,70 +1,9 @@
 #!/usr/bin/env bash
-# Negative cases of deploy/ci/gitops-check.sh and of the root chart argocd/apps of a tree of the deployment repository
-# svp-gitops. The rules on the tree's files (step 1) are conftest policies, each case of them a test of
-# deploy/ci/gitops-tree-policies/ (make conftest-verify, run first here); this script checks what the script does around
-# them and the rules that need a render, a tool or git. Each case changes one thing in a fresh copy of TREE (without the
-# commit an environment pins) and must fail with its own message; the root is also rendered on its own (helm template;
-# with the two-level root argocd/root, level 1 and then argocd/apps with its values), since Argo CD relies on its
-# render failing, not on the check. TREE may have the root of one level or of two:
-#   - the policies on the tree, through the input the check builds: envs/stg/images/ with six of the seven image files
-#     (the tree's entries), an empty revision in envs/stg/charts.yaml (the text of a file), a wrong
-#     collectorConfigSha256 (the value the revision's commit derives), components.json without key platforms; a
-#     conftest that gives no answer (a policy that does not compile) or none from one policy (a package renamed) fails
-#     the check instead of passing;
-#   - the root chart: six image files of seven, an image file with a key besides image, an overlay of a release of
-#     chart svp-service that sets image, an unknown environment (env=nope), an empty revision;
-#   - a short targetRevision (main, not refs/heads/main) for the sources of svp-gitops wherever the root writes it
-#     (argocd/apps/values.yaml, argocd/root);
-#   - the platform layer (gitops-check.sh --root, steps 1 and 2, on copies of TREE, which must have platforms/): TREE
-#     passes, each environment on each platform of key platforms of components.json, with a line for each pair it
-#     leaves out; a template of a platform rendering a release's image, a root chart making Applications of another
-#     platform and one reading a platform's values after the environment's each fail with their own message, while
-#     argo-cd.yaml of a platform passes the policies and the root's render (a root chart that refuses the file made to
-#     leave it out); on a two-level root, an overlay and its platform's template setting one key pass with the
-#     template's value, and a root chart that merges the overlay over the template fails; k3d without localHosts fails
-#     the whole check on the render of stg there naming svp.localhost (step 3, charts of this repository, no network);
-#   - the pin of prd and the two-level root (gitops-check.sh --root on a copy of TREE made a git repository, its own
-#     section below): the pinned commit renders for prd, the tree for stg; a pin that is no commit on main holding
-#     argocd/apps fails before any render; level 1 must make svp-apps at the pin and hand level 2 the content of
-#     envs/prd/ of the tree; level 2 must read every values file at the pin, through sources of svp-gitops at one
-#     revision;
-#   - the Kyverno policies on rendered manifests (deploy/ci/gitops-policies/, the CLI of KYVERNO_CLI_IMAGE, no
-#     network once its image is pulled): their kyverno test (make kyverno-test); through gitops-check.sh --policy, a
-#     render with every image pinned passes, a document of comments alone and a CustomResourceDefinition left out; an
-#     image flag without its digest fails naming file, resource and image; an image where policy images-pinned does
-#     not read fails as outside it; the lab host on a route fails policy no-lab-hosts, a real one passes; a policy
-#     that does not compile fails the check instead of passing;
-#   - the release sources of the image files (gitops-check.sh --tree, on a throwaway copy of this repository with a
-#     commit from before the table of release sources, one with the table of the rename (with the retired sources,
-#     which prd may still pin) and one with the table of the working tree), the tables the check reads at each
-#     revision: the table of the rename passes with the releases of the retired sources and with those of the new
-#     ones; the working tree's passes with the new ones and refuses a retired one; charts from before the table stop,
-#     naming the commit; values-check.sh refuses an image file naming the repository of another service before it
-#     verifies any release;
-#   - the author of a pull request (gitops-check.sh --tree TREE BASE on the same throwaway repository, the author in
-#     SVP_CHANGE_REQUEST_AUTHOR or in an event file), how the check reads the author, the sender and the files changed:
-#     the bot of svp-frontend moves web of stg and of prd, the bot of backend promotes charts.yaml and the six services
-#     to stg and the whole set, web's included, to prd, a person changes anything, a bot that promotes no source
-#     changes base/: each passes; the bot of svp-frontend changing gateway.yaml of stg or deleting web.yaml, a bot that
-#     promotes no source adding a file of a name git quotes under envs/: each fails with its own message; an author
-#     that is no login, an event without one, an event file that cannot be read, a sender that is no login, a bot
-#     pushing onto another's pull request fail; a run of no pull request, of a push, or without BASE skips; the event's
-#     author wins over SVP_CHANGE_REQUEST_AUTHOR, and a person pushing onto a bot's pull request is judged by the bot's
-#     rule;
-#   - tag_provenance_mismatch of common.sh, which step 5 reads the release checks with (offline, synthetic checks):
-#     image.tag against the commit the provenance names, and a check that names no provenance commit in an environment
-#     requiring provenance (a reworded line of verify-release.sh) fails instead of passing.
-# First, gitops_dir of deploy/k8s/lib.sh, which every script asks for the clone of svp-gitops, in a draft workspace laid
-# out as the lab's (<workspace>/backend, a git repository holding a copy of lib.sh; a worktree of it in
-# <workspace>/.worktrees/; <workspace>/gitops): from the main checkout, from a folder inside it and from the worktree it
-# names <workspace>/gitops once that is a clone of svp-gitops; SVP_GITOPS_DIR names another clone; a missing folder, a
-# folder that is no git repository, a repository with another origin and a folder inside a clone are refused with the
-# command that makes the clone, and nothing is cloned. Then gitops_clone: a GITOPS_REF that is no branch fails, and
-# the next run checks out the clone it left (no index, every file read as deleted) instead of refusing it; a change to
-# a checked-out clone is still refused.
-# Every case fails before the check reaches the network (chart repositories, GHCR): needs bash, git, jq, helm, docker
-# (conftest, the Kyverno CLI) and the history of this repository up to the tree's revisions (a full clone, origin/main fetched).
-#
+# Negative cases of deploy/ci/gitops-check.sh and of the root chart argocd/apps of a tree of svp-gitops: each case
+# changes one thing in a fresh copy of TREE and must fail with its own message, before the check reaches the network.
+# Needs bash, git, jq, helm, docker and the history of this repository up to the tree's revisions (origin/main fetched).
+# Design notes: docs/reference/ci.md.
+
 # Usage, from anywhere: deploy/ci/gitops-check-test.sh [TREE]
 #   TREE: a tree of svp-gitops (base/, envs/, argocd/), never written. Without it, main of
 #   https://github.com/anhnvcoder/svp-gitops is cloned anonymously into a temporary directory, as this repository does
@@ -345,10 +284,8 @@ t=$(copy)
 printf 'image:\n  tag: "000000000000"\n' >"$t/platforms/eks/gateway.values.tpl"
 check_root "platforms: a template of a platform that renders the image of a release" 1 \
   "platforms/eks/gateway.values.tpl renders image for stg on eks" "$t"
-# Argo CD's values of a platform (deploy/k8s/gitops.sh installs Argo CD with them after argocd/bootstrap.json's): the
-# file argo-cd.yaml, which the policies hold to the rules of a platform's file.
-# A root chart from before the file refuses it itself: the copy's leaves it out as it leaves README.md out, as one that
-# lets it through does, so the check's rules and the root's render must both pass.
+# argo-cd.yaml holds Argo CD's own values of a platform (deploy/k8s/gitops.sh installs them); a root chart from before
+# the file refuses it itself, so the check's rules and the root's render must both pass (the copy's leaves it out).
 t=$(copy)
 printf 'notifications:\n  enabled: true\n' >"$t/platforms/eks/argo-cd.yaml"
 replace_once "$t/argocd/apps/templates/applications.yaml" '(ne $base "README.md")' \
@@ -365,9 +302,8 @@ else
   fail "platforms: the root chart of $tree no longer holds the line the case of Applications of another platform changes"
 fi
 # The root chart that reads the values of the platform after the overlay of the environment. On a two-level root the
-# overlay is no values file but part of the Application's valuesObject, after every values file: there an overlay and
-# the platform's template set one key, which the template's render must win, and a root chart that merges the overlay
-# over the template fails.
+# overlay is part of the Application's valuesObject, after every values file: an overlay and the platform's template
+# setting one key must give the template's value, and a root chart that merges the overlay over the template fails.
 t=$(copy)
 if [ -f "$t/argocd/root/Chart.yaml" ]; then
   # shellcheck disable=SC2016 # the layers of the valuesObject in level 2, text of the template
@@ -397,20 +333,10 @@ jq '.platforms.k3d |= del(.localHosts)' "$components_json" >"$t/argocd/apps/comp
 check "platforms: k3d without localHosts, whose renders name svp.localhost" "$t" \
   "the render above still names svp.localhost on a platform without localHosts in components.json"
 
-# --- the pin of prd (gitopsRevision of envs/prd/charts.yaml) and the two-level root (gitops-check.sh --root, steps 1
-# and 2, no network), on a copy of TREE made a git repository: commit A0 holds base/ alone, commit A on top of it (the
-# end of origin/main) the whole tree with the two-level root, level 1 argocd/root handing the content of envs/<env>/
-# to level 2 argocd/apps, which puts an overlay and an image file into the valuesObject of their Application; the
-# working tree then pins prd to A, as the promote to prd writes it. A tree that has the two-level root keeps its own
-# charts; one from before it gets stand-ins in the shape the check holds them to: a level 1 written here, and its
-# argocd/apps reading the overlays and image files from that level's values instead of as values files. The cases
-# below edit either chart only where both shapes hold the same text (a component's platforms, the source with ref
-# values, the ref $values/), or record the render of level 1 and change it.
-# Checked: prd renders argocd/apps, base/ and platforms/ at A and stg the tree, so a change of them reaches stg alone;
-# a commit the clone has not, one off main, one without argocd/apps, a branch name and a tree that is no git
-# repository each fail before any render; level 1 must make svp-apps at the pin and hand over envs/prd/ of the tree;
-# level 2 must read every values file at the pin, through sources of svp-gitops at one revision: a second one on main,
-# what Argo CD refuses, fails.
+# --- the pin of prd (gitopsRevision of envs/prd/charts.yaml) and the two-level root, on a copy of TREE made a git
+# repository: commit A0 holds base/ alone, A the whole tree (the end of origin/main), and prd pins A. A tree from before
+# the two-level root gets stand-ins for its two levels in the shape the check holds them to; the cases edit only text
+# both shapes share, or record the render of level 1 and change it.
 gitops_url=https://github.com/anhnvcoder/svp-gitops.git
 pt=$(copy)
 pg() { git -C "$1" -c user.name=test -c user.email=test@example.invalid -c commit.gpgsign=false -c core.hooksPath=/dev/null "${@:2}"; }
@@ -927,11 +853,9 @@ else
   fail "values-check: an image file naming the repository of another service (exit $rc, want 1, '$want', no release verified):"$'\n'"$(sed 's/^/      /' <<<"$out")"
 fi
 
-# --- the author of a pull request (gitops-check.sh --tree DIR BASE of the throwaway repository, as a machine runs it:
-# env -i, so no CI job's variables). The tree becomes a git repository whose first commit a0 pins k3 in both
-# environments with releases of the working tree's sources; each case commits one change on top of a0. The author is
-# SVP_CHANGE_REQUEST_AUTHOR, or pull_request.user.login and sender.login of an event file, as the workflow of svp-gitops
-# gives them (GITHUB_EVENT_NAME, GITHUB_EVENT_PATH).
+# --- the author of a pull request (gitops-check.sh --tree DIR BASE, as a machine runs it: env -i, no CI job variables).
+# The tree becomes a git repository whose first commit a0 pins k3 in both environments; each case commits one change
+# on top of a0. The author is SVP_CHANGE_REQUEST_AUTHOR, or pull_request.user.login and sender.login of an event file.
 at=$(sources_tree "$k3" ghcr.io/anhnvcoder/svp-backend/ ghcr.io/anhnvcoder/svp-frontend/web)
 at=$(cd "$at" && pwd -P)
 ag() { git -C "$at" -c user.name=test -c user.email=test@example.invalid -c commit.gpgsign=false "$@"; }
@@ -972,7 +896,6 @@ author_case() {
   fi
 }
 promoted="the promoter of a release source: its"
-# What each bot promotes passes.
 from_a0
 image envs/stg/images/web.yaml ghcr.io/anhnvcoder/svp-frontend/web w1
 author_case "the bot of svp-frontend moves web of stg to another of its releases" 0 \
@@ -1021,7 +944,6 @@ from_a0
 echo 'replicas: 3' >"$at/envs/stg/gätewäy.yaml"
 author_case "a bot that promotes no release source adds a file of a quoted name under envs/" 1 \
   "envs/stg/gätewäy.yaml: changed by renovate[bot], a bot that promotes no release source" SVP_CHANGE_REQUEST_AUTHOR="renovate[bot]"
-# Who the author is: none, unreadable, read from the event; the sender of the event.
 from_a0
 image envs/stg/images/gateway.yaml ghcr.io/anhnvcoder/svp-backend/gateway e1
 author_case "an author that is no login fails closed" 1 \

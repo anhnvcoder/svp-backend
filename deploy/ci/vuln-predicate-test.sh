@@ -2,7 +2,7 @@
 # Tests for who made the predicate deploy/ci/vuln-predicate.sh writes: in a made-up GitHub Actions job, its invocation
 # names this attempt of the run, the run id and the workflow file at its ref; on a machine, "local" for each. The two
 # platform legs are fixtures in a temporary directory. Runs on macOS and Linux: no network, no Docker, no cluster.
-#
+
 # Usage, from anywhere: deploy/ci/vuln-predicate-test.sh
 set -euo pipefail
 

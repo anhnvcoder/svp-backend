@@ -1,33 +1,16 @@
 #!/usr/bin/env bash
-# Step drill-k8s-supplychain of jobs gitops and dev-k3d of .github/workflows/verify.yml: make drill-k8s-supplychain with
-# the images it needs, read from GHCR without credentials (deploy/ci/ghcr-digest.sh newest): the newest drill-unsigned
-# as the unsigned image of cases b, h and i (no signature or attestation names it), the newest drill-vulnerable for case
-# c, and for case l (signed and attested vuln, without build provenance) the newest drill-no-provenance. An image that
-# cannot be read is left out and the step fails after the drill, even when the drill passes: its case SKIPs, except
-# drill-unsigned, which the drill then looks up itself; case l gets none, never empty, which the drill reads as "look it
-# up yourself".
-#
-# Cases c and l pass only when their drill image's vuln attestation is within the policy's maximum age
-# (imageVerification.maxAttestationAge of chart svp-policy, 72h): dispatch images.yml -f drill=true less than that before
-# a dispatched run, as no image file of svp-gitops names a drill image and the daily rescan never attests one again.
-# Nobody dispatches it before a scheduled run (SVP_VERIFY_SCHEDULED=true, which the job sets on a scheduled run only;
-# any other value is a dispatch): there the image of c or l whose vuln attestation is older than that age less an hour
-# is left out (c empty, l none: the case SKIPs, failing nothing), with a NOTE line naming the case, its age and that
-# dispatch. The age is read as the drill reads it: the oldest scanFinishedOn of the attestations cosign verifies,
-# anonymously, with the identity of the release source whose prefix the image is under. An image whose age cannot be
-# read is kept: the drill reads it again and fails the case with what it got. A dispatched run keeps both whatever
-# their age. SUPPLYCHAIN_ENFORCE_TMP goes to the drill as it is: job dev-k3d sets it to 1, so that the dev path's policy
-# (Audit) is in Enforce for each case and back, job gitops leaves it empty (its policy enforces already).
-#
+# Prepares test images and runs drill-k8s-supplychain for verify.yml jobs.
+# On scheduled runs (SVP_VERIFY_SCHEDULED=true), skips drill cases with attestations nearing maxAttestationAge (72h).
 # Usage, from the repo root: deploy/ci/verify-steps/supplychain.sh
+# Design notes: docs/reference/ci.md.
 set -euo pipefail
 
 ci=$(cd "$(dirname "$0")/.." && pwd)
 # shellcheck source=deploy/ci/common.sh
 . "$ci/common.sh"
 
-# stale CASE IMAGE: status 0, after printing the NOTE line, when the vuln attestation of IMAGE (REPOSITORY@DIGEST) is
-# older than the policy's maximum age less an hour; status 1 otherwise, also when cosign or the time cannot be read.
+# stale CASE IMAGE: prints NOTE and exits 0 if IMAGE vuln attestation is older than maxAttestationAge less an hour.
+# Exits 1 if within age or if cosign or the time cannot be read.
 stale() (
   local source max_age max_s envelopes scanned age hint
   source=$(source_of_repository "${2%@*}") || exit 1

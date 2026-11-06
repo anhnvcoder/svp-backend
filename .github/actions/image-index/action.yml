@@ -1,13 +1,7 @@
-# One multi-arch index per image from its two scanned manifests: downloads the artifacts leg-<image>-amd64 and -arm64
-# of image-leg, joins the two manifests into <prefix><image>:<12 hex of the commit> with the OCI annotations of the
-# commit (docker buildx imagetools create), reads the index back and checks it holds exactly those two manifests
-# (deploy/ci/image-guard.sh index, index-check), and hands on the artifact index-<image> (repository, tag, digest): the
-# digest that is signed, attested and promoted. An image with a failed leg has not both artifacts and fails here: no
-# index, no signature, no release. Used by images.yml of this repository and of svp-frontend (code-root its checkout).
-#
-# Inputs reach the steps through env:, never ${{ }} inside run:. The job grants contents: read and packages: write;
-# GITHUB_TOKEN is used only by docker login. The step that calls docker unsets DOCKER_DEFAULT_PLATFORM first, as every
-# docker call of this repository does.
+# Joins two scanned manifests into a multi-arch index; used by backend and svp-frontend images.yml.
+# image-guard.sh checks legs before join and verifies the inspected raw index holds exactly those two.
+# Inputs reach steps via env:, never ${{ }} inside run:; unsets DOCKER_DEFAULT_PLATFORM for native docker calls.
+# Design notes: docs/ci-cd.md.
 name: image-index
 description: "Join the two scanned manifests of an image into one index and check it"
 

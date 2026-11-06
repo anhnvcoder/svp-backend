@@ -1,24 +1,8 @@
 #!/usr/bin/env bash
-# Tests for deploy/ci/verify-steps/steps.sh, and for the shape of the jobs of .github/workflows/verify.yml that it
-# relies on, read as JSON with yq (YQ_IMAGE of the Makefile, through Docker without network):
-#   - check: an empty list, steps of the job and its build step pass; a name the job does not have (one of the other
-#     job's, a name the scenario had before), or a character other than a-z, 0-9, - and space, exits 2 without printing
-#     the list back;
-#   - table: one line per step of SVP_VERIFY_STEP_NAMES in order with its outcome from the steps context, a skipped
-#     step's reason, absent for an id the job lacks, and no output of a step;
-#   - the workflow: in each job, the steps of SVP_VERIFY_STEP_NAMES in that order, the build step without if: after
-#     the check of the targets and the clone of svp-gitops, every other one with exactly the if: of its name (not
-#     cancelled, build step succeeded, in targets), each with its timeout-minutes and its output to its file, none with
-#     continue-on-error; no ${{ }} in a run:; the steps that mask, tabulate, collect, upload and clean up after them with
-#     always() once the ref check passed; the sum of the steps' timeout-minutes, 20 minutes of setup and 25 for those
-#     steps within the job's timeout-minutes; the new values of drill-k8s-reloader made by a step of their own before
-#     the build step of each job that runs it; job dev-k3d dispatched only, its svp-gitops cloned at gitops_ref, which a
-#     step checks before the clone (main and a full commit SHA pass, anything else fails without printing it back), its
-#     supply chain step with SUPPLYCHAIN_ENFORCE_TMP=1. The same check over copies of the workflow each broken one way
-#     must fail.
-# Runs on macOS and Linux: bash, jq and Docker; no network, no cluster.
-#
+# Tests for steps.sh and verify.yml job invariants (step order, if conditions, timeouts, no ${{ }} in run).
+# Runs on macOS and Linux (bash, jq, yq through Docker; no network, no cluster) on valid and broken verify.yml variants.
 # Usage, from anywhere: deploy/ci/verify-steps/steps-test.sh
+# Design notes: docs/reference/ci.md.
 set -euo pipefail
 
 here=$(cd "$(dirname "$0")" && pwd)
@@ -40,8 +24,7 @@ compose="up smoke drill-obs-threats test-stack-objstore"
 gitops="k8s-gitops-up drill-k8s-gitops gitops-admission-metrics k8s-smoke drill-k8s-reloader drill-k8s-supplychain drill-k8s-threats"
 dev="k8s-up k8s-smoke drill-k8s-reloader drill-k8s-supplychain"
 
-# steps NAME NAMES TARGETS ARG [VAR=VALUE...]: steps.sh ARG for the steps NAMES and the input TARGETS, as on a machine;
-# its output in $work/NAME.log; prints its status.
+# steps NAME NAMES TARGETS ARG [VAR=VALUE...]: runs steps.sh ARG with NAMES and TARGETS, logging to $work/NAME.log.
 steps() {
   local name=$1 names=$2 targets=$3 arg=$4 rc=0
   shift 4
@@ -50,7 +33,6 @@ steps() {
   echo "$rc"
 }
 
-# --- check.
 same "check: no targets passes" 0 "$(steps all "$gitops" "" check)"
 has all "every step is named" "verify steps: every step ($gitops)"
 same "check: steps of the job pass" 0 "$(steps two "$gitops" "drill-k8s-threats  k8s-smoke" check)"
@@ -69,7 +51,6 @@ has bad "it says why" "targets holds a character other than a-z, 0-9, - and spac
 same "check: a job without steps stops it" 2 "$(steps none "" "" check)"
 same "steps.sh: another argument stops it" 2 "$(steps usage "$gitops" "" run)"
 
-# --- table.
 json=$(jq -n '{
   ref: {outcome: "success", conclusion: "success", outputs: {}},
   "k8s-gitops-up": {outcome: "success", conclusion: "success", outputs: {}},
@@ -101,14 +82,13 @@ same "table: a step skipped after a successful build step was not run (a cancel)
   "$(awk -F '\t' 'NR == 3 { print $1, $2, $3 }' "$work/table-cancelled.out/results.tsv")"
 same "table: steps context that is not JSON stops it" 2 "$(steps table-bad "$compose" "" table SVP_VERIFY_STEPS='{not json')"
 
-# --- The workflow.
 yq_image=$(sed -n 's/^YQ_IMAGE[[:space:]]*:=[[:space:]]*//p' "$src/Makefile")
-# workflow_json FILE: FILE (a workflow) as JSON.
+# workflow_json FILE: returns workflow FILE parsed as JSON via yq.
 workflow_json() {
   env -u DOCKER_DEFAULT_PLATFORM docker run --rm --network none -v "$(dirname "$1"):/w:ro" "$yq_image" -o json \
     "/w/$(basename "$1")"
 }
-# problems FILE: one line per rule of the header that the jobs of workflow FILE break; nothing when it keeps them.
+# problems FILE: outputs rule violations found in workflow FILE, or empty if valid.
 problems() {
   workflow_json "$1" | jq -r '
     def want_if($build; $name):
@@ -180,9 +160,8 @@ same "workflow: gitops_ref defaults to main" main "$(workflow_json "$wf" | jq -r
 same "workflow: dev-k3d's supply chain step puts the policy in Enforce for the drill" "1 deploy/ci/verify-steps/supplychain.sh" \
   "$(workflow_json "$wf" | jq -r '.jobs["dev-k3d"].steps[] | select(.id == "drill-k8s-supplychain") | "\(.env.SUPPLYCHAIN_ENFORCE_TMP) \(.run | split(" ")[0])"')"
 
-# The step Check gitops_ref, run as the job runs it: main and a full SHA pass, anything else fails, printed back never.
 refcheck=$(workflow_json "$wf" | jq -r '.jobs["dev-k3d"].steps[] | select(.name == "Check gitops_ref") | .run')
-# gitops_ref NAME VALUE: the step with SVP_GITOPS_REF=VALUE; its output in $work/NAME.log; prints its status.
+# gitops_ref NAME VALUE: executes Check gitops_ref logic with SVP_GITOPS_REF=VALUE, logging to $work/NAME.log.
 gitops_ref() {
   local rc=0
   SVP_GITOPS_REF=$2 bash -c "$refcheck" >"$work/$1.log" 2>&1 </dev/null || rc=$?
@@ -198,9 +177,8 @@ same "gitops_ref: a workflow command fails" 1 "$(gitops_ref ref-inject $'main\n:
 lacks ref-inject "the rejected value is not printed back" BAD-REF-MARKER
 has ref-branch "it says why" "gitops_ref is main or a full commit SHA of svp-gitops (40 hex); nothing started"
 
-# Copies broken one way each: the check must name it.
 mkdir -p "$work/broken"
-# broken NAME WANT SED: the workflow with the sed script SED applied must break the rule WANT names.
+# broken NAME WANT SED: applies sed expression to workflow and asserts problems output contains WANT.
 broken() {
   sed "$3" "$wf" >"$work/broken/$1.yml"
   cmp -s "$wf" "$work/broken/$1.yml" && { fail "workflow, broken $1: the sed script changed nothing"; return; }
