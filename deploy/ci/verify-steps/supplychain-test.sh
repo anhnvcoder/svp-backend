@@ -4,9 +4,10 @@
 # for GHCR (failing for the image named in FAKE_GHCR_MISSING), a fake make that records its arguments and exits with
 # FAKE_MAKE_RC, and a fake cosign that answers verify-attestation with one envelope scanned FAKE_SCAN_HOURS ago
 # (FAKE_SCAN_HOURS_C, FAKE_SCAN_HOURS_L for the image of case c, l alone) or fails with FAKE_COSIGN_FAIL=1.
-# Checked: the three images handed to the drill, an image GHCR does not give failing the step (case l then none, never
-# empty), the drill's own failure, and on a scheduled run only, case c or l left out with a NOTE when its vuln
-# attestation is past the policy's maximum age less an hour (kept within it, or when cosign does not answer).
+# Checked: the three images handed to the drill, SUPPLYCHAIN_ENFORCE_TMP handed on as it is (job dev-k3d sets it), an
+# image GHCR does not give failing the step (case l then none, never empty), the drill's own failure, and on a scheduled
+# run only, case c or l left out with a NOTE when its vuln attestation is past the policy's maximum age less an hour
+# (kept within it, or when cosign does not answer).
 # Runs on macOS and Linux: no network, no Docker, no cluster.
 #
 # Usage, from anywhere: deploy/ci/verify-steps/supplychain-test.sh
@@ -32,6 +33,7 @@ mkdir -p "$tree/deploy/ci/verify-steps" "$tree/deploy/k8s" "$tree/deploy/helm/sv
 cp "$here/supplychain.sh" "$tree/deploy/ci/verify-steps/"
 cp "$src/deploy/ci/common.sh" "$tree/deploy/ci/"
 cp "$src/deploy/k8s/lib.sh" "$tree/deploy/k8s/"
+cp "$src/deploy/docker-bake.json" "$tree/deploy/"
 cp -R "$src/deploy/helm/svp-policy/values.yaml" "$src/deploy/helm/svp-policy/files" "$tree/deploy/helm/svp-policy/"
 cat >"$tree/deploy/ci/ghcr-digest.sh" <<'EOF'
 #!/usr/bin/env bash
@@ -69,20 +71,25 @@ run() {
   shift
   : >"$work/$name-make.log"
   : >"$work/$name-cosign.log"
-  env -u GITHUB_ACTIONS -u CI -u SVP_VERIFY_SCHEDULED PATH="$work/bin:$PATH" FAKE_MAKE_LOG="$work/$name-make.log" \
+  env -u GITHUB_ACTIONS -u CI -u SVP_VERIFY_SCHEDULED -u SUPPLYCHAIN_ENFORCE_TMP PATH="$work/bin:$PATH" FAKE_MAKE_LOG="$work/$name-make.log" \
     FAKE_COSIGN_LOG="$work/$name-cosign.log" FAKE_SCAN_HOURS=10 "$@" "$tree/deploy/ci/verify-steps/supplychain.sh" \
     >"$work/$name.log" 2>&1 </dev/null || rc=$?
   echo "$rc"
 }
 # made NAME: the arguments make got in run NAME, one per line.
 made() { cat "$work/$1-make.log"; }
-args() { printf '%s\n' drill-k8s-supplychain "SUPPLYCHAIN_UNSIGNED=$1" "SUPPLYCHAIN_VULNERABLE=$2" "SUPPLYCHAIN_NO_PROVENANCE=$3"; }
+args() {
+  printf '%s\n' drill-k8s-supplychain "SUPPLYCHAIN_UNSIGNED=$1" "SUPPLYCHAIN_VULNERABLE=$2" "SUPPLYCHAIN_NO_PROVENANCE=$3" \
+    "SUPPLYCHAIN_ENFORCE_TMP=${4:-}"
+}
 
 # --- A dispatched run.
 same "supplychain: every image on GHCR, the drill passing, passes" 0 "$(run all)"
 same "supplychain: the drill gets the newest drill-unsigned, drill-vulnerable and drill-no-provenance" \
   "$(args "$dun" "$dvu" "$dnp")" "$(made all)"
 same "supplychain: a dispatched run reads no attestation age" "" "$(cat "$work/all-cosign.log")"
+same "supplychain: SUPPLYCHAIN_ENFORCE_TMP=1 (job dev-k3d) reaches the drill" 0 "$(run enforce SUPPLYCHAIN_ENFORCE_TMP=1)"
+same "supplychain: ... with the images as without it" "$(args "$dun" "$dvu" "$dnp" 1)" "$(made enforce)"
 same "supplychain: a dispatched run keeps an image whatever its age" 0 "$(run dispatch-old FAKE_SCAN_HOURS=100)"
 same "supplychain: ... and hands it to the drill" "$(args "$dun" "$dvu" "$dnp")" "$(made dispatch-old)"
 lacks dispatch-old "nothing is noted on a dispatched run" NOTE

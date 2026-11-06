@@ -7,7 +7,7 @@ K8S_LIB := . deploy/k8s/lib.sh
 .PHONY: k8s-exclusive k8s-up k8s-down k8s-status k8s-ca k8s-secrets k8s-images k8s-smoke \
 	k8s-glitchtip-init k8s-ui-grafana k8s-ui-prometheus k8s-ui-alertmanager k8s-ui-glitchtip k8s-gitops-up \
 	k8s-ui-argocd k8s-traffic-start k8s-traffic-stop drill-k8s-threats \
-	drill-k8s-supplychain drill-k8s-gitops k8s-web-sourcemaps k8s-web-e2e cloud-check \
+	drill-k8s-supplychain drill-k8s-gitops drill-k8s-reloader k8s-web-sourcemaps k8s-web-e2e cloud-check \
 	gitops-clone web-clone eks-secrets eks-glitchtip-init eks-smoke eks-seed \
 	eks-rl-reset
 
@@ -19,11 +19,12 @@ k8s-exclusive:
 
 # env-required: the Secrets come from .env (deploy/k8s/secrets.sh, run by install.sh once the namespaces exist). The
 # clone of svp-gitops is looked up first (gitops_dir), so a missing one stops the target before anything is created.
+# The releases are installed by helmfile (deploy/k8s/helmfile.yaml.gotmpl, HELMFILE_VERSION of the Makefile: make tools).
 # WEB_FROM and WEB_IMAGE choose the web client as for make up (deploy/compose/compose.mk): its release in staging by
 # default, or WEB_IMAGE (both pulled from GHCR, anonymously by the nodes; the image policy only audits on this path),
 # or built from the clone of svp-frontend with WEB_FROM=clone. The six backend services are always built here: IMAGES is
 # make up's alone.
-k8s-up: k8s-exclusive env-required ## Create (or start) the registry 127.0.0.1:5111 and cluster svp (API 127.0.0.1:6550, HTTPS 127.0.0.1:8443), build and push the six backend images (WEB_FROM=clone: the web client's too, from the clone of svp-frontend, ../frontend or SVP_WEB_DIR; otherwise the web client runs its staging release, or WEB_IMAGE=<ghcr.io/...@sha256:...> with WEB_FROM=image), install argocd/apps/components.json of the clone of svp-gitops (../gitops beside the checkout, or SVP_GITOPS_DIR) with its base/ values, with drill traffic while a canary of the gateway or the web client runs; idempotent (LOCAL LAB ONLY: a canary's drill traffic resets register rate limit keys in the cluster's Valkey db 10)
+k8s-up: k8s-exclusive env-required ## Create (or start) the registry 127.0.0.1:5111 and cluster svp (API 127.0.0.1:6550, HTTPS 127.0.0.1:8443), build and push the six backend images (WEB_FROM=clone: the web client's too, from the clone of svp-frontend, ../frontend or SVP_WEB_DIR; otherwise the web client runs its staging release, or WEB_IMAGE=<ghcr.io/...@sha256:...> with WEB_FROM=image), install argocd/apps/components.json of the clone of svp-gitops (../gitops beside the checkout, or SVP_GITOPS_DIR) with its base/ values through helmfile, with drill traffic while a canary of the gateway or the web client runs; idempotent (LOCAL LAB ONLY: a canary's drill traffic resets register rate limit keys in the cluster's Valkey db 10)
 	@test -z '$(IMAGES)' || { echo "make k8s-up: IMAGES=$(IMAGES) is a setting of make up only; the cluster of the dev path builds the six backend services" >&2; exit 1; }
 	@WEB_FROM='$(WEB_FROM)' WEB_IMAGE='$(WEB_IMAGE)' bash -c '$(K8S_LIB) && gitops_dir >/dev/null && web_source && ensure_registry && ensure_cluster'
 	WEB_FROM='$(WEB_FROM)' WEB_IMAGE='$(WEB_IMAGE)' deploy/k8s/install.sh
@@ -72,11 +73,11 @@ k8s-status: ## Show the containers, nodes and the pods of every namespace but ku
 	  kubectl --context k3d-svp get pods --all-namespaces --field-selector metadata.namespace!=kube-system; \
 	else echo "cluster svp not found; run make k8s-up"; fi
 
-k8s-secrets: env-required ## Create or update the cluster's Secrets from .env (no value printed; a changed Redpanda admin password needs redpanda-0 running), restart the object store or Redpanda if their password changed; then run make k8s-up: the init Jobs set the new passwords and each service whose Secret changed restarts with them (on the GitOps cluster: the steps at the top of deploy/k8s/gitops.sh). On a cluster with namespace svp-secrets (GitOps staging with External Secrets) it writes only the source Secrets there and has every ExternalSecret built again from them
+k8s-secrets: env-required ## Create or update the cluster's Secrets from .env, a whole change of credentials (no value printed): a changed Redpanda admin password set in redpanda-0 first (it must run), the Secrets of svp-data, a wait until the object store and Redpanda run with them (Reloader restarts them), the init Jobs of svp-data that set the new passwords (dev path: helmfile, release svp-data alone; GitOps cluster: a sync of Application svp-data), then the clients' Secrets, whose workloads Reloader restarts. On a cluster with namespace svp-secrets (GitOps staging with External Secrets) it writes only the source Secrets there and has the ExternalSecrets built again from them, those of svp-data first. Refuses, before writing anything, a cluster that runs the project's workloads without Reloader or with a workload that does not name its Secrets for it yet, or (dev path) that Reloader may not restart (make k8s-up installs them)
 	SVP_KUBE_CONTEXT=k3d-svp deploy/k8s/secrets.sh
 
 # Needs no .env: both values are GlitchTip's own, read inside its pod (deploy/k8s/glitchtip-init.sh).
-k8s-glitchtip-init: ## Put GlitchTip's DSN into Secret svp/sentry and its read-only API token into Secret svp-obs/glitchtip-api (never into .env, nothing printed), then restart each service whose pods started without the current DSN; idempotent, run by make k8s-up
+k8s-glitchtip-init: ## Put GlitchTip's DSN into Secret svp/sentry and its read-only API token into Secret svp-obs/glitchtip-api (never into .env, nothing printed); Reloader restarts each service whose DSN changed; idempotent, run by make k8s-up
 	SVP_KUBE_CONTEXT=k3d-svp deploy/k8s/glitchtip-init.sh
 
 k8s-ca: ## Write the CA of the cluster's TLS certificates to .k8s/ca.crt (curl --cacert .k8s/ca.crt https://<name>.svp.localhost:8443/)
@@ -124,6 +125,9 @@ drill-k8s-supplychain: ## Check Kyverno's image policy of namespace svp: a signe
 
 drill-k8s-gitops: ## Check the GitOps cluster svp (make k8s-gitops-up): one Chainsaw test per check (deploy/k8s/drills/gitops/), log and JUnit report in .k8s/drills/gitops-<UTC>.log and .xml
 	deploy/k8s/drills/run.sh gitops
+
+drill-k8s-reloader: ## Check a change of credentials on cluster svp (dev path or GitOps): make k8s-secrets with new values, then each workload that reads a changed Secret restarted by Reloader, and a run with the same values that changes no pod; Chainsaw tests under deploy/k8s/drills/reloader/, log and JUnit report in .k8s/drills/reloader-<UTC>.log and .xml; needs make k8s-smoke run before
+	deploy/k8s/drills/run.sh reloader
 
 # The operations UIs have no route, LoadBalancer or NodePort (threat model OPS-2): each is reached by a port-forward
 # bound to the host's loopback only, for as long as the target runs (Ctrl-C ends it). The host ports are those of
@@ -192,11 +196,11 @@ EKS_DOMAIN_CHECK = printf '%s' '$(DOMAIN)' | grep -Eqx '([a-z0-9]([a-z0-9-]*[a-z
 # eks-secrets runs after the apply of root aws/envs/<env> and before that of aws/gitops/<env>, then again after each
 # change of .env; SVP_RDS_MASTER_PASSWORD comes from the environment (the session's script reads it from AWS), never
 # from .env.
-eks-secrets: env-required ## With AWS_PROFILE=<profile of the environment>, write the entries svp/<env>/* of AWS Secrets Manager of the EKS cluster CONTEXT=svp-stg|svp-prd from .env (keys of chart svp-cluster's files/external-secrets.yaml), pg-superuser from SVP_RDS_MASTER_PASSWORD of the environment (required), glitchtip-runtime empty only while it has no value; on a running environment Redpanda takes a changed superuser password first and every ExternalSecret is built again after (no value printed)
+eks-secrets: env-required ## With AWS_PROFILE=<profile of the environment>, write the entries svp/<env>/* of AWS Secrets Manager of the EKS cluster CONTEXT=svp-stg|svp-prd from .env (keys of chart svp-cluster's files/external-secrets.yaml), pg-superuser from SVP_RDS_MASTER_PASSWORD of the environment (required), glitchtip-runtime empty only while it has no value; on a running environment (Reloader must run there, StatefulSet redpanda naming its Secrets for it) a whole change of credentials: Redpanda takes a changed superuser password first, the ExternalSecrets of svp-data are built again, the brokers waited for until each runs the new password (Reloader restarts them), Application svp-data synced (its init Jobs set the new passwords), then every other ExternalSecret built again, whose workloads Reloader restarts (no value printed)
 	@$(EKS_CONTEXT_CHECK)
 	SVP_KUBE_CONTEXT='$(CONTEXT)' deploy/k8s/aws-secrets.sh
 
-eks-glitchtip-init: ## With AWS_PROFILE=<profile of the environment>, as k8s-glitchtip-init on the EKS cluster CONTEXT=svp-stg|svp-prd once Application svp-observability is Healthy: GlitchTip's DSN and API tokens into entry svp/<env>/glitchtip-runtime of AWS Secrets Manager, its three ExternalSecrets built again, each service restarted that started without the current DSN; idempotent
+eks-glitchtip-init: ## With AWS_PROFILE=<profile of the environment>, as k8s-glitchtip-init on the EKS cluster CONTEXT=svp-stg|svp-prd once Application svp-observability is Healthy: GlitchTip's DSN and API tokens into entry svp/<env>/glitchtip-runtime of AWS Secrets Manager, its three ExternalSecrets built again; Reloader restarts each service whose DSN changed; idempotent
 	@$(EKS_CONTEXT_CHECK)
 	SVP_KUBE_CONTEXT='$(CONTEXT)' deploy/k8s/glitchtip-init.sh
 

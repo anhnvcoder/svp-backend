@@ -96,7 +96,8 @@ NEW=svp-pg-$(date -u +%y%m%d%H%M%S)
    lưu được:
    `kubectl --context k3d-svp -n svp-data get cluster svp-pg -o jsonpath='{.status.conditions[?(@.type=="ContinuousArchiving")].status}{"\n"}'` là `True`.
 
-6. **`make k8s-up`** khi tiện: `deploy/k8s/install.sh` đọc thế hệ từ Cluster đang chạy và giữ nó (`--set`), bỏ
+6. **`make k8s-up`** khi tiện: `pg_backup_sets` của `deploy/k8s/rotate.sh` đọc thế hệ từ Cluster đang chạy và giữ nó (state value
+   `pgServerName` của helmfile), bỏ
    `bootstrap.recovery` khỏi Cluster; CloudNativePG chỉ đọc `bootstrap` khi tạo instance đầu nên database không đổi. Sau chart
    `svp-data` nó chờ WAL lưu được và lấy một backup cơ sở khi thế hệ đang chạy chưa có cái nào (`pg_base_backup`).
 
@@ -122,7 +123,7 @@ Không bao giờ xoá Backup hay object của bucket `pg-backups` để "dọn":
 
 - ADR: [ADR-0020](../adr/0020-reliability-stage6.md) §5 (thế hệ lưu trữ, diễn tập, RTO/RPO); threat model BAK-1.
 - Cấu hình: `deploy/helm/svp-data/templates/postgres.yaml` (`plugins`, `bootstrap.recovery`, `externalClusters`),
-  `templates/backup.yaml`, `deploy/k8s/install.sh` (`pg_backup_sets`, `pg_base_backup`).
+  `templates/backup.yaml`, `deploy/k8s/rotate.sh` (`pg_backup_sets`), `deploy/k8s/install.sh` (`pg_base_backup`).
 - Diễn tập tái hiện: `drill-k8s-backup` (`MODE=latest`) và `MODE=pitr` của bài lab `drills/` của `svp-labs`, JSON ở
   `.k8s/drills/backup-<time>.json` (RTO, RPO, số dòng mỗi bảng trước và sau). Số đo của buổi k3d ghi ở mục Kết quả của
   ADR-0020.

@@ -1,8 +1,10 @@
 # Supply chain drill, case h: an ephemeral container (what kubectl debug adds) in a running pod of svp, as a
 # server-side dry run of a strategic patch of the pod's ephemeralcontainers subresource: with an unsigned image
 # refused, with the signed release of case a admitted. "Unsigned" is the unsigned image of case b (refused by the
-# signature rule), or the dev image of the local registry when there is none (refused by the prefix rule). The
-# admitted half is SKIP while no pod of svp runs an image of GHCR. A script step: Chainsaw's patch sends a JSON merge
+# signature rule), or the dev image of the local registry when there is none (refused by the prefix rule). The policy
+# reads every image of the pod, so while the pod runs an image outside every release source (the dev path's builds of
+# the local registry) the prefix rule refuses it first, whatever the ephemeral image. The admitted half is SKIP while
+# no pod of svp runs an image of GHCR. A script step: Chainsaw's patch sends a JSON merge
 # patch, which would replace the pod's list of ephemeral containers rather than add one as kubectl debug does.
 # Helpers, inputs and the verdict lines: ../lib.sh.
 apiVersion: chainsaw.kyverno.io/v1alpha1
@@ -69,6 +71,7 @@ spec:
           . ../lib.sh
           target_pod
           bad_image
+          ephemeral_rule
           timed kc -n svp patch pod "$target" --subresource=ephemeralcontainers --type=strategic --dry-run=server \
             -p "$(ephemeral "$bad")"
           refused "$bad_rule" "ephemeral container $bad in pod svp/$target"

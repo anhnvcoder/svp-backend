@@ -73,42 +73,38 @@ Lệnh `terraform` và script buổi ở `svp-infra` (`aws/scripts/`); mỗi bư
 
 ## Đổi secret của env đang chạy
 
-Cùng thứ tự như `make k8s-secrets` trên k3d. Sửa `.env` (hay `SVP_RDS_MASTER_PASSWORD`), rồi
-`AWS_PROFILE=anhnv-<env> make eks-secrets CONTEXT=svp-<env>` làm bốn bước đầu (cluster phải tới được; prd: tunnel mở, không thì dừng
-trước mọi lệnh ghi):
+Sửa `.env` (hay `SVP_RDS_MASTER_PASSWORD`), rồi một lệnh; cluster phải tới được (prd: tunnel mở, không thì dừng trước mọi lệnh ghi):
 
-1. Mật khẩu superuser Redpanda đổi thì đặt vào broker đang chạy trước (`redpanda_admin` của `deploy/k8s/lib.sh`, dùng chung với
+```sh
+AWS_PROFILE=anhnv-<env> make eks-secrets CONTEXT=svp-<env>
+```
+
+Lệnh làm trọn một lượt xoay credential theo cùng thứ tự với `make k8s-secrets` trên k3d (`deploy/k8s/rotate.sh`,
+[ADR-0050](../adr/0050-bash-to-standard-tools.md) mục 5); người vận hành không sync, không restart gì:
+
+1. Cluster phải chạy Reloader, StatefulSet `redpanda` phải opt in theo tên Secret của nó, không thì dừng trước mọi lệnh ghi
+   (`FAIL  cluster svp-<env> is not ready for a change of credentials: <lý do>`).
+2. Mật khẩu superuser Redpanda đổi thì đặt vào broker đang chạy trước (`redpanda_admin` của `deploy/k8s/lib.sh`, dùng chung với
    `secrets.sh`; broker không chạy hay không nhận mật khẩu nào thì dừng, không ghi entry nào).
-2. Ghi mọi entry (trừ `glitchtip-runtime`, đã có giá trị).
-3. `force-sync` mọi ExternalSecret (`refreshPolicy: OnChange`), chờ từng cái dựng lại từ entry mới.
-4. Broker nào còn chạy với mật khẩu superuser khác `.env` thì rolling restart StatefulSet `redpanda` và chờ xong; không broker nào thì
-   in `skip` và không restart. Broker và sidecar đọc mật khẩu (`RPK_PASS`) từ environment chỉ lúc khởi động: từ bước 1, probe của sidecar
-   gọi Admin API bằng mật khẩu cũ nhận 401, mọi broker NotReady, và Argo CD chỉ chạy hook PostSync của `svp-data` khi tài nguyên đã
-   Healthy, nên bước này phải xong trước khi sync. Rolling update của StatefulSet thay từng broker (ordinal cao trước), chờ broker mới
-   Ready rồi mới sang broker sau; prd ba broker luôn còn hai, đủ đa số Raft. Hook `preStop` của broker cũ không đăng nhập được để drain:
-   partition do nó làm leader bầu leader mới, producer `acks=all` chờ và thử lại. Bước này lỗi (quá 300 giây mỗi broker) thì xem
-   `AWS_PROFILE=anhnv-<env> kubectl --context svp-<env> -n svp-data get pods -l app.kubernetes.io/name=redpanda` rồi chạy lại lệnh trên.
+3. Ghi mọi entry (trừ `glitchtip-runtime`, đã có giá trị).
+4. `force-sync` các ExternalSecret của `svp-data`, rồi chờ mọi broker chạy với mật khẩu superuser mới và Ready. Broker và sidecar đọc
+   mật khẩu (`RPK_PASS`) từ environment chỉ lúc khởi động: Reloader rolling restart StatefulSet `redpanda` khi Secret của nó đổi, từng
+   broker (ordinal cao trước), broker mới Ready rồi mới sang broker sau; prd ba broker luôn còn hai, đủ đa số Raft. Hook `preStop` của
+   broker cũ không đăng nhập được để drain: partition do nó làm leader bầu leader mới, producer `acks=all` chờ và thử lại. Argo CD chỉ
+   chạy hook PostSync của `svp-data` khi tài nguyên đã Healthy, nên bước 5 chờ bước này. Quá 300 giây mỗi broker thì dừng, nêu
+   StatefulSet (xem `AWS_PROFILE=anhnv-<env> kubectl --context svp-<env> -n reloader logs deployment/reloader`).
+5. Một sync của Application `svp-data` (hook PostSync `pg-bootstrap`, `redpanda-init` đặt mật khẩu mới trong Postgres, Redpanda), chờ
+   đúng lượt sync đó `Succeeded`; `Failed`, `Error` hay quá 600 giây thì dừng, ExternalSecret của client chưa dựng lại: client restart
+   trước khi Job đặt mật khẩu mới thì đăng nhập bằng mật khẩu hệ thống chưa có.
+6. `force-sync` mọi ExternalSecret còn lại; Reloader restart workload có Secret đổi: Deployment bằng rolling update, Rollout `gateway`,
+   `web` bằng `spec.restartAt` (không tạo revision, nên không thành canary). Script không chờ bước này.
 
-Người vận hành làm tiếp, theo thứ tự:
+Dòng cần thấy, theo thứ tự: `ok    ExternalSecrets of the server built again from their source`, `ok    StatefulSet redpanda: each of its
+<n> pod(s) runs with the RPK_PASS of .env and is Ready`, `ok    init Jobs of svp-data done (sync of Application svp-data Succeeded)`,
+`ok    ExternalSecrets of the clients built again from their source`, `ok    Reloader restarts each workload whose Secret changed`. Một
+dòng `FAIL` thì sửa nguyên nhân rồi chạy lại đúng lệnh trên: lượt nào cũng làm đủ các bước, gồm init còn thiếu của lượt trước. Theo dõi
+restart:
 
-1. Sync Application `svp-data` (Job init đặt mật khẩu mới trong Postgres, Redpanda) và chờ đúng lượt sync đó xong, gồm hook PostSync
-   `pg-bootstrap`, `redpanda-init`: restart trước khi Job đặt mật khẩu mới thì pod mới đăng nhập bằng mật khẩu hệ thống chưa có:
-
-   ```sh
-   before=$(AWS_PROFILE=anhnv-<env> kubectl --context svp-<env> -n argocd get applications.argoproj.io svp-data -o jsonpath='{.status.operationState.startedAt}')
-   AWS_PROFILE=anhnv-<env> kubectl --context svp-<env> -n argocd patch applications.argoproj.io svp-data --type merge -p '{"operation":{"sync":{}}}'
-   until s=$(AWS_PROFILE=anhnv-<env> kubectl --context svp-<env> -n argocd get applications.argoproj.io svp-data \
-       -o jsonpath='{.status.operationState.startedAt} {.status.operationState.phase}') &&
-     [ "${s% *}" != "$before" ] && case "${s#* }" in Succeeded) true ;; Failed | Error) echo "STOP sync $s"; true ;; *) false ;; esac
-   do sleep 5; done; echo "sync: $s"
-   ```
-
-   Dòng cuối phải là `sync: <thời điểm mới> Succeeded`. In `STOP` thì không sang bước 2: xem Job lỗi
-   (`AWS_PROFILE=anhnv-<env> kubectl --context svp-<env> -n svp-data get jobs`), sửa rồi chạy lại bước 1.
-2. Restart workload có Secret đổi: Deployment bằng `rollout restart`; Rollout `gateway`, `web` bằng `spec.restartAt` (không tạo
-   revision, nên không thành canary):
-
-   ```sh
-   AWS_PROFILE=anhnv-<env> kubectl --context svp-<env> -n <namespace> rollout restart deployment/<tên>
-   AWS_PROFILE=anhnv-<env> kubectl --context svp-<env> -n svp patch rollout <tên> --type merge -p "{\"spec\":{\"restartAt\":\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\"}}"
-   ```
+```sh
+AWS_PROFILE=anhnv-<env> kubectl --context svp-<env> get pods -A -w
+```

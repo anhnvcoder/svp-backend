@@ -149,3 +149,4 @@ Phụ lục: [`appendix/0039-mainpath-drills-scan-gate-sourcemaps.md`](appendix/
 ### Chỉnh bởi
 
 - §1: [0050](0050-bash-to-standard-tools.md): `drill-k8s-supplychain`, `drill-k8s-threats` viết thành test Chainsaw (`deploy/k8s/drills/<diễn tập>/`, `make drill-k8s-*` qua `deploy/k8s/drills/run.sh`); runner của `verify.yml` thành từng bước Actions, artifact chỉ còn kết quả máy đọc.
+- §1, bảng 1: [0050](0050-bash-to-standard-tools.md) mục 6: kịch bản `dev-k3d` trở lại `verify.yml`, chỉ dispatch, chỉ đường dev (`make k8s-up`, `k8s-smoke`, `drill-k8s-reloader`, `drill-k8s-supplychain` có ca (k)); bản đo một lần của bảng 1 vẫn ở bài lab.

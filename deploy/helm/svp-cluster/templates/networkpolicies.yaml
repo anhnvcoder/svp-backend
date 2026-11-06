@@ -9,13 +9,16 @@ Not needed despite the deny: kubelet probes and kubectl port-forward come from t
 NetworkPolicy cannot block.
 
 Namespace kyverno gets the same three (its pods that call the API server carry svp-kube-api=allow), and two more at the
-end of this file. With externalSecrets on (GitOps path), so does namespace external-secrets of External Secrets
-Operator: its controller (labelled svp-kube-api=allow) talks to the API server only, and nothing comes in (it serves no
-webhook, and nothing scrapes its metrics); with store aws it also gets TCP 443 out to public addresses (Secrets
-Manager, STS) and TCP 80 to the EKS Pod Identity Agent, at the end of this file. The source namespace of store
+end of this file. So does namespace reloader of Reloader, with nothing more: its controller (labelled
+svp-kube-api=allow) talks to the API server only, and nothing comes in. With externalSecrets on (GitOps path), so does
+namespace external-secrets of External Secrets Operator: its controller (labelled svp-kube-api=allow) talks to the API
+server only, and nothing comes in (it serves no webhook, and nothing scrapes its metrics); with store aws it also gets
+TCP 443 out to public addresses (Secrets Manager, STS) and TCP 80 to the EKS Pod Identity Agent, at the end of this
+file. The source namespace of store
 kubernetes has no pod, and is denied all the same.
 */}}
 {{- $kyverno := dict "name" .Values.kyverno.namespace "kubeAPI" true }}
+{{- $reloader := dict "name" .Values.reloader.namespace "kubeAPI" true }}
 {{- $es := .Values.externalSecrets }}
 {{- $esNamespaces := list }}
 {{- if $es.enabled }}
@@ -24,7 +27,7 @@ kubernetes has no pod, and is denied all the same.
 {{- $esNamespaces = append $esNamespaces (dict "name" $es.sourceNamespace "kubeAPI" false) }}
 {{- end }}
 {{- end }}
-{{- range concat .Values.namespaces (list $kyverno) $esNamespaces }}
+{{- range concat .Values.namespaces (list $kyverno $reloader) $esNamespaces }}
 ---
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy

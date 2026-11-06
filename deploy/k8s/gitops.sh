@@ -38,7 +38,7 @@
 # The release images, Argo CD's install and the list of Applications come from git at that one commit, never from a
 # working tree, and Argo CD builds the cluster at that commit too, not at the branch: what this script checks is what
 # Argo CD deploys, even when a release reaches the branch meanwhile (that release would go out as a canary, which no
-# traffic promotes while the cluster is being built, and the restarts of step 5 wait for Rollouts to be Healthy).
+# traffic promotes while the cluster is being built).
 #
 # Environment (set by `make k8s-gitops-up`):
 #   GITOPS_REV         the revision of svp-gitops: a branch of the clone's origin (default main; read from
@@ -48,18 +48,13 @@
 #   SVP_GITOPS_DIR     the clone of svp-gitops (deploy/k8s/lib.sh, gitops_dir; CI's make gitops-clone sets it).
 #   SVP_ATTEST_MAX_AGE drills only (never in .env): a shorter limit than 48h for the age of the vuln attestations.
 #
-# Secrets live outside git, so a changed .env reaches this cluster by hand: `make k8s-secrets` (which, with External
-# Secrets, writes the source in svp-secrets and has every ExternalSecret built again from it), then a sync of
-# Application svp-data, whose init Jobs set the new passwords in Postgres, the object store and Redpanda
-# (kubectl --context k3d-svp -n argocd patch applications.argoproj.io svp-data --type merge
-#  -p '{"operation":{"sync":{}}}'), then `kubectl --context k3d-svp -n <namespace> rollout restart deployment/<name>` of
-# each workload whose Secret changed: five of the services, kps-grafana, glitchtip, keda-operator. The gateway and the
-# web client (Secret web-env) are Argo Rollouts Rollouts: a restart that stamps the pod template is a new revision,
-# hence a canary, so each restarts through spec.restartAt instead (its pods are evicted one at a time, the template
-# unchanged):
-#   for r in gateway web; do kubectl --context k3d-svp -n svp patch rollout "$r" --type merge \
-#     -p "{\"spec\":{\"restartAt\":\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\"}}"; done
-# `make k8s-up` does the same on the dev path and refuses a cluster Argo CD manages.
+# Secrets live outside git, so a changed .env reaches this cluster through `make k8s-secrets`, a whole change of
+# credentials in the order of deploy/k8s/rotate.sh: it writes the source in svp-secrets, has the ExternalSecrets of
+# svp-data built again from it, waits until the object store and Redpanda run with the new values, runs the init Jobs
+# of svp-data (one sync of Application svp-data), then has every other ExternalSecret built again. Reloader (component
+# reloader) restarts each workload whose Secret changed: the servers, the services, GlitchTip, Grafana, the KEDA
+# operator; the gateway and the web client, Argo Rollouts Rollouts, through Argo Rollouts' own restart, which evicts
+# their pods without a new revision (so no canary). `make k8s-up` refuses a cluster Argo CD manages.
 #
 # deploy/k8s/gitops.sh follow BRANCH: step 6 alone, on the cluster this script made: the root follows refs/heads/BRANCH
 # of svp-gitops from then on. For a cluster built at a commit (the verification run builds at one, and follows main
@@ -368,8 +363,8 @@ app_report() {
 }
 
 # Every Application of $want_apps ready within the deadline. GlitchTip's DSN goes into Secret svp/sentry once
-# svp-observability (wave 5) is ready; the services (wave 7) that started before it are restarted by
-# glitchtip-init.sh, those that start after read it. Argo CD retries a failed comparison at each poll (60 s), so an
+# svp-observability (wave 5) is ready; Reloader restarts the services (wave 7) that started before it once the DSN
+# reaches Secret svp/sentry, those that start after read it. Argo CD retries a failed comparison at each poll (60 s), so an
 # error is printed when it first shows, and the wait stops once errors have been reported for 180 s without a break
 # (three polls: not a passing failure such as a moment without GitHub) instead of running out its 1800 s.
 want=$(printf '%s' "$want_apps" | grep -c .)

@@ -32,8 +32,8 @@ OBS_OTHER_ := $(OBS_OTHER_elastic) $(OBS_OTHER_lgtm)
 OBS_OTHER_off := $(OBS_OTHER_)
 SMOKE_URL ?= http://127.0.0.1:8080
 # Which images `make up` runs (compose_images of deploy/k8s/lib.sh, which exports what compose.yaml reads). IMAGES:
-# unset builds the six backend services from the working tree; stg runs their releases in staging (envs/stg/images/
-# of the clone of svp-gitops, read as it is), with no Go build. WEB_FROM: stg (unset) runs the web client's release in
+# unset builds the six backend services from the working tree (docker buildx bake -f deploy/docker-bake.json); stg
+# runs their releases in staging (envs/stg/images/ of the clone of svp-gitops, read as it is), with no Go build. WEB_FROM: stg (unset) runs the web client's release in
 # staging, clone builds it from its source (the clone of svp-frontend: SVP_WEB_DIR, else <workspace>/frontend), image runs
 # WEB_IMAGE (ghcr.io/<repository>@sha256:<digest>). make k8s-up reads WEB_FROM and WEB_IMAGE as well, not IMAGES.
 IMAGES ?=
@@ -42,10 +42,11 @@ WEB_IMAGE ?=
 # Runs the command after it with the variables compose_images exports; $(1) is compose_images or compose_up_images.
 WITH_IMAGES = IMAGES='$(IMAGES)' WEB_FROM='$(WEB_FROM)' WEB_IMAGE='$(WEB_IMAGE)' \
 	bash -c '. deploy/k8s/lib.sh && $(1) && exec "$$@"' with-images
-# A release runs as pulled: --build would build every service with a build section, the released ones too, under
-# the name of the release. Without it compose still builds the others, whose pull policy is build. WEB_FROM unset is
-# stg, a release.
-UP_BUILD = $(if $(filter stg,$(IMAGES))$(filter stg image,$(or $(WEB_FROM),stg)),,--build)
+# Only the web client has a build section: the six backend services run images built before compose starts (bake of
+# deploy/docker-bake.json in compose_up_images) or pulled releases, never built by compose. --build rebuilds the web
+# client when WEB_FROM=clone builds it from its source; a web release runs as pulled, and --build would build it under
+# the name of the release. WEB_FROM unset is stg, a release.
+UP_BUILD = $(if $(filter stg image,$(or $(WEB_FROM),stg)),,--build)
 # Roles whose passwords `make env` generates (deploy/postgres/bootstrap.sql).
 DB_PASSWORD_VARS := SVP_USER_MIGRATOR_DB_PASSWORD SVP_USER_APP_DB_PASSWORD SVP_VIDEO_MIGRATOR_DB_PASSWORD SVP_VIDEO_APP_DB_PASSWORD \
 	SVP_ENGAGEMENT_MIGRATOR_DB_PASSWORD SVP_ENGAGEMENT_APP_DB_PASSWORD SVP_FEED_MIGRATOR_DB_PASSWORD SVP_FEED_APP_DB_PASSWORD \

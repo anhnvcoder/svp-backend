@@ -11,7 +11,11 @@
 #     cancelled, build step succeeded, in targets), each with its timeout-minutes and its output to its file, none with
 #     continue-on-error; no ${{ }} in a run:; the steps that mask, tabulate, collect, upload and clean up after them with
 #     always() once the ref check passed; the sum of the steps' timeout-minutes, 20 minutes of setup and 25 for those
-#     steps within the job's timeout-minutes. The same check over copies of the workflow each broken one way must fail.
+#     steps within the job's timeout-minutes; the new values of drill-k8s-reloader made by a step of their own before
+#     the build step of each job that runs it; job dev-k3d dispatched only, its svp-gitops cloned at gitops_ref, which a
+#     step checks before the clone (main and a full commit SHA pass, anything else fails without printing it back), its
+#     supply chain step with SUPPLYCHAIN_ENFORCE_TMP=1. The same check over copies of the workflow each broken one way
+#     must fail.
 # Runs on macOS and Linux: bash, jq and Docker; no network, no cluster.
 #
 # Usage, from anywhere: deploy/ci/verify-steps/steps-test.sh
@@ -33,7 +37,8 @@ has() { if grep -qF -- "$3" "$work/$1.log"; then ok "$1: $2"; else fail "$1: $2"
 lacks() { if grep -qF -- "$3" "$work/$1.log"; then fail "$1: $2"; else ok "$1: $2"; fi; }
 
 compose="up smoke drill-obs-threats test-stack-objstore"
-gitops="k8s-gitops-up drill-k8s-gitops gitops-admission-metrics k8s-smoke drill-k8s-supplychain drill-k8s-threats"
+gitops="k8s-gitops-up drill-k8s-gitops gitops-admission-metrics k8s-smoke drill-k8s-reloader drill-k8s-supplychain drill-k8s-threats"
+dev="k8s-up k8s-smoke drill-k8s-reloader drill-k8s-supplychain"
 
 # steps NAME NAMES TARGETS ARG [VAR=VALUE...]: steps.sh ARG for the steps NAMES and the input TARGETS, as on a machine;
 # its output in $work/NAME.log; prints its status.
@@ -54,6 +59,7 @@ same "check: the build step may be named" 0 "$(steps build "$compose" up check)"
 same "check: a name that is no step of the job stops it" 2 "$(steps unknown "$gitops" "drill-k8s-threats drill-k8s-thraets" check)"
 has unknown "it names the name and the job's steps" "not a step of this job: drill-k8s-thraets (its steps: $gitops); nothing started"
 same "check: a step of the other job is unknown" 2 "$(steps other "$compose" k8s-smoke check)"
+same "check: the build step of job gitops is no step of dev-k3d" 2 "$(steps dev-other "$dev" k8s-gitops-up check)"
 has other "the steps of compose-obs are listed" "(its steps: $compose)"
 same "check: a check of the scenario that is now a test of drill-k8s-gitops is unknown" 2 \
   "$(steps old "$gitops" gitops-external-secrets check)"
@@ -75,8 +81,8 @@ same "table: exits 0 whatever the steps gave" 0 \
   "$(steps table "$gitops" "k8s-smoke drill-k8s-gitops drill-k8s-supplychain drill-k8s-threats" table SVP_VERIFY_STEPS="$json")"
 same "table: one line per step in order: outcome, why a step was skipped, absent for an id the job lacks" \
   "$(printf 'step\toutcome\tnote\n%s\n' "$(printf '%s\t%s\t%s\n' k8s-gitops-up success '' drill-k8s-gitops failure '' \
-    gitops-admission-metrics skipped 'not in targets' k8s-smoke success '' drill-k8s-supplychain cancelled '' \
-    drill-k8s-threats absent 'no step of that id in the job')")" "$(cat "$work/table.out/results.tsv")"
+    gitops-admission-metrics skipped 'not in targets' k8s-smoke success '' drill-k8s-reloader absent 'no step of that id in the job' \
+    drill-k8s-supplychain cancelled '' drill-k8s-threats absent 'no step of that id in the job')")" "$(cat "$work/table.out/results.tsv")"
 has table "the table is printed" "  drill-k8s-gitops             failure"
 lacks table "no output of a step is read" OUTPUT-MARKER
 grep -q OUTPUT-MARKER "$work/table.out/results.tsv" && fail "table: no output of a step in results.tsv" ||
@@ -108,7 +114,7 @@ problems() {
     def want_if($build; $name):
       "${{ !cancelled() && steps.\($build).outcome == '"'"'success'"'"' && (!inputs.targets || contains(format('"'"' {0} '"'"', inputs.targets), '"'"' \($name) '"'"')) }}";
     def after: "always() && steps.ref.outcome == '"'"'success'"'"'";
-    (if .on.workflow_dispatch.inputs.scenario.options != ["compose-obs", "gitops"] then "scenario: the options are compose-obs and gitops" else empty end),
+    (if .on.workflow_dispatch.inputs.scenario.options != ["compose-obs", "gitops", "dev-k3d"] then "scenario: the options are compose-obs, gitops and dev-k3d" else empty end),
     (.jobs | to_entries[] | .key as $job | .value as $j
     | ($j.env.SVP_VERIFY_STEP_NAMES // "" | split(" ") | map(select(. != ""))) as $names
     | ($names[0] // "") as $build
@@ -138,7 +144,18 @@ problems() {
       ([$steps[] | select(.name | tostring | startswith("Mask what the build step added"))] | first // null) as $mask
       | (if $mask == null or $mask.i != ($b.i // -2) + 1 then "\($job): the build step is not followed by a mask" else empty end),
       (if ($j["timeout-minutes"] // 0) < $sum + 45
-       then "\($job): timeout-minutes \($j["timeout-minutes"]) holds less than the steps'"'"' \($sum), 20 of setup and 25 after them" else empty end))'
+       then "\($job): timeout-minutes \($j["timeout-minutes"]) holds less than the steps'"'"' \($sum), 20 of setup and 25 after them" else empty end),
+      ([$steps[] | select(.name == "New values of drill-k8s-reloader")] | first // null) as $values
+      | (if ($names | index("drill-k8s-reloader")) == null then empty
+         elif $values == null or $values.i > ($b.i // -1) or $values.if != null
+           or ($values.run | contains("deploy/k8s/drills/reloader/new-values.sh \"$RUNNER_TEMP/verify-reloader/new-values\"") | not)
+           or ($values.run | contains("echo \"SVP_DRILL_NEW_VALUES=$RUNNER_TEMP/verify-reloader/new-values\" >>\"$GITHUB_ENV\"") | not)
+         then "\($job): the new values of drill-k8s-reloader are not made and masked by a step of their own before the build step" else empty end),
+      ([$steps[] | select(.name == "Check gitops_ref")] | first // null) as $refcheck
+      | (if $j.env.SVP_GITOPS_REF == null then empty
+         elif $refcheck == null or $refcheck.i > ($clone.i // -1) then "\($job): gitops_ref is not checked before the clone of svp-gitops"
+         elif ($clone.run | contains("make gitops-clone GITOPS_REF=\"$SVP_GITOPS_REF\"") | not) then "\($job): svp-gitops is not cloned at gitops_ref"
+         else empty end))'
 }
 
 wf=$src/.github/workflows/verify.yml
@@ -154,6 +171,32 @@ workflow_json "$wf" | jq -e '.jobs.gitops.steps[] | select(.id == "k8s-gitops-up
 workflow_json "$wf" | jq -e '.jobs.gitops.steps[] | select(.id == "drill-k8s-supplychain") | .env.SVP_VERIFY_SCHEDULED == "${{ github.event_name == '"'"'schedule'"'"' && '"'"'true'"'"' || '"'"''"'"' }}"' >/dev/null &&
   ok "workflow: only a scheduled run tells the supply chain step it is one" ||
   fail "workflow: only a scheduled run tells the supply chain step it is one"
+same "workflow: the job dev-k3d lists its steps" "$dev" "$(workflow_json "$wf" | jq -r '.jobs["dev-k3d"].env.SVP_VERIFY_STEP_NAMES')"
+same "workflow: dev-k3d runs on a dispatch of its scenario only (no schedule)" "inputs.scenario == 'dev-k3d'" \
+  "$(workflow_json "$wf" | jq -r '.jobs["dev-k3d"].if')"
+same "workflow: dev-k3d reads gitops_ref through env only" '${{ inputs.gitops_ref }}' \
+  "$(workflow_json "$wf" | jq -r '.jobs["dev-k3d"].env.SVP_GITOPS_REF')"
+same "workflow: gitops_ref defaults to main" main "$(workflow_json "$wf" | jq -r '.on.workflow_dispatch.inputs.gitops_ref.default')"
+same "workflow: dev-k3d's supply chain step puts the policy in Enforce for the drill" "1 deploy/ci/verify-steps/supplychain.sh" \
+  "$(workflow_json "$wf" | jq -r '.jobs["dev-k3d"].steps[] | select(.id == "drill-k8s-supplychain") | "\(.env.SUPPLYCHAIN_ENFORCE_TMP) \(.run | split(" ")[0])"')"
+
+# The step Check gitops_ref, run as the job runs it: main and a full SHA pass, anything else fails, printed back never.
+refcheck=$(workflow_json "$wf" | jq -r '.jobs["dev-k3d"].steps[] | select(.name == "Check gitops_ref") | .run')
+# gitops_ref NAME VALUE: the step with SVP_GITOPS_REF=VALUE; its output in $work/NAME.log; prints its status.
+gitops_ref() {
+  local rc=0
+  SVP_GITOPS_REF=$2 bash -c "$refcheck" >"$work/$1.log" 2>&1 </dev/null || rc=$?
+  echo "$rc"
+}
+same "gitops_ref: main passes" 0 "$(gitops_ref ref-main main)"
+same "gitops_ref: a full commit SHA passes" 0 "$(gitops_ref ref-sha "$(printf '0123456789abcdef%.0s' 1 2)01234567")"
+same "gitops_ref: a branch name fails" 1 "$(gitops_ref ref-branch feat/reloader)"
+same "gitops_ref: a short SHA fails" 1 "$(gitops_ref ref-short 0123456)"
+same "gitops_ref: an upper-case SHA fails" 1 "$(gitops_ref ref-upper "$(printf '0123456789ABCDEF%.0s' 1 2)01234567")"
+same "gitops_ref: empty fails" 1 "$(gitops_ref ref-empty "")"
+same "gitops_ref: a workflow command fails" 1 "$(gitops_ref ref-inject $'main\n::warning::BAD-REF-MARKER')"
+lacks ref-inject "the rejected value is not printed back" BAD-REF-MARKER
+has ref-branch "it says why" "gitops_ref is main or a full commit SHA of svp-gitops (40 hex); nothing started"
 
 # Copies broken one way each: the check must name it.
 mkdir -p "$work/broken"
@@ -169,7 +212,21 @@ broken no-build-check "step drill-k8s-threats has another if:" \
   "/id: drill-k8s-threats/{n;s/steps.k8s-gitops-up.outcome == 'success' \&\& //;}"
 broken other-name "step k8s-smoke has another if:" "/id: k8s-smoke/{n;s/' k8s-smoke '/' drill-k8s-threats '/;}"
 broken no-timeout "step drill-k8s-threats has no timeout-minutes" '/id: drill-k8s-threats/{n;n;d;}'
-broken budget "gitops: timeout-minutes 200 holds less" 's/timeout-minutes: 205/timeout-minutes: 200/'
+broken budget "gitops: timeout-minutes 245 holds less" 's/timeout-minutes: 250/timeout-minutes: 245/'
+broken dev-budget "dev-k3d: timeout-minutes 200 holds less" 's/timeout-minutes: 210/timeout-minutes: 200/'
+broken dev-reloader-if "step drill-k8s-reloader has another if:" \
+  "/id: drill-k8s-reloader/{n;s/steps.k8s-up.outcome == 'success' \&\& //;}"
+broken values-after "dev-k3d: the new values of drill-k8s-reloader are not made and masked by a step of their own before the build step" \
+  '/- name: New values of drill-k8s-reloader/,/>>"$GITHUB_ENV"/d
+/id: k8s-up$/i\
+      - name: New values of drill-k8s-reloader\
+        run: |\
+          install -d -m 700 "$RUNNER_TEMP/verify-reloader"\
+          deploy/k8s/drills/reloader/new-values.sh "$RUNNER_TEMP/verify-reloader/new-values"\
+          echo "SVP_DRILL_NEW_VALUES=$RUNNER_TEMP/verify-reloader/new-values" >>"$GITHUB_ENV"'
+broken no-values "gitops: the new values of drill-k8s-reloader are not made" '/- name: New values of drill-k8s-reloader/,/>>"$GITHUB_ENV"/d'
+broken ref-unchecked "dev-k3d: gitops_ref is not checked before the clone" 's/- name: Check gitops_ref/- name: Check something/'
+broken ref-ignored "dev-k3d: svp-gitops is not cloned at gitops_ref" 's/make gitops-clone GITOPS_REF="$SVP_GITOPS_REF"/make gitops-clone/'
 broken output "step smoke does not send its output to its file" 's|run: make smoke >"$SVP_VERIFY_OUT/logs/smoke.log" 2>&1 </dev/null|run: make smoke|'
 broken continue "has continue-on-error" '/id: k8s-smoke/a\
         continue-on-error: true'

@@ -10,19 +10,22 @@
 # would copy them into.
 #
 # Run by deploy/k8s/install.sh once chart svp-cluster has created the namespaces, before any chart that reads these
-# Secrets; on its own with `make k8s-secrets` (after changing .env; then `make k8s-up` runs the init Jobs again, which
-# set the new passwords in Postgres, the object store and Redpanda, and restarts each service whose Secret changed). A
-# changed password of Redpanda's superuser is set in the running broker before any Secret is applied, and the script
-# stops when the broker does not run to take it (redpanda_admin of deploy/k8s/lib.sh). The object store or Redpanda
-# running with another password than the one now in .env is restarted (see the end of this script).
+# Secrets; on its own with `make k8s-secrets` after changing .env, a whole change of credentials in the order of
+# deploy/k8s/rotate.sh: the servers' Secrets (a changed password of Redpanda's superuser set in the running broker
+# first, redpanda_admin of deploy/k8s/lib.sh, which stops the script when no broker runs to take it), then a wait until
+# the object store and Redpanda run with the values of .env (Reloader restarts them), then the init Jobs of svp-data,
+# which set the new passwords in Postgres, the object store and Redpanda, then the clients' Secrets, whose workloads
+# Reloader restarts. A cluster that runs the project's workloads without Reloader, or with a workload that does not
+# name its Secrets for Reloader yet, is refused before anything is written (rotate_guard).
 #
 # The GitOps path's staging (a cluster with namespace svp-secrets, which chart svp-cluster makes with its externalSecrets
 # on and deploy/k8s/gitops.sh before Argo CD): there External Secrets Operator builds the same Secrets from the
 # ExternalSecrets of chart svp-cluster, and this script writes only their source, one Secret of svp-secrets per entry of
 # chart svp-cluster's files/external-secrets.yaml, keys named as in .env (source_manifests below). Entry
 # glitchtip-runtime it creates empty when it is missing and never changes: deploy/k8s/glitchtip-init.sh fills it. Once
-# the ExternalSecrets exist (a run after gitops.sh's first), it has each built again from the new source and waits
-# for it (es_force_sync of deploy/k8s/lib.sh), before the restarts at the end. gitops.sh runs it as the dev path does;
+# the ExternalSecrets exist (a run after gitops.sh's first), it has them built again from the new source and waits for
+# them (es_force_sync of deploy/k8s/lib.sh), those of svp-data in the servers' step, the others in the clients', and
+# the init Jobs run as a sync of Application svp-data. gitops.sh runs it as the dev path does, before Argo CD exists;
 # `make k8s-secrets` finds the mode by the namespace. A cluster of the GitOps path from a revision without External
 # Secrets has no svp-secrets and gets the Secrets themselves, as on the dev path.
 #
@@ -39,6 +42,8 @@ set -euo pipefail
 
 # shellcheck source=deploy/k8s/lib.sh
 . "$(dirname "$0")/lib.sh"
+# shellcheck source=deploy/k8s/rotate.sh
+. "$(dirname "$0")/rotate.sh"
 require_k3d "deploy/k8s/secrets.sh (the Secrets of an EKS cluster come from AWS Secrets Manager: make eks-secrets)"
 # The command that runs this script again, and the one that makes the cluster, for the messages.
 again="make k8s-secrets"
@@ -308,9 +313,16 @@ source_manifests() {
   fi
 }
 
-# A changed password of Redpanda's superuser goes into the running broker before any Secret is applied
-# (redpanda_admin of deploy/k8s/lib.sh); restarting the object store, which reads its root password from its
-# environment at every start, is all the store needs (below).
+# Reloader first, and every workload's annotation, on a cluster that runs the project's workloads: it restarts them,
+# nothing else does.
+if [ -n "$gitops" ]; then
+  rotate_guard argocd "Argo CD installs them with component reloader and the charts of svp-gitops: sync the cluster to a revision that has them"
+else
+  rotate_guard dev "make k8s-up installs them, Reloader and every workload's annotation, with the Secrets as they are"
+fi
+
+# --- 1. the servers. A changed password of Redpanda's superuser goes into the running broker before any Secret is
+# applied (redpanda_admin of deploy/k8s/lib.sh).
 redpanda_admin
 
 if [ -n "$gitops" ]; then
@@ -324,19 +336,33 @@ if [ -n "$gitops" ]; then
       kc create -f - >/dev/null || fail "create the empty source Secret $source_ns/glitchtip-runtime"
     ok "source Secret $source_ns/glitchtip-runtime created empty (deploy/k8s/glitchtip-init.sh fills it once GlitchTip runs)"
   fi
-  if kc get crd externalsecrets.external-secrets.io >/dev/null 2>&1 &&
-    [ -n "$(kc get externalsecrets.external-secrets.io -A -o name)" ]; then
-    es_force_sync
-    ok "every ExternalSecret built again from $source_ns"
-  else
-    echo "skip  ExternalSecrets: none yet; Argo CD creates them (chart svp-cluster), each built from $source_ns then"
-  fi
+  # Every source is written now; a Secret changes only once its ExternalSecret is built again (refreshPolicy
+  # OnChange), so those of the clients wait for step 3.
+  rotate_es_sync server
 else
   # kubectl prints only the kind and name of each object it applied.
   manifests | kc apply --server-side --field-manager=svp-secrets --force-conflicts -f - >/dev/null ||
     fail "apply the Secrets of namespace svp-data"
   ok "Secrets of svp-data applied from .env: pg-superuser, pg-roles, s3-root, s3-users, pg-backup-s3, redpanda-bootstrap, redpanda-superusers, kafka-users"
+fi
 
+# The object store (RustFS) takes the root password from its environment at start, in the variable chart svp-data maps
+# Secret s3-root to; it keeps its buckets, users, policies, CORS rules and objects when it starts with another one, and
+# the previous password no longer logs in (checked on the pinned image). Redpanda takes the password of .env already
+# (redpanda_admin, above); the broker's rpk and the sidecar keep logging in with the one they started with. Reloader
+# restarts both when their Secret changes; the init Jobs log in with the new passwords, so they wait for it. Postgres
+# needs no restart: CloudNativePG sets a changed superuser password itself (Secret pg-superuser carries its label
+# cnpg.io/reload, above).
+rotate_barrier s3 s3 RUSTFS_SECRET_KEY "$SVP_S3_ROOT_PASSWORD"
+rotate_barrier redpanda redpanda RPK_PASS "$SVP_KAFKA_ADMIN_PASSWORD"
+
+# --- 2. the init Jobs of svp-data, which set the new passwords of Postgres', the object store's and Redpanda's users.
+if [ -n "$gitops" ]; then rotate_init_argocd; else rotate_init_dev; fi
+
+# --- 3. the clients.
+if [ -n "$gitops" ]; then
+  rotate_es_sync clients
+else
   svp_manifests | kc apply --server-side --field-manager=svp-secrets --force-conflicts -f - >/dev/null ||
     fail "apply the Secrets of namespace svp"
   ok "Secrets of svp applied from .env: <service>-env of each service and of web, <service>-migrate-env of each with a database"
@@ -361,52 +387,4 @@ if [ "$telegram" = on ]; then
 else
   ok "Alertmanager: Telegram receiver off (SVP_ALERT_TELEGRAM_BOT_TOKEN or SVP_ALERT_TELEGRAM_CHAT_ID empty or invalid); alerts are only listed in its UI (make k8s-ui-alertmanager)"
 fi
-
-# A process reads a Secret given to it as an environment variable only when it starts: a changed Secret reaches a
-# running pod only through a restart, which Kubernetes does not do by itself. No chart can do it either, by a checksum
-# of the Secret in its pod template: these Secrets are made here, outside Helm and Argo CD, which never see them. So
-# the object store and Redpanda are restarted here, on the dev and the GitOps path alike, before the init Jobs of
-# svp-data log in to them with the new password. The six services, the web client and the KEDA operator are restarted
-# by deploy/k8s/install.sh, after those Jobs have set their new passwords (restarted here, a service would start with
-# a password its backend does not take yet). The init Jobs need none (each run is a new pod), and CloudNativePG sets a
-# changed superuser password in Postgres itself, without a restart (Secret pg-superuser carries its label
-# cnpg.io/reload, above).
-
-# stale POD CONTAINER VAR VALUE: true when CONTAINER of POD runs with an environment variable VAR that differs from
-# VALUE. VALUE goes to the container on stdin and is compared there, never printed nor on a command line. A pod that
-# does not exist or does not run yet reads the Secret when it starts, so it is not stale.
-stale() {
-  local pod=$1 container=$2 var=$3 value=$4 started err rc=0
-  started=$(kc -n svp-data get pod "$pod" \
-    -o jsonpath="{.status.containerStatuses[?(@.name==\"$container\")].state.running.startedAt}" 2>/dev/null) || true
-  [ -n "$started" ] || return 1
-  # Exit 3 inside the container means "differs", told apart from kubectl's own failures (exit 1).
-  err=$(printf '%s\n' "$value" | kc -n svp-data exec -i "$pod" -c "$container" -- \
-    sh -c "IFS= read -r v; [ \"\$v\" = \"\$$var\" ] || exit 3" 2>&1) || rc=$?
-  case $rc in
-    0) return 1 ;;
-    3) return 0 ;;
-    *) fail "compare $var of $pod/$container with .env: $err" ;;
-  esac
-}
-
-# restart WORKLOAD: rolls the pods of WORKLOAD so that they read their Secrets again, and waits until they are ready.
-restart() {
-  kc -n svp-data rollout restart "$1" >/dev/null || fail "restart $1"
-  kc -n svp-data rollout status "$1" --timeout=300s >/dev/null || fail "$1 ready again within 300s of its restart"
-  ok "$1 restarted: it had started with another password than the one in .env"
-}
-
-# The object store (RustFS) takes the root password from its environment at start, in the variable chart svp-data maps
-# Secret s3-root to; it keeps its buckets, users, policies, CORS rules and objects when it starts with another one, and
-# the previous password no longer logs in (checked on the pinned image). Without this the s3-init Job, which logs in
-# with the new password, would fail.
-if stale s3-0 s3 RUSTFS_SECRET_KEY "$SVP_S3_ROOT_PASSWORD"; then
-  restart statefulset/s3
-fi
-
-# Redpanda takes the password in .env already (redpanda_admin, above); the broker's rpk and the sidecar keep logging
-# in with the one they started with until they restart.
-if stale redpanda-0 redpanda RPK_PASS "$SVP_KAFKA_ADMIN_PASSWORD"; then
-  restart statefulset/redpanda
-fi
+rotate_clients_note

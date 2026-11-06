@@ -3,7 +3,8 @@
 - Quy trình làm tay, không có cảnh báo. Làm định kỳ, hay **ngay** khi nghi khoá ký bị lộ (SEC-4, JWT-10 của
   [threat model](../threat-model.md)).
 - Trạng thái: viết theo mã, chưa chạy thử; diễn tập đổi khoá khi có Secrets Manager
-  ([ADR-0020](../adr/0020-reliability-stage6.md) §12).
+  ([ADR-0020](../adr/0020-reliability-stage6.md) §12). Bước 1 trên k3d (thêm một khoá verify, token của khoá đang ký vẫn hợp lệ) là
+  một phần của `make drill-k8s-reloader` ([`k8s.md`](../reference/k8s.md)).
 
 ## Ý nghĩa và tác động tới người dùng
 
@@ -68,44 +69,20 @@ biến đổi, gateway và bốn service gRPC, được tạo lại):
 make up OBS=lgtm
 ```
 
-k3d, trước hết biết cluster đi đường nào: có Application `svp-root` là cluster GitOps, `make k8s-up` từ chối nó
-(`deploy/k8s/install.sh`), Secret đổi xong phải restart tay theo các bước ở đầu `deploy/k8s/gitops.sh`.
+k3d (đường dev hay cluster GitOps) và EKS: một lệnh ghi Secret theo thứ tự xoay credential, rồi Reloader restart gateway (qua
+`spec.restartAt`, từng pod, không revision mới nên không canary) và bốn service gRPC (rolling update của Deployment) vì Secret
+`<service>-env` của chúng đổi ([ADR-0050](../adr/0050-bash-to-standard-tools.md) mục 5):
 
 ```sh
-kubectl --context k3d-svp -n argocd get applications.argoproj.io svp-root    # NotFound: đường dev
+make k8s-secrets                                                 # k3d, cả cluster GitOps
+AWS_PROFILE=anhnv-<env> make eks-secrets CONTEXT=svp-<env>       # EKS (prd: tunnel tới API mở; eks.md, "Đổi secret của env đang chạy")
 ```
 
-Đường dev: `make k8s-up` thấy Secret `<service>-env` đổi thì restart workload đó và chờ pod mới Ready: gateway qua
-`spec.restartAt` (từng pod, không canary, chờ Rollout `Healthy`), bốn service gRPC bằng rollout của Deployment.
-
-```sh
-make k8s-secrets && make k8s-up
-```
-
-Cluster GitOps: `make k8s-secrets` ghi nguồn `jwt-verify` và dựng lại các ExternalSecret, rồi restart bằng tay gateway và bốn
-service. Process chỉ đọc biến môi trường lúc khởi động, nên tới khi gateway in `<giá trị $at> Healthy` và cả bốn Deployment
-rollout xong, pod cũ (chỉ có khoá cũ) có thể vẫn còn phục vụ.
-
-```sh
-make k8s-secrets
-at=$(date -u +%Y-%m-%dT%H:%M:%SZ)
-kubectl --context k3d-svp -n svp patch rollout gateway --type merge -p "{\"spec\":{\"restartAt\":\"$at\"}}"
-for d in user-service video-service engagement-service feed-service; do
-  kubectl --context k3d-svp -n svp rollout restart "deployment/$d"
-done
-for d in user-service video-service engagement-service feed-service; do
-  kubectl --context k3d-svp -n svp rollout status "deployment/$d" --timeout=300s
-done
-# xong khi in "<giá trị $at> Healthy"; trước đó chưa sang bước 2
-kubectl --context k3d-svp -n svp get rollout gateway -o jsonpath='{.status.restartedAt} {.status.phase}{"\n"}'
-```
-
-EKS: người vận hành chạy `AWS_PROFILE=anhnv-<env> make eks-secrets CONTEXT=svp-<env>` (prd: tunnel tới API mở; ghi mọi entry của
-`svp/<env>/` vào Secrets Manager, dựng lại mọi ExternalSecret; [`eks.md`](../reference/eks.md), mục "Đổi secret của env đang chạy"),
-rồi đúng các lệnh restart và kiểm ở trên với `--context svp-<env>` thay cho `--context k3d-svp`; bước 2 cũng vậy.
+Process chỉ đọc biến môi trường lúc khởi động, nên tới khi mọi pod của năm workload là pod mới và Ready, pod cũ (chỉ có khoá cũ) có
+thể vẫn còn phục vụ. Lệnh không chờ restart; EKS dùng `--context svp-<env>` thay `--context k3d-svp` ở các lệnh kiểm dưới đây.
 
 Gateway và service không khởi động khi `JWT_VERIFY_KEYS` sai dạng hay trùng `kid`. Trước khi sang bước 2, kiểm mọi pod của năm
-workload đã Ready và khởi động sau lúc áp dụng (cột `START` muộn hơn lệnh restart; compose: `make ps`, cột thời gian tạo):
+workload đã Ready và khởi động sau lúc áp dụng (cột `START` muộn hơn lúc chạy lệnh trên; compose: `make ps`, cột thời gian tạo):
 
 ```sh
 kubectl --context k3d-svp -n svp get pods \
@@ -114,12 +91,10 @@ kubectl --context k3d-svp -n svp get pods \
 ```
 
 **Bước 2. user-service ký bằng khoá mới.** Trong `.env`, thay `JWT_SIGNING_KID` và `JWT_SIGNING_KEY` bằng hai dòng của file tạm.
-Áp dụng: compose và đường dev như bước 1 (lần này user-service được tạo lại hay restart, Secret `user-service-env`); cluster
-GitOps:
+Áp dụng như bước 1 (compose tạo lại user-service; k3d và EKS: Reloader restart user-service vì Secret `user-service-env` đổi), rồi
+chờ rollout của nó xong:
 
 ```sh
-make k8s-secrets
-kubectl --context k3d-svp -n svp rollout restart deployment/user-service
 kubectl --context k3d-svp -n svp rollout status deployment/user-service --timeout=300s
 ```
 

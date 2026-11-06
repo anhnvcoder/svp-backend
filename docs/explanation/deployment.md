@@ -125,7 +125,10 @@ flowchart LR
   `svp-secrets`; External Secrets Operator (component `external-secrets`, wave 0, chỉ đường GitOps) dựng Secret từ ExternalSecret
   của chart `svp-cluster` (`deploy/helm/svp-cluster/templates/external-secrets.yaml`), mỗi namespace một SecretStore chỉ đọc đúng
   entry của nó; stg và prd trên EKS đọc AWS Secrets Manager, entry do `deploy/k8s/aws-secrets.sh` (`make eks-secrets`) ghi
-  ([AWS](#aws)). Repo chỉ có tên Secret, key và nguồn.
+  ([AWS](#aws)). Repo chỉ có tên Secret, key và nguồn. Đổi một credential là một lệnh, `make k8s-secrets` (k3d, cả cluster GitOps) hay
+  `make eks-secrets` (EKS), làm theo thứ tự máy chủ, rồi Job init của `svp-data` đặt mật khẩu mới, rồi client; Reloader (component
+  `reloader`, mọi nền tảng) restart workload opt in khi Secret nó đọc đổi, không script nào restart
+  ([ADR-0050](../adr/0050-bash-to-standard-tools.md) mục 5).
 - **Workload** (ADR-0014 §10): một chart chung `deploy/helm/svp-service` cho 6 service và web (probe, `requests`/`limits`,
   securityContext `restricted`, không token ServiceAccount); gateway 2 replica có PDB và HPA theo CPU, feed-service luôn 2
   replica (HPA 2–2) có PDB, ưu tiên trải hai node ([ADR-0031](../adr/0031-chaos-findings-feed-engagement-tempo.md) §1), web 2
@@ -140,8 +143,9 @@ flowchart LR
   `argocd/apps/components.json` của `svp-gitops` liệt kê các thành phần theo wave 0–7 (cert-manager, Envoy Gateway, External
   Secrets Operator (chỉ đường GitOps cài); namespace, CA, policy; operator và Kyverno; backend dữ liệu, observability, plugin
   Barman Cloud và policy image `svp-policy`; chart dữ liệu; chart observability; Collector; 6 service và web, web đứng sau
-  gateway). Đường dev `make k8s-up` cài file đó bằng Helm từ bản clone `svp-gitops` cạnh repo (values `base/`), image tag
-  `dev-<image ID>` build từ working tree vào registry k3d (môi trường dev); đường GitOps `make k8s-gitops-up` dựng cluster mới
+  gateway). Đường dev `make k8s-up` cài file đó bằng helmfile (`deploy/k8s/helmfile.yaml.gotmpl`, `needs` theo wave) từ bản clone
+  `svp-gitops` cạnh repo (values `base/`), image tag `dev-<image ID>` build từ working tree bằng `docker buildx bake` (bảng
+  `deploy/docker-bake.json`) vào registry k3d (môi trường dev); đường GitOps `make k8s-gitops-up` dựng cluster mới
   đóng vai stg (`base/` cộng overlay `envs/stg/`, [ADR-0024](../adr/0024-multi-environment.md)) mà Argo CD (app-of-apps, root
   `svp-root` với giá trị `env`, AppProject `svp`) đồng bộ từ GitHub qua HTTPS ẩn danh (không deploy key), image kéo từ GHCR theo
   digest mà PR promote ghi vào `envs/stg/images/` ([CI/CD](delivery.md#cicd-và-chuỗi-cung-ứng)); overlay prd chỉ render và kiểm

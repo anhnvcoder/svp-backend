@@ -76,8 +76,9 @@ env:
 
 # -- Report errors to GlitchTip (internal/sentryx): SENTRY_DSN comes from Secret sentry, which
 # deploy/k8s/glitchtip-init.sh writes once GlitchTip runs (the DSN is GlitchTip's own, never in .env). The reference
-# is optional: a pod started before that Secret exists runs with error reporting off, and glitchtip-init.sh restarts
-# it once the DSN is there. media-worker reports no errors, as in compose.
+# is optional: a pod started before that Secret exists runs with error reporting off, and Reloader restarts it once the
+# DSN is there (the workload names Secret sentry in its reload annotation). media-worker reports no errors, as in
+# compose.
 errorTracking: false
 
 # -- Writable directories of a container whose root filesystem is read-only: name -> {mountPath, sizeLimit, medium}.

@@ -1,0 +1,561 @@
+# reloader-rotate, on cluster svp of the dev path (make k8s-up) or of the GitOps path (make k8s-gitops-up): a change of
+# credentials as an operator makes it, new values in .env and one make k8s-secrets, after which Reloader, not a script,
+# restarts what reads the Secrets that changed (ADR-0050). The values changed (deploy/k8s/drills/reloader/new-values.sh
+# makes them, deploy/k8s/drills/run.sh hands them over by file) touch each row of the table "Secret -> workload" that
+# restarts something: the object store's root password, Redpanda's superuser, a database role of video-service and of
+# GlitchTip, the Kafka users of feed-service and KEDA, Grafana's admin, a new JWT verify key added after the keys of
+# JWT_VERIFY_KEYS (the signing key stays) and the web client's Server Action key. The new values stay in .env when the
+# drill ends: a failed run is finished with make k8s-secrets once the cause is fixed; the verify key added stays in
+# JWT_VERIFY_KEYS, its private key gone with the drill (docs/runbooks/jwt-key-rotation.md removes keys no one signs
+# with).
+#
+# Evidence of the change, read after make k8s-secrets ends, with no timestamp and no mark of Reloader as proof:
+# - each Secret the values are written to got a new version (the others may change only by chance, noted);
+# - each workload that reads a Secret that changed, by the table of reloader.sh, runs new pods only (UIDs not in the
+#   snapshot before the change), as many Ready as its replicas, within 300 s each; every other Deployment,
+#   StatefulSet, Rollout and CloudNativePG Cluster of svp, svp-data, svp-obs and keda has no new pod; Rollouts gateway
+#   and web keep their revision (a restart, not a new ReplicaSet); the init Jobs of chart svp-data (pg-bootstrap,
+#   redpanda-init, s3-init) ran again and Succeeded;
+# - one check of function per value, by its kind: the new value is taken, the old one refused where that can be
+#   checked from outside:
+#     a server's own password (SVP_S3_ROOT_PASSWORD, SVP_KAFKA_ADMIN_PASSWORD): the server restarted, its init Job
+#       logged in with it (above), a login with the new value works, with the old one is refused (S3 ListBuckets 200 /
+#       403, rpk SASL ok / SASL_AUTHENTICATION_FAILED);
+#     a client's login to a server (SVP_VIDEO_APP_DB_PASSWORD, SVP_GLITCHTIP_APP_DB_PASSWORD,
+#       SVP_KAFKA_FEED_SERVICE_PASSWORD, SVP_KAFKA_KEDA_PASSWORD): what the client does with it works (upload init
+#       through the gateway 201, GlitchTip's API 200, Kafka group feed-service Stable with members at the new pods only,
+#       the lag KEDA's metrics server gives for media-worker and ScaledObject media-worker Ready), and a login with the
+#       new value works, with the old one is refused (psql, rpk);
+#     an admin login of a UI (SVP_GRAFANA_ADMIN_PASSWORD): Grafana's /api/user 200 with the new password, 401 with
+#       the old one;
+#     a set of verify keys (JWT_VERIFY_KEYS, a key added): the token of the new key, refused (401) before the change,
+#       is taken (200) after it; the token of the current key stays valid all along, the overlap of
+#       docs/runbooks/jwt-key-rotation.md (no key is removed here, so nothing old is to be refused);
+#     a key a process only holds (NEXT_SERVER_ACTIONS_ENCRYPTION_KEY): each web pod's container runs with the new
+#       value and none with the old one (compared inside the container, the value on stdin), and the home page is 200.
+# Control: right after, make k8s-secrets again with the same .env: no Secret of the four namespaces gets a new version
+# (Helm's release records aside, which each sync of release svp-data adds to), no tracked workload a new pod, and the
+# init Jobs run again and Succeed. Last, make k8s-smoke passes on the changed credentials.
+#
+# Each step's scripts source reloader.sh (beside this file), which says how values and tokens are kept out of every
+# command line and output; the files live in the drill's private folder stateDir of run.sh. The steps before the
+# checks of function stop the test when they fail (the change and what it is checked against); each check of function
+# is one operation, continueOnError keeping the next one running, and the test still fails. Data the drill makes
+# through the API (a user, a video in UPLOADING) stays, as that of make k8s-smoke; the port-forwards stop with the
+# test (templates/port-forward.yaml). LOCAL LAB ONLY: make k8s-smoke resets register rate limit keys in Valkey db 10.
+apiVersion: chainsaw.kyverno.io/v1alpha1
+kind: Test
+metadata:
+  name: reloader-rotate
+  labels:
+    drill: reloader
+spec:
+  description: "reloader-rotate: make k8s-secrets with new values restarts, through Reloader, each workload whose Secret changed and nothing else; each value works new and is refused old; the same .env again changes nothing"
+  # An existing namespace, so Chainsaw creates no ephemeral one and deletes nothing.
+  namespace: svp
+  steps:
+  - name: reloader-rotate-before
+    try:
+    - description: "reloader: before the change, the pods, Secrets, init Jobs and Rollout revisions; a user of the drill, and a token of it signed with the new verify key"
+      script:
+        shell: bash
+        timeout: 3m
+        env: &env
+        - {name: CALLER_KUBECONFIG, value: (env('KUBECONFIG'))}
+        - {name: NEW_VALUES, value: ($values.newValues)}
+        - {name: OLD_VALUES, value: ($values.oldValues)}
+        - {name: STATE_DIR, value: ($values.stateDir)}
+        content: |
+          set -euo pipefail
+          . ./reloader.sh
+          snapshot before
+          ok "before: $(grep -c . "$state/pods-before") pods of $(awk '{ print $1 }' "$state/pods-before" | sort -u | grep -c .) workloads, $(grep -c . "$state/secrets-before") Secrets, init Jobs $(awk '{ print $1 }' "$state/jobs-before" | paste -sd ' ' -)"
+          drill_user
+          jwt_new_token
+        check:
+          ($error): ~
+
+  - name: reloader-rotate-jwt-before
+    try:
+    - description: "reloader (JWT_VERIFY_KEYS), before the change: GET /me with the token of the new key: 401, no service knows its kid yet"
+      continueOnError: true
+      script:
+        shell: bash
+        env: *env
+        content: |
+          set -euo pipefail
+          . ./reloader.sh
+          api GET /me "$state/new.auth"
+        check:
+          ($error): ~
+          (trim_space($stdout)): '401'
+    - description: "reloader (JWT_VERIFY_KEYS) control, before the change: GET /me with the token of the current key: 200"
+      continueOnError: true
+      script:
+        shell: bash
+        env: *env
+        content: |
+          set -euo pipefail
+          . ./reloader.sh
+          api GET /me "$state/old.auth"
+        check:
+          ($error): ~
+          (trim_space($stdout)): '200'
+
+  - name: reloader-rotate-change
+    try:
+    - description: "reloader: the new values into .env, then make k8s-secrets (servers, barrier, init Jobs of svp-data, clients)"
+      script:
+        shell: bash
+        timeout: 25m
+        env: *env
+        content: |
+          set -euo pipefail
+          . ./reloader.sh
+          env_write
+          make -C "$repo" k8s-secrets
+        check:
+          ($error): ~
+
+  - name: reloader-rotate-restarts
+    try:
+    - description: "reloader: each workload that reads a Secret that changed runs new pods only, Ready at its replicas, within 300 s each; the others keep theirs; Rollouts gateway and web keep their revision; the init Jobs of svp-data ran again and Succeeded"
+      script:
+        shell: bash
+        timeout: 60m
+        env: *env
+        content: |
+          set -euo pipefail
+          . ./reloader.sh
+          wait_restarts
+        check:
+          ($error): ~
+
+  # The forwards after the restarts: a port-forward follows the one pod it started on.
+  - name: reloader-rotate-s3-forward
+    use:
+      template: ../../templates/port-forward.yaml
+      with:
+        bindings:
+        - {name: forwardNamespace, value: svp-data}
+        - {name: forwardTarget, value: service/s3}
+        - {name: forwardPort, value: "19000"}
+        - {name: forwardRemotePort, value: "9000"}
+        - {name: forwardReadyPath, value: /health/ready}
+  - name: reloader-rotate-grafana-forward
+    use:
+      template: ../../templates/port-forward.yaml
+      with:
+        bindings:
+        - {name: forwardNamespace, value: svp-obs}
+        - {name: forwardTarget, value: service/kps-grafana}
+        - {name: forwardPort, value: "13000"}
+        - {name: forwardRemotePort, value: "80"}
+        - {name: forwardReadyPath, value: /api/health}
+  - name: reloader-rotate-glitchtip-forward
+    use:
+      template: ../../templates/port-forward.yaml
+      with:
+        bindings:
+        - {name: forwardNamespace, value: svp-obs}
+        - {name: forwardTarget, value: service/glitchtip}
+        - {name: forwardPort, value: "18000"}
+        - {name: forwardRemotePort, value: "8000"}
+        - {name: forwardReadyPath, value: /_health/}
+
+  - name: reloader-rotate-s3-root
+    try:
+    - description: "reloader (SVP_S3_ROOT_PASSWORD): ListBuckets as svp-admin with the new password: 200"
+      continueOnError: true
+      script:
+        shell: bash
+        env: *env
+        content: |
+          set -euo pipefail
+          . ./reloader.sh
+          s3_root new
+        check:
+          ($error): ~
+          (trim_space($stdout)): '200'
+    - description: "reloader (SVP_S3_ROOT_PASSWORD): ListBuckets as svp-admin with the old password: 403, the store refuses it"
+      continueOnError: true
+      script:
+        shell: bash
+        env: *env
+        content: |
+          set -euo pipefail
+          . ./reloader.sh
+          s3_root old
+        check:
+          ($error): ~
+          (trim_space($stdout)): '403'
+
+  - name: reloader-rotate-kafka-admin
+    try:
+    - description: "reloader (SVP_KAFKA_ADMIN_PASSWORD): rpk as svp-admin with the new password: ok"
+      continueOnError: true
+      script:
+        shell: bash
+        env: *env
+        content: |
+          set -euo pipefail
+          . ./reloader.sh
+          rpk_login svp-admin new SVP_KAFKA_ADMIN_PASSWORD
+        check:
+          ($error): ~
+          (trim_space($stdout)): ok
+    - description: "reloader (SVP_KAFKA_ADMIN_PASSWORD): rpk as svp-admin with the old password: SASL_AUTHENTICATION_FAILED"
+      continueOnError: true
+      script:
+        shell: bash
+        env: *env
+        content: |
+          set -euo pipefail
+          . ./reloader.sh
+          rpk_login svp-admin old SVP_KAFKA_ADMIN_PASSWORD
+        check:
+          ($error): ~
+          (trim_space($stdout)): SASL_AUTHENTICATION_FAILED
+
+  - name: reloader-rotate-video-db
+    try:
+    - description: "reloader (SVP_VIDEO_APP_DB_PASSWORD): an upload init through the gateway (POST /videos, a row in svp_video): 201"
+      continueOnError: true
+      script:
+        shell: bash
+        env: *env
+        content: |
+          set -euo pipefail
+          . ./reloader.sh
+          jq -n '{title: "drill-reloader", size_bytes: 1048576, content_type: "video/mp4"}' >"$state/video.json"
+          status=$(api POST /videos "$state/old.auth" "$state/video.json")
+          # The answer holds the presigned form, a short-lived credential: dropped unread.
+          : >"$state/body"
+          echo "$status"
+        check:
+          ($error): ~
+          (trim_space($stdout)): '201'
+    - description: "reloader (SVP_VIDEO_APP_DB_PASSWORD): psql as svp_video_app with the new password: ok"
+      continueOnError: true
+      script:
+        shell: bash
+        env: *env
+        content: |
+          set -euo pipefail
+          . ./reloader.sh
+          psql_login svp_video_app svp_video new SVP_VIDEO_APP_DB_PASSWORD
+        check:
+          ($error): ~
+          (trim_space($stdout)): ok
+    - description: "reloader (SVP_VIDEO_APP_DB_PASSWORD): psql as svp_video_app with the old password: password authentication failed"
+      continueOnError: true
+      script:
+        shell: bash
+        env: *env
+        content: |
+          set -euo pipefail
+          . ./reloader.sh
+          psql_login svp_video_app svp_video old SVP_VIDEO_APP_DB_PASSWORD
+        check:
+          ($error): ~
+          (trim_space($stdout)): password-authentication-failed
+
+  - name: reloader-rotate-feed-kafka
+    try:
+    - description: "reloader (SVP_KAFKA_FEED_SERVICE_PASSWORD): GET /feed/explore through the gateway: 200 with the READY video of make k8s-smoke"
+      continueOnError: true
+      script:
+        shell: bash
+        env: *env
+        content: |
+          set -euo pipefail
+          . ./reloader.sh
+          status=$(api GET /feed/explore "$state/old.auth")
+          items=$(jq -r '.items | length' "$state/body" 2>/dev/null || echo 0)
+          echo "status $status, $items item(s)" >&2
+          if [ "$status" = 200 ] && [ "$items" -ge 1 ]; then echo ok; else echo "status $status"; fi
+        check:
+          ($error): ~
+          (trim_space($stdout)): ok
+    - description: "reloader (SVP_KAFKA_FEED_SERVICE_PASSWORD): Kafka group feed-service is Stable, its members at the addresses of the new feed-service pods only (within 90 s)"
+      continueOnError: true
+      script:
+        shell: bash
+        timeout: 3m
+        env: *env
+        content: |
+          set -euo pipefail
+          . ./reloader.sh
+          deadline=$((SECONDS + 90))
+          while :; do
+            read -r group_state members stray < <(feed_group)
+            if [ "$group_state" = Stable ] && [ "$members" -ge 1 ] && [ "$stray" = - ]; then break; fi
+            ((SECONDS < deadline)) || break
+            sleep 5
+          done
+          echo "group feed-service: $group_state, $members member(s), addresses of no feed-service pod: $stray" >&2
+          if [ "$group_state" = Stable ] && [ "$members" -ge 1 ] && [ "$stray" = - ]; then echo ok; else echo "$group_state"; fi
+        check:
+          ($error): ~
+          (trim_space($stdout)): ok
+    - description: "reloader (SVP_KAFKA_FEED_SERVICE_PASSWORD): rpk as svp-feed-service with the new password: ok"
+      continueOnError: true
+      script:
+        shell: bash
+        env: *env
+        content: |
+          set -euo pipefail
+          . ./reloader.sh
+          rpk_login svp-feed-service new SVP_KAFKA_FEED_SERVICE_PASSWORD
+        check:
+          ($error): ~
+          (trim_space($stdout)): ok
+    - description: "reloader (SVP_KAFKA_FEED_SERVICE_PASSWORD): rpk as svp-feed-service with the old password: SASL_AUTHENTICATION_FAILED"
+      continueOnError: true
+      script:
+        shell: bash
+        env: *env
+        content: |
+          set -euo pipefail
+          . ./reloader.sh
+          rpk_login svp-feed-service old SVP_KAFKA_FEED_SERVICE_PASSWORD
+        check:
+          ($error): ~
+          (trim_space($stdout)): SASL_AUTHENTICATION_FAILED
+
+  - name: reloader-rotate-keda-kafka
+    try:
+    - description: "reloader (SVP_KAFKA_KEDA_PASSWORD): ScaledObject svp/media-worker is Ready"
+      continueOnError: true
+      assert:
+        timeout: 120s
+        resource:
+          apiVersion: keda.sh/v1alpha1
+          kind: ScaledObject
+          metadata:
+            name: media-worker
+            namespace: svp
+          status:
+            (conditions[?type == 'Ready'] | [0].status): 'True'
+    - description: "reloader (SVP_KAFKA_KEDA_PASSWORD): KEDA's metrics server gives the lag of media-worker's Kafka trigger (within 120 s)"
+      continueOnError: true
+      script:
+        shell: bash
+        timeout: 3m
+        env: *env
+        content: |
+          set -euo pipefail
+          . ./reloader.sh
+          deadline=$((SECONDS + 120))
+          lag=
+          until [[ $lag =~ ^[0-9]+$ ]]; do
+            ((SECONDS < deadline)) || break
+            sleep 5
+            lag=$(keda_lag)
+          done
+          echo "lag of media-worker from KEDA's metrics server: ${lag:-none}" >&2
+          if [[ $lag =~ ^[0-9]+$ ]]; then echo ok; else echo none; fi
+        check:
+          ($error): ~
+          (trim_space($stdout)): ok
+    - description: "reloader (SVP_KAFKA_KEDA_PASSWORD): rpk as svp-keda with the new password: ok"
+      continueOnError: true
+      script:
+        shell: bash
+        env: *env
+        content: |
+          set -euo pipefail
+          . ./reloader.sh
+          rpk_login svp-keda new SVP_KAFKA_KEDA_PASSWORD
+        check:
+          ($error): ~
+          (trim_space($stdout)): ok
+    - description: "reloader (SVP_KAFKA_KEDA_PASSWORD): rpk as svp-keda with the old password: SASL_AUTHENTICATION_FAILED"
+      continueOnError: true
+      script:
+        shell: bash
+        env: *env
+        content: |
+          set -euo pipefail
+          . ./reloader.sh
+          rpk_login svp-keda old SVP_KAFKA_KEDA_PASSWORD
+        check:
+          ($error): ~
+          (trim_space($stdout)): SASL_AUTHENTICATION_FAILED
+
+  - name: reloader-rotate-glitchtip-db
+    try:
+    - description: "reloader (SVP_GLITCHTIP_APP_DB_PASSWORD): GlitchTip's API for project svp with the token of Secret svp-obs/glitchtip-api: 200"
+      continueOnError: true
+      script:
+        shell: bash
+        env: *env
+        content: |
+          set -euo pipefail
+          . ./reloader.sh
+          glitchtip_api
+        check:
+          ($error): ~
+          (trim_space($stdout)): '200'
+    - description: "reloader (SVP_GLITCHTIP_APP_DB_PASSWORD): psql as svp_glitchtip_app with the new password: ok"
+      continueOnError: true
+      script:
+        shell: bash
+        env: *env
+        content: |
+          set -euo pipefail
+          . ./reloader.sh
+          psql_login svp_glitchtip_app svp_glitchtip new SVP_GLITCHTIP_APP_DB_PASSWORD
+        check:
+          ($error): ~
+          (trim_space($stdout)): ok
+    - description: "reloader (SVP_GLITCHTIP_APP_DB_PASSWORD): psql as svp_glitchtip_app with the old password: password authentication failed"
+      continueOnError: true
+      script:
+        shell: bash
+        env: *env
+        content: |
+          set -euo pipefail
+          . ./reloader.sh
+          psql_login svp_glitchtip_app svp_glitchtip old SVP_GLITCHTIP_APP_DB_PASSWORD
+        check:
+          ($error): ~
+          (trim_space($stdout)): password-authentication-failed
+
+  - name: reloader-rotate-grafana
+    try:
+    - description: "reloader (SVP_GRAFANA_ADMIN_PASSWORD): Grafana /api/user as admin with the new password: 200"
+      continueOnError: true
+      script:
+        shell: bash
+        env: *env
+        content: |
+          set -euo pipefail
+          . ./reloader.sh
+          grafana_admin new
+        check:
+          ($error): ~
+          (trim_space($stdout)): '200'
+    - description: "reloader (SVP_GRAFANA_ADMIN_PASSWORD): Grafana /api/user as admin with the old password: 401"
+      continueOnError: true
+      script:
+        shell: bash
+        env: *env
+        content: |
+          set -euo pipefail
+          . ./reloader.sh
+          grafana_admin old
+        check:
+          ($error): ~
+          (trim_space($stdout)): '401'
+
+  - name: reloader-rotate-jwt
+    try:
+    - description: "reloader (JWT_VERIFY_KEYS): GET /me with the token of the new key, refused before the change: 200 (the gateway and user-service take its kid)"
+      continueOnError: true
+      script:
+        shell: bash
+        env: *env
+        content: |
+          set -euo pipefail
+          . ./reloader.sh
+          api GET /me "$state/new.auth"
+        check:
+          ($error): ~
+          (trim_space($stdout)): '200'
+    - description: "reloader (JWT_VERIFY_KEYS): GET /me with the token of the current key, issued before the change: 200 (the overlap: no key removed)"
+      continueOnError: true
+      script:
+        shell: bash
+        env: *env
+        content: |
+          set -euo pipefail
+          . ./reloader.sh
+          api GET /me "$state/old.auth"
+        check:
+          ($error): ~
+          (trim_space($stdout)): '200'
+
+  - name: reloader-rotate-web-key
+    try:
+    - description: "reloader (NEXT_SERVER_ACTIONS_ENCRYPTION_KEY): every Ready pod of Rollout web runs with the new key"
+      continueOnError: true
+      script:
+        shell: bash
+        env: *env
+        content: |
+          set -euo pipefail
+          . ./reloader.sh
+          got=$(web_key new)
+          printf '%s\n' "$got" | sed 's/^/web pod, new key: /' >&2
+          if [ -n "$got" ] && ! grep -qv ' same$' <<<"$got"; then echo ok; else echo "not every pod"; fi
+        check:
+          ($error): ~
+          (trim_space($stdout)): ok
+    - description: "reloader (NEXT_SERVER_ACTIONS_ENCRYPTION_KEY): no Ready pod of Rollout web runs with the old key"
+      continueOnError: true
+      script:
+        shell: bash
+        env: *env
+        content: |
+          set -euo pipefail
+          . ./reloader.sh
+          got=$(web_key old)
+          printf '%s\n' "$got" | sed 's/^/web pod, old key: /' >&2
+          if [ -n "$got" ] && ! grep -qv ' differs$' <<<"$got"; then echo ok; else echo "a pod runs it, or none could be compared"; fi
+        check:
+          ($error): ~
+          (trim_space($stdout)): ok
+    - description: "reloader (NEXT_SERVER_ACTIONS_ENCRYPTION_KEY): the web client's login page https://svp.localhost:8443/login: 200 (/ sends a guest there with 307)"
+      continueOnError: true
+      script:
+        shell: bash
+        env: *env
+        content: |
+          set -euo pipefail
+          . ./reloader.sh
+          curl -sS --max-time 10 -o /dev/null -w '%{http_code}' "$web_base/login" 2>/dev/null || true
+        check:
+          ($error): ~
+          (trim_space($stdout)): '200'
+
+  - name: reloader-rotate-control
+    try:
+    - description: "reloader control: make k8s-secrets again with the same .env, then 20 s for anything Reloader would do"
+      script:
+        shell: bash
+        timeout: 25m
+        env: *env
+        content: |
+          set -euo pipefail
+          . ./reloader.sh
+          snapshot control
+          make -C "$repo" k8s-secrets
+          sleep 20
+        check:
+          ($error): ~
+    - description: "reloader control: no Secret of svp, svp-data, svp-obs and keda got a new version (Helm's release records aside), no tracked workload a new pod; the init Jobs of svp-data ran again and Succeeded"
+      script:
+        shell: bash
+        timeout: 3m
+        env: *env
+        content: |
+          set -euo pipefail
+          . ./reloader.sh
+          control_check
+        check:
+          ($error): ~
+
+  - name: reloader-rotate-smoke
+    try:
+    - description: "reloader: make k8s-smoke passes on the new credentials"
+      script:
+        shell: bash
+        timeout: 15m
+        env: *env
+        content: |
+          set -euo pipefail
+          . ./reloader.sh
+          make -C "$repo" k8s-smoke
+        check:
+          ($error): ~

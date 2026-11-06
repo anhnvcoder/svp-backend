@@ -1,13 +1,16 @@
 {{- /*
 The service itself. Configuration is environment variables only, as in compose: the plain ones
-from the values, the secret ones from Secret <service>-env, which deploy/k8s/secrets.sh writes from .env
-(deploy/k8s/install.sh restarts this Deployment when that Secret has changed, since a process reads its environment
-only when it starts).
+from the values, the secret ones from Secret <service>-env, which deploy/k8s/secrets.sh writes from .env. A process
+reads its environment only when it starts, so the workload names the Secrets it reads (<service>-env, and sentry with
+errorTracking) in annotation secret.reloader.stakater.com/reload: Reloader (component reloader) restarts it when the
+data of one of them changes or, for sentry, when it is first created. Names, not reloader.stakater.com/auto: a Secret
+the pod does not read never restarts it.
 
 With canary set (the gateway, the web client) it is an Argo Rollouts Rollout instead: the same
 pod template, and a new revision goes out as a canary behind Envoy rather than as a rolling update. Each revision's ReplicaSet gets the
 label rollouts-pod-template-hash, which the controller adds to the selectors of Services <release> (stable) and
-<release>-canary.
+<release>-canary. Reloader restarts a Rollout with reloader.stakater.com/rollout-strategy restart: it sets
+spec.restartAt, and Argo Rollouts evicts the pods older than that time one at a time: no new revision, no canary.
 */}}
 {{- if .Values.canary }}
 apiVersion: argoproj.io/v1alpha1
@@ -21,6 +24,11 @@ metadata:
   namespace: {{ .Release.Namespace }}
   labels:
     {{- include "svp-service.labels" . | nindent 4 }}
+  annotations:
+    secret.reloader.stakater.com/reload: {{ .Release.Name }}-env{{ if .Values.errorTracking }},sentry{{ end }}
+    {{- if .Values.canary }}
+    reloader.stakater.com/rollout-strategy: restart
+    {{- end }}
 spec:
   {{- if and .Values.hpa .Values.keda }}
   {{- fail (printf "release %s sets both hpa and keda: KEDA makes its own HPA, two would fight over the replicas" .Release.Name) }}

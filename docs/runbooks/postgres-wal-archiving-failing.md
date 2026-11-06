@@ -75,7 +75,7 @@ Chưa có gì cần làm cho người dùng; việc gấp là để PVC không �
 ## Khôi phục và xác nhận
 
 Cảnh báo cháy ở cả hai đường k3d. Trước hết biết cluster đi đường nào: có Application `svp-root` là cluster GitOps, `make k8s-up`
-từ chối nó (`deploy/k8s/install.sh`); các bước tay thay cho nó ở đầu `deploy/k8s/gitops.sh`.
+từ chối nó (`deploy/k8s/install.sh`).
 
 ```sh
 kubectl --context k3d-svp -n argocd get applications.argoproj.io svp-root    # NotFound: đường dev
@@ -90,8 +90,8 @@ kubectl --context k3d-svp -n argocd get applications.argoproj.io svp-data -o jso
 ```
 
 - Nguyên nhân 1: `kubectl --context k3d-svp -n svp-data rollout restart statefulset/s3` hay sửa PVC của store; rồi chờ.
-- Nguyên nhân 2: sửa `.env` cho đúng (hay giữ giá trị mới), rồi `make k8s-secrets` và áp lại chart `svp-data`: Job `s3-init`
-  đặt lại key của user `svp-pg-backup` theo `.env`.
+- Nguyên nhân 2: sửa `.env` cho đúng (hay giữ giá trị mới), rồi `make k8s-secrets` (cả cluster GitOps): lệnh tự chạy lại Job init
+  của `svp-data`, `s3-init` đặt lại key của user `svp-pg-backup` theo `.env`.
 - Nguyên nhân 3: Cluster đang chạy phải lưu vào thế hệ mới, rỗng. Đường dev: cách an toàn là phục hồi lại theo
   [postgres-restore.md](postgres-restore.md) với `serverName` mới; không xoá object của thế hệ cũ. Cluster GitOps: Argo CD giữ
   `serverName` theo git, nên quy trình đó không dùng được. Không xoá gì (Cluster, PVC, Backup, object của bucket) và không dựng

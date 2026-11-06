@@ -69,19 +69,19 @@ trace của web và gateway ở Tempo. Dashboard `svp-slo`; `svp-web` cho trải
   nhãn, lệnh đó xoá cả hai pod cùng lúc, bỏ qua PDB, kể cả pod còn phục vụ. Một pod lỗi mà pod kia Ready: xoá đúng pod lỗi
   (`kubectl --context k3d-svp -n svp delete pod <tên pod lỗi>`, tên lấy từ `get pods` ở trên), Rollout tạo pod mới. Cần chạy lại
   cả hai: restart tuần tự bằng `spec.restartAt` (Argo Rollouts evict từng pod qua PDB, không đổi pod template nên không có
-  revision mới hay canary, như `restart_workload` của `deploy/k8s/lib.sh`):
+  revision mới hay canary, như Reloader restart Rollout khi Secret đổi):
 
 ```sh
 at=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 kubectl --context k3d-svp -n svp patch rollout web --type merge -p "{\"spec\":{\"restartAt\":\"$at\"}}"
-# xong khi in "<giá trị $at> Healthy" (deploy/k8s/lib.sh chờ tối đa 300 s)
+# xong khi in "<giá trị $at> Healthy" (thường dưới 300 s)
 kubectl --context k3d-svp -n svp get rollout web -o jsonpath='{.status.restartedAt} {.status.phase}{"\n"}'
 ```
 
 - Khoá Server Action lệch giữa hai pod: chạy lại cả hai pod để cùng đọc Secret `svp/web-env` hiện tại (khối `spec.restartAt` ở
-  trên). `.env` đã đổi khoá mà Secret chưa: `make k8s-secrets` trước (kiểm dạng base64 32 byte, không in giá trị); rồi đường dev
-  `make k8s-up` (restart web khi Secret đổi), cluster GitOps (có Application `argocd/svp-root`, `make k8s-up` từ chối nó) dùng
-  khối `spec.restartAt`. Không đổi khoá khi không cần (người dùng đang mở form phải tải lại trang).
+  trên). `.env` đã đổi khoá mà Secret chưa: `make k8s-secrets` (kiểm dạng base64 32 byte, không in giá trị; cả cluster GitOps):
+  Secret `svp/web-env` đổi thì Reloader restart web như khối trên. Không đổi khoá khi không cần (người dùng đang mở form phải tải lại
+  trang).
 - Lỗi sau deploy: quay về bản trước (GitOps: PR revert commit promote; canary đang chạy thì để phân tích abort).
 
 ## Khôi phục và xác nhận

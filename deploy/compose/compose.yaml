@@ -218,8 +218,8 @@ services:
     <<: *host-services
     profiles: [core]
     image: ${SVP_USER_SERVICE_IMAGE:-svp/user-service:dev}
-    # The image of user-service: built by it, or a release `make up IMAGES=stg` has pulled
-    # already. Never pull a public image with the name of a build.
+    # The image of user-service: built by `make up`, or a release `make up IMAGES=stg` has
+    # pulled already. Never pull a public image with the name of a build.
     pull_policy: never
     command: ["migrate"]
     environment:
@@ -259,16 +259,12 @@ services:
   user-service:
     <<: *host-services
     profiles: [core]
-    # `make up` sets SVP_<SERVICE>_IMAGE and SVP_BACKEND_PULL_POLICY of the six backend services:
-    # built from the working tree, or with IMAGES=stg their releases in staging, pulled already and
-    # never built (policy never). The defaults build them.
+    # `make up` sets SVP_<SERVICE>_IMAGE of the six backend services and has their images ready
+    # before compose starts: built from the working tree by docker buildx bake (deploy/docker-bake.json,
+    # tag svp/<service>:dev), or with IMAGES=stg their releases in staging, pulled already. Compose
+    # neither builds nor pulls them (policy never).
     image: ${SVP_USER_SERVICE_IMAGE:-svp/user-service:dev}
-    pull_policy: ${SVP_BACKEND_PULL_POLICY:-build}
-    build:
-      context: ../..
-      dockerfile: deploy/docker/service.Dockerfile
-      args:
-        SERVICE: user-service
+    pull_policy: never
     environment:
       <<: *telemetry-app-env
       LISTEN_ADDR: ":9101"
@@ -295,12 +291,7 @@ services:
     <<: *host-services
     profiles: [core]
     image: ${SVP_VIDEO_SERVICE_IMAGE:-svp/video-service:dev}
-    pull_policy: ${SVP_BACKEND_PULL_POLICY:-build}
-    build:
-      context: ../..
-      dockerfile: deploy/docker/service.Dockerfile
-      args:
-        SERVICE: video-service
+    pull_policy: never
     environment:
       <<: *telemetry-app-env
       LISTEN_ADDR: ":9102"
@@ -336,12 +327,7 @@ services:
     <<: *host-services
     profiles: [core]
     image: ${SVP_ENGAGEMENT_SERVICE_IMAGE:-svp/engagement-service:dev}
-    pull_policy: ${SVP_BACKEND_PULL_POLICY:-build}
-    build:
-      context: ../..
-      dockerfile: deploy/docker/service.Dockerfile
-      args:
-        SERVICE: engagement-service
+    pull_policy: never
     environment:
       <<: *telemetry-app-env
       LISTEN_ADDR: ":9103"
@@ -367,12 +353,7 @@ services:
     <<: *host-services
     profiles: [core]
     image: ${SVP_FEED_SERVICE_IMAGE:-svp/feed-service:dev}
-    pull_policy: ${SVP_BACKEND_PULL_POLICY:-build}
-    build:
-      context: ../..
-      dockerfile: deploy/docker/service.Dockerfile
-      args:
-        SERVICE: feed-service
+    pull_policy: never
     environment:
       <<: *telemetry-app-env
       LISTEN_ADDR: ":9104"
@@ -401,12 +382,7 @@ services:
     <<: *host-services
     profiles: [core]
     image: ${SVP_GATEWAY_IMAGE:-svp/gateway:dev}
-    pull_policy: ${SVP_BACKEND_PULL_POLICY:-build}
-    build:
-      context: ../..
-      dockerfile: deploy/docker/service.Dockerfile
-      args:
-        SERVICE: gateway
+    pull_policy: never
     environment:
       <<: *telemetry-app-env
       LISTEN_ADDR: ":8080"
@@ -523,10 +499,7 @@ services:
   media-worker:
     profiles: [core]
     image: ${SVP_MEDIA_WORKER_IMAGE:-svp/media-worker:dev}
-    pull_policy: ${SVP_BACKEND_PULL_POLICY:-build}
-    build:
-      context: ../..
-      dockerfile: deploy/docker/media-worker.Dockerfile
+    pull_policy: never
     environment:
       <<: *telemetry-env
       KAFKA_BROKERS: redpanda:9092

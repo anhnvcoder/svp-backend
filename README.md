@@ -114,7 +114,7 @@ Compose và k3d không chạy cùng lúc: mỗi bên từ chối khi bên kia đ
 | `deploy/docker/` | Dockerfile của service Go và media-worker (Dockerfile web ở gốc `svp-frontend`). |
 | `deploy/postgres/`, `deploy/redpanda/`, `deploy/s3/` | Bootstrap database, topic Kafka (compose), bucket, user, policy và CORS của object storage. |
 | `deploy/observability/` | Collector, Prometheus và rule SLO, Alertmanager, Grafana LGTM, GlitchTip, Elastic (so sánh). |
-| `deploy/k8s/` | Cluster k3d: `install.sh`, `gitops.sh`, `k8s.mk`, PSA, `drills/`, `cloud/` (kiểm tĩnh Job k6). Values, overlay và digest của các môi trường ở `svp-gitops`. |
+| `deploy/k8s/` | Cluster k3d: `helmfile.yaml.gotmpl` cùng glue `install.sh` (đường dev), `gitops.sh`, `secrets.sh` và `rotate.sh` (xoay credential, Reloader restart), `k8s.mk`, PSA, `drills/` (Chainsaw), `cloud/` (kiểm tĩnh Job k6). Values, overlay và digest của các môi trường ở `svp-gitops`. |
 | `deploy/helm/` | Chart Helm: `svp-service` (chung cho mọi service), `svp-cluster`, `svp-data`, `svp-observability`, `svp-policy` (Kyverno). |
 | `deploy/k6/`, `deploy/dast/` | Kịch bản tải k6 theo SLO; DAST của gateway theo `openapi.yaml` bằng Schemathesis (`make dast`). |
 | `deploy/ci/` | Script của pipeline: build, quét, ký, attest, guard promote sang `svp-gitops`, check của `svp-gitops`; `verify/` là trình tự của `verify.yml`. Phần lớn logic CI ở đây, không ở YAML. |

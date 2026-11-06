@@ -16,7 +16,8 @@ Cho code Go (`services/`, `internal/`, `tools/`), mọi lệnh chạy từ gốc
 liệt kê target):
 
 - `make tools`: cài một lần các công cụ ghim version (`protoc-gen-go`, `protoc-gen-go-grpc`, `sqlc`, `golangci-lint`,
-  `actionlint`, `gitleaks`, `govulncheck`, `sloth` sinh rule SLO, `k3d`, `chainsaw` chạy diễn tập k8s); `buf`, Helm cài bằng Homebrew (CI cài hai thứ đó bằng
+  `actionlint`, `gitleaks`, `govulncheck`, `sloth` sinh rule SLO, `k3d`, `chainsaw` chạy diễn tập k8s, `helmfile` cài component của
+  đường dev k3d); `buf`, Helm cài bằng Homebrew (CI cài hai thứ đó bằng
   `make ci-tools`, chỉ chạy trên Linux amd64).
 - `make generate`: chạy sau khi sửa `proto/` hoặc SQL của `sqlc`; code sinh ra (`gen/go`, code `sqlc`) được commit.
 - `make generate-check`: chạy `make generate` trong bản sao tạm của working tree (file đã track và file chưa track không bị

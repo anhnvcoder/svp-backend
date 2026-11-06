@@ -15,8 +15,9 @@ to, as in compose. Two parts, as there:
   only (port-forward to 127.0.0.1:8000, login required; threat model OPS-2).
 
 Secret glitchtip-env (SECRET_KEY, DATABASE_URL with the app role, MAINTENANCE_DATABASE_URL with the migrator role)
-and glitchtip-admin come from .env through deploy/k8s/secrets.sh; deploy/k8s/install.sh restarts the server when
-glitchtip-env changes, since it reads its environment only when it starts.
+and glitchtip-admin come from .env through deploy/k8s/secrets.sh. The server reads its environment only when it starts:
+Reloader restarts it when the data of glitchtip-env changes (annotation of the Deployment). glitchtip-admin is read by
+the Job alone, which runs again with each install and upgrade.
 */}}
 {{- define "svp-observability.glitchtipEnv" -}}
 {{- range $name, $value := .Values.glitchtip.env }}
@@ -199,6 +200,8 @@ metadata:
   namespace: {{ .Release.Namespace }}
   labels:
     {{- toYaml .Values.pods.glitchtip | nindent 4 }}
+  annotations:
+    secret.reloader.stakater.com/reload: glitchtip-env
 spec:
   replicas: 1
   # The old pod goes before the new one starts: two GlitchTip pods at once would need another 512 MiB on a machine

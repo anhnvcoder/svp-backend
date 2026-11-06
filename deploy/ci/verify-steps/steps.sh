@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # The step list of a job of .github/workflows/verify.yml: one step per target, whose id is the target's name, the first
-# of them the build step (up, k8s-gitops-up) that builds what the others use. The job names them in order in
+# of them the build step (up, k8s-gitops-up, k8s-up) that builds what the others use. The job names them in order in
 # SVP_VERIFY_STEP_NAMES; the dispatch's input targets reaches here only through SVP_VERIFY_TARGETS (empty on a
 # scheduled run: every step).
 #

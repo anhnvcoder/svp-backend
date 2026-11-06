@@ -1,0 +1,73 @@
+{
+  "group": {
+    "default": {
+      "targets": [
+        "gateway",
+        "user-service",
+        "video-service",
+        "engagement-service",
+        "feed-service",
+        "media-worker"
+      ]
+    }
+  },
+  "target": {
+    "gateway": {
+      "context": ".",
+      "dockerfile": "deploy/docker/service.Dockerfile",
+      "args": {
+        "SERVICE": "gateway"
+      },
+      "tags": [
+        "svp/gateway:dev"
+      ]
+    },
+    "user-service": {
+      "context": ".",
+      "dockerfile": "deploy/docker/service.Dockerfile",
+      "args": {
+        "SERVICE": "user-service"
+      },
+      "tags": [
+        "svp/user-service:dev"
+      ]
+    },
+    "video-service": {
+      "context": ".",
+      "dockerfile": "deploy/docker/service.Dockerfile",
+      "args": {
+        "SERVICE": "video-service"
+      },
+      "tags": [
+        "svp/video-service:dev"
+      ]
+    },
+    "engagement-service": {
+      "context": ".",
+      "dockerfile": "deploy/docker/service.Dockerfile",
+      "args": {
+        "SERVICE": "engagement-service"
+      },
+      "tags": [
+        "svp/engagement-service:dev"
+      ]
+    },
+    "feed-service": {
+      "context": ".",
+      "dockerfile": "deploy/docker/service.Dockerfile",
+      "args": {
+        "SERVICE": "feed-service"
+      },
+      "tags": [
+        "svp/feed-service:dev"
+      ]
+    },
+    "media-worker": {
+      "context": ".",
+      "dockerfile": "deploy/docker/media-worker.Dockerfile",
+      "tags": [
+        "svp/media-worker:dev"
+      ]
+    }
+  }
+}
