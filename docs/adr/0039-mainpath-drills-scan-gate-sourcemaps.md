@@ -65,7 +65,8 @@ ghim của `svp-backend` (và `svp-frontend` cho canary web) nơi script còn ch
 | `measure-gitops` và bước chờ phát hành | Đo thời gian giao hàng, cùng lý do DORA rời đường chính ở 0037 §1 |
 | `drill-k8s-web-obs`, bước `gitops-sourcemaps`, `k8s-web-e2e` của kịch bản | e2e web chạy ở job `stack` của CI `svp-frontend`; `make k8s-web-e2e`, `k8s-web-sourcemaps` giữ là công cụ đường dev |
 | Kịch bản `dev-k3d`, `web-canary`, `k6-cloud-mini`, `chaos`, `velero` | Đo một lần, số ở [0021](0021-deferred-verification-stage6b.md), 0020, 0031 |
-| Phần còn lại của `compose-obs`: load-local và cảnh báo, Lighthouse ×3, `drill-duplicates`, `drill-kill-worker`, `drill-upload-cleanup`, `measure-upload` và RAM `s3`, `drill-alert-to-sentry`, `object-store-roundtrip` | Script diễn tập compose vẫn ở repo, chạy tay |
+| Phần còn lại của `compose-obs`: load-local và cảnh báo, Lighthouse ×3, `drill-duplicates`, `drill-kill-worker`, `drill-upload-cleanup`, `measure-upload` và RAM `s3`, `drill-alert-to-sentry`, `object-store-roundtrip` | Đo một lần trên runner; `make load-local`, `measure-upload` vẫn chạy tay, script diễn tập compose ở hàng dưới |
+| Diễn tập compose `drill-kill-worker`, `drill-duplicates`, `drill-duplicates-feed`, `drill-engagement-down`, `drill-rate-limit`, `drill-upload-cleanup`, `drill-alert-to-sentry`, `measure-ready`, `measure-freshness` (cùng `tools/fakefollows`), `measure-explore-cache`, game day | Đo một lần, số ở 0003, 0008, 0009, 0010, 0011, 0020, 0021, 0022, 0029; chuyển theo [0050](0050-bash-to-standard-tools.md) mục 3, [bài lab `drills/`](https://github.com/anhnvcoder/svp-labs/tree/main/drills) |
 | `verify-sample.sh`, `verify-tempo.sh`; chế độ runner của `deploy/k6/cloud/run.sh` | Chỉ các kịch bản trên dùng |
 | Manifest Chaos Mesh, Velero, overlay runner dưới `deploy/k8s/cloud/` | Velero cho EKS ở bảng chi phí của [0034](0034-aws-stage7.md) là việc 7b: quyết lại lúc đó, lấy từ bài lab |
 
@@ -150,3 +151,4 @@ Phụ lục: [`appendix/0039-mainpath-drills-scan-gate-sourcemaps.md`](appendix/
 
 - §1: [0050](0050-bash-to-standard-tools.md): `drill-k8s-supplychain`, `drill-k8s-threats` viết thành test Chainsaw (`deploy/k8s/drills/<diễn tập>/`, `make drill-k8s-*` qua `deploy/k8s/drills/run.sh`); runner của `verify.yml` thành từng bước Actions, artifact chỉ còn kết quả máy đọc.
 - §1, bảng 1: [0050](0050-bash-to-standard-tools.md) mục 6: kịch bản `dev-k3d` trở lại `verify.yml`, chỉ dispatch, chỉ đường dev (`make k8s-up`, `k8s-smoke`, `drill-k8s-reloader`, `drill-k8s-supplychain` có ca (k)); bản đo một lần của bảng 1 vẫn ở bài lab.
+- §1, bảng 1: [0050](0050-bash-to-standard-tools.md) mục 3: diễn tập compose đo một lần (cả game day, [`tools/fakefollows/`](https://github.com/anhnvcoder/svp-labs/tree/main/drills/svp-backend/tools/fakefollows/)) rời repo sang bài lab `drills/` của `svp-labs`; đường chính chỉ giữ `drill-obs-threats` cùng phần `deploy/compose/drills/common.sh` nó dùng.

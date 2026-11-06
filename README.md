@@ -109,7 +109,7 @@ Compose và k3d không chạy cùng lúc: mỗi bên từ chối khi bên kia đ
 | `internal/` | Thư viện dùng chung: kết nối Postgres và retry, Kafka, outbox, Redis, telemetry, gRPC, env. |
 | `proto/` | Contract `.proto` của gRPC và event, quản lý bằng buf. Sửa ở đây rồi chạy `make generate`. |
 | `gen/` | Code Go sinh từ `proto/`; commit cùng thay đổi, không sửa tay. Code sinh từ SQL (sqlc) ở `services/*/internal/store`. |
-| `tools/` | Công cụ nhỏ: `fakefollows` (follow giả cho diễn tập), `jwtkey` (khoá JWT), `vulngate` (gate của `make vulncheck`). |
+| `tools/` | Công cụ nhỏ: `jwtkey` (khoá JWT), `vulngate` (gate của `make vulncheck`). |
 | `deploy/compose/` | Stack compose `make up`, script smoke và diễn tập. |
 | `deploy/docker/` | Dockerfile của service Go và media-worker (Dockerfile web ở gốc `svp-frontend`). |
 | `deploy/postgres/`, `deploy/redpanda/`, `deploy/s3/` | Bootstrap database, topic Kafka (compose), bucket, user, policy và CORS của object storage. |

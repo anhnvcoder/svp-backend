@@ -87,5 +87,5 @@ Tỉ lệ lỗi 5 phút về 0 (hay không có series khi không có traffic); p
 - Dashboard: `svp-slo`, `svp-red`.
 - ADR: [ADR-0011](../adr/0011-observability-stage3.md) §8 (SLO, burn rate), [ADR-0010](../adr/0010-redis-ratelimit-cache-resilience-stage2c.md)
   §3–4 (cache khám phá, breaker).
-- Diễn tập tái hiện: `make drill-alert-to-sentry` (compose `OBS=lgtm`: tắt feed-service, đo từ lúc cảnh báo page này có trong
+- Diễn tập tái hiện: `drill-alert-to-sentry` của bài lab `drills/` của `svp-labs` (compose `OBS=lgtm`: tắt feed-service, đo từ lúc cảnh báo page này có trong
   Alertmanager tới khi trace, log và event GlitchTip cùng `trace_id` đều tìm thấy, đạt khi dưới 5 phút).

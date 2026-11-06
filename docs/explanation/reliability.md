@@ -79,7 +79,7 @@ Vì sao: [ADR-0020](../adr/0020-reliability-stage6.md) §12, §14.
 - [`runbooks/`](../runbooks/) có một runbook cho mỗi cảnh báo page (`runbook_url` trên rule, link đi kèm thông báo) và runbook cho
   các sự cố đã gặp; [`postmortems/`](../postmortems/) theo mẫu không đổ lỗi; RFC một trang cho người không làm kỹ thuật ở
   [`rfc/`](../rfc/).
-- Game day trên compose (`make gameday`: tắt engagement-service dưới tải k6, người trực chỉ theo runbook); lượt đầu cảnh báo sau
+- Game day trên compose (`gameday` của bài lab `drills/` của `svp-labs`: tắt engagement-service dưới tải k6, người trực chỉ theo runbook); lượt đầu cảnh báo sau
   75 s, hồi phục sau 184 s, postmortem ở
   [`postmortems/261024-gameday-engagement-down.md`](../postmortems/261024-gameday-engagement-down.md).
 - Job `stack` của CI dựng compose trên runner và chạy smoke, e2e web, k6 `ci`, Lighthouse ở mọi PR, chỉ báo, ngoài `ci-ok`.

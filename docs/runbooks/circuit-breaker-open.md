@@ -153,6 +153,6 @@ Mốc cho postmortem: giờ breaker đóng chính xác nằm ở log của gatew
 - Dashboard: `svp-pipeline` (Gateway resilience), `svp-red` (gRPC non-OK calls by code, trace gần đây).
 - ADR: [ADR-0010](../adr/0010-redis-ratelimit-cache-resilience-stage2c.md) §4 (breaker), [ADR-0011](../adr/0011-observability-stage3.md)
   §8 (rule, độ mới của gauge), [ADR-0020](../adr/0020-reliability-stage6.md) §13 (game day).
-- Diễn tập tái hiện: `make drill-engagement-down` (compose: tắt engagement-service, breaker mở sau 6 like trong 3,3 s, like
-  503 chậm nhất 8,7 ms, bật lại 204 sau 1,6 s); `make gameday` (cùng sự cố dưới tải k6,
+- Diễn tập tái hiện: `drill-engagement-down` của bài lab `drills/` của `svp-labs` (compose: tắt engagement-service, breaker mở sau 6 like trong 3,3 s, like
+  503 chậm nhất 8,7 ms, bật lại 204 sau 1,6 s); `gameday` của cùng bài lab (cùng sự cố dưới tải k6,
   ADR-0020 §13; kết quả một lần chạy: [postmortem](../postmortems/261024-gameday-engagement-down.md)).

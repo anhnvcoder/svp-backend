@@ -188,6 +188,13 @@ Chọn phương án A ở cả bốn mục. Ngoài ra:
     `deploy/k8s/drills/run-test.sh`): `make k8s-secrets` với giá trị mới, mỗi workload đọc Secret đổi thay pod, mỗi giá trị mới được
     nhận và giá trị cũ bị từ chối, lượt cùng `.env` không đổi gì; chạy ở kịch bản `gitops` và kịch bản mới `dev-k3d` (chỉ dispatch,
     input `gitops_ref`) của `.github/workflows/verify.yml`. Lượt `verify.yml` của nhánh giai đoạn này: **kiểm sau push**.
+- Diễn tập compose sang `svp-labs` (mục 3, bước cuối; F4 của phụ lục), xong: 11 script của `deploy/compose/drills/` (`kill-worker.sh`,
+  `duplicate-events.sh`, `duplicate-feed-events.sh`, `engagement-down.sh`, `rate-limit.sh`, `upload-cleanup.sh`, `measure-ready.sh`,
+  `measure-freshness.sh`, `measure-explore-cache.sh`, `alert-to-sentry.sh`, `gameday.sh`), [`tools/fakefollows/`](https://github.com/anhnvcoder/svp-labs/tree/main/drills/svp-backend/tools/fakefollows/) và 13 target của chúng ở
+  `deploy/compose/compose.mk` xoá; bản đóng băng ở [bài lab `drills/` của `svp-labs`](https://github.com/anhnvcoder/svp-labs/tree/main/drills)
+  ([0039](0039-mainpath-drills-scan-gate-sourcemaps.md) bảng 1). `deploy/compose/drills/common.sh` chỉ còn phần `obs-threats.sh`
+  (`make drill-obs-threats`) dùng, 547 → 353 dòng. Bỏ 2 345 dòng bash (11 script 2 151, `common.sh` 194; phụ lục ước 2 448 với khoảng
+  250 dòng `common.sh` ở lại: phần còn lại gồm guard bản phát hành GHCR, trả stack và tải video lên) cùng 356 dòng Go.
 
 ## Thông tin thêm
 

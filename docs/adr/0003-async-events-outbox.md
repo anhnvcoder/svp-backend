@@ -82,7 +82,7 @@ cân nhắc khi số bước và nhánh lỗi tăng tới mức khó theo dõi l
   `services/video-service/migrations/00002_create_outbox.sql`.
 - Consumer at-least-once, commit tay, DLQ: `internal/kafkax/`; consumer idempotent ở `services/feed-service/internal/projector/`,
   `services/video-service/internal/server/transcode.go`, `services/engagement-service/internal/server/views.go`.
-- Kiểm gửi trùng: `deploy/compose/drills/duplicate-events.sh`, `deploy/compose/drills/duplicate-feed-events.sh`.
+- Kiểm gửi trùng (bản đóng băng ở bài lab `drills/` của `svp-labs`, [0050](0050-bash-to-standard-tools.md)): [`deploy/compose/drills/duplicate-events.sh`](https://github.com/anhnvcoder/svp-labs/blob/main/drills/svp-backend/deploy/compose/drills/duplicate-events.sh), [`deploy/compose/drills/duplicate-feed-events.sh`](https://github.com/anhnvcoder/svp-labs/blob/main/drills/svp-backend/deploy/compose/drills/duplicate-feed-events.sh).
 
 ## Thông tin thêm
 

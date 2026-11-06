@@ -21,7 +21,7 @@ Loại tài liệu (Diátaxis): **reference**, tra cứu khi cần một lệnh 
   sách toàn cục `RUSTFS_CORS_ALLOWED_ORIGINS` rỗng nên bucket khác không có header CORS; WEB-10): mở web bằng
   `127.0.0.1:3001` thì đăng nhập được nhưng không phát và không tải video lên được. Cổng publish chỉ trên `127.0.0.1`: 8080 gateway, 3001 web (mở
   bằng `http://localhost:3001`), 9000 object store (API S3; console tắt, không cổng 9001), 19092 Redpanda (Kafka API). Xem object bằng
-  `curl --aws-sigv4` chạy trong container `s3` (như `make drill-upload-cleanup`), không mở cổng nào thêm. `make ps` và `make logs SVC=<tên>` để xem. `make smoke` và mọi script diễn tập cần
+  `curl --aws-sigv4` chạy trong container `s3`, không mở cổng nào thêm. `make ps` và `make logs SVC=<tên>` để xem. `make smoke` và `make drill-obs-threats` cần
   `redis-cli` trên máy và Redis native đang chạy: trước khi chạy, script xoá khoá rate limit đăng ký theo IP
   `svp:gw:rl:register:*` ở db 10 (`SCAN` + `DEL`, không `FLUSHDB`), vì mọi request đi ra từ một IP bridge của Docker và
   vài lần chạy trong một giờ sẽ cạn burst 20. Việc xoá này **chỉ dùng ở lab local**, không trỏ script vào stack dùng
@@ -51,7 +51,7 @@ Loại tài liệu (Diátaxis): **reference**, tra cứu khi cần một lệnh 
   theo kiến trúc máy trước khi dựng (kéo không được thì dừng trước khi chạy gì), bản phát hành chạy với `pull_policy: never`, có bản
   phát hành thì sáu service của `IMAGES=stg` không bake, `--build` chỉ còn cho web khi `WEB_FROM=clone`. Giá trị sai (`IMAGES` khác `stg`, `WEB_IMAGE` thiếu `WEB_FROM=image`, tag
   thay digest) thì dừng nêu lý do. Chế độ này cho job e2e: target diễn tập dựng lại service bằng `compose up --no-deps` không mang
-  biến của `make up` (sẽ chạy image `svp/<service>:dev` của lần bake trước thay bản phát hành), nên mọi script diễn tập (`deploy/compose/drills/common.sh`) từ chối
+  biến của `make up` (sẽ chạy image `svp/<service>:dev` của lần bake trước thay bản phát hành), nên `make drill-obs-threats` (`deploy/compose/drills/common.sh`) từ chối
   chạy khi một service mà diễn tập dừng hay dựng lại chạy image `ghcr.io/…` (web bản phát hành không chặn: không diễn tập nào dựng lại
   web), nêu service và lệnh dựng lại (`make down`, rồi `make up` không `IMAGES`),
   trước khi đụng gì. Web chạy bản phát hành thì
@@ -82,43 +82,21 @@ Loại tài liệu (Diátaxis): **reference**, tra cứu khi cần một lệnh 
 - `make clean-data`: gỡ stack (mọi profile) và xoá volume của nó (topic Redpanda, bucket của object store `s3-data`, thư mục
   tạm của media-worker, dữ liệu LGTM, silence của Alertmanager, chỉ mục Elasticsearch); Postgres native (cả `svp_glitchtip`)
   không bị đụng; volume của project mà compose không còn khai được giữ và in ra. Chỉ chạy khi cần làm lại dữ liệu từ đầu.
-- `make drill-kill-worker`, `make drill-duplicates`, `make measure-ready N=5`: diễn tập trên stack đang chạy, script ở
-  `deploy/compose/drills/`. Lần lượt: kill media-worker giữa lúc transcode rồi kiểm video vẫn `READY` đúng một lần và master
-  trỏ đúng một thư mục lần thử (thư mục của thumbnail); phát lại event bằng `rpk group seek` rồi kiểm không gì đổi: media-worker
-  thấy master của version, không transcode (log `transcode output exists`), không object nào dưới `media/<id>/` thêm hay ghi lại
-  (key và ETag, liệt kê bằng request có chữ ký trong container `s3`), `transcode.completed` phát lại giống từng byte; đo `CompleteUpload` → `READY` cho N video 60 s 1080p (p50, p95,
-  max, CPU/RAM của media-worker).
-- `make drill-duplicates-feed`, `make drill-engagement-down`, `make measure-freshness FOLLOWERS=10000 N=10`: diễn tập
-  phần feed, cùng chỗ. Lần lượt: phát lại `view.recorded`, `user.followed`/`user.unfollowed` và `video.ready` bằng
-  `rpk group seek` rồi kiểm bộ đếm và dòng feed không đổi; tắt engagement-service rồi kiểm circuit breaker của gateway mở
-  (like trả 503 trong < 100 ms), feed vẫn 200 không có `stats`, bật lại thì breaker tự đóng và like trả 204; đo độ tươi
-  `video.ready` → dòng timeline cuối cho N video (tối đa 10: một tác giả, burst upload 10) tới FOLLOWERS follower giả
-  (`tools/fakefollows` phát `user.followed` vào Redpanda, dọn bằng `user.unfollowed` khi kết thúc).
-- `make drill-rate-limit`, `make measure-explore-cache N=100`, `make drill-upload-cleanup`: diễn tập phần Redis, cache và
-  job dọn, cùng chỗ. Lần lượt: vượt ngưỡng thì 429 `RATE_LIMITED` có `Retry-After`, mở quá 3 form upload thì 429
-  `TOO_MANY_UPLOADS`, Redis không tới được (gateway dựng lại với `REDIS_URL` trỏ tên miền `.invalid`, Redis native không
-  bị tắt) thì login vẫn bị giới hạn bằng bộ đếm dự phòng còn feed, like, lượt xem vẫn chạy; hai sóng N request đồng thời
-  (mặc định 100, tối đa 150, sóng đầu lúc cache trống) chỉ đọc Postgres một lần, không kể lần đọc do Redis quá hạn 50 ms
-  (dòng `explore page loaded from database` có `cache=timeout`, hoặc đứng ngay sau dòng có `cache_write=timeout`: SET
-  quá hạn nên lần đọc sau không thấy trang; đạt khi tổng ≥ 1 và tổng − `timeout` − số dòng sau SET quá hạn ≤ 1, in tổng,
-  `timeout`, `miss`, `error`, số dòng sau SET quá hạn), script xoá khoá `svp:feed:explore:*` ở db 14 trước khi đo; video
-  bỏ dở quá hạn chuyển `FAILED` và object `uploads/<id>` bị xoá (mọi video khác nằm `UPLOADING` quá 20 s cũng bị dọn).
-- `make drill-alert-to-sentry`, `make drill-obs-threats`: diễn tập quan sát và cảnh báo, chỉ trên stack `make up OBS=lgtm`, cần
+- Diễn tập compose đo một lần (`drill-kill-worker`, `drill-duplicates`, `drill-duplicates-feed`, `drill-engagement-down`,
+  `drill-rate-limit`, `drill-upload-cleanup`, `drill-alert-to-sentry`, `measure-ready`, `measure-freshness`, `measure-explore-cache`,
+  game day) không còn ở repo này: bản đóng băng cùng [`tools/fakefollows/`](https://github.com/anhnvcoder/svp-labs/tree/main/drills/svp-backend/tools/fakefollows/) và cách chạy lại ở commit ghim là bài lab
+  [`drills/` của `svp-labs`](https://github.com/anhnvcoder/svp-labs/tree/main/drills) ([ADR-0039](../adr/0039-mainpath-drills-scan-gate-sourcemaps.md) bảng 1,
+  [ADR-0050](../adr/0050-bash-to-standard-tools.md)); số đo và id lượt chạy giữ ở ADR của từng diễn tập.
+- `make drill-obs-threats`: diễn tập các dòng threat model về telemetry, chỉ trên stack `make up OBS=lgtm`, cần
   GlitchTip đã khởi tạo (`SENTRY_DSN`, `SENTRY_AUTH_TOKEN` trong `.env`, do `make up OBS=lgtm` hay `make glitchtip-init`
-  ghi; script chỉ nhận `SENTRY_API_URL=http://127.0.0.1:8000`, không cổng loopback nào khác). Lần lượt: tắt feed-service,
-  đo từ lúc cảnh báo page `FeedAvailabilityBudgetBurn` có trong Alertmanager (T1) tới khi trace (Tempo), dòng log (Loki)
-  và event GlitchTip cùng một `trace_id` đều tìm thấy (T4), đạt khi T4 − T1 < 5 phút; trước khi tắt, script chờ cảnh báo
-  của lần chạy trước resolve (tới khoảng 30 phút) và 31 s không có 5xx ở feed. Kiểm các dòng về telemetry của threat
-  model: JWT-8 (trace, log, event GlitchTip của request login/feed/follow, cả lúc user-service tắt, không có email, mật
+  ghi; script chỉ nhận `SENTRY_API_URL=http://127.0.0.1:8000`, không cổng loopback nào khác). Kiểm: JWT-8 (trace, log, event GlitchTip của request login/feed/follow, cả lúc user-service tắt, không có email, mật
   khẩu, token), UP-8 (`video created`, `upload completed` có `user_id`, `video_id`, `trace_id`), OPS-1 (`/debug/pprof/`,
   `/metrics` trả 404; project publish đúng 7 cổng loopback, gồm web 3001 và `s3` 9000, không 9001), RL-2 (gateway dựng lại với Redis `.invalid` thì metric
   `store="fallback"` > 0 và cảnh báo `RateLimitFallbackActive` trong 4 phút), WEB-9 (web trên compose: email, token,
   sid, `?next=`, chữ ký presigned từ form của web, `/rum` và `/monitoring` không có trong GlitchTip, Tempo, Loki, Prometheus;
   đối chứng có dữ liệu của web). **Telegram tuỳ chọn:** người học tự tạo bot
   và điền `SVP_ALERT_TELEGRAM_BOT_TOKEN`, `SVP_ALERT_TELEGRAM_CHAT_ID` vào `.env`; có đủ cả hai thì Alertmanager gửi cảnh
-  báo `severity=page` tới `api.telegram.org` (ngoại lệ hẹp về mạng ngoài của lab) và `drill-alert-to-sentry` kiểm số
-  thông báo đã gửi; thiếu thì không gửi gì, bước đó SKIP. Có cả hai biến mà Alertmanager đang chạy chưa nạp receiver thì
-  FAIL trước khi tắt service.
+  báo `severity=page` tới `api.telegram.org` (ngoại lệ hẹp về mạng ngoài của lab); thiếu thì không gửi gì.
 
 ## Tải k6
 
@@ -150,21 +128,13 @@ Loại tài liệu (Diátaxis): **reference**, tra cứu khi cần một lệnh 
 
 ## Game day
 
-- `make gameday`, `make gameday-mark M=diagnosed|mitigated|recovered`, `make gameday-end` (game day, ADR-0020 §13, script
-  `deploy/compose/drills/gameday.sh`): chỉ trên stack `make up OBS=lgtm` có video `READY`. `gameday` chạy suốt buổi ở một
-  terminal: tải nền k6 `local` (container `svp-gameday-k6`, giữ `SVP_K6_HOLD`, mặc định 60 phút), chờ 2 phút ổn định, **T0**
-  dừng engagement-service, **T1** khi `CircuitBreakerOpen` có trong Alertmanager; người trực xử lý theo runbook
-  `docs/runbooks/circuit-breaker-open.md` và ghi mốc bằng `gameday-mark` ở terminal khác. `gameday-end` hay Ctrl-C: dừng tải,
-  bật lại service (chỉ khi đã qua T0), ghi dòng thời gian, báo cáo và tóm tắt k6 ở `.k6/gameday-<time>/`. Container
-  `svp-gameday-k6` còn sót thì `gameday` từ chối chạy và in lệnh xoá. Postmortem viết từ mốc thật ở `docs/postmortems/`.
-  **LOCAL LAB ONLY:** xoá khoá `svp:gw:rl:register:*` ở db 10 như `make smoke`.
+- Game day trên compose ([ADR-0020](../adr/0020-reliability-stage6.md) §13: tắt engagement-service dưới tải k6, người trực chỉ theo
+  runbook `docs/runbooks/circuit-breaker-open.md`) chạy ở bài lab [`drills/` của `svp-labs`](https://github.com/anhnvcoder/svp-labs/tree/main/drills) (`make gameday` ở commit ghim);
+  postmortem của lượt đã chạy ở `docs/postmortems/`.
 
 ## Giới hạn của script diễn tập
 
-- Script diễn tập dừng/khởi động container, chỉ `SELECT` trên `svp_video`, `svp_engagement`, `svp_feed`, và luôn bật lại
-  mọi service khi kết thúc. Trên Redis, ngoài hai thao tác xoá ở trên (`svp:gw:rl:register:*` ở db 10,
-  `svp:feed:explore:*` ở db 14) script chỉ đọc. `drill-rate-limit`, `drill-obs-threats` và `drill-upload-cleanup` dựng lại
-  gateway hay video-service với cấu hình diễn tập qua `SVP_GATEWAY_REDIS_URL`, `SVP_UPLOAD_ABANDON_AFTER`,
-  `SVP_UPLOAD_SWEEP_INTERVAL` rồi trả về mặc định; ba biến này **chỉ dùng cho diễn tập**, không đặt trong `.env` (hạn dọn
-  upload dưới 15 phút ngắn hơn hạn form upload). Hai diễn tập quan sát (`drill-alert-to-sentry`, `drill-obs-threats`) đọc Prometheus, Tempo, Loki qua datasource proxy
-  của Grafana, API Alertmanager và API GlitchTip bằng token chỉ đọc, không in giá trị nào của `.env`.
+- `drill-obs-threats` dừng user-service và dựng lại gateway với cấu hình diễn tập qua `SVP_GATEWAY_REDIS_URL` rồi trả về mặc
+  định, luôn bật lại mọi service khi kết thúc; biến này **chỉ dùng cho diễn tập**, không đặt trong `.env`. Không đọc database nào;
+  trên Redis chỉ xoá `svp:gw:rl:register:*` ở db 10 (như ở trên) và đọc session của chính user diễn tập ở db 9. Nó đọc Prometheus,
+  Tempo, Loki qua datasource proxy của Grafana, API Alertmanager và API GlitchTip bằng token chỉ đọc, không in giá trị nào của `.env`.

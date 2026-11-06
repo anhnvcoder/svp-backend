@@ -385,8 +385,8 @@ kiện của K4 và E2 trên store local: sai một trong hai thì K4 hay E2 kh�
 - `deploy/compose/smoke.sh` (bước 8a, dùng chung cho `make k8s-smoke`): dạng key có version, URI biến thể, thumbnail cùng thư
   mục lần thử, header `Cache-Control` của master, một playlist rendition, một segment, thumbnail; `SVP_SMOKE_LEGACY_MEDIA=1` cho
   key không version qua với một dòng `NOTE` (từ 2026-10-30 không kịch bản nào đặt, `deploy/ci/verify/gitops.sh` bỏ biến này).
-  `deploy/compose/drills/duplicate-events.sh`: phát lại không ghi object nào (key và
-  ETag), `transcode.completed` giống từng byte; `deploy/compose/drills/kill-worker.sh`: master trỏ một thư mục lần thử, thumbnail
+  [`deploy/compose/drills/duplicate-events.sh`](https://github.com/anhnvcoder/svp-labs/blob/main/drills/svp-backend/deploy/compose/drills/duplicate-events.sh) (bản đóng băng ở bài lab `drills/` của `svp-labs`, [ADR-0050](../0050-bash-to-standard-tools.md)): phát lại không ghi object nào (key và
+  ETag), `transcode.completed` giống từng byte; [`deploy/compose/drills/kill-worker.sh`](https://github.com/anhnvcoder/svp-labs/blob/main/drills/svp-backend/deploy/compose/drills/kill-worker.sh): master trỏ một thư mục lần thử, thumbnail
   ở đó. `deploy/ci/verify/compose-obs.sh`: bước `drill-duplicates`, `drill-kill-worker` và ba test integration mới.
 - `deploy/s3/media-worker-policy.json`: thêm `s3:GetObject` trên `media/media/*` và `s3:ListBucket` trên `media` với
   `s3:prefix` `media/*`; `deploy/s3/init.sh` đặt lại policy mỗi lần chạy (job `s3-init` của compose mỗi `make up`, hook

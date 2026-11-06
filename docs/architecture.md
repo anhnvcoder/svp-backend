@@ -42,8 +42,8 @@ nhiêu; SLO và cảnh báo ở [`explanation/reliability.md`](explanation/relia
 | --- | --- | --- |
 | Độ trễ | Feed p99 < 150 ms tại 1.000 req/s | SLO `feed-latency` (bucket 150 ms của `http_server_request_duration_seconds` ở gateway); k6 theo SLO, 1.000 req/s bằng Job k6 trong cluster cloud |
 | Sẵn sàng | Khởi tạo upload 99,9%; đọc feed 99,9%; trang web 99,9% | SLO `upload-init-availability`, `feed-availability` (5xx ở gateway), `web-availability` (5xx của server web) |
-| Xử lý video | Video 1 phút sẵn sàng phát p95 < 2 phút kể từ lúc upload xong | SLO `video-ready-latency` (`svp_video_ready_duration_seconds`, `FAILED` luôn tính xấu); `make measure-ready` |
-| Độ tươi | Video `READY` xuất hiện trong feed follower p95 < 10 s | Histogram `svp_feed_freshness_seconds` trên dashboard; `make measure-freshness` |
+| Xử lý video | Video 1 phút sẵn sàng phát p95 < 2 phút kể từ lúc upload xong | SLO `video-ready-latency` (`svp_video_ready_duration_seconds`, `FAILED` luôn tính xấu); `measure-ready` của bài lab `drills/` của `svp-labs` |
+| Độ tươi | Video `READY` xuất hiện trong feed follower p95 < 10 s | Histogram `svp_feed_freshness_seconds` trên dashboard; `measure-freshness` của bài lab `drills/` của `svp-labs` |
 | Bền dữ liệu | Video đã `CompleteUpload` thì không mất; event không mất; database phục hồi được từ backup | Diễn tập kill worker; backup Postgres và diễn tập khôi phục đo RTO, RPO ([`explanation/reliability.md`](explanation/reliability.md#backup-và-phục-hồi-postgres)) |
 | Đúng đắn | Event gửi trùng không làm sai bộ đếm, không transcode hai lần ra kết quả khác | Test nhận cùng event hai lần ở mỗi consumer |
 | Nhất quán | Số lượt xem trễ tối đa ~1 phút; like của chính mình thấy ngay | — |

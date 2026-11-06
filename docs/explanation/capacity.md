@@ -22,7 +22,7 @@ P1–P3 là giả định gốc của dự án; A1–A8 là giả định của 
 | A5 | Video trung bình 60 s; file gốc quay 1080p khoảng 10 Mbps, tức 75 MB |
 | A6 | HLS 3 bản: 360p 0,8 Mbps + 720p 2,5 Mbps + 1080p 5 Mbps = 8,3 Mbps (62 MB cho video 60 s); người xem nhận trung bình 2,5 Mbps |
 | A7 | 1 triệu tài khoản, mỗi tài khoản follow trung bình 50 người; video upload được fan-out tới trung bình 2.000 follower; tài khoản lớn nhất 200k follower |
-| A8 | Một worker 2 vCPU transcode video 60 s ra 3 bản mất khoảng 60 s. Số đo trên máy local M2 (worker giới hạn 2 CPU, preset `veryfast`, video tổng hợp 60 s 1080p `testsrc2`, `make measure-ready N=5`): `CompleteUpload` → `READY` p50 46,8 s, max 47,6 s, gồm tải file gốc, transcode, ghi HLS và hai chặng event |
+| A8 | Một worker 2 vCPU transcode video 60 s ra 3 bản mất khoảng 60 s. Số đo trên máy local M2 (worker giới hạn 2 CPU, preset `veryfast`, video tổng hợp 60 s 1080p `testsrc2`, `measure-ready N=5` của bài lab `drills/` của `svp-labs`): `CompleteUpload` → `READY` p50 46,8 s, max 47,6 s, gồm tải file gốc, transcode, ghi HLS và hai chặng event |
 
 P1 dùng để ước lượng dung lượng, băng thông, chi phí; P2 là mục tiêu tải cho k6, không suy ra từ P1 (xem
 [Rút ra gì](#rút-ra-gì)).

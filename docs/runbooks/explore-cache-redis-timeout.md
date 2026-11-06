@@ -1,6 +1,6 @@
 # Cache khám phá: Redis quá hạn 50 ms, `measure-explore-cache` chập chờn
 
-- Không có cảnh báo riêng. Dấu hiệu: `make measure-explore-cache` đếm thừa lần đọc Postgres hay FAIL, log feed-service có WARN
+- Không có cảnh báo riêng. Dấu hiệu: bài đo `measure-explore-cache` (bài lab `drills/` của `svp-labs`) đếm thừa lần đọc Postgres hay FAIL, log feed-service có WARN
   `read explore cache`, `FeedLatencyBudgetBurn` chỉ ở `/feed/explore`.
 - Chuẩn bị biến `PROM`, hàm `dc`: [README](README.md#chuẩn-bị-trong-terminal).
 
@@ -64,9 +64,8 @@ Dashboard `svp-use` → "Redis pool (redisotel)": "Connection use time p95", "Po
 
 ## Khôi phục và xác nhận
 
-```sh
-make measure-explore-cache N=100     # compose; in tổng lần đọc, số do timeout/miss/error, p50/p95 hai sóng (LOCAL LAB ONLY)
-```
+Chạy lại bài đo `measure-explore-cache N=100` của bài lab `drills/` của `svp-labs` (compose, ở commit ghim theo README của bài; in tổng lần đọc, số
+do timeout/miss/error, p50/p95 hai sóng; LOCAL LAB ONLY).
 
 Đạt: tổng ≥ 1 và tổng − `timeout` − số dòng sau SET quá hạn ≤ 1. Số tham chiếu (compose `core`): sóng 1 p50 181,3 /
 p95 203,0 ms, 1 lần đọc; sóng 2 p50 97,1 / p95 118,6 ms.
@@ -82,4 +81,4 @@ p95 203,0 ms, 1 lần đọc; sóng 2 p50 97,1 / p95 118,6 ms.
 - Dashboard: `svp-use` (Redis pool), `svp-red` (p99 `/feed/explore`).
 - ADR: [ADR-0010](../adr/0010-redis-ratelimit-cache-resilience-stage2c.md) §1 (timeout Redis), §3 (cache khám phá);
   [ADR-0020](../adr/0020-reliability-stage6.md) §4 (đo p99 Redis dưới k6).
-- Diễn tập tái hiện: `make measure-explore-cache N=100`; dưới tải `make load-local` (ADR-0020 §4).
+- Diễn tập tái hiện: `measure-explore-cache N=100` của bài lab `drills/` của `svp-labs`; dưới tải `make load-local` (ADR-0020 §4).

@@ -178,9 +178,9 @@ Chọn **B**. Sang [ADR-0010](0010-redis-ratelimit-cache-resilience-stage2c.md):
 - Like, lượt xem gom theo lô, `GetStats` (§2–§5): `services/engagement-service/` (`internal/server/server.go`, `internal/server/views.go`, `migrations/`, `cmd/engagement-service/main.go`), gom lô ở `internal/kafkax/batch.go`.
 - Feed-service (§6–§8, §11): `services/feed-service/` (`migrations/00001_create_feed.sql`, `queries/feed.sql`, `internal/projector/`, `internal/server/`, `cmd/feed-service/main.go`), page token ở `internal/pagetoken/`.
 - Gateway ghép số đếm trong 100 ms (§9): `services/gateway/internal/api/api.go`.
-- Đo độ tươi (§10): `tools/fakefollows/`, `deploy/compose/drills/measure-freshness.sh`.
+- Đo độ tươi (§10; bản đóng băng ở bài lab `drills/` của `svp-labs`, [0050](0050-bash-to-standard-tools.md)): [`tools/fakefollows/`](https://github.com/anhnvcoder/svp-labs/tree/main/drills/svp-backend/tools/fakefollows/), [`deploy/compose/drills/measure-freshness.sh`](https://github.com/anhnvcoder/svp-labs/blob/main/drills/svp-backend/deploy/compose/drills/measure-freshness.sh).
 - Topic, cổng, RAM (§11, §12): `deploy/redpanda/create-topics.sh`, `deploy/compose/compose.yaml`; trên k3d `deploy/k8s/values/services/user-service.yaml`, `engagement-service.yaml`, `feed-service.yaml` cùng thư mục.
-- Diễn tập: `deploy/compose/smoke.sh`, `deploy/compose/drills/duplicate-feed-events.sh`, `deploy/compose/drills/engagement-down.sh`; thí nghiệm cloud `deploy/k8s/cloud/chaos/c-redpanda-failure.yaml`.
+- Diễn tập: `deploy/compose/smoke.sh`; [`deploy/compose/drills/duplicate-feed-events.sh`](https://github.com/anhnvcoder/svp-labs/blob/main/drills/svp-backend/deploy/compose/drills/duplicate-feed-events.sh), [`deploy/compose/drills/engagement-down.sh`](https://github.com/anhnvcoder/svp-labs/blob/main/drills/svp-backend/deploy/compose/drills/engagement-down.sh) (bản đóng băng ở bài lab `drills/` của `svp-labs`, [0050](0050-bash-to-standard-tools.md)); thí nghiệm cloud `deploy/k8s/cloud/chaos/c-redpanda-failure.yaml`.
 
 ## Thông tin thêm
 

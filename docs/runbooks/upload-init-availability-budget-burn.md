@@ -77,4 +77,4 @@ curl -sG "$PROM/api/v1/query" --data-urlencode 'query=slo:sli_error:ratio_rate5m
 - Dashboard: `svp-slo`, `svp-red`.
 - ADR: [ADR-0011](../adr/0011-observability-stage3.md) §8, [ADR-0004](../adr/0004-direct-upload-and-hls.md) (upload trực tiếp,
   presigned), [ADR-0010](../adr/0010-redis-ratelimit-cache-resilience-stage2c.md) §4–5 (không retry `InitUpload`, UP-7).
-- Diễn tập tái hiện: chưa có. `make drill-rate-limit` kiểm 429 `TOO_MANY_UPLOADS` (không phải lỗi của SLO này).
+- Diễn tập tái hiện: chưa có. `drill-rate-limit` của bài lab `drills/` của `svp-labs` kiểm 429 `TOO_MANY_UPLOADS` (không phải lỗi của SLO này).

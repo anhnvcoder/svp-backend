@@ -79,7 +79,7 @@ vào đánh giá hạn 50 ms của [ADR-0020](../adr/0020-reliability-stage6.md)
 
 ## Nguyên nhân thường gặp
 
-1. **Diễn tập để lại cấu hình** (compose): `make drill-rate-limit` và `make drill-obs-threats` dựng lại gateway với
+1. **Diễn tập để lại cấu hình** (compose): `make drill-obs-threats` (và `drill-rate-limit` của bài lab `drills/` của `svp-labs`) dựng lại gateway với
    `SVP_GATEWAY_REDIS_URL` trỏ tên miền `.invalid` rồi trả về khi kết thúc; script bị ngắt giữa chừng thì gateway vẫn trỏ
    `.invalid`. Dấu hiệu: log bước 2 có `.invalid`, `redis-cli ping` vẫn `PONG`.
 2. **Redis native không chạy hay không nhận kết nối** (compose): `ping` lỗi.
@@ -125,6 +125,6 @@ hồi, người vừa bị giới hạn ở fallback được tính lại từ t
 - Dashboard: `svp-pipeline` (Rate limit decisions by store), `svp-use` (Redis pool).
 - ADR: [ADR-0010](../adr/0010-redis-ratelimit-cache-resilience-stage2c.md) §1–2, [ADR-0011](../adr/0011-observability-stage3.md)
   §8, [ADR-0020](../adr/0020-reliability-stage6.md) §4.
-- Diễn tập tái hiện: `make drill-rate-limit` (Redis không tới được: login vẫn bị giới hạn bằng bộ đếm dự phòng, feed, like,
+- Diễn tập tái hiện: `drill-rate-limit` của bài lab `drills/` của `svp-labs` (Redis không tới được: login vẫn bị giới hạn bằng bộ đếm dự phòng, feed, like,
   lượt xem vẫn chạy); `make drill-obs-threats` dòng RL-2 (metric `store="fallback"` > 0 và cảnh báo này trong 4 phút từ login đầu, cần
   `make up OBS=lgtm`).

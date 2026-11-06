@@ -184,7 +184,7 @@ RFC một trang cạnh ADR: `docs/rfc/README.md` (mẫu: Vấn đề, Phương �
 - Backup và phục hồi Postgres (§5): `deploy/helm/svp-data/templates/backup.yaml`, `deploy/helm/svp-data/values.yaml`, `deploy/k8s/values/plugin-barman-cloud.yaml`, `deploy/helm/svp-observability/templates/postgres.yaml`, `deploy/s3/init.sh`, `deploy/k8s/secrets.sh` (biến của `deploy/compose/compose.mk`), `deploy/k8s/install.sh`, `deploy/k8s/lib.sh`, `deploy/k8s/drills/backup.sh`, `deploy/k8s/drills/threats/bak-1/`, `deploy/ci/trivy-config-ignore.yaml`.
 - Velero, Chaos Mesh, kubeconform (§6–§8): `deploy/k8s/cloud/` (`chaos/`, `velero/`, `values/`, `check.sh`, `charts.json`), `cloud-check` của `deploy/k8s/k8s.mk`, `renovate.json`.
 - Probe (§10): `deploy/helm/svp-service/templates/deployment.yaml`. Thử lại Postgres (§11): `internal/pgretry/`, `internal/pgpool/`, `internal/dbmigrate/`.
-- Game day (§13): `deploy/compose/drills/gameday.sh`, `deploy/compose/compose.mk`. Job `stack` (§15): `.github/workflows/ci.yml`, `ci-bridge-check` của `Makefile`.
+- Game day (§13; bản đóng băng ở bài lab `drills/` của `svp-labs`, [0050](0050-bash-to-standard-tools.md)): [`deploy/compose/drills/gameday.sh`](https://github.com/anhnvcoder/svp-labs/blob/main/drills/svp-backend/deploy/compose/drills/gameday.sh), [`deploy/compose/compose.mk`](https://github.com/anhnvcoder/svp-labs/blob/main/drills/svp-backend/deploy/compose/compose.mk) (trích đoạn target). Job `stack` (§15): `.github/workflows/ci.yml`, `ci-bridge-check` của `Makefile`.
 - Hiện trạng: [`explanation/reliability.md`](../explanation/reliability.md), [`reference/compose.md`](../reference/compose.md), [`reference/k8s.md`](../reference/k8s.md), runbook [`postgres-restore.md`](../runbooks/postgres-restore.md).
 
 ## Thông tin thêm

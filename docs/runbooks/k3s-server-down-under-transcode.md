@@ -73,7 +73,7 @@ kubectl --context k3d-svp -n svp-data exec redpanda-0 -c redpanda -- rpk group d
 ```
 
 Video đang transcode lúc server chết được làm lại (record chưa commit) và tới `READY` đúng một lần (tính chất của pipeline,
-`make drill-kill-worker`).
+`drill-kill-worker` của bài lab `drills/` của `svp-labs`).
 
 ## Leo thang
 

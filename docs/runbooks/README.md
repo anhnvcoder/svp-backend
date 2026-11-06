@@ -125,7 +125,7 @@ Sự cố đã gặp và quy trình:
 | --- | --- |
 | [k3s-server-down-under-transcode.md](k3s-server-down-under-transcode.md) | API server k3d không trả lời, container `k3d-svp-server-0` restart khi nhiều media-worker cùng transcode |
 | [liveness-timeout-cpu-saturation.md](liveness-timeout-cpu-saturation.md) | Pod k3d bị restart vì probe quá hạn trong lúc node bận CPU |
-| [explore-cache-redis-timeout.md](explore-cache-redis-timeout.md) | `make measure-explore-cache` FAIL hay đếm thừa lần đọc Postgres; WARN `read explore cache` |
+| [explore-cache-redis-timeout.md](explore-cache-redis-timeout.md) | Bài đo `measure-explore-cache` (bài lab `drills/` của `svp-labs`) FAIL hay đếm thừa lần đọc Postgres; WARN `read explore cache` |
 | [github-push-run-missing.md](github-push-run-missing.md) | Merge vào `main` mà không có lượt `images.yml`/`ci.yml` của push |
 | [kyverno-down.md](kyverno-down.md) | Pod `svp` mới bị từ chối vì webhook Kyverno không trả lời, hay webhook biến mất |
 | [vuln-attestation-expired.md](vuln-attestation-expired.md) | Kyverno từ chối pod vì attestation `vuln` quá 72 giờ; `make k8s-gitops-up` dừng vì attestation cũ |
