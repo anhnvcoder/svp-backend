@@ -194,3 +194,7 @@ Buổi T = 4 giờ. H₀ (theo giờ khi prd chạy, chưa gồm Kafka) ~$0,90/g
 ## Thông tin thêm
 
 Phụ lục: [`appendix/0048-prd-aws.md`](appendix/0048-prd-aws.md) (phương án, chi tiết từng §, bảng biến stg/prd, nguyên mẫu hai tầng, chi phí, nguồn).
+
+### Chỉnh bởi
+
+- §1, §2: [0051](0051-dns-prd-apex.md): zone gốc `aws.<miền>` ở account `svp-prd`, zone `stg.aws.<miền>` là zone con do zone prd uỷ quyền; management không còn hosted zone.
