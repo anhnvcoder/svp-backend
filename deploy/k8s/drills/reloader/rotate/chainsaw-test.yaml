@@ -506,7 +506,7 @@ spec:
         check:
           ($error): ~
           (trim_space($stdout)): ok
-    - description: "reloader (NEXT_SERVER_ACTIONS_ENCRYPTION_KEY): the web client's home page https://svp.localhost:8443/: 200"
+    - description: "reloader (NEXT_SERVER_ACTIONS_ENCRYPTION_KEY): the web client's login page https://svp.localhost:8443/login: 200 (/ sends a guest there with 307)"
       continueOnError: true
       script:
         shell: bash
@@ -514,7 +514,7 @@ spec:
         content: |
           set -euo pipefail
           . ./reloader.sh
-          curl -sS --max-time 10 -o /dev/null -w '%{http_code}' "$web_base/" 2>/dev/null || true
+          curl -sS --max-time 10 -o /dev/null -w '%{http_code}' "$web_base/login" 2>/dev/null || true
         check:
           ($error): ~
           (trim_space($stdout)): '200'
