@@ -522,7 +522,7 @@ explore_link() {
 # obs_preflight: the stack of `make up OBS=lgtm` answers: Grafana, and Prometheus, Tempo and Loki
 # through it, Alertmanager, the GlitchTip API with the drill token; the gateway's metrics reached
 # Prometheus (through the Collector) within the last 45 s, waited for up to metrics_wait seconds on a
-# stack just started, with the WARN lines of obs_report before and after the wait; and .env holds
+# stack just started, with the WARN lines of obs_report when they do not come; and .env holds
 # SENTRY_DSN, without which the services report no error, so a drill would wait for an event that
 # cannot come.
 obs_preflight() {
@@ -540,7 +540,6 @@ obs_preflight() {
   age=${prom_value:-never}
   if ! metrics_fresh "$age"; then
     echo "WARN  the gateway's metrics are not in Prometheus yet (newest sample: $(sample_age "$age")); waiting up to $metrics_wait s"
-    obs_report
     start=$SECONDS
     while ! metrics_fresh "$age" && ((SECONDS - start < metrics_wait)); do
       sleep 5
@@ -548,9 +547,10 @@ obs_preflight() {
       age=${prom_value:-never}
     done
     waited=$((SECONDS - start))
-    obs_report
-    metrics_fresh "$age" ||
+    if ! metrics_fresh "$age"; then
+      obs_report
       fail "the gateway's metrics reach Prometheus within $metrics_wait s (newest sample: $(sample_age "$age"); see the WARN lines above)"
+    fi
   fi
   sentry_init
   [[ -n $(dotenv_value "$env_file" SENTRY_DSN) ]] ||
@@ -561,13 +561,12 @@ obs_preflight() {
   ok "observability stack up: Grafana, Prometheus, Tempo, Loki, Alertmanager, GlitchTip API (gateway metrics ${age%.*} s old${waited:+, after waiting $waited s})"
 }
 
-# Seconds obs_preflight waits for the gateway's metrics on a stack just started. They can reach
-# Prometheus well after `make up --wait` saw LGTM healthy: the Collector's exporter dials lgtm:4317
-# before LGTM listens, and after each failed dial gRPC waits 1.6 times longer before the next, up to
-# 120 s, give or take 20 % (https://github.com/grpc/grpc/blob/master/doc/connection-backoff.md), so
-# the next dial can come up to 144 s after LGTM listens; one export interval of the gateway (15 s,
-# internal/telemetry) and the Collector's batch (1 s) come on top.
-metrics_wait=${metrics_wait:-180}
+# Seconds obs_preflight waits for the gateway's metrics on a stack just started. The gateway exports
+# its metrics every 15 s (internal/telemetry), the first time one interval after it starts (the
+# OpenTelemetry SDK's periodic reader exports on each tick, none at start), and `make up --wait`
+# returns a few seconds after the gateway starts, so a drill run right after it finds no sample yet.
+# 60 s holds four export intervals, with the Collector's batch (1 s) and LGTM's ingestion on top.
+metrics_wait=${metrics_wait:-60}
 
 # metrics_fresh AGE: AGE (seconds, or never) is under 45 s, the freshness the alert rules ask of
 # every gauge (ADR-0011 §8).
@@ -583,10 +582,10 @@ docker_() { env -u DOCKER_DEFAULT_PLATFORM docker "$@"; }
 # run script wrote /tmp/ready (once its own Collector listens on 4317) and how many of its log lines
 # are samples its Prometheus refused; the Collector's log as counts (export failures by cause, the
 # age of the first and the newest, lines rejecting or dropping data, refusals for memory); how many
-# "telemetry export failed" warnings the gateway logged. Then the age of the newest sample in
-# Prometheus of each service_name, and the names of the gateway's go_ metrics there (the preflight
-# reads go_goroutine_count). Names and numbers only, never a line of a container's log: the
-# verdict lines of a drill reach the public artifact of verify.yml. Never fails.
+# "telemetry export failed" warnings the gateway logged. Then the age of the newest sample of
+# go_goroutine_count (the metric the preflight reads) in Prometheus of each Go service, and the
+# names of the gateway's go_ metrics there. Names and numbers only, never a line of a container's
+# log: the verdict lines of a drill reach the public artifact of verify.yml. Never fails.
 obs_report() {
   local t ids svc id line ready n f cr de dns other rej mem first last status
   t=$(now)
@@ -644,10 +643,10 @@ obs_report() {
     echo "WARN  telemetry: $svc $line"
   done
   status=$(obs_get "$proxy_url/prometheus/api/v1/query" "$work/obs-ages.json" \
-    --data-urlencode 'query=time() - max by (service_name) (timestamp({service_name!=""}))')
+    --data-urlencode 'query=time() - max by (service_name) (timestamp(go_goroutine_count))')
   line=$(jq -r '[.data.result[] | "\(.metric.service_name) \(.value[1] | tonumber | floor) s"] | sort | join(", ")' \
     "$work/obs-ages.json" 2>/dev/null) || line=
-  echo "WARN  telemetry: newest sample in Prometheus by service_name (query status $status): ${line:-none}"
+  echo "WARN  telemetry: newest go_goroutine_count sample in Prometheus by service_name (query status $status): ${line:-none}"
   status=$(obs_get "$proxy_url/prometheus/api/v1/query" "$work/obs-names.json" \
     --data-urlencode 'query=count by (__name__) ({service_name="gateway", __name__=~"go_.+"})')
   line=$(jq -r '[.data.result[].metric.__name__] | sort | join(", ")' "$work/obs-names.json" 2>/dev/null) || line=
