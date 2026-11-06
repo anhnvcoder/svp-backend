@@ -1,10 +1,7 @@
-# Collector of the `obs` profile.
-# Services send OTLP/gRPC to otelcol:4317; this Collector scrubs sensitive attributes and
-# forwards everything to the Collector inside grafana/otel-lgtm (lgtm:4317), which splits it into
-# Tempo, Loki and Prometheus. Nothing here is published on the host.
-# The `obs-elastic` profile runs this same file with ../elastic/otelcol-config.yaml merged over it,
-# which swaps the exporters only: the
-# receivers and the scrubbing processors live here alone.
+# Collector of the `obs` profile: services send OTLP/gRPC to otelcol:4317; it scrubs sensitive attributes and forwards
+# everything to the Collector inside grafana/otel-lgtm (lgtm:4317), which splits it into Tempo, Loki and Prometheus.
+# Nothing here is published on the host. The `obs-elastic` profile merges ../elastic/otelcol-config.yaml over this
+# file, which swaps the exporters only: the receivers and the scrubbing processors live here alone.
 
 extensions:
   # Reachable inside the compose network only, e.g. from the lgtm container:
@@ -34,7 +31,7 @@ processors:
     check_interval: 1s
     limit_mib: 192
     spike_limit_mib: 48
-  # A second line of defence only: services must not record these in the first place (JWT-8).
+  # A second line of defence only: services must not record these in the first place.
   # Signal attributes (span, log record, data point) and resource attributes are both scrubbed.
   attributes/scrub:
     actions:
@@ -78,11 +75,10 @@ exporters:
 
 service:
   extensions: [health_check]
-  # The Collector's own metrics (queue size and capacity, refused, failed and dropped data), pushed
-  # by OTLP every 15 s like the services' metrics, straight to LGTM rather than through this
-  # Collector's own pipeline, so they still arrive while that pipeline refuses data. Setting a
-  # reader replaces the default Prometheus endpoint on :8888, which nothing scrapes. service.name
-  # tells these series from those of the Collector inside lgtm (service_name="otelcol-contrib").
+  # The Collector's own metrics (queue size and capacity, refused, failed and dropped data), pushed by OTLP every 15 s
+  # like the services' metrics, straight to LGTM rather than through this Collector's own pipeline, so they still arrive
+  # while that pipeline refuses data. A reader replaces the default Prometheus endpoint on :8888, which nothing scrapes.
+  # service.name tells these series from those of the Collector inside lgtm (service_name="otelcol-contrib").
   telemetry:
     resource:
       service.name: otelcol

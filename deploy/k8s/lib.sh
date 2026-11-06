@@ -1,12 +1,10 @@
 # shellcheck shell=bash
-# Helpers shared by the scripts and make targets of the local Kubernetes cluster `svp` (deploy/k8s/, deploy/k8s/k8s.mk):
-# the pinned docker/k3d/kubectl/helm calls, bounded waits, the registry and the cluster themselves, the CA export.
-# Written for bash 3.2 (the macOS /bin/bash). Sourcing it only defines things, exports the variables below and reads
-# the image table (deploy/docker-bake.json, with jq).
-#
+# Helpers shared by the scripts and make targets of the local Kubernetes cluster `svp` (deploy/k8s/, deploy/k8s/k8s.mk).
+# Written for bash 3.2 (the macOS /bin/bash).
+# Design notes: docs/reference/k8s.md.
+
 # Rules every helper keeps: docker and k3d run without DOCKER_DEFAULT_PLATFORM (the global shell sets linux/amd64 for
-# another project; the nodes must run native arm64), kubectl and helm always name their context, k3d-svp unless
-# SVP_KUBE_CONTEXT names a cloud cluster (below; the current context may be another cluster), every wait has a
+# another project; the nodes must run native arm64), kubectl and helm always name their context, every wait has a
 # deadline, no Secret value is ever printed.
 
 repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
@@ -38,13 +36,10 @@ fail() {
   exit 1
 }
 
-# The context of every kubectl and helm call (kc, hc): k3d-svp, the local cluster, when SVP_KUBE_CONTEXT is unset;
-# otherwise SVP_KUBE_CONTEXT, which may only name the local cluster or an EKS cluster of the project by the alias
-# `aws eks update-kubeconfig --alias` gives it (svp-stg, svp-prd), never an ARN or another cluster of the kubeconfig.
-# Checked as this file is sourced, before any command. A cloud cluster is reached only by the scripts written for it
-# (deploy/k8s/aws-secrets.sh, glitchtip-init.sh), each of which sets kube_cloud_ok=1: kc and hc of any other
-# script refuse it (the dev path, the drills, which build, reset or measure a local cluster), and so do the helpers of
-# the local cluster alone (k3d_, ensure_registry, ensure_cluster, export_ca), whoever calls them.
+# The context of every kubectl and helm call (kc, hc): k3d-svp, the local cluster, when SVP_KUBE_CONTEXT is unset; else
+# SVP_KUBE_CONTEXT, which may only be k3d-svp or an EKS alias (svp-stg, svp-prd), never an ARN or another cluster. A
+# cloud cluster is reached only by scripts that set kube_cloud_ok=1; kc and hc of any other script refuse it, and so do
+# the helpers of the local cluster alone (k3d_, ensure_registry, ensure_cluster, export_ca).
 kube_context=${SVP_KUBE_CONTEXT-k3d-svp}
 if ! [[ $kube_context =~ ^(k3d-svp|svp-(stg|prd))$ ]]; then
   printf "FAIL  SVP_KUBE_CONTEXT is %q: it must be k3d-svp (the local cluster, also when unset) or svp-stg or svp-prd (an EKS cluster, by the alias aws eks update-kubeconfig --alias gives it)\n" "$kube_context" >&2
@@ -156,13 +151,10 @@ ensure_cluster() {
     esac
     [ -n "$src" ] ||
       fail "cluster svp was created without the Pod Security admission configuration (deploy/k8s/pod-security-admission.yaml); recreate it, which deletes its data: make k8s-down && make k8s-up"
-    # The mount is the file on the machine at the path the cluster was created from, and the API server reads it
-    # again each time the node starts: on every `k3d cluster start`, and whenever Docker starts the node by itself
-    # (restart policy unless-stopped, e.g. after Docker or the laptop restarts), so a running cluster is checked too.
-    # Repository moved or renamed, or a checkout without the file: Docker creates an empty directory at the old
-    # path, mounts it, and the API server never comes up (k3d cluster start would only time out after 300 s). A file
-    # there that differs from this repository's would be read unchecked. Either way the cluster is recreated from
-    # this checkout; another clone with the same content is fine.
+    # The mount is the file at the path the cluster was created from; the API server reads it again each time the node
+    # starts, also when Docker restarts it by itself, so a running cluster is checked too. A repository moved or renamed
+    # leaves Docker an empty directory there and the API server never comes up; a file there that differs from this
+    # repository's would be read unchecked. Another clone with the same content is fine.
     [ -f "$src" ] ||
       fail "node k3d-svp-server-0 mounts the Pod Security admission configuration from '$src', which is no longer a file (repository moved or renamed, or the file deleted): its API server would not start again; recreate the cluster from this checkout, which deletes its data: make k8s-down && make k8s-up"
     [ "$src" = "$psa" ] || cmp -s "$src" "$psa" ||
@@ -171,9 +163,9 @@ ensure_cluster() {
     running=$(docker_ ps -q --filter label=k3d.cluster=svp | wc -l)
     if [ "$running" -lt "$all" ]; then
       # Same address race as the create below: before starting the nodes, k3d recreates its tools container with the
-      # network's first free address, which a running registry may hold, so the tools container takes the fixed
-      # address of the server node and the server fails with "Address already in use" (k3d v5.9.0,
-      # GatherEnvironmentInfo and GetHostIP). The registry is stopped meanwhile and started after the nodes.
+      # network's first free address, which a running registry may hold, so the tools container takes the fixed address
+      # of the server node and the server fails with "Address already in use". The registry is stopped meanwhile,
+      # started after.
       docker_ stop k3d-svp-registry >/dev/null || fail "stop the registry k3d-svp-registry before starting the cluster"
       if ! k3d_ cluster start svp --wait --timeout "$k3d_timeout" >/dev/null; then
         docker_ start k3d-svp-registry >/dev/null
@@ -202,19 +194,15 @@ ensure_cluster() {
     for port in 6550 8443; do
       port_free "$port" || fail "127.0.0.1:$port (cluster svp) is already in use by another process; free it and run again"
     done
-    # k3d reserves the network's first free address for its tools container in memory only, while Docker hands that
-    # same address to the running registry when k3d connects it; the server node may then be given the address the
-    # tools container takes a moment later (always when its image is still being pulled) and fails to start with
-    # "Address already in use" (k3d v5.9.0, ClusterPrepNetwork and ClusterRun in pkg/client/cluster.go). Connected
-    # while stopped, the registry gets an address only when started again, after the nodes have theirs.
+    # k3d reserves the network's first free address for its tools container in memory only, while Docker hands that same
+    # address to the running registry when k3d connects it; the server node may then be given the address the tools
+    # container takes a moment later and fail with "Address already in use". Connected while stopped, the registry gets
+    # an address only when started again, after the nodes have theirs.
     docker_ stop k3d-svp-registry >/dev/null || fail "stop the registry k3d-svp-registry before creating the cluster"
-    # On failure, a timeout included, k3d deletes what it had created (rollback), network k3d-svp too; the stopped
-    # registry would still name that network and never start again ("network k3d-svp not found"), so it is detached
-    # first (an error only means k3d already detached it). The next run then starts clean.
-    # One step has no deadline: k3d creates its tools container (pulling k3d-tools when missing) on a context
-    # without --timeout, so a pull that hangs keeps this command waiting. It is not killed from outside: k3d would
-    # stop halfway without its rollback, leaving a half-made cluster that is harder to clean up than a hang the
-    # user sees. When it hangs: Ctrl-C, then `make k8s-down` and `make k8s-up`.
+    # On failure, a timeout included, k3d deletes what it had created, network k3d-svp too; the stopped registry would
+    # still name that network and never start again, so it is detached first. One step has no deadline: k3d creates its
+    # tools container on a context without --timeout, so a pull that hangs keeps this waiting. It is not killed from
+    # outside: k3d would stop without its rollback. When it hangs: Ctrl-C, then `make k8s-down` and `make k8s-up`.
     if ! k3d_ cluster create --config "$repo_root/deploy/k8s/k3d.yaml" --timeout "$k3d_timeout"; then
       docker_ network disconnect k3d-svp k3d-svp-registry >/dev/null 2>&1
       docker_ start k3d-svp-registry >/dev/null
@@ -254,10 +242,8 @@ export_ca() {
 
 # secret NAMESPACE NAME TYPE KEY=VALUE...: prints one Secret manifest, with the one label in $label ("key: value") when
 # the call sets it (label=... secret ...). The values are base64-encoded through a pipe; none is an argument of any
-# program. For `kc apply --server-side -f -` on stdin: no value goes through a file or a command line, and a
-# server-side apply keeps them out of the last-applied-configuration annotation a client-side apply would copy them
-# into. An empty value is written "", so its key is there all the same: an ExternalSecret that names it would
-# otherwise fail on a key that does not exist.
+# program. For `kc apply --server-side -f -` on stdin: no value goes through a file or a command line, and a server-side
+# apply keeps them out of the last-applied-configuration annotation. An empty value is written "", so its key is there.
 secret() {
   local ns=$1 name=$2 type=$3 kv
   shift 3
@@ -269,17 +255,10 @@ secret() {
   done
 }
 
-# es_force_sync [NAMESPACE/NAME...]: has External Secrets Operator build ExternalSecrets NAME (every ExternalSecret of
-# the cluster when none is named) again from their store, and waits up to 120 s until each has. Their refreshPolicy is
-# OnChange (chart svp-cluster, templates/external-secrets.yaml): a changed source reaches a Secret only through a
-# change of its ExternalSecret, here a new value of annotation force-sync. ESO then syncs once and writes
-# status.syncedResourceVersion (<generation>-<hash of labels and annotations>), new with the annotation, as soon as
-# that sync succeeds, whether or not the Secret it builds differs from the one there: an unchanged Secret is left as it
-# is (no new resourceVersion, so no pod restarts for it). Waiting for a new resourceVersion of every Secret would hang
-# on each whose values did not change. An ExternalSecret whose generation changes meanwhile (Argo CD applied another
-# revision) stops the wait, since the sync seen may be of that spec; so does one that is gone. Prints nothing but a
-# failure: the reason and message of the Ready condition of each ExternalSecret not done, which ESO keeps to what is
-# safe to show.
+# es_force_sync [NAMESPACE/NAME...]: has External Secrets Operator build ExternalSecrets NAME (every one when none is
+# named) again from their store, by a new value of annotation force-sync, and waits up to 120 s until each has: status
+# syncedResourceVersion is new, not the Secret's resourceVersion, which an unchanged Secret never gets. Stops when an
+# ExternalSecret's generation changes meanwhile or it is gone. Prints nothing but a failure.
 es_force_sync() {
   local want=" $* " stamp list before id left deadline=$((SECONDS + 120))
   list=$(kc get externalsecrets.external-secrets.io -A -o json) || fail "list the ExternalSecrets of the cluster"
@@ -320,10 +299,9 @@ es_force_sync() {
   done
 }
 
-# The values of .env that become Secrets, shared by deploy/k8s/secrets.sh (a lab cluster) and deploy/k8s/aws-secrets.sh
-# (the entries of AWS Secrets Manager of an EKS cluster). The caller sources deploy/observability/glitchtip/dotenv.sh,
-# whose strict rule they are read with.
-#
+# The values of .env that become Secrets, shared by deploy/k8s/secrets.sh and deploy/k8s/aws-secrets.sh. The caller
+# sources deploy/observability/glitchtip/dotenv.sh, whose strict rule they are read with.
+
 # dotenv_read FILE VAR...: reads each VAR of FILE into a shell variable of the same name, and the names of those missing
 # or empty into dotenv_missing (space first, empty when none). Fails on a FILE that breaks the rule; dotenv_value has
 # then named the offending line (never a value) on stderr.
@@ -338,21 +316,19 @@ dotenv_read() {
   done
 }
 
-# check_next_key: NEXT_SERVER_ACTIONS_ENCRYPTION_KEY, as read by dotenv_read. Next decodes the Server Action key with
-# atob and imports it as a raw AES-GCM key the first time an action needs it; make env writes 32 bytes (AES-256) in
-# standard base64. A value edited into another shape stops the script here, rather than failing in the web pods later,
-# on some request. The check is on the text, not on what base64 -d makes of it: macOS base64 -d also decodes the
-# URL-safe alphabet (- and _), on which atob throws.
+# check_next_key: NEXT_SERVER_ACTIONS_ENCRYPTION_KEY, as read by dotenv_read, must be the standard base64 of 32 bytes
+# (make env writes it so): Next imports it as a raw AES-GCM key the first time an action needs it. A value of another
+# shape stops the script here, not the web pods later. Checked on the text: macOS base64 -d also decodes the URL-safe
+# alphabet (- and _), on which atob throws.
 check_next_key() {
   [[ $NEXT_SERVER_ACTIONS_ENCRYPTION_KEY =~ ^[A-Za-z0-9+/]{43}=$ ]] ||
     fail "NEXT_SERVER_ACTIONS_ENCRYPTION_KEY in .env is not the standard base64 of 32 bytes; empty it and run make env, then this again"
 }
 
-# check_notify_key FILE AGAIN: reads the GitHub App of Argo CD Notifications (it writes commit statuses on svp-gitops)
-# from .env FILE into SVP_ARGOCD_NOTIFY_APP_ID, SVP_ARGOCD_NOTIFY_INSTALLATION_ID and SVP_ARGOCD_NOTIFY_PRIVATE_KEY_B64,
-# and checks them; on a failure the message names AGAIN, the command to run once .env is fixed (make env cannot make a
-# GitHub App's key, so it writes none of them). Its ids are integers; its private key is the standard base64 of the PEM
-# file on one line, which the ExternalSecret decodes. The checks read the values without printing them.
+# check_notify_key FILE AGAIN: reads the GitHub App of Argo CD Notifications from .env FILE into
+# SVP_ARGOCD_NOTIFY_APP_ID, SVP_ARGOCD_NOTIFY_INSTALLATION_ID and SVP_ARGOCD_NOTIFY_PRIVATE_KEY_B64 and checks them; a
+# failure names AGAIN, the command to run once .env is fixed. The private key is the standard base64 of the PEM file on
+# one line, which the ExternalSecret decodes. The checks read the values without printing them.
 check_notify_key() {
   dotenv_read "$1" SVP_ARGOCD_NOTIFY_APP_ID SVP_ARGOCD_NOTIFY_INSTALLATION_ID SVP_ARGOCD_NOTIFY_PRIVATE_KEY_B64
   [ -z "$dotenv_missing" ] ||
@@ -367,19 +343,10 @@ check_notify_key() {
     fail "SVP_ARGOCD_NOTIFY_PRIVATE_KEY_B64 in .env is not the standard base64 of a PEM private key on one line (base64 < key.pem | tr -d '\\n'); no Secret was changed"
 }
 
-# Redpanda, unlike the object store, keeps its superuser svp-admin with its password in its own data: it creates it
-# from Secret redpanda-bootstrap once, when the cluster forms, and never reads that Secret again. Every container that
-# logs in as svp-admin (the broker's rpk, the sidecar that keeps the superusers in step, the redpanda-init Job) takes
-# the password from that Secret when it starts. A changed password applied to the Secret (or its source) alone would
-# lock all of them out as soon as they start again, with the password Redpanda knows gone from everywhere.
-#
-# redpanda_admin: makes Redpanda take SVP_KAFKA_ADMIN_PASSWORD (as read from .env) for svp-admin before any Secret or
-# source of one is written: first step of a changed secret, on a lab cluster (deploy/k8s/secrets.sh) and on EKS
-# (deploy/k8s/aws-secrets.sh) alike. Inside the broker container it logs in with that password; when that fails, with
-# the one of Secret redpanda-bootstrap, then with the one the container started with, and sets the new one. It stops
-# the script, before anything is written, when the password changes and no broker runs to take it; the messages name
-# $again, the command that runs the script again. The passwords go to the container on stdin; the new one is on rpk's
-# command line inside that container only, as in the redpanda-init Job.
+# redpanda_admin: makes Redpanda take SVP_KAFKA_ADMIN_PASSWORD (.env) for svp-admin before any Secret is written.
+# Redpanda reads Secret redpanda-bootstrap only when the cluster forms: a new password in the Secret alone locks out
+# every container that logs in as svp-admin. Stops, writing nothing, when the password changes and no broker runs.
+# Passwords reach the container on stdin; the new one is on rpk's command line inside that container only.
 redpanda_admin() {
   local current ready err rc=0
   # No data volume yet: the cluster that forms takes svp-admin from the Secret written now.
@@ -432,13 +399,10 @@ redpanda_admin() {
   esac
 }
 
-# The source of the Secrets of an EKS cluster svp-<env>: entries svp/<env>/<entry> of AWS Secrets Manager in the
-# region below, whose shells the infrastructure repository makes, with no value (its module external-secrets), and
-# whose values deploy/k8s/aws-secrets.sh and glitchtip-init.sh write, as the learner, with the AWS profile of that
-# environment's account. Every aws call names that profile and the region on its command line (aws_), so neither the
-# profile's region nor credentials of the environment (AWS_ACCESS_KEY_ID...) take over, and no pager waits for a key
-# (AWS_PAGER empty). No value is ever an argument:
-# each entry's JSON goes to put-secret-value as file://<file> of a folder of mode 700 that the caller removes.
+# The source of the Secrets of an EKS cluster svp-<env>: entries svp/<env>/<entry> of AWS Secrets Manager, whose values
+# deploy/k8s/aws-secrets.sh and glitchtip-init.sh write. Every aws call names the profile and the region (aws_), so
+# neither the profile's region nor credentials of the environment take over, and no pager waits for a key. No value is
+# an argument: each entry's JSON goes to put-secret-value as file://<file> of a folder of mode 700 the caller removes.
 aws_region=ap-southeast-1
 aws_() { AWS_PAGER= aws --profile "$AWS_PROFILE" --region "$aws_region" "$@"; }
 
@@ -493,14 +457,10 @@ gitops_is_clone() {
   [[ $url =~ ^(https://github\.com/|git@github\.com:|ssh://git@github\.com/)anhnvcoder/svp-gitops(\.git)?$ ]]
 }
 
-# gitops_dir: prints the absolute path of the clone of svp-gitops to read. SVP_GITOPS_DIR when set (CI sets it to the
-# clone of make gitops-clone; on a machine it may name another clone, the one being edited); otherwise
-# <workspace>/gitops, where <workspace> holds the main checkout of this repository: the parent of the folder of git's
-# common directory (<workspace>/backend/.git, the same from the main checkout and from a worktree under
-# <workspace>/.worktrees/, which --show-toplevel would not give). The dev path reads that clone's working tree as it is,
-# uncommitted changes included, and never clones, fetches or switches a branch in it. Fails, printing the command that
-# makes the clone, when the folder is not a clone of svp-gitops: no other copy of the configuration is ever read in its
-# place.
+# gitops_dir: prints the absolute path of the clone of svp-gitops to read: SVP_GITOPS_DIR when set (CI sets it, make
+# gitops-clone), otherwise <workspace>/gitops, <workspace> being the parent of the folder of git's common directory (the
+# same from a worktree under <workspace>/.worktrees/). The working tree is read as it is, uncommitted changes included;
+# nothing is cloned, fetched or switched. Fails, printing the clone command, when it is no clone: no other copy is read.
 gitops_dir() {
   local dir common
   if [ -n "${SVP_GITOPS_DIR:-}" ]; then
@@ -518,13 +478,10 @@ gitops_dir() {
   (cd "$dir" && pwd -P)
 }
 
-# gitops_clone: CI's copy of the configuration (make gitops-clone). Clones svp-gitops anonymously into $gitops_ci_clone
-# (the whole history, which the bootstrap reads), or fetches it when it is there, then checks out
-# GITOPS_REF (default main: a branch, as origin/<branch>, or a full commit SHA) detached, and exports SVP_GITOPS_DIR to
-# that folder for what this shell runs next. Refuses a clone there with uncommitted changes, or a folder that is no
-# clone of svp-gitops, instead of overwriting either. A clone with no index was never checked out (a run that stopped
-# between the clone and the checkout, as on a GITOPS_REF that is no branch): it holds nothing to lose, so the next run
-# checks it out instead of reading every file as deleted. Touches nothing outside .gitops/ of this checkout.
+# gitops_clone: CI's copy of the configuration (make gitops-clone): clones svp-gitops anonymously into $gitops_ci_clone
+# (the whole history, which the bootstrap reads) or fetches it, checks out GITOPS_REF (default main: a branch or a full
+# SHA) detached, exports SVP_GITOPS_DIR. Refuses a clone with uncommitted changes, or no clone of svp-gitops. A clone
+# with no index was never checked out and holds nothing to lose. Touches nothing outside .gitops/ of this checkout.
 gitops_clone() {
   local dir=$gitops_ci_clone ref=${GITOPS_REF:-main} target sha
   # No credential helper and no prompt: the clone is anonymous, as Argo CD's is.
@@ -567,12 +524,10 @@ web_is_clone() {
   [[ $url =~ ^(https://github\.com/|git@github\.com:|ssh://git@github\.com/)anhnvcoder/svp-frontend(\.git)?$ ]]
 }
 
-# web_dir: prints the absolute path of the web client's source that images are built from. SVP_WEB_DIR when set (CI
-# sets it to the clone of make web-clone; on a machine it may name another clone), which must be a clone of
-# svp-frontend;
-# otherwise <workspace>/frontend (the workspace as for gitops_dir), which must be one too. The working tree is read as
-# it is, uncommitted changes included; nothing is cloned, fetched or switched. No folder there, or one that is no clone
-# of svp-frontend, fails, printing the command that makes the clone, instead of building something else in its place.
+# web_dir: prints the absolute path of the web client's source that images are built from: SVP_WEB_DIR when set (CI sets
+# it, make web-clone) or <workspace>/frontend (the workspace as for gitops_dir); either must be a clone of svp-frontend.
+# The working tree is read as it is, uncommitted changes included; nothing is cloned, fetched or switched. Fails,
+# printing the clone command, instead of building something else in its place.
 web_dir() {
   local dir common
   if [ -n "${SVP_WEB_DIR:-}" ]; then
@@ -593,15 +548,10 @@ web_dir() {
 # web_dockerfile DIR: the Dockerfile that builds the web image from DIR (printed by web_dir), at the top of the clone.
 web_dockerfile() { echo "$1/Dockerfile"; }
 
-# web_clone: CI's copy of the web client's source (make web-clone), as gitops_clone: clones svp-frontend anonymously
-# into $web_ci_clone (the whole history), or fetches it when it is there, then checks out WEB_REF detached and exports
-# SVP_WEB_DIR to that folder for what this shell runs next. WEB_REF is a branch (as origin/<branch>) or a full commit
-# SHA; unset, it is the commit of the web release staging runs (image.tag of envs/stg/images/web.yaml in the
-# clone of svp-gitops, gitops_dir), so the tests run the code of the image that runs there. That release must be
-# <imagePrefix>web of a release source of the working tree's table (release_source_of): the source that publishes web
-# is the web client's repository, and every tag of it is a commit of svp-frontend; a release under no such prefix has
-# no commit there, and WEB_REF must then be given. Refuses a clone there with uncommitted changes, or a folder that is no clone of svp-frontend. Touches
-# nothing outside .web/ of this checkout.
+# web_clone: CI's copy of the web client's source (make web-clone), as gitops_clone, with WEB_REF (a branch or a full
+# SHA) checked out detached and SVP_WEB_DIR exported. Unset, WEB_REF is the commit of the web release staging runs
+# (image.tag of envs/stg/images/web.yaml), so the tests run the code of that image; that release must be of a source
+# that publishes web (release_source_of), else WEB_REF must be given. Touches nothing outside .web/ of this checkout.
 web_clone() {
   local dir=$web_ci_clone ref=${WEB_REF:-} target sha gitops file repo tag=
   local git_=(env GIT_TERMINAL_PROMPT=0 git -c credential.helper=)
@@ -640,31 +590,22 @@ web_clone() {
   ok "svp-frontend at ${sha:0:12} ($ref) in ${dir#"$repo_root"/}"
 }
 
-# argocd_root_app REPO_URL REVISION ENV CHART_REPO_URL: prints the root Application svp-root of the GitOps path, as
-# JSON for `kc apply -f -`: chart argocd/root of svp-gitops (REPO_URL) at REVISION, the first of the two levels of the
-# root. It reads envs/ENV/ (its value env, a directory of envs/) and renders Application svp-apps, chart argocd/apps at
-# the commit gitopsRevision of envs/ENV/charts.yaml pins, or at REVISION when the environment pins none (its value
-# targetRevision, which svp-apps hands to every Application it makes for its values files), with the charts of this
-# repository from CHART_REPO_URL at the commit charts.yaml pins (its value chartRepoURL) and the overlays of ENV. The
-# root of an EKS cluster is the same Application, made by the bootstrap of the infrastructure repository (an
-# ApplicationSet over the cluster's Secret) at refs/heads/main. REVISION is a full ref (refs/heads/<branch>) or a
-# commit, never a short name: Argo CD fetches every branch and tag and may resolve a short name to a tag of that name, so a tag named main
-# pushed with a stolen token could be deployed. Built by jq from --arg values, so the revision and the environment are always JSON
-# strings: a branch named 2026, true or 1e3 written into YAML as it is would be read as a number or a boolean, which the
-# Application CRD refuses (targetRevision is a string).
-#
+# argocd_root_app REPO_URL REVISION ENV CHART_REPO_URL: prints the root Application svp-root, as JSON for
+# `kc apply -f -`: chart argocd/root of svp-gitops (REPO_URL) at REVISION, the first of two root levels, which renders
+# svp-apps at the gitopsRevision commit envs/ENV/charts.yaml pins, or at REVISION when none. REVISION is a full ref
+# (refs/heads/<branch>) or a commit, never a short name: a tag named main pushed with a stolen token could be deployed.
+
+# Built by jq from --arg values, so the revision and the environment are always JSON strings: a branch named 2026, true
+# or 1e3 written into YAML as it is would be read as a number or a boolean, which the Application CRD refuses.
+
 # Label svp.io/notify=root is what the subscriptions of Argo CD Notifications select (platforms/eks/argo-cd.yaml of
-# svp-gitops): the root alone reports, one commit status argocd/ENV per commit of svp-gitops for the whole environment.
-# Where notifications are off (k3d) the label selects nothing.
-#
-# The root compares with Argo CD's default diff, not with the server-side diff the controller uses for every other
-# Application (base/argo-cd.yaml of svp-gitops): the root applies its child Applications client-side (no
-# ServerSideApply=true), so their fields belong to a field manager of operation Update. A server-side dry run is an
-# Apply, which never removes a field another manager entry owns: a field deleted from chart argocd/root (an
-# ignoreDifferences, a retry block, managedNamespaceMetadata) would stay in the predicted and the live Application
-# alike, so the root would stay Synced and the child keep the field for good. The default diff compares with the
-# kubectl.kubernetes.io/last-applied-configuration annotation of a client-side apply and sees the deletion. The
-# children apply their own objects server-side (ServerSideApply=true), for which the server-side diff is right.
+# svp-gitops): the root alone reports, one commit status argocd/ENV per commit. Where notifications are off (k3d) it
+# selects nothing.
+
+# The root compares with Argo CD's default diff, not the server-side diff of every other Application (base/argo-cd.yaml
+# of svp-gitops): it applies its child Applications client-side, and a server-side dry run, an Apply, never removes a
+# field another field manager owns, so a field deleted from chart argocd/root would stay in the predicted and the live
+# Application alike and the root would stay Synced. The default diff sees the deletion. The children apply server-side.
 argocd_root_app() {
   jq -n --arg repo "$1" --arg rev "$2" --arg env "$3" --arg charts "$4" '{
     apiVersion: "argoproj.io/v1alpha1",
@@ -703,13 +644,10 @@ argocd_root_telegram() {
   }'
 }
 
-# image_policy_ready NAME [FAILURE_POLICY]: true when Kyverno has compiled ImageValidatingPolicy NAME
-# (status.conditionStatus.ready) and kyverno-resource-validating-webhook-cfg holds a webhook for it: one of the
-# policy's failurePolicy (FAILURE_POLICY when given: Fail or Ignore), objectSelector and rules whose namespaceSelector
-# carries the policy's match on namespace svp (Kyverno ANDs it with the selector of its own ConfigMap). A policy with
-# its own webhookConfiguration.timeoutSeconds (svp-images and every temporary policy of the drills) gets a webhook of
-# its own, ivpol.validate.kyverno.svc-fail-finegrained-<policy> (-ignore- in Audit); the webhook is still found by what
-# it selects, not by that name, which is Kyverno's to change.
+# image_policy_ready NAME [FAILURE_POLICY]: true when Kyverno has compiled ImageValidatingPolicy NAME and
+# kyverno-resource-validating-webhook-cfg holds a webhook for it: one of the policy's failurePolicy (FAILURE_POLICY when
+# given), objectSelector and rules whose namespaceSelector carries the policy's match on namespace svp. The webhook is
+# found by what it selects, not by its name, which is Kyverno's to change.
 image_policy_ready() {
   local name=$1 want=${2:-} pol
   pol=$(kc get imagevalidatingpolicies.policies.kyverno.io "$name" -o json 2>/dev/null) || return 1
@@ -768,34 +706,26 @@ EOF
   done
 }
 
-# The namespaces whose containers' logs unready_report prints, and the only ones whose log lines
-# deploy/ci/verify-collect.sh keeps in the public artifact (and job log) of a verification run: third-party servers,
-# operators and controllers, whose logs speak of their own start, configuration and peers (Redpanda's startup checks and
-# the memory error that stops it, an operator's reconcile errors). Left out: svp (the project's services, whose logs may
-# hold user data), envoy-gateway-system (the Envoy proxies' access log holds request paths and query strings, the
-# signatures of presigned uploads among them), kube-system and argocd. Within these, unready_report also skips
-# GlitchTip (its access log holds the DSN's public key, its errors the events it received) and every Postgres pod of
-# CloudNativePG (an error line quotes the statement that failed, values included).
+# The namespaces whose containers' logs unready_report prints, and the only ones whose log lines verify-collect.sh keeps
+# in the public artifact of a verification run: third-party servers, operators and controllers. Left out: svp (its logs
+# may hold user data), envoy-gateway-system (its access log holds request paths), kube-system, argocd.
+
+# unready_report also skips GlitchTip (its access log holds the DSN's public key) and every CloudNativePG Postgres pod
+# (an error line quotes the statement that failed, values included).
 log_tail_namespaces="argo-rollouts cert-manager cnpg-system keda kyverno svp-data svp-obs"
 
 # mark_log NAMESPACE < LOG: prints each line of LOG as "    [NAMESPACE] LINE", the form verify-collect.sh tells a quoted
-# container log by, and keeps only for the namespaces of log_tail_namespaces: a line left unmarked (a panic of a
-# service, which is no JSON record) would reach the public artifact of a verification run. Every line is marked
-# whatever its bytes (LC_ALL=C: sed refuses bytes that are not UTF-8 under a UTF-8 locale), the last one ends with a
-# newline even when LOG's does not (else the next line printed would be glued to it), and an empty LOG prints nothing.
+# container log by, for the namespaces of log_tail_namespaces: a line left unmarked (a panic of a service, which is no
+# JSON record) would reach the public artifact. Every line is marked whatever its bytes (LC_ALL=C: sed refuses non-UTF-8
+# bytes under a UTF-8 locale), the last ends with a newline even if LOG's does not, and an empty LOG prints nothing.
 mark_log() {
   { cat; echo; } | LC_ALL=C sed -e '${' -e '/^$/d' -e '}' -e "s/^/    [$1] /"
 }
 
-# unready_report NAMESPACE: after a release that did not get ready, prints to stderr each container of NAMESPACE that
-# is not ready, and each init container that has not exited 0: its state, how its last attempt ended, and, for a
-# container whose log may be shown (log_tail_namespaces), the last lines of its log, and of the attempt before when it
-# restarted. Helm says no more than "1 pods have failed", and the kubelet keeps the log of the current and the previous
-# attempt only, so a container that crashes at every start is gone with its reason once the cluster is: a verification
-# run on a machine that is thrown away right after has nothing else to show. Pods that completed (Jobs) are left out.
-# Each log line is printed as "    [NAMESPACE] LINE", the form verify-collect.sh keeps only for these namespaces. The
-# message of the last attempt is a log tail too when the container's terminationMessagePolicy is
-# FallbackToLogsOnError, so it is printed only where the log may be.
+# unready_report NAMESPACE: after a release that did not get ready, prints to stderr each container of NAMESPACE that is
+# not ready and each init container that has not exited 0: its state, how its last attempt ended and, where its log may
+# be shown (log_tail_namespaces), the last lines of its log and of the attempt before. The message of the last attempt
+# is a log tail too under terminationMessagePolicy FallbackToLogsOnError, so it is printed only where the log may be.
 unready_report() {
   local ns=$1 sep=$'\x1f' pod container restarts state last show
   kc -n "$ns" get pods -o json 2>/dev/null | jq -r --arg ns "$ns" --arg shown " $log_tail_namespaces " '
@@ -832,25 +762,9 @@ unready_report() {
     done
 }
 
-# gitops_timeout_report APPS: when the GitOps path's wait for its Applications (APPS, one name per line) ran out,
-# prints to stderr what Argo CD's own status line leaves out, so a run on a machine thrown away right after still
-# shows why:
-#   - each Application of APPS that is not Healthy, and each resource it tracks that is not ready, read from the
-#     cluster: Argo CD 3 keeps the health of an Application's resources out of the Application (in its own cache,
-#     unless its controller runs with --persist-resource-health), and its API needs a login. Only the kinds of
-#     health_kinds below are read, each judged by a rule close to Argo CD's check of it: a Deployment, StatefulSet
-#     or DaemonSet by its ready and updated pods and the generation it observed, a Job by its conditions Complete and
-#     Failed, a PersistentVolumeClaim by its phase, any other kind by its conditions that say it is ready (Ready,
-#     Available, ...) when they are not True, or by having no status at all. One that is not there is "missing";
-#   - the CRDs of the Prometheus and Alertmanager objects, when they were created and when they became Established;
-#   - the status conditions of every Prometheus and Alertmanager object, or that it has none: no controller has
-#     reconciled it;
-#   - each container of the Prometheus operator's pods in svp-obs (label app.kubernetes.io/component of chart
-#     kube-prometheus-stack): when it started, and the last lines of its log, and of its attempt before when it
-#     restarted, marked as unready_report marks them. The operator asks the API server once, at its start, which of
-#     its CRDs it serves, and never starts the controller of a CRD that was missing then (it logs a warning "resource
-#     ... not installed in the cluster"): a Prometheus object it then never turns into a StatefulSet, with no event.
-# Nothing here reads a Secret. Each step that cannot read the cluster prints why and the others still run.
+# gitops_timeout_report APPS: when the wait for the Applications APPS (one name per line) ran out, prints to stderr why:
+# Applications not Healthy with their resources not ready, the Prometheus and Alertmanager CRDs and objects, and the
+# Prometheus operator's logs (it never starts the controller of a CRD that was missing at its start). Reads no Secret.
 gitops_timeout_report() {
   local apps=$1 out sep=$'\x1f' what a b c d type got pod container restarts started
   local -a list
@@ -980,17 +894,9 @@ gitops_timeout_report() {
 }
 
 # The image table, deploy/docker-bake.json: the one place that names the images this repository builds from its own
-# tree, the six Go services whose releases its CI builds, signs and promotes (web is one of the seven releases, but its
-# source and its releases are svp-frontend's). It is a file of Docker Bake: group default lists the services in the
-# order the dev path builds them, and target <service> holds the Dockerfile, the context, the build arguments and the
-# local tag of its image, svp/<service>:dev (the name compose runs it by). JSON rather than HCL, so that the scripts read it with jq, without docker;
-# under deploy/, so that a test copying deploy/ has it. It is read here, once, as this file is sourced: built_services,
-# svp_services and dockerfile answer from it, for the image pipeline of CI (deploy/ci/plan.sh, changed-services.sh,
-# image-guard.sh, which hands the action image-leg its Dockerfile and context) as for make k8s-images, make k8s-up
-# and make up (build_dev_images, compose_images). Every context is the repository root ("."): the CI build
-# (image-guard.sh) and image_paths assume it, so a table with another context stops here instead of being built two
-# ways. A table missing, not JSON, or naming a service without a target, a Dockerfile or that context stops the
-# sourcing script here too.
+# tree, the six Go services (web's source and releases are svp-frontend's). A Docker Bake file: group default lists the
+# services in the order the dev path builds them; target <service> holds its Dockerfile, context and local tag. Every
+# context is the repository root, which image-guard.sh and image_paths assume.
 image_table=deploy/docker-bake.json
 image_rows=$(jq -er '.target as $t | .group.default.targets
   | if type == "array" and length > 0 then .[] else error("group default lists no target") end
@@ -1026,19 +932,14 @@ dockerfile() {
   return 1
 }
 
-# web_build_id: prints the build id of the web image on the dev path (SVP_BUILD_ID, which Next uses as its
-# deploymentId and the server as its release name): dev- and the first 12 hex digits of the SHA-256 of the list
-# "<SHA-256 of the content> <path>", sorted by path, of every file the build context web_dir sends (by its
-# .dockerignore, not by git: a .DS_Store git ignores counts, a tracked file .dockerignore leaves out does not) plus the
-# Dockerfile (web_dockerfile), each path relative to the clone. The same context gives the same id, so the build cache
-# gives the same image ID and `make k8s-up` starts no new ReplicaSet (or canary); any change of the context gives a new
-# id, so two different builds never share one deploymentId through a file git does not see. A symlink counts by the
-# path it points to (the context sends it as it is); file modes do not count.
-#
-# Only the form the clone's .dockerignore has is understood: each line (blank lines and # comments aside) is a
-# one-level name pattern of letters, digits, . _ - * and ?, which, as in Docker, matches a name at the root of the
-# context only and leaves out its whole tree. Any other line fails, naming it, instead of drifting from what Docker
-# sends unnoticed; a new form means teaching this function the same rule in the same change.
+# web_build_id: prints the build id of the web image on the dev path (SVP_BUILD_ID, Next's deploymentId and the server's
+# release name): dev- and the first 12 hex digits of the SHA-256 of the list "<SHA-256 of the content> <path>", sorted
+# by path, of every file the build context web_dir sends (by its .dockerignore, not by git) plus the Dockerfile. The
+# same context gives the same id, so `make k8s-up` starts no new ReplicaSet (or canary); any change gives a new id.
+
+# Only the form the clone's .dockerignore has is understood: each line is a one-level name pattern of letters, digits, .
+# _ - * and ?, which matches a name at the root of the context only and leaves out its whole tree. Any other line fails,
+# naming it, instead of drifting from what Docker sends; a new form means teaching this function the same rule.
 web_build_id() {
   local dir dockerfile=Dockerfile ignore line path name pattern list kept entry
   local patterns=() entries=() files=()
@@ -1122,12 +1023,10 @@ build_web_image() {
   image_id=${image_id#sha256:}
 }
 
-# build_dev_images [SERVICE...]: builds the images of SERVICE... (default: the seven of svp_services) from the working
-# tree, those of the image table with bake_images, web from the clone of svp-frontend (build_web_image), pushes each to
-# the registry as 127.0.0.1:5111/svp/<service>:dev-<first 12 hex digits of its image ID>, and sets dev_tag_<service
-# with _ for -> to that tag. The build cache gives the same image ID for the same inputs, so a run with no code
-# change yields the same tags, the pod templates do not change, and no new ReplicaSet (later: no canary) starts. Run
-# after ensure_registry.
+# build_dev_images [SERVICE...]: builds the images of SERVICE... (default: svp_services) from the working tree, those of
+# the image table with bake_images, web from the clone of svp-frontend (build_web_image), pushes each to the registry as
+# 127.0.0.1:5111/svp/<service>:dev-<first 12 hex digits of its image ID> and sets dev_tag_<service, - as _> to that tag.
+# The same inputs give the same image ID, so no new ReplicaSet (later: no canary) starts. Run after ensure_registry.
 build_dev_images() {
   local svc id tag ref services=("$@") targets=()
   [ $# -gt 0 ] || services=("${svp_services[@]}")
@@ -1164,39 +1063,23 @@ image_paths() {
   printf '%s\n' go.mod go.sum gen internal "services/$1" "$(dockerfile "$1")" .dockerignore
 }
 
-# Release images: built, scanned and signed by CI only,
-# under this prefix on GHCR, one image per service; nothing else may be pushed there. The promote pull request writes
-# a release's repository, tag (first 12 hex digits of its commit, for people) and digest (what pods run) into
+# Release images: built, scanned and signed by CI only, under this prefix on GHCR, one image per service; nothing else
+# may be pushed there. The promote pull request writes a release's repository, tag and digest into
 # envs/<env>/images/<service>.yaml of svp-gitops; the GitOps cluster pulls them anonymously by digest. The dev path
-# never reads them: `make k8s-up` passes its own registry, tag and an empty digest (deploy/k8s/install.sh).
-# This is the prefix of this repository's own releases; the release sources below name every prefix the cluster runs.
+# never reads them. This is the prefix of this repository's own releases; the release sources below name every prefix.
 # shellcheck disable=SC2034 # read by the scripts that source this file
 ghcr_prefix=ghcr.io/anhnvcoder/svp-backend
 
 # Release sources: every repository whose CI builds, signs and publishes images the GitOps path runs. Each has a name,
-# its repository URL, the prefix its images live under on GHCR (ending in /), the services it publishes there (a
-# service is in two sources only while it moves from one to the other), the drill images it may push there, the
-# keyless identity of its images.yml on main (issuer, subject), the ref its build provenance names, and the GitHub App
-# that promotes its releases (promoter). They are written once, in this file of chart svp-policy, whose policy admits
-# exactly these images with these identities; the scripts read the same file, so what they check is what admission
-# checks. The rules on the table are written once too, in the template of the chart, which fails the render of a
-# table the policy would get wrong (deploy/ci/sources-test.sh). The scripts read the table without checking those rules
-# again, since every table they read on the release path has rendered first: the working tree's in job config of CI
-# (make helm-check, sources-test.sh), required before a change reaches main; the one at the revision an environment
-# pins, a commit on main, in gitops-check.sh (step 3 renders the charts of that revision) and in Argo CD, which syncs
-# no policy that does not render. Every source of the working tree's table has a promoter (deploy/ci/sources-test.sh).
-# A table of an older commit may hold a retired source, one without promoter: a repository renamed, its successor
-# another source, whose releases signed under the old name stayed admitted while an environment ran them, but nothing
-# built, promoted or rescanned for it.
+# its repository URL, its image prefix on GHCR (ending in /), its services, its drill images, the keyless identity of
+# its images.yml on main, the ref its build provenance names and its promoter. Written once, in this file of chart
+# svp-policy, whose policy admits exactly these images with these identities; the scripts read the same file.
 release_sources_file=deploy/helm/svp-policy/files/sources.json
 
-# release_sources [REV]: prints the table of release sources ({"sources": [...]}, compact JSON) of this repository at
-# commit REV, or of the working tree when REV is empty; fails when it is not JSON. The template above holds every rule
-# of the table; this checks the one every script relies on before it builds, pushes, signs or verifies under a prefix,
-# on a table no render may have read yet (an image job, a drill on a machine): each imagePrefix is a registry path
-# ending in /, and none starts another, so an image is under the prefix of at most one source.
-# Fails too when REV is no commit of this clone, or a commit from before the table: no environment pins one any more,
-# so its one source is not rebuilt from the policy's values of then; pin a newer commit.
+# release_sources [REV]: prints the table of release sources (compact JSON) of this repository at commit REV, or of the
+# working tree when REV is empty; fails when it is not JSON. Checks the one rule every script relies on before it
+# builds, pushes, signs or verifies, on a table no render may have read yet: each imagePrefix is a registry path ending
+# in /, and none starts another. Fails on a REV that is no commit of this clone or is from before the table.
 release_sources() {
   local rev=${1:-} table where="the working tree"
   [ -z "$rev" ] || where="commit ${rev:0:12}"
@@ -1231,10 +1114,8 @@ release_source() {
 }
 
 # The two lookups below pick a source by the prefix of an image, and with it the identity a signature of the image is
-# checked against, as Kyverno picks its attestor. The template refuses a table in which one prefix starts another, so
-# at most one source matches; each lookup still fails when more than one does, the one rule a script needs to pick,
-# so that a pick never depends on a render having run first (a drill or a check on a machine reads the working tree as
-# it is).
+# checked against, as Kyverno picks its attestor. The template refuses a table in which one prefix starts another, so at
+# most one source matches; each lookup still fails when more than one does, so that a pick needs no render first.
 
 # source_of_repository REPOSITORY [REV]: prints the name of the release source whose imagePrefix REPOSITORY lies
 # under, in the table at REV; fails unless exactly one source has such a prefix.
@@ -1273,12 +1154,10 @@ release_repositories() {
   jq -r --arg s "$1" '[.sources[] | select(.services | index($s)) | .imagePrefix + $s] | join(" or ")' <<<"$table"
 }
 
-# values_field FIELD: reads a service's values file on stdin and prints image.FIELD (repository, tag or digest)
-# without quotes, "" when empty. Only the shape these files have is read: exactly one line `  FIELD: <value>` inside
-# the top-level `image:` block, the value bare or in double quotes, no comment after it, and of FIELD's form:
-# repository [0-9a-z.:/_-]*, tag empty or 12 lowercase hex digits (a commit), digest empty or sha256:<64 hex>. Anything
-# else fails, naming the problem on stderr, rather than guess: the result goes to a registry, to cosign and to git.
-# Exit status: 3 no such line, 4 the line twice, 5 a value of the wrong form.
+# values_field FIELD: reads a service's values file on stdin and prints image.FIELD (repository, tag or digest) without
+# quotes, "" when empty. Reads only the shape these files have: one line `  FIELD: <value>` in the top-level `image:`
+# block, bare or double-quoted, no comment after it. Anything else fails, naming the problem on stderr, rather than
+# guess: the result goes to a registry, to cosign and to git. Exit 3: no such line; 4: the line twice; 5: wrong form.
 values_field() {
   local form value rc=0
   case $1 in
@@ -1338,13 +1217,10 @@ ghcr_manifest_status() {
     "https://ghcr.io/v2/$1/manifests/$2" || true
 }
 
-# release_image SERVICE WHERE: reads SERVICE's image file on stdin (WHERE names it in messages, such as
-# "envs/stg/images/gateway.yaml at 1a2b3c4d5e6f") and prints REPOSITORY@DIGEST of the release it names
-# once the GitOps cluster can pull it: image.digest set (the promote pull request writes it), image.repository
-# SERVICE's image of a release source that publishes SERVICE (release_source_of, the working tree's table), and that
-# manifest served to an anonymous pull by GHCR. Fails naming the cause
-# otherwise; creates nothing. Whether the release carries a signature and a fresh vuln attestation is
-# deploy/ci/verify-release.sh's check.
+# release_image SERVICE WHERE: reads SERVICE's image file on stdin (WHERE names it in messages) and prints
+# REPOSITORY@DIGEST of the release it names once the GitOps cluster can pull it: image.digest set, image.repository
+# SERVICE's image of a release source that publishes SERVICE, and that manifest served to an anonymous pull by GHCR.
+# Fails naming the cause otherwise. A signature and attestation are deploy/ci/verify-release.sh's check.
 release_image() {
   local svc=$1 where=$2 values repo digest code
   values=$(cat)
@@ -1388,12 +1264,10 @@ gitops_at() {
   fi
 }
 
-# web_source: what the web client of `make up` and `make k8s-up` runs, from WEB_FROM: stg (the default when unset) runs
-# the release staging runs (stg_release web); clone builds its image from web_dir, the clone of svp-frontend; image runs
-# WEB_IMAGE, a release given as ghcr.io/<repository>@sha256:<digest>, which GHCR must serve to an anonymous pull as the
-# nodes and compose pull it. Sets web_release to REPOSITORY@DIGEST of that release, empty when the image is built. A
-# release keeps the SVP_BUILD_ID CI built it with and is never built here, so the targets that build the source maps of
-# the web (make web-sourcemaps, make k8s-web-sourcemaps) do not apply to it.
+# web_source: what the web client of `make up` and `make k8s-up` runs, from WEB_FROM: stg (default) runs the release
+# staging runs; clone builds its image from web_dir; image runs WEB_IMAGE, which GHCR must serve to an anonymous pull.
+# Sets web_release to REPOSITORY@DIGEST, empty when built. A release keeps the SVP_BUILD_ID CI built it with, so the
+# targets that build the source maps of the web do not apply to it.
 web_source() {
   local repo code
   web_release=
@@ -1417,15 +1291,10 @@ web_source() {
   esac
 }
 
-# compose_images: exports what deploy/compose/compose.yaml reads to pick the images of the application for `make up`
-# and `make compose-config`. IMAGES unset: the six backend services run their images built from the working tree
-# (compose_up_images builds them with bake_images, under the tags of the image table, svp/<service>:dev);
-# IMAGES=stg: they run their releases in staging (stg_release), their migrations the same images, so a stack of
-# this checkout runs exactly what staging runs, with no Go build. Compose never builds or pulls any of the six (pull
-# policy never in compose.yaml). The web client as web_source says: built from web_dir (its folder and Dockerfile) by
-# compose, or a release. A release runs as already pulled (compose_up_images): pull policy never, so compose neither
-# pulls nor builds it. Sets compose_bake to the services compose_up_images builds, compose_releases to every
-# REPOSITORY@DIGEST to pull and compose_notes to one line per choice; prints nothing.
+# compose_images: exports what deploy/compose/compose.yaml reads to pick the images of the application for `make up` and
+# `make compose-config`. IMAGES unset: the six backend services are built from the working tree (compose_up_images, with
+# bake_images, as svp/<service>:dev); IMAGES=stg: they and their migrations run the releases in staging (stg_release),
+# with no Go build. Web as web_source says. Sets compose_bake, compose_releases and compose_notes; prints nothing.
 compose_images() {
   local svc var ref dir gitops
   compose_bake=() compose_releases=() compose_notes=()

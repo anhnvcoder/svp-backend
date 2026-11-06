@@ -1,17 +1,7 @@
-{{- /*
-Namespaces by role: svp (the six Go services and the web client), svp-data (Postgres, Valkey,
-Redpanda, the object store s3), svp-obs (observability, GlitchTip), svp-edge (Gateway and wildcard certificate). Pod Security
-Admission enforces "restricted":
-pods must run as non-root, drop every capability, use seccomp RuntimeDefault and forbid privilege escalation; a chart
-that cannot is fixed in its values, the namespace is not loosened. warn and audit use the same level so kubectl and
-the audit log name what enforce rejected. The platform namespaces of values.yaml get the same Pod Security labels and
-nothing else. deploy/k8s/install.sh and deploy/k8s/gitops.sh render this template alone (no release) for the
-namespaces they make before this chart, so those carry the same labels: both make the project's namespaces before wave
-0, Envoy Gateway binding a Role in each one it watches; install.sh also those of wave 0 (platformNamespaces set to
-them), gitops.sh argocd. This chart then takes the project's over. With externalSecrets on and its store kubernetes
-(the GitOps path's stg), namespace externalSecrets.sourceNamespace too: the source Secrets of templates/external-secrets.yaml,
-no pod; deploy/k8s/gitops.sh renders this template with that overlay, so it exists before deploy/k8s/secrets.sh fills it.
-*/}}
+{{- /* Namespaces by role: svp (the six Go services and the web client), svp-data (Postgres, Valkey, Redpanda, the
+object store s3), svp-obs (observability, GlitchTip), svp-edge (Gateway and certificates). Pod Security
+Admission enforces "restricted": a chart that cannot meet it is fixed in its values, the namespace is not
+loosened. install.sh and gitops.sh render this template alone for the namespaces they make before this chart. */}}
 {{- $sources := list }}
 {{- with .Values.externalSecrets }}
 {{- if and .enabled (eq .store "kubernetes") }}

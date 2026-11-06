@@ -1,21 +1,16 @@
 # WEB-8 of the threat model (docs/threat-model.md): the web client puts neither every web user in one rate limit bucket
-# nor a client with a forged X-Forwarded-For in a bucket of its own. Once every login-ip bucket has expired, 40 wrong
-# logins through the web client's /login form (the Server Action, each with a new email and its own forged
-# X-Forwarded-For) over one HTTP/2 connection to Envoy, 8 in flight at a time: every answer is the form whose alert reads
-# "Wrong email or password" or "Too many tries" (any 429 of the gateway), at least one is a 429 of login-ip (no
-# login-email key for its email), every 401 left its login-email key; the login-ip keys added are 1 or 2, on the pod
-# network of a node and none the address of a web pod (which would put every web user in one bucket), no key is for a
-# forged address, and the login-email key of every login that passed names one of those addresses: the gateway counts
-# the address Envoy wrote, which the web client passes on unchanged. Control: logins through the web client pass the
-# rate limit and reach the gateway's limiter and user-service.
-#
+# nor a client with a forged X-Forwarded-For in a bucket of its own. 40 wrong logins through its /login form over one
+# HTTP/2 connection, each with its own forged address: the login-ip keys added are 1 or 2, on the pod network of a node
+# and none the address of a web pod, and no key is for a forged address.
+
 # As RL-1 (rl-1/chainsaw-test.yaml, whose ratelimit.sh this test sources): judged on an attempt in which no login
 # decision fell back to a gateway pod's in-memory limiter, at most 3 attempts, each once the login-ip bucket is full
-# again (RL-1 spends the same bucket). The attempts are one operation, which stops the test when none counts; each check
-# of the attempt that counts is one operation after it, named by its ID; continueOnError keeps the next ones running
-# after one fails, and the test still fails. The scripts source ../web-7-web-2/web.sh (the form helpers) and
-# ../rl-1/ratelimit.sh; their files live in the test's private work directory .k8s/drills/web-8, made by the first step
-# and removed when the test ends. Valkey is only read (SCAN, TIME in db 10).
+# again (RL-1 spends the same bucket). Valkey is only read (SCAN, TIME in db 10).
+
+# The attempts are one operation, which stops the test when none counts; each check of the attempt that counts is one
+# operation after it, named by its ID; continueOnError keeps the next ones running after one fails, and the test still
+# fails.
+# Design notes: docs/threat-model.md.
 apiVersion: chainsaw.kyverno.io/v1alpha1
 kind: Test
 metadata:

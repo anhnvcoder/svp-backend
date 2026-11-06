@@ -1,16 +1,8 @@
 # shellcheck shell=bash
-# Helpers of the drill tests that spend the gateway's login-ip bucket on cluster svp: rl-1 and web-8 of
-# deploy/k8s/drills/threats/. A script of such a test sources this file from its test's folder (Chainsaw runs it there):
-# `. ./ratelimit.sh` in rl-1, `. ../rl-1/ratelimit.sh` in web-8. Written for bash 3.2 (the macOS /bin/bash).
-#
-# Valkey (the gateway's db 10) is only read: SCAN, PTTL, MGET, TIME. Prometheus is read through the test's port-forward
-# on 127.0.0.1:19090 (templates/port-forward.yaml). Every file the helpers write is private (umask 077) and lives in the
-# test's own work directory, $work: .k8s/drills/<folder of the test> (ignored by git), made by the test's first step
-# and removed by its cleanup.
-#
-# The script's environment needs CALLER_KUBECONFIG, the caller's kubeconfig (empty: ~/.kube/config): Chainsaw sets
-# KUBECONFIG to its own copy of the cluster (templates/probe-up.yaml says why). kubectl always names context k3d-svp;
-# curl takes the cluster's CA from CURL_CA_BUNDLE, which the make target sets.
+# Helpers of the rl-1 and web-8 drills of deploy/k8s/drills/threats/ that spend the gateway's login-ip bucket, sourced
+# from the test's folder (`. ./ratelimit.sh` in rl-1, `. ../rl-1/ratelimit.sh` in web-8); bash 3.2. Valkey (db 10) is
+# only read. Files are private (umask 077) and live in the test's work directory $work.
+# Design notes: docs/threat-model.md.
 
 umask 077
 : "${CALLER_KUBECONFIG?the env of the script sets CALLER_KUBECONFIG to the caller KUBECONFIG}"
@@ -69,12 +61,10 @@ promql() {
   curl -sf --max-time 10 "http://127.0.0.1:$prom_port/api/v1/query" "${args[@]}" | jq -c '.data.result'
 }
 
-# gateway_pods: the gateway's server pods as one JSON line, sorted by name: name, uid, phase, whether being deleted, the
-# restart count of each container. Pods that have ended (Succeeded, Failed: an evicted pod stays so) are left out, as
-# no process of theirs runs. Each gateway process pushes its rate limit decisions under an instance label of its own
-# (service.instance.id, random per process: internal/telemetry), which names no pod, so the processes of an attempt are
-# told by their pods instead: the same line before and after the burst, every pod Running and none being deleted, means
-# the same processes ran all along. A new pod, an ended, deleted or terminating one, or a restarted container changes it.
+# gateway_pods: the gateway's server pods as one JSON line sorted by name: name, uid, phase, whether being deleted, the
+# restart count of each container; ended pods (Succeeded, Failed) are left out. A gateway process pushes its decisions
+# under a random instance label that names no pod, so an attempt's processes are told by their pods: the same line
+# before and after the burst, every pod Running and none being deleted, means the same processes ran all along.
 gateway_pods() {
   kc -n svp get pods -l app.kubernetes.io/name=gateway,app.kubernetes.io/component=server -o json |
     jq -c '[.items[] | select(.status.phase != "Succeeded" and .status.phase != "Failed")
@@ -89,15 +79,10 @@ pods_summary() {
     | join(", ")' <<<"${1:-[]}" 2>/dev/null || echo "not read"
 }
 
-# rl1_fallback: whether a login decision of the last burst (Valkey's time rl1_t_start before it, rl1_t_end after it;
-# the gateway's pods as it started, rl1_pods_before) fell back to a gateway pod's in-memory limiter. Each pod counts its
-# decisions in svp_ratelimit_decisions_total by store and pushes them every 15 s, each sample stamped with the time it
-# was read. The attempt is judged only when the gateway's pods (gateway_pods) were the same before the burst and once
-# every one of them has pushed after it, all Running and none being deleted: then exactly as many instances as pods
-# have a sample stamped after the burst (a process that is gone pushes nothing new, and one more instance than pods is a
-# process the pods do not account for), and the fallback login decisions of each in its latest sample are compared with
-# those in its last sample before the burst (an instant query at rl1_t_start), instance by instance. Sets rl1_fell to 0
-# when they are equal on every one (rl1_pods: how many), else to what grew or why it cannot be told.
+# rl1_fallback: whether a login decision of the last burst (Valkey's time rl1_t_start before it, rl1_t_end after it)
+# fell back to a gateway pod's in-memory limiter, by svp_ratelimit_decisions_total of each pod, pushed every 15 s.
+# Judged only when the pods were the same before the burst and every one has pushed after it, with as many instances as
+# pods. Sets rl1_fell to 0 when no instance's fallback count grew (rl1_pods: how many pods), else to what grew or why.
 rl1_fallback() {
   local pods deadline fresh n after before now i d grew=0 on=0 unknown=0
   local since=$((rl1_t_end + 1))

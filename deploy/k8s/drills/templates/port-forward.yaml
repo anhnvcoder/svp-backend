@@ -1,17 +1,12 @@
 # kubectl port-forward on 127.0.0.1 to a Service or pod, for the drills that read Prometheus (127.0.0.1:19090) or Grafana
-# (127.0.0.1:13000). Use it as a step of the test that needs it, with the bindings that differ from the defaults:
-#   - use:
-#       template: ../../templates/port-forward.yaml
-#       with:
-#         bindings:
-#         - {name: forwardNamespace, value: svp-obs}
-#         - {name: forwardTarget, value: service/kps-prometheus}
-#         - {name: forwardPort, value: "19090"}
-#         - {name: forwardRemotePort, value: "9090"}
-#         - {name: forwardReadyPath, value: /-/ready}
-# The forward stops when the test ends, failed or not: the pid goes to .k8s/drills/port-forward-<forwardPort>.pid and the end
-# kills that pid only if it is still a kubectl port-forward on that port. A port already listening fails the step.
-# kubectl uses the caller's kubeconfig (CALLER_KUBECONFIG, not the copy Chainsaw puts in KUBECONFIG) and context k3d-svp.
+# (127.0.0.1:13000). Use it as a step of the test that needs it, with the bindings that differ from the defaults.
+
+# The forward stops when the test ends, failed or not: the pid goes to .k8s/drills/port-forward-<forwardPort>.pid
+# and the end kills that pid only if it is still a kubectl port-forward on that port. A port already listening fails
+# the step. kubectl uses the caller's kubeconfig (CALLER_KUBECONFIG, not the copy Chainsaw puts in KUBECONFIG) and
+# context k3d-svp.
+
+# Design notes: docs/reference/k8s.md.
 apiVersion: chainsaw.kyverno.io/v1alpha1
 kind: StepTemplate
 metadata:

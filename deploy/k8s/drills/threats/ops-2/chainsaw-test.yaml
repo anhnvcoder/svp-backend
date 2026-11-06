@@ -1,14 +1,14 @@
-# OPS-2 of docs/threat-model.md on cluster svp: the only routes are HTTPRoute svp/api, svp/web and svp-data/s3 (to gateway,
-# web and s3; svp.localhost to web and web-canary), no other route kind or Ingress, the only LoadBalancer or NodePort
-# Service is Envoy's, no pod outside kube-system uses the host network or a hostPort; grafana, prometheus, alertmanager,
-# glitchtip and argocd .svp.localhost are 404 at Envoy; Grafana without a login is 401 (port-forward on 127.0.0.1:13000,
-# templates/port-forward.yaml, stopped when the test ends). Controls: api.svp.localhost/healthz 200, Grafana's
-# /api/health 200 and /api/user with the admin login (Secret svp-obs/grafana-admin, through a private curl config file,
-# never on a command line or in the output) 200.
-#
-# Each check is one operation named by its ID; continueOnError keeps the next checks running after one fails, and the
-# test still fails. curl takes the cluster's CA from CURL_CA_BUNDLE, which the make target sets; kubectl uses the caller's
-# kubeconfig and context k3d-svp (templates/probe-up.yaml says why).
+# OPS-2 of the threat model (docs/threat-model.md) on cluster svp: the only routes are HTTPRoute svp/api, svp/web and
+# svp-data/s3 (to gateway, web and s3; svp.localhost to web and web-canary), no other route kind or Ingress, the only
+# LoadBalancer or NodePort Service is Envoy's, no pod outside kube-system uses the host network or a hostPort.
+
+# grafana, prometheus, alertmanager, glitchtip and argocd .svp.localhost are 404 at Envoy; Grafana without a login is
+# 401 (port-forward on 127.0.0.1:13000, templates/port-forward.yaml, stopped when the test ends). Controls:
+# api.svp.localhost/healthz 200, Grafana's /api/health 200 and /api/user with the admin login (Secret
+# svp-obs/grafana-admin) 200.
+
+# curl takes the cluster's CA from CURL_CA_BUNDLE, which the make target sets; kubectl uses the caller's kubeconfig
+# and context k3d-svp (templates/probe-up.yaml says why).
 apiVersion: chainsaw.kyverno.io/v1alpha1
 kind: Test
 metadata:

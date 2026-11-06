@@ -1,15 +1,13 @@
-# Supply chain drill, case l: an image signed and attested vuln like a release, but without build provenance, sent as
-# a server-side dry run of a pod of svp: refused with the provenance rule's message, only when the running policy
-# checks provenance (requireProvenance of chart svp-policy: it has attestation provenance); otherwise SKIP "policy
-# off". The image is value noProvenance when given, otherwise the newest drill-no-provenance under the prefix of release
-# source backend on GHCR (deploy/ci/ghcr-digest.sh newest, anonymous: the drill image CI signs and attests vuln and
-# never attests provenance); noProvenance=none leaves the case out (SKIP), for a caller that knows that image is past
-# the maximum age. Kyverno checks provenance after every other rule, so the refusal shows the provenance rule only if
-# the image passes all of them: before sending the pod the case checks with cosign (anonymous) that the image is
-# signed, has exactly one vuln attestation of both platforms, no CRITICAL, scanned within the policy's maximum age, and
-# has no provenance attestation; otherwise, or when no drill-no-provenance is found, the case fails, naming the
-# dispatch that builds the drill images again (no image file of svp-gitops names a drill image, so the daily rescan
-# never attests it again).
+# Supply chain drill, case l: an image signed and attested vuln like a release, but without build provenance, as a dry
+# run of a pod of svp: refused with the provenance rule's message, only when the running policy checks provenance
+# (requireProvenance of chart svp-policy), otherwise SKIP "policy off". The image is value noProvenance, else the newest
+# drill-no-provenance on GHCR; noProvenance=none skips it, for a caller that knows it is past the maximum age.
+
+# Kyverno checks provenance after every other rule, so the refusal shows it only if the image passes all of them: the
+# case first checks with cosign that the image is signed, has exactly one vuln attestation of both platforms, no
+# CRITICAL, is within the maximum age and has no provenance attestation; otherwise it fails, naming the dispatch that
+# rebuilds it.
+
 # Helpers, inputs and the verdict lines: ../lib.sh.
 apiVersion: chainsaw.kyverno.io/v1alpha1
 kind: Test

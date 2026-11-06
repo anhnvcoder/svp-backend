@@ -69,9 +69,9 @@ Loại tài liệu (Diátaxis): **reference**, tra cứu khi cần một lệnh 
   ([ADR-0050](../adr/0050-bash-to-standard-tools.md)): `deploy/ci/sources-test.sh` (job `config`) đưa từng bảng hỏng qua render, phải
   bị từ chối đúng message, bảng của working tree render được. Script đọc bảng mà không kiểm lại luật, vì mọi bảng đường phát hành đọc
   đã render trước: bảng working tree ở job `config` (bắt buộc trước khi vào `main`), bảng ở `revision` env ghim (commit trên `main`) ở
-  bước 3 của `gitops-check.sh` và ở Argo CD. Script chỉ giữ một luật, ở hai hàm chọn nguồn theo prefix của image (`source_of_repository`,
-  `release_source_of` của `lib.sh`): hơn một nguồn khớp thì dừng, để identity được chọn không tuỳ vào việc render đã chạy hay chưa
-  (diễn tập, check trên máy đọc working tree như đang có). Kyverno thật chọn attestor
+  bước 3 của `gitops-check.sh` và ở Argo CD. Script chỉ giữ hai luật: `release_sources` kiểm mỗi `imagePrefix` là đường registry kết thúc `/` và không
+  prefix nào bắt đầu bằng prefix khác, và hai hàm chọn nguồn theo prefix của image (`source_of_repository`, `release_source_of` của `lib.sh`) dừng khi hơn một
+  nguồn khớp, để identity được chọn không tuỳ vào việc render đã chạy hay chưa (diễn tập, check trên máy đọc working tree như đang có). Kyverno thật chọn attestor
   theo prefix: lượt `verify.yml` `gitops` trên `main` 41112757906 (trước đổi tên, stg chạy web của nguồn `web` khi đó, dưới tên `svp-web`): ca (m)
   hai chiều identity bị từ chối đúng message nêu nguồn, bản web đang chạy được nhận. **Build provenance**
   ([ADR-0027](../adr/0027-slsa-build-provenance.md) §4): giá trị `imageVerification.requireProvenance` của chart (mặc định `false`,
@@ -343,6 +343,330 @@ Loại tài liệu (Diátaxis): **reference**, tra cứu khi cần một lệnh 
   job `stack` của CI `svp-frontend`; image source map không còn
   ([ADR-0039](../adr/0039-mainpath-drills-scan-gate-sourcemaps.md) §3). **LOCAL LAB ONLY:** `k8s-web-e2e` xoá khoá
   `svp:gw:rl:register:*` ở Valkey db 10 của cluster.
+
+## Cách các script của cluster làm việc
+
+Phần này ghi vì sao các hàm và script ở `deploy/k8s/` làm như vậy; lệnh `make` và hành vi theo từng target ở mục trên. Thiết kế của chart ở
+[`deployment.md`](../explanation/deployment.md#chart-helm-của-project).
+
+### Tạo cluster và hàm dùng chung của `lib.sh`
+
+- **File cấu hình API server là mount.** Mount là file trên máy ở đường mà cluster đã được tạo từ đó, và API server đọc lại nó mỗi lần node
+  khởi động: mỗi `k3d cluster start`, và khi Docker tự khởi động node (restart policy `unless-stopped`, ví dụ sau khi Docker hay laptop khởi
+  động lại), nên cluster đang chạy cũng được kiểm. Repo bị dời hay đổi tên, hay checkout không có file: Docker tạo một thư mục rỗng ở đường
+  cũ, mount nó, và API server không bao giờ lên (`k3d cluster start` chỉ hết hạn sau 300 giây). File ở đó mà khác file của repo này thì sẽ
+  bị đọc mà không kiểm. Cả hai trường hợp cluster được tạo lại từ checkout này; bản clone khác có cùng nội dung thì không sao.
+- **Vì sao có `pod-security-admission.yaml`.** Namespace của lab đã mang nhãn Pod Security; file đặt `restricted` cho phần còn lại
+  (`default`, `kube-public`, `kube-node-lease`, namespace tạo sau), nơi một controller được tạo pod ở mọi namespace (role của ACME solver của
+  cert-manager) có thể khởi động pod đặc quyền có `hostPath` của node, tức root trên node, nơi giữ kubeconfig admin của k3s. File mount chỉ
+  đọc vào node server bởi `deploy/k8s/k3d.yaml` và truyền cho API server bằng `--kube-apiserver-arg=admission-control-config-file` (k3s
+  không có cờ PSA riêng và không ghi file như vậy). API server chỉ đọc lúc khởi động: thay đổi có hiệu lực ở cluster mới (`make k8s-down
+  && make k8s-up`).
+- **Đua địa chỉ với registry** (k3d v5.9.0). K3d dành địa chỉ trống đầu tiên của network cho container tools của nó chỉ trong bộ nhớ, trong
+  khi Docker trao chính địa chỉ đó cho registry đang chạy khi k3d nối nó; node server khi đó có thể nhận địa chỉ mà container tools lấy ngay
+  sau (luôn xảy ra khi image của nó còn đang kéo) và không khởi động được với "Address already in use" (`ClusterPrepNetwork` và
+  `ClusterRun` trong `pkg/client/cluster.go`). Vì vậy registry được nối khi đang dừng: nó chỉ nhận địa chỉ khi khởi động lại, sau khi các
+  node đã có địa chỉ. Cùng cuộc đua khi khởi động lại cluster có sẵn (`GatherEnvironmentInfo` và `GetHostIP`): trước khi khởi động node, k3d
+  tạo lại container tools với địa chỉ trống đầu tiên của network, mà registry đang chạy có thể đang giữ, nên container tools lấy địa chỉ
+  cố định của node server và server lỗi "Address already in use"; registry dừng trong lúc đó và khởi động sau các node.
+- **Tạo cluster lỗi.** Khi lỗi, kể cả timeout, k3d xoá cái đã tạo (rollback), cả network `k3d-svp`; registry đã dừng vẫn nêu network đó và
+  không bao giờ khởi động lại được ("network k3d-svp not found"), nên nó được gỡ khỏi network trước (lỗi chỉ có nghĩa k3d đã gỡ rồi). Lần
+  chạy sau khi đó bắt đầu sạch. Một bước không có hạn: k3d tạo container tools của nó (kéo `k3d-tools` khi thiếu) trên một context không có
+  `--timeout`, nên một lần kéo treo giữ lệnh này chờ. Lệnh không bị kill từ ngoài: k3d sẽ dừng giữa chừng mà không rollback, để lại một
+  cluster dở dang khó dọn hơn một lần treo mà người dùng thấy. Khi treo: Ctrl-C, rồi `make k8s-down` và `make k8s-up`.
+- **`secret NAMESPACE NAME TYPE KEY=VALUE...`** in một manifest Secret, kèm nhãn trong `$label` (`"key: value"`) khi lời gọi đặt nó
+  (`label=... secret ...`). Giá trị được base64 qua pipe; không giá trị nào là đối số của chương trình nào. Dành cho `kc apply
+  --server-side -f -` qua stdin: không giá trị nào qua file hay dòng lệnh, và apply server-side giữ chúng ngoài annotation
+  `last-applied-configuration` mà apply phía client sẽ chép chúng vào. Giá trị rỗng được ghi `""` nên key của nó vẫn có: một ExternalSecret
+  gọi tên nó nếu không sẽ lỗi vì key không tồn tại.
+- **`es_force_sync [NAMESPACE/NAME...]`** làm External Secrets Operator dựng lại các ExternalSecret NAME (mọi ExternalSecret của cluster khi
+  không nêu) từ store của chúng, và chờ tới 120 giây cho tới khi từng cái xong. `refreshPolicy` của chúng là `OnChange` (chart
+  `svp-cluster`, `templates/external-secrets.yaml`): nguồn đổi chỉ tới Secret qua một thay đổi của ExternalSecret, ở đây là giá trị mới của
+  annotation `force-sync`. ESO khi đó sync một lần và ghi `status.syncedResourceVersion` (`<generation>-<hash của nhãn và annotation>`), mới
+  cùng annotation, ngay khi lần sync thành công, dù Secret nó dựng có khác cái đang có hay không: Secret không đổi được giữ nguyên (không
+  `resourceVersion` mới, nên không pod nào restart vì nó). Chờ một `resourceVersion` mới của mọi Secret sẽ treo ở mỗi cái mà giá trị không
+  đổi. ExternalSecret có generation đổi trong lúc đó (Argo CD áp revision khác) dừng việc chờ, vì lần sync thấy có thể là của spec đó;
+  cái đã biến mất cũng vậy. Không in gì ngoài lỗi: `reason` và `message` của condition `Ready` của từng ExternalSecret chưa xong, mà ESO
+  giữ ở mức an toàn để hiện.
+- **Giá trị `.env` thành Secret** dùng chung bởi `secrets.sh` (cluster lab) và `aws-secrets.sh` (entry của AWS Secrets Manager của cluster
+  EKS). Caller nạp `deploy/observability/glitchtip/dotenv.sh`, luật chặt mà chúng được đọc theo. `dotenv_read FILE VAR...` đọc mỗi VAR của
+  FILE vào biến shell cùng tên, và tên những cái thiếu hay rỗng vào `dotenv_missing` (dấu cách đứng đầu, rỗng khi không có); fail với FILE
+  vi phạm luật, và `dotenv_value` khi đó đã nêu dòng sai (không bao giờ giá trị) trên stderr.
+  - `check_next_key`: `NEXT_SERVER_ACTIONS_ENCRYPTION_KEY`, như `dotenv_read` đọc. Next giải mã khoá Server Action bằng `atob` và nhập nó
+    làm khoá AES-GCM thô lần đầu một action cần; `make env` ghi 32 byte (AES-256) base64 chuẩn. Giá trị sửa thành dạng khác thì script dừng
+    ở đây, thay vì lỗi ở pod web sau đó, ở một request nào đó. Kiểm trên text, không trên cái `base64 -d` tạo ra: `base64 -d` của macOS cũng
+    giải mã bảng chữ URL-safe (`-` và `_`), mà `atob` ném lỗi.
+  - `check_notify_key FILE AGAIN`: đọc GitHub App của Argo CD Notifications (nó ghi commit status trên `svp-gitops`) từ `.env` FILE vào
+    `SVP_ARGOCD_NOTIFY_APP_ID`, `SVP_ARGOCD_NOTIFY_INSTALLATION_ID` và `SVP_ARGOCD_NOTIFY_PRIVATE_KEY_B64`, và kiểm chúng; khi lỗi, message
+    nêu AGAIN, lệnh chạy lại khi `.env` đã sửa (`make env` không tạo được khoá của GitHub App nên không ghi biến nào trong số đó). Id là số
+    nguyên; khoá riêng là base64 chuẩn của file PEM trên một dòng, mà ExternalSecret giải mã. Các phép kiểm đọc giá trị mà không in.
+  - `redpanda_admin`: Redpanda, khác object store, giữ superuser `svp-admin` cùng mật khẩu trong dữ liệu của chính nó: nó tạo từ Secret
+    `redpanda-bootstrap` một lần, khi cluster lập, và không bao giờ đọc Secret đó nữa. Mọi container đăng nhập bằng `svp-admin` (rpk của
+    broker, sidecar giữ superuser đồng bộ, Job `redpanda-init`) lấy mật khẩu từ Secret đó khi khởi động. Mật khẩu đổi chỉ áp vào Secret (hay
+    nguồn của nó) sẽ khoá tất cả chúng ngay khi chúng khởi động lại, với mật khẩu mà Redpanda biết đã mất khỏi mọi nơi. Hàm làm Redpanda
+    nhận `SVP_KAFKA_ADMIN_PASSWORD` (đọc từ `.env`) cho `svp-admin` trước khi Secret hay nguồn của nó được ghi: bước đầu của một lần đổi
+    secret, trên cluster lab (`secrets.sh`) lẫn EKS (`aws-secrets.sh`). Trong container broker, nó đăng nhập bằng mật khẩu đó; khi lỗi thì
+    bằng mật khẩu của Secret `redpanda-bootstrap`, rồi bằng mật khẩu mà container đã khởi động với, và đặt mật khẩu mới. Nó dừng script,
+    trước khi ghi gì, khi mật khẩu đổi mà không broker nào chạy để nhận; message nêu `$again`, lệnh chạy lại script. Mật khẩu vào container
+    qua stdin; mật khẩu mới nằm trên dòng lệnh của rpk chỉ bên trong container đó, như trong Job `redpanda-init`.
+- **Root Application `argocd_root_app REPO_URL REVISION ENV CHART_REPO_URL`** in `svp-root` của đường GitOps dạng JSON cho `kc apply -f -`.
+  Root của cluster EKS là cùng Application đó, do bootstrap của repo hạ tầng (một ApplicationSet trên Secret của cluster) tạo, ở
+  `refs/heads/main`. Nó dựng bằng jq từ các giá trị `--arg`, nên revision và môi trường luôn là chuỗi JSON: một nhánh tên `2026`, `true`
+  hay `1e3` viết vào YAML nguyên văn sẽ bị đọc là số hay boolean, mà CRD Application từ chối (`targetRevision` là chuỗi). REVISION là ref
+  đầy đủ hay commit, không bao giờ tên ngắn (lý do ở mục `make k8s-gitops-up`: tên ngắn có thể phân giải sang tag cùng tên; Argo CD fetch
+  mọi nhánh và tag, nên một tag tên `main` đẩy lên bằng token bị đánh cắp có thể được triển khai).
+  - Nhãn `svp.io/notify=root` là cái mà các subscription của Argo CD Notifications chọn (`platforms/eks/argo-cd.yaml` của `svp-gitops`):
+    chỉ root báo, một commit status `argocd/ENV` mỗi commit của `svp-gitops` cho cả môi trường. Nơi notifications tắt (k3d), nhãn chọn
+    không gì.
+  - Root so sánh bằng diff mặc định của Argo CD, không bằng server-side diff mà controller dùng cho mọi Application khác
+    (`base/argo-cd.yaml` của `svp-gitops`): root áp các Application con phía client (không `ServerSideApply=true`), nên field của chúng
+    thuộc một field manager có operation `Update`. Dry run server-side là một `Apply`, không bao giờ xoá field mà entry manager khác sở
+    hữu: field bị xoá khỏi chart `argocd/root` (một `ignoreDifferences`, khối `retry`, `managedNamespaceMetadata`) sẽ ở lại trong
+    Application dự đoán lẫn Application đang chạy, nên root vẫn `Synced` và con giữ field mãi. Diff mặc định so với annotation
+    `kubectl.kubernetes.io/last-applied-configuration` của một apply phía client và thấy việc xoá. Các con áp object của chúng server-side
+    (`ServerSideApply=true`), cho thứ mà server-side diff là đúng.
+- **Báo cáo khi release không sẵn sàng.** `log_tail_namespaces` là các namespace mà log container được `unready_report` in, và là các namespace
+  duy nhất mà dòng log được `deploy/ci/verify-collect.sh` giữ trong artifact công khai (và log job) của một lượt kiểm chứng: server của bên
+  thứ ba, operator và controller, mà log nói về lần khởi động, cấu hình và peer của chúng (kiểm tra khởi động của Redpanda và lỗi bộ nhớ
+  làm nó dừng, lỗi reconcile của một operator). Bỏ ra: `svp` (service của project, log có thể giữ dữ liệu người dùng),
+  `envoy-gateway-system` (access log của Envoy proxy giữ path và query string của request, gồm chữ ký của upload presigned), `kube-system`
+  và `argocd`. Trong số này, `unready_report` còn bỏ GlitchTip (access log giữ khoá công khai của DSN, lỗi của nó giữ event đã nhận) và
+  mọi pod Postgres của CloudNativePG (một dòng lỗi trích câu lệnh đã lỗi, gồm giá trị).
+  - `mark_log NAMESPACE < LOG` in từng dòng của LOG dạng `[NAMESPACE] LINE` (thụt bốn dấu cách), dạng mà `verify-collect.sh` dùng để nhận biết một log
+    container được trích, và chỉ giữ cho các namespace của `log_tail_namespaces`: dòng không đánh dấu (panic của một service, không là
+    record JSON) sẽ tới artifact công khai của một lượt kiểm chứng. Mọi dòng được đánh dấu bất kể byte (`LC_ALL=C`: `sed` từ chối byte
+    không phải UTF-8 dưới locale UTF-8), dòng cuối kết thúc bằng newline dù LOG không (nếu không dòng in sau sẽ dính vào nó), và LOG rỗng
+    không in gì.
+  - `unready_report NAMESPACE`, sau một release không sẵn sàng, in ra stderr mỗi container của NAMESPACE chưa ready và mỗi init container
+    chưa thoát 0: trạng thái, lần thử cuối kết thúc ra sao, và, với container mà log được phép hiện, các dòng cuối của log, và của lần thử
+    trước khi nó đã restart. Helm chỉ nói "1 pods have failed", và kubelet chỉ giữ log của lần thử hiện tại và lần trước, nên container
+    crash mỗi lần khởi động biến mất cùng lý do khi cluster mất: một lượt kiểm chứng trên máy bị vứt ngay sau đó không còn gì khác để hiện.
+    Pod đã hoàn thành (Job) bị bỏ. Message của lần thử cuối cũng là một đuôi log khi `terminationMessagePolicy` của container là
+    `FallbackToLogsOnError`, nên chỉ in ở nơi log được phép.
+  - `gitops_timeout_report APPS`, khi việc chờ các Application của đường GitOps (APPS, mỗi dòng một tên) hết hạn, in ra stderr cái mà dòng
+    trạng thái của Argo CD bỏ sót, để lượt chạy trên máy bị vứt ngay sau đó vẫn cho thấy vì sao: (a) mỗi Application của APPS chưa Healthy,
+    và mỗi tài nguyên nó theo dõi chưa sẵn sàng, đọc từ cluster: Argo CD 3 giữ health của tài nguyên của một Application ngoài Application
+    (trong cache riêng, trừ khi controller chạy với `--persist-resource-health`), và API của nó cần đăng nhập. Chỉ các kind của
+    `health_kinds` được đọc, mỗi kind được phán bằng một luật gần với kiểm tra của Argo CD cho nó: Deployment, StatefulSet hay DaemonSet
+    theo pod ready và updated và generation nó đã quan sát; Job theo condition `Complete` và `Failed`; PersistentVolumeClaim theo phase;
+    kind khác theo các condition nói nó sẵn sàng (`Ready`, `Available`, ...) khi chúng không `True`, hay theo việc không có status nào. Cái
+    không có là "missing"; (b) CRD của object Prometheus và Alertmanager, lúc chúng được tạo và lúc chúng `Established`; (c) condition của
+    mọi object Prometheus và Alertmanager, hay việc nó không có condition: chưa controller nào reconcile nó; (d) mỗi container của pod
+    Prometheus operator ở `svp-obs` (nhãn `app.kubernetes.io/component` của chart `kube-prometheus-stack`): lúc nó khởi động, và các dòng
+    cuối của log, và của lần thử trước khi nó đã restart, đánh dấu như `unready_report`. Operator hỏi API server một lần, lúc khởi động,
+    những CRD nào của nó được phục vụ, và không bao giờ khởi động controller của CRD đã thiếu lúc đó (nó log cảnh báo "resource ... not
+    installed in the cluster"): một object Prometheus khi đó không bao giờ thành StatefulSet, không có event. Không gì ở đây đọc Secret.
+    Mỗi bước không đọc được cluster in lý do và các bước khác vẫn chạy.
+- **Bảng image `deploy/docker-bake.json`** là nơi duy nhất nêu các image mà repo này build từ cây của nó: sáu service Go mà CI của nó build, ký
+  và promote (`web` là một trong bảy bản phát hành, nhưng nguồn và bản phát hành của nó là của `svp-frontend`). Nó là file Docker Bake: nhóm
+  `default` liệt kê service theo thứ tự đường dev build chúng, và target `<service>` giữ Dockerfile, context, build argument và tag cục bộ
+  của image, `svp/<service>:dev` (tên mà compose chạy nó). JSON thay vì HCL để script đọc bằng `jq` mà không cần `docker`; nằm dưới
+  `deploy/` để test chép `deploy/` có nó. Nó được đọc một lần, khi `lib.sh` được nạp: `built_services`, `svp_services` và `dockerfile` trả
+  lời từ nó, cho pipeline image của CI (`deploy/ci/plan.sh`, `changed-services.sh`, `image-guard.sh`, đưa action `image-leg` Dockerfile và
+  context của nó) cũng như cho `make k8s-images`, `make k8s-up` và `make up` (`build_dev_images`, `compose_images`). Mọi context là gốc repo
+  (`.`): bản build CI (`image-guard.sh`) và `image_paths` giả định điều đó, nên bảng có context khác dừng ở đây thay vì bị build theo hai
+  cách. Bảng thiếu, không là JSON, hay nêu service không có target, Dockerfile hay context đó cũng làm script nạp nó dừng ở đây.
+- **Tag của image dev.** `build_dev_images [SERVICE...]` (mặc định bảy cái của `svp_services`) build image từ working tree, những cái của
+  bảng image bằng `bake_images`, `web` từ bản clone của `svp-frontend` (`build_web_image`), đẩy mỗi cái lên registry dưới dạng
+  `127.0.0.1:5111/svp/<service>:dev-<12 hex đầu của image ID>`, và đặt `dev_tag_<service>` (với `-` của tên đổi thành `_`) thành tag đó; chạy sau
+  `ensure_registry`. Build cache cho cùng image ID với cùng đầu vào, nên lượt chạy không đổi code cho cùng tag, pod template không đổi, và
+  không ReplicaSet mới khởi động (và với release có canary, không canary nào). `web_build_id` in build id của image web ở đường dev (`SVP_BUILD_ID`, mà Next dùng làm
+  `deploymentId` và server làm tên release): `dev-` và 12 chữ số hex đầu của SHA-256 của danh sách `<SHA-256 của nội dung> <đường>`, sắp
+  theo đường, của mọi file mà context build `web_dir` gửi (theo `.dockerignore` của nó, không theo git: file `.DS_Store` mà git bỏ qua có
+  tính, file được theo dõi mà `.dockerignore` loại thì không) cộng Dockerfile (`web_dockerfile`), mỗi đường tương đối với bản clone. Cùng
+  context cho cùng id, nên build cache cho cùng image ID; mọi thay đổi của context cho id mới, nên hai bản build khác nhau không bao giờ
+  chung một `deploymentId` qua file mà git không thấy. Symlink tính theo đường nó trỏ tới (context gửi nó nguyên dạng); mode của file
+  không tính. Chỉ dạng mà `.dockerignore` của bản clone có được hiểu: mỗi dòng (trừ dòng trống và comment `#`) là mẫu tên một cấp gồm chữ,
+  số, `.` `_` `-` `*` và `?`, mà như trong Docker chỉ khớp tên ở gốc context và loại cả cây của nó. Dòng khác thì fail và nêu tên nó, thay vì
+  lệch khỏi cái Docker gửi mà không ai biết; dạng mới nghĩa là dạy hàm này cùng luật đó trong cùng thay đổi.
+
+### Cài đặt: `install.sh`, `gitops.sh`, helmfile
+
+- **`rollouts_plugin_check`.** Plugin traffic router Gateway API của Argo Rollouts là binary native, mà controller tải khi khởi động và thực
+  thi ở lần reconcile đầu của một Rollout có canary. `base/argo-rollouts.yaml` ghim asset `linux-arm64`, cho node của một Mac; trên node
+  amd64 (host Linux x86_64, như runner CI) binary đó không chạy được: controller lỗi khi khởi động plugin ở mọi lần reconcile, trước khi
+  scale ReplicaSet của Rollout, nên gateway không bao giờ có pod. Ở đó file `archValues` mà `components.json` nêu cho amd64 được đọc sau nó,
+  như đường GitOps, và thay plugin bằng asset của cùng bản phát hành build cho amd64. Hai file phải nêu cùng một bản phát hành, để bản
+  phát hành mới không cập nhật một chỗ ghim mà bỏ chỗ kia: mỗi file giữ đúng một vị trí plugin, và các vị trí chỉ khác tên asset.
+- **Theo dõi Job `migrate`.** Job `migrate` của chart `svp-service` restart container trong một pod (`restartPolicy: OnFailure`, xem chart), và
+  khi Job lỗi, Job controller xoá pod đó cùng log của nó: Helm khi đó chỉ báo `BackoffLimitExceeded`. `watch_migrate NAMESPACE JOB OLD_UID
+  LOG HELMFILE` chạy nền từ hook presync của release của một service trong lúc nó cài, và chép log của lần thử lỗi mới nhất của Job vào
+  LOG mỗi 2 giây, khi pod còn đó; OLD_UID là Job của lượt trước, mà Helm thay, không được đọc. Nó kết thúc khi hook postsync dừng nó, hay
+  khi tiến trình HELMFILE (helmfile, cha của các hook) đã hết.
+- **`wait_rollout NAMESPACE NAME`.** Khi controller đã thấy generation hiện tại của Rollout, chờ tới khi nó `Healthy`: ngay lập tức khi
+  upgrade không tạo revision mới (hay revision mà template là stable lại), không thì sau các bước của canary (25%, 60 giây, 50%, 60 giây,
+  100%) cùng analysis nền, khoảng 3 phút. Fail khi canary bị abort (AnalysisRun của nó lỗi, hay một bước quá progress deadline) hay bị tạm
+  dừng bởi AnalysisRun inconclusive, mà không bao giờ tự promote, và nêu AnalysisRun; cũng fail sau 900 giây, quá progress deadline 600
+  giây. Mỗi lần lỗi trước hết in cách thoát (`way_out`). Dòng tiến trình và lần abort nêu AnalysisRun nền; lần tạm dừng inconclusive nêu
+  run đang Inconclusive, của bước gate (`currentStepAnalysisRunStatus`) hay của nền, vì cả hai đều làm Rollout tạm dừng.
+- **`pg_base_backup`**, sau chart `svp-data`, đảm bảo Postgres `svp-pg` archive WAL và thế hệ archive của nó có backup cơ sở để phục hồi.
+  Trên cluster mới ScheduledBackup `svp-pg-daily` chụp bản đầu ngay (`immediate`; hook của chart, sau khi Job `s3-init` tạo bucket
+  `pg-backups` và login của nó). Nhưng ở upgrade thêm plugin vào Cluster dựng trước nó, CloudNativePG khởi động Backup đó trên primary nào
+  đang Ready, có thể vẫn là pod cũ, không có sidecar của plugin: Backup khi đó lỗi vĩnh viễn (CloudNativePG không bao giờ thử lại một
+  Backup; lần chạy tiếp theo của lịch là 03:00 UTC). Vậy khi primary đã chạy sidecar và không Backup nào của `svp-pg` đang chạy, một thế hệ
+  chưa có backup cơ sở thành công trong status của ObjectStore `svp-pg-backup` nhận một bản ở đây. Rồi WAL archiving phải chạy (condition
+  `ContinuousArchiving`, mà WAL switch của một backup cơ sở đặt chậm nhất).
+- **Traffic diễn tập lúc cài.** Gateway và web client là Rollout của Argo Rollouts: upgrade đổi pod template (code mới, hay giá trị mà một
+  diễn tập để lại trong release) là revision mới, ra như canary chỉ khi Envoy đã đo đủ response của nó. Nên khi Rollout như vậy tồn tại và
+  có canary phía trước (`canary_ahead`), traffic diễn tập (`deploy/k8s/drills/traffic.sh`, request cả hai) khởi động trước mỗi lượt helmfile
+  của các wave sau wave 1 (lượt sau Secret, và trên cluster chưa sẵn sàng cho một lần đổi credential thì lượt trước chúng nữa:
+  `sync_later`), mà hook postsync chờ từng Rollout (`wait_rollout`), và dừng khi lượt đó kết thúc, kể cả khi lỗi (cả trap `EXIT`). Upgrade
+  không đổi template không tạo revision (tag dev theo image ID) và không khởi động traffic. Traffic đã chạy sẵn (`make k8s-traffic-start`)
+  được dùng và để chạy; chỉ pid mà script này khởi động mới bị dừng. `canary_ahead NAMESPACE NAME` sai chỉ khi upgrade sắp tới của release
+  NAME render Rollout NAME y hệt revision hiện tại của release và Rollout đó `Healthy`: không canary nào sẽ chạy, nên traffic không được
+  khởi động (mỗi lần khởi động đăng ký user và xoá khoá rate limit đăng ký). Rollout khác ở bất kỳ điểm nào, hay đang canary, tạm dừng
+  hay bị abort, tính là có canary phía trước, cũng như cái không render hay đọc được. Chart không đọc gì từ cluster, nên `helmfile template`
+  của release, với state value mà sync nhận, render đúng cái upgrade sẽ render.
+- **`gitops.sh`.** Mọi service được kiểm trước khi script dừng, nên một lượt chạy nêu mọi bản phát hành bị thiếu. `release_image`
+  (`deploy/k8s/lib.sh`) đọc file image từ git và hỏi GHCR; `deploy/ci/values-check.sh --gitops` rồi kiểm chữ ký và attestation `vuln` của
+  từng bản phát hành ẩn danh, với image `COSIGN_IMAGE` ghim khi cosign chưa cài, và build provenance của nó khi chart `svp-policy` kiểm nó
+  ở môi trường này: trên bản sao của riêng `envs/$env` ở revision, nên bản phát hành của các môi trường khác không bị kiểm ở đây. Image
+  phát hành, bản cài Argo CD và danh sách Application đến từ git ở đúng một commit đó, không bao giờ từ working tree, và Argo CD cũng dựng
+  cluster ở commit đó, không ở nhánh: cái script này kiểm là cái Argo CD triển khai, kể cả khi một bản phát hành tới nhánh trong lúc đó (bản
+  đó sẽ ra như canary, mà không traffic nào promote khi cluster còn được dựng). `SVP_ATTEST_MAX_AGE` chỉ cho diễn tập (không bao giờ trong
+  `.env`): giới hạn ngắn hơn 48 giờ cho tuổi của attestation `vuln`.
+  - Chart `svp-cluster` (wave 1) sở hữu namespace của project, nhưng hai thứ cần chúng sớm hơn: Secret, trước pod đầu tiên đọc một cái
+    (wave 2), và Envoy Gateway (wave 0), bind Role ở mỗi namespace nó theo dõi (`base/envoy-gateway.yaml` của `svp-gitops`) và không sync
+    được khi thiếu một cái. Nên namespace của values của `svp-cluster` được tạo ở đây từ template của chính nó, cùng nhãn Pod Security,
+    như `install.sh`; apply của Argo CD cho `svp-cluster` sau đó thấy chúng nguyên như vậy. Chart là cái stg chạy, ở commit của
+    `envs/stg/charts.yaml`, giải nén bằng `git archive` (không đọc working tree lẫn index), nên namespace khớp values Envoy Gateway mà Argo CD
+    triển khai. Values của nền tảng và overlay của môi trường cho `svp-cluster`, khi revision có, cũng được đọc, theo thứ tự Argo CD đọc:
+    khi `externalSecrets` bật, overlay thêm namespace `svp-secrets`, mà `secrets.sh` điền nguồn của Secret vào.
+  - Secret của Argo CD Notifications: ExternalSecret của nó chỉ có khi `externalSecrets` bật và `argocdNotifications` bật (chart trước khoá
+    này: tắt), nên `secrets.sh` chỉ khi đó ghi nguồn của nó và đòi biến của nó trong `.env`. Namespace `argocd`, nơi nó ở, được tạo sau,
+    trước Argo CD; ExternalSecret tới sau nữa, cùng chart `svp-cluster` (wave 1), mà Argo CD sync khi đã cài. Controller notifications của
+    Argo CD đọc Secret của nó mỗi khi nó đổi: không restart.
+  - Pod Security `restricted` trên namespace `argocd` trước pod đầu tiên của Argo CD (mọi pod của chart đạt): Namespace của template của
+    chart `svp-cluster`, như `install.sh` tạo của wave 0. Nó tồn tại trước helm, nên helm không có `--create-namespace`, mà apply của nó bỏ
+    nhãn. Argo CD được cài như `argocd/bootstrap.json` ở revision nêu nó: một object dạng của một component của `components.json`, rồi
+    values của nền tảng khi revision có, như `platforms/<platform>/<name>.yaml` của một component đứng sau file `base/` của nó (lớp nền
+    tảng là dữ liệu: Argo CD Notifications chỉ ở nơi cluster chạy cả buổi).
+  - `app_report` đọc các Application của namespace `argocd` và in một dòng mỗi tên của `$want_apps`: `ready NAME` (`Synced`, `Healthy` và
+    sync cuối `Succeeded`: tiêu chí của health check cho Application trong `base/argo-cd.yaml` của `svp-gitops`, nên hook PostSync còn
+    chạy hay lỗi thì chưa ready); `wait NAME(S/H/P)` (cái khác, với trạng thái sync, health và phase của sync cuối, `-` khi chưa đặt);
+    `missing NAME` (root chưa tạo, wave sau); rồi, sau chúng, một dòng mỗi vấn đề Argo CD báo: `error NAME: ...` (condition có type kết
+    thúc bằng `Error`: `ComparisonError` là repo không đọc được, revision hay path không tìm thấy; `InvalidSpecError`; `SyncError`...,
+    hay sync `Failed` hay kết thúc `Error` khi hết lượt thử lại) và `retry NAME: ...` (sync lỗi và đang được thử lại, kèm message của
+    Argo CD).
+  - Mọi Application của `$want_apps` ready trong hạn. DSN của GlitchTip vào Secret `svp/sentry` khi `svp-observability` (wave 5) ready;
+    Reloader restart các service (wave 7) đã khởi động trước khi DSN tới Secret `svp/sentry`, những cái khởi động sau thì đọc nó. Argo CD
+    thử lại một phép so sánh lỗi ở mỗi lần poll (60 giây), nên lỗi được in khi nó lần đầu hiện, và việc chờ dừng khi lỗi đã được báo 180
+    giây không đứt quãng (ba lần poll: không phải một lỗi thoáng qua như một lúc không có GitHub) thay vì chạy hết 1800 giây.
+- **`helmfile.yaml.gotmpl`.** Chỉ `base/` của bản clone `svp-gitops` được đọc, không bao giờ `envs/`: đường dev tự build image. Component có
+  `gitopsOnly` bị bỏ (Secret của đường dev đến từ `.env` qua `secrets.sh`), cũng như component mà `platforms` loại k3d (controller của
+  cloud); không `platforms` nghĩa là mọi nền tảng. Một component là chart upstream (`repo` + `chart` + `version`; kho OCI của Helm viết
+  `oci://...`) hay chart của repo này (`path`, đọc từ working tree này), với file values tuỳ chọn tương đối với gốc bản clone.
+  `dev_helmfile` của `rotate.sh` chạy từng release một (`--concurrency 1`), điều mà wave của Argo CD không cần nhưng bộ nhớ của máy này cần.
+  Release `reloader` cũng `needs` `argo-rollouts`, wave của riêng nó: chart của nó đọc từ cluster xem Rollout có tồn tại không.
+  - Root GitOps cũng đọc `platforms/k3d/` của bản clone, file này chỉ `base/`: `base/` được viết cho k3d, cluster của đường dev, nên giá trị
+    của k3d vào đó, được cả hai đường đọc. Một file dưới `platforms/k3d/` sẽ làm đường này cài thứ khác với cái Argo CD chạy trên k3d mà
+    không ai hay, nên render lỗi với nó, trừ `README.md` và `svp-cluster.yaml` chỉ giữ `externalSecrets`: nguồn của Secret là của riêng
+    đường GitOps, như `gitopsOnly` (đường dev áp chúng từ `.env`).
+  - State value, do `dev_helmfile` đưa trên dòng lệnh hay trong file tạm, không bao giờ trong file của repo này: `gitopsDir` (bản clone
+    `svp-gitops`; bắt buộc), `nodeArch` (`amd64` hay `arm64`, kiến trúc node của cluster `svp`; bắt buộc), `images` (`<release>:
+    {repository, tag, digest}` mỗi release của chart `svp-service`: image dev mà `make k8s-up` vừa build, hay bản phát hành web mà
+    `web_source` chọn; release thiếu thì lỗi ở lúc render của chart, nêu `image.repository is empty for release ...`) và `pgServerName`
+    (thế hệ archive của Cluster `svp-pg` đang chạy, `pg_backup_sets` của `rotate.sh`; không đặt khi Cluster chưa có, nhận mặc định của
+    chart).
+  - Hook presync và postsync gọi `deploy/k8s/install.sh hook <event> <release> <namespace> <kind> <canaryRoute> <failed>` (`kind` là `service`
+    cho release của chart `svp-service`, `component` cho phần còn lại; `failed` khi helm lỗi). Hook lỗi, như release lỗi, dừng helmfile trước
+    wave sau, với status khác 0. Cả hai không chạy với `helmfile template`, mà không hỏi cluster nào.
+
+### Secret
+
+- **Secret của service ở `svp`:** một cái mỗi service, mỗi cái chỉ có cái mà pod của service đó dùng, nên một pod bị chiếm không lộ hơn
+  credential của chính nó. `<service>-env` vào container của service làm biến môi trường; `<service>-migrate-env` giữ role migrator, chỉ
+  cho Job `migrate`. Khoá ký JWT chỉ ở `user-service-env` (threat model JWT-10); gateway và bốn service gRPC nhận khoá công khai, mà xác
+  minh access token do gateway chuyển tiếp nhưng không ký được cái nào ([ADR-0042](../adr/0042-caller-identity-grpc.md)). `web-env` chỉ giữ
+  khoá Server Action của web client, đặt lúc chạy để khoá đang dùng không bao giờ nằm trong image công khai: các thiết lập khác của nó
+  không bí mật (`base/services/web.yaml` của `svp-gitops`), DSN của nó đến từ Secret `sentry`, và Valkey, nơi nó giữ session, không có mật
+  khẩu. Secret phải tồn tại trong mọi trường hợp: chart `svp-service` đọc `<release>-env` bằng `envFrom`, không `optional`.
+- **Mật khẩu của object store và Postgres.** Object store (RustFS) lấy mật khẩu root từ môi trường lúc khởi động, trong biến mà chart `svp-data`
+  ánh xạ Secret `s3-root` tới; nó giữ bucket, user, policy, rule CORS và object khi khởi động với mật khẩu khác, và mật khẩu cũ không đăng
+  nhập được nữa (đã kiểm trên image ghim). Redpanda đã lấy mật khẩu của `.env` (`redpanda_admin`); `rpk` của broker và sidecar vẫn đăng
+  nhập bằng cái mà chúng khởi động với. Reloader restart cả hai khi Secret của chúng đổi; Job init đăng nhập bằng mật khẩu mới, nên chúng
+  chờ điều đó. Postgres không cần restart: CloudNativePG tự đặt mật khẩu superuser đã đổi (Secret `pg-superuser` mang nhãn
+  `cnpg.io/reload`).
+- **`glitchtip-init.sh`.** Ba Secret mà nó ghi là giá trị của riêng GlitchTip, do Job init (`bootstrap.py`) của nó tạo: chúng không bao giờ
+  vào `.env`, một file hay terminal; chúng được đọc bên trong pod GlitchTip qua ORM của nó và trở lại trên stdout vào một biến shell mà
+  thôi. Secret `svp-obs/glitchtip-sourcemaps` (`SENTRY_SOURCEMAPS_TOKEN`, token API `svp-sourcemaps`: `project:releases`, mà `make
+  k8s-web-sourcemaps` dùng) bị bỏ, kèm ghi chú, khi GlitchTip chưa có token đó (revision GitOps mà `bootstrap.py` có trước nó), để DSN vẫn
+  tới service. Secret `svp/sentry` (`SENTRY_DSN`, host `glitchtip.svp-obs:8000`) là tham chiếu tuỳ chọn của năm service báo lỗi: tới khi nó
+  tồn tại chúng chạy không có; `svp-obs/glitchtip-api` là token API chỉ đọc `svp-drill` (`event:read`, `project:read`). Trên cluster có
+  `svp-secrets` giá trị vào `svp-secrets/glitchtip-runtime` (rỗng khi GlitchTip chưa có token đó); trên EKS vào entry
+  `svp/<env>/glitchtip-runtime`, ghi bằng `aws_setup` và `aws_put_entry` (giá trị đi qua file mode 700, không bao giờ trên dòng lệnh); ba
+  ExternalSecret dựng lại từ đó. Chỉ cần GlitchTip ready (Job init của nó đã chạy).
+- **File `external-secrets.yaml` của chart `svp-cluster`** (`deploy/helm/svp-cluster/files/external-secrets.yaml`; `templates/external-secrets.yaml`
+  render nó khi `externalSecrets.enabled`): mỗi Secret của đường GitOps một ExternalSecret, cùng tên, namespace, key và type với cái
+  `secrets.sh` (25) và `glitchtip-init.sh` (3) áp ở đường dev, và `argocd-notifications-secret` chỉ của đường GitOps; hai danh sách phải khớp
+  nhau, và comment của `secrets.sh` nói ai đọc từng Secret. File được Helm đọc bằng `.Files.Get`, nên các template trong đó là của External
+  Secrets Operator (Go `text/template` với sprig), không của Helm. Mỗi Secret có:
+  - `values`: cái store đọc, `NAME: ENTRY/KEY`, giá trị của key `KEY` của entry `ENTRY` của nguồn (Secret của namespace `svp-secrets` trên
+    cluster lab, `svp/<env>/ENTRY` trong AWS Secrets Manager). Các entry nhóm biến của `.env` theo ai cần chúng, để Role (hay IAM policy)
+    của store của một namespace chỉ nêu các entry mà namespace đó đọc;
+  - `template`: key của Secret, mỗi key là một template trên các NAME của `values` (`.NAME`); `${postgres}` được Helm thay bằng
+    `externalSecrets.postgres` trước. Không `template` thì key của Secret là các NAME của `values`, giá trị nguyên;
+  - `type`, `labels` của Secret;
+  - `inClusterObjectStore`: `true` thì Secret chỉ tồn tại khi object store là `s3` của chart `svp-data` (`s3.mode: cluster`); với store managed
+    (`external`) không gì đăng nhập vào nó bằng khoá tĩnh;
+  - `inClusterObjectStoreKeys`: các NAME của `values` và key của `template` bị bỏ với store managed: pod lấy credential từ EKS Pod Identity,
+    và service từ chối khởi động với khoá tĩnh bên cạnh chúng;
+  - `enabledBy`: khoá của `externalSecrets` render Secret: chỉ render khi khoá đó `true` (mặc định tắt), cho Secret mà đường dev không có
+    bản tương ứng;
+  - `sharedNamespace`: `true` thì namespace thuộc chart khác, mà Secret riêng của nó controller không được ghi; controller chỉ được ghi ở đó
+    đúng Secret này, đúng type của nó (ValidatingAdmissionPolicy `svp-external-secrets-writes`).
+
+  Mỗi ExternalSecret có `target.template`, ít nhất là type của nó: không có, ESO chép nhãn và annotation của ExternalSecret lên Secret, gồm
+  annotation `force-sync` của `deploy/k8s/lib.sh`, và mỗi lần sync cưỡng bức sẽ cho Secret một `resourceVersion` mới vô ích (Reloader chỉ
+  restart khi dữ liệu đổi). Entry `argocd` là Secret của Argo CD Notifications (`externalSecrets.argocdNotifications`), mà key của cấu hình
+  service của nó (`$github-appID`...) nêu tên: GitHub App chỉ được ghi commit status trên `svp-gitops`, và bot Telegram của Alertmanager, rỗng
+  khi không đặt. Khoá riêng của nó giữ ở base64 trên một dòng trong nguồn (`.env` không nhận giá trị nhiều dòng) và giải mã ở đây. Entry
+  nguồn cũng giữ token của bot, nên store của `argocd` không đọc entry nào của `svp-obs`. Chart của Argo CD khi đó không tạo Secret tên đó
+  (`notifications.secret.create: false` trong `svp-gitops`).
+
+### Diễn tập và smoke
+
+- **`*-skips.tsv`.** Report JUnit đếm bước SKIP là đạt, nên sau mỗi lần gọi `chainsaw`, danh sách các SKIP vào
+  `.k8s/drills/<diễn tập>-skips.tsv`: mỗi dòng `<test><TAB><lý do>` cho mỗi dòng SKIP mà một test in (dòng dạng `SKIP  (<id>) <lý do>` trong
+  khối STDOUT của một bước script, đọc từ log của chainsaw trước mọi bộ lọc; `<test>` là test Chainsaw đang chạy lúc đó) và cho mỗi test bị
+  bỏ ở trên, rồi `total<TAB><n>`; file có cả khi n là 0, và cả khi chainsaw lỗi. Lý do chứa giá trị Secret của `threats` được thay bằng một
+  dòng nói vậy.
+- **Template `port-forward.yaml`** dùng như một bước của test cần nó, với các binding khác mặc định:
+  `use: {template: ../../templates/port-forward.yaml, with: {bindings: [{name: forwardNamespace, value: svp-obs}, {name: forwardTarget,
+  value: service/kps-prometheus}, {name: forwardPort, value: "19090"}, {name: forwardRemotePort, value: "9090"}, {name: forwardReadyPath,
+  value: /-/ready}]}}`.
+- **Giá trị mới của diễn tập Reloader** (`reloader/new-values.sh FILE`, FILE chưa được tồn tại, mode 600; mỗi dòng `NAME=value`). Mỗi giá trị có
+  dạng mà `make env` cho biến của nó (`deploy/compose/compose.mk`): `SVP_S3_ROOT_PASSWORD` 20 byte ngẫu nhiên hex; `SVP_KAFKA_ADMIN_PASSWORD`,
+  `SVP_VIDEO_APP_DB_PASSWORD`, `SVP_KAFKA_FEED_SERVICE_PASSWORD`, `SVP_KAFKA_KEDA_PASSWORD`, `SVP_GLITCHTIP_APP_DB_PASSWORD`,
+  `SVP_GRAFANA_ADMIN_PASSWORD` 24 byte ngẫu nhiên hex; `NEXT_SERVER_ACTIONS_ENCRYPTION_KEY` base64 chuẩn của 32 byte ngẫu nhiên;
+  `JWT_VERIFY_KEY_NEW` là `<kid>:<khoá công khai>` của một cặp khoá mới của `tools/jwtkey`, mà diễn tập thêm vào `JWT_VERIFY_KEYS` sau các
+  khoá có sẵn (khoá ký giữ nguyên); `JWT_DRILL_SIGNING_KEY` là khoá riêng (seed) của cặp đó, mà diễn tập ký một token, không bao giờ vào
+  `.env`. Trên GitHub Actions (`GITHUB_ACTIONS=true`) mỗi giá trị và base64 của nó bị mask ngay khi được tạo (dòng `::add-mask::` trên
+  stdout, trước khi gì khác đọc giá trị): chạy trong bước mà output là log của job, không bao giờ cái gửi vào file. Nơi khác nó không in gì.
+  Không bao giờ `set -x` ở đó: vết sẽ in mọi giá trị.
+- **`reloader/rotate/reloader.sh`** là helper của test `reloader-rotate` (`make drill-k8s-reloader`). Mỗi script của test nạp nó từ thư mục của
+  test, nơi Chainsaw chạy nó: `. ./reloader.sh`; viết cho bash 3.2 (`/bin/bash` của macOS). Môi trường cần `CALLER_KUBECONFIG` (kubeconfig của
+  caller, rỗng là `~/.kube/config`; Chainsaw đặt `KUBECONFIG` thành bản sao cluster của nó, `templates/probe-up.yaml` nêu lý do), và
+  `NEW_VALUES`, `OLD_VALUES`, `STATE_DIR`, các giá trị Chainsaw `newValues`, `oldValues` và `stateDir` của `deploy/k8s/drills/run.sh`: file
+  giá trị mới và cũ (dòng `NAME=value`, mode 600) và thư mục riêng của test, mà `run.sh` xoá khi diễn tập kết thúc. Giá trị chỉ được đọc từ
+  các file đó, không bao giờ từ dòng lệnh; nó rời máy này chỉ trên stdin của `kubectl exec` hay trong file cấu hình `curl` riêng của
+  `$STATE_DIR`, xoá ngay; không gì ở đây in một giá trị, hay một token. `kubectl` luôn nêu context `k3d-svp`; `curl` lấy CA của cluster từ
+  `CURL_CA_BUNDLE`, do `run.sh` đặt.
+- **Bảng "Secret → workload"** của lần đổi credential: mỗi Secret mà thay đổi của nó restart một workload, và workload đó dạng
+  Kind/namespace/name. Các Secret nó bỏ ra không restart gì: `pg-superuser` (CloudNativePG tự đặt mật khẩu), đầu vào của Job init của
+  `svp-data` (`pg-roles`, `s3-users`, `kafka-users`, `pg-backup-s3`), `<service>-migrate-env` của Job `migrate`, `glitchtip-admin`, và của
+  Alertmanager, mà nó đọc từ file. Viết từ bảng, không từ annotation của workload, để workload không opt in sẽ fail.
+- **Đặt lại giới hạn đăng ký của smoke** (`reset_register_limit` của `deploy/compose/lib.sh`). **LOCAL LAB ONLY.** Mọi request của các script
+  smoke tới gateway từ một địa chỉ bridge Docker, và mọi script đăng ký user mới, nên các lượt chạy trong một giờ dùng hết burst đăng ký
+  20 mỗi IP. Hàm xoá các bucket đăng ký (`svp:gw:rl:register:*`) ở db 10 Redis của gateway ở `127.0.0.1:6379` bằng `SCAN` + `DEL`, và không
+  khoá nào khác; bản thân giới hạn không được nâng. Với `SVP_STACK=k3d` (`make k8s-smoke`), gateway chạy trong cluster k3d `svp` cục bộ, sau
+  Envoy, và đếm trong db 10 Valkey của cluster: cùng `SCAN` + `DEL` các khoá đó chạy ở đó qua `kubectl exec` (chỉ context `k3d-svp`), vì
+  Valkey không có địa chỉ trên host; `deploy/compose/smoke.sh` chạy cùng các bước với base `https://api.svp.localhost:8443` và
+  `CURL_CA_BUNDLE=.k8s/ca.crt` để `curl` tin CA của cluster cho API lẫn storage. Với `SVP_STACK=eks` (`make eks-smoke`, `eks-seed`,
+  `eks-rl-reset`) cùng việc chạy trong Valkey của cluster EKS mà `SVP_KUBE_CONTEXT` nêu, `svp-stg` hay `svp-prd` và không gì khác: một
+  cluster lab của project này, không bao giờ cái dùng chung; `make eks-smoke` dùng base `https://api.<domain>` với chứng chỉ công khai
+  (không `CURL_CA_BUNDLE`). Load balancer của EKS giữ địa chỉ của client, nên các lượt chạy từ một máy cũng chung một địa chỉ ở đó, và pod
+  của một bài load test có thể nhận địa chỉ của các lượt trước.
 
 ## Manifest cho cluster đo thật
 

@@ -1,11 +1,12 @@
-# Supply chain drill, case f: an attestation too old. A temporary copy of the policy (same chart, maximum age 5
-# seconds, mode Enforce) that applies only to pods of svp labelled svp-drill=supplychain-stale refuses such a pod with
-# the image of case a, with the age rule's message; with the copy in place, every webhook of the image policies still
-# selects namespace svp only; the copy is deleted again and its webhook gone before the test ends, also when a step
-# fails. That image's vuln attestation is always older than 5 seconds when the drill runs (CI attests before the
-# release is promoted), so the case neither waits nor reads a clock; it only checks first, with cosign, that the image
-# has a vuln attestation at all, and fails without the temporary policy when it has none (Kyverno would then refuse it
-# for the missing attestation, which shows nothing about the age). SKIP while no pod of svp runs an image of GHCR.
+# Supply chain drill, case f: an attestation too old. A temporary copy of the policy (maximum age 5 seconds, mode
+# Enforce, only pods labelled svp-drill=supplychain-stale) refuses a pod with the image of case a, with the age rule's
+# message, while every webhook of the image policies still selects namespace svp only; the copy and its webhook are gone
+# before the test ends, also when a step fails.
+
+# The vuln attestation is always older than 5 seconds here, so the case only checks with cosign that the image has one
+# (without it Kyverno would refuse for the missing attestation, which shows nothing about the age). SKIP while no pod of
+# svp runs a GHCR image.
+
 # Helpers, inputs and the verdict lines: ../lib.sh.
 apiVersion: chainsaw.kyverno.io/v1alpha1
 kind: Test

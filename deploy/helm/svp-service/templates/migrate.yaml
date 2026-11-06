@@ -1,18 +1,24 @@
 {{- /*
-Schema migration of a service with a database: a Job runs `migrate` with the service's migrator
-role before every install and upgrade, once, not in each replica; the long-running pods hold the app role only. goose
-applies only what is missing, so a run with nothing new does nothing. A failed migration fails the release: Helm (and
-Argo CD, which reads pre-install/pre-upgrade as PreSync) stops before the new pods replace the old ones, so no service
-runs against a schema older than its code.
-
-Hooks run before every ordinary resource of the release, in a namespace that denies everything by default: the Job's
-ServiceAccount and its egress policy are hooks of the same kind with a lower weight, so they exist before the Job on
-a new cluster too. before-hook-creation replaces each one at the next run, so a Job that completed keeps its pod and
-log until then. One that fails does not: the Job controller deletes its pod, and the log with it, when the Job fails;
-deploy/k8s/install.sh copies the log of each failed attempt while the pod is there and prints it then.
-The Job's pods carry the service's name (the label Postgres's policy in svp-data opens 5432 to) with component
-migrate, so neither the Service nor the service's own policy selects them.
+Schema migration of a service with a database: a Job runs `migrate` with the service's migrator role before every
+install and upgrade, once, not in each replica; the long-running pods hold the app role only.
 */}}
+
+{{- /*
+A failed migration fails the release: Helm (and Argo CD, which reads pre-install/pre-upgrade as PreSync) stops before
+the new pods replace the old ones, so no service runs against a schema older than its code.
+*/}}
+
+{{- /*
+Hooks run before every ordinary resource of the release, in a namespace that denies everything by default: the Job's
+ServiceAccount and its egress policy are hooks of the same kind with a lower weight, so they exist before the Job.
+*/}}
+
+{{- /*
+A completed Job keeps its pod and log until the next run replaces it; a failed one does not (the Job controller deletes
+its pod and log), so deploy/k8s/install.sh copies the log of each failed attempt while the pod is there.
+*/}}
+
+{{- /* Design notes: docs/explanation/deployment.md. */}}
 {{- if .Values.migrate }}
 apiVersion: v1
 kind: ServiceAccount
@@ -72,11 +78,9 @@ metadata:
     helm.sh/hook-delete-policy: before-hook-creation
 spec:
   # A new pod's address reaches Postgres only once k3s's network policy controller has added it to the policy of
-  # svp-data, about 2 s after the pod starts (measured), and `migrate` fails at once on a refused connection. The
-  # container is therefore restarted in the same pod (OnFailure keeps the pod and its address; a new pod would race
-  # again): at once, then after the kubelet's back-off of 10 s and 20 s. The Job fails as the container restarts the
-  # third time, about 40 s after it started (measured); three restarts leave room for a short outage of Postgres too,
-  # and a migration still failing then is a real error that fails the release.
+  # svp-data, about 2 s after the pod starts, and `migrate` fails at once on a refused connection. So the container is
+  # restarted in the same pod (OnFailure keeps its address; a new pod would race again), at once and after the kubelet's
+  # back-off of 10 s and 20 s; the Job fails at the third restart. A migration still failing then is a real error.
   backoffLimit: 3
   activeDeadlineSeconds: 300
   template:

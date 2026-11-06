@@ -1,16 +1,16 @@
 {{- /*
-Flows into and out of svp-data (threat model IN-2, IN-4, IN-9). Chart svp-cluster
-already denies every pod of the namespace in both directions and opens DNS, and opens the API server for pods
-labelled svp-kube-api=allow (the Postgres instance, Redpanda's sidecar). Each policy below opens one server port to
-the pods that use it, chosen by label, so a pod elsewhere in the cluster (or a client added later without its label)
-reaches nothing. Clients in svp and svp-obs also need their own egress policy there; KEDA, the CloudNativePG operator
-and Envoy live in platform namespaces, which deny nothing outbound. The one pod here that calls another of the namespace
-is Postgres, whose backups go to the object store s3 (policy postgres-backup).
+Chart svp-cluster already denies every pod of the namespace in both directions and opens DNS. Each policy below opens
+one server port to the pods that use it, by label: a pod elsewhere, or a client without the label, reaches nothing.
+*/}}
 
+{{- /*
+Clients in svp and svp-obs also need their own egress policy there; KEDA, the CloudNativePG operator and Envoy live in
+platform namespaces, which deny nothing outbound.
+*/}}
+
+{{- /*
 Ports are the pods' ports: NetworkPolicy sees the packet after a Service has been translated to a pod.
-
-With postgres.mode external there is no Postgres pod: the pg-bootstrap Job reaches the managed Postgres at
-postgres.external.cidrs instead. With s3.mode external there is no object store pod and no s3-init Job.
+Design notes: docs/explanation/deployment.md.
 */}}
 {{- define "svp-data.svpPods" -}}
 - namespaceSelector:

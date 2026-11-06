@@ -1,24 +1,15 @@
 # shellcheck shell=bash
-# Helpers of the supply chain drill (deploy/k8s/drills/supplychain/case-*/chainsaw-test.yaml): the image policy of
-# namespace svp (Kyverno ImageValidatingPolicy svp-images, chart deploy/helm/svp-policy) on cluster svp. Each test is
-# one case of the drill; what each case shows, and why, is written in its test. Every script step of a test sources
-# this file from the test's folder (`. ../lib.sh`) with, in its environment:
-#   CASE               the letter of the case (a…m), which every verdict line and the state folder name;
-#   CALLER_KUBECONFIG  env('KUBECONFIG') of the chainsaw process (empty: ~/.kube/config). kubectl and helm use it and
-#                      always name context k3d-svp, not the copy of the cluster Chainsaw gives each script;
-#   UNSIGNED, VULNERABLE, NO_PROVENANCE, ENFORCE_TMP
-#                      the Chainsaw values unsigned, vulnerable, noProvenance and enforceTmp (make drill-k8s-supplychain
-#                      SUPPLYCHAIN_UNSIGNED=… SUPPLYCHAIN_VULNERABLE=… SUPPLYCHAIN_NO_PROVENANCE=…|none
-#                      SUPPLYCHAIN_ENFORCE_TMP=1), empty when not given.
-#
-# A check prints one line `PASS|FAIL|SKIP  (<case>) <detail>[ [<ms> ms]]` and its script exits 1 after a FAIL. Chainsaw
-# has no skip decided while a test runs, so a SKIP is a passing step whose line gives the reason; the steps of that
-# case after it print `ok    (<case>) … not run` and pass. A step that finds the case cannot run (an image or an
-# attestation missing) fails, and the test stops there, its cleanups still run.
-#
-# What a step learns for the steps after it (the path, the policy's webhooks at the start, what to undo) goes to
-# .k8s/drills/supplychain-state/case-<case>/ (ignored by git): made anew by the test's first step, removed by its last
-# cleanup. The drill reads no Secret and calls no API of the gateway, so it deletes no rate limit key.
+# Helpers of the supply chain drill (case-*/chainsaw-test.yaml): the image policy svp-images of namespace svp (chart
+# deploy/helm/svp-policy) on cluster svp. A script step sources it from the test's folder (`. ../lib.sh`) with CASE (the
+# case letter), CALLER_KUBECONFIG (chainsaw's KUBECONFIG; empty: ~/.kube/config; kubectl and helm name context k3d-svp,
+# not Chainsaw's copy of the cluster) and the Chainsaw values UNSIGNED, VULNERABLE, NO_PROVENANCE, ENFORCE_TMP.
+
+# A check prints `PASS|FAIL|SKIP  (<case>) <detail>[ [<ms> ms]]` and its script exits 1 after a FAIL. Chainsaw has no
+# skip decided while a test runs, so a SKIP is a passing step whose line gives the reason; the case's later steps print
+# `ok`. State for later steps: .k8s/drills/supplychain-state/case-<case>/ (ignored by git). The drill reads no Secret
+# and calls no API of the gateway, so it deletes no rate limit key.
+
+# Design notes: docs/threat-model.md.
 set -euo pipefail
 : "${CASE:?CASE, the letter of the case, is not set}"
 
@@ -379,10 +370,8 @@ local_image() {
 
 # unsigned_image: value unsigned when given, otherwise the newest drill-unsigned under the prefix of release source
 # backend on GHCR (deploy/ci/ghcr-digest.sh newest, anonymous; its last error line in $work/unsigned.err), empty when
-# there is none. CI pushes it with no signature and no attestation, so nothing on GHCR refers to it. Not a platform
-# manifest of a signed release's index: in Sigstore bundles the release's attestations refer to each platform
-# manifest too and Kyverno counts them as its signature, so it would pass the signature rule and be refused later, for
-# the vuln attestation; b, h and i would then depend on the format.
+# there is none. CI pushes it with no signature and no attestation. Not a platform manifest of a signed release: Kyverno
+# counts its Sigstore attestations as a signature, so b, h and i would depend on the format.
 unsigned_image() {
   if [ -n "${UNSIGNED:-}" ]; then
     echo "$UNSIGNED"
@@ -428,11 +417,10 @@ foreign_images() {
   done <<<"$images"
 }
 
-# ephemeral_rule (case h, after target_pod and bad_image): the policy reads every image of the pod, the ones it runs
-# already too, and its first check (the prefix rule) comes before the signature rule. When pod target runs an image
-# outside every release source, that check refuses the ephemeral container whatever its image: bad_rule becomes the
-# prefix rule. Case i needs none of this: it sets the image of the pod's one container (a server pod of chart
-# svp-service has no other), so the pod it sends keeps no image of before.
+# ephemeral_rule (case h, after target_pod and bad_image): the policy reads every image of the pod, so when pod target
+# runs an image outside every release source its first check (the prefix rule) refuses the ephemeral container whatever
+# its image: bad_rule becomes the prefix rule. Case i needs none of this: it sets the image of the pod's one container,
+# so the pod it sends keeps no image of before.
 ephemeral_rule() {
   local foreign
   foreign=$(foreign_images "$target") || exit 1

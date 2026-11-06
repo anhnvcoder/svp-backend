@@ -1,8 +1,8 @@
-# Prometheus configuration of grafana/otel-lgtm 0.36.0 (/otel-lgtm/prometheus.yaml in the image),
-# mounted read-only over the image's own.
-# Copied from the image unchanged except for evaluation_interval, retention, rule_files and
-# alerting: re-check it against the image's file when the image is upgraded. run-prometheus.sh
-# keeps turning on the OTLP and remote-write receivers and exemplar storage on the command line;
+# Prometheus configuration of grafana/otel-lgtm 0.36.0 (/otel-lgtm/prometheus.yaml in the image), mounted read-only
+# over the image's own. Copied unchanged except for evaluation_interval, retention, rule_files and alerting: re-check
+# it against the image's file when the image is upgraded.
+
+# run-prometheus.sh keeps turning on the OTLP and remote-write receivers and exemplar storage on the command line;
 # the image scrapes nothing itself (Redpanda is scraped by the obs Collector).
 
 global:

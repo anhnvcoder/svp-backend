@@ -1,24 +1,13 @@
 #!/usr/bin/env bash
 # Tests for the guard of the cloud context and the scripts of the eks-* targets of deploy/k8s/k8s.mk that reach an EKS
-# cluster of the project, without a cluster, a network or AWS: fake kubectl, k3d, docker, aws, curl, ffmpeg and sleep
-# first on PATH, each recording its arguments, and a fake helm that runs the real one for `helm template` (nothing
-# reaches a cluster) and records every other call. Everything is a fixture in a temporary directory: a copy of this
-# checkout's deploy/ with a fake .env, whose secrets are made at run time, so no file of the repository holds one.
-# The entries of AWS Secrets Manager (deploy/k8s/aws-secrets.sh, glitchtip-init.sh on EKS) have their own test,
-# deploy/k8s/aws-secrets-test.sh. Cases:
-#   - deploy/k8s/lib.sh: the context of kc and hc (k3d-svp unless SVP_KUBE_CONTEXT is svp-stg or svp-prd), every other
-#     name refused as the file is sourced, a cloud context refused by a script not written for it, and the helpers of
-#     the local cluster alone refusing svp-stg before docker or k3d run;
-#   - the scripts of the local cluster alone, deploy/k8s/gitops.sh and secrets.sh, refuse svp-stg before any call;
-#     deploy/k8s/aws-secrets.sh, for an EKS cluster alone, refuses k3d-svp (SVP_KUBE_CONTEXT unset or named) before
-#     any aws or kubectl call;
-#   - deploy/k8s/secrets.sh on k3d-svp as before (pg-superuser from .env, the store's sources, the same line), on a
-#     cluster before Argo CD: nothing to wait for or sync yet, every kubectl call on context k3d-svp;
-#   - reset_register_limit of deploy/compose/lib.sh with SVP_STACK=eks: the context passed, every other one refused;
-#   - deploy/k8s/eks-seed.sh with a fake API behind curl: every request to https://api.<domain> or the form's URL, and
-#     a stop when explore holds fewer than 30 videos.
-# No output of a script may hold a secret value or its base64.
-#
+# cluster, without a cluster, a network or AWS: fake kubectl, k3d, docker, aws, curl, ffmpeg and sleep first on PATH
+# record their arguments, and a fake helm runs the real one for `helm template` and records every other call.
+
+# Everything is a fixture in a temporary directory: a copy of this checkout's deploy/ with a fake .env, whose secrets
+# are made at run time, so no file of the repository holds one. No output of a script may hold a secret value or its
+# base64.
+# The entries of AWS Secrets Manager have their own test, deploy/k8s/aws-secrets-test.sh.
+
 # Usage, from anywhere: deploy/k8s/eks-context-test.sh
 set -euo pipefail
 
@@ -163,7 +152,7 @@ refused() {
   fi
 }
 
-# --- 1. deploy/k8s/lib.sh: the context.
+# --- deploy/k8s/lib.sh: the context.
 # lib_run OUT CODE: CODE after sourcing lib.sh of the throwaway checkout, with the fake tools; status in $rc.
 lib_run() {
   local out=$1
@@ -212,7 +201,7 @@ for fn in ensure_registry ensure_cluster export_ca 'k3d_ cluster list'; do
   no_cluster_call "lib.sh: ${fn%% *} on svp-stg"
 done
 
-# --- 2. the context of the scripts written for one kind of cluster alone.
+# --- the context of the scripts written for one kind of cluster alone.
 # script_run SCRIPT OUT [VAR=VALUE...]: deploy/k8s/SCRIPT of the throwaway checkout with the fake tools; status in $rc.
 script_run() {
   local script=$1 out=$2
@@ -243,7 +232,7 @@ script_run aws-secrets.sh "$work/out" SVP_KUBE_CONTEXT=arn:aws:eks:ap-southeast-
 refused "aws-secrets.sh with an ARN for context" "$work/out" "SVP_KUBE_CONTEXT is arn:aws:eks"
 no_cluster_call "aws-secrets.sh with an ARN for context"
 
-# --- 3. deploy/k8s/secrets.sh on k3d-svp.
+# --- deploy/k8s/secrets.sh on k3d-svp.
 # secrets_run OUT [VAR=VALUE...]: deploy/k8s/secrets.sh of the throwaway checkout; status in $rc.
 secrets_run() {
   local out=$1
@@ -262,7 +251,7 @@ else
 fi
 no_leak "secrets.sh on k3d-svp" "$work/k3d.out"
 
-# --- 4. reset_register_limit of deploy/compose/lib.sh.
+# --- reset_register_limit of deploy/compose/lib.sh.
 # rl_run OUT [VAR=VALUE...]: sources deploy/compose/lib.sh of the throwaway checkout; status in $rc.
 rl_run() {
   local out=$1
@@ -292,7 +281,7 @@ else
   fail "compose/lib.sh SVP_STACK=k3d: kubectl '$(cat "$FAKE_STATE/kubectl.log")'"
 fi
 
-# --- 5. deploy/k8s/eks-seed.sh against a fake API. FAKE_EXPLORE is how many items explore lists.
+# --- deploy/k8s/eks-seed.sh against a fake API. FAKE_EXPLORE is how many items explore lists.
 api_bin=$work/api-bin
 mkdir -p "$api_bin"
 cat >"$api_bin/curl" <<'EOF'

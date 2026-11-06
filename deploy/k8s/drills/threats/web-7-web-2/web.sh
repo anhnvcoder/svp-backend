@@ -1,17 +1,10 @@
 # shellcheck shell=bash
-# Helpers of the drill tests that talk to the web client (threat model 4.9) on cluster svp: web-7-web-2 and web-8 of
-# deploy/k8s/drills/threats/. A script of such a test sources this file from its test's folder (Chainsaw runs it there):
-# `. ./web.sh` in web-7-web-2, `. ../web-7-web-2/web.sh` in web-8. Written for bash 3.2 (the macOS /bin/bash).
-#
-# Every file the helpers write is private (umask 077) and lives in the test's own work directory, $work:
-# .k8s/drills/<folder of the test> (ignored by git), made by the test's first step and removed by its cleanup. The
-# drill user's credentials and session cookie (cookie jar $work/web.jar), the curl configs that carry form fields and
-# the session's tokens read from Valkey stay there and are never printed: a script prints statuses, codes and the names
-# of what it found, not values.
-#
-# The script's environment needs CALLER_KUBECONFIG, the caller's kubeconfig (empty: ~/.kube/config): Chainsaw sets
-# KUBECONFIG to its own copy of the cluster (templates/probe-up.yaml says why). kubectl always names context k3d-svp;
-# curl takes the cluster's CA from CURL_CA_BUNDLE, which the make target sets.
+# Helpers of the web-7-web-2 and web-8 drills of deploy/k8s/drills/threats/ that talk to the web client on cluster svp,
+# sourced from the test's folder (`. ./web.sh` in web-7-web-2, `. ../web-7-web-2/web.sh` in web-8); bash 3.2. Files are
+# private (umask 077) and live in the test's work directory $work; the drill user's credentials, the session cookie and
+# the session's tokens stay there and are never printed.
+
+# Design notes: docs/threat-model.md.
 
 umask 077
 : "${CALLER_KUBECONFIG?the env of the script sets CALLER_KUBECONFIG to the caller KUBECONFIG}"
@@ -39,10 +32,9 @@ web_selector=app.kubernetes.io/name=web,app.kubernetes.io/component=server
 work_ready() { [[ -d $work ]] || fail "the test's work directory ${work#"$(git rev-parse --show-toplevel)"/} exists (made by its first step)"; }
 
 # web_get PATH OUT [CURL_ARGS...] / web_post PATH OUT [CURL_ARGS...]: a request to the web client with the drill user's
-# session (the private cookie jar $work/web.jar, kept up to date; web_jar names another one, such as an empty one for a
-# logged-out request); the body goes to OUT, the response headers to OUT.headers, and the HTTP status is printed (000
-# when nothing answered). Accept-Language en: the form errors the tests read are the English copy. Redirects are not
-# followed.
+# session (cookie jar $work/web.jar; web_jar names another one); the body goes to OUT, the response headers to
+# OUT.headers, and the HTTP status is printed (000 when nothing answered). Accept-Language en: the form errors the tests
+# read are the English copy. Redirects are not followed.
 web_get() { web_curl GET "$@"; }
 web_post() { web_curl POST "$@"; }
 web_curl() {
@@ -115,11 +107,9 @@ web_form() {
 }
 
 # form_error FILE: the error the form with a password field in FILE shows, by its English copy (messages/en/auth.json):
-# wrong-credentials, rate-limited, unavailable (the box of the whole form, role="alert", by its title), email-taken,
-# handle-taken, invalid (the red note under a field, class text-danger), other (an alert or note with other copy), none
-# (neither), no-form (FILE has no such form: a redirect, an error page). Only the form's own markup is read: every
-# page of /login and /register also carries all the auth messages, unrendered, in its RSC payload (scripts outside the
-# form), so a search of the whole page finds "Wrong email or password" in a form that shows nothing.
+# wrong-credentials, rate-limited, unavailable, email-taken, handle-taken, invalid, other, none, or no-form (a redirect,
+# an error page). Only the form's own markup is read: every page of /login and /register also carries all the auth
+# messages, unrendered, in its RSC payload, so a search of the whole page finds them in a form that shows nothing.
 form_error() {
   perl -0777 -ne '
     my $form;

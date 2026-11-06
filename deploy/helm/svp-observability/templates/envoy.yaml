@@ -1,15 +1,37 @@
 {{- /*
-Envoy's metrics for the canaries of the gateway and web: Prometheus scrapes the proxy of
-Gateway svp on its metrics port, /stats/prometheus, and AnalysisTemplates <release>-canary (chart svp-service) read
-the canary backend's 5xx and latency from them. Envoy exposes a few thousand series; only the three families the
-analyses and the drills read are kept, for the clusters of HTTPRoutes api and web (svp), the routes of the releases
-with a canary: responses by class, all responses, and the response time histogram (ms). A release that gets a canary
-adds its route to the regex below, or its analysis finds no series and every run ends Inconclusive.
+Envoy's metrics for the canaries of the gateway and web: Prometheus scrapes the proxy of Gateway svp on its metrics
+port, /stats/prometheus.
+*/}}
 
+{{- /*
+AnalysisTemplates <release>-canary (chart svp-service) read the canary backend's 5xx and latency from them.
+*/}}
+
+{{- /*
+Envoy exposes a few thousand series; only the three families the analyses and the drills read are kept: responses by
+class, all responses, and the response time histogram (ms).
+*/}}
+
+{{- /*
+They are kept for the clusters of HTTPRoutes api and web (svp), the routes of the releases with a canary.
+*/}}
+
+{{- /*
+A release that gets a canary adds its route to the regex below, or its analysis finds no series and every run ends
+Inconclusive.
+*/}}
+
+{{- /*
 The PodMonitor lives in svp-obs although the pods are in envoy-gateway-system: the Prometheus operator watches svp-obs
-only (base/kube-prometheus-stack.yaml of svp-gitops), and a PodMonitor elsewhere would never be picked up, with no error
-anywhere. Prometheus finds the pods itself, with its own cluster-wide right to list pods; policy prometheus opens the
-port.
+only (base/kube-prometheus-stack.yaml of svp-gitops).
+*/}}
+
+{{- /*
+A PodMonitor elsewhere would never be picked up, with no error anywhere.
+*/}}
+
+{{- /*
+Prometheus finds the pods itself, with its own cluster-wide right to list pods; policy prometheus opens the port.
 */}}
 apiVersion: monitoring.coreos.com/v1
 kind: PodMonitor

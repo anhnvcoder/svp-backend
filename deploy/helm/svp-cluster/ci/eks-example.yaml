@@ -1,8 +1,7 @@
 # Example values of an EKS cluster, to render and check what only such a cluster turns on (helm template -f this file):
-# Postgres on Amazon RDS and objects on Amazon S3 (no CloudNativePG, no object store in the cluster, StorageClass gp3),
-# Let's Encrypt through Route 53, an NLB of AWS Load Balancer Controller in front of Envoy, the API server on 443 of the
-# control plane's network interfaces in the VPC. Placeholders only: the real CIDRs, zone, names and email come from the
-# cluster's Terraform outputs and the learner's own variables, never from git, and .example never resolves.
+# Postgres on Amazon RDS, objects on Amazon S3 (no CloudNativePG, no in-cluster object store, StorageClass gp3), Let's
+# Encrypt through Route 53, an NLB in front of Envoy. Placeholders only: the real CIDRs, zone, names and email come from
+# the cluster's Terraform outputs and the learner's own variables, never from git, and .example never resolves.
 cloudnativePG:
   enabled: false
 s3:

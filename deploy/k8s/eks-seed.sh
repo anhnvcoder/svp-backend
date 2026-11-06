@@ -1,16 +1,14 @@
 #!/usr/bin/env bash
-# The data a load test of an EKS cluster of the project reads (make eks-seed): 4 users, each uploading 8 short videos
-# (2 s, 320x240) through the public API, every one completed and waited for until READY, then GET /feed/explore must
-# hold at least 30 READY videos. The k6 profile cloud reads its pool of videos from explore at setup and fails without
-# enough; these are the videos the local seed of the verification runs makes too.
-#
-# Only the API helpers of deploy/compose/lib.sh, with SVP_STACK=eks: the gateway at BASE (https://api.<domain>, whose
-# certificate is a public one, so curl needs no CA of its own), the register rate limit reset in the Valkey of the
-# cluster SVP_KUBE_CONTEXT names (svp-stg or svp-prd). Needs curl, jq, openssl, ffmpeg and kubectl on the host.
-#
+# Seeds the data a load test of an EKS cluster reads (make eks-seed): 4 users upload 8 short videos each (2 s, 320x240)
+# through the public API, each completed and waited for until READY; GET /feed/explore must then hold at least 30 READY
+# videos, which the k6 profile cloud reads at setup and fails without.
+
+# Uses the API helpers of deploy/compose/lib.sh with SVP_STACK=eks (api.<domain> has a public certificate, so curl
+# needs no CA) and resets the register rate limit in the Valkey of the cluster SVP_KUBE_CONTEXT names. Needs curl, jq,
+# openssl, ffmpeg and kubectl.
+
 # LOCAL LAB ONLY: deploy/compose/lib.sh deletes the register rate limit keys in the cluster's Valkey db 10. Never point
 # it at a shared or production stack.
-#
 # Usage: SVP_STACK=eks SVP_KUBE_CONTEXT=svp-stg deploy/k8s/eks-seed.sh https://api.<domain>
 set -euo pipefail
 

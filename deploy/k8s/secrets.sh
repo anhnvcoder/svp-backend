@@ -1,43 +1,12 @@
 #!/usr/bin/env bash
-# Creates or updates the cluster's Secrets from .env: .env stays
-# the one source of local secrets for compose and the cluster, and no Secret is ever in git. Read with the strict rule
-# of deploy/observability/glitchtip/dotenv.sh, the one compose agrees with.
-#
-# Every value is read and checked before anything is applied: a variable missing or empty in .env (a clone from before
-# the variable existed) stops the script naming it, with no Secret created or changed. The manifests go to
-# `kubectl apply --server-side` on stdin, never through a file or a command line, and no value is printed.
-# Server-side apply also keeps the values out of the last-applied-configuration annotation that a client-side apply
-# would copy them into.
-#
-# Run by deploy/k8s/install.sh once chart svp-cluster has created the namespaces, before any chart that reads these
-# Secrets; on its own with `make k8s-secrets` after changing .env, a whole change of credentials in the order of
-# deploy/k8s/rotate.sh: the servers' Secrets (a changed password of Redpanda's superuser set in the running broker
-# first, redpanda_admin of deploy/k8s/lib.sh, which stops the script when no broker runs to take it), then a wait until
-# the object store and Redpanda run with the values of .env (Reloader restarts them), then the init Jobs of svp-data,
-# which set the new passwords in Postgres, the object store and Redpanda, then the clients' Secrets, whose workloads
-# Reloader restarts. A cluster that runs the project's workloads without Reloader, or with a workload that does not
-# name its Secrets for Reloader yet, is refused before anything is written (rotate_guard).
-#
-# The GitOps path's staging (a cluster with namespace svp-secrets, which chart svp-cluster makes with its externalSecrets
-# on and deploy/k8s/gitops.sh before Argo CD): there External Secrets Operator builds the same Secrets from the
-# ExternalSecrets of chart svp-cluster, and this script writes only their source, one Secret of svp-secrets per entry of
-# chart svp-cluster's files/external-secrets.yaml, keys named as in .env (source_manifests below). Entry
-# glitchtip-runtime it creates empty when it is missing and never changes: deploy/k8s/glitchtip-init.sh fills it. Once
-# the ExternalSecrets exist (a run after gitops.sh's first), it has them built again from the new source and waits for
-# them (es_force_sync of deploy/k8s/lib.sh), those of svp-data in the servers' step, the others in the clients', and
-# the init Jobs run as a sync of Application svp-data. gitops.sh runs it as the dev path does, before Argo CD exists;
-# `make k8s-secrets` finds the mode by the namespace. A cluster of the GitOps path from a revision without External
-# Secrets has no svp-secrets and gets the Secrets themselves, as on the dev path.
-#
-# The source of Argo CD Notifications' Secret (entry argocd-notifications) is written only when chart svp-cluster
-# renders its ExternalSecret (externalSecrets.argocdNotifications, on only where the platform turns notifications on):
-# SVP_ARGOCD_NOTIFICATIONS on or off, which deploy/k8s/gitops.sh sets from the values Argo CD gives the chart; unset
-# (make k8s-secrets), on when the cluster has that ExternalSecret. Then SVP_ARGOCD_NOTIFY_APP_ID,
-# SVP_ARGOCD_NOTIFY_INSTALLATION_ID and SVP_ARGOCD_NOTIFY_PRIVATE_KEY_B64 are required in .env (check_notify_key of
-# deploy/k8s/lib.sh). Argo CD's notifications controller reads its Secret whenever it changes: no restart.
-#
-# The local cluster only (kc of deploy/k8s/lib.sh refuses an EKS context here): the Secrets of an EKS cluster come
-# from AWS Secrets Manager, whose entries deploy/k8s/aws-secrets.sh writes (make eks-secrets).
+# Creates or updates the cluster's Secrets from .env, the one source of local secrets for compose and the cluster (no
+# Secret is ever in git), as a whole change of credentials in the order of deploy/k8s/rotate.sh.
+# Design notes: docs/reference/k8s.md.
+
+# Every value is read (the strict rule of deploy/observability/glitchtip/dotenv.sh, the one compose agrees with) and
+# checked first: one missing or empty in .env stops the script naming it, nothing applied. Manifests go to kubectl apply
+# --server-side on stdin, never through a file or a command line, no value printed nor copied into the last-applied
+# annotation. The local cluster only (kc refuses an EKS context here): EKS gets its Secrets from make eks-secrets.
 set -euo pipefail
 
 # shellcheck source=deploy/k8s/lib.sh
@@ -77,8 +46,7 @@ source_ns=svp-secrets
 gitops=
 if kc get namespace "$source_ns" >/dev/null 2>&1; then gitops=yes; fi
 
-# Argo CD Notifications (see the header): the GitHub App that writes commit statuses on svp-gitops, checked before
-# anything is applied.
+# Argo CD Notifications: the GitHub App that writes commit statuses on svp-gitops, checked before anything is applied.
 notify=off
 if [ -n "$gitops" ]; then
   case ${SVP_ARGOCD_NOTIFICATIONS:-} in
@@ -117,9 +85,9 @@ manifests() {
     SVP_VIDEO_S3_SECRET_KEY="$SVP_VIDEO_S3_SECRET_KEY" \
     SVP_MEDIA_WORKER_S3_SECRET_KEY="$SVP_MEDIA_WORKER_S3_SECRET_KEY" \
     SVP_PG_BACKUP_S3_SECRET_KEY="$SVP_PG_BACKUP_S3_SECRET_KEY"
-  # The login of the backups of Postgres svp-pg to bucket pg-backups (ObjectStore svp-pg-backup of chart svp-data;
-  # threat model BAK-1), the key names the ObjectStore reads. Only the
-  # Barman Cloud plugin's sidecar in the Postgres pods reads it, through the API server; no service gets it.
+  # The login of the backups of Postgres svp-pg to bucket pg-backups (ObjectStore svp-pg-backup of chart svp-data), the
+  # key names the ObjectStore reads. Only the Barman Cloud plugin's sidecar in the Postgres pods reads it, through the
+  # API server; no service gets it.
   secret svp-data pg-backup-s3 Opaque \
     ACCESS_KEY_ID=svp-pg-backup ACCESS_SECRET_KEY="$SVP_PG_BACKUP_S3_SECRET_KEY"
   # Redpanda's only superuser, svp-admin: the chart's bootstrap user and sidecar, and the redpanda-init Job. The
@@ -140,18 +108,13 @@ manifests() {
 
 # pg_url SERVICE ROLE PASSWORD: the connection string of role svp_<SERVICE>_<ROLE> to database svp_<SERVICE> on
 # svp-pg. sslmode=require: the server's certificate is CloudNativePG's own, so the link is encrypted but the CA is not
-# checked (that is IN-3). The passwords are hex, so nothing needs URL-encoding.
+# checked. The passwords are hex, so nothing needs URL-encoding.
 pg_url() { printf 'postgres://svp_%s_%s:%s@svp-pg-rw.svp-data:5432/svp_%s?sslmode=require' "$1" "$2" "$3" "$1"; }
 
-# The services' Secrets in svp, one per service, each with only what that service's pods use, so one compromised
-# pod exposes no more than its own credentials. <service>-env goes to the service's container as environment variables;
-# <service>-migrate-env holds the migrator role, for the migrate Job only. The JWT signing key is in user-service-env
-# alone (threat model JWT-10); the gateway and the four gRPC services get the public keys, which verify the access token
-# the gateway forwards but cannot sign one (ADR-0042). web-env holds the web client's Server Action key alone,
-# set at run time so that the key in use is never in the public image: its other settings are no secret
-# (base/services/web.yaml of svp-gitops), its DSN comes from Secret sentry, and Valkey, where it keeps sessions, has no
-# password. The Secret must exist in any case: chart
-# svp-service reads <release>-env with envFrom, not optional.
+# The services' Secrets in svp, each with only what that service's pods use, so one compromised pod exposes no more
+# than its own credentials; <service>-migrate-env is for the migrate Job only. The JWT signing key is in
+# user-service-env alone; the gateway and the four gRPC services get the public keys, which verify but cannot sign.
+# web-env: the Server Action key alone, set at run time so it is never in the public image; it must exist (envFrom).
 svp_manifests() {
   secret svp user-service-env Opaque \
     DATABASE_URL="$(pg_url user app "$SVP_USER_APP_DB_PASSWORD")" \
@@ -195,12 +158,9 @@ keda_manifests() {
 }
 
 # Alertmanager's routing, the one deploy/observability/alertmanager/entrypoint.sh writes for compose (keep the two in
-# step): alerts grouped by name and severity, severity="page" to Telegram when .env has both a bot
-# token and an integer chat id, everything else (and every alert, without Telegram) only listed in the UI and API.
-# severity="ticket" always stays in the UI: the 1d/3d SLO windows keep firing for days after a drill. The bot token is
-# never in this config: Alertmanager reads it from the file Secret alertmanager-telegram is mounted as
-# (alertmanagerSpec.secrets of base/kube-prometheus-stack.yaml of svp-gitops). The chat id is in it, as in compose; it
-# is an identifier, not a credential.
+# step): severity="page" to Telegram when .env has a bot token and an integer chat id, the rest only in the UI and API;
+# severity="ticket" stays there: the 1d/3d SLO windows keep firing for days after a drill. The bot token is never in
+# this config (Alertmanager reads it from Secret alertmanager-telegram's file); the chat id is no credential.
 telegram=off
 if [ -n "$SVP_ALERT_TELEGRAM_BOT_TOKEN" ] && [ -n "$SVP_ALERT_TELEGRAM_CHAT_ID" ]; then
   # chat_id is an integer in Alertmanager's config; anything else would make the operator refuse the whole config.
@@ -238,17 +198,12 @@ EOF
   fi
 }
 
-# The Secrets of svp-obs:
-# - grafana-admin, Grafana's admin login (kube-prometheus-stack, grafana.admin.existingSecret): Grafana allows no
-#   anonymous user in the cluster (threat model OPS-2), so this is the only way in. Grafana sets the admin password
-#   from it when its database is created, which is at every start since it keeps no volume.
-# - alertmanager-svp, the config above (alertmanagerSpec.configSecret; the key must be alertmanager.yaml).
-# - alertmanager-telegram, the bot token, empty while Telegram is off: Alertmanager's pod mounts it in any case, and
-#   would not start without it.
-# - glitchtip-env, GlitchTip's Django secret key and its two database logins on svp-pg: the app role for the server,
-#   the migrator role (MAINTENANCE_DATABASE_URL) for the migrations of its init Job. GlitchTip and its init Job only.
-# - glitchtip-admin, the admin login bootstrap.py creates (its password is set only when the user is created, as in
-#   compose). The init Job only.
+# The Secrets of svp-obs: grafana-admin, the only way into Grafana (no anonymous user in the cluster), its admin
+# password set at each start since it keeps no volume; alertmanager-svp, the config above; alertmanager-telegram,
+# empty while Telegram is off, which Alertmanager's pod mounts and would not start without.
+
+# glitchtip-env is for GlitchTip and its init Job only; glitchtip-admin for the init Job only (bootstrap.py sets the
+# password only when it creates the user).
 obs_manifests() {
   local token=
   if [ "$telegram" = on ]; then token=$SVP_ALERT_TELEGRAM_BOT_TOKEN; fi
@@ -346,13 +301,10 @@ else
   ok "Secrets of svp-data applied from .env: pg-superuser, pg-roles, s3-root, s3-users, pg-backup-s3, redpanda-bootstrap, redpanda-superusers, kafka-users"
 fi
 
-# The object store (RustFS) takes the root password from its environment at start, in the variable chart svp-data maps
-# Secret s3-root to; it keeps its buckets, users, policies, CORS rules and objects when it starts with another one, and
-# the previous password no longer logs in (checked on the pinned image). Redpanda takes the password of .env already
-# (redpanda_admin, above); the broker's rpk and the sidecar keep logging in with the one they started with. Reloader
-# restarts both when their Secret changes; the init Jobs log in with the new passwords, so they wait for it. Postgres
-# needs no restart: CloudNativePG sets a changed superuser password itself (Secret pg-superuser carries its label
-# cnpg.io/reload, above).
+# The object store (RustFS) takes its root password from its environment at start, keeps its buckets, users and objects
+# with another one, and the previous password no longer logs in (checked on the pinned image); the broker's rpk and the
+# sidecar keep the password they started with. Reloader restarts both when their Secret changes; the init Jobs log in
+# with the new passwords, so they wait for it. Postgres needs no restart: CloudNativePG sets it itself (cnpg.io/reload).
 rotate_barrier s3 s3 RUSTFS_SECRET_KEY "$SVP_S3_ROOT_PASSWORD"
 rotate_barrier redpanda redpanda RPK_PASS "$SVP_KAFKA_ADMIN_PASSWORD"
 

@@ -1,6 +1,7 @@
 # Local Kubernetes targets (k3d cluster svp), included by the root Makefile, and the eks-* targets for an EKS cluster
 # of the project (at the end). docker and k3d run without DOCKER_DEFAULT_PLATFORM and kubectl/helm always name their
 # context, --context k3d-svp on every target but eks-*; the shell helpers behind these targets are in deploy/k8s/lib.sh.
+# Design notes: docs/reference/k8s.md.
 
 K8S_LIB := . deploy/k8s/lib.sh
 
@@ -20,10 +21,7 @@ k8s-exclusive:
 # env-required: the Secrets come from .env (deploy/k8s/secrets.sh, run by install.sh once the namespaces exist). The
 # clone of svp-gitops is looked up first (gitops_dir), so a missing one stops the target before anything is created.
 # The releases are installed by helmfile (deploy/k8s/helmfile.yaml.gotmpl, HELMFILE_VERSION of the Makefile: make tools).
-# WEB_FROM and WEB_IMAGE choose the web client as for make up (deploy/compose/compose.mk): its release in staging by
-# default, or WEB_IMAGE (both pulled from GHCR, anonymously by the nodes; the image policy only audits on this path),
-# or built from the clone of svp-frontend with WEB_FROM=clone. The six backend services are always built here: IMAGES is
-# make up's alone.
+# The six backend services are always built here: IMAGES is make up's alone.
 k8s-up: k8s-exclusive env-required ## Create (or start) the registry 127.0.0.1:5111 and cluster svp (API 127.0.0.1:6550, HTTPS 127.0.0.1:8443), build and push the six backend images (WEB_FROM=clone: the web client's too, from the clone of svp-frontend, ../frontend or SVP_WEB_DIR; otherwise the web client runs its staging release, or WEB_IMAGE=<ghcr.io/...@sha256:...> with WEB_FROM=image), install argocd/apps/components.json of the clone of svp-gitops (../gitops beside the checkout, or SVP_GITOPS_DIR) with its base/ values through helmfile, with drill traffic while a canary of the gateway or the web client runs; idempotent (LOCAL LAB ONLY: a canary's drill traffic resets register rate limit keys in the cluster's Valkey db 10)
 	@test -z '$(IMAGES)' || { echo "make k8s-up: IMAGES=$(IMAGES) is a setting of make up only; the cluster of the dev path builds the six backend services" >&2; exit 1; }
 	@WEB_FROM='$(WEB_FROM)' WEB_IMAGE='$(WEB_IMAGE)' bash -c '$(K8S_LIB) && gitops_dir >/dev/null && web_source && ensure_registry && ensure_cluster'
@@ -47,14 +45,10 @@ WEB_REF ?=
 web-clone: ## CI: clone svp-frontend anonymously into .web/svp-frontend (gitignored), or fetch it when it is there, and check out WEB_REF (a branch or a full commit SHA; unset: the commit of the web release in staging); refuses a clone there with uncommitted changes. Then set SVP_WEB_DIR to that folder; a machine reads its own clone instead (../frontend beside the checkout, or SVP_WEB_DIR)
 	@WEB_REF='$(WEB_REF)' bash -c '$(K8S_LIB) && web_clone'
 
-# The GitOps path: a new cluster svp that Argo CD builds from GitHub, running the release images of GHCR, as the
-# staging environment: base/ of svp-gitops plus the overlays and release images of its envs/stg, with the charts of this
-# repository at the commit envs/stg/charts.yaml pins (production is only rendered, by the checks). GITOPS_REV is the
-# revision of svp-gitops Argo CD follows: a branch of the clone's origin (read from origin/<branch> as last fetched) or a
-# full commit SHA. The cluster is built at the commit checked (the root and every values source read that SHA); given a
-# branch, the root then moves to refs/heads/<branch> once the cluster is built, given a SHA it stays there. Releases
-# are built, signed and promoted by CI (.github/workflows/images.yml): no target builds one on this machine. Argo CD
-# reads both public repositories over HTTPS without credentials: no deploy key, no secret.
+# The GitOps path: a new cluster svp that Argo CD builds from GitHub, running the release images of GHCR, as staging:
+# base/ of svp-gitops plus the overlays and release images of its envs/stg, with the charts of this repository at the
+# commit envs/stg/charts.yaml pins (production is only rendered, by the checks). GITOPS_REV is the revision Argo CD
+# follows: a branch of the clone's origin or a full SHA. Argo CD reads both public repos over HTTPS: no deploy key.
 GITOPS_REV ?= main
 
 k8s-gitops-up: k8s-exclusive env-required ## Create a new cluster svp that runs as staging (base/ plus envs/stg of svp-gitops), built by Argo CD from GitHub over anonymous HTTPS (no deploy key) [GITOPS_REV=main, a branch of the clone of svp-gitops or a commit]; first checks that the seven release digests of envs/stg/images/ at that revision are on GHCR (anonymous pull), signed, with a clean vuln attestation at most 48 h old; applies the Secrets of .env, installs Argo CD with the plugin of Argo Rollouts for the nodes' architecture, waits until every Application is Synced and Healthy
@@ -94,7 +88,6 @@ k8s-smoke: ## Run the end-to-end smoke test against cluster svp at https://api.s
 	@test -s .k8s/ca.crt || { echo "make k8s-smoke: .k8s/ca.crt missing; run make k8s-up (or make k8s-ca)" >&2; exit 1; }
 	SVP_STACK=k3d CURL_CA_BUNDLE=$(CURDIR)/.k8s/ca.crt deploy/compose/smoke.sh https://api.svp.localhost:8443
 
-# The drill traffic on cluster svp (deploy/k8s/drills/traffic.sh), through Envoy like k8s-smoke.
 K8S_DRILL_ENV := SVP_STACK=k3d CURL_CA_BUNDLE=$(CURDIR)/.k8s/ca.crt
 
 # The canaries of the gateway and the web client. The drill traffic runs in the background until stopped, for hours
@@ -148,14 +141,9 @@ k8s-ui-glitchtip: ## Open GlitchTip of cluster svp on http://127.0.0.1:8000 (por
 	$(K8S_PORT_FORWARD) service/glitchtip 8000:8000
 
 # The web image's source maps and the web client's end-to-end tests against cluster svp are code of svp-frontend too: each
-# target runs the target of svp-frontend its help names in the clone web_dir names, as the web targets of the Makefile do
-# (IN_WEB), against this checkout's cluster, .k8s/ca.crt and scripts (deploy/observability/glitchtip/sourcemaps.sh).
-# The maps are built from that clone with the build id make k8s-up WEB_FROM=clone gave the image (web_build_id of
-# deploy/k8s/lib.sh), checked against the chunks https://svp.localhost:8443 serves, and uploaded through a
-# port-forward of its own on 127.0.0.1:8000, closed at the end. The e2e tests check .k8s/ca.crt and the
-# cluster, set SVP_STACK=k3d and the CA for curl and Node, and with SVP_E2E_GLITCHTIP=1 also run the browser error
-# test with the read-only token of Secret svp-obs/glitchtip-api and a port-forward of their own on 127.0.0.1:8000.
-# SVP_E2E_EVIDENCE as for web-e2e.
+# target runs the target of svp-frontend its help names in the clone web_dir names (IN_WEB), against this checkout's
+# cluster, .k8s/ca.crt and scripts (deploy/observability/glitchtip/sourcemaps.sh). The source maps are uploaded through
+# a port-forward of its own on 127.0.0.1:8000, closed at the end. SVP_E2E_EVIDENCE as for web-e2e.
 k8s-web-sourcemaps: ## Upload the source maps of the web client's browser bundle, from the build cluster svp runs (dev path, make k8s-up WEB_FROM=clone), to its GlitchTip with the token of Secret svp-obs/glitchtip-sourcemaps; checks first that the web serves that build (port 127.0.0.1:8000 must be free) (make k8s-sourcemaps of svp-frontend)
 	@$(IN_WEB) k8s-sourcemaps
 
@@ -167,24 +155,21 @@ k8s-ui-argocd: ## Open Argo CD of the GitOps cluster on https://127.0.0.1:8081 (
 	kubectl --context k3d-svp -n argocd port-forward --address 127.0.0.1 service/argocd-server 8081:443
 
 # The k6 Job of the cloud cluster (the output of deploy/k6/cloud/render.sh), checked without a cluster: no kubectl, no
-# .env. The steps are at the top of deploy/k8s/cloud/check.sh: kubeconform -strict of KUBECONFORM_IMAGE against the
-# Kubernetes schemas of CLOUD_K8S_VERSION (no kind is skipped for want of a schema; a missing one fails), then a digest
-# on every image. Needs network access: GitHub. CLOUD_K8S_VERSION is a release whose schemas the commit of
-# yannh/kubernetes-json-schema pinned in check.sh holds.
+# .env (steps at the top of deploy/k8s/cloud/check.sh). Needs network access: GitHub. CLOUD_K8S_VERSION is a release
+# whose schemas the commit of yannh/kubernetes-json-schema pinned in check.sh holds.
 CLOUD_K8S_VERSION := 1.35.9
 
 cloud-check: ## Check the k6 Job of the cloud cluster (deploy/k6/cloud/render.sh) without a cluster: kubeconform -strict (Kubernetes CLOUD_K8S_VERSION), every image pinned by digest (needs network)
 	KUBECONFORM_IMAGE='$(KUBECONFORM_IMAGE)' CLOUD_K8S_VERSION='$(CLOUD_K8S_VERSION)' deploy/k8s/cloud/check.sh
 
-# --- An EKS cluster of the project, which the infrastructure repository makes, bootstraps (Argo CD and its root, root
-# aws/gitops/<env> of svp-infra) and destroys, and its learner reaches with the AWS profile of the session (the AI runs
-# none of these). CONTEXT is the cluster's alias in the kubeconfig, svp-stg or svp-prd (output kubeconfig_command of
-# the infrastructure repository: aws eks update-kubeconfig --alias), never the current context; the scripts get it as
+# --- An EKS cluster of the project, reached with the AWS profile of the session (the AI runs none of these). CONTEXT
+# is the cluster's alias in the kubeconfig, svp-stg or svp-prd, never the current context; the scripts get it as
 # SVP_KUBE_CONTEXT, and refuse every other name before any command (deploy/k8s/lib.sh, deploy/compose/lib.sh). These
-# targets never run k8s-exclusive: a cluster in the cloud takes no memory of this machine. DOMAIN is the domain of the
-# cluster's web client, its API api.<domain>, behind certificates of a public CA (no .k8s/ca.crt). LOCAL LAB ONLY:
-# eks-smoke, eks-seed and eks-rl-reset delete the register rate limit keys in the cluster's Valkey db 10, as k8s-smoke
-# does on k3d; a stg or prd of this lab only.
+# targets never run k8s-exclusive: a cluster in the cloud takes no memory of this machine.
+
+# DOMAIN is the domain of the cluster's web client, its API api.<domain>, behind certificates of a public CA (no
+# .k8s/ca.crt). LOCAL LAB ONLY: eks-smoke, eks-seed and eks-rl-reset delete the register rate limit keys in the
+# cluster's Valkey db 10, as k8s-smoke does on k3d; a stg or prd of this lab only.
 CONTEXT ?=
 DOMAIN ?=
 EKS_CONTEXT_CHECK = case '$(CONTEXT)' in svp-stg | svp-prd) ;; *) echo "make $@: CONTEXT must be svp-stg or svp-prd, the alias of an EKS cluster of the project in the kubeconfig (got '$(CONTEXT)')" >&2; exit 1 ;; esac
@@ -193,9 +178,7 @@ EKS_DOMAIN_CHECK = printf '%s' '$(DOMAIN)' | grep -Eqx '([a-z0-9]([a-z0-9-]*[a-z
 # The source of every Secret of an EKS cluster is AWS Secrets Manager, entries svp/<env>/<entry> (deploy/k8s/lib.sh):
 # both targets take AWS_PROFILE (the profile of the account of the environment, whose id SVP_AWS_<ENV>_ACCOUNT_ID of
 # the session's terminal must match) from the environment, and name it and the region in every aws call.
-# eks-secrets runs after the apply of root aws/envs/<env> and before that of aws/gitops/<env>, then again after each
-# change of .env; SVP_RDS_MASTER_PASSWORD comes from the environment (the session's script reads it from AWS), never
-# from .env.
+# SVP_RDS_MASTER_PASSWORD comes from the environment (the session's script reads it from AWS), never from .env.
 eks-secrets: env-required ## With AWS_PROFILE=<profile of the environment>, write the entries svp/<env>/* of AWS Secrets Manager of the EKS cluster CONTEXT=svp-stg|svp-prd from .env (keys of chart svp-cluster's files/external-secrets.yaml), pg-superuser from SVP_RDS_MASTER_PASSWORD of the environment (required), glitchtip-runtime empty only while it has no value; on a running environment (Reloader must run there, StatefulSet redpanda naming its Secrets for it) a whole change of credentials: Redpanda takes a changed superuser password first, the ExternalSecrets of svp-data are built again, the brokers waited for until each runs the new password (Reloader restarts them), Application svp-data synced (its init Jobs set the new passwords), then every other ExternalSecret built again, whose workloads Reloader restarts (no value printed)
 	@$(EKS_CONTEXT_CHECK)
 	SVP_KUBE_CONTEXT='$(CONTEXT)' deploy/k8s/aws-secrets.sh

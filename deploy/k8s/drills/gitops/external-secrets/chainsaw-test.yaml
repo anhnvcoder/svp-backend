@@ -1,12 +1,13 @@
 # gitops-external-secrets, on the GitOps cluster svp (make k8s-gitops-up): the cluster's ExternalSecrets are exactly the
 # entries of files/external-secrets.yaml of chart svp-cluster at the commit the cluster runs that chart at (the
 # targetRevision of the chart's source in Application argocd/svp-cluster, which envs/stg/charts.yaml of svp-gitops pins;
-# a commit of this repository's history, so the checkout needs it), an entry with enabledBy (off unless the values turn
-# that key of externalSecrets on) only where Application svp-cluster renders its ExternalSecret (requiresPruning: in
-# the cluster, not in the render); each Ready, and the Secret each builds exists with the type and exactly the keys its
-# ExternalSecret names (those of its template, or of its data without one): one line per Secret. Only the names of the
-# keys leave kubectl's pipe, never a value.
-#
+# a commit of this repository's history, so the checkout needs it).
+
+# An entry with enabledBy (off unless the values turn that key of externalSecrets on) only where Application
+# svp-cluster renders its ExternalSecret (requiresPruning: in the cluster, not in the render); each Ready, and the
+# Secret each builds exists with the type and exactly the keys its ExternalSecret names (those of its template, or of
+# its data without one): one line per Secret. Only the names of the keys leave kubectl's pipe, never a value.
+
 # Scripts, as the list is read at run time; kubectl uses the caller's kubeconfig and context k3d-svp
 # (templates/probe-up.yaml says why). Each check is one operation; continueOnError keeps the next one running after
 # one fails, and the test still fails. Nothing is created.

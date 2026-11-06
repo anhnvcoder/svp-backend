@@ -1,14 +1,13 @@
-# Data tier in namespace svp-data. Installed by deploy/k8s/install.sh as wave 4 of argocd/apps/components.json of
-# svp-gitops: after the CloudNativePG operator and KEDA (wave 2, whose CRDs its Cluster and ClusterTriggerAuthentication
-# need), Redpanda and the Barman Cloud plugin (wave 3, whose CRD its ObjectStore needs), before observability and the
-# services. Every Secret it reads is written by deploy/k8s/secrets.sh from .env before this release; none is in git.
+# Data tier in namespace svp-data. Wave 4 of argocd/apps/components.json of svp-gitops: after the CloudNativePG operator
+# and KEDA (wave 2, whose CRDs its Cluster and ClusterTriggerAuthentication need), Redpanda and the Barman Cloud plugin
+# (wave 3, whose CRD its ObjectStore needs). Every Secret it reads is written by deploy/k8s/secrets.sh; none is in git.
+# Design notes: docs/explanation/deployment.md.
 
 postgres:
-  # cluster: Postgres svp-pg run by CloudNativePG in this namespace, with its WAL and base backups in the object store s3
-  # (templates/postgres.yaml, backup.yaml). external: a managed Postgres outside the cluster (Amazon RDS), which keeps
-  # its own backups: no Cluster, no backup, and Service svp-pg-rw becomes an ExternalName for external.host, so every
-  # connection string (svp-pg-rw.svp-data:5432) is the same on every platform. The pg-bootstrap Job still makes the
-  # roles and databases there, as the login of Secret pg-superuser (on RDS its master user, postgres).
+  # cluster: Postgres svp-pg run by CloudNativePG in this namespace, with its WAL and base backups in the object store
+  # s3. external: a managed Postgres outside the cluster (Amazon RDS), which keeps its own backups: no Cluster, no
+  # backup, and Service svp-pg-rw becomes an ExternalName for external.host, so every connection string is the same on
+  # every platform. The pg-bootstrap Job still makes the roles and databases there, as the login of Secret pg-superuser.
   mode: cluster
   external:
     # DNS name of the managed Postgres (an RDS endpoint), and the CIDRs its addresses are in (the database subnets),
@@ -25,10 +24,9 @@ postgres:
   # (templates/backup.yaml).
   backup:
     # The archive generation svp-pg writes its WAL and base backups to, a prefix of the bucket. A Cluster restored from
-    # backups must archive into a new, empty one (the recovery Job refuses an archive that already holds WAL, and two
-    # generations in one prefix would mix their backups), so each restore (docs/runbooks/postgres-restore.md) starts
-    # the next generation, svp-pg-<yymmddhhmmss> (UTC), and deploy/k8s/install.sh passes the one the running Cluster
-    # uses with --set, so that make k8s-up keeps it. This default is the first generation's, that of a new cluster.
+    # backups must archive into a new, empty one (two generations in one prefix would mix their backups), so each
+    # restore (docs/runbooks/postgres-restore.md) starts the next, svp-pg-<yymmddhhmmss> (UTC); deploy/k8s/install.sh
+    # passes the running one with --set. This default is the first generation's, that of a new cluster.
     serverName: svp-pg
     # The plugin's sidecar in the Postgres pod (and in the recovery Job's pod): Barman compresses and uploads WAL and
     # base backups. The memory limit bounds the page cache a base backup fills (plugin issue #825).
@@ -36,10 +34,9 @@ postgres:
       requests: {cpu: 50m, memory: 128Mi}
       limits: {memory: 256Mi}
   # Set only by a restore (docs/runbooks/postgres-restore.md), on the command line of the one upgrade that creates
-  # svp-pg again from its backups, never in a file: source is the archive generation to restore from (the one
-  # the deleted Cluster archived to), targetTime (RFC 3339) an optional point in time to stop the recovery at (PITR).
-  # CloudNativePG reads bootstrap only when it creates the first instance, so the next upgrade without these values
-  # removes them from the Cluster and changes nothing in the restored database.
+  # svp-pg again from its backups, never in a file: source is the archive generation to restore from, targetTime (RFC
+  # 3339) an optional point in time to stop at. CloudNativePG reads bootstrap only when it creates the first instance,
+  # so the next upgrade without these values removes them from the Cluster and changes nothing in the restored database.
   recovery:
     source: ""
     targetTime: ""
@@ -67,11 +64,10 @@ s3:
     limits: {cpu: "1", memory: 512Mi}
   # Presigned POST uploads and HLS playback from the host go through Gateway svp at https://<host>:8443.
   host: s3.svp.localhost
-  # The origins whose pages may read the store's answers, set by the s3-init Job as the CORS rules of each bucket:
-  # POST to uploads, GET and HEAD at media, nothing else. The browser talks to the store cross-origin, hls.js loading
-  # playlists and segments with XHR and the upload page posting the file with XHR (its progress listener makes that a
-  # preflight) (threat model WEB-10). Only the web client's origin in the cluster: the web clients of compose and
-  # make dev of svp-frontend (http://localhost:3001, :3002) use compose's store, never this one. Commas without spaces.
+  # The origins whose pages may read the store's answers, set by the s3-init Job as the CORS rules of each bucket: POST
+  # to uploads, GET and HEAD at media, nothing else. The browser talks to the store cross-origin (hls.js and the upload
+  # page use XHR). Only the web client's origin here: the web clients of compose and make dev use compose's store, never
+  # this one. Commas without spaces.
   corsAllowedOrigins: https://svp.localhost:8443
 
 redpanda:

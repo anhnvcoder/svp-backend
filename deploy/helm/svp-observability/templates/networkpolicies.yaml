@@ -1,16 +1,7 @@
-{{- /*
-Flows into and out of svp-obs (threat model IN-2, FF-5, OPS-2). Chart svp-cluster
-already denies every pod of the namespace in both directions, opens DNS, and opens the API server for pods labelled
-svp-kube-api=allow (Prometheus, its operator, kube-state-metrics, Grafana's sidecars, Pyroscope). Each pod below gets
-one policy listing every port it serves and every peer it calls, so the policy of a pod is the whole of its traffic;
-the one exception is Alertmanager's egress to the internet, kept apart in allow-alertmanager-telegram so the widest
-rule of the namespace stands on its own.
-
-Nothing opens a UI to any pod: Grafana, Prometheus and the rest are reached from the host only by `kubectl
-port-forward`, which comes in from the node and no NetworkPolicy blocks. A pod calling itself (memberlist, the
-single binaries' own gRPC) stays inside the pod. Ports are the pods' ports: NetworkPolicy sees the packet after a
-Service has been translated to a pod (Grafana's 3000 behind Service kps-grafana:80).
-*/}}
+{{- /* Flows into and out of svp-obs (threat model IN-2, FF-5, OPS-2). Chart svp-cluster already denies every pod and
+opens DNS and the API server (svp-kube-api=allow). Each pod below gets one policy listing every port it serves
+and every peer it calls; the exception is Alertmanager's egress to the internet (allow-alertmanager-telegram).
+Nothing opens a UI to any pod: port-forward comes in from the node, which no NetworkPolicy blocks. */}}
 {{- define "svp-observability.peer" -}}
 - podSelector:
     matchLabels:
@@ -74,16 +65,9 @@ spec:
         - {protocol: TCP, port: 9644}
 ---
 # Prometheus: OTLP from the Collector, remote write from Tempo's metrics-generator, queries from Grafana and from the
-# Argo Rollouts controller (the AnalysisRuns of the gateway's canary). Out: alerts to Alertmanager, the scrapes of the
-# stack's ServiceMonitors (Grafana, kube-state-metrics, Alertmanager and its config reloader, the operator), of each
-# node's kubelet (cAdvisor and probe metrics), of the Envoy proxy (PodMonitor envoy-svp), of Postgres svp-pg's
-# exporter (PodMonitor svp-pg) and of Argo CD's application controller on the GitOps path (PodMonitor
-# argocd-application-controller). Prometheus scraping its own pod stays inside the pod. argo-rollouts does not deny
-# traffic by default; envoy-gateway-system does only when the svp-cluster chart turns envoy.networkPolicy on (EKS),
-# and that chart then admits these scrapes itself, so the policy here is the only one the other flows need. argocd has the
-# argo-cd chart's own ingress policies (one per component), and the application controller's already admits its port
-# metrics (8082) from every namespace; svp-data denies by default, and its chart opens 9187 of the Postgres pods to
-# Prometheus.
+# Argo Rollouts controller (the AnalysisRuns of the gateway's canary). Out: alerts to Alertmanager and the scrapes of
+# the stack, kubelets, Envoy, svp-pg's exporter and Argo CD's application controller. envoy-gateway-system admits these
+# scrapes itself when its policy is on (EKS); svp-data's chart opens 9187.
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
@@ -305,14 +289,10 @@ spec:
         - {protocol: TCP, port: 4040}
   egress: []
 ---
-# Alertmanager to Telegram (api.telegram.org:443), for alerts of severity=page when .env has a bot.
-# A NetworkPolicy cannot name a host, only pods and IP blocks, so this opens TCP
-# 443 to every public IPv4 address: 0.0.0.0/0 except the private, link-local and shared ranges, which hold the pods
-# (10.42.0.0/16), the Services (10.43.0.0/16), the nodes (10.200.0.0/24) and the machine's own networks, so nothing
-# inside the cluster or on the host is opened. Telegram's published ranges would be narrower, but they change without
-# notice, and alerts would then stop with no error to show it. The policy stays when Telegram is off: Alertmanager
-# sends nothing then. The price: a compromised Alertmanager can reach any public address on 443 (compose does not
-# limit it either).
+# Alertmanager to Telegram (api.telegram.org:443), for alerts of severity=page when .env has a bot. A NetworkPolicy
+# cannot name a host, so this opens TCP 443 to every public IPv4 address (private, link-local and shared ranges
+# excepted). Telegram's published ranges change without notice, and alerts would then stop with no error to show it. The
+# price: a compromised Alertmanager can reach any public address on 443 (compose does not limit it either).
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:

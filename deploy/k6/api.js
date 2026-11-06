@@ -4,12 +4,10 @@ import { send } from "./lib/http.js";
 
 // Scenarios of the gateway's API, one per route of the SLOs.
 
-// turn(data): this iteration's user and, for the routes that need one, its video. The users of the pool take turns in
-// order (iterationInInstance counts this instance's iterations of the scenario, so on a cloud pod, which runs only its
-// execution segment, the turn still goes through the whole of its own pool). The video moves on with each turn of the
-// same user, from an offset of its own: taken from the iteration modulo the number of videos, as the user is, the two
-// would turn in lockstep and a user would see only videos / gcd(users, videos) of them (5 of 30 with 12 users),
-// repeating the (user, video) pairs that RL-3 stops at the gateway.
+// turn(data): this iteration's user and, for the routes that need one, its video. The users take turns in order
+// (iterationInInstance counts this instance's iterations, so a cloud pod still goes through its whole pool). The video
+// moves on with each turn of the same user, from an offset of its own: taken from the iteration modulo the number of
+// videos, as the user is, the two would turn in lockstep and repeat the (user, video) pairs RL-3 stops at the gateway.
 function turn(data) {
   const i = exec.scenario.iterationInInstance;
   const users = data.tokens.length;

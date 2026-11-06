@@ -1,32 +1,37 @@
 #!/usr/bin/env bash
-# Drill traffic for the canaries on cluster svp, from this machine through Envoy:
-# - the gateway's: about 10 requests/s (https://api.svp.localhost:8443) to GET /feed/explore and GET /feed/following,
-#   the routes whose 5xx and latency AnalysisTemplate gateway-canary judges;
-# - the web client's: about 4 requests/s (https://svp.localhost:8443), GET /login three times a second (a page that
-#   needs no session and calls no gateway) and once a second one static asset (/_next/static/...) named in the HTML of
-#   the latest /login, which AnalysisTemplate web-canary judges. An asset only the other build has answers 404 while a
-#   canary runs: the 404s of route web-asset in the log count the asset requests that crossed builds.
+# Drill traffic for the canaries on cluster svp, from this machine through Envoy. The gateway's: about 10 requests/s
+# (https://api.svp.localhost:8443) to GET /feed/explore and GET /feed/following, the routes whose 5xx and latency
+# AnalysisTemplate gateway-canary judges.
+
+# The web client's: about 4 requests/s (https://svp.localhost:8443), GET /login three times a second (a page that
+# needs no session and calls no gateway) and once a second one static asset (/_next/static/...) named in the HTML of
+# the latest /login, which AnalysisTemplate web-canary judges. An asset only the other build has answers 404 while a
+# canary runs: the 404s of route web-asset in the log count the asset requests that crossed builds.
+
 # A canary needs at least 30 responses that are not 4xx a minute to be judged at all; at 25% this traffic brings the
 # gateway's about 150 and the web client's about 45.
-#
+
 #   traffic.sh start    starts the traffic in the background (nohup), records its pid and log in .k8s/drills/traffic.pid
 #                       and returns once every user is logged in and requests flow; refuses to start a second one
 #   traffic.sh stop     stops the process of that pid (and only it: the command line must be this script's run mode),
 #                       which stops its user loops, then prints the requests of its log by status
+
 #   traffic.sh status   exit 0 and "PID LOG" while it runs, exit 1 otherwise
 #   traffic.sh run LOG  the traffic itself, in the foreground (what start runs)
-#
+
 # Both feeds need a token and count in rate limit class read, 600 a minute with a burst of 200 per user
 # (services/gateway/internal/ratelimit/ratelimit.go): four drill users take 2.5 requests/s each, alternating the two
-# routes, so no user comes near its limit. Each user logs in again 5 minutes before its token expires (expires_at of
-# the login; tokens last an hour, threat model JWT-3) and as soon as a request gets 401, at most once a minute (login is
-# limited per email, 5 at once then 10 an hour), so the traffic runs for hours, through the push of a release.
-#
+# routes, so no user comes near its limit.
+
+# Each user logs in again 5 minutes before its token expires (expires_at of the login; tokens last an hour, threat
+# model JWT-3) and as soon as a request gets 401, at most once a minute (login is limited per email, 5 at once then
+# 10 an hour), so the traffic runs for hours, through the push of a release.
+
 # Every request is one line of the log .k8s/drills/traffic-<UTC start>.log:
 #   <unix time of the request's start, ms> <user u1..u4, web for the web client's> <route explore|following|login, or
 #   web-login|web-asset> <HTTP status, 000 when none> <time to the response, ms>
 # and lines starting with # mark the start and stop.
-#
+
 # Run through make (k8s-traffic-start, k8s-traffic-stop): SVP_STACK=k3d and CURL_CA_BUNDLE (the cluster's CA) come from
 # there. Users are registered fresh at each start. LOCAL LAB ONLY: starting deletes the register rate limit keys in the
 # cluster's Valkey db 10 (deploy/compose/lib.sh).
@@ -41,7 +46,6 @@ web_base=${SVP_TRAFFIC_WEB_BASE:-https://svp.localhost:8443}
 drills="$repo_root/.k8s/drills"
 pidfile="$drills/traffic.pid"
 
-# Four users at one request every 400 ms each; the web client's loop one request every 250 ms.
 users=4
 interval_ms=400
 web_interval_ms=250

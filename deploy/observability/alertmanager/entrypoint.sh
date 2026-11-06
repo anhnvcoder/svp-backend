@@ -1,14 +1,11 @@
 #!/bin/sh
-# Entry point of the alertmanager container.
-# Alertmanager does not expand environment variables in its YAML, so this script writes the
-# config before starting it:
-# - with a Telegram bot token (compose secret, /run/secrets/telegram_bot_token) and an integer
-#   SVP_ALERT_TELEGRAM_CHAT_ID, severity="page" goes to Telegram; the token is copied to a mode
-#   600 file read through bot_token_file, so it is never in the YAML, the logs or the environment;
-# - otherwise every alert stays in the UI-only receiver (http://127.0.0.1:9093).
-# severity="ticket" always stays in the UI: the 1d/3d SLO windows keep firing for days after a
-# drill, and a message every 4 hours would only be noise.
-# The values of the two variables are never printed.
+# Entry point of the alertmanager container. Alertmanager does not expand environment variables in its YAML, so this
+# writes the config first: with a Telegram bot token (compose secret) and an integer SVP_ALERT_TELEGRAM_CHAT_ID,
+# severity="page" goes to Telegram, otherwise every alert stays in the UI. The token is copied to a mode 600 file, never
+# in the YAML, logs or environment, and neither variable is printed.
+
+# severity="ticket" always stays in the UI: the 1d/3d SLO windows keep firing for days after a drill, and a message
+# every 4 hours would only be noise.
 set -eu
 umask 077
 

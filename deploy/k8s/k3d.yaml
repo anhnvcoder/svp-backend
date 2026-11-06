@@ -43,9 +43,9 @@ options:
       # The file mounted above (volumes); ensure_cluster checks an existing cluster has this argument.
       - arg: --kube-apiserver-arg=admission-control-config-file=/etc/rancher/k3s/pod-security-admission.yaml
         nodeFilters: ["server:*"]
-      # FF-3: a fork bomb in any pod stops at 512 processes. The kubelet applies it to every pod of the node, so it sits
-      # above what Postgres (one process per connection, about 110 when full) and Envoy need, twice media-worker's
-      # pids_limit of 256 in compose.
+      # A fork bomb in any pod stops at 512 processes. The kubelet applies it to every pod of the node, so it sits above
+      # what Postgres (one process per connection, about 110 when full) and Envoy need, twice media-worker's pids_limit
+      # in compose.
       - arg: --kubelet-arg=pod-max-pids=512
         nodeFilters: ["server:*", "agent:*"]
   kubeconfig:

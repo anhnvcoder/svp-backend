@@ -1,10 +1,9 @@
 # Build, generate, lint and test entry point for the monorepo. `make help` lists the targets.
+# Design notes: docs/reference/make.md.
 
 # Pinned tool versions, installed by `make tools` rather than as `tool` directives in go.mod: sqlc and golangci-lint
 # would pull hundreds of modules into the application's dependency graph, and `go install` builds each of them with
 # this machine's Go.
-# The "# renovate:" line above a pin names where Renovate looks up its new versions (renovate.json; go = the Go module
-# proxy, the module `go install` builds).
 # renovate: datasource=go depName=google.golang.org/protobuf
 PROTOC_GEN_GO_VERSION      := v1.36.12
 # renovate: datasource=go depName=google.golang.org/grpc/cmd/protoc-gen-go-grpc
@@ -15,13 +14,11 @@ SQLC_VERSION               := v1.31.1
 GOLANGCI_LINT_VERSION      := v2.15.0
 # renovate: datasource=go depName=github.com/zricethezav/gitleaks/v8
 GITLEAKS_VERSION           := v8.30.1
-# SLO rule generator: Sloth turns the SLO spec into Prometheus recording and burn-rate alert rules. `go install` leaves
-# the version empty and Sloth would then write "dev" in the header of the file it generates.
+# `go install` leaves the Sloth version empty and Sloth would then write "dev" in the header of the file it generates.
 # renovate: datasource=go depName=github.com/slok/sloth
 SLOTH_VERSION              := v0.16.0
-# Local Kubernetes (k3d, cluster svp). Without both -X flags k3d reports v5-dev and
-# pulls its proxy and tools images as :latest, and its default node image is an older k3s; the node image itself is
-# pinned by digest in deploy/k8s/k3d.yaml.
+# k3d: without both -X flags it reports v5-dev and pulls its proxy and tools images as :latest, and its default node
+# image is an older k3s; the node image itself is pinned by digest in deploy/k8s/k3d.yaml.
 # renovate: datasource=go depName=github.com/k3d-io/k3d/v5
 K3D_VERSION                := v5.9.0
 # renovate: datasource=docker depName=rancher/k3s
@@ -29,22 +26,20 @@ K3S_IMAGE_TAG              := v1.36.5-k3s1
 # One line on purpose: a backslash-newline inside the single quotes of a recipe reaches the shell as a literal backslash
 # on GNU Make 4.x (Make 3.81 joined the lines), and the linker then gets a broken -ldflags.
 K3D_LDFLAGS                := -X github.com/k3d-io/k3d/v5/version.Version=$(K3D_VERSION) -X github.com/k3d-io/k3d/v5/version.K3sVersion=$(K3S_IMAGE_TAG)
-# Chainsaw runs the drills of deploy/k8s/drills/ (ADR-0050 §2). `go install` and not its image: the `script` steps need the
-# kubectl, curl, jq, nc, openssl and docker of the machine that runs them. Releases: github.com/kyverno/chainsaw/releases.
-# deploy/k8s/drills/.schemas/ holds the StepTemplate schema of this same tag (make chainsaw-lint fails when they differ).
+# `go install` and not its image: the `script` steps need the kubectl, curl, jq, nc, openssl and docker of the machine
+# that runs them. deploy/k8s/drills/.schemas/ holds the StepTemplate schema of this same tag (make chainsaw-lint fails
+# when they differ).
 # renovate: datasource=go depName=github.com/kyverno/chainsaw
 CHAINSAW_VERSION           := v0.2.15
-# helmfile installs the releases of the dev path (make k8s-up: deploy/k8s/helmfile.yaml.gotmpl, ADR-0050). Its go.mod
-# holds replace directives, which `go install <module>@<version>` refuses: make tools downloads the module through the
-# Go module proxy (checked against the checksum database, as go install does) and builds it in its own folder, with the
-# version helmfile --version reports. Releases: github.com/helmfile/helmfile/releases.
+# The go.mod of helmfile holds replace directives, which `go install <module>@<version>` refuses: make tools downloads
+# the module through the Go module proxy (checked against the checksum database, as go install does) and builds it in
+# its own folder, with the version helmfile --version reports.
 # renovate: datasource=go depName=github.com/helmfile/helmfile
 HELMFILE_VERSION           := v1.8.2
-# Linter of the GitHub Actions workflows, run by `make actionlint` inside `make check`. It also runs shellcheck on every
-# `run:` script when shellcheck is on PATH: the CI runner has it, a dev machine need not.
+# actionlint also runs shellcheck on every `run:` script when shellcheck is on PATH: the CI runner has it, a dev
+# machine need not.
 # renovate: datasource=go depName=github.com/rhysd/actionlint
 ACTIONLINT_VERSION         := v1.7.12
-# Go vulnerability scanner of `make vulncheck`: reports only what the code can reach through its call graph.
 # renovate: datasource=go depName=golang.org/x/vuln
 GOVULNCHECK_VERSION        := v1.9.0
 
@@ -63,12 +58,10 @@ HELM_LINUX_AMD64_SHA256    := 0403a88ae20913d11b10a2467b50087721fea7581736da6b9d
 TRIVY_IMAGE := ghcr.io/aquasecurity/trivy:0.76.0@sha256:2416d1f74045b57274df1a340eee6b510cacd73c66a6ccb8da092b117eb7d222
 # renovate: datasource=docker depName=ghcr.io/anchore/syft
 SYFT_IMAGE  := ghcr.io/anchore/syft:v1.54.1@sha256:3eb5379ba7b409c3f4069b686110527af0c47df993fa5c10d13e7cf34f49b1aa
-# Second vulnerability gate of every image, on the SBOM syft writes (.github/actions/image-leg, make grype).
 # renovate: datasource=docker depName=ghcr.io/anchore/grype
 GRYPE_IMAGE := ghcr.io/anchore/grype:v0.121.0@sha256:621d56d1d68106b787022c81546f7e0a36202a25d1239f0c20195fab8c16f7ea
-# cosign: in CI the signer of the image pipeline (.github/actions/image-sign runs this image); on a dev machine it only
-# verifies releases (deploy/ci/verify-release.sh, and `make k8s-gitops-up` before it creates anything): signing happens
-# in CI alone.
+# cosign: signing happens in CI alone (.github/actions/image-sign runs this image); on a dev machine it only verifies
+# releases (deploy/ci/verify-release.sh, and `make k8s-gitops-up` before it creates anything).
 # renovate: datasource=docker depName=ghcr.io/sigstore/cosign/cosign
 COSIGN_IMAGE := ghcr.io/sigstore/cosign/cosign:v3.1.3@sha256:9e5c2f2edc34351160407ca3416c61855bdf9403c3c5936e0f0be7fc261611b8
 # Load generator of the SLO scripts in deploy/k6/, from its official image
@@ -77,24 +70,20 @@ COSIGN_IMAGE := ghcr.io/sigstore/cosign/cosign:v3.1.3@sha256:9e5c2f2edc343511604
 # line only gets security fixes.
 # renovate: datasource=docker depName=grafana/k6
 K6_IMAGE := grafana/k6:2.3.0@sha256:2dd4756ec6e14e62778916e1eb850108e4b499304c02df56760fa0bdb0fba0b8
-# DAST of the gateway against its OpenAPI contract (make dast), from the official image pinned by digest, the same on a
-# dev machine and in the CI job stack.
+# DAST (make dast): the same pinned image on a dev machine and in the CI job stack.
 # renovate: datasource=docker depName=schemathesis/schemathesis
 SCHEMATHESIS_IMAGE := schemathesis/schemathesis:4.32.4@sha256:b501f25d00fa6e2b393ddd1b525a11bb560d593fd06268491595c2e439090bf0
-# Schema check of the manifests of the cloud cluster, with nothing installed: the image is FROM scratch with kubeconform
-# and openapi2jsonschema, which turns the CRDs of the pinned charts into schemas (make helm-check), so no Python is
-# needed. make cloud-check checks the k6 Job with no CRD schema. It runs as root unless docker run gets --user.
+# The image is FROM scratch with kubeconform and openapi2jsonschema, which turns the CRDs of the pinned charts into
+# schemas (make helm-check), so no Python is needed. make cloud-check checks the k6 Job with no CRD schema. The image
+# runs as root unless docker run gets --user.
 # renovate: datasource=docker depName=ghcr.io/yannh/kubeconform
 KUBECONFORM_IMAGE := ghcr.io/yannh/kubeconform:v0.8.0@sha256:faffaf43f95aa6425306e1ab8d6fcad72acb9049158f38e574c085ea1ec0f64e
-# Policies on the manifests the GitOps path renders (deploy/ci/gitops-policies/: every image pinned by digest, no lab
-# host on a real platform), applied by deploy/ci/gitops-check.sh and tested by make kyverno-test, with no cluster and no
-# network: the Kyverno CLI from its official image pinned by digest, the minor of the Kyverno the clusters run (chart
-# kyverno of argocd/apps/components.json in svp-gitops), so the CLI reads the policies as admission would.
+# The Kyverno CLI is the minor of the Kyverno the clusters run (chart kyverno of argocd/apps/components.json in
+# svp-gitops), so it reads the policies as admission would; no cluster, no network.
 # renovate: datasource=docker depName=ghcr.io/kyverno/kyverno-cli
 KYVERNO_CLI_IMAGE := ghcr.io/kyverno/kyverno-cli:v1.19.1@sha256:ced7b2be0b04250cabfe695f15307f69eb715fe23234816388af4f3812915b2a
-# The REST contract of the gateway as a versioned release (deploy/ci/contract.sh): oasdiff compares the spec of a pull
-# request with its base (make api-contract-check), ORAS pushes a new version to GHCR as an OCI artifact on main. Both from
-# their official images pinned by digest, run on a dev machine as in CI; no GitHub Action of either is used.
+# oasdiff compares the spec of a pull request with its base (make api-contract-check), ORAS pushes a new version to
+# GHCR as an OCI artifact on main (deploy/ci/contract.sh); no GitHub Action of either is used.
 # renovate: datasource=docker depName=tufin/oasdiff
 OASDIFF_IMAGE := tufin/oasdiff:v1.34.1@sha256:67a23cfea7d251e2ae34ee703ac8733c5d96bc2e7b90fd0f4d475ec99367b85f
 # renovate: datasource=docker depName=ghcr.io/oras-project/oras
@@ -104,16 +93,12 @@ ORAS_IMAGE := ghcr.io/oras-project/oras:v1.3.6@sha256:9cfb578be975b762fd898b9d00
 # runner image, unseen by Renovate and unreviewed, and these steps write the deployment repository.
 # renovate: datasource=docker depName=mikefarah/yq
 YQ_IMAGE := mikefarah/yq:4.54.1@sha256:4b3d9475d65571d28cbb19544d3820ec2945e4c8b2f18279394282b8dc3a592e
-# The rules of the scan gate's ignore files (.trivyignore.yaml, .grype.yaml, deploy/ci/trivy-config-ignore.yaml) as Rego
-# policies of deploy/ci/ignorefile-policies/, applied by deploy/ci/scan-gate.sh, and those of a tree of svp-gitops as the
-# policies of deploy/ci/gitops-tree-policies/, applied by deploy/ci/gitops-check.sh, both tested by make conftest-verify:
-# conftest from its official image pinned by digest, without network. yq above finds a key written twice, which
+# conftest applies the Rego policies of deploy/ci/ignorefile-policies/ (the scan gate's ignore files) and
+# deploy/ci/gitops-tree-policies/ (a tree of svp-gitops), without network. yq above finds a key written twice, which
 # conftest's parser hides.
 # renovate: datasource=docker depName=openpolicyagent/conftest
 CONFTEST_IMAGE := openpolicyagent/conftest:v0.71.1@sha256:0e77cdf7c1fcde035f3c579e4aaa6664ee2a8be5777eaa9af9f520cdd02280c0
-# Regal, the linter of the OPA project, for those Rego policies (make regal-lint, make regal-fix; rules in
-# .regal/config.yaml), from its official image (ghcr.io/open-policy-agent/regal, as the README of the project gives)
-# pinned by digest, run without network.
+# Regal, the linter of the OPA project, for those Rego policies; the image is the one its README gives.
 # renovate: datasource=docker depName=ghcr.io/open-policy-agent/regal
 REGAL_IMAGE := ghcr.io/open-policy-agent/regal:0.43.0@sha256:29460f0ec1340d37f6c0c74bcbd88dd232fd8382c7a2337f0684415bd4c46da1
 
@@ -176,9 +161,8 @@ generate-go: ## Generate Go code from proto/ (buf) and from SQL (sqlc, per servi
 	buf generate
 	@for f in $(wildcard services/*/sqlc.yaml); do echo "sqlc generate -f $$f"; sqlc generate -f $$f || exit 1; done
 
-# Generated Go code must match its sources. `make generate-go` runs
-# in a scratch copy of the files git tracks plus the untracked ones it does not ignore (so .env is never read), and the
-# result is compared with a second, untouched copy of the same files: the working tree is never written, so uncommitted
+# Runs generate-go in a scratch copy of the files git tracks plus the untracked ones it does not ignore (so .env is
+# never read) and compares the result with a second, untouched copy: the working tree is never written, so uncommitted
 # edits of generated code survive, and a file that generation adds counts as a difference too. A tracked file deleted
 # from the working tree is left out of both copies.
 generate-check: ## Fail when make generate-go would change or add a file: list them and print the diff (writes nothing here)
@@ -237,10 +221,9 @@ buf-lint: ## buf lint and buf build
 	buf build -o /dev/null
 
 # The go directive of go.mod is the Go release of the images: govulncheck scans the standard library of exactly that
-# release (GOTOOLCHAIN downloads it when the installed Go differs), and tools/vulngate fails when a golang build stage
-# of deploy/docker/ uses another one, so the result holds for the released binaries. govulncheck exits 0 in JSON mode
-# whatever it finds: the gate decides. The output goes to a file, not a pipe, so a failure of govulncheck itself
-# (no network to vuln.go.dev, a build error) fails the target too.
+# release, and tools/vulngate fails when a golang build stage of deploy/docker/ uses another one, so the result holds
+# for the released binaries. govulncheck exits 0 in JSON mode whatever it finds: the gate decides. The output goes to a
+# file, not a pipe, so a failure of govulncheck itself (no network to vuln.go.dev, a build error) fails the target too.
 vulncheck: ## govulncheck ./... with the Go of the go directive; called vulnerabilities fail unless excepted in .govulncheck-ignore.json
 	@command -v govulncheck >/dev/null 2>&1 || { echo "govulncheck not found: run make tools" >&2; exit 1; }
 	@gover=$$(go list -m -f '{{.GoVersion}}') || exit 1; \
@@ -262,11 +245,10 @@ cover: ## go test -race with coverage into cover.out (same test variables and TE
 # How long `make fuzz` fuzzes each target.
 FUZZTIME ?= 30s
 
-# go test -fuzz takes one target of one package per run, so the targets run one after another and the first failure
-# stops the rest. They are found by reading the *_test.go files, not with go test -list: listing runs TestMain, and a
-# TestMain may build a database. No -race: it slows fuzzing down several times, and make test already runs every seed
-# with -race. The generated corpus stays in GOCACHE; a failing input goes to testdata/fuzz/<target>/ of its package,
-# to be fixed and committed so the seeds keep it.
+# go test -fuzz takes one target of one package per run. Targets are found by reading the *_test.go files, not with
+# go test -list: listing runs TestMain, and a TestMain may build a database. No -race: it slows fuzzing down several
+# times, and make test already runs every seed with -race. A failing input goes to testdata/fuzz/<target>/ of its
+# package, to be fixed and committed so the seeds keep it.
 fuzz: ## Fuzz each Fuzz target of PKGS for FUZZTIME (default 30s), one at a time; stop at the first failure and print its input
 	@list=$$(go list -f '{{.ImportPath}} {{.Dir}}' $(PKGS)) || exit 1; \
 	targets=$$(printf '%s\n' "$$list" | while read -r pkg dir; do \
@@ -288,29 +270,19 @@ check: check-go ## Run every check (check-go)
 
 check-go: fmt-check vet lint actionlint buf-lint vulncheck test ## Run the Go, workflow and proto checks
 
-# Every chart of the repository's working tree, as the GitOps path renders it with the deployment configuration of
-# svp-gitops: the clone gitops_dir of deploy/k8s/lib.sh names (../gitops beside the main checkout, or SVP_GITOPS_DIR,
-# which CI points at the clone of make gitops-clone, main of svp-gitops). deploy/ci/gitops-check.sh --worktree, the
-# check svp-gitops runs on its own changes, with the working tree's charts in place of the commit each environment
-# pins: the root chart argocd/apps of the clone for each environment on amd64 and arm64 nodes (the plugin of Argo
-# Rollouts built for each, every source of svp-gitops on a full ref); each chart of this repository with base/ alone and
-# with each environment's overlay and image file, as Argo CD reads them (prd without svp.localhost); the ExternalSecrets
-# and SecretStores of each environment against the CRD schemas of the pinned External Secrets chart (kubeconform in
-# KUBECONFORM_IMAGE, no network), none with base/ alone; the rules on the rendered manifests as Kyverno policies of
-# deploy/ci/gitops-policies/ (Kyverno CLI in KYVERNO_CLI_IMAGE, no network): every image pinned by digest
-# (images-pinned), no svp.localhost on a platform without localHosts (no-lab-hosts, beside a grep of the whole render);
-# no overlay changing an image. Needs Docker and network access to the chart repositories. A change that needs a new
-# value in base/ merges in svp-gitops first, then here.
+# The charts run against the deployment configuration of the clone of svp-gitops that gitops_dir of deploy/k8s/lib.sh
+# names (../gitops beside the main checkout, or SVP_GITOPS_DIR, which CI points at the clone of make gitops-clone).
+# Needs Docker and network access to the chart repositories. A change that needs a new value in base/ merges in
+# svp-gitops first, then here.
 helm-check: helm-docs-check ## helm lint and helm template every chart of the working tree with base/ of the clone of svp-gitops (../gitops, or SVP_GITOPS_DIR) alone and with the overlays and image files of each environment, its root chart argocd/apps for each environment on amd64 and arm64 nodes, the ExternalSecrets and SecretStores of each environment against the CRD schemas of the pinned External Secrets chart (kubeconform), and the Kyverno policies of deploy/ci/gitops-policies/ on the renders: every image pinned by digest, no svp.localhost on a real platform (deploy/ci/gitops-check.sh --worktree)
 	@gitops=$$(bash -c '$(K8S_LIB) && gitops_dir') && \
 	  KUBECONFORM_IMAGE='$(KUBECONFORM_IMAGE)' KYVERNO_CLI_IMAGE='$(KYVERNO_CLI_IMAGE)' \
 	  deploy/ci/gitops-check.sh --worktree "$$gitops"
 
-# README.md of chart svp-service, generated by helm-docs from Chart.yaml, the "# --" comments of values.yaml and
-# README.md.gotmpl, from the official image pinned by digest (the same on a dev machine and in CI), without network and
-# as the caller. The README documents the values the seven releases' files in svp-gitops set, so it must not drift from
-# values.yaml: make helm-docs writes it; make helm-docs-check mounts the repository read-only, has helm-docs print what it
-# would write (--dry-run) and fails when README.md differs. helm-check runs the check.
+# README.md of chart svp-service is generated by helm-docs from Chart.yaml, the "# --" comments of values.yaml and
+# README.md.gotmpl. It documents the values the seven releases' files in svp-gitops set, so it must not drift from
+# values.yaml: helm-docs-check mounts the repository read-only, has helm-docs print what it would write (--dry-run) and
+# fails when README.md differs; helm-check runs it.
 # renovate: datasource=docker depName=jnorwood/helm-docs
 HELM_DOCS_IMAGE := jnorwood/helm-docs:v1.14.2@sha256:7e562b49ab6b1dbc50c3da8f2dd6ffa8a5c6bba327b1c6335cc15ce29267979c
 HELM_DOCS_CHART := deploy/helm/svp-service
@@ -322,18 +294,15 @@ helm-docs-check: ## Fail when README.md of chart svp-service differs from what t
 	@$(call HELM_DOCS,:ro) --dry-run | diff -u $(HELM_DOCS_CHART)/README.md - \
 	  || { echo "$(HELM_DOCS_CHART)/README.md is out of date: run make helm-docs" >&2; exit 1; }
 
-# The kyverno test of each policy deploy/ci/gitops-check.sh applies to rendered manifests: the resources of
-# deploy/ci/gitops-policies/test/<policy>/ that must fail and those that must pass. No cluster, no network; the policies
-# are mounted read-only and the CLI runs as the caller.
+# The resources of deploy/ci/gitops-policies/test/<policy>/ that must fail and those that must pass, per policy. No
+# cluster, no network.
 kyverno-test: ## kyverno test of the policies on rendered manifests (deploy/ci/gitops-policies/, Kyverno CLI in KYVERNO_CLI_IMAGE, no network)
 	env -u DOCKER_DEFAULT_PLATFORM docker run --rm --user "$$(id -u):$$(id -g)" --network none \
 	  -v "$(CURDIR)/deploy/ci/gitops-policies:/p:ro" '$(KYVERNO_CLI_IMAGE)' test /p --remove-color
 
-# The unit tests of the conftest policies (*_test.rego beside them), one run per folder: those deploy/ci/scan-gate.sh
-# applies to the ignore files (deploy/ci/ignorefile-policies/; every file shape and rule that must fail, and those that
-# must pass, with today fixed) and those deploy/ci/gitops-check.sh applies to a tree of svp-gitops
-# (deploy/ci/gitops-tree-policies/; every rule that must fail and pass, on a tree written in the tests). No network;
-# the policies are mounted read-only and conftest runs as the caller.
+# The unit tests of the conftest policies (*_test.rego beside them), one run per folder: the ignore-file policies of
+# deploy/ci/scan-gate.sh (every file shape and rule that must fail, and those that must pass, with today fixed) and the
+# tree policies of deploy/ci/gitops-check.sh (every rule that must fail and pass, on a tree written in the tests).
 CONFTEST_POLICIES := deploy/ci/ignorefile-policies deploy/ci/gitops-tree-policies
 conftest-verify: ## conftest verify of the ignore-file and svp-gitops tree policies (deploy/ci/*-policies/ of Rego, conftest in CONFTEST_IMAGE, no network)
 	@set -e; for dir in $(CONFTEST_POLICIES); do \
@@ -344,8 +313,7 @@ conftest-verify: ## conftest verify of the ignore-file and svp-gitops tree polic
 
 # Regal over the same two folders, one run per folder like conftest (the packages of a folder see each other only).
 # regal-lint only reads (a violation, a warning too, is exit 1); regal-fix writes the fixes Regal has (opa fmt and the
-# rest of the list in `regal fix --help`) into the folders, the only place the container may write. The rules are
-# .regal/config.yaml, mounted read-only.
+# rest of the list in `regal fix --help`) into the folders, the only place the container may write.
 regal-lint: ## Regal lint of the Rego policies (deploy/ci/*-policies/, rules in .regal/config.yaml, Regal in REGAL_IMAGE, no network, read-only)
 	@set -e; for dir in $(CONFTEST_POLICIES); do \
 	  echo "regal lint $$dir"; \
@@ -354,13 +322,10 @@ regal-lint: ## Regal lint of the Rego policies (deploy/ci/*-policies/, rules in 
 	    lint . --config-file /regal/config.yaml --fail-level warning --no-color; \
 	done
 
-# Static check of the Chainsaw drills, no cluster: every YAML file under CHAINSAW_DRILLS is exactly one of three things, and
-# any other is an error (a file nothing checks is not a green one). chainsaw-test.yaml: `chainsaw lint test`; .chainsaw.yaml
-# (any folder): `chainsaw lint configuration`; a file under templates/ (StepTemplate): kubeconform -strict, no network,
-# against the schema of CHAINSAW_VERSION kept in .schemas/ (chainsaw lint, v0.2.15, takes only test and configuration).
-# .schemas/source names the URL the copy comes from, and its tag must be CHAINSAW_VERSION. The copy is kept in the
-# repository so the check runs offline; kubeconform fails on a kind with no schema, so a file of another kind under
-# templates/ is red.
+# Every YAML file under CHAINSAW_DRILLS is exactly one of three things, and any other is an error (a file nothing checks
+# is not a green one): chainsaw-test.yaml, .chainsaw.yaml, or a StepTemplate under templates/. chainsaw lint (v0.2.15)
+# takes only test and configuration, so kubeconform -strict checks the templates against the schema of CHAINSAW_VERSION
+# kept in .schemas/ (offline); it fails on a kind with no schema.
 CHAINSAW_DRILLS := deploy/k8s/drills
 chainsaw-lint: ## Lint the Chainsaw drills of deploy/k8s/drills/: chainsaw lint test and configuration, kubeconform -strict on the step templates, any other YAML file is an error (no cluster)
 	@set -eu; d='$(CHAINSAW_DRILLS)'; rc=0; \
@@ -394,12 +359,10 @@ regal-fix: ## Regal fix of the Rego policies (opa fmt and the other automatic fi
 	    fix . --config-file /regal/config.yaml --no-color; \
 	done
 
-# Misconfiguration scan of the Dockerfiles, charts and manifests with the pinned trivy. It only
-# reports: exit 0 whatever it finds. The findings that are deliberate choices are left out by
-# deploy/ci/trivy-config-ignore.yaml, each for its paths and until its expired_at, with the reason in the file.
-# TRIVY_CONFIG_SARIF set to an absolute path writes a SARIF
-# report there (CI uploads it); unset, a table goes to the terminal. The repository is mounted read-only and the container runs as the caller,
-# so the report belongs to them; the policy bundle trivy downloads goes to a cache inside the container.
+# It only reports: exit 0 whatever it finds. The findings that are deliberate choices are left out by
+# deploy/ci/trivy-config-ignore.yaml, each for its paths and until its expired_at, with the reason in the file. The
+# report belongs to the caller (the container runs as them); the policy bundle trivy downloads goes to a cache inside
+# the container.
 TRIVY_CONFIG_SARIF ?=
 trivy-config: ## trivy config on the repository, report only (TRIVY_CONFIG_SARIF=<absolute path> writes SARIF)
 	@if [ -n "$(TRIVY_CONFIG_SARIF)" ]; then \
@@ -409,11 +372,10 @@ trivy-config: ## trivy config on the repository, report only (TRIVY_CONFIG_SARIF
 	env -u DOCKER_DEFAULT_PLATFORM docker run --rm --user "$$(id -u):$$(id -g)" -v "$(CURDIR):/src:ro" --workdir /src \
 		"$$@" --quiet --cache-dir /tmp/trivy --ignorefile deploy/ci/trivy-config-ignore.yaml --exit-code 0 .
 
-# The grype gate of the image pipeline, from a machine: deploy/ci/scan-gate.sh --grype runs grype on an SPDX SBOM with
-# --fail-on critical and .grype.yaml (any Critical left after its rules fails). SBOM=<absolute path> scans that
-# document; IMAGE=<ref>@sha256:<digest> [ARCH=amd64|arm64] first has the pinned syft read the image of that platform
-# from its registry, anonymously. grype needs the network for its DB, and a DB it cannot fetch fails the target.
-# SVP_GRYPE_CACHE, when set, keeps the DB in that directory (it is about 3 GB unpacked); unset, in $TMPDIR.
+# deploy/ci/scan-gate.sh --grype runs grype on an SPDX SBOM with --fail-on critical and .grype.yaml (any Critical left
+# after its rules fails). IMAGE=<ref>@sha256:<digest> [ARCH=amd64|arm64] first has the pinned syft read the image of
+# that platform from its registry, anonymously. grype needs the network for its DB, and a DB it cannot fetch fails the
+# target. SVP_GRYPE_CACHE, when set, keeps the DB in that directory (it is about 3 GB unpacked); unset, in $TMPDIR.
 SBOM ?=
 IMAGE ?=
 ARCH ?= amd64
@@ -421,21 +383,17 @@ grype: ## grype + gate on an SBOM (SBOM=<absolute path of SPDX JSON>) or an imag
 	@bash -c '. deploy/ci/common.sh && grype_check "$$1" "$$2" "$$3"' grype '$(SBOM)' '$(IMAGE)' '$(ARCH)'
 
 # Checks renovate.json as the GitHub App reads it, a repository config (--no-global), and fails on any error or on an
-# option that needs migrating (--strict): with the pinned Renovate image, no network, the repository mounted read-only
-# (renovate.json must stay readable by the image's uid 12021). The App runs the Renovate version Mend deploys, which can
-# lag this one by up to a week.
+# option that needs migrating (--strict). renovate.json must stay readable by the image's uid 12021. The App runs the
+# Renovate version Mend deploys, which can lag this one by up to a week.
 # renovate: datasource=docker depName=ghcr.io/renovatebot/renovate
 RENOVATE_IMAGE := ghcr.io/renovatebot/renovate:44.165.1@sha256:455f4169a364a4c8bdc38a08694e3509649f3d7cb9aaea35c86946b38015ac47
 renovate-check: ## Validate renovate.json with the pinned Renovate (renovate-config-validator --strict, no network)
 	env -u DOCKER_DEFAULT_PLATFORM docker run --rm --network none -v "$(CURDIR):/repo:ro" --workdir /repo \
 		$(RENOVATE_IMAGE) renovate-config-validator --strict --no-global renovate.json
 
-# Security lint of the workflows (ADR-0041 (g)): zizmor with the regular persona on the whole repository, from its
-# official image pinned by digest (multi-arch: the same reference on an arm64 dev machine and an amd64 runner), the
-# repository mounted read-only. Every finding fails (exit codes 11 to 14); the deliberate ones are left out in
-# .github/zizmor.yml, each with its reason. With GH_TOKEN set (CI passes the job's read-only GITHUB_TOKEN) the online
-# audits run too (impostor commits, actions with known vulnerabilities); without it, offline audits only.
-# ZIZMOR_FORMAT=github writes workflow commands (annotations in CI); ZIZMOR_SARIF=<path> writes a SARIF report there
+# Every finding fails (exit codes 11 to 14); the deliberate ones are left out in .github/zizmor.yml, each with its
+# reason. With GH_TOKEN set (CI passes the job's read-only GITHUB_TOKEN) the online audits run too (impostor commits,
+# actions with known vulnerabilities); without it, offline audits only. ZIZMOR_SARIF=<path> writes a SARIF report there
 # instead and never fails on a finding (the report of the code scanning upload).
 # renovate: datasource=docker depName=ghcr.io/zizmorcore/zizmor
 ZIZMOR_IMAGE := ghcr.io/zizmorcore/zizmor:1.31.1@sha256:42d409dbb851d4c5d35a058cf042b828bea1e3f2884378c526eb0974780e18d9
@@ -448,13 +406,10 @@ zizmor: ## Security lint of the workflows with the pinned zizmor (online audits 
 		$(ZIZMOR_IMAGE) --persona=regular --no-progress --color=never --cache-dir /tmp/zizmor "$$@" . \
 		$(if $(ZIZMOR_SARIF),> '$(ZIZMOR_SARIF)')
 
-# Static check of the Markdown: markdownlint-cli2 with .markdownlint.yaml (style), then lychee --offline --include-fragments
-# (relative links and heading anchors; links to other sites are not followed: the network is not stable and a check that
-# depends on it fails for reasons outside the change), both from their official images pinned by digest (multi-arch),
-# without network, the repository mounted read-only at /repo: a relative link that leaves the repository (to plans/,
-# which is no repository's) is an error on purpose. DOCS narrows the files (paths or globs, relative to the repository);
-# the default is every Markdown file git tracks plus the new ones it does not track yet. Both tools always run; the exit
-# code is not 0 when either reports a problem.
+# lychee --offline checks relative links and heading anchors; links to other sites are not followed: the network is not
+# stable and a check that depends on it fails for reasons outside the change. The repository is mounted at /repo, so a
+# relative link that leaves it (to plans/, which is no repository's) is an error on purpose. Both tools always run; the
+# exit code is not 0 when either reports a problem.
 # renovate: datasource=docker depName=davidanson/markdownlint-cli2
 MARKDOWNLINT_IMAGE := davidanson/markdownlint-cli2:v0.24.0@sha256:70ead7c0352d22d04bbe612cd96b54ec591538d8f4626cafe391bb2ecf3639ca
 # renovate: datasource=docker depName=lycheeverse/lychee
@@ -481,12 +436,10 @@ api-contract-check: ## Check the version rule of the gateway's OpenAPI spec agai
 hooks: ## Point git at .githooks (run once per clone)
 	git config core.hooksPath .githooks
 
-# The web client's end-to-end tests, measurements and source map upload against the stack of make up are code of
-# svp-frontend (its e2e/, lighthouse/ and Makefile). Each target here runs the target of svp-frontend its help names, in the
-# clone web_dir of deploy/k8s/lib.sh names (<workspace>/frontend, or SVP_WEB_DIR, which CI points at the clone of make
-# web-clone), with that clone's Node, pnpm and Playwright browsers, against this checkout's stack, scripts and .env
-# (SVP_BACKEND_DIR); results go to test-results/ of the clone. LOCAL LAB ONLY: the e2e seed and every Playwright worker,
-# measure-upload and Lighthouse delete the gateway's register rate limit keys in Redis db 10, as make smoke does.
+# Each target runs the target of svp-frontend its help names, in the clone web_dir of deploy/k8s/lib.sh names
+# (<workspace>/frontend, or SVP_WEB_DIR), with that clone's Node, pnpm and Playwright browsers, against this checkout's
+# stack, scripts and .env (SVP_BACKEND_DIR). LOCAL LAB ONLY: the e2e seed and every Playwright worker, measure-upload
+# and Lighthouse delete the gateway's register rate limit keys in Redis db 10, as make smoke does.
 IN_WEB = dir=$$(bash -c '$(K8S_LIB) && web_dir') && SVP_BACKEND_DIR='$(CURDIR)' $(MAKE) --no-print-directory -C "$$dir"
 
 web-e2e: ## Playwright end-to-end tests of the web client on Chromium and WebKit against the stack of make up (make e2e of svp-frontend)
@@ -506,11 +459,7 @@ web-lighthouse: ## Lighthouse (mobile, one run per page) of the feed logged in a
 web-sourcemaps: ## Upload the source maps of the web client's browser bundle, from the build the stack of make up OBS=lgtm WEB_FROM=clone runs, to its GlitchTip (http://127.0.0.1:8000); checks first that the web serves that build (make sourcemaps of svp-frontend)
 	@$(IN_WEB) sourcemaps
 
-# Docker and compose targets live in their own file.
 -include deploy/compose/compose.mk
-# Local Kubernetes targets (k3d cluster svp).
 -include deploy/k8s/k8s.mk
-# Load test targets (k6).
 -include deploy/k6/k6.mk
-# DAST target (Schemathesis).
 -include deploy/dast/dast.mk

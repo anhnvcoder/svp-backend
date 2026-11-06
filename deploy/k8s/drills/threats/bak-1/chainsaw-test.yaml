@@ -1,19 +1,18 @@
-# BAK-1 of the threat model (docs/threat-model.md): the object store user of the backups of Postgres reads bucket
-# pg-backups only, and no service's user reads that bucket. S3 requests to the object store through Envoy
-# (https://s3.svp.localhost:8443), signed (AWS Signature V4, region us-east-1) with the store's logins of Secrets
-# svp-data/pg-backup-s3 and svp-data/s3-users, each written to a private curl config file (umask 077) for that one request
-# and deleted after it, never on a command line: svp-pg-backup may neither list buckets uploads and media nor read an
-# object there, 403 AccessDenied, and svp-video-service and svp-media-worker may neither list pg-backups nor read an object
-# there. Objects under media/ of media are public to every GET by design (UP-6), signed ones included on RustFS, so
-# svp-pg-backup's read of media is of a key outside that prefix, which only its own policy could allow.
-#
-# The objects read are a name made for the request (drill-threats-<UTC time>-<random>), which exists nowhere: the store
-# answers 404 NoSuchKey where the user may read and 403 AccessDenied where not, so nothing of a backup is downloaded.
-# Controls: svp-pg-backup lists pg-backups (200) and reads there (404 NoSuchKey), each service's user reads its own prefix
-# uploads/uploads/ (404 NoSuchKey). Other pods cannot reach the store (IN-2, FF-5, WEB-13), and the Barman Cloud plugin's
-# RBAC is printed with its reason by the RBAC item.
-#
-# Each check and control is one step; a failed one marks the test failed and the next steps still run.
+# BAK-1 of the threat model: the object store user of the Postgres backups reads bucket pg-backups only, and no
+# service's user reads that bucket. S3 requests through Envoy are signed with the store's logins of Secrets
+# svp-data/pg-backup-s3 and s3-users, each kept in a private (umask 077) curl config file deleted after the request,
+# never on a command line.
+
+# svp-pg-backup may neither list buckets uploads and media nor read an object there (403 AccessDenied);
+# svp-video-service and svp-media-worker may neither list pg-backups nor read an object there. Objects under
+# media/ of media are public to every GET by design (UP-6), signed ones included on RustFS, so svp-pg-backup's
+# read of media is of a key outside that prefix.
+
+# The objects read are a name made for the request, which exists nowhere: 404 NoSuchKey where the user may read, 403
+# AccessDenied where not, so nothing of a backup is downloaded. Controls: svp-pg-backup lists pg-backups (200) and reads
+# there (404), each service's user reads its own prefix uploads/uploads/ (404).
+
+# Design notes: docs/threat-model.md.
 apiVersion: chainsaw.kyverno.io/v1alpha1
 kind: Test
 metadata:
