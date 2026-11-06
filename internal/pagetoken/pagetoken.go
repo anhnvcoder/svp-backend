@@ -1,7 +1,7 @@
 // Package pagetoken encodes and decodes an opaque page_token: the keyset position (time,
 // video_id) of the last item of a page, for lists ordered newest first by a timestamp and the
 // video id. The time is the list's sort key: published_at for the feeds, created_at for the videos
-// of an author (docs/architecture.md §8.3).
+// of an author.
 //
 // The token is the unpadded base64url form of the protobuf bytes of a message with no .proto
 // file, encoded by hand with protowire:
@@ -11,7 +11,7 @@
 //
 // It is not signed: which items a caller may see always comes from the request and the caller of
 // the verified access token, never from the page token, so an edited or borrowed page token only
-// moves where the caller reads in what it may see anyway (threat model PG-1).
+// moves where the caller reads in what it may see anyway.
 package pagetoken
 
 import (
@@ -23,8 +23,8 @@ import (
 	"google.golang.org/protobuf/encoding/protowire"
 )
 
-// MaxLen is the longest token Decode accepts, checked before decoding anything (threat model
-// PG-2). A token Encode makes for a current date is 36 characters.
+// MaxLen is the longest token Decode accepts, checked before decoding anything. A token Encode
+// makes for a current date is 36 characters.
 const MaxLen = 64
 
 const (

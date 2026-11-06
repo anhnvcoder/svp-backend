@@ -1,5 +1,5 @@
 // Package grpcerr builds gRPC errors that carry a machine-readable reason in a
-// google.rpc.ErrorInfo status detail, and reads the reason back (docs/architecture.md §8.4).
+// google.rpc.ErrorInfo status detail, and reads the reason back.
 package grpcerr
 
 import (

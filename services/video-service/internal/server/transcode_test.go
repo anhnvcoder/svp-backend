@@ -449,7 +449,7 @@ func headerValue(r *kgo.Record, key string) string {
 }
 
 // Every malformed, forged or out-of-order event goes to the dead-letter topic at once and
-// changes nothing (IN-5, FF-6); an unknown event type is skipped and committed.
+// changes nothing; an unknown event type is skipped and committed.
 func TestTranscodeInvalidEventsGoToDeadLetter(t *testing.T) {
 	needDB(t)
 	brokers := transcodeCluster(t, 1)

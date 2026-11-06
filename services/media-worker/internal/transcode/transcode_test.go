@@ -299,7 +299,7 @@ func TestRunRejectsNonVideo(t *testing.T) {
 }
 
 // TestRunRejectsReferencingFormats feeds playlist and concat files that point at other local
-// files (FF-2). The referenced file is a FIFO with no writer, named relative to the playlist (the
+// files. The referenced file is a FIFO with no writer, named relative to the playlist (the
 // concat demuxer refuses absolute names on its own): without the format whitelist ffprobe opens
 // it and blocks until the probe timeout, failing with a deadline error instead of
 // ErrInvalidInput.

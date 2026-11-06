@@ -158,8 +158,8 @@ func (b backend) serviceConfig() string {
 	return string(cfg)
 }
 
-// dialOptions are the options of every connection to b: plain text (no mTLS between services:
-// threat model IN-3), client spans and metrics, b's own circuit breaker, and b's service config. A service config
+// dialOptions are the options of every connection to b: plain text (no mTLS between services),
+// client spans and metrics, b's own circuit breaker, and b's service config. A service config
 // from the resolver (a DNS TXT record) is ignored, so the retry policy is always this one.
 func (b backend) dialOptions() []grpc.DialOption {
 	return []grpc.DialOption{
@@ -287,12 +287,10 @@ func serve(ctx context.Context, logger *slog.Logger) error {
 		return err
 	}
 	defer func() { _ = feedConn.Close() }()
-	// A GetStats call that first has to set up DNS, TCP and HTTP/2 may miss its 100 ms budget, so
-	// this connection is opened at start and kept open. Connect does not wait: the gateway starts
-	// even when engagement-service is not up yet, and the connection keeps retrying in the
-	// background. An idle timeout of 0 stops grpc-go from closing it after 30 minutes without
-	// calls. When an open connection breaks (engagement-service restarts), grpc-go reconnects on
-	// the next call, so that one feed page may come back without stats.
+	// A GetStats call that first has to set up DNS, TCP and HTTP/2 may miss its 100 ms budget, so this
+	// connection is opened at start and kept open: Connect does not wait (the gateway starts without
+	// engagement-service, the connection keeps retrying) and an idle timeout of 0 stops grpc-go closing it
+	// after 30 minutes idle. A broken one reconnects on the next call, so that feed page may lack stats.
 	engagementConn, err := dial(engagementBackend, grpc.WithIdleTimeout(0))
 	if err != nil {
 		return err
@@ -371,7 +369,7 @@ func parseMediaBaseURL(s string) (string, error) {
 // HOPS defaults to 0, the connection's address: with no proxy in front (compose) every
 // X-Forwarded-For comes from the client, so trusting one hop there would let a client pick its
 // rate-limit bucket on every request. A wrong count fails silently at run time (one bucket for
-// everyone, or spoofed IPs, threat model RL-1), so every setting that cannot be right stops the
+// everyone, or spoofed IPs), so every setting that cannot be right stops the
 // gateway instead: HOPS not a whole number >= 0, a range that does not parse, HOPS > 0 with no
 // range (no proxy would ever be trusted), or ranges with HOPS 0 (ranges that do nothing hide a
 // missing HOPS). The errors name the variable and never carry its value.

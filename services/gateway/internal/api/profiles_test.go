@@ -99,7 +99,7 @@ func TestGetMeErrors(t *testing.T) {
 			t.Errorf("problem = %+v", p)
 		}
 	})
-	// Unlike the authors of a page, a failing GetProfiles fails GET /me through the §8.4 table.
+	// Unlike the authors of a page, a failing GetProfiles fails GET /me.
 	t.Run("user-service unavailable", func(t *testing.T) {
 		e := newEnv(t)
 		e.users.fail(status.Error(codes.Unavailable, "user-service is down"))
@@ -129,7 +129,7 @@ func TestUpdateMe(t *testing.T) {
 	if v := callers(c.md); !slices.Equal(v, []string{userA}) {
 		t.Errorf("caller = %v, want [%s]", v, userA)
 	}
-	// A display name may be a real name: it stays out of the log (threat model WEB-18).
+	// A display name may be a real name: it stays out of the log.
 	if strings.Contains(logs.String(), "Real Name") {
 		t.Errorf("log contains the display name:\n%s", logs)
 	}
@@ -660,7 +660,7 @@ func TestPublicVideoRateLimitedByIP(t *testing.T) {
 
 // TestPublicVideoLimitedWhileRedisDown: class public is soft-closed, so while Redis fails the
 // in-memory fallback still limits it, to a burst of 30 and one every 2 s, counted under
-// store="fallback" (threat model RL-2).
+// store="fallback".
 func TestPublicVideoLimitedWhileRedisDown(t *testing.T) {
 	collect := readDecisions(t)
 	e := newEnv(t)

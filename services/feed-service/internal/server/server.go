@@ -1,7 +1,6 @@
 // Package server implements svp.feed.v1.FeedService: the caller's following feed from their own
-// timeline and the explore feed of every READY video, both newest first with keyset pagination
-// (docs/architecture.md §8.3). The first explore page, which every new user reads, is cached in
-// Redis.
+// timeline and the explore feed of every READY video, both newest first with keyset pagination.
+// The first explore page, which every new user reads, is cached in Redis.
 package server
 
 import (
@@ -121,8 +120,7 @@ type page struct {
 }
 
 // GetFollowingFeed returns a page of the caller's own timeline of the last 30 days. The user
-// whose timeline is read always comes from the caller's access token, never from the page token
-// (threat model PG-1).
+// whose timeline is read always comes from the caller's access token, never from the page token.
 func (s *Server) GetFollowingFeed(ctx context.Context, req *feedv1.GetFollowingFeedRequest) (*feedv1.GetFollowingFeedResponse, error) {
 	caller, err := callerID(ctx)
 	if err != nil {
@@ -189,12 +187,10 @@ func (s *Server) firstExplorePage(ctx context.Context, p page) (*feedv1.GetExplo
 			return nil, err
 		}
 		wrote := s.cacheExplorePage(ctx, key, b)
-		// The line carries why the cache did not serve this read, so the Postgres reads a slow
-		// Redis caused can be counted: the cache WARNs are logged at most once a minute and do
-		// not count them. The look just above is the one that decides whether Postgres is read.
-		// It also carries how caching the page ended: a write past the budget may leave no page,
-		// so the next shared read finds none (cache=miss) because Redis was slow, not because the
-		// page expired.
+		// The line carries why the cache did not serve this read, so the Postgres reads a slow Redis
+		// caused can be counted (the cache WARNs are logged at most once a minute), and how caching
+		// the page ended: a write past the budget may leave no page, so the next shared read finds
+		// none (cache=miss) because Redis was slow, not because the page expired.
 		s.logger.InfoContext(ctx, "explore page loaded from database", slog.Int("page_size", int(p.size)),
 			slog.String("cache", string(got)), slog.String("cache_write", string(wrote)))
 		return b, nil

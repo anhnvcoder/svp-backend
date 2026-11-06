@@ -1,5 +1,5 @@
 // Package httpx is the gateway's HTTP edge: the server with its timeouts, JSON request bodies,
-// problem+json errors (RFC 9457, docs/architecture.md §8.4), the middleware every route passes
+// problem+json errors (RFC 9457), the middleware every route passes
 // through, and the gRPC metadata sent to the services.
 //
 // The package logs through slog.Default; the gateway's main sets it to a logx logger, so every
@@ -22,7 +22,7 @@ import (
 	"github.com/anhnvcoder/svp-backend/internal/callerid"
 )
 
-// Server limits (threat model RL-4): Go's http.Server has no timeout by default.
+// Server limits: Go's http.Server has no timeout by default.
 const (
 	readHeaderTimeout = 5 * time.Second
 	readTimeout       = 10 * time.Second
@@ -31,10 +31,10 @@ const (
 	maxHeaderBytes    = 16 << 10
 )
 
-// NewServer returns an http.Server for handler on addr with the timeouts and header limit of
-// threat model RL-4. It panics when handler is nil or http.DefaultServeMux, which a nil handler
-// would serve too: anything a package registers there, such as net/http/pprof, must never be
-// exposed (OPS-1). Pass a mux built with http.NewServeMux.
+// NewServer returns an http.Server for handler on addr with the timeouts and header limit set
+// by the constants above. It panics when handler is nil or http.DefaultServeMux, which a nil
+// handler would serve too: anything a package registers there, such as net/http/pprof, must
+// never be exposed. Pass a mux built with http.NewServeMux.
 func NewServer(addr string, handler http.Handler) *http.Server {
 	if handler == nil || handler == http.DefaultServeMux {
 		panic("httpx: NewServer needs its own handler, not nil or http.DefaultServeMux")
@@ -58,12 +58,12 @@ const (
 	logStateKey
 )
 
-// OutgoingContext returns ctx with gRPC outgoing metadata built from scratch (threat model
-// IN-1): when the request is authenticated, authorization "Bearer <token>" with the very token
-// RequireAuth verified, which the service verifies again to find the caller. Any outgoing
-// metadata already in ctx is replaced, and no client header is ever copied: an X-User-Id or a
-// second Authorization the client sent never reaches a service. The traceparent of the request's
-// span is added later, by the stats handler of ClientTelemetry.
+// OutgoingContext returns ctx with gRPC outgoing metadata built from scratch: when the request
+// is authenticated, authorization "Bearer <token>" with the very token RequireAuth verified,
+// which the service verifies again to find the caller. Any outgoing metadata already in ctx is
+// replaced, and no client header is ever copied: an X-User-Id or a second Authorization the
+// client sent never reaches a service. The traceparent of the request's span is added later, by
+// the stats handler of ClientTelemetry.
 func OutgoingContext(ctx context.Context) context.Context {
 	md := metadata.MD{}
 	if token, ok := ctx.Value(tokenKey).(string); ok {

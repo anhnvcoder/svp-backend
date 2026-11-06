@@ -190,7 +190,7 @@ type ListAuthorVideosParams struct {
 
 // Reads a page of the videos of author_id, newest first, strictly after the cursor
 // (before_created_at, before_id); a NULL before_created_at starts at the newest video. Every status
-// when all_statuses (the caller is the author), otherwise only READY ones (UP-3). Runs on
+// when all_statuses (the caller is the author), otherwise only READY ones. Runs on
 // videos_author_created_idx.
 func (q *Queries) ListAuthorVideos(ctx context.Context, arg ListAuthorVideosParams) ([]Video, error) {
 	rows, err := q.db.Query(ctx, listAuthorVideos,
@@ -237,7 +237,7 @@ SELECT pg_advisory_xact_lock(hashtextextended('video-upload-author:' || $1::uuid
 `
 
 // Serializes the InitUpload calls of one author until the transaction ends, so two concurrent
-// calls cannot both pass the open upload count (UP-7). Other authors do not wait.
+// calls cannot both pass the open upload count. Other authors do not wait.
 func (q *Queries) LockAuthorUploads(ctx context.Context, authorID uuid.UUID) error {
 	_, err := q.db.Exec(ctx, lockAuthorUploads, authorID)
 	return err

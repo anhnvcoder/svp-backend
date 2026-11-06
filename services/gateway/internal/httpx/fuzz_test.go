@@ -72,7 +72,7 @@ func FuzzClientAddr(f *testing.F) {
 				t.Fatalf("Of = %q, not an IP address in canonical form: %v", got, err)
 			}
 		}
-		// RL-1: what a client writes arrives before every element a trusted proxy appends, so a
+		// What a client writes arrives before every element a trusted proxy appends, so a
 		// header put in front of the list never changes the answer once the list is long enough.
 		if fromProxy && hops%3 > 0 && len(headers) > 0 &&
 			len(strings.Split(strings.Join(headers, ","), ",")) >= int(hops%3) {

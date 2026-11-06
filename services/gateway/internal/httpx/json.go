@@ -9,7 +9,7 @@ import (
 	"net/http"
 )
 
-// maxBodyBytes caps a JSON request body (threat model RL-4); files never go through the gateway.
+// maxBodyBytes caps a JSON request body; files never go through the gateway.
 const maxBodyBytes = 64 << 10
 
 // DecodeJSON decodes the request body, one JSON object of at most 64 KiB, into dst. Unknown

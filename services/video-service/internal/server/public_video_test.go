@@ -57,7 +57,7 @@ func TestGetPublicVideoReturnsReadyVideo(t *testing.T) {
 }
 
 // Every video that is not READY looks exactly like a missing one, even to its author: the answer
-// is the same for everyone (UP-3).
+// is the same for everyone.
 func TestGetPublicVideoHidesUnpublished(t *testing.T) {
 	needDB(t)
 	s, _ := newServer()

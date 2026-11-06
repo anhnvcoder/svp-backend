@@ -24,6 +24,11 @@ Loại tài liệu (Diátaxis): **reference**, tra cứu khi cần một lệnh 
   `SVP_TEST_S3_PROBE_ACCESS_KEY` / `SVP_TEST_S3_PROBE_SECRET_KEY`,
   `SVP_TEST_KAFKA_BROKERS`; thiếu biến thì test gọi `t.Skip`. `make test-stack` đặt các biến này; hiện chưa có test nào
   dùng `SVP_TEST_KAFKA_BROKERS`.
+- Test tích hợp checksum của `internal/objstore` (multipart CRC32 bằng user thử, chạy qua `make test-stack`, xem
+  [`compose.md`](compose.md)) gồm hai lượt vì SDK gửi checksum theo hai dạng: header `x-amz-checksum-crc32` qua HTTP, như công
+  cụ sao lưu gửi tới endpoint `http://` trong cluster, và trailer `aws-chunked`, dạng SDK chỉ chọn khi URL request là https. Lượt
+  trailer vì vậy đi qua một proxy TLS của chính test đặt trước endpoint HTTP, như một gateway TLS đứng trước store trong cluster.
+  Mỗi lượt kiểm trên transport của client rằng mọi part đã gửi đúng dạng của nó, nên không thể qua nhờ dạng kia.
 - Test Redis dùng db 15 qua `SVP_TEST_REDIS_URL`; helper `internal/redistest` từ chối URL nào khác `127.0.0.1:6379` /
   `localhost:6379` db 15, cho mỗi test một tiền tố khoá ngẫu nhiên `svp:test:<hex>:` và khi xong chỉ xoá khoá của tiền tố
   đó. Không `FLUSHDB`/`FLUSHALL`, kể cả ở db 15. Thiếu biến thì test gọi `t.Skip`.

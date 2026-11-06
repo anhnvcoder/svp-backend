@@ -400,7 +400,7 @@ func TestPageSizeDefaultAndMaximum(t *testing.T) {
 }
 
 // A token edited to point anywhere, even at another user's rows, only moves where the caller
-// reads in their own timeline (threat model PG-1).
+// reads in their own timeline.
 func TestEditedTokenStaysInCallersTimeline(t *testing.T) {
 	needDB(t)
 	s := newServer()

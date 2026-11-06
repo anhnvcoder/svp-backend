@@ -193,7 +193,7 @@ func TestLoginSpansHoldNoSecrets(t *testing.T) {
 	}
 }
 
-// TestRefreshTokensStayOutOfTelemetry is threat model JWT-8 on refresh and logout: whatever
+// TestRefreshTokensStayOutOfTelemetry: on refresh and logout, whatever
 // user-service answers, neither the presented refresh token nor the tokens of the answer reach a
 // span, a log line or a problem body.
 func TestRefreshTokensStayOutOfTelemetry(t *testing.T) {
@@ -291,7 +291,7 @@ func TestReadyzLeavesNoSpans(t *testing.T) {
 	}
 }
 
-// TestNoProfilingOrMetricsRoutes is threat model OPS-1: no pprof and no /metrics on the API.
+// TestNoProfilingOrMetricsRoutes: no pprof and no /metrics on the API.
 func TestNoProfilingOrMetricsRoutes(t *testing.T) {
 	e := newEnv(t)
 	for _, path := range []string{"/debug/pprof/", "/debug/pprof/heap", "/debug/pprof/cmdline", "/metrics"} {

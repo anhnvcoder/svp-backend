@@ -22,7 +22,7 @@ import (
 // gave up on; gRPC CANCELLED maps to it.
 const StatusClientClosedRequest = 499
 
-// problem is the RFC 9457 body of every error response (docs/architecture.md §8.4).
+// problem is the RFC 9457 body of every error response.
 type problem struct {
 	Type    string `json:"type"`
 	Title   string `json:"title"`
@@ -137,7 +137,7 @@ type grpcMapping struct {
 	name   string
 }
 
-// grpcToHTTP is the table of docs/architecture.md §8.4.
+// grpcToHTTP is the table of docs/reference/contracts.md (gRPC code to HTTP status).
 var grpcToHTTP = map[codes.Code]grpcMapping{
 	codes.OK:                 {http.StatusOK, "OK"},
 	codes.InvalidArgument:    {http.StatusBadRequest, "INVALID_ARGUMENT"},
@@ -168,12 +168,12 @@ var reasonToHTTP = map[string]int{
 }
 
 // WriteGRPCError writes the problem response for err, an error returned by a gRPC call, mapped
-// by docs/architecture.md §8.4: code is the ErrorInfo reason, or the gRPC code name when there
+// by docs/reference/contracts.md: code is the ErrorInfo reason, or the gRPC code name when there
 // is none, and detail is the service's message. A reason of reasonToHTTP sets the status of a
-// 4xx response. A wrapped gRPC error (fmt.Errorf("...: %w", err))
-// is unwrapped first, so the wrapping text never reaches detail.
+// 4xx response. A wrapped gRPC error (fmt.Errorf("...: %w", err)) is unwrapped first, so the
+// wrapping text never reaches detail.
 //
-// A 5xx response never carries the service's message or reason (threat model IN-8): detail is
+// A 5xx response never carries the service's message or reason: detail is
 // empty, code is the gRPC code name, and the original error goes to an ERROR log line with the
 // trace_id, the route pattern (route, empty outside a route) and the gRPC code (code). The error
 // tracker groups that line by route and reads the error's type and code from error, which stays

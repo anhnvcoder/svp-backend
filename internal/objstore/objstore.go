@@ -59,7 +59,7 @@ var (
 
 // IsMediaKey reports whether key names an object of video videoID in the media bucket:
 // "media/<videoID>/" followed by one or more segments, each made of letters, digits, ".", "_"
-// and "-" only, and not "." or ".." (FF-6). The gateway puts the key into a URL as it is, and a
+// and "-" only, and not "." or "..". The gateway puts the key into a URL as it is, and a
 // URL parser reads "%2e%2e" as ".." and "\" as "/", so any other character could make a player
 // resolve the URL elsewhere.
 func IsMediaKey(key, videoID string) bool {
@@ -94,13 +94,11 @@ const (
 	// credentialRefreshWindow is how long before its expiry a fetched credential stops signing
 	// forms. A form stops working when the credential that signed it expires, so the window is
 	// longer than the longest form, plus a margin for clock skew and the time the client takes to
-	// start the upload: every form is signed with a credential that outlives it, as long as the
-	// endpoint hands out credentials with more than this left.
+	// start the upload.
 	credentialRefreshWindow = maxPresignTTL + 5*time.Minute
 	// callCredentialWindow is how long before its expiry a fetched credential stops signing calls
 	// to storage. A call is used at once, so it only needs a margin for clock skew and the time the
-	// request takes; the long window of forms would drop a credential that still works and turn a
-	// failed refresh into failed calls 20 minutes early.
+	// request takes; the long window of forms would drop a credential that still works.
 	callCredentialWindow = time.Minute
 )
 
@@ -262,8 +260,7 @@ func New(cfg Config) (*Store, error) {
 	}
 	client := s3.New(opts, func(o *s3.Options) { otelaws.AppendMiddlewares(&o.APIOptions) })
 	// A second client only for signing: the SDK builds the form URL from the client's endpoint.
-	// Without the tracing middleware: signing is local. It has its own credential cache, which
-	// replaces a credential long before the one of calls does.
+	// Without the tracing middleware: signing is local.
 	publicClient := s3.New(opts, func(o *s3.Options) {
 		o.BaseEndpoint = aws.String(public)
 		o.Credentials = formCreds
@@ -314,8 +311,7 @@ func newCredentials(cfg Config) (calls, forms aws.CredentialsProvider, err error
 		})
 		// Without a cache the SDK would fetch a credential for every request. Two caches, so each
 		// keeps a credential for as long as its own use allows: a form must not outlive the
-		// credential that signed it, a call only needs one valid while it is sent. Each cache
-		// fetches once per credential lifetime.
+		// credential that signed it, a call only needs one valid while it is sent.
 		cache := func(window time.Duration) aws.CredentialsProvider {
 			return aws.NewCredentialsCache(provider, func(o *aws.CredentialsCacheOptions) { o.ExpiryWindow = window })
 		}
@@ -347,7 +343,7 @@ type PresignedPost struct {
 }
 
 // PresignPost signs a form that lets its holder write exactly key, with a body of 1 to
-// sizeBytes bytes and Content-Type contentType, until ttl from now (UP-1); ttl is at most 15
+// sizeBytes bytes and Content-Type contentType, until ttl from now; ttl is at most 15
 // minutes. Only keys under uploads/ can be signed. Signing is local: nothing is sent, except that
 // with container credentials the first form, and one after each refresh, fetches a credential.
 func (s *Store) PresignPost(ctx context.Context, key string, sizeBytes int64, contentType string, ttl time.Duration) (*PresignedPost, error) {

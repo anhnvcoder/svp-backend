@@ -146,7 +146,7 @@ func TestListAuthorVideosAuthorSeesEveryStatus(t *testing.T) {
 }
 
 // The token holds a position only: a token the author got, used by someone else, lists only the
-// READY videos after that position (PG-1, UP-3).
+// READY videos after that position.
 func TestListAuthorVideosBorrowedTokenShowsNoHiddenVideo(t *testing.T) {
 	needDB(t)
 	s, _ := newServer()

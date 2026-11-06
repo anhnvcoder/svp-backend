@@ -51,7 +51,6 @@ func newFakeAgent(t *testing.T, lifetime time.Duration) *fakeAgent {
 	return a
 }
 
-// fetches returns the Authorization header of every fetch so far.
 func (a *fakeAgent) fetches() []string {
 	a.mu.Lock()
 	defer a.mu.Unlock()

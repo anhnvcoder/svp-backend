@@ -22,10 +22,10 @@ import (
 	"github.com/anhnvcoder/svp-backend/services/user-service/internal/store"
 )
 
-// Refresh token lifetimes. Each rotation gives the new
-// token RefreshTTL from the rotation, so a user who comes back within two weeks stays logged in,
-// but never beyond RefreshFamilyTTL after the login: a thief who rotates the token first is never
-// caught by reuse detection if the real client does not come back, and the ceiling bounds that.
+// Refresh token lifetimes. Each rotation gives the new token RefreshTTL from the rotation, so a
+// user who comes back within two weeks stays logged in, but never beyond RefreshFamilyTTL after
+// the login: a thief who rotates the token first is never caught by reuse detection if the real
+// client does not come back, and the ceiling bounds that.
 const (
 	RefreshTTL       = 14 * 24 * time.Hour
 	RefreshFamilyTTL = 30 * 24 * time.Hour

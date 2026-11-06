@@ -171,11 +171,12 @@ func startBackend(t *testing.T, register func(*grpc.Server), opts ...grpc.DialOp
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = conn.Close() })
-	// grpc.NewClient connects lazily, on the first RPC, which then pays for the bufconn dial and
-	// the HTTP/2 handshake inside its own deadline. Under a loaded -race run of the whole repo
-	// that can exceed statsTimeout (100 ms), so GetStats would fail before reaching the fake.
-	// Connecting here keeps setup out of every call's deadline; tests that stop a backend still
-	// see it unreachable, as the connection to it breaks.
+	// grpc.NewClient connects lazily, on the first RPC, which then pays for the bufconn dial and the
+	// HTTP/2 handshake inside its own deadline. Under a loaded -race run of the whole repo that can
+	// exceed statsTimeout (100 ms), so GetStats would fail before reaching the fake.
+
+	// Connecting here keeps setup out of every call's deadline; tests that stop a backend still see
+	// it unreachable, as the connection to it breaks.
 	conn.Connect()
 	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
 	defer cancel()
@@ -908,8 +909,7 @@ func TestInitUploadNilFormFieldsIsEmptyObject(t *testing.T) {
 	}
 }
 
-// TestInitUploadKeepsCredentialOutOfLog is threat model UP-2: the presigned POST goes to the
-// client only.
+// TestInitUploadKeepsCredentialOutOfLog: the presigned POST goes to the client only.
 func TestInitUploadKeepsCredentialOutOfLog(t *testing.T) {
 	logs := captureLog(t)
 	e := newEnv(t)
@@ -1268,7 +1268,7 @@ func TestAuthenticatedRoutesNeedToken(t *testing.T) {
 	}
 }
 
-// TestOutgoingMetadataFromTokenOnly is threat model IN-1: the services receive the user id of
+// TestOutgoingMetadataFromTokenOnly: the services receive the user id of
 // the token and a traceparent the gateway made, never a client header.
 func TestOutgoingMetadataFromTokenOnly(t *testing.T) {
 	e := newEnv(t)
@@ -1303,7 +1303,6 @@ func TestOutgoingMetadataFromTokenOnly(t *testing.T) {
 	}
 }
 
-// TestCompleteUploadIgnoresClientUserID is threat model IN-1 on the complete route.
 func TestCompleteUploadIgnoresClientUserID(t *testing.T) {
 	e := newEnv(t)
 	r := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/videos/"+videoID+"/complete", nil)
@@ -1612,7 +1611,7 @@ func TestFeedStatsMatchedByVideoID(t *testing.T) {
 	}
 }
 
-// TestFeedWithoutStatsWhenEngagementFails is graceful degradation (architecture §7.2): the feed
+// TestFeedWithoutStatsWhenEngagementFails: the feed
 // answers 200 without stats, about statsTimeout at most, and the error is only logged.
 func TestFeedWithoutStatsWhenEngagementFails(t *testing.T) {
 	const internalMessage = "dial tcp 10.0.0.9:5432: connection refused"
@@ -1731,8 +1730,7 @@ func TestFeedLongCursorPassedThrough(t *testing.T) {
 	}
 }
 
-// TestFeedServiceErrorIsMapped: unlike engagement-service, a feed-service error fails the request
-// through the §8.4 table.
+// TestFeedServiceErrorIsMapped: unlike engagement-service, a feed-service error fails the request.
 func TestFeedServiceErrorIsMapped(t *testing.T) {
 	e := newEnv(t)
 	e.feeds.fail(grpcerr.New(codes.Unavailable, "DB_DOWN", "dial tcp 10.0.0.5:5432: connection refused"))
@@ -1749,7 +1747,7 @@ func TestFeedServiceErrorIsMapped(t *testing.T) {
 	}
 }
 
-// TestLikeUnlikeAndView also checks threat model IN-1 on these routes: a client X-User-Id header
+// TestLikeUnlikeAndView also checks that on these routes a client X-User-Id header
 // never reaches engagement-service.
 func TestLikeUnlikeAndView(t *testing.T) {
 	for _, tc := range []struct {
@@ -1827,7 +1825,7 @@ func TestEngagementErrors(t *testing.T) {
 	}
 }
 
-// TestFeedIgnoresClientUserID is threat model IN-1 on the feed: both services get the user id
+// TestFeedIgnoresClientUserID: both services get the user id
 // of the token and no client header.
 func TestFeedIgnoresClientUserID(t *testing.T) {
 	e := newEnvPatient(t)

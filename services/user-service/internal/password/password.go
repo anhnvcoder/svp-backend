@@ -1,5 +1,4 @@
-// Package password hashes and verifies passwords with argon2id (docs/threat-model.md §4.1,
-// JWT-5, JWT-7, JWT-9).
+// Package password hashes and verifies passwords with argon2id.
 //
 // Hashes are PHC strings, $argon2id$v=19$m=<KiB>,t=<passes>,p=<lanes>$<salt>$<hash> with
 // unpadded standard base64, so the parameters travel with each hash and can be raised later:
@@ -51,7 +50,7 @@ const (
 // (64 MiB) and maxLanes (4 threads) each, so 4 in flight hold at most 256 MiB and 16 threads.
 // That fits a user-service container in a few hundred MiB next to the Go runtime and connection
 // pools; at the current parameters it is 76 MiB and 4 threads. A burst of logins then waits or
-// fails with ErrBusy instead of growing memory without bound (JWT-9). Raising maxMemoryKiB or
+// fails with ErrBusy instead of growing memory without bound. Raising maxMemoryKiB or
 // maxLanes raises this bound too.
 const MaxConcurrent = 4
 
@@ -135,7 +134,7 @@ func (h *Hasher) Verify(ctx context.Context, pw secret.String, encoded string) (
 
 // VerifyDummy runs the same work as Verify against a hash that matches no password. Login calls
 // it when the email is unknown, so that branch takes as long as a wrong password and response
-// time does not reveal which emails are registered (JWT-5). It returns only ErrBusy-type errors.
+// time does not reveal which emails are registered. It returns only ErrBusy-type errors.
 func (h *Hasher) VerifyDummy(ctx context.Context, pw secret.String) error {
 	_, err := h.Verify(ctx, pw, h.dummy)
 	return err

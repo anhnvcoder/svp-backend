@@ -2,10 +2,10 @@
 // every gateway instance, and the same algorithm in memory for the routes that must stay limited
 // while Redis fails.
 //
-// Each route class decides what happens when Redis fails or takes longer than storeTimeout
-// (threat model RL-2): a soft-closed class (register, login, refresh, upload, public) falls back to an
-// in-memory counter per instance with lower limits; an open class (write, read, view-once) lets
-// the request through.
+// Each route class decides what happens when Redis fails or takes longer than storeTimeout:
+// a soft-closed class (register, login, refresh, upload, public) falls back to an in-memory
+// counter per instance with lower limits; an open class (write, read, view-once) lets the
+// request through.
 package ratelimit
 
 import (
@@ -27,7 +27,7 @@ const (
 	defaultStoreTimeout = 50 * time.Millisecond
 	// warnEvery spaces out the WARN logged while Redis fails.
 	warnEvery = 10 * time.Second
-	// viewWindow is how long a (user, video) view blocks the next one (threat model RL-3).
+	// viewWindow is how long a (user, video) view blocks the next one.
 	viewWindow = 60 * time.Second
 )
 
@@ -126,7 +126,7 @@ func WithStoreTimeout(d time.Duration) Option {
 //
 // Every Allow answer is counted by the global OTel meter provider in svp.ratelimit.decisions,
 // labelled class, result (allowed or limited) and store (redis, or fallback when Redis failed),
-// so the fallback in use is visible (threat model RL-2). An answer to a request cancelled before
+// so the fallback in use is visible. An answer to a request cancelled before
 // Redis answered is not counted. New adds 0 to every series of the classes above, so they exist
 // before the first request.
 func New(client *redis.Client, prefix string, opts ...Option) *Limiter {
@@ -181,7 +181,6 @@ func (l *Limiter) Allow(ctx context.Context, c Class, id string) (ok bool, retry
 	return ok, retryAfter
 }
 
-// count adds n to the decisions of class c with result allowed in store.
 func (l *Limiter) count(ctx context.Context, c Class, allowed bool, store string, n int64) {
 	result := "limited"
 	if allowed {

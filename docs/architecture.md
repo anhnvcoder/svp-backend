@@ -198,6 +198,18 @@ video-service chuyển `FAILED` và xoá file dở dang. Mọi bước chịu đ
 của `video.uploaded`), master tạo một lần bằng `If-None-Match: *` ([ADR-0029](adr/0029-immutable-media-versions.md));
 video-service chỉ chuyển trạng thái một chiều; feed-service ghi timeline với khoá chính chống trùng.
 
+Với `S3_CREDENTIALS=container`, `internal/objstore` giữ hai cache credential riêng: một ký lời gọi tới storage, một ký form
+presigned (client chỉ để ký, có cache riêng, thay credential sớm hơn nhiều so với cache của lời gọi). Mỗi cache lấy credential
+một lần mỗi vòng đời credential. Cửa sổ làm mới của form để mỗi form được ký bằng credential sống lâu hơn nó, miễn là endpoint
+cấp credential còn hạn dài hơn cửa sổ đó; cache của lời gọi dùng cửa sổ ngắn hơn, vì cửa sổ dài của form sẽ bỏ một credential
+còn dùng được và biến một lần làm mới lỗi thành lời gọi lỗi sớm 20 phút.
+
+Thumbnail là poster trang hiện trước khung hình đầu tiên, và ở feed nó là lần vẽ lớn nhất của trang, nên media-worker chặn cạnh
+ngắn của nó ở 720 px: nặng khoảng nửa một khung 1080 px. Poster phủ một cột dọc, vì vậy chiều cao quyết định độ nét: poster dọc
+(720x1280) gần vừa một cột điện thoại ở tỉ lệ 1,75x; poster ngang (1280x720) bị phóng khoảng 1,8x ở đó và 2,2x trên màn hình
+desktop 2x. Poster giữ nguyên như vậy cho tới khi có khung hình đầu, mà trình phát web lấy từ bản thấp nhất (360 px), nên còn
+mềm hơn.
+
 ### 6.2 Đọc feed
 
 Gateway kiểm JWT và rate limit, lấy trang video kèm object key và page token từ feed-service, rồi gọi song song `GetStats` của
