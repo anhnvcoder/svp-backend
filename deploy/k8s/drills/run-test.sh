@@ -641,12 +641,12 @@ same "new-values: the verify key is <kid>:<key> of the pair, its private key the
   "$(kid=$(sed -n 's/^JWT_VERIFY_KEY_NEW=//p' "$work/nv1" | cut -d: -f1); [[ $kid =~ ^[0-9]{8}-[0-9a-f]{8}$ ]] && grep -q '^JWT_DRILL_SIGNING_KEY=.' "$work/nv1" && echo ok)"
 same "new-values: NEXT_SERVER_ACTIONS_ENCRYPTION_KEY is the base64 of 32 bytes" "ok" \
   "$(grep -qE '^NEXT_SERVER_ACTIONS_ENCRYPTION_KEY=[A-Za-z0-9+/]{43}=$' "$work/nv1" && echo ok)"
-"$nv" "$work/nv2" >"$work/nv2.out" 2>&1
+env -u GITHUB_ACTIONS "$nv" "$work/nv2" >"$work/nv2.out" 2>&1
 same "new-values: elsewhere nothing printed" "" "$(cat "$work/nv2.out")"
 same "new-values: two runs give other values" "" "$(LC_ALL=C comm -12 <(cut -d= -f2- "$work/nv1" | sort) <(cut -d= -f2- "$work/nv2" | sort))"
 cp "$work/nv1" "$work/nv1.copy"
 set +e
-"$nv" "$work/nv1" >/dev/null 2>&1
+env -u GITHUB_ACTIONS "$nv" "$work/nv1" >/dev/null 2>&1
 rc=$?
 set -e
 same "new-values: an existing file is refused" 1 "$rc"
