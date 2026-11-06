@@ -96,7 +96,7 @@ KYVERNO_CLI_IMAGE := ghcr.io/kyverno/kyverno-cli:v1.19.1@sha256:ced7b2be0b04250c
 # request with its base (make api-contract-check), ORAS pushes a new version to GHCR as an OCI artifact on main. Both from
 # their official images pinned by digest, run on a dev machine as in CI; no GitHub Action of either is used.
 # renovate: datasource=docker depName=tufin/oasdiff
-OASDIFF_IMAGE := tufin/oasdiff:v1.34.1@sha256:67a23cfea7d251e2ae34ee703ac8733c5d96bc2e7b90fd0f4d475ec99367b85f
+OASDIFF_IMAGE := tufin/oasdiff:v1.35.0@sha256:82b1840a77335562bb11ce95f77ad31745a0c6f3a770929333ed1c5ef466e400
 # renovate: datasource=docker depName=ghcr.io/oras-project/oras
 ORAS_IMAGE := ghcr.io/oras-project/oras:v1.3.6@sha256:9cfb578be975b762fd898b9d004243d8003aeb807a3e15b2ed212cdd1326c9eb
 # yq of the steps of images.yml that write svp-gitops (jobs promote and promote-prd, through yq_ of deploy/ci/common.sh),
