@@ -1,36 +1,12 @@
 #!/usr/bin/env bash
-# Writes the values of the entries svp/<env>/<entry> of AWS Secrets Manager, the source from which External Secrets
-# Operator builds every Secret of the EKS cluster svp-<env> (SVP_KUBE_CONTEXT svp-stg or svp-prd; `make eks-secrets`),
-# as deploy/k8s/secrets.sh writes the source Secrets of a lab cluster. The infrastructure repository makes the entries,
-# with no value (its module external-secrets); this script runs after the apply of its root aws/envs/<env> and before
-# that of root aws/gitops/<env>, so the source exists before Argo CD does, and again whenever .env changes.
-#
-# The entries and their keys are those the ExternalSecrets of chart svp-cluster read on EKS: a render of its
-# files/external-secrets.yaml with a managed object store (s3.mode external: no source for the users of an object
-# store in the cluster) and Argo CD Notifications on (externalSecrets.argocdNotifications). Each key is the variable
-# of .env of that name, read with the strict rule of deploy/observability/glitchtip/dotenv.sh, but for:
-#   - SVP_PG_SUPERUSER_PASSWORD (entry pg-superuser), the master password of the managed Postgres (RDS), which the
-#     session's script reads from AWS into SVP_RDS_MASTER_PASSWORD of this script's environment: required, never read
-#     from .env, kept in this shell alone (no program it starts gets it in its environment);
-#   - the keys of entry glitchtip-runtime, GlitchTip's own values: the entry is written with its three keys empty only
-#     while it has no version AWSCURRENT (a new environment), so that its ExternalSecrets are Ready before GlitchTip
-#     runs, and never again: deploy/k8s/glitchtip-init.sh fills it (make eks-glitchtip-init);
-#   - the Telegram variables, optional: empty, they are written empty, as on a lab cluster.
-# Every value is read and checked before anything is written (a variable missing or empty in .env stops the script
-# naming it), and so is the account: AWS_PROFILE must be of the account of the environment (aws_setup of
-# deploy/k8s/lib.sh). Each entry is one put-secret-value with its JSON in a file of a folder of mode 700, removed on
-# exit: no value is on a command line, on stdout or stderr.
-#
-# A run on an environment whose entry glitchtip-runtime has a version is a whole change of credentials of a running
-# cluster, in the order of deploy/k8s/rotate.sh, as on a lab cluster: the cluster must be reachable (svp-prd: through
-# its tunnel) and run Reloader, with StatefulSet redpanda naming its Secrets for it (rotate_guard); a changed password
-# of Redpanda's superuser goes into the running broker first (redpanda_admin of deploy/k8s/lib.sh); the entries are
-# written; the ExternalSecrets of svp-data are built again from them (their refreshPolicy is OnChange) and the brokers
-# of Redpanda waited for until each runs with the new superuser password (Reloader restarts them); a sync of
-# Application svp-data runs the init Jobs, which set the new passwords in Postgres and Redpanda; then every other
-# ExternalSecret is built again, and Reloader restarts each workload whose Secret changed. A first run (entry
-# glitchtip-runtime without a version: a new environment) only writes the entries and asks the cluster nothing: nothing
-# reads them before Argo CD is installed.
+# Writes the entries svp/<env>/<entry> of AWS Secrets Manager, the source External Secrets Operator builds every Secret
+# of EKS cluster svp-<env> from (SVP_KUBE_CONTEXT svp-stg or svp-prd; make eks-secrets). Run after the apply of root
+# aws/envs/<env> and before that of aws/gitops/<env>, and again whenever .env changes.
+
+# Every value and the account are read and checked before anything is written. pg-superuser takes
+# SVP_RDS_MASTER_PASSWORD of the environment, never .env, kept in this shell alone. Each entry is one put-secret-value
+# with its JSON in a file of a folder of mode 700, removed on exit: no value is on a command line, stdout or stderr.
+# Design notes: docs/reference/k8s.md.
 set -euo pipefail
 
 # shellcheck source=deploy/k8s/lib.sh
@@ -41,7 +17,6 @@ cloud_context ||
   fail "context $kube_context is the local cluster, whose Secrets come from .env (make k8s-secrets): this script writes those of an EKS cluster, SVP_KUBE_CONTEXT svp-stg or svp-prd"
 # Written for a cloud cluster: kc may reach the EKS cluster SVP_KUBE_CONTEXT names (deploy/k8s/lib.sh).
 kube_cloud_ok=1
-# The command that runs this script again, for the messages.
 again="make eks-secrets CONTEXT=$kube_context"
 # shellcheck source=deploy/observability/glitchtip/dotenv.sh
 . "$repo_root/deploy/observability/glitchtip/dotenv.sh"
@@ -57,7 +32,6 @@ env_file="$repo_root/.env"
 SVP_PG_SUPERUSER_PASSWORD=$SVP_RDS_MASTER_PASSWORD
 unset SVP_RDS_MASTER_PASSWORD
 
-# AWS_PROFILE and its account, then the folder of the entries' files.
 aws_setup
 trap 'rm -rf "$aws_dir"' EXIT
 
@@ -111,7 +85,7 @@ if jq -e 'has("glitchtip-runtime")' <<<"$entries" >/dev/null; then
     fail "read the versions of entry ${aws_prefix}glitchtip-runtime"
 fi
 
-# --- 1. the servers. On a running environment Reloader must run, StatefulSet redpanda must name its Secrets for it,
+# --- the servers. On a running environment Reloader must run, StatefulSet redpanda must name its Secrets for it,
 # and Redpanda takes a changed password of its superuser first.
 if [ -n "$running" ]; then
   kc get --raw /readyz >/dev/null 2>&1 ||
@@ -120,7 +94,6 @@ if [ -n "$running" ]; then
   redpanda_admin
 fi
 
-# The entries.
 written=
 for name in $names; do
   [ "$name" != glitchtip-runtime ] || continue
@@ -139,24 +112,16 @@ if jq -e 'has("glitchtip-runtime")' <<<"$entries" >/dev/null; then
   fi
 fi
 
-# Redpanda's brokers read the superuser's password once, when they start: the broker's rpk and the sidecar take it from
-# their environment (RPK_PASS, from Secret redpanda-bootstrap). Once redpanda_admin has changed it in Redpanda, every
-# broker started before keeps logging in with the previous one: the sidecar's readiness probe, which asks the Admin API
-# with it, gets 401 and the broker turns NotReady, and so do the maintenance hooks of a broker of several. Reloader
-# restarts StatefulSet redpanda once its Secret changes, one broker at a time, the highest ordinal first, each Ready
-# before the next, so a cluster of three keeps two brokers, a majority of every Raft group, all along. The preStop hook
-# of a broker started with the previous password cannot log in to drain it (it gives up and lets the broker stop): the
-# partitions it leads elect a new leader, which producers with acks=all wait for and retry. The sync of svp-data waits
-# for that (rotate_barrier): Argo CD runs its PostSync Jobs only once its resources are healthy, and redpanda-init logs
-# in with the new password.
+# Brokers started before redpanda_admin changed the superuser's password keep logging in with the previous one
+# (RPK_PASS, from Secret redpanda-bootstrap): the sidecar's readiness probe gets 401 and the broker turns NotReady.
+# Reloader restarts them one at a time, so a cluster of three keeps a majority; the sync of svp-data waits for that
+# (rotate_barrier), as redpanda-init logs in with the new password.
 if [ -z "$running" ]; then
   echo "skip  ExternalSecrets: a new environment; Argo CD creates them (chart svp-cluster), each built from the entries then"
   exit 0
 fi
 rotate_es_sync server
 rotate_barrier redpanda redpanda RPK_PASS "$SVP_KAFKA_ADMIN_PASSWORD"
-# --- 2. the init Jobs of svp-data.
 rotate_init_argocd
-# --- 3. the clients.
 rotate_es_sync clients
 rotate_clients_note

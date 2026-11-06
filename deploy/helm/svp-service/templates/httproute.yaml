@@ -1,22 +1,51 @@
 {{- /*
-https://<host>:8443 on Gateway svp (TLS ends at Envoy) to this release's Service: the public API
-(route api, listener https) and the web client (route web, listener https-apex). Only those two releases set a host;
-no route exists for any other service or for an operations UI (OPS-2).
+https://<host>:8443 on Gateway svp (TLS ends at Envoy) to this release's Service: the public API (route api, listener
+https) and the web client (route web, listener https-apex).
+*/}}
 
+{{- /*
+Only those two releases set a host; no route exists for any other service or for an operations UI.
+*/}}
+
+{{- /*
 The rule removes the trace context a client may send (traceparent, tracestate, baggage, sentry-trace) before the
-request reaches the release: the gateway takes the trace context of a request it gets (TRUST_TRACE_CONTEXT), so a
-caller from outside must not be able to pick the trace id or turn sampling off. With every route through Envoy
-stripping it and only Envoy and the web pods let into the gateway (its NetworkPolicy), the web client is the one source
-of a trace context the gateway sees (threat model WEB-24). The filter sits on the rule, beside the
-backendRefs' own filters below, and applies to every backend.
+request reaches the release.
+*/}}
 
-With canary set the one rule has two backendRefs, the stable Service then the canary one, at
-weights 100 and 0: the Gateway API plugin of Argo Rollouts changes the two weights during a canary and puts them back
-to 100/0 when it ends (Argo CD ignores the weights, argocd/apps of svp-gitops). The weights are written here because a
-backendRef without one weighs 1, which would split every request half and half. Each backendRef sets header
-x-svp-backend (the gateway ignores it): a backendRef with a filter makes Envoy Gateway give it a cluster of its own,
-whose metrics AnalysisTemplate <release>-canary reads (templates/canary.yaml). A backendRef of weight 0 is left out
-of Envoy's config, so the canary's cluster exists only while a canary runs.
+{{- /*
+The gateway takes the trace context of a request it gets (TRUST_TRACE_CONTEXT), so a caller from outside must not be
+able to pick the trace id or turn sampling off.
+*/}}
+
+{{- /*
+With every route through Envoy stripping it and only Envoy and the web pods let into the gateway (its NetworkPolicy),
+the web client is the one source of a trace context the gateway sees.
+*/}}
+
+{{- /*
+The filter sits on the rule, beside the backendRefs' own filters below, and applies to every backend.
+*/}}
+
+{{- /*
+With canary set the one rule has two backendRefs, the stable Service then the canary one, at weights 100 and 0.
+*/}}
+
+{{- /*
+The Gateway API plugin of Argo Rollouts changes the two weights during a canary and puts them back to 100/0 when it
+ends (Argo CD ignores the weights, argocd/apps of svp-gitops).
+*/}}
+
+{{- /*
+The weights are written here because a backendRef without one weighs 1, which would split every request half and half.
+*/}}
+
+{{- /*
+Each backendRef sets header x-svp-backend (the gateway ignores it): a backendRef with a filter makes Envoy Gateway
+give it a cluster of its own, whose metrics AnalysisTemplate <release>-canary reads (templates/canary.yaml).
+*/}}
+
+{{- /*
+A backendRef of weight 0 is left out of Envoy's config, so the canary's cluster exists only while a canary runs.
 */}}
 {{- with .Values.httpRoute.host }}
 apiVersion: gateway.networking.k8s.io/v1

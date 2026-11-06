@@ -1,38 +1,32 @@
 # WEB-7 and WEB-2 of the threat model (docs/threat-model.md), one test because WEB-2 uses the session WEB-7 reads and
-# ends with its logout.
-#
-# Setup: a drill user registers through the web client's /register form at https://svp.localhost:8443 (posted as a
-# browser without JavaScript posts it: the form's hidden Server Action fields, read from the page, then the user's
-# fields; the session cookie __Host-Http-svp_sid stays in a private cookie jar).
-#
-# WEB-7, the BFF is no open proxy and no token reaches the browser: with that session, /api/ paths outside the BFF's list
-# are 400 or 404: unknown and gateway-only routes, `..` (sent as is), %2F, an internal host in the path, an unknown query
-# parameter; a path with %2F may instead get Envoy's own redirect to the unescaped path (Envoy Gateway's default
-# UnescapeAndRedirect), whose Location must stay on the web client's origin with no escaped slash and answer 400 or 404
-# in turn. Its HTML pages (/, /me, /upload, /u/<handle>) are 200, and they, the RSC payloads of / and /me and the JSON of
-# /api/me and /api/feed/explore hold no string shaped like a JWT (eyJ.., three dot-separated parts), nor the session's
-# own access token, refresh token or session id (read from the session in Valkey db 9, never printed). Controls:
-# /api/feed/explore and /api/me are 200 (handle of the drill user), /me renders the handle (the pages were rendered with
-# the session), the RSC answers are text/x-component, and the same JWT search finds the token of a login answered by the
-# gateway itself (https://api.svp.localhost:8443) and the session's access token.
-#
-# WEB-2, no request from another site, or from s3.svp.localhost, changes state with the session: POSTs carrying the
-# drill user's session cookie to a Server Action (the /login form), /api/videos (an empty JSON object), /logout, /rum
-# and /monitoring with Sec-Fetch-Site cross-site or same-site, Origin https://evil.example, https://s3.svp.localhost:8443
+# ends with its logout: with a drill user's session, the BFF is no open proxy and no token reaches the browser (WEB-7);
+# no request from another site, or from s3.svp.localhost, changes state with it (WEB-2).
+
+# Setup: a drill user registers through the web client's /register form at https://svp.localhost:8443, posted as a
+# browser without JavaScript posts it (the form's hidden Server Action fields, then the user's); the session cookie
+# __Host-Http-svp_sid stays in a private cookie jar.
+
+# WEB-7: with the session, /api/ paths outside the BFF's list are 400 or 404 (unknown and gateway-only routes, `..`,
+# %2F, an internal host in the path, an unknown query parameter); a path with %2F may instead get Envoy's redirect,
+# whose Location must stay on the web client's origin and answer 400 or 404 in turn.
+
+# The HTML pages, RSC payloads and JSON hold no string shaped like a JWT (eyJ.., three dot-separated parts), nor the
+# session's own access token, refresh token or session id (read from the session in Valkey db 9, never printed).
+
+# WEB-2: POSTs carrying the session cookie to a Server Action (the /login form), /api/videos, /logout, /rum and
+# /monitoring with Sec-Fetch-Site cross-site or same-site, Origin https://evil.example, https://s3.svp.localhost:8443
 # (same site: it serves files users uploaded) or null, or with neither header, are 403 CSRF_REJECTED, and after the
-# refused logouts the session still works. Controls: the same POSTs with Sec-Fetch-Site same-origin and the app's Origin
-# are not refused: the login action renders its form with "Wrong email or password" in the form's alert (200), the empty
-# upload request reaches the gateway (400, its own code), /rum takes a beacon (204), /monitoring checks the body (400
-# INVALID_REPORT; 404 means SENTRY_DSN is empty in Secret svp/sentry), and /logout (303) clears the cookie and ends the
-# session on the server: the old session id sent again gets 401 from /api/me.
-#
+# refused logouts the session still works. Controls: the same POSTs same-origin are not refused.
+
 # Each check and control is one operation named by its ID; continueOnError keeps the next ones running after one fails,
-# and the test still fails. A failed setup (the gateway not ready, the drill user not registered, the /login form not
-# read) ends the test. The scripts source web.sh (helpers, and what the test may write and print); their files live in
-# the test's private work directory .k8s/drills/web-7-web-2, made by the first step and removed when the test ends,
-# after the web session is logged out if it is still on (it lives 30 days). LOCAL LAB ONLY: the test deletes the
-# register rate limit keys svp:gw:rl:register:* in the cluster's Valkey db 10 (SCAN + DEL) before it registers its drill
-# user; otherwise it reads Valkey only (GET of the drill user's own session in db 9).
+# and the test still fails. A failed setup ends the test. The scripts source web.sh; their files live in the test's
+# private work directory .k8s/drills/web-7-web-2, removed when the test ends, after the web session is logged out if it
+# is still on (it lives 30 days).
+
+# LOCAL LAB ONLY: the test deletes the register rate limit keys svp:gw:rl:register:* in the cluster's Valkey db 10 (SCAN
+# + DEL) before it registers its drill user; otherwise it reads Valkey only (GET of the drill user's own session in db
+# 9).
+# Design notes: docs/threat-model.md.
 apiVersion: chainsaw.kyverno.io/v1alpha1
 kind: Test
 metadata:
@@ -124,10 +118,9 @@ spec:
   - name: "WEB-7: the BFF is no open proxy and no token reaches the browser"
     try:
     # Paths outside the BFF's list, with the session, so a refusal is the list and not a missing login. `..` goes as is
-    # (--path-as-is); should Envoy or Next normalise it, the path left is /debug/pprof or /api/internal, neither of which
-    # the app has: 404 as well. No path ends in / or holds //: Next answers those with a 308 to the normalised path. A
-    # path with %2F may get Envoy's redirect instead; none of them unescapes to a route on the list (/api/videos/{id} is
-    # one, but of a random id: 404), so wherever the redirect leads is 400 or 404 too. Each prints "refused" when so.
+    # (--path-as-is); should Envoy or Next normalise it, the path left is /debug/pprof or /api/internal, which the app
+    # has not: 404 as well. No path ends in / or holds //: Next answers those with a 308. A path with %2F may get
+    # Envoy's redirect instead, and wherever it leads is 400 or 404 too. Each prints "refused" when so.
     - description: "WEB-7: GET /api/internal/secrets through the web client with the session: 400 or 404 (or Envoy's redirect, on the web client's origin, to a path that is)"
       continueOnError: true
       script:

@@ -1,17 +1,18 @@
 # SEC-6-reader of docs/threat-model.md: nothing but the controller of External Secrets Operator gets a token of the
-# stores' ServiceAccount svp-secrets-reader, on a cluster with that operator (the GitOps path's staging). Label
-# requires=external-secrets: the caller leaves this test out, with a skip line and its reason, on a cluster without the
-# CRD externalsecrets.external-secrets.io (dev path: its Secrets come from .env); run there anyway, its first step fails
-# rather than passing on nothing.
-# As server-side dry runs in svp-data, which has the stores' ServiceAccount (in a namespace without it, the ServiceAccount
-# admission plugin refuses the pod before any policy sees it, which proves nothing; Kyverno's image policy holds svp
-# only): a pod running as it with its token mounted is refused by ValidatingAdmissionPolicy
-# svp-store-serviceaccount-pods and a token Secret of it by svp-store-serviceaccount-tokens, each with the policy's message
-# (controls: the same pod as svp-data/default and a token Secret of default are admitted). The controller takes the
-# store's token through TokenRequest, which neither policy sees.
-#
+# stores' ServiceAccount svp-secrets-reader. As dry runs, a pod running as it with its token mounted is refused by
+# ValidatingAdmissionPolicy svp-store-serviceaccount-pods and a token Secret of it by svp-store-serviceaccount-tokens
+# (controls: the same pod as svp-data/default and a token Secret of default are admitted).
+
+# The dry runs are in svp-data, which has the stores' ServiceAccount: in a namespace without it, the ServiceAccount
+# admission plugin refuses the pod before any policy sees it, which proves nothing.
+
+# Label requires=external-secrets: the caller leaves this test out, with a skip line and its reason, on a cluster
+# without the CRD externalsecrets.external-secrets.io (dev path: its Secrets come from .env); run there anyway, its
+# first step fails rather than passing on nothing.
+
 # Each check is one operation named by its ID; continueOnError keeps the next checks running after one fails, and the
 # test still fails. Nothing is created: every object is a server-side dry run.
+# Design notes: docs/threat-model.md.
 apiVersion: chainsaw.kyverno.io/v1alpha1
 kind: Test
 metadata:

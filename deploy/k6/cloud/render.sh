@@ -1,27 +1,24 @@
 #!/usr/bin/env bash
-# Prints the manifests of the k6 Job of the cloud cluster on stdout:
-# namespace svp-load, ConfigMap svp-k6-scripts with the scripts of deploy/k6/ as they are in this working tree, and the
-# Indexed Job of job.yaml.in. Reaches no cluster and reads no .env; needs jq. run.sh applies its output, and
-# `make cloud-check` checks it (run with no argument).
-#
+# Prints the manifests of the k6 Job of the cloud cluster on stdout: namespace svp-load, ConfigMap svp-k6-scripts with
+# the scripts of deploy/k6/ as they are in this working tree, and the Indexed Job of job.yaml.in. Reaches no cluster
+# and reads no .env; needs jq. run.sh applies its output, and `make cloud-check` checks it (run with no argument).
+# Design notes: docs/reference/compose.md.
+
 # The image is K6_IMAGE as the root Makefile pins it, read from there: one place to pin k6 for make load-local, CI and
 # this Job, and Renovate updates that line only.
-#
+
 # Usage: deploy/k6/cloud/render.sh [--domain <domain>] [--envoy-ip <ClusterIP>] [--forwarded-for] [--ca-file <file>] [--pods <n>] [--ramp <duration>] [--hold <duration>]
 #   --domain         the web's host; the API is api.<domain> (default svp.invalid, for the static check only)
 #   --envoy-ip       ClusterIP of Envoy's Service, which the public names resolve to inside the pods (default
 #                    192.0.2.1, a documentation address, for the static check only)
+
 #   --forwarded-for  each pod writes its own IP in X-Forwarded-For: only when the cluster trusts 2 hops (threat model RL-7)
-#   --ca-file        PEM file of the CA that signs Envoy's certificate, when a private CA does (job.yaml.in, lines
-#                    marked @CA@): a ConfigMap svp-k6-ca holds it, and the pods trust it in addition to whatever
-#                    roots the image holds in /etc/ssl/certs (SSL_CERT_FILE replaces only the bundle file, not that
-#                    directory). Certificates only: a file holding a private key is refused. Without it the pods trust
-#                    the image's roots.
-#   --pods           how many pods run the load, 1 to 20 (default 20, the design): each keeps the load of one pod of
-#                    the design, so the totals shrink with the count (lib/config.js, SVP_K6_PODS)
-#   --ramp, --hold   how long the rate ramps up and holds (SVP_K6_RAMP, SVP_K6_HOLD; a whole number of s, m or h, like
-#                    2m; default the profile's 10m each); either one sets the Job's deadline from the run's length
-#                    instead of the default 3600 s
+#   --ca-file        PEM file of the CA that signs Envoy's certificate, when a private CA does (lines marked @CA@ of
+#                    job.yaml.in); the pods trust it in addition to the roots the image holds
+#   --pods           1 to 20 pods run the load (default 20, the design), each with the load of one pod of the design
+
+#   --ramp, --hold   how long the rate ramps up and holds (a whole number of s, m or h, like 2m; default the profile's
+#                    10m each); either one sets the Job's deadline from the run's length instead of the default 3600 s
 set -euo pipefail
 
 here=$(cd "$(dirname "$0")" && pwd)
@@ -102,8 +99,7 @@ items=$(printf '%s\n' "${files[@]}" | jq -R . | jq -cs 'map({key: gsub("/"; ".")
 # The template without its leading comment, then: the Namespace, the ConfigMap (JSON, which is YAML too), the Job, so
 # that kubectl apply creates the scripts before the pods that mount them.
 # Lines marked @CA@ lose the mark with --ca-file and go away without it; so do those marked @PODS@ with fewer pods than
-# the design's, @RAMP@ with --ramp and @HOLD@ with --hold. The marks go before the values that share their
-# names.
+# the design's, @RAMP@ with --ramp and @HOLD@ with --hold. The marks go before the values that share their names.
 fewer=
 [ "$pods" = "$design_pods" ] || fewer=1
 marks=()

@@ -1,26 +1,35 @@
-# RBAC of docs/threat-model.md on cluster svp: no ServiceAccount of namespace svp may get or list secrets or pods in any
-# namespace of the cluster (every one it has when the test runs, not a fixed list) or cluster-wide (kubectl auth can-i
-# --as), and in no namespace does a rule of its SelfSubjectRulesReview let it get, list or watch them, by name or not
-# (can-i asked without a name says no to a Role that grants only named objects; rules-reads.jq). Controls: the rule check
-# flags exactly the named, the watch and the wildcard rules of a sample review, and finds the Argo Rollouts controller's
-# right to list pods in svp, to which can-i says yes as well.
-# Operators: the CloudNativePG operator may get and list Secrets in cnpg-system and svp-data only, create pods, exec into
-# them, patch Deployments, create ServiceAccounts and delete Secrets in svp-data only, and create a ServiceAccount token
-# nowhere; it may not create, update, patch or delete a webhook configuration, a ValidatingAdmissionPolicy or binding,
+# RBAC of the threat model (docs/threat-model.md) on cluster svp: no ServiceAccount of namespace svp may get or list
+# secrets or pods in any namespace of the cluster (every one it has when the test runs, not a fixed list) or
+# cluster-wide (kubectl auth can-i --as).
+
+# In no namespace does a rule of its SelfSubjectRulesReview let it get, list or watch them, by name or not (can-i asked
+# without a name says no to a Role that grants only named objects; rules-reads.jq). Controls: the rule check flags
+# exactly the named, the watch and the wildcard rules of a sample review, and finds the Argo Rollouts controller's right
+# to list pods in svp, to which can-i says yes as well.
+
+# Operators: the CloudNativePG operator may get and list Secrets in cnpg-system and svp-data only, create pods, exec
+# into them, patch Deployments, create ServiceAccounts and delete Secrets in svp-data only, and create a ServiceAccount
+# token nowhere.
+
+# It may not create, update, patch or delete a webhook configuration, a ValidatingAdmissionPolicy or binding,
 # svp-cnpg-operator-secrets by name included (control: as the same user, can-i says yes to create secrets in
-# cnpg-system); as it, in cnpg-system (server-side dry runs), a token Secret for ServiceAccount plugin-barman-cloud, the
-# same named cnpg-ca-secret and an Opaque Secret of another name are refused by ValidatingAdmissionPolicy
-# svp-cnpg-operator-secrets, and so is a label on another TLS Secret there (controls: as it, an Opaque cnpg-ca-secret
-# passes the policy and is AlreadyExists, a label on cnpg-webhook-cert passes; as the test's admin, the token Secret is
-# admitted); the Envoy Gateway controller gets and lists Secrets in the namespaces it watches only (envoy-gateway-system,
-# svp, svp-data, svp-edge) and patches pods nowhere, Kyverno's admission and reports controllers get and list Secrets in
-# kyverno only, neither cluster-wide (can-i in every namespace and -A); the exceptions (cert-manager, Argo CD, Kyverno,
-# the Barman Cloud plugin) are printed as info with their reason.
-#
-# Each check is one operation named by its ID; continueOnError keeps the next checks running after one fails, and the
-# test still fails. Nothing is created: every Secret and label is a server-side dry run. Impersonation (--as) is
-# kubectl's, so those checks are scripts; kubectl uses the caller's kubeconfig and context k3d-svp
-# (templates/probe-up.yaml says why).
+# cnpg-system).
+
+# As it, in cnpg-system (server-side dry runs), a token Secret for ServiceAccount plugin-barman-cloud, the same named
+# cnpg-ca-secret and an Opaque Secret of another name are refused by ValidatingAdmissionPolicy
+# svp-cnpg-operator-secrets, and so is a label on another TLS Secret there.
+
+# Controls: as it, an Opaque cnpg-ca-secret passes the policy and is AlreadyExists, a label on cnpg-webhook-cert passes;
+# as the test's admin, the token Secret is admitted.
+
+# The Envoy Gateway controller gets and lists Secrets in the namespaces it watches only (envoy-gateway-system, svp,
+# svp-data, svp-edge) and patches pods nowhere, Kyverno's admission and reports controllers get and list Secrets in
+# kyverno only, neither cluster-wide (can-i in every namespace and -A).
+
+# The exceptions (cert-manager, Argo CD, Kyverno, the Barman Cloud plugin) are printed as info with their reason.
+
+# Nothing is created: every Secret and label is a server-side dry run. Impersonation (--as) is kubectl's, so those
+# checks are scripts; kubectl uses the caller's kubeconfig and context k3d-svp (templates/probe-up.yaml says why).
 apiVersion: chainsaw.kyverno.io/v1alpha1
 kind: Test
 metadata:
@@ -110,9 +119,11 @@ spec:
           "(starts_with($stdout, 'ok    RBAC: '))": true
     # The rules review catches what can-i asked without a name answers no to: a Role that grants get on named Secrets or
     # pods only, and watch. A review lists the rules of the Roles bound in the namespace and of every ClusterRole bound,
-    # the way the authorizer applies them. --validate=false: kubectl's client-side schema check lists the cluster's CRDs,
-    # and it does so as the impersonated ServiceAccount, which may not list them; the check then fails before the review
-    # is sent. The object is fixed here and the API server still decodes it.
+    # the way the authorizer applies them.
+
+    # --validate=false: kubectl's client-side schema check lists the cluster's CRDs, and it does so as the impersonated
+    # ServiceAccount, which may not list them; the check then fails before the review is sent. The object is fixed here
+    # and the API server still decodes it.
     - description: "RBAC: no rule of the rules review of any ServiceAccount of svp lets it get, list or watch secrets or pods in any namespace, by name or not"
       continueOnError: true
       script:
@@ -204,10 +215,12 @@ spec:
         - name: namespaces
           value: (trim_space($stdout))
     # operator: kubectl auth can-i CAN_I as ServiceAccount SA in each namespace of the cluster and cluster-wide (-A):
-    # passes when the answer is yes in every namespace of ALLOWED (space-separated) that exists and no in every other one
-    # and cluster-wide; LABEL names the right. In cnpg-system, beside the Barman Cloud plugin whose ServiceAccount reads
-    # every Secret of the cluster, the CloudNativePG operator reads, and writes only its PKI Secrets, events and Lease:
-    # nothing that runs code as that ServiceAccount. Kyverno: its own TLS Secrets and its lease, nothing else.
+    # passes when the answer is yes in every namespace of ALLOWED (space-separated) that exists and no in every other
+    # one and cluster-wide; LABEL names the right.
+
+    # In cnpg-system, beside the Barman Cloud plugin whose ServiceAccount reads every Secret of the cluster, the
+    # CloudNativePG operator reads, and writes only its PKI Secrets, events and Lease: nothing that runs code as that
+    # ServiceAccount. Kyverno: its own TLS Secrets and its lease, nothing else.
     - description: "RBAC: cnpg-system/cloudnative-pg may get secrets in cnpg-system svp-data only, in no other namespace and not cluster-wide"
       continueOnError: true
       script:
@@ -488,13 +501,16 @@ spec:
 
   # Webhook configurations are cluster-scoped: asked with -A, kubectl prints no warning that they have no namespace.
   # Writing one would let the operator send itself every Secret written in the cluster; cainjector writes the CA of its
-  # two (base/cloudnative-pg.yaml of svp-gitops). Admission policies are cluster-scoped as well: updating or deleting
-  # ValidatingAdmissionPolicy svp-cnpg-operator-secrets or its binding (same name) would lift the only limit on the
-  # operator's Secret writes in cnpg-system (step rbac-cnpg-secrets), and a policy or binding of its own could refuse any
-  # write of the cluster. Asked without a name and by that name: a Role that grants only named objects gets no from can-i
-  # without a name; a name means nothing to create (RBAC does not narrow create by name). The last check answers yes for a
-  # right the same user must have, so the no above is not that of a misspelled ServiceAccount (can-i answers no for a
-  # user that does not exist): it creates cnpg-ca-secret in cnpg-system at start.
+  # two (base/cloudnative-pg.yaml of svp-gitops).
+
+  # Admission policies are cluster-scoped as well: updating or deleting ValidatingAdmissionPolicy
+  # svp-cnpg-operator-secrets or its binding (same name) would lift the only limit on the operator's Secret writes in
+  # cnpg-system (step rbac-cnpg-secrets), and a policy or binding of its own could refuse any write of the cluster.
+
+  # Asked without a name and by that name: a Role that grants only named objects gets no from can-i without a name; a
+  # name means nothing to create (RBAC does not narrow create by name). The last check answers yes for a right the same
+  # user must have, so the no above is not that of a misspelled ServiceAccount (can-i answers no for a user that does
+  # not exist): it creates cnpg-ca-secret in cnpg-system at start.
   - name: rbac-cnpg-cluster-writes
     try:
     - description: "RBAC: cnpg-system/cloudnative-pg may not create mutatingwebhookconfigurations"
@@ -712,11 +728,12 @@ spec:
         content: *can-i
         check:
           (trim_space($stdout)): 'yes'
-  # The CloudNativePG operator may create Secrets in cnpg-system (its CA, cnpg-ca-secret, made at start), and RBAC cannot
-  # narrow create by name, so ValidatingAdmissionPolicy svp-cnpg-operator-secrets (chart svp-cluster,
-  # templates/cnpg-rbac.yaml) keeps its writes there to cnpg-ca-secret and cnpg-webhook-cert. Server-side dry runs, as the
-  # operator's ServiceAccount but for one control: nothing is written. Each Secret names ServiceAccount
-  # plugin-barman-cloud.
+  # The CloudNativePG operator may create Secrets in cnpg-system (its CA, cnpg-ca-secret, made at start), and RBAC
+  # cannot narrow create by name, so ValidatingAdmissionPolicy svp-cnpg-operator-secrets (chart svp-cluster,
+  # templates/cnpg-rbac.yaml) keeps its writes there to cnpg-ca-secret and cnpg-webhook-cert.
+
+  # Server-side dry runs, as the operator's ServiceAccount but for one control: nothing is written. Each Secret names
+  # ServiceAccount plugin-barman-cloud.
   - name: rbac-cnpg-secrets
     try:
     - description: "RBAC: cnpg-system/cloudnative-pg may not create a token Secret for ServiceAccount plugin-barman-cloud in cnpg-system (refused by ValidatingAdmissionPolicy svp-cnpg-operator-secrets)"

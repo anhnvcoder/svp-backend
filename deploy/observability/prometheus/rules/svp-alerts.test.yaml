@@ -1,8 +1,7 @@
-# promtool tests of svp-alerts.yaml and the Sloth recording rules. Run with `make slo-check`. Samples are 15 s
-# apart, like the services' metric export.
-# Loop gauges hold the Unix time of the last success; promtool time starts at 0, so a success is
-# never recorded as 0 here (0 means "never succeeded"). A series that stops is written with `_`
-# (no sample), never `stale`: OTLP-pushed series get no staleness marker.
+# promtool tests of svp-alerts.yaml and the Sloth recording rules (`make slo-check`). Samples are 15 s apart, like the
+# services' metric export. Loop gauges hold the Unix time of the last success; promtool time starts at 0, so a success
+# is never recorded as 0 here (0 means "never succeeded"). A series that stops is written with `_` (no sample), never
+# `stale`: OTLP-pushed series get no staleness marker.
 rule_files:
   - svp-alerts.yaml
   - slo-generated.yaml
@@ -1258,11 +1257,10 @@ tests:
         eval_time: 4m
         exp_samples: []
 
-  # SLO rules, sparse traffic as on the lab: feed requests during 2 minutes, then none for 2 hours
-  # while the counters are still exported. Every 5 m ratio of the quiet time is NaN (0/0; counted
-  # with `x != x`, true only for NaN), the 30-day SLI, period burn rate and budget remaining are
-  # finite: 8 of 40 requests 5xx, 16 of 40 slower than 150 ms. promtool compares values exactly,
-  # hence round() on the ratios.
+  # SLO rules, sparse traffic as on the lab: feed requests during 2 minutes, then none for 2 hours while the counters
+  # are still exported. Every 5 m ratio of the quiet time is NaN (0/0; counted with `x != x`, true only for NaN), the
+  # 30-day SLI, period burn rate and budget remaining are finite: 8 of 40 requests 5xx, 16 of 40 slower than 150 ms.
+  # promtool compares values exactly, hence round() on the ratios.
   - interval: 15s
     input_series:
       - series: 'http_server_request_duration_seconds_count{service_name="gateway",http_request_method="GET",http_route="/feed/explore",http_response_status_code="200"}'

@@ -1,12 +1,7 @@
-// Profiles, scenarios and thresholds of the load test. One profile is
-// picked with SVP_K6_PROFILE; every rate below is per minute, so a route of less than one request a second (POST
-// /videos) needs no fractional rate. Cloud rates are the totals of the whole Job: k6 splits them across the `pods`
-// processes by --execution-segment, while each pod registers its own pool in setup() (one pool per source address).
-//
-// SVP_K6_PODS (profile cloud only, 1 to 20) runs the Job at fewer pods than the design's 20, each pod keeping the load of
-// one pod of the design: every rate becomes its design total times SVP_K6_PODS / 20, so the pool sizes and per-user
-// rates below hold unchanged. SVP_K6_RAMP and SVP_K6_HOLD set how long the rate ramps up and holds (profiles with a
-// ramp; a whole number of s, m or h).
+// Profiles, scenarios and thresholds of the load test. One profile is picked with SVP_K6_PROFILE; every rate below is
+// per minute, so a route of less than one request a second (POST /videos) needs no fractional rate. Cloud rates are the
+// totals of the whole Job: k6 splits them across the `pods` processes by --execution-segment, while each pod registers
+// its own pool in setup() (one pool per source address).
 
 const holdPattern = /^[1-9][0-9]*[smh]$/;
 
@@ -23,12 +18,10 @@ export const routes = {
   login: { route: "/login", app: "web", status: 200 },
 };
 
-// Pool sizes keep every per-user and per-address limit of the gateway out of reach, whatever its route, class and
-// key: `users` register and log in once at the gateway (register burst 20 per address, login
-// burst 30), `webSessions` of them log in once more through the web form; a user's read rate stays under 10/s and its
-// POST /videos under the 3 open uploads per 15 minutes of video-service. `pods` is how many k6 processes share the
-// rates, each with its own pool: the per-user numbers hold only when every one of them runs its share (setup() checks
-// the execution segments against it).
+// Pool sizes keep every per-user and per-address limit of the gateway out of reach: `users` register and log in once
+// (register burst 20 per address, login burst 30), `webSessions` of them log in once more through the web form; a
+// user's read rate stays under 10/s and its POST /videos under 3 open uploads per 15 minutes of video-service. `pods`
+// k6 processes share the rates, each with its own pool: the per-user numbers hold only when each runs its share.
 const profiles = {
   // make load-local: one container, one address; the target resets the register buckets first (LOCAL LAB ONLY).
   local: {
@@ -151,11 +144,9 @@ export function targets() {
 export const forwardedForIP = forwardedFor;
 
 // Iterations an arrival-rate executor may run at once, sized per pod and multiplied by `pods`: about 300 ms of work per
-// request in flight before it starts more VUs, and room for latency to grow to 2 s before it drops iterations
-// (dropped_iterations then says so). k6 splits VUs across the execution segments as it splits the rate, and gives a
-// scenario's iterations only to the segments that get at least one of its maxVUs: sized on the Job's total, a slow
-// route (POST /videos, 3 VUs at most) would run on 3 of the 20 pods with their 36 users instead of all 240, and a pod
-// left with no pre-allocated VU drops its first iteration while it starts one.
+// request in flight before it starts more VUs, and room for latency to grow to 2 s before it drops iterations. k6 gives
+// a scenario's iterations only to the segments that get at least one of its maxVUs: sized on the Job's total, a slow
+// route (POST /videos) would run on 3 of the 20 pods, and a pod with no pre-allocated VU drops its first iteration.
 function vus(perMinute) {
   const perSecond = perMinute / profile.pods / 60;
   return {

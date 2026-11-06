@@ -1,46 +1,17 @@
 # shellcheck shell=bash
 # shellcheck disable=SC2154 # repo_root and kube_context come from deploy/k8s/lib.sh, again from the sourcing script
-# The order of a change of credentials, shared by deploy/k8s/secrets.sh (make k8s-secrets, a lab cluster: the dev path,
-# or the GitOps path's staging with External Secrets) and deploy/k8s/aws-secrets.sh (make eks-secrets, an EKS cluster
-# whose Secrets External Secrets builds from AWS Secrets Manager), and dev_helmfile, through which the dev path runs
-# helmfile (deploy/k8s/install.sh as well). Sourced after deploy/k8s/lib.sh; sourcing it only defines functions. Each
-# script that sources it sets $again, the command that runs it again, for the messages.
-#
-# Reloader (component reloader of svp-gitops) restarts every workload that opts in by annotation when a Secret it
-# names changes: the services, the web client, GlitchTip, Grafana, the KEDA operator, the object store and Redpanda
-# (deploy/helm/*, base/ of svp-gitops). No script restarts anything. What the scripts keep is the order in which the
-# new values may reach those workloads, servers first, then the init Jobs of chart svp-data that set the new passwords
-# in the servers, then the clients:
-#   1. the servers: a changed password of Redpanda's superuser goes into the running broker first (redpanda_admin of
-#      lib.sh); then the Secrets of svp-data (or, with External Secrets, every source, and the ExternalSecrets of
-#      svp-data built again from it: rotate_es_sync server); then the barrier (rotate_barrier): every running pod of
-#      StatefulSet s3 (when the cluster has one) and redpanda runs with the value of .env and is Ready, which Reloader
-#      brings about. The init Jobs log in to those servers with the new superuser password and give up at the first
-#      failure (backoffLimit 0, after waiting only for the endpoint's readiness): started before Reloader's restart,
-#      they would race it;
-#   2. the init Jobs of svp-data (hooks of the chart, PostSync with Argo CD), which set each user's new password in
-#      Postgres, the object store and Redpanda: rotate_init_dev (helmfile, release svp-data alone) or rotate_init_argocd
-#      (an operation sync of Application svp-data). A failure stops the run before the clients' Secrets change, so no
-#      client restarts with a password its server does not take yet;
-#   3. the clients: the Secrets of svp, svp-obs and keda (with External Secrets: every other ExternalSecret built
-#      again, rotate_es_sync clients). Reloader restarts the workloads whose Secret changed; nothing waits for them.
-# Every run makes all three steps, whatever changed: applying the same values leaves the Secrets as they are, so
-# Reloader restarts nothing, and a run after one that stopped half way makes up the init it missed.
-#
-# Reloader must run, and each workload must name its Secrets, before a credential changes on a cluster that runs the
-# project's workloads, since Reloader reacts to a change of a Secret a workload names, not to its own start nor to the
-# annotation's arrival (rotate_unready, rotate_guard). A Rollout that is in a canary when its Secret changes is left to
-# Reloader and Argo Rollouts (a restart without a new revision), as any restart of it.
+# The order of a change of credentials, shared by secrets.sh, aws-secrets.sh and dev_helmfile; sourced after lib.sh,
+# it only defines functions, and the sourcing script sets $again, the command that runs it again. Reloader restarts the
+# workloads when a Secret they name changes; no script does. The scripts keep the order: servers, init Jobs, clients.
+# Design notes: docs/reference/k8s.md.
 
 # The annotation by which a workload opts in, on the workload or else on its pod template, where Reloader reads it.
 reload_key=secret.reloader.stakater.com/reload
 
 # opt_in_render: prints "<namespace> <Kind> <name> <Secrets>" for each Deployment, StatefulSet and Rollout that the dev
-# path's releases of waves 2 and later (deploy/k8s/helmfile.yaml.gotmpl) render with annotation $reload_key, <Secrets>
-# its value: the charts of this working tree and base/ of the clone of svp-gitops are where a workload opts in, so no
-# list of them is kept here. helmfile template asks no cluster; the releases of chart svp-service render with the
-# images of make k8s-up ($dev_helmfile_images of install.sh) or, without them, a placeholder, since the image is not
-# what is read here.
+# path's waves 2 and later render with annotation $reload_key (<Secrets> its value): the charts and base/ of svp-gitops
+# are where a workload opts in, so no list is kept here. helmfile template asks no cluster; without the images of make
+# k8s-up ($dev_helmfile_images) svp-service renders with a placeholder, since the image is not what is read here.
 opt_in_render() {
   local dev_helmfile_images=${dev_helmfile_images:-} placeholder='' gitops err rendered rc=0 lines
   if [ -z "$dev_helmfile_images" ]; then
@@ -80,12 +51,10 @@ opt_in_render() {
   printf '%s\n' "$lines"
 }
 
-# opt_in_gaps: reads the lines of opt_in_render and prints, joined by "; ", what keeps Reloader from restarting those
-# workloads: each one that exists and names other Secrets in $reload_key (or none) than its chart does, and each
-# namespace and kind of them whose objects Reloader's ServiceAccount may not patch, a restart being a patch. Reloader's
-# chart grants that on Rollouts only when the cluster served their API as it rendered (hence the needs of release
-# reloader in deploy/k8s/helmfile.yaml.gotmpl). A workload not made yet gets the annotation with its release. Nothing
-# when there is nothing to fix.
+# opt_in_gaps: reads the lines of opt_in_render and prints, joined by "; ", what keeps Reloader from restarting them:
+# each workload that exists and names other Secrets (or none) in $reload_key than its chart, and each namespace and kind
+# Reloader's ServiceAccount may not patch, a restart being a patch. A workload not made yet gets the annotation with its
+# release. Nothing when there is nothing to fix.
 opt_in_gaps() {
   local sa ns kind name want resource json have answer seen=" " gaps=
   sa=$(kc -n reloader get deployment reloader -o jsonpath='{.spec.template.spec.serviceAccountName}') && [ -n "$sa" ] ||
@@ -116,15 +85,10 @@ opt_in_gaps() {
   printf '%s' "${gaps#; }"
 }
 
-# rotate_unready dev|argocd: true when the cluster runs the project's workloads (StatefulSet s3 or redpanda of
-# svp-data: not a new cluster) and a change of credentials would not reach each of them yet, with what is missing in
-# $unready_why: Deployment reloader/reloader has no available pod (a cluster made before Reloader, or with it down), or
-# a workload does not opt in yet, or Reloader may not restart it. A credential changed before then reaches such a
-# workload only at its next restart, and a server's makes the barrier fail. On the dev path (dev) every workload the
-# releases render with the annotation is checked (opt_in_render, opt_in_gaps). With Argo CD (argocd), whose GitOps root
-# is not rendered here, the servers the barrier waits for (StatefulSets s3 and redpanda, those that exist) must carry
-# the annotation; the clients' comes with Argo CD's sync of their waves. A cluster that cannot be read stops the
-# script.
+# rotate_unready dev|argocd: true when the cluster runs the project's workloads (StatefulSet s3 or redpanda of svp-data)
+# and a change of credentials would not reach each of them yet, with what is missing in $unready_why: no available
+# Reloader, a workload not opted in, or Reloader may not restart it. dev checks every workload the releases render;
+# argocd only the servers the barrier waits for. A cluster that cannot be read stops the script.
 rotate_unready() {
   local mode=$1 servers available sts json lines
   unready_why=
@@ -196,10 +160,8 @@ server_current() {
 
 # rotate_barrier STATEFULSET CONTAINER VAR VALUE: when StatefulSet svp-data/STATEFULSET exists, waits until every one
 # of its pods runs with VAR of CONTAINER equal to VALUE and is Ready (server_current), 300 s per replica: the time
-# Reloader takes to restart them one at a time, highest ordinal first, each Ready before the next. A server that
-# takes its password from its environment at start (the object store's root password, the superuser password the
-# broker's rpk and sidecar log in with) runs with the previous one until then. Fails naming the StatefulSet once that
-# time is over.
+# Reloader takes to restart them one at a time, each Ready before the next. A server that takes its password from its
+# environment at start runs with the previous one until then. Fails naming the StatefulSet once that time is over.
 rotate_barrier() {
   local sts=$1 container=$2 var=$3 value=$4 replicas limit deadline i pending
   replicas=$(kc -n svp-data get statefulset "$sts" --ignore-not-found -o jsonpath='{.spec.replicas}') ||
@@ -305,15 +267,12 @@ rotate_clients_note() {
 }
 
 # pg_backup_sets: sets pg_server to the archive generation of the running Cluster svp-pg, for an upgrade of chart
-# svp-data (state value pgServerName of deploy/k8s/helmfile.yaml.gotmpl). Each restore of svp-pg from its backups creates
-# svp-pg again archiving into a new generation (value postgres.backup.serverName), and the chart's default is the
-# first generation's: an upgrade without it would point the restored Cluster's WAL archiving back at the generation it
-# was restored from, whose archive is not empty, and archiving would fail. A new cluster, or a Cluster made before the
-# backups (no serverName yet), leaves it empty: the chart's default. A Cluster that is gone while Backups of it remain
-# was deleted after it had data (a restore stopped half way): the chart would create an empty database in its place,
-# so the script stops before chart svp-data is upgraded. So it does for a Cluster still being restored
-# (bootstrap.recovery set and not Ready yet): the upgrade would remove bootstrap.recovery and externalClusters, which
-# the chart renders only on the restore's own command line, while the restore still reads them. Prints nothing.
+# svp-data; empty (the chart's default) for a new cluster or a Cluster made before the backups. Prints nothing. Each
+# restore creates svp-pg in a new archive generation; an upgrade at the chart's default would point its WAL archiving
+# back at the one it was restored from, whose archive is not empty, and archiving would fail.
+
+# Stops before the upgrade when svp-pg is gone while Backups of it remain (the chart would create an empty database in
+# its place), or is still being restored (it would remove bootstrap.recovery, which the restore reads).
 pg_backup_sets() {
   local found backups restoring origin
   pg_server=
@@ -342,10 +301,9 @@ pg_backup_sets() {
     fail "Cluster svp-data/svp-pg is missing while Backups of it remain (${backups% }): it was deleted after it had data, a restore stopped half way? Installing svp-data would create an empty database in its place. Finish the restore as docs/runbooks/postgres-restore.md says, or start over with no data: make k8s-down && make k8s-up"
 }
 
-# dev_helmfile SUBCOMMAND [ARG...]: helmfile SUBCOMMAND (sync, template, list...) of the dev path's releases,
-# deploy/k8s/helmfile.yaml.gotmpl, on cluster svp (the local one only: lib.sh's require_k3d), with ARG... (a selector
-# -l, a flag of the subcommand) and the state values the file reads: the clone of svp-gitops (gitops_dir), the nodes'
-# architecture, the archive generation of svp-pg (pg_backup_sets), and the images of make k8s-up when
+# dev_helmfile SUBCOMMAND [ARG...]: helmfile SUBCOMMAND of the dev path's releases, deploy/k8s/helmfile.yaml.gotmpl,
+# on cluster svp (the local one only), with ARG... and the state values the file reads: the clone of svp-gitops, the
+# nodes' architecture, the archive generation of svp-pg (pg_backup_sets), and the images of make k8s-up when
 # $dev_helmfile_images names a file of them (install.sh). sync installs one release at a time.
 dev_helmfile() {
   local cmd=$1 gitops arch extra=()

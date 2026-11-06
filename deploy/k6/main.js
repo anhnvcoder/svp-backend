@@ -1,12 +1,7 @@
-// Load test of the SLOs: the API scenarios of api.js and the web
-// scenarios of web.js in one k6 process, at the rates of the profile SVP_K6_PROFILE picks (local, ci, cloud; see
-// lib/config.js). Run it through make load-local / make load-ci (deploy/k6/load.sh) or the cloud Job
-// (deploy/k6/cloud/), never with a k6 that is not K6_IMAGE.
-//
-// Environment: SVP_K6_PROFILE; SVP_API_URL (the gateway), SVP_WEB_URL (the address k6 dials for the web client) and
-// SVP_WEB_ORIGIN (the origin users open it at, sent as Host and Origin); SVP_K6_HOLD and SVP_K6_RAMP (how long the
-// full rate holds and the ramp to it lasts, default per profile); SVP_K6_RESULTS (the folder summary.json goes to;
-// unset: stdout); SVP_K6_PODS and SVP_K6_FORWARDED_FOR (cloud Job only, see lib/config.js).
+// Load test of the SLOs: the API scenarios of api.js and the web scenarios of web.js in one k6 process, at the rates
+// of the profile SVP_K6_PROFILE picks (local, ci, cloud; see lib/config.js). Run it through make load-local /
+// make load-ci or the cloud Job (deploy/k6/cloud/), never with a k6 that is not K6_IMAGE.
+// Design notes: docs/reference/compose.md.
 import { scenarios, thresholds } from "./lib/config.js";
 import { createPool } from "./lib/setup.js";
 import { summary } from "./lib/summary.js";

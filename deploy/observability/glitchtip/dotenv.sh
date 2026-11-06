@@ -1,20 +1,17 @@
 # shellcheck shell=sh
-# One strict rule for reading and filling in the env file, shared by everything that reads it:
-# `make env` and `make test-stack` (deploy/compose/compose.mk), deploy/postgres/bootstrap.sh,
-# init.sh and the drills. All of them see a variable as compose does, or stop. Source it; POSIX sh,
-# since make runs its recipes with /bin/sh.
-#
-# Rather than copy compose's parser, the rule accepts only lines that compose reads one way, the
-# way read here, and refuses the whole file for any other line. Every line must be one of:
-#   - blank (spaces and tabs only), or a comment: # in column 1, then anything;
-#   - NAME=value, NAME of ASCII letters, digits and _, not starting with a digit, in column 1 with
-#     = right after it; the value plain (printable ASCII with no blank, quote, \ or $), or in one
-#     pair of quotes, "..." or '...', with no quote, \ or $ inside and nothing after them.
-# No NAME is on two lines, no line ends in CR (a CRLF file) and no line, comments and blank lines
-# included, has a NUL byte (awk stops reading a line there, compose does not). The quotes are
-# dropped, so NAME=, NAME="" and NAME='' are all empty, as they are for compose. Everything else
-# compose reads (interpolation, indented or `export` lines, repeated names, inline comments, blanks
-# around a value, escapes, quoted values over several lines) is refused.
+# One strict rule for reading and filling in the env file, shared by everything that reads it: `make env` and
+# `make test-stack` (deploy/compose/compose.mk), deploy/postgres/bootstrap.sh, init.sh and the drills. All of
+# them see a variable as compose does, or stop. Source it; POSIX sh, since make runs its recipes with /bin/sh.
+
+# Rather than copy compose's parser, the rule accepts only lines that compose reads one way, the way read here,
+# and refuses the whole file for any other line: blank (spaces and tabs only), a comment with # in column 1, or
+# NAME=value, NAME of ASCII letters, digits and _, not starting with a digit, in column 1 with = right after it;
+# the value plain (printable ASCII, no blank, quote, \ or $) or in one pair of quotes with no quote, \ or $ inside.
+
+# No NAME is on two lines, no line ends in CR (a CRLF file) and no line, comments and blank lines included, has a
+# NUL byte (awk stops reading a line there, compose does not). The quotes are dropped, so NAME=, NAME="" and
+# NAME='' are all empty, as they are for compose. Everything else compose reads (interpolation, indented or `export`
+# lines, repeated names, inline comments, blanks around a value, escapes, multi-line quoted values) is refused.
 
 # dotenv_value prints NAME's value in FILE, nothing when NAME is missing or empty. When a line of
 # FILE breaks the rule, whatever NAME is, it prints nothing and fails, naming on stderr the first
@@ -69,11 +66,10 @@ dotenv_fill() {
     END { for (i = 1; i <= n; i++) if (!(order[i] in done)) print val[order[i]] }' "$2" "$1"
 }
 
-# dotenv_nul fails when FILE has a NUL byte, naming on stderr the first line that has one
-# (FILE:LINE:) and the variable it sets, if it starts with NAME=; never a value. awk cannot see the
-# byte, so it reads FILE as od prints it, one decimal number per byte. A FILE od cannot read
-# passes, for the caller's own read to report; od's status is dropped so that this holds under
-# `set -o pipefail` too.
+# dotenv_nul fails when FILE has a NUL byte, naming on stderr the first line that has one (FILE:LINE:) and the
+# variable it sets, if it starts with NAME=; never a value. awk cannot see the byte, so it reads FILE as od prints
+# it, one decimal number per byte. A FILE od cannot read passes, for the caller's own read to report; od's status
+# is dropped so that this holds under `set -o pipefail` too.
 dotenv_nul() {
   { od -An -v -tu1 "$1" 2> /dev/null || :; } | awk -v file="$1" '
     BEGIN { line = 1 }

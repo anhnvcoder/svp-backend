@@ -1,19 +1,23 @@
-# FF-3/FF-4 of docs/threat-model.md on cluster svp: every container of every pod in svp has CPU and memory requests and
-# limits, runAsNonRoot, readOnlyRootFilesystem, drops ALL and adds nothing, allowPrivilegeEscalation false, seccomp
-# RuntimeDefault (a container's own runAsNonRoot and seccomp override the pod's), no host namespace or hostPath, and no
-# ServiceAccount token reaches it: automount off, no volume of a projected serviceAccountToken or of a Secret of type
-# service-account-token (on its own or as a source of a projected volume) mounted at any path, no such Secret in its env
-# or envFrom (pod-rules.jq); the project's namespaces enforce PSA restricted; the kubelet of every node has podPidsLimit as
-# in deploy/k8s/k3d.yaml. Every pod of svp is checked, not a list, and each pod of the web client (labels
-# app.kubernetes.io/name=web, component=server) must be among them, its containers named.
+# FF-3/FF-4 of the threat model (docs/threat-model.md) on cluster svp: every container of every pod in svp has CPU and
+# memory requests and limits, runAsNonRoot, readOnlyRootFilesystem, drops ALL and adds nothing, allowPrivilegeEscalation
+# false, seccomp RuntimeDefault (a container's own runAsNonRoot and seccomp override the pod's), no host namespace or
+# hostPath.
+
+# No ServiceAccount token reaches a container: automount off, no volume of a projected serviceAccountToken or of a
+# Secret of type service-account-token (on its own or as a source of a projected volume) mounted at any path, no such
+# Secret in its env or envFrom (pod-rules.jq).
+
+# The project's namespaces enforce PSA restricted; the kubelet of every node has podPidsLimit as in deploy/k8s/k3d.yaml.
+# Every pod of svp is checked, not a list, and each pod of the web client (labels app.kubernetes.io/name=web,
+# component=server) must be among them, its containers named.
+
 # Controls: the same rules flag every rule on a bare pod, and on a pod that is restricted but for a container's
-# runAsNonRoot false and a token reaching a container in each of those ways, while a container with an ordinary Secret as
-# a volume and in envFrom passes; a server-side dry run of a root pod in svp is Forbidden while a restricted one is
+# runAsNonRoot false and a token reaching a container in each of those ways, while a container with an ordinary Secret
+# as a volume and in envFrom passes; a server-side dry run of a root pod in svp is Forbidden while a restricted one is
 # admitted.
-#
-# Each check is one operation named by its ID; continueOnError keeps the next checks running after one fails, and the
-# test still fails. Nothing is created: the two pods are server-side dry runs. kubectl in the scripts uses the caller's
-# kubeconfig and context k3d-svp (templates/probe-up.yaml says why).
+
+# Nothing is created: the two pods are server-side dry runs. kubectl in the scripts uses the caller's kubeconfig and
+# context k3d-svp (templates/probe-up.yaml says why).
 apiVersion: chainsaw.kyverno.io/v1alpha1
 kind: Test
 metadata:
@@ -129,10 +133,12 @@ spec:
           ($error): ~
           "(contains($stdout, 'ok    FF-3/FF-4: every web pod is among the pods checked'))": true
     # Controls of pod-rules.jq: on a pod that sets none of the rules it flags each one; on a pod restricted in every
-    # respect but six containers (one sets runAsNonRoot false over the pod's true; three mount a token at a path of their
-    # own, from a projected serviceAccountToken, from a Secret of type service-account-token and from that Secret as a
-    # source of a projected volume; two read that Secret through env and envFrom) it flags exactly those, and passes a
-    # seventh that mounts an ordinary Secret and reads it through envFrom, as the services do.
+    # respect but six containers it flags exactly those, and passes a seventh that mounts an ordinary Secret and reads
+    # it through envFrom, as the services do.
+
+    # The six: one sets runAsNonRoot false over the pod's true; three mount a token at a path of their own, from a
+    # projected serviceAccountToken, from a Secret of type service-account-token and from that Secret as a source of a
+    # projected volume; two read that Secret through env and envFrom.
     - description: "FF-3/FF-4 control: the same rules on a bare pod flag all of them"
       continueOnError: true
       script:
@@ -285,9 +291,10 @@ spec:
             (contains(to_string($error), $psaDenied)): true
     # In svp the dry run also goes through Kyverno's image webhook (on the GitOps path, failurePolicy Fail), whose first
     # verification of an image reads GHCR and Sigstore and can run past the webhook's 30 s: a timeout is tried again, up
-    # to 3 times, as it says nothing about PSA; a refusal by the webhook ("denied the request") is not. The API server
-    # answers a timeout either as the webhook's ("failed calling webhook ...: context deadline exceeded") or, when the
-    # whole request ran past its own limit, "Timeout: request did not complete within requested timeout".
+    # to 3 times, as it says nothing about PSA; a refusal by the webhook ("denied the request") is not.
+
+    # The API server answers a timeout either as the webhook's ("failed calling webhook ...: context deadline exceeded")
+    # or, when the whole request ran past its own limit, "Timeout: request did not complete within requested timeout".
     - description: "FF-4 control: the same pod as uid 65532 is admitted in svp (server-side dry run)"
       continueOnError: true
       script:

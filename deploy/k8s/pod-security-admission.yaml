@@ -1,12 +1,10 @@
-# Admission configuration of the API server of cluster svp:
-# Pod Security "restricted" on every namespace without its own pod-security.kubernetes.io labels. The namespaces of the
-# lab carry the labels already; this default covers the rest (default, kube-public, kube-node-lease, any namespace made
-# later), where a controller allowed to create pods everywhere (cert-manager's ACME solver role) could otherwise start
-# a privileged pod with a hostPath of the node, root on the node, which holds k3s's admin kubeconfig.
-#
-# Mounted read-only into the server node by deploy/k8s/k3d.yaml and passed to the API server with
-# --kube-apiserver-arg=admission-control-config-file (k3s has no PSA flag of its own and writes no such file). Read only
-# when the API server starts: a change here takes effect on a new cluster (make k8s-down && make k8s-up).
+# Admission configuration of the API server of cluster svp: Pod Security "restricted" on every namespace without its own
+# pod-security.kubernetes.io labels (default, kube-public, kube-node-lease, any made later), where a controller allowed
+# to create pods everywhere (cert-manager's ACME solver role) could start a privileged pod with a hostPath of the node:
+# root on the node, which holds k3s's admin kubeconfig.
+
+# Mounted read-only into the server node by k3d.yaml and read only when the API server starts: a change takes effect
+# on a new cluster (make k8s-down && make k8s-up).
 apiVersion: apiserver.config.k8s.io/v1
 kind: AdmissionConfiguration
 plugins:

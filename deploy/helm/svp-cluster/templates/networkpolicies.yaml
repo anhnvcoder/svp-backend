@@ -1,22 +1,7 @@
-{{- /*
-Default-deny in both directions for every pod of the project's namespaces (IN-2, FF-5): a pod
-reaches and is reached by nothing until a policy of its own chart opens that one flow, so a compromised pod cannot
-scan the cluster or call out to the internet. Platform namespaces (cert-manager, envoy-gateway-system, ...) are not
-denied by default: their charts ship no policies, their webhooks are called by the API server from the node network,
-and they hold no project data.
-
-Not needed despite the deny: kubelet probes and kubectl port-forward come from the node the pod runs on, which a
-NetworkPolicy cannot block.
-
-Namespace kyverno gets the same three (its pods that call the API server carry svp-kube-api=allow), and two more at the
-end of this file. So does namespace reloader of Reloader, with nothing more: its controller (labelled
-svp-kube-api=allow) talks to the API server only, and nothing comes in. With externalSecrets on (GitOps path), so does
-namespace external-secrets of External Secrets Operator: its controller (labelled svp-kube-api=allow) talks to the API
-server only, and nothing comes in (it serves no webhook, and nothing scrapes its metrics); with store aws it also gets
-TCP 443 out to public addresses (Secrets Manager, STS) and TCP 80 to the EKS Pod Identity Agent, at the end of this
-file. The source namespace of store
-kubernetes has no pod, and is denied all the same.
-*/}}
+{{- /* Default-deny in both directions for every pod of the project's namespaces: a pod reaches and is reached by
+nothing until a policy of its own chart opens that one flow, so a compromised pod cannot scan the cluster or
+call out to the internet. Platform namespaces are not denied by default (their charts ship no policies, they
+hold no project data), except kyverno, reloader and, with externalSecrets on, external-secrets. */}}
 {{- $kyverno := dict "name" .Values.kyverno.namespace "kubeAPI" true }}
 {{- $reloader := dict "name" .Values.reloader.namespace "kubeAPI" true }}
 {{- $es := .Values.externalSecrets }}
@@ -91,18 +76,10 @@ spec:
           port: 443
 {{- end }}
 {{- end }}
-{{- /*
-Kyverno's admission controller. In: the API server's admission
-calls on the webhook port. The API server runs on the server node: a call to a pod on that node comes from the node
-itself, one to a pod on the agent leaves through the server's VXLAN interface (values: kyverno.vxlanAddresses), so only
-those addresses and the nodes' network are let in, no pod. On EKS nodeSubnet is the VPC's CIDR: the control plane's
-network interfaces sit in the same private subnets as the nodes, so no narrower range holds them, and VPC CNI gives
-every pod an address of the VPC, so every pod is let in on the webhook port too. Accepted: the project's namespaces
-deny egress by default, so only pods of the platform namespaces (Envoy's among them) gain that reach. Out: TCP 443 to public addresses only, for the registries and Sigstore's TUF
-repository it verifies images against; every private range is left out (values: kyverno.privateRanges), so neither the
-local registry nor anything else on the nodes' network or the host is reachable. The reports controller needs only the
-API server.
-*/}}
+{{- /* Kyverno's admission controller. In: the API server's webhook calls, from nodeSubnet and the VXLAN addresses
+(kyverno.vxlanAddresses), no pod; on EKS nodeSubnet is the VPC's CIDR, so every pod of the VPC is let in on the
+webhook port too (accepted: the project's namespaces deny egress by default). Out: TCP 443 to public addresses
+only, for the registries and Sigstore's TUF repository; every private range is left out (kyverno.privateRanges). */}}
 ---
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
@@ -147,14 +124,10 @@ spec:
       ports:
         - protocol: TCP
           port: 443
-{{- /*
-The brokers of release redpanda (namespace svp-data, wave 3) with one another: RPC on 33145 (seeds, Raft, replication;
-a broker that cannot reach the seeds never forms the cluster) and the Admin API on 9644 (the sidecar and the lifecycle
-hooks call the Admin API of every broker). Here, in wave 1, not in chart svp-data (wave 4): the root moves to wave 4
-only once Redpanda is healthy, which three brokers without this policy never are. Rendered on every platform; with one
-broker it only lets the broker reach itself. Kafka on 9092 stays closed between brokers: only the internal clients of
-the HTTP proxy and the schema registry use it, and nothing calls those two.
-*/}}
+{{- /* The brokers of release redpanda (svp-data) with one another: RPC on 33145 (seeds, Raft, replication) and the
+Admin API on 9644 (the sidecar and hooks call every broker's). Here, in wave 1, not in chart svp-data (wave 4):
+the root moves to wave 4 only once Redpanda is healthy, which three brokers without this policy never are. Kafka
+on 9092 stays closed between brokers. */}}
 ---
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
@@ -211,11 +184,10 @@ spec:
         - protocol: TCP
           port: 443
 ---
-# The store aws has no auth block: the controller takes its AWS credentials from the EKS Pod Identity Agent, which
-# listens on the node at the link-local address 169.254.170.23, port 80 (the address AWS_CONTAINER_CREDENTIALS_FULL_URI
-# points the SDK to). The policy above leaves out every private range, link-local included, so this one opens that
-# single address and port, for this pod only. The agent also answers on [fd00:ec2::23]:80; an IPv6 cluster needs that
-# address here instead.
+# The store aws has no auth block: the controller takes its AWS credentials from the EKS Pod Identity Agent, on the node
+# at 169.254.170.23:80 (where AWS_CONTAINER_CREDENTIALS_FULL_URI points the SDK). The policy above leaves out every
+# private range, link-local included, so this one opens that single address and port, for this pod only. An IPv6 cluster
+# needs [fd00:ec2::23]:80 instead.
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
@@ -241,12 +213,9 @@ spec:
 {{- end }}
 ---
 # The Envoy pods of Gateway svp, on a cluster whose Envoy faces the internet: once a policy selects them, nothing else
-# reaches them, so a pod of the cluster cannot reach Envoy's other ports. In: 10443, the port Envoy Gateway gives the
-# listeners' 443 in the pod (a port under 1024 gets 10000 added, so Envoy needs no privilege to bind it), from every
-# address: the NLB keeps each client's own; the metrics port from Prometheus in svp-obs (the canary's analysis reads
-# them); the NLB's health check on a port of its own from the VPC, where the NLB's nodes are (on traffic-port it
-# checks 10443, already open). The kubelet's probes come from the node, which a NetworkPolicy cannot block. Out: not
-# restricted (Envoy reaches its controller and every backend).
+# reaches them. In: 10443 (the listeners' 443 in the pod: a port under 1024 gets 10000 added) from every address (the
+# NLB keeps each client's own); the metrics port from Prometheus in svp-obs (the canary's analysis); the NLB's health
+# check on a port of its own from the VPC. Out: not restricted (Envoy reaches its controller and every backend).
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:

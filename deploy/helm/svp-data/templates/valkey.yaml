@@ -1,18 +1,34 @@
 {{- /*
-Valkey in place of the host's Redis, at valkey.svp-data:6379 with the same db numbers and key
-prefixes: gateway db 10 (svp:gw:), feed-service db 14 (svp:feed:), the web client db 9 (svp:web:, its sessions and
-refresh locks). Rate limits, a cache and sessions, none worth persisting: when the pod restarts, every web session is
-lost and users log in again. noeviction as on the host: when full, writes fail (the gateway falls
-back to its in-process counter with a metric, a login fails) rather than rate-limit keys or someone's session being
-dropped silently.
+Valkey in place of the host's Redis, at valkey.svp-data:6379 with the same db numbers and key prefixes: gateway db 10
+(svp:gw:), feed-service db 14 (svp:feed:), the web client db 9 (svp:web:, its sessions and refresh locks).
+*/}}
 
-No password: db numbers are no boundary between clients (IN-7, accepted locally); the NetworkPolicy lets only the
-gateway, feed-service and the web client reach it. A session holds the user's access and refresh tokens, so every one
-of the three can read and write every session. Accepted on a one-user lab machine (threat model WEB-22): a taken
-gateway pod can already act as any user through gRPC (IN-2), and a taken feed-service pod, which reaches neither the
-gateway nor the internet, could only copy someone's tokens into a session of the attacker's own. Revisit on the cloud
-(Valkey with AUTH, per-client ACLs and TLS, or an instance of its own for sessions), or sooner if feed-service gets
-a new way out.
+{{- /*
+Rate limits, a cache and sessions, none worth persisting: a restart loses every web session. noeviction as on the host:
+when full, writes fail (the gateway falls back to its in-process counter, a login fails), no key is dropped silently.
+*/}}
+
+{{- /*
+No password: db numbers are no boundary between clients (accepted locally).
+*/}}
+
+{{- /*
+The NetworkPolicy lets only the gateway, feed-service and the web client reach it, and each can read and write every
+session, which holds the user's access and refresh tokens.
+*/}}
+
+{{- /*
+Accepted on a one-user lab machine: a taken gateway pod can already act as any user through gRPC, and a taken
+feed-service pod, which reaches neither the gateway nor the internet, could only copy tokens into a session of its own.
+*/}}
+
+{{- /*
+Revisit on the cloud (Valkey with AUTH, per-client ACLs and TLS, or an instance of its own for sessions), or sooner if
+feed-service gets a new way out.
+*/}}
+
+{{- /*
+Design notes: docs/explanation/deployment.md.
 */}}
 apiVersion: apps/v1
 kind: Deployment

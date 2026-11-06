@@ -1,24 +1,7 @@
-# Template of the k6 Job of the cloud cluster, filled in by render.sh:
-# @K6_IMAGE@ (K6_IMAGE of the Makefile), @DOMAIN@, @ENVOY_IP@, @FORWARDED_FOR@, @SCRIPT_ITEMS@, @PODS@,
-# @DEADLINE@, @RAMP@ and @HOLD@. Not a manifest on its own (hence .yaml.in, which make cloud-check does
-# not read; it checks the output of render.sh).
-#
-# Namespace svp-load is outside svp, so Kyverno's image policy does not apply, and runs under PSA restricted. 20 pods of
-# one Indexed Job, each running its own execution segment of profile cloud: k6 splits the rates, and each pod registers
-# its own pool from its own pod IP (no rate limit key is ever deleted on the cloud). 20 is `pods` of profile cloud in
-# lib/config.js, which sizes VUs and pools per pod; setup() refuses a run with another number of segments. Fewer pods
-# (render.sh --pods) keep the lines marked @PODS@: SVP_K6_PODS tells the scripts the count, and the rates shrink with
-# it, each pod keeping the load of one pod of the design. The lines marked @RAMP@ and @HOLD@ stay only with
-# render.sh --ramp and --hold. The pods
-# call Envoy's Service inside the cluster: hostAliases point the public names at its ClusterIP, so TLS checks the real
-# certificate while the load never crosses the public load balancer or the internet.
-#
-# The lines marked @CA@ stay only with render.sh --ca-file, for an Envoy whose certificate a private CA signs (a cluster
-# CA behind a load balancer that holds the public certificate): they mount ConfigMap svp-k6-ca and point SSL_CERT_FILE
-# at it. k6 has no flag for a CA; Go's crypto/x509, which k6 uses on Linux, reads that file in place of the image's
-# bundle file, but still reads every certificate file in /etc/ssl/certs and /etc/pki/tls/certs (only SSL_CERT_DIR
-# would replace those directories). So the private CA is trusted in addition to whatever roots the image holds in
-# those directories, not instead of them. TLS is still checked, never skipped.
+# Template of the k6 Job of the cloud cluster, filled in by render.sh. Not a manifest on its own (hence .yaml.in).
+# Namespace svp-load is outside svp, so Kyverno's image policy does not apply, and runs under PSA restricted.
+# Up to 20 pods (render.sh --pods) of one Indexed Job, each on its own segment of profile cloud: k6 splits the rates.
+# Design notes: docs/reference/compose.md.
 apiVersion: v1
 kind: Namespace
 metadata:
@@ -34,6 +17,9 @@ metadata:
   namespace: svp-load
 spec:
   completionMode: Indexed
+  # 20 is `pods` of profile cloud in lib/config.js; fewer pods set SVP_K6_PODS, and setup() refuses a run with another
+  # number of segments. Each pod registers its own pool from its own pod IP (no rate limit key is ever deleted on the
+  # cloud).
   completions: @PODS@
   parallelism: @PODS@
   # A pod run again would register its pool again: a failed pod is a result to read, not to retry. The limit is per
@@ -60,6 +46,8 @@ spec:
         runAsGroup: 12345
         seccompProfile:
           type: RuntimeDefault
+      # The public names point at Envoy's ClusterIP, so TLS checks the real certificate while the load never crosses the
+      # public load balancer or the internet.
       hostAliases:
         - ip: "@ENVOY_IP@"
           hostnames: ["api.@DOMAIN@", "@DOMAIN@"]

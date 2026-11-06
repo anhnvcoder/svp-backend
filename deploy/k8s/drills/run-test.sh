@@ -1,41 +1,12 @@
 #!/usr/bin/env bash
 # Tests for deploy/k8s/drills/run.sh (make drill-k8s-threats, drill-k8s-supplychain, drill-k8s-gitops,
 # drill-k8s-reloader), deploy/k8s/drills/reloader/new-values.sh and the snapshot helpers of
-# deploy/k8s/drills/reloader/rotate/reloader.sh, without a cluster, a network or Docker: a temporary
-# copy of the repository's tree holds run.sh, deploy/k8s/lib.sh, the rule of .env, new-values.sh, made-up tests under
-# deploy/k8s/drills/<drill>/, a made-up .env and a fake deploy/ci/ghcr-digest.sh; fake chainsaw, kubectl and go (for
-# go run ./tools/jwtkey) come first on PATH, each recording its arguments. The Secret values are made at run time, so no
-# file of the repository holds one. Cases:
-#   - the context: SVP_KUBE_CONTEXT other than k3d-svp, no context k3d-svp in the kubeconfig, its API not answering:
-#     each stops before chainsaw, and the first two before any call to a cluster;
-#   - threats: chainsaw gets context, configuration, folder, selector and --parallel 1, curl the CA; without External
-#     Secrets Operator the tests labelled requires=external-secrets are left out with a skip line; a Secret value in the
-#     output or the report fails the drill and is printed nowhere (the terminal gets the other lines); fewer than 10
-#     values fail before chainsaw; the file of the values is mode 600, never an argument, removed at the end;
-#   - every drill: chainsaw red, no report, a report with another number of tests than the folder, a folder without
-#     tests, an unknown drill: each exits non-zero;
-#   - the list of the SKIPs, .k8s/drills/<drill>-skips.tsv: one line per SKIP line of a script step's STDOUT with the
-#     test chainsaw was running, a line "total<TAB>n" last (n = 0 too); the tests left out for want of External Secrets
-#     Operator are in it; a SKIP line outside a STDOUT block is not counted; a Secret value in a reason is not in the
-#     file; chainsaw red leaves the file and a non-zero exit;
-#   - supplychain: the values chainsaw gets for each row "diễn tập" of the image table of the drill (an image looked up
-#     when not given, a lookup that fails left empty, vulnerable never looked up, noProvenance=none as is), and the
-#     values given passed as they are;
-#   - reloader: chainsaw gets newValues, oldValues and stateDir, paths of private files and of a private folder (mode
-#     600, 700) that are gone at the end, never a value; the old values are those of .env, the new ones made by
-#     new-values.sh or read from SVP_DRILL_NEW_VALUES as they are; a new value, an old value or GlitchTip's API token in
-#     the output or the report fails the drill and is printed nowhere; it stops before chainsaw for SVP_DRILL_NEW_VALUES
-#     readable by others, lacking a variable or holding another, for GitHub Actions without SVP_DRILL_NEW_VALUES (no
-#     value made), for .env lacking a variable, without GlitchTip's token or without .k8s/ca.crt;
-#   - new-values.sh: one line per variable, each value new, mode 600, an existing file never overwritten; on GitHub
-#     Actions an ::add-mask:: line for each value and its base64, and nothing else; elsewhere nothing printed;
-#   - reloader/rotate/reloader.sh, sourced as the drill's steps do, on the lists fake kubectl gives of a cluster
-#     bootstrapped once: snapshot writes the pods of Deployments, Rollouts, StatefulSets and Clusters (not of Jobs), the
-#     Secrets without Helm's release records and no Secret data, the init Jobs of svp-data and nothing like them, the
-#     revisions; jobs_ran passes init Jobs that ran again and Succeeded and fails one the same as before, one gone and
-#     one not Succeeded; a list that fails stops snapshot.
-#
-# Usage, from anywhere: deploy/k8s/drills/run-test.sh
+# deploy/k8s/drills/reloader/rotate/reloader.sh, without a cluster, a network or Docker.
+
+# A temporary copy of the repository's tree holds run.sh, deploy/k8s/lib.sh, the rule of .env, new-values.sh, made-up
+# tests under deploy/k8s/drills/<drill>/, a made-up .env and a fake deploy/ci/ghcr-digest.sh; fake chainsaw, kubectl and
+# go (for go run ./tools/jwtkey) come first on PATH, each recording its arguments. The Secret values are made at run
+# time, so no file of the repository holds one.
 set -euo pipefail
 
 here=$(cd "$(dirname "$0")" && pwd)

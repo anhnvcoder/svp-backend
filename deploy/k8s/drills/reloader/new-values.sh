@@ -1,22 +1,12 @@
 #!/usr/bin/env bash
-# The new values of drill-k8s-reloader (deploy/k8s/drills/reloader/rotate/chainsaw-test.yaml), one line NAME=value
-# each, written to FILE, a file that must not exist yet, mode 600. Each value has the form make env gives its variable
-# (deploy/compose/compose.mk):
-#   SVP_S3_ROOT_PASSWORD                    20 random bytes in hex
-#   SVP_KAFKA_ADMIN_PASSWORD, SVP_VIDEO_APP_DB_PASSWORD, SVP_KAFKA_FEED_SERVICE_PASSWORD, SVP_KAFKA_KEDA_PASSWORD,
-#   SVP_GLITCHTIP_APP_DB_PASSWORD, SVP_GRAFANA_ADMIN_PASSWORD
-#                                           24 random bytes in hex
-#   NEXT_SERVER_ACTIONS_ENCRYPTION_KEY      the standard base64 of 32 random bytes
-#   JWT_VERIFY_KEY_NEW                      <kid>:<public key> of a new key pair of tools/jwtkey, which the drill adds
-#                                           to JWT_VERIFY_KEYS after the keys there (the signing key stays as it is)
-#   JWT_DRILL_SIGNING_KEY                   the private key (seed) of that pair, with which the drill signs one token;
-#                                           it never goes to .env
-#
-# On GitHub Actions (GITHUB_ACTIONS=true) each value and its base64 are masked as soon as they are made (an
-# ::add-mask:: line on stdout, before anything else reads the value): run it in a step whose output is the job's log,
-# never one sent to a file. Elsewhere it prints nothing. Never set -x here: the trace would print every value.
-#
-# Usage, from anywhere: deploy/k8s/drills/reloader/new-values.sh FILE
+# The new values of drill-k8s-reloader (reloader/rotate/chainsaw-test.yaml), one NAME=value line each, written to FILE
+# (must not exist yet; mode 600), each in the form make env gives its variable (deploy/compose/compose.mk).
+# JWT_VERIFY_KEY_NEW is <kid>:<public key> of a new tools/jwtkey pair, JWT_DRILL_SIGNING_KEY its private key (seed),
+# which never goes to .env.
+
+# On GitHub Actions each value and its base64 are masked (an ::add-mask:: line on stdout) as soon as they are made: run
+# it in a step whose output is the job's log, never one sent to a file. Elsewhere it prints nothing. Never set -x here:
+# the trace would print every value. Usage, from anywhere: deploy/k8s/drills/reloader/new-values.sh FILE
 set -euo pipefail
 
 fail() {

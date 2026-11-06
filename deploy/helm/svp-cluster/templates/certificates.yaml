@@ -1,14 +1,7 @@
-{{- /*
-TLS of the entry point from a local CA run by cert-manager: a self-signed issuer signs the CA, the
-CA issuer signs the two certificates Envoy serves (the wildcard one, and svp-apex for svp.localhost alone,
-templates/gateway.yaml says why two). Clients trust the CA alone (`make k8s-ca` writes it to
-.k8s/ca.crt), nothing is installed into the machine's trust store, and cert-manager renews both certificates as it
-would on a cloud cluster.
-
-With tls.issuer acme (a cluster on the internet), Let's Encrypt signs both instead, through ClusterIssuer svp-acme:
-cert-manager proves control of the names with a TXT record in the Route 53 hosted zone (DNS-01, the one challenge that
-covers a wildcard), with the AWS credentials of its own pod. No local CA is made then.
-*/}}
+{{- /* TLS of the entry point from a local CA run by cert-manager: a self-signed issuer signs the CA, the CA issuer
+signs the two certificates Envoy serves (the wildcard one, and svp-apex). Clients trust the CA alone (`make
+k8s-ca`), nothing is installed into the machine's trust store. With tls.issuer acme, Let's Encrypt signs both
+instead, by DNS-01 (the one challenge that covers a wildcard) with the AWS credentials of cert-manager's pod. */}}
 {{- $tls := .Values.tls }}
 {{- $issuer := "svp-ca" }}
 {{- if eq $tls.issuer "acme" }}

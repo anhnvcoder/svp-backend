@@ -1,16 +1,14 @@
 #!/usr/bin/env bash
-# Runs the glitchtip-init job (migrations, cache table, partitions, bootstrap.py) once with a
-# private output directory mounted, then puts the DSN and API tokens it wrote there into the env
-# file:
-#   SENTRY_DSN         the project DSN with host glitchtip:8000, for the Go services in compose
-#   SENTRY_AUTH_TOKEN  read-only API token (event:read, project:read) for the drills
-#   SENTRY_SOURCEMAPS_TOKEN  API token svp-sourcemaps (project:releases) of make web-sourcemaps
-#   SENTRY_ORG, SENTRY_PROJECT, SENTRY_API_URL  svp, svp, http://127.0.0.1:8000
-# The env file is read with the strict rule of dotenv.sh, the same as `make env`: a line it refuses
-# stops the script, naming the variable, with the env file untouched. A variable that already has
-# a value is never changed (a different one is reported by name); the env file is replaced
-# atomically, mode 600, and only when a variable was added. No value is printed. Idempotent.
-#
+# Runs the glitchtip-init job (migrations, cache table, partitions, bootstrap.py) once with a private output
+# directory mounted, then puts the DSN and API tokens it wrote there into the env file: SENTRY_DSN (host
+# glitchtip:8000, for the Go services in compose), SENTRY_AUTH_TOKEN (read-only, for the drills),
+# SENTRY_SOURCEMAPS_TOKEN (project:releases, of make web-sourcemaps), SENTRY_ORG, SENTRY_PROJECT, SENTRY_API_URL.
+
+# The env file is read with the strict rule of dotenv.sh, the same as `make env`: a line it refuses stops the
+# script, naming the variable, with the env file untouched. A variable that already has a value is never changed
+# (a different one is reported by name); the env file is replaced atomically, mode 600, and only when a variable
+# was added. No value is printed. Idempotent.
+
 # Usage: COMPOSE='<docker compose command with the obs profile>' init.sh <env-file>
 set -euo pipefail
 . "$(dirname "$0")/dotenv.sh"

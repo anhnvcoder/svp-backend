@@ -1,55 +1,43 @@
 #!/usr/bin/env bash
 # The drills on the local cluster svp (make drill-k8s-threats, drill-k8s-supplychain, drill-k8s-gitops,
-# drill-k8s-reloader): runs the Chainsaw tests of deploy/k8s/drills/<drill>/ (label drill=<drill>, configuration
-# deploy/k8s/drills/.chainsaw.yaml), one at a time, in one call of chainsaw per drill, so the tests of two drills never
-# run together. What each test checks is written in the test.
-#
-#   run.sh threats      the threat model rows (deploy/k8s/drills/threats/<ID>/). Needs .k8s/ca.crt, given to curl as
-#                       CURL_CA_BUNDLE, and a video READY and the drill users of make k8s-smoke run before on the same
-#                       cluster. On a cluster without External Secrets Operator (no CRD externalsecrets.external-secrets.io:
-#                       the dev path, whose Secrets come from .env) the tests labelled requires=external-secrets
-#                       (SEC-5/6/7, SEC-6-reader) are left out, each with a skip line.
-#   run.sh supplychain  the image policy of namespace svp (deploy/k8s/drills/supplychain/case-<letter>/), with the
-#                       Chainsaw values unsigned, vulnerable, noProvenance and enforceTmp from SUPPLYCHAIN_UNSIGNED,
-#                       SUPPLYCHAIN_VULNERABLE, SUPPLYCHAIN_NO_PROVENANCE and SUPPLYCHAIN_ENFORCE_TMP. An image not given
-#                       is looked up here, once for every case: unsigned the newest drill-unsigned, noProvenance the newest
-#                       drill-no-provenance on GHCR (deploy/ci/ghcr-digest.sh newest, anonymous). A lookup that fails
-#                       leaves the value empty and prints why: case b then SKIPs (h and i send the dev image) and case l
-#                       FAILs, unless the running policy checks no provenance (SKIP "policy off"). vulnerable is never
-#                       looked up (case c SKIPs without it), noProvenance=none is passed as is (case l SKIPs).
-#   run.sh gitops       the checks of the GitOps cluster (deploy/k8s/drills/gitops/).
-#   run.sh reloader     a change of credentials on the dev path or the GitOps path (deploy/k8s/drills/reloader/), which
-#                       writes new values into .env and keeps them: the values the drill changes are read from .env
-#                       first (oldValues), the new ones from the file SVP_DRILL_NEW_VALUES names (mode 600, written by
-#                       deploy/k8s/drills/reloader/new-values.sh in an earlier step that masked them; required on GitHub
-#                       Actions, where a value made here would reach the log only through the drill's own output) or,
-#                       without it, made here by new-values.sh (newValues). Both files, of mode 600 in a private work
-#                       folder with the test's own (stateDir), go to Chainsaw by path only, as the values oldValues,
-#                       newValues and stateDir. Needs .k8s/ca.crt, given to curl as CURL_CA_BUNDLE, and a video READY of
-#                       make k8s-smoke run before on the same cluster.
-#
+# drill-k8s-reloader): the Chainsaw tests of deploy/k8s/drills/<drill>/ (label drill=<drill>, configuration
+# deploy/k8s/drills/.chainsaw.yaml), one at a time, in one call of chainsaw per drill, so two drills never run together.
+# Usage: run.sh threats|supplychain|gitops|reloader
+
+# threats needs .k8s/ca.crt, given to curl as CURL_CA_BUNDLE, and a video READY and the drill users of make k8s-smoke
+# run before on the same cluster. On a cluster without External Secrets Operator (no CRD
+# externalsecrets.external-secrets.io: the dev path, whose Secrets come from .env) the tests labelled
+# requires=external-secrets are left out, each with a skip line.
+
+# supplychain takes the Chainsaw values unsigned, vulnerable, noProvenance and enforceTmp from SUPPLYCHAIN_UNSIGNED,
+# SUPPLYCHAIN_VULNERABLE, SUPPLYCHAIN_NO_PROVENANCE and SUPPLYCHAIN_ENFORCE_TMP. An image not given is looked up here
+# once for every case: unsigned the newest drill-unsigned, noProvenance the newest drill-no-provenance on GHCR
+# (deploy/ci/ghcr-digest.sh newest, anonymous); vulnerable is never looked up, noProvenance=none is passed as is.
+
+# reloader writes new values into .env and keeps them: the values it changes are read from .env first (oldValues). It
+# needs what threats needs. The new values (newValues) come from the file SVP_DRILL_NEW_VALUES names (mode 600, written
+# by deploy/k8s/drills/reloader/new-values.sh in an earlier step that masked them; required on GitHub Actions) or,
+# without it, are made here by new-values.sh. Both files go to Chainsaw by path only.
+
 # Before chainsaw: the context of every call is k3d-svp (SVP_KUBE_CONTEXT unset or k3d-svp), the kubeconfig has that
-# context and its API answers; otherwise the drill stops there, without a call to any other cluster. chainsaw gets
-# --kube-context k3d-svp, and its tests name that context on every kubectl of their own.
-#
-# The output goes to .k8s/drills/<drill>-<UTC>.log, the JUnit report to .k8s/drills/<drill>-<UTC>.xml (ignored by git).
+# context and its API answers; otherwise the drill stops there, without a call to any other cluster.
+
 # The JUnit report counts a SKIP step as passed, so after every chainsaw call the list of the SKIPs goes to
-# .k8s/drills/<drill>-skips.tsv: one line "<test><TAB><reason>" for each SKIP line a test printed (a line of the
-# form "SKIP  (<id>) <reason>" in the STDOUT block of a script step, read from the log of chainsaw before any filter;
-# <test> is the Chainsaw test running then) and for each test left out above, then "total<TAB><n>"; the file is there
-# when n is 0 too, and when chainsaw failed. A reason that holds a Secret value of threats is replaced by a line saying so.
-# A drill with no test, or whose report holds another number of tests than its folder (less those left out), fails.
+# .k8s/drills/<drill>-skips.tsv (the file is there when there are none too, and when chainsaw failed). A reason that
+# holds a Secret value of threats is replaced by a line saying so. A drill with no test, or whose report holds another
+# number of tests than its folder (less those left out), fails.
+
 # threats reads the Secret values its tests use first (the 6 Kafka users of svp-data/kafka-users, the Grafana admin of
 # svp-obs/grafana-admin, the 3 object store users of svp-data/pg-backup-s3 and svp-data/s3-users), into a file of mode
 # 600 that is removed on exit and never named a value on a command line: fewer than 10 values fail the drill before
-# chainsaw. reloader puts in that file the old and the new value of each variable it changes and GlitchTip's API token
-# of svp-obs/glitchtip-api, which one of its checks uses: one missing or empty fails the drill before chainsaw. The
-# terminal then gets every line of the output but those that hold one of the values, and once chainsaw has ended the log
+# chainsaw. reloader puts in that file the old and the new value of each variable it changes and GlitchTip's API token.
+
+# The terminal gets every line of the output but those that hold one of the values, and once chainsaw has ended the log
 # and the report are searched for them: a line holding one fails the drill, which prints how many, never the value.
-#
+
+# The output goes to .k8s/drills/<drill>-<UTC>.log, the JUnit report to .k8s/drills/<drill>-<UTC>.xml (ignored by git).
 # Exits non-zero when a test failed, a check above failed, or a Secret value was found.
-#
-# Usage, from the repo root through make: deploy/k8s/drills/run.sh threats|supplychain|gitops|reloader
+# Design notes: docs/reference/k8s.md.
 set -euo pipefail
 
 # shellcheck source=deploy/k8s/lib.sh

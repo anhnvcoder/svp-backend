@@ -1,59 +1,58 @@
 # Docker and compose targets, included by the root Makefile. Every docker call drops
 # DOCKER_DEFAULT_PLATFORM, which the global shell sets to linux/amd64 for another project:
 # containers here run native arm64, not amd64 under emulation (slower, more RAM).
+# Design notes: docs/reference/compose.md.
 
 COMPOSE_ARGS := --env-file .env -f deploy/compose/compose.yaml
 COMPOSE   := env -u DOCKER_DEFAULT_PLATFORM docker compose $(COMPOSE_ARGS) --profile core
 # Every profile, so down, ps and logs never miss a container of the observability stacks.
 COMPOSE_ALL := $(COMPOSE) --profile obs --profile obs-elastic
-# `make up OBS=...`. Unset: core only,
-# telemetry SDKs on with no backend to reach. lgtm: core and the obs profile. elastic: core and
-# the obs-elastic profile, the Elastic stack kept only to compare with LGTM. off: core
-# with telemetry off in every service, the baseline for measuring its overhead; the compose file
-# reads these three variables, which are set nowhere else.
+# `make up OBS=...`. Unset: core only, telemetry SDKs on with no backend to reach. lgtm: core and the obs profile.
+# elastic: core and the obs-elastic profile, the Elastic stack kept only to compare with LGTM. off: core with
+# telemetry off in every service, the baseline for measuring its overhead; the compose file reads these three
+# variables, which are set nowhere else.
 OBS ?=
 OBS_VALUES := lgtm elastic off
 TELEMETRY_OFF := SVP_OTEL_SDK_DISABLED=true SVP_PYROSCOPE_SERVER_ADDRESS= SENTRY_DSN=
 COMPOSE_UP_ := $(COMPOSE)
-# The Telegram bot token reaches Alertmanager as a compose secret, and compose refuses to create a
-# secret from a variable that is not set at all. A .env made from an older .env.example lacks the line, so an
-# absent variable is passed as empty; a value in .env is never overridden.
+# The Telegram bot token reaches Alertmanager as a compose secret, and compose refuses to create a secret from a
+# variable that is not set at all. A .env made from an older .env.example lacks the line, so an absent variable is
+# passed as empty; a value in .env is never overridden.
 TELEGRAM_TOKEN_ABSENT = $(shell grep -q '^SVP_ALERT_TELEGRAM_BOT_TOKEN=' .env 2>/dev/null || echo SVP_ALERT_TELEGRAM_BOT_TOKEN=)
 COMPOSE_UP_lgtm = env -u DOCKER_DEFAULT_PLATFORM $(TELEGRAM_TOKEN_ABSENT) docker compose $(COMPOSE_ARGS) --profile core --profile obs
 COMPOSE_UP_elastic := env -u DOCKER_DEFAULT_PLATFORM docker compose $(COMPOSE_ARGS) --profile core --profile obs-elastic
 COMPOSE_UP_off := env -u DOCKER_DEFAULT_PLATFORM $(TELEMETRY_OFF) docker compose $(COMPOSE_ARGS) --profile core
-# The two observability stacks never run together (16 GB machine), and a
-# stack measured as core only or with telemetry off has neither (the baselines of the telemetry
-# overhead measurement): the long-running services of the profiles `make up OBS=<value>` does not choose, which it
-# refuses to start beside.
+# The two observability stacks never run together (16 GB machine), and a stack measured as core only or with telemetry
+# off has neither (the baselines of the telemetry overhead measurement). These are the long-running services of the
+# profiles `make up OBS=<value>` does not choose, which it refuses to start beside.
 OBS_OTHER_lgtm := elasticsearch kibana apm-server otelcol-elastic
 OBS_OTHER_elastic := otelcol lgtm alertmanager glitchtip
 OBS_OTHER_ := $(OBS_OTHER_elastic) $(OBS_OTHER_lgtm)
 OBS_OTHER_off := $(OBS_OTHER_)
 SMOKE_URL ?= http://127.0.0.1:8080
-# Which images `make up` runs (compose_images of deploy/k8s/lib.sh, which exports what compose.yaml reads). IMAGES:
-# unset builds the six backend services from the working tree (docker buildx bake -f deploy/docker-bake.json); stg
-# runs their releases in staging (envs/stg/images/ of the clone of svp-gitops, read as it is), with no Go build. WEB_FROM: stg (unset) runs the web client's release in
-# staging, clone builds it from its source (the clone of svp-frontend: SVP_WEB_DIR, else <workspace>/frontend), image runs
-# WEB_IMAGE (ghcr.io/<repository>@sha256:<digest>). make k8s-up reads WEB_FROM and WEB_IMAGE as well, not IMAGES.
+# Which images `make up` runs (compose_images of deploy/k8s/lib.sh exports what compose.yaml reads). IMAGES: unset
+# builds the six backend services from the working tree (docker buildx bake -f deploy/docker-bake.json); stg runs
+# their releases in staging (envs/stg/images/ of the svp-gitops clone), with no Go build.
+
+# WEB_FROM: stg (unset) runs the web client's staging release; clone builds it from the svp-frontend clone (SVP_WEB_DIR,
+# else <workspace>/frontend); image runs WEB_IMAGE (ghcr.io/<repository>@sha256:<digest>). make k8s-up reads WEB_FROM
+# and WEB_IMAGE too, not IMAGES.
 IMAGES ?=
 WEB_FROM ?=
 WEB_IMAGE ?=
 # Runs the command after it with the variables compose_images exports; $(1) is compose_images or compose_up_images.
 WITH_IMAGES = IMAGES='$(IMAGES)' WEB_FROM='$(WEB_FROM)' WEB_IMAGE='$(WEB_IMAGE)' \
 	bash -c '. deploy/k8s/lib.sh && $(1) && exec "$$@"' with-images
-# Only the web client has a build section: the six backend services run images built before compose starts (bake of
-# deploy/docker-bake.json in compose_up_images) or pulled releases, never built by compose. --build rebuilds the web
-# client when WEB_FROM=clone builds it from its source; a web release runs as pulled, and --build would build it under
-# the name of the release. WEB_FROM unset is stg, a release.
+# Only the web client has a build section: the six backend services run images built before compose starts
+# (compose_up_images) or pulled releases. --build rebuilds the web client when WEB_FROM=clone builds it from its source;
+# a web release runs as pulled, and --build would build it under the name of the release. WEB_FROM unset is stg.
 UP_BUILD = $(if $(filter stg image,$(or $(WEB_FROM),stg)),,--build)
 # Roles whose passwords `make env` generates (deploy/postgres/bootstrap.sql).
 DB_PASSWORD_VARS := SVP_USER_MIGRATOR_DB_PASSWORD SVP_USER_APP_DB_PASSWORD SVP_VIDEO_MIGRATOR_DB_PASSWORD SVP_VIDEO_APP_DB_PASSWORD \
 	SVP_ENGAGEMENT_MIGRATOR_DB_PASSWORD SVP_ENGAGEMENT_APP_DB_PASSWORD SVP_FEED_MIGRATOR_DB_PASSWORD SVP_FEED_APP_DB_PASSWORD \
 	SVP_GLITCHTIP_MIGRATOR_DB_PASSWORD SVP_GLITCHTIP_APP_DB_PASSWORD
-# Root password of the object store and the secret keys of its users (deploy/s3/init.sh): the two
-# services and the probe user of the integration tests. 20 random bytes in hex, 40 characters, the
-# length of an AWS secret key.
+# Root password of the object store and the secret keys of its users (deploy/s3/init.sh): the two services and the probe
+# user of the integration tests. 20 random bytes in hex, 40 characters, the length of an AWS secret key.
 S3_SECRET_VARS := SVP_S3_ROOT_PASSWORD SVP_VIDEO_S3_SECRET_KEY SVP_MEDIA_WORKER_S3_SECRET_KEY SVP_S3_PROBE_SECRET_KEY
 # GlitchTip's Django secret key and its admin password: random per clone like the S3 secrets above, so no fixed
 # credential is committed.
@@ -62,24 +61,23 @@ GLITCHTIP_SECRET_VARS := GLITCHTIP_SECRET_KEY GLITCHTIP_ADMIN_PASSWORD
 GLITCHTIP_ADMIN_EMAIL := admin@svp.local
 # Written together by tools/jwtkey: one key pair, so they are generated all or none.
 JWT_VARS := JWT_SIGNING_KID JWT_SIGNING_KEY JWT_VERIFY_KEYS
-# Used by the k3d cluster only (deploy/k8s/secrets.sh): the
-# superuser of the in-cluster Postgres, Redpanda's superuser svp-admin, the Kafka user of KEDA and of each service with
-# Kafka (compose runs Redpanda without SASL), Grafana's admin login, and the secret key of the object store's user
-# svp-pg-backup, which the backups of the in-cluster Postgres log in with. The
+# Used by the k3d cluster only (deploy/k8s/secrets.sh): the in-cluster Postgres superuser, Redpanda's superuser
+# svp-admin, the Kafka users of KEDA and of each service with Kafka (compose runs Redpanda without SASL), Grafana's
+# admin login and the object store key of svp-pg-backup, used by the backups of the in-cluster Postgres. The
 # *_S3_SECRET_KEY ones get 20 random bytes in hex like S3_SECRET_VARS, the others 24.
 K8S_SECRET_VARS := SVP_PG_SUPERUSER_PASSWORD SVP_KAFKA_ADMIN_PASSWORD SVP_KAFKA_KEDA_PASSWORD \
 	SVP_KAFKA_USER_SERVICE_PASSWORD SVP_KAFKA_VIDEO_SERVICE_PASSWORD SVP_KAFKA_ENGAGEMENT_SERVICE_PASSWORD \
 	SVP_KAFKA_FEED_SERVICE_PASSWORD SVP_KAFKA_MEDIA_WORKER_PASSWORD SVP_GRAFANA_ADMIN_PASSWORD \
 	SVP_PG_BACKUP_S3_SECRET_KEY
-# The web client's Server Action key, set at run time so that the key in use is never in the public image (the one
-# Next writes at build time is): an AES-256 key, which Next takes as the base64 of 32 bytes. Every replica shares it.
-# The cluster gives it to the web pods in Secret svp/web-env (deploy/k8s/secrets.sh).
+# The web client's Server Action key, set at run time so that the key in use is never in the public image (the one Next
+# writes at build time is): an AES-256 key, which Next takes as the base64 of 32 bytes. Every replica shares it. The
+# cluster gives it to the web pods in Secret svp/web-env (deploy/k8s/secrets.sh).
 WEB_KEY_VARS := NEXT_SERVER_ACTIONS_ENCRYPTION_KEY
 
 .PHONY: env env-required obs-valid obs-exclusive k3d-exclusive ci-bridge-check db-bootstrap glitchtip-init up down clean-data ps logs compose-config compose-hash slo-check smoke test-stack drill-obs-threats
 
-# .env is read with the strict rule of deploy/observability/glitchtip/dotenv.sh, the same as
-# glitchtip-init: a line it refuses stops make env, naming the variable, before anything is written.
+# .env is read with the strict rule of deploy/observability/glitchtip/dotenv.sh, the same as glitchtip-init: a line it
+# refuses stops make env, naming the variable, before anything is written.
 env: ## Create .env (mode 600) with random secrets and a new JWT key, or fill in the ones it lacks or has empty; never changes a set value
 	@set -e; umask 077; \
 	k8s_bytes() { case $$1 in *_S3_SECRET_KEY) echo 20 ;; *) echo 24 ;; esac; }; \
@@ -128,19 +126,18 @@ obs-exclusive: env-required
 	@running=$$($(COMPOSE_ALL) ps -q $(OBS_OTHER_$(OBS))); \
 	  if [ -n "$$running" ]; then echo "make up$(if $(OBS), OBS=$(OBS)): a container of an observability profile it does not start is running (one of: $(OBS_OTHER_$(OBS))); run 'make down' first" >&2; exit 1; fi
 
-# Compose and the k3d cluster svp never run together on the 16 GB machine: together
-# they do not fit in its RAM. No node of the cluster (label k3d.cluster=svp) and not its
-# registry may be running. `make k8s-up` refuses the other way round (deploy/k8s/k8s.mk).
+# Compose and the k3d cluster svp never run together on the 16 GB machine: together they do not fit in its RAM. No node
+# of the cluster (label k3d.cluster=svp) and not its registry may be running. `make k8s-up` refuses the other way round
+# (deploy/k8s/k8s.mk).
 k3d-exclusive:
 	@running=$$(env -u DOCKER_DEFAULT_PLATFORM docker ps -q --filter label=k3d.cluster=svp; \
 	  env -u DOCKER_DEFAULT_PLATFORM docker ps -q --filter name=^k3d-svp-registry$$); \
 	  if [ -n "$$running" ]; then echo "make up: the k3d cluster svp or its registry is running; run 'make k8s-down' first" >&2; exit 1; fi
 
-# Job stack of .github/workflows/ci.yml publishes its Postgres and Redis service containers on 172.17.0.1, and the
+# The job stack of .github/workflows/ci.yml publishes its Postgres and Redis service containers on 172.17.0.1, and the
 # compose services reach them as host.docker.internal, which host-gateway maps to the gateway of Docker's default bridge
 # (unless the daemon sets host-gateway-ip). If the two differ, every compose service fails to reach Postgres and Redis
-# with a timeout far from its cause, so the job checks this before anything is built. The ::error:: line is a GitHub
-# Actions annotation.
+# with a timeout far from its cause.
 ci-bridge-check: ## CI only (job stack): fail unless the gateway of Docker's default bridge is 172.17.0.1, where that job publishes Postgres and Redis
 	@gateway=$$(env -u DOCKER_DEFAULT_PLATFORM docker network inspect bridge --format '{{range .IPAM.Config}}{{.Gateway}}{{end}}'); \
 	  if [ "$$gateway" != 172.17.0.1 ]; then \
@@ -148,9 +145,8 @@ ci-bridge-check: ## CI only (job stack): fail unless the gateway of Docker's def
 	  fi; \
 	  echo "Docker's default bridge has gateway 172.17.0.1"
 
-# The DSN and API token exist only once GlitchTip is initialized, and compose reads .env when it
-# creates a container: `make up OBS=lgtm` writes them to .env first, so even the first run starts
-# the Go services with SENTRY_DSN set (deploy/observability/glitchtip/init.sh).
+# The DSN and API token exist only once GlitchTip is initialized, and compose reads .env when it creates a container:
+# `make up OBS=lgtm` writes them to .env first, so even the first run starts the Go services with SENTRY_DSN set.
 GLITCHTIP_INIT = COMPOSE='$(COMPOSE_UP_lgtm)' deploy/observability/glitchtip/init.sh .env
 
 glitchtip-init: env-required db-bootstrap ## Migrate and bootstrap GlitchTip (admin, org/project svp, drill token, source map upload token), add SENTRY_* to .env; idempotent, never changes a set value
@@ -182,18 +178,17 @@ ps: ## Show the containers of every profile
 logs: ## Show recent logs of every profile; narrow with SVC=<service>
 	$(COMPOSE_ALL) logs --tail=200 $(SVC)
 
-# Validation only: `config` without --quiet would print the file with the passwords, S3 secrets
-# and JWT signing key from .env filled in. With the images IMAGES, WEB_FROM and WEB_IMAGE choose, as make up.
-# compose_images runs once for the four configs: it asks GHCR about every release (the web client's unless
-# WEB_FROM=clone, the six services' with IMAGES=stg), the same set each time.
+# Validation only: `config` without --quiet would print the file with the passwords, S3 secrets and JWT signing key from
+# .env filled in. compose_images runs once for the four configs: it asks GHCR about every release (the web client's
+# unless WEB_FROM=clone, the six services' with IMAGES=stg), the same set each time.
 compose-config: env-required ## Check the compose file is valid for core, core + obs, core + obs-elastic and OBS=off, with the images IMAGES, WEB_FROM, WEB_IMAGE choose as for make up (prints nothing on success)
 	@$(call WITH_IMAGES,compose_images) sh -c '$(COMPOSE_UP_) config --quiet && $(COMPOSE_UP_lgtm) config --quiet && \
 	  $(COMPOSE_UP_elastic) config --quiet && $(COMPOSE_UP_off) config --quiet'
 
-# One line per service with the config hash compose computes from .env (`config --hash`): a sha256
-# of the service's whole resolved config, never a value. OBS= picks the profiles as for make up.
-# deploy/observability/glitchtip/dotenv-test.sh runs it on fixtures to check compose reads quoted
-# values as dotenv.sh does.
+# One line per service with the config hash compose computes from .env (`config --hash`): a sha256 of the service's
+# whole resolved config, never a value. OBS= picks the profiles as for make up.
+# deploy/observability/glitchtip/dotenv-test.sh runs it on fixtures to check compose reads quoted values as dotenv.sh
+# does.
 compose-hash: env-required obs-valid
 	@$(COMPOSE_UP_$(OBS)) config --hash '*'
 
@@ -213,16 +208,16 @@ slo-check: ## promtool: check the Prometheus config and alert rules, run the rul
 smoke: ## Through the gateway at SMOKE_URL: register, log in, follow, upload to READY, play HLS, feed, like and view, unfollow
 	deploy/compose/smoke.sh $(SMOKE_URL)
 
-# The observability drill on the running stack of `make up OBS=lgtm` (deploy/compose/drills/). It stops
-# user-service and recreates the gateway with a drill-only setting through $(COMPOSE), and every service
-# runs again with its defaults when it ends, passed or not. It reads Prometheus, Tempo and Loki through
-# Grafana's datasource proxy, Alertmanager's API and GlitchTip's API, with the read-only token
-# SENTRY_AUTH_TOKEN read from .env and never printed. Like smoke, it deletes the per-IP register rate
-# limit keys in Redis db 10 first: lab only, since every run registers from the one Docker bridge address.
-# A drill recreates services (the drill-only settings, and the restore when it ends), so it runs
-# compose with the telemetry state the stack was started with: on a stack from `make up OBS=off`
-# (its Go services run with OTEL_SDK_DISABLED=true) telemetry stays off, instead of coming back on
-# halfway through. The inspect template prints `off` or nothing, never another setting of the containers.
+# The observability drill on the running stack of `make up OBS=lgtm` (deploy/compose/drills/). It stops user-service
+# and recreates the gateway with a drill-only setting, and every service runs again with its defaults when it ends,
+# passed or not. Its read-only token SENTRY_AUTH_TOKEN is read from .env and never printed.
+
+# Like smoke, it deletes the per-IP register rate limit keys in Redis db 10 first: lab only, since every run registers
+# from the one Docker bridge address.
+
+# A drill recreates services, so it runs compose with the telemetry state the stack was started with: on a stack from
+# `make up OBS=off` telemetry stays off, instead of coming back on halfway through. The inspect template prints `off` or
+# nothing, never another setting of the containers.
 TELEMETRY_OFF_RUNNING = $(shell ids=`$(COMPOSE) ps -q`; test -z "$$ids" || env -u DOCKER_DEFAULT_PLATFORM docker inspect \
 	--format '{{range .Config.Env}}{{if eq . "OTEL_SDK_DISABLED=true"}}off{{end}}{{end}}' $$ids | grep -m 1 -x off)
 DRILL_COMPOSE = $(if $(TELEMETRY_OFF_RUNNING),$(COMPOSE_UP_off),$(COMPOSE))
@@ -230,11 +225,10 @@ DRILL_COMPOSE = $(if $(TELEMETRY_OFF_RUNNING),$(COMPOSE_UP_off),$(COMPOSE))
 drill-obs-threats: env-required ## OBS=lgtm: JWT-8 (no email, password, token in traces, logs, GlitchTip), UP-8 (log ids), OPS-1 (no pprof, /metrics, loopback ports only), RL-2 (fallback metric and alert), WEB-9 (no email, token, sid, ?next= or presigned signature from the web client's forms, /rum and /monitoring in GlitchTip, Tempo, Loki or Prometheus)
 	COMPOSE='$(DRILL_COMPOSE)' deploy/compose/drills/obs-threats.sh $(SMOKE_URL)
 
-# test-stack reads the S3 secret keys from .env with the strict rule of
-# deploy/observability/glitchtip/dotenv.sh, as deploy/postgres/bootstrap.sh and compose do: no
-# sourcing, no echo, and they reach go test through the environment, not its command line. Every
-# run is uncached and verbose, so it shows each test that ran against the stack and each one that
-# skipped; TESTFLAGS adds flags as for make test.
+# test-stack reads the S3 secret keys from .env with the strict rule of deploy/observability/glitchtip/dotenv.sh, as
+# deploy/postgres/bootstrap.sh and compose do: no sourcing, no echo, and they reach go test through the environment, not
+# its command line. Every run is uncached and verbose, so it shows each test that ran against the stack and each one
+# that skipped.
 test-stack: env-required ## go test -race -count=1 -v against the running stack (make up): object store and Redpanda test variables set; TESTFLAGS adds flags
 	@set -e; \
 	. deploy/observability/glitchtip/dotenv.sh; \

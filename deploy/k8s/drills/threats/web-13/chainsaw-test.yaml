@@ -1,15 +1,14 @@
 # WEB-13 of the threat model (docs/threat-model.md): the web pods reach only the gateway, Valkey, the Collector and
-# GlitchTip, and only Envoy reaches them. From each web pod (labels app.kubernetes.io/name=web, component=server; a
-# Rollout's, so kubectl exec names each pod): kubectl exec of the image's node (/nodejs/bin/node -e: distroless has no
-# shell, no nc), a name resolved first, so a closed port with a name that resolves is the policy: the internet (an IP and
-# a name), Postgres, Redpanda (9092, 9644), the object store, the four gRPC services, Pyroscope and the API server are
-# closed; the gateway 8080, Valkey 6379, the Collector 4317 and GlitchTip 8000 open (the controls of the closed ones). The
-# internet has no control case from the web pods: example.com resolves there, so its failure is the connection. Pod probe
-# of namespace svp-probe cannot open web:3001; control: Envoy reaches it (/healthz 200).
-#
+# GlitchTip, and only Envoy reaches them. From each web pod (kubectl exec of the image's node, a name resolved first, so
+# a closed port with a name that resolves is the policy) the internet, Postgres, Redpanda, the object store, the four
+# gRPC services, Pyroscope and the API server are closed; the gateway, Valkey, the Collector and GlitchTip are open.
+
+# A pod probe of namespace svp-probe cannot open web:3001; control: Envoy reaches it (/healthz 200).
+
 # Each check and control is one step, which runs its target in every web pod; a failed one marks the test failed and the
-# next steps still run. No running web pod, or namespace svp-probe not made, ends the test; the template's cleanup deletes
-# svp-probe.
+# next steps still run. No running web pod, or namespace svp-probe not made, ends the test; the template's cleanup
+# deletes svp-probe.
+# Design notes: docs/threat-model.md.
 apiVersion: chainsaw.kyverno.io/v1alpha1
 kind: Test
 metadata:

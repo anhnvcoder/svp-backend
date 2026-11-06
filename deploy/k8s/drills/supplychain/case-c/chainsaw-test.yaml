@@ -1,10 +1,8 @@
-# Supply chain drill, case c: value vulnerable (drill-vulnerable, signed and attested with CRITICAL vulnerabilities),
-# sent as a server-side dry run of a pod of svp: refused with the CRITICAL rule's message. Kyverno stops at the first
-# check that fails, and CRITICAL is checked before the age, so the drill image (never rescanned) is still refused with
-# that message once its attestation is past the maximum age: the message cannot show the age rule holds. So the case
-# reads scanFinishedOn of the image's vuln attestation itself (cosign, anonymous, the oldest when there are several)
-# and fails, without sending the pod, when it is older than the maximum age of the policy (72 hours after the drill
-# images' dispatch). SKIP when value vulnerable is not given (the drill does not look it up).
+# Supply chain drill, case c: value vulnerable (drill-vulnerable, signed and attested with CRITICAL vulnerabilities) as
+# a dry run of a pod of svp: refused with the CRITICAL rule's message. CRITICAL is checked before the age, so that
+# message cannot show the age rule holds: the case reads scanFinishedOn of the vuln attestation itself and fails,
+# sending no pod, when it is older than the policy's maximum age. SKIP when value vulnerable is not given.
+
 # Helpers, inputs and the verdict lines: ../lib.sh.
 apiVersion: chainsaw.kyverno.io/v1alpha1
 kind: Test

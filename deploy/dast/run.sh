@@ -1,32 +1,13 @@
 #!/usr/bin/env bash
-# DAST of the gateway against its OpenAPI contract (services/gateway/openapi.yaml) with Schemathesis, on the running
-# compose stack (`make up`), run by `make dast` and by the CI job `stack`.
-#
-#   1. Refuses unless the gateway container of compose project svp runs, network svp_web exists, and no node or
-#      registry of the k3d cluster svp runs; it never starts anything.
-#   2. LOCAL LAB ONLY: deletes the gateway's per-IP register rate limit keys (svp:gw:rl:register:*) in Redis db 10 on
-#      127.0.0.1:6379 before and after the run (reset_register_limit of deploy/compose/lib.sh, as make smoke does), and
-#      waits for /readyz, so that a stack still starting is not reported as an API failure. Never point this script at
-#      a shared stack.
-#   3. Registers and logs in a test user through http://127.0.0.1:8080. Its access token stays in this script's
-#      environment: never printed, never on a command line.
-#   4. Runs SCHEMATHESIS_IMAGE on svp_web against http://gateway:8080, the token passed as `-e SVP_DAST_TOKEN` with no
-#      value (docker reads it from the environment). The container has an address of its own, so its per-IP rate limit
-#      buckets are apart from the registration above and from every other step. SVP_DAST_TIMEOUT seconds (600) bound
-#      the pull of a missing image and the run together: past them the script stops the container and kills the
-#      docker client; macOS has no timeout(1).
-#   5. Everything Schemathesis prints goes to .dast/<time>/schemathesis.log, never to the terminal: a failed check
-#      prints the response body and a curl command to reproduce it, and the responses of /auth/* and POST /videos hold
-#      tokens and presigned forms. junit.xml and requests.har hold the same bodies. The folder is private (mode 700)
-#      and those three files never leave the machine or runner.
-#   6. Builds summary.json (counts and labels only) from the HAR, then scans the two files meant to be published,
-#      report.json and summary.json, for secrets, the test user's token included. Only once both are clean does it
-#      print a summary from them.
-#
-# Usage: SCHEMATHESIS_IMAGE=<image> deploy/dast/run.sh
-#   SVP_DAST_SEED=<n> repeats a run with the seed of its report.json (the stack's data differs, so the requests may too).
-# Exit status: Schemathesis's own: 0 when every check passed, 1 when a check failed, 2 when it could not run (config,
-# schema, internal error, nothing tested). A run over its time limit or with a secret in a published file is 1.
+# DAST of the gateway against services/gateway/openapi.yaml with Schemathesis, on the running compose stack, run by
+# `make dast` and the CI job `stack`. LOCAL LAB ONLY: deletes the gateway's register rate limit keys in Redis db 10
+# before and after the run; never point it at a shared stack. Schemathesis output goes to .dast/<time>/ (mode 700),
+# never to the terminal: a failed check prints response bodies that hold tokens.
+
+# Usage: SCHEMATHESIS_IMAGE=<image> deploy/dast/run.sh; SVP_DAST_SEED=<n> reruns with the seed of a report.json.
+# Exit status: Schemathesis's own (0 passed, 1 a check failed, 2 could not run); 1 also past the time limit or with
+# a secret in a published file.
+# Design notes: docs/reference/compose.md.
 set -euo pipefail
 
 : "${SCHEMATHESIS_IMAGE:?set SCHEMATHESIS_IMAGE (run make dast)}"
@@ -35,7 +16,7 @@ repo=$(cd "$(dirname "$0")/../.." && pwd)
 spec=$repo/services/gateway/openapi.yaml
 docker_() { env -u DOCKER_DEFAULT_PLATFORM docker "$@"; }
 
-# 1. The compose stack only, already running.
+# The compose stack only, already running.
 [[ -z $(docker_ ps -q --filter label=k3d.cluster=svp; docker_ ps -q --filter 'name=^k3d-svp-registry$') ]] || {
   echo "FAIL  the k3d cluster svp or its registry is running; this DAST runs on the compose stack only (make k8s-down, then make up)" >&2
   exit 2
@@ -50,7 +31,7 @@ docker_ network inspect svp_web >/dev/null 2>&1 || {
   exit 2
 }
 
-# 2. LOCAL LAB ONLY: sourcing lib.sh resets the register rate limit; the EXIT trap below resets it again after the run.
+# LOCAL LAB ONLY: sourcing lib.sh resets the register rate limit; the EXIT trap below resets it again after the run.
 base=http://127.0.0.1:8080
 # shellcheck source=deploy/compose/lib.sh
 source "$repo/deploy/compose/lib.sh"
@@ -71,7 +52,7 @@ trap cleanup EXIT
 
 wait_gateway_ready 60
 
-# 3. The test user. Its body holds the token: emptied as soon as the token is read.
+# The test user. Its body holds the token: emptied as soon as the token is read.
 DAST_PASSWORD=$(openssl rand -hex 16) jq -n --arg e "dast-$stamp-$(openssl rand -hex 4)@example.test" \
   --arg h "dast_$(openssl rand -hex 6)" '{email: $e, password: env.DAST_PASSWORD, handle: $h}' >"$work/user.reg"
 jq '{email, password}' "$work/user.reg" >"$work/user.cred"
@@ -89,17 +70,18 @@ mkdir -p "$repo/.dast"
 mkdir -m 700 "$results"
 seed=${SVP_DAST_SEED:-$((RANDOM * 32768 + RANDOM))}
 
-# 4. The run. Checks: no 5xx; status, content type, headers and body as the spec declares; 401 or 403 without a token
-# or with a wrong one (ignored_auth); invalid input refused with a 4xx (negative_data_rejection). Left out:
-# positive_data_acceptance (opaque cursors and server-side rules such as the upload limits reject input valid by the
-# schema), use_after_free and ensure_resource_availability (need the stateful phase and links the spec does not have),
-# object_level_authorization (needs two identities), missing_required_header (no required header besides the token,
-# which ignored_auth covers), unsupported_method and allow_header_conformance (Go's ServeMux answers HEAD on every GET
-# route, which the spec does not list). The probes are left out: they take no input, and /readyz is a 503 whenever a
-# dependency flaps.
+# Left out: positive_data_acceptance (opaque cursors and server-side rules such as the upload limits reject input valid
+# by the schema), use_after_free and ensure_resource_availability (need the stateful phase and links the spec does not
+# have), object_level_authorization (needs two identities), missing_required_header (no required header besides the
+# token, which ignored_auth covers).
+
+# Also left out: unsupported_method and allow_header_conformance (Go's ServeMux answers HEAD on every GET route, which
+# the spec does not list), and the probes (they take no input, and /readyz is a 503 whenever a dependency flaps).
+
 # Budget: 5 requests a second with one worker, 25 fuzzed cases per operation, which the gateway's rate limits (2 writes
 # a second per user, burst 60) turn partly into 429s: declared in the spec, so they fail no check and only cost
 # coverage, which summary.json measures. --rate-limit auto would wait out each Retry-After, minutes for register.
+
 # SCHEMATHESIS_COVERAGE=false: the image's coverage plugin writes reports this run does not use. -w /tmp: anything else
 # written to the working directory stays in the container.
 echo "Schemathesis on the compose gateway (seed $seed); results in ${results#"$repo"/}"
@@ -149,7 +131,7 @@ if [[ ! -s $results/report.json ]]; then
   fail "Schemathesis wrote no report.json (exit status $rc); read ${results#"$repo"/}/schemathesis.log on this machine"
 fi
 
-# 6. summary.json: requests by status, overall and by operation. Each request is matched to the operation of the spec
+# summary.json: requests by status, overall and by operation. Each request is matched to the operation of the spec
 # whose path template has its length and its static segments; the operations are read from the spec's paths, written
 # by hand at a fixed indentation. A method the spec does not declare on a path (the coverage phase sends some, expecting
 # 405) counts as OTHER on that path.

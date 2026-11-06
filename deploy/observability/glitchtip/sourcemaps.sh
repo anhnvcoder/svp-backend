@@ -1,36 +1,24 @@
 #!/usr/bin/env bash
 # Uploads the source maps of the web client's browser bundle to GlitchTip, so a browser error's stack shows in the
-# source:
-#   compose  `make web-sourcemaps`: the web of `make up` (http://localhost:3001) and GlitchTip of `make up OBS=lgtm`
-#            (http://127.0.0.1:8000), token SENTRY_SOURCEMAPS_TOKEN of .env (written by make glitchtip-init);
-#   k3d      `make k8s-web-sourcemaps`: the web of cluster svp (https://svp.localhost:8443, CA .k8s/ca.crt) and its
-#            GlitchTip through a port-forward on 127.0.0.1:8000 for the time of the upload, token of Secret
-#            svp-obs/glitchtip-sourcemaps (written by make k8s-glitchtip-init).
-# Steps:
-#   1. GlitchTip answers, the token is there, the web answers: otherwise stop, naming the command to run first,
-#      before anything is built or sent.
-#   2. Build stage `sourcemaps` of the web's Dockerfile from its source (web_dir and web_dockerfile of
-#      deploy/k8s/lib.sh, as make up and make k8s-up build it) with the build argument the running image got
-#      (SVP_BUILD_ID: empty in compose, web_build_id of deploy/k8s/lib.sh on k3d), into a private temporary directory.
-#      The build cache gives the stage of that very build, so the maps of the bundle served. A web that runs a
-#      release (WEB_FROM=stg|image) was built by CI with a build id of its own, from no tree here: refused, naming
-#      the release.
-#   3. Every chunk the web serves on /login must carry a debug id found in those chunks: otherwise the web runs
-#      another build (the image was built from another tree, or the cache was pruned since), and nothing is sent.
-#   4. `sentry sourcemap upload` (the Sentry CLI of the web's package.json, through pnpm) sends chunks and maps as an
-#      artifact bundle of organization and project svp that GlitchTip matches to an event by debug id. Without
-#      --no-rewrite on purpose: the CLI then reads the debug id Turbopack already wrote (`//# debugId=`, the file is left
-#      as it is) and puts it in the bundle's manifest as each file's `debug-id` header. With --no-rewrite the CLI sends
-#      no such header, and GlitchTip's assemble step drops every artifact that has neither a debug-id header nor a
-#      release ("skipped ... no debug-id header and no release" in its log), while the upload itself still succeeds.
-#      The token is exported to that process alone, never printed or put on a command line; the CLI's telemetry,
-#      update check and configuration directory are off or temporary.
-#   5. GlitchTip assembles the bundle after the upload answers and has no API to read it back, so the script can only
-#      say it was sent; the check that the stack maps is e2e/glitchtip.e2e.ts (SVP_E2E_GLITCHTIP=1).
-# The temporary directory and the port-forward go away when the script ends, however it ends.
-#
-# Usage: sourcemaps.sh compose|k3d (run from the Makefile of svp-frontend, make sourcemaps or make
-# k8s-sourcemaps, which puts the Node and pnpm of its clone first on PATH).
+# source: `make web-sourcemaps` (compose: the web of `make up`, GlitchTip of `make up OBS=lgtm`, token
+# SENTRY_SOURCEMAPS_TOKEN of .env) or `make k8s-web-sourcemaps` (k3d: the web of cluster svp, GlitchTip through a
+# port-forward on 127.0.0.1:8000 for the time of the upload, token of Secret svp-obs/glitchtip-sourcemaps).
+
+# The maps are built from the web's Dockerfile with the build argument the running image got, and every chunk the
+# web serves on /login must carry a debug id found in them: otherwise nothing is sent. A web that runs a release
+# (WEB_FROM=stg|image) was built by CI with a build id of its own, from no tree here: refused.
+
+# `sentry sourcemap upload` runs without --no-rewrite on purpose: the CLI then reads the debug id Turbopack already
+# wrote and puts it in the bundle's manifest as each file's `debug-id` header. With --no-rewrite GlitchTip's assemble
+# step drops every artifact that has neither a debug-id header nor a release, while the upload itself still succeeds.
+# The token is exported to that process alone, never printed or put on a command line.
+
+# GlitchTip assembles the bundle after the upload answers and has no API to read it back, so the script can only
+# say it was sent; the check that the stack maps is e2e/glitchtip.e2e.ts (SVP_E2E_GLITCHTIP=1).
+# Design notes: docs/explanation/observability.md.
+
+# Usage: sourcemaps.sh compose|k3d (run from the Makefile of svp-frontend, make sourcemaps or make k8s-sourcemaps,
+# which puts the Node and pnpm of its clone first on PATH).
 set -euo pipefail
 
 # shellcheck source=deploy/k8s/lib.sh

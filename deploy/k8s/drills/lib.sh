@@ -1,12 +1,10 @@
 # shellcheck shell=bash
 # Helpers of the drill traffic on the local k3d cluster svp (deploy/k8s/drills/traffic.sh): the API helpers of
-# deploy/compose/lib.sh through Envoy (SVP_STACK=k3d) and the kubectl/helm helpers of deploy/k8s/lib.sh. The drills
-# themselves are Chainsaw tests (deploy/k8s/drills/run.sh).
+# deploy/compose/lib.sh through Envoy (SVP_STACK=k3d) and the kubectl/helm helpers of deploy/k8s/lib.sh.
 # Written for bash 3.2 (the macOS /bin/bash).
-#
+
 # Source it after setting `base` (https://api.svp.localhost:8443); the make target sets SVP_STACK=k3d and
 # CURL_CA_BUNDLE to the cluster's CA. kubectl names --context k3d-svp on every call.
-#
 # LOCAL LAB ONLY: deploy/compose/lib.sh deletes the gateway's register rate limit keys in the cluster's Valkey db 10.
 
 [[ ${SVP_STACK:-} == k3d ]] || {

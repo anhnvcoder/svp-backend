@@ -1,24 +1,7 @@
-{{- /*
-GlitchTip in svp-obs: the error tracker the five services report
-to, as in compose. Two parts, as there:
-
-- Job glitchtip-init migrates database svp_glitchtip (migrator role, MAINTENANCE_DATABASE_URL), creates the cache
-  table and the partitions, then runs deploy/observability/glitchtip/bootstrap.py (symlink files/): the admin user,
-  organization, team and project svp with its DSN, the drills' read-only API token. Every step is idempotent, so it
-  runs before each install and upgrade. It is a pre-install/pre-upgrade hook (Argo CD reads it as PreSync), so the
-  server below never starts on a schema older than its code. Hooks run before the release's ordinary resources, in a
-  namespace that denies everything by default: its ConfigMap, ServiceAccount and egress policy are hooks of a lower
-  weight, so they exist before the Job on a new cluster too. bootstrap.py prints counts only; the DSN and the token
-  are read later by deploy/k8s/glitchtip-init.sh, straight into Secrets.
-- Deployment glitchtip: web and task worker in one process (GLITCHTIP_EMBED_WORKER), no Valkey, its init steps
-  skipped (the Job ran them). Reached by the five services on 8000 and from the host by `make k8s-ui-glitchtip`
-  only (port-forward to 127.0.0.1:8000, login required; threat model OPS-2).
-
-Secret glitchtip-env (SECRET_KEY, DATABASE_URL with the app role, MAINTENANCE_DATABASE_URL with the migrator role)
-and glitchtip-admin come from .env through deploy/k8s/secrets.sh. The server reads its environment only when it starts:
-Reloader restarts it when the data of glitchtip-env changes (annotation of the Deployment). glitchtip-admin is read by
-the Job alone, which runs again with each install and upgrade.
-*/}}
+{{- /* GlitchTip in svp-obs, the error tracker the five services report to. Job glitchtip-init (a
+pre-install/pre-upgrade hook, PreSync in Argo CD) migrates svp_glitchtip and runs bootstrap.py, so the server
+never starts on a schema older than its code; its ConfigMap, ServiceAccount and egress policy are hooks of a
+lower weight (the namespace denies all by default). From the host the server is reached by port-forward only. */}}
 {{- define "svp-observability.glitchtipEnv" -}}
 {{- range $name, $value := .Values.glitchtip.env }}
 - name: {{ $name }}

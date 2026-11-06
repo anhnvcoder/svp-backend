@@ -1,7 +1,10 @@
 {{- /*
 Config of the Collector (release otel-collector, wave 6, configMap.existingName), from
-deploy/observability/otelcol/k8s-config.yaml through the symlink files/otelcol-k8s-config.yaml: the file `make
-otelcol-validate` checks is exactly the one that runs. Key relay is the one the Collector chart mounts.
+deploy/observability/otelcol/k8s-config.yaml through the symlink files/otelcol-k8s-config.yaml.
+*/}}
+
+{{- /*
+The file `make otelcol-validate` checks is exactly the one that runs. Key relay is the one the Collector chart mounts.
 */}}
 {{- $config := .Files.Get "files/otelcol-k8s-config.yaml" }}
 {{- if not $config }}

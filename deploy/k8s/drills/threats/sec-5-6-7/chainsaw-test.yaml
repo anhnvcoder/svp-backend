@@ -1,29 +1,16 @@
-# SEC-5, SEC-6 and SEC-7 of docs/threat-model.md, on a cluster with External Secrets Operator (the GitOps path's staging).
-# Label requires=external-secrets: the caller leaves this test out, with a skip line and its reason, on a cluster without
-# the CRD externalsecrets.external-secrets.io (dev path: its Secrets come from .env); run there anyway, its first step
-# fails rather than passing on nothing.
-# SEC-6: the ServiceAccount of the SecretStore of each namespace with ExternalSecrets may get exactly the source Secrets
-# of svp-secrets that files/external-secrets.yaml of chart svp-cluster has that namespace read, by name, and neither list
-# nor watch them nor get a Secret of its own or any namespace (so the store of svp may not get pg-superuser; control: it
-# may get pg-roles); no ClusterSecretStore kind exists.
-# SEC-5: the controller (external-secrets/external-secrets) may create a token for the stores' ServiceAccounts only (Argo
-# CD's application controller, svp/default and a ServiceAccount of that name in svp-secrets refused; control: the store of
-# svp); as it, server-side dry runs: an Opaque Secret in argocd and a token Secret in svp are refused by
-# ValidatingAdmissionPolicy svp-external-secrets-writes (control: an Opaque Secret in svp passes it); where the chart
-# renders Argo CD Notifications' ExternalSecret (externalSecrets.argocdNotifications), Opaque Secret
-# argocd/argocd-notifications-secret passes it (control) while a token Secret of that name and an Opaque Secret of another
-# name in argocd are refused, the latter with the message naming the one Secret allowed there (elsewhere those three are
-# said as info and pass); its right to read every Secret is printed as the SEC-5 exception with its reason; no webhook
-# configuration of ESO and no pod but the controller in external-secrets; the probe pod of svp-probe
-# (templates/probe-up.yaml) cannot open the controller's metrics port 8080 (control: a port-forward to it on
-# 127.0.0.1:18080, through the kubelet, gets /metrics; templates/port-forward.yaml).
-# SEC-7: no ServiceAccount of svp may create ExternalSecrets or SecretStores in svp, and ClusterRoles view, edit and admin
-# grant nothing on external-secrets.io.
-#
+# SEC-5, SEC-6 and SEC-7 of docs/threat-model.md, on a cluster with External Secrets Operator: a namespace's store may
+# get only the source Secrets of svp-secrets that namespace reads (SEC-6); the controller may create tokens only for the
+# stores' ServiceAccounts, and its Secret writes are held by policy svp-external-secrets-writes (SEC-5); no
+# ServiceAccount of svp may create ExternalSecrets or SecretStores in svp (SEC-7).
+
+# Label requires=external-secrets: the caller leaves this test out, with a skip line and its reason, on a cluster
+# without the CRD externalsecrets.external-secrets.io (dev path: its Secrets come from .env); run there anyway, its
+# first step fails rather than passing on nothing.
+
 # Each check is one operation named by its ID; continueOnError keeps the next checks running after one fails, and the
 # test still fails. The steps that use a template (probe pod, port-forward) come last: a template step that fails ends
-# the test. Nothing is written: every Secret is a server-side dry run. Impersonation (--as) is kubectl's, so those checks
-# are scripts; kubectl uses the caller's kubeconfig and context k3d-svp (templates/probe-up.yaml says why).
+# the test. Nothing is written: every Secret is a server-side dry run.
+# Design notes: docs/threat-model.md.
 apiVersion: chainsaw.kyverno.io/v1alpha1
 kind: Test
 metadata:

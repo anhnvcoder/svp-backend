@@ -25,9 +25,12 @@ seccompProfile:
 {{- end }}
 
 {{- /*
-Annotations of the init Jobs: Helm hooks run after every install and upgrade, once the release's ordinary resources
-(NetworkPolicies, ConfigMaps, Services) exist and, with --wait, are ready. A new run replaces the last Job, whose pod
-stays until then for its log. Argo CD reads these as PostSync hooks.
+Annotations of the init Jobs: Helm hooks that run after every install and upgrade, once the release's ordinary
+resources (NetworkPolicies, ConfigMaps, Services) are ready (--wait). Argo CD reads them as PostSync hooks.
+*/}}
+
+{{- /*
+A new run replaces the last Job, whose pod stays until then for its log.
 */}}
 {{- define "svp-data.initJobAnnotations" -}}
 helm.sh/hook: post-install,post-upgrade

@@ -503,6 +503,257 @@ trùng tên với đúng name server được hứa sẽ nắm subdomain; gỡ l
 Mỗi biện pháp có test hay lệnh kiểm nêu ngay trong dòng của nó ở mục 4. Bảng đối chiếu biện pháp với phép kiểm đã chạy, theo thời gian, ở
 [phụ lục](appendix/threat-model.md#tổng-hợp-theo-giai-đoạn-mục-5-cũ).
 
+### Các diễn tập kiểm gì
+
+Lệnh và biến của từng diễn tập ở [`reference/k8s.md`](reference/k8s.md#lệnh-của-cluster) và [`reference/compose.md`](reference/compose.md);
+mỗi test là một thư mục ở `deploy/k8s/drills/` hay một script ở `deploy/compose/drills/`. Phần này ghi từng test thử gì và vì sao thử như vậy.
+
+**Diễn tập chuỗi cung ứng** (`deploy/k8s/drills/supplychain/`): policy image của namespace `svp` (Kyverno `ImageValidatingPolicy`
+`svp-images`, chart `deploy/helm/svp-policy`) trên cluster `svp`; mỗi test là một ca.
+
+- Quy ước chung của các ca. Mỗi bước script của một test nạp `lib.sh` của diễn tập từ thư mục của test, với trong môi trường:
+  `CASE` (chữ của ca, `a`…`m`, có trong mọi dòng kết luận và tên thư mục trạng thái); `CALLER_KUBECONFIG` (`env('KUBECONFIG')` của tiến
+  trình Chainsaw, rỗng là `~/.kube/config`; `kubectl` và `helm` dùng nó và luôn nêu context `k3d-svp`, không dùng bản sao cluster mà
+  Chainsaw cho mỗi script); `UNSIGNED`, `VULNERABLE`, `NO_PROVENANCE`, `ENFORCE_TMP` (các giá trị Chainsaw `unsigned`, `vulnerable`,
+  `noProvenance`, `enforceTmp`, từ các biến `SUPPLYCHAIN_*` của `make drill-k8s-supplychain`, nêu ở
+  [`reference/k8s.md`](reference/k8s.md#lệnh-của-cluster); rỗng khi không cho).
+- Một phép kiểm in một dòng `PASS|FAIL|SKIP  (<ca>) <chi tiết>[ [<ms> ms]]` và script thoát 1 sau một `FAIL`. Chainsaw không có SKIP quyết
+  định lúc test chạy, nên SKIP là một bước vẫn qua mà dòng của nó nêu lý do; các bước sau của ca đó in `ok    (<ca>) … not run` và qua.
+  Bước thấy ca không chạy được (thiếu image hay attestation) thì fail, test dừng ở đó, các cleanup vẫn chạy.
+- Cái một bước học được cho các bước sau (đường dẫn, webhook của policy lúc đầu, cái phải hoàn tác) vào
+  `.k8s/drills/supplychain-state/case-<ca>/` (git bỏ qua): bước đầu của test tạo mới, cleanup cuối xoá. Diễn tập không đọc Secret nào và
+  không gọi API của gateway, nên không xoá khoá rate limit nào.
+- **Ca a**: image mà một pod `svp` chạy, bản phát hành đã ký của nguồn `backend` trên GHCR, gửi hai lần dưới dạng dry run server-side của
+  một pod `svp`: cả hai lần được nhận; câu trả lời lần hai đến từ cache xác minh của Kyverno, và thời gian của cả hai được in. Khi phép
+  provenance bật, ca này cho thấy một bản phát hành có provenance qua được nó. SKIP khi không pod `svp` nào chạy image của GHCR (image
+  của đường dev là bản dev chưa ký).
+- **Ca b**: image chưa ký trong một Deployment thật của `svp` (không phải dry run): ReplicaSet của nó báo `FailedCreate` với message của
+  phép chữ ký; một pod của nó được tạo thì ca fail; Deployment bị xoá lại, kể cả khi một bước lỗi. Image chưa ký là giá trị `unsigned` khi
+  được cho, không thì `drill-unsigned` mới nhất dưới prefix của nguồn `backend` trên GHCR (cách chọn và vì sao không dùng manifest nền
+  tảng của bản phát hành đã ký: [Image chưa ký của diễn tập](explanation/delivery.md#cicd-và-chuỗi-cung-ứng)). SKIP khi cả hai không có,
+  kèm lệnh build image diễn tập.
+- **Ca c**: giá trị `vulnerable` (`drill-vulnerable`, ký và attest `vuln`, có CRITICAL) gửi dry run của pod `svp`: bị từ chối với message của
+  phép CRITICAL. Kyverno dừng ở phép đầu tiên sai và CRITICAL được kiểm trước tuổi, nên image diễn tập (không bao giờ rescan) vẫn bị từ
+  chối bằng message đó khi attestation của nó đã quá tuổi tối đa: message không chứng minh được phép tuổi còn giữ. Vì vậy ca tự đọc
+  `scanFinishedOn` của attestation `vuln` của image (cosign, ẩn danh, lấy cái cũ nhất khi có nhiều) và fail, không gửi pod, khi nó cũ hơn
+  tuổi tối đa của policy (72 giờ sau lượt dispatch image diễn tập). SKIP khi không cho giá trị `vulnerable` (diễn tập không tự tra).
+- **Ca d**: một image của registry cục bộ (`k3d-svp-registry:5111`) và một image Docker Hub theo digest, mỗi cái gửi dry run của pod
+  `svp`: bị phép prefix từ chối, mỗi câu trả lời trong 1 giây (timeout của thao tác: Kyverno không hỏi registry nào cho image ngoài prefix).
+  Image cục bộ là cái đầu tiên mà một pod `svp` chạy, không thì một image dev của registry đó theo tên. Khai báo: `create` với `dryRun` của
+  Chainsaw, lỗi admission mong đợi kiểm bằng message.
+- **Ca e**: một image của project (prefix của nguồn `backend`) theo tag, không digest, gửi dry run của pod `svp`: bị phép digest của
+  Kyverno từ chối trong 1 giây (timeout của thao tác), trước khi registry nào được hỏi. Khai báo như ca d.
+- **Ca f**: attestation quá cũ. Một bản sao tạm của policy (cùng chart, tuổi tối đa 5 giây, mode Enforce) chỉ áp cho pod `svp` có nhãn
+  `svp-drill=supplychain-stale` từ chối pod như vậy với image của ca a, với message của phép tuổi; khi bản sao có mặt, mọi webhook của
+  các policy image vẫn chỉ chọn namespace `svp`; bản sao bị xoá và webhook của nó mất trước khi test kết thúc, kể cả khi một bước lỗi.
+  Attestation `vuln` của image đó luôn cũ hơn 5 giây khi diễn tập chạy (CI attest trước khi bản phát hành được promote), nên ca không chờ
+  và không đọc đồng hồ; nó chỉ kiểm trước, bằng cosign, rằng image có attestation `vuln`, và fail không cần policy tạm khi không có (Kyverno
+  khi đó từ chối vì thiếu attestation, điều không cho thấy gì về tuổi). SKIP khi không pod `svp` nào chạy image của GHCR.
+- **Ca h**: ephemeral container (cái `kubectl debug` thêm) trong một pod `svp` đang chạy, dưới dạng dry run server-side của strategic
+  patch lên subresource `ephemeralcontainers`: image chưa ký bị từ chối, bản phát hành đã ký của ca a được nhận. "Chưa ký" là image chưa ký
+  của ca b (bị phép chữ ký từ chối), hay image dev của registry cục bộ khi không có (bị phép prefix từ chối). Policy đọc mọi image của pod,
+  cả những cái nó đang chạy (`ephemeral_rule` của `lib.sh`; phép đầu, phép prefix, đứng trước phép chữ ký): khi pod đích chạy một image
+  ngoài mọi nguồn phát hành (bản build của đường dev ở registry cục bộ), phép prefix từ chối ephemeral container bất kể image của nó,
+  nên `bad_rule` thành phép prefix. Nửa được nhận SKIP khi không pod `svp` nào chạy image của GHCR. Là bước script: `patch` của Chainsaw gửi
+  JSON merge patch, sẽ thay danh sách ephemeral container của pod thay vì thêm một cái như `kubectl debug`.
+- **Ca i**: UPDATE một pod `svp` đang chạy đặt image của một container thành image chưa ký, dưới dạng dry run server-side của strategic
+  patch: bị từ chối. "Chưa ký" như ca h. Là bước script: `patch` của Chainsaw gửi JSON merge patch, sẽ thay cả danh sách container của
+  pod, và API server từ chối điều đó trước khi Kyverno được hỏi. Ca i không cần xử lý như `ephemeral_rule`: nó đặt image của container
+  duy nhất của pod (pod server của chart `svp-service` không có container khác), nên pod nó gửi không còn image cũ.
+- **Ca k**: đường keyless với image công khai của nhà cung cấp khác (operator CloudNativePG v1.28.1 trên GHCR, ký bởi workflow phát hành
+  của nó; identity lấy từ `docs/src/security.md` của `cloudnative-pg/cloudnative-pg` và chứng chỉ của chữ ký). Hai policy tạm, một cái đúng
+  subject, một cái sai (cùng workflow ở `refs/heads/main`), mỗi cái cho pod `svp` có nhãn diễn tập riêng: image được cái đầu nhận, cái
+  sau từ chối. Cả hai bị xoá và webhook của chúng mất trước khi test kết thúc, kể cả khi một bước lỗi. Chỉ chạy khi `svp-images` ở Audit
+  (đường dev, với `enforceTmp`; là ca duy nhất không đặt policy sang Enforce), vì Enforce từ chối image đó bằng prefix: SKIP khi policy
+  ở Enforce.
+- **Ca l**: image ký và attest `vuln` như một bản phát hành nhưng không có build provenance, gửi dry run của pod `svp`: bị từ chối với
+  message của phép provenance, chỉ khi policy đang chạy kiểm provenance (`requireProvenance` của chart `svp-policy`: nó có attestation
+  `provenance`); không thì SKIP "policy off". Image là `drill-no-provenance`, image diễn tập mà CI ký, attest `vuln` và không bao giờ
+  attest provenance; cách chọn nó và giá trị `none` (bỏ ca, SKIP, cho caller biết image đó đã quá tuổi tối đa) ở
+  [`reference/k8s.md`](reference/k8s.md#lệnh-của-cluster). Kyverno kiểm provenance sau mọi phép khác, nên việc từ chối chỉ cho thấy phép provenance nếu image qua hết các phép kia: trước khi gửi pod, ca kiểm bằng cosign (ẩn
+  danh) rằng image đã ký, có đúng một attestation `vuln` của cả hai nền tảng, không CRITICAL, quét trong tuổi tối đa của policy, và không có
+  attestation provenance; không thì, hay khi không tìm thấy `drill-no-provenance`, ca fail và nêu lượt dispatch build lại image diễn tập
+  (không file image nào của `svp-gitops` nêu một image diễn tập, nên rescan hằng ngày không bao giờ attest lại nó).
+- **Ca m**: các nguồn phát hành tách nhau (`files/sources.json` của chart `svp-policy`), với mọi cặp có thứ tự nguồn A, B của bảng:
+  - tên: image dưới prefix của A mà tên chỉ B phát hành (service hay image diễn tập của B, không của A), theo digest: bị phép prefix (phép
+    đầu) từ chối bất kể digest, không registry nào được hỏi (không glob nào của policy khớp); SKIP khi mọi tên của B cũng là của A;
+  - identity, A→B: một bản phát hành của B mà pod `svp` chạy, dưới một bản sao tạm của policy (cùng chart, bảng của nó có issuer và subject
+    của A và B đổi chỗ, mode Enforce, chỉ pod `svp` có nhãn `svp-drill=supplychain-swap`): bị phép chữ ký nêu nguồn B từ chối, vì Kyverno xác
+    minh image bằng attestor của nguồn có prefix mà image nằm dưới, ở bản sao có identity của A; nếu nó chọn attestor của A, vốn có identity
+    của B ở đó, pod sẽ qua. Một bản sao mỗi cặp nguồn phục vụ cả hai chiều và bị xoá sau chúng, webhook của nó mất, kể cả khi bước lỗi.
+    Không dùng bản phát hành của A với digest đặt dưới prefix của B: GHCR không có manifest của digest của repo khác, và Kyverno kéo image
+    khớp trước mọi phép, nên câu trả lời đó là lỗi registry. SKIP khi không bản phát hành nào của B chạy ở `svp` (trước khi bản phát hành
+    đầu của nguồn đó tới cluster);
+  - bản phát hành của mỗi nguồn khác `backend` mà pod `svp` chạy: được nhận (ca a là của `backend`); SKIP khi chưa có.
+
+  Các cặp lấy từ bảng, nên các bước lặp qua nó và in một dòng kết luận mỗi cặp và mỗi chiều.
+
+**Diễn tập mối đe doạ trên cluster** (`deploy/k8s/drills/threats/<ID>/`, ID viết thường): mỗi mục một test Chainsaw; mỗi phép kiểm và
+đối chứng là một operation hay một bước mang tên ID, `continueOnError` cho các phép sau chạy tiếp khi một phép fail, và test vẫn fail.
+
+- **BAK-1.** Đối chứng: `svp-pg-backup` liệt kê được `pg-backups` (200) và đọc ở đó (404 `NoSuchKey`), user của mỗi service đọc prefix
+  của chính nó `uploads/uploads/` (404 `NoSuchKey`). Pod khác không tới được store (IN-2, FF-5, WEB-13), và RBAC của plugin Barman
+  Cloud được in kèm lý do bởi mục RBAC.
+- **RL-1** (`X-Forwarded-For` giả không cho client một bucket rate limit riêng). Sau khi mọi bucket `login-ip` trong Valkey hết hạn (GCRA:
+  một khoá sống tới khi bucket đầy lại, nhiều nhất 30 giây; không khoá nào bị xoá), 40 lần đăng nhập sai qua `https://api.svp.localhost:8443`
+  trên một kết nối HTTP/2 (nên là một địa chỉ client ở gateway), 8 cái cùng lúc, mỗi cái một email mới và `X-Forwarded-For` giả riêng: 30
+  (burst của `login-ip`) qua rate limit, cộng một cho mỗi giây mà các quyết định trải ra (bucket nạp lại một mỗi giây; độ trải đọc từ các
+  khoá `login-email`, giữ thời điểm của từng quyết định), phần còn lại nhận 429 `RATE_LIMITED`, ít nhất một; khoá `login-email` của mọi email
+  đã qua tồn tại và của không email nào nhận 429 (nên 429 đến từ `login-ip`, được kiểm trước); khoá `login-ip` thêm vào nhiều nhất 2 (k3d:
+  một mỗi node), trên mạng pod `10.42.0.0/16`, không khoá nào cho địa chỉ giả.
+  - Chỉ phán trên lần thử mà không quyết định đăng nhập nào rơi về bộ giới hạn trong bộ nhớ của một pod gateway (một lời gọi Valkey quá 50
+    ms của gateway đi đường đó, với burst riêng của mỗi pod): trên mọi pod gateway, các quyết định đăng nhập `fallback` của
+    `svp_ratelimit_decisions_total` ở một mẫu sau burst bằng ở mẫu cuối trước nó (Prometheus, qua port-forward ở `127.0.0.1:19090`). Lần
+    thử có quyết định `fallback`, hay không xác định được, được in và không tính, cũng như lần mà pod của gateway đổi (pod mới, đã kết
+    thúc, bị xoá hay restart: nhãn `instance` của mẫu, ngẫu nhiên mỗi tiến trình, không nêu pod); test thử lại khi bucket đầy, tối đa 3 lần.
+    `web-8` tiêu cùng bucket và chờ nó đầy theo cách đó.
+  - Các lần thử là một operation, dừng test khi không lần nào được tính; mỗi phép kiểm của lần thử được tính là một operation sau đó, đọc
+    cái lần thử đã ghi ngay sau burst. Script nạp `ratelimit.sh`; file nằm ở thư mục riêng `.k8s/drills/rl-1`, bước đầu tạo và test
+    kết thúc thì xoá. Valkey chỉ được đọc (`SCAN`, `PTTL`, `MGET`, `TIME` ở db 10).
+  - `ratelimit.sh` là helper của các test tiêu bucket `login-ip` của gateway: `rl-1` và `web-8`. Script của test nạp nó từ thư mục test
+    (`. ./ratelimit.sh` ở `rl-1`, `. ../rl-1/ratelimit.sh` ở `web-8`), viết cho bash 3.2. Valkey (db 10 của gateway) chỉ được đọc; Prometheus
+    đọc qua port-forward của test (`templates/port-forward.yaml`). Mọi file helper ghi là riêng tư (`umask 077`) và nằm ở thư mục làm việc
+    `$work` của test, `.k8s/drills/<thư mục test>` (git bỏ qua), bước đầu tạo và cleanup xoá. Môi trường cần `CALLER_KUBECONFIG` (Chainsaw
+    đặt `KUBECONFIG` thành bản sao cluster của nó; `templates/probe-up.yaml` nêu lý do); `kubectl` luôn nêu context `k3d-svp`; `curl` lấy CA
+    của cluster từ `CURL_CA_BUNDLE`, do target make đặt.
+  - `gateway_pods` in các pod server của gateway thành một dòng JSON sắp theo tên: tên, uid, phase, có đang bị xoá không, số restart của
+    từng container. Pod đã kết thúc (`Succeeded`, `Failed`: pod bị evict vẫn ở trạng thái đó) bị bỏ, vì không tiến trình nào của chúng chạy.
+    Mỗi tiến trình gateway đẩy quyết định rate limit của nó dưới một nhãn instance riêng (`service.instance.id`, ngẫu nhiên mỗi tiến
+    trình: `internal/telemetry`) mà không nêu pod, nên tiến trình của một lần thử được phân biệt bằng pod của chúng: cùng một dòng trước và
+    sau burst, mọi pod `Running` và không cái nào đang bị xoá, nghĩa là cùng các tiến trình chạy suốt. Pod mới, pod đã kết thúc, bị xoá hay
+    đang terminate, hay container restart làm nó đổi.
+  - `rl1_fallback` cho biết một quyết định đăng nhập của burst vừa rồi (thời gian Valkey `rl1_t_start` trước nó, `rl1_t_end` sau nó; các pod
+    gateway lúc nó bắt đầu, `rl1_pods_before`) có rơi về bộ giới hạn trong bộ nhớ của một pod gateway không. Mỗi pod đếm quyết định của nó
+    trong `svp_ratelimit_decisions_total` theo store và đẩy mỗi 15 giây, mỗi mẫu đóng dấu thời điểm đọc. Lần thử chỉ được phán khi pod của
+    gateway (`gateway_pods`) giống nhau trước burst và khi mỗi cái đã đẩy sau nó, đều `Running` và không cái nào đang bị xoá: khi đó đúng
+    bằng số instance như số pod có mẫu đóng dấu sau burst (tiến trình đã mất không đẩy gì mới, và thừa một instance so với pod là một tiến
+    trình mà pod không tính được), và các quyết định đăng nhập `fallback` của mỗi cái trong mẫu mới nhất được so với mẫu cuối cùng của nó
+    trước burst (truy vấn tức thời ở `rl1_t_start`), từng instance. Đặt `rl1_fell` là 0 khi chúng bằng nhau ở mọi cái (`rl1_pods`: bao
+    nhiêu), không thì là cái đã tăng hay lý do không xác định được.
+- **SEC-5, SEC-6, SEC-7** (`sec-5-6-7`, trên cluster có External Secrets Operator: stg của đường GitOps; nhãn `requires=external-secrets`: caller
+  bỏ test này, kèm dòng skip và lý do, trên cluster thiếu CRD `externalsecrets.external-secrets.io` (đường dev: Secret đến từ `.env`); chạy ở đó
+  thì bước đầu của nó fail thay vì qua trên không gì).
+  - SEC-6: ServiceAccount của SecretStore ở mỗi namespace có ExternalSecret được `get` đúng các Secret nguồn của `svp-secrets` mà
+    `files/external-secrets.yaml` của chart `svp-cluster` cho namespace đó đọc, theo tên, và không list hay watch chúng, không `get` Secret
+    của chính nó hay của namespace nào (nên store của `svp` không được `get` `pg-superuser`; đối chứng: được `get` `pg-roles`); không có kind
+    `ClusterSecretStore`.
+  - SEC-5: controller (`external-secrets/external-secrets`) chỉ được tạo token cho ServiceAccount của store (application controller của Argo
+    CD, `svp/default` và ServiceAccount cùng tên ở `svp-secrets` bị từ chối; đối chứng: store của `svp`); dưới tên nó, dry run server-side:
+    Secret `Opaque` ở `argocd` và Secret token ở `svp` bị ValidatingAdmissionPolicy `svp-external-secrets-writes` từ chối (đối chứng:
+    Secret `Opaque` ở `svp` qua); nơi chart render ExternalSecret của Argo CD Notifications (`externalSecrets.argocdNotifications`), Secret
+    `Opaque` `argocd/argocd-notifications-secret` qua (đối chứng) còn Secret token cùng tên và Secret `Opaque` tên khác ở `argocd` bị từ
+    chối, cái sau với message nêu Secret duy nhất được phép ở đó (nơi khác ba điều này được nói bằng `info` và qua); quyền đọc mọi Secret
+    của nó được in thành ngoại lệ SEC-5 kèm lý do; không webhook configuration nào của ESO và không pod nào ngoài controller ở
+    `external-secrets`; pod thử ở `svp-probe` (`templates/probe-up.yaml`) không mở được cổng metrics 8080 của controller (đối chứng:
+    port-forward tới nó ở `127.0.0.1:18080`, qua kubelet, lấy được `/metrics`; `templates/port-forward.yaml`).
+  - SEC-7: không ServiceAccount nào của `svp` được tạo ExternalSecret hay SecretStore ở `svp`, và ClusterRole `view`, `edit`, `admin` không
+    cấp gì trên `external-secrets.io`.
+  - Các bước dùng template (pod thử, port-forward) đứng cuối: một bước template fail thì test kết thúc. Không ghi gì: mọi Secret là dry run
+    server-side. Impersonation (`--as`) là của `kubectl`, nên các phép kiểm đó là script; `kubectl` dùng kubeconfig của caller và context
+    `k3d-svp` (`templates/probe-up.yaml` nêu lý do).
+- **SEC-6-reader** (`sec-6-reader`; cùng nhãn và điều kiện cluster như trên): không gì ngoài controller của ESO lấy được token của
+  ServiceAccount `svp-secrets-reader` của các store. Dry run server-side ở `svp-data`, namespace có ServiceAccount của các store (ở namespace
+  không có, plugin admission ServiceAccount từ chối pod trước khi policy nào thấy, điều không chứng minh gì; policy image của Kyverno chỉ
+  giữ `svp`): pod chạy dưới nó có mount token bị ValidatingAdmissionPolicy `svp-store-serviceaccount-pods` từ chối, và Secret token của nó
+  bị `svp-store-serviceaccount-tokens` từ chối, mỗi cái với message của policy (đối chứng: cùng pod dưới `svp-data/default` và Secret token
+  của `default` được nhận). Controller lấy token của store qua TokenRequest, cái mà không policy nào thấy. Không tạo gì: mọi object là
+  dry run server-side.
+- **WEB-10** (CORS của object store chỉ trả lời origin của web, và với mỗi bucket chỉ cái web làm ở đó). Preflight (`OPTIONS`) qua Envoy tới
+  `https://s3.svp.localhost:8443`, `/media/...` (GET) và `/uploads` (POST), từ `https://evil.example` và từ origin của compose
+  `http://localhost:3001` và `:3002` không nhận `Access-Control-Allow-Origin`, và hai request mà web không bao giờ gửi cũng không: POST
+  tới `/media` và GET tới `/uploads/...`, từ chính `https://svp.localhost:8443` (rule CORS theo bucket, mỗi cái chỉ cho cái web làm ở
+  đó). Đối chứng: từ `https://svp.localhost:8443`, GET `/media/...` và POST `/uploads` là 2xx với đúng origin đó, nên store có trả lời
+  CORS. Các object được nêu là của lần chạy này (`drill-threats-<giờ UTC>-<ngẫu nhiên>`) và không tồn tại ở đâu: preflight không đọc gì.
+  Mỗi phép kiểm và đối chứng là một bước; cái fail đánh dấu test fail và các bước sau vẫn chạy. `curl` lấy CA của cluster từ `CURL_CA_BUNDLE`,
+  do target make đặt.
+- **WEB-13** (pod web chỉ tới gateway, Valkey, Collector và GlitchTip, và chỉ Envoy tới được chúng). Từ mỗi pod web (nhãn
+  `app.kubernetes.io/name=web`, `component=server`; của một Rollout nên `kubectl exec` nêu từng pod): `kubectl exec` của `node -e` của
+  image (`/nodejs/bin/node -e`: distroless không có shell, không `nc`), tên được phân giải trước nên cổng đóng mà tên phân giải được là
+  do policy: internet (một IP và một tên), Postgres, Redpanda (9092, 9644), object store, bốn service gRPC, Pyroscope và API server đóng;
+  gateway 8080, Valkey 6379, Collector 4317 và GlitchTip 8000 mở (đối chứng của các cái đóng). Internet không có ca đối chứng từ pod
+  web: `example.com` phân giải ở đó, nên lỗi là của kết nối. Pod thử của namespace `svp-probe` không mở được `web:3001`; đối chứng: Envoy
+  tới được (`/healthz` 200). Mỗi phép kiểm và đối chứng là một bước chạy đích của nó trong mọi pod web; cái fail đánh dấu test fail và các
+  bước sau vẫn chạy. Không có pod web đang chạy, hay namespace `svp-probe` chưa tạo, thì test kết thúc; cleanup của template xoá `svp-probe`.
+- **WEB-7 và WEB-2** (một test, vì WEB-2 dùng session mà WEB-7 đọc và kết thúc bằng logout của nó; 4.9). Chuẩn bị: một user diễn tập đăng
+  ký qua form `/register` của web ở `https://svp.localhost:8443` (post như trình duyệt không JavaScript post: các field Server Action ẩn của
+  form, đọc từ trang, rồi field của user; cookie session `__Host-Http-svp_sid` giữ trong cookie jar riêng).
+  - WEB-7, BFF không là open proxy và không token nào tới trình duyệt: với session đó, path `/api/` ngoài danh sách của BFF là 400 hay 404:
+    route lạ và route chỉ của gateway, `..` (gửi nguyên), `%2F`, host nội bộ trong path, tham số query lạ; path có `%2F` có thể nhận
+    redirect của chính Envoy về path đã unescape (mặc định `UnescapeAndRedirect` của Envoy Gateway), mà `Location` phải ở lại origin của web,
+    không có dấu `/` đã escape, và trả lời 400 hay 404 lượt nó. Các trang HTML của nó (`/`, `/me`, `/upload`, `/u/<handle>`) là 200, và
+    chúng, payload RSC của `/` và `/me` và JSON của `/api/me` và `/api/feed/explore` không chứa chuỗi nào có dạng JWT (`eyJ..`, ba phần
+    cách nhau dấu chấm), cũng như access token, refresh token hay session id của chính session (đọc từ session trong Valkey db 9, không
+    bao giờ in). Đối chứng: `/api/feed/explore` và `/api/me` là 200 (handle của user diễn tập), `/me` hiện handle (các trang được render
+    với session), các câu trả lời RSC là `text/x-component`, và cùng phép tìm JWT thấy token của một lần đăng nhập do chính gateway trả lời
+    (`https://api.svp.localhost:8443`) và access token của session.
+  - Path ngoài danh sách của BFF được thử kèm session, để việc từ chối là do danh sách chứ không do thiếu đăng nhập. `..` đi nguyên
+    (`--path-as-is`); nếu Envoy hay Next chuẩn hoá nó, path còn lại là `/debug/pprof` hay `/api/internal`, app không có cái nào: cũng 404.
+    Không path nào kết thúc bằng `/` hay chứa `//`: Next trả lời những path đó bằng 308 tới path đã chuẩn hoá. Path có `%2F` có thể nhận
+    redirect của Envoy; không cái nào unescape thành route trong danh sách (`/api/videos/{id}` là một, nhưng với id ngẫu nhiên: 404), nên
+    redirect dẫn tới đâu thì cũng 400 hay 404. Mỗi cái in "refused" khi đúng vậy.
+  - WEB-2, không request nào từ site khác, hay từ `s3.svp.localhost`, đổi được trạng thái bằng session: POST mang cookie session của user
+    diễn tập tới một Server Action (form `/login`), `/api/videos` (JSON object rỗng), `/logout`, `/rum` và `/monitoring` với
+    `Sec-Fetch-Site` là `cross-site` hay `same-site`, `Origin` là `https://evil.example`, `https://s3.svp.localhost:8443` (same site: nó
+    phục vụ file do người dùng upload) hay `null`, hay không có cả hai header, là 403 `CSRF_REJECTED`, và sau các logout bị từ chối session
+    vẫn dùng được. Đối chứng: cùng các POST đó với `Sec-Fetch-Site: same-origin` và `Origin` của app không bị từ chối: action login render
+    form với "Wrong email or password" trong alert của form (200), request upload rỗng tới gateway (400, mã của chính nó), `/rum` nhận beacon
+    (204), `/monitoring` kiểm thân (400 `INVALID_REPORT`; 404 nghĩa là `SENTRY_DSN` rỗng trong Secret `svp/sentry`), và `/logout` (303) xoá
+    cookie và kết thúc session ở server: session id cũ gửi lại nhận 401 từ `/api/me`.
+  - Chuẩn bị lỗi (gateway chưa sẵn sàng, user diễn tập chưa đăng ký, form `/login` không đọc được) thì test kết thúc. Script nạp `web.sh`
+    (helper, và cái test được ghi và in); file nằm ở thư mục riêng `.k8s/drills/web-7-web-2`, bước đầu tạo và test kết thúc thì xoá, sau
+    khi session web được logout nếu còn bật (nó sống 30 ngày). **LOCAL LAB ONLY:** test xoá khoá rate limit đăng ký `svp:gw:rl:register:*` ở
+    Valkey db 10 của cluster (`SCAN` + `DEL`) trước khi đăng ký user diễn tập; ngoài ra chỉ đọc Valkey (`GET` session của chính user diễn
+    tập ở db 9).
+  - `web.sh` là helper của các test nói chuyện với web (4.9): `web-7-web-2` và `web-8`; script nạp nó từ thư mục test (`. ./web.sh` ở
+    `web-7-web-2`, `. ../web-7-web-2/web.sh` ở `web-8`), viết cho bash 3.2. Mọi file helper ghi là riêng tư (`umask 077`) và nằm ở `$work`
+    của test (`.k8s/drills/<thư mục test>`, git bỏ qua), bước đầu tạo và cleanup xoá. Credential của user diễn tập và cookie session (cookie jar
+    `$work/web.jar`), các file cấu hình `curl` mang field của form và token của session đọc từ Valkey ở yên đó và không bao giờ được in:
+    script in status, mã và tên của cái nó tìm thấy, không in giá trị. Môi trường cần `CALLER_KUBECONFIG` như `ratelimit.sh`.
+- **WEB-8** (web không đặt mọi người dùng web vào một bucket rate limit, cũng không đặt client có `X-Forwarded-For` giả vào bucket riêng). Khi
+  mọi bucket `login-ip` đã hết hạn, 40 lần đăng nhập sai qua form `/login` của web (Server Action, mỗi cái một email mới và
+  `X-Forwarded-For` giả riêng) trên một kết nối HTTP/2 tới Envoy, 8 cái cùng lúc: mọi câu trả lời là form có alert "Wrong email or
+  password" hay "Too many tries" (mọi 429 của gateway), ít nhất một là 429 của `login-ip` (không khoá `login-email` cho email của nó), mọi
+  401 để lại khoá `login-email` của nó; khoá `login-ip` thêm vào là 1 hoặc 2, trên mạng pod của một node và không cái nào là địa chỉ của
+  pod web (điều đó đặt mọi người dùng web vào một bucket), không khoá nào cho địa chỉ giả, và khoá `login-email` của mọi lần đăng nhập đã
+  qua nêu một trong các địa chỉ đó: gateway đếm địa chỉ mà Envoy ghi, và web chuyển nguyên. Đối chứng: đăng nhập qua web qua được rate limit
+  và tới bộ giới hạn của gateway và user-service. Như RL-1 (nạp `ratelimit.sh` của `rl-1`): phán trên lần thử không có quyết định đăng
+  nhập nào rơi về bộ giới hạn trong bộ nhớ của pod gateway, tối đa 3 lần, mỗi lần khi bucket `login-ip` đã đầy lại (RL-1 tiêu cùng bucket).
+  Các lần thử là một operation, dừng test khi không lần nào được tính; mỗi phép kiểm của lần thử được tính là một operation sau đó, mang
+  tên ID. Script nạp `../web-7-web-2/web.sh` (helper form) và `../rl-1/ratelimit.sh`; file nằm ở `.k8s/drills/web-8`, bước đầu tạo và test
+  kết thúc thì xoá. Valkey chỉ được đọc (`SCAN`, `TIME` ở db 10).
+
+**Diễn tập quan sát** (`deploy/compose/drills/obs-threats.sh`, `make drill-obs-threats`): các dòng của threat model kiểm trên stack của
+`make up OBS=lgtm`. Mỗi mục in dòng `ok` hay `FAIL`; mục fail không dừng các mục sau (stack được khôi phục trước), và script thoát khác 0 khi
+có mục fail. Khi thoát (đạt hay không) mọi service của stack chạy lại với cấu hình mặc định. Chỉ đọc database là session store của web ở Redis
+db 9 (`GET` session của chính user diễn tập); từ `.env` chỉ đọc biến GlitchTip, không in giá trị. Đăng ký ba user (hai ở gateway, một qua web).
+**LOCAL LAB ONLY:** nạp `deploy/compose/lib.sh` xoá khoá rate limit đăng ký của gateway ở Redis db 10.
+
+- JWT-8: một user mới có email và mật khẩu ngẫu nhiên đăng ký, đăng nhập (access token), đọc `GET /feed/explore` với token (200) và đăng nhập
+  với mật khẩu ngẫu nhiên khác (401); khi user-service dừng, nó đăng nhập lại và, với token, follow một user id ngẫu nhiên: mỗi cái 503, hay
+  504 khi kết nối của gateway còn chờ địa chỉ của container đã dừng, kèm `trace_id` trong thân problem; user-service chạy lại. Trace của
+  các request đó (Tempo), mọi dòng log của mọi service trong khoảng đó (Loki) và event GlitchTip của hai lỗi 5xx không chứa email, cả hai
+  mật khẩu hay access token, cũng không header `Authorization` hay giá trị `Bearer` (tìm chuỗi thường trong JSON đã tải).
+- UP-8: `POST /videos`, upload và complete: video-service log "video created" và "upload completed" với `user_id`, `video_id` và `trace_id`
+  (Loki), và dòng access log của gateway của mỗi `trace_id` có cùng `user_id` (gateway không log `video_id`: `trace_id` nối chúng).
+- OPS-1: `GET /debug/pprof/`, `/debug/pprof/heap` và `/metrics` qua gateway là 404; project publish đúng các cổng `127.0.0.1` 8080 (gateway),
+  3001 (web), 9000 (`s3`, API S3 của object store), 19092 (redpanda), 3000 (lgtm: Grafana), 8000 (glitchtip) và 9093 (alertmanager), mỗi cái
+  tới cùng cổng container (mọi binding trên loopback), nên Collector, Prometheus, Tempo, Loki và Pyroscope không publish gì.
+- RL-2: gateway được tạo lại với `REDIS_URL` trỏ host `.invalid` không phân giải được (Redis native không bao giờ bị dừng): sau ba lần đăng
+  nhập Prometheus có `svp_ratelimit_decisions_total{store="fallback"} > 0` cho instance gateway mới, và Alertmanager có alert
+  `RateLimitFallbackActive` mới trong 4 phút kể từ lần đăng nhập đầu; gateway được tạo lại với cấu hình mặc định.
+- WEB-9: qua web ở `http://localhost:3001` (4.9), như trình duyệt không JavaScript: `GET /login?next=<marker ngẫu nhiên trong query>`,
+  đăng ký và đăng nhập qua form `/register` và `/login` (Server Action của chúng; cookie session `svp_sid` giữ trong cookie jar riêng), logout
+  và đăng nhập lại, feed (`/` và `/api/feed/explore`), một lần upload (`POST /api/videos`, form presigned, `POST /api/videos/{id}/complete`),
+  beacon web-vitals tới `/rum` (một cái hợp lệ, hai cái mà path chứa email hay query `?next=`: bị bỏ), và một báo lỗi tới `/monitoring` mà
+  message và stack mang email, access và refresh token của session, sid, URL `?next=`, và chữ ký cùng policy của form presigned trong
+  query của URL (luật che phải bỏ chúng). Sau đó không event GlitchTip nào có tag `service=web` nhận từ đó, không trace nào của
+  `service.name=web` (Tempo), không dòng log nào của service nào trong khoảng đó (Loki; web chỉ log ra stdout) và không series Prometheus
+  nào của `service_name=web` hay `svp_web_vital_*` chứa email (mọi kiểu chữ), mật khẩu, access hay refresh token (đọc từ session ở Redis
+  db 9, không bao giờ in), sid, marker `?next=`, policy hay chữ ký của form, các tên `upload_url`, `form_fields` hay `X-Amz-Signature`,
+  hay chuỗi có dạng JWT. Đối chứng: event của báo lỗi có trong GlitchTip, Tempo có trace của service `web`, Prometheus có series
+  `svp_web_vital_lcp_seconds_count{route="/"}`, Loki có dòng "upload completed" của video (để "không tìm thấy" không phải là "không có dữ
+  liệu"). Session được logout ở cuối.
+
 ## 6. Rủi ro chấp nhận
 
 | Rủi ro | ID | Vì sao chấp nhận | Xem lại khi |

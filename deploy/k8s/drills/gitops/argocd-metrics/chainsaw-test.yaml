@@ -1,11 +1,13 @@
 # gitops-argocd-metrics, on the GitOps cluster svp (make k8s-gitops-up): Prometheus scrapes Argo CD's view of the
 # Applications (PodMonitor argocd-application-controller of chart svp-observability): within 180 s, argocd_app_info has
 # one series per Application of namespace argocd and every one is Synced and Healthy, and no ArgoCDApplication* alert
-# fires. Read through a port-forward of Prometheus on 127.0.0.1:19090 (templates/port-forward.yaml), stopped when the
-# test ends. When the charts the cluster runs (the targetRevision of the chart's source in Application
+# fires.
+
+# Read through a port-forward of Prometheus on 127.0.0.1:19090 (templates/port-forward.yaml), stopped when the test
+# ends. When the charts the cluster runs (the targetRevision of the chart's source in Application
 # argocd/svp-observability, a commit of this repository's history) predate that PodMonitor, the check says so and
 # passes: it starts with the first promote that brings it.
-#
+
 # kubectl uses the caller's kubeconfig and context k3d-svp (templates/probe-up.yaml says why). Nothing is created.
 apiVersion: chainsaw.kyverno.io/v1alpha1
 kind: Test

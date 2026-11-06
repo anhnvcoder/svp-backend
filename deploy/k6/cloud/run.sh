@@ -1,32 +1,23 @@
 #!/usr/bin/env bash
-# The k6 load test of a cloud cluster: 20 pods of profile
-# cloud, 1 000 feed requests a second (1 250 req/s in all) held at least 10 minutes. The learner runs it, with the cloud
-# cluster's kubectl context; never from make. Needs kubectl and jq. A k3d-* context (the 16 GB laptop) is refused
-# before any kubectl call.
-#
+# The k6 load test of a cloud cluster: 20 pods of profile cloud, 1 000 feed requests a second (1 250 req/s in all) held
+# at least 10 minutes. The learner runs it, with the cloud cluster's kubectl context; never from make. Needs kubectl and
+# jq. A k3d-* context (the 16 GB laptop) is refused before any kubectl call.
+# Design notes: docs/reference/compose.md.
+
 # Usage: deploy/k6/cloud/run.sh --context <ctx> --domain <domain> [--forwarded-for] [--ca-file <file>] [--pods <n>] [--ramp <duration>] [--hold <duration>] start|logs|delete
 #   --domain         the web's public host (the API is api.<domain>), as Envoy's listeners and certificates name them
-#   --forwarded-for  only when the cluster trusts 2 hops of X-Forwarded-For (a load balancer before Envoy): each pod then
-#                    writes its own IP there, as the load balancer would (threat model RL-7)
-#   --ca-file        PEM file of the CA that signs Envoy's certificate, when a private CA does (an Envoy behind a load
-#                    balancer that holds the public certificate): the pods trust that CA alone (render.sh)
-#   --pods           1 to 20 pods (default 20), each with the load of one pod of the design (render.sh)
-#   --ramp, --hold   how long the rate ramps up and holds, like 2m (default 10m each); the Job's deadline follows
-#                    (render.sh)
-#   start   finds the ClusterIP of Envoy's Service of Gateway svp, renders the manifests (render.sh) and applies them:
-#           namespace svp-load, the scripts' ConfigMap, Job svp-k6. Refuses while a Job svp-k6 exists.
-#   logs    after the Job ends: the summary line of each pod into .k6/cloud-<time>/pod-<i>.json, and a table of them;
-#           exits 1 when the Job's pods are not as many as its completions, a pod printed no summary or a summary holds
-#           what looks like a token, cookie or password (which is then deleted)
-#   delete  deletes namespace svp-load (the Job, its pods and their logs)
-#
+#   --forwarded-for  only when the cluster trusts 2 hops of X-Forwarded-For: each pod then writes its own IP there
+#   --ca-file, --pods, --ramp, --hold  as in render.sh
+
+# start: renders (render.sh) and applies namespace svp-load, the scripts' ConfigMap and Job svp-k6; refuses while that
+# Job exists. logs: after the Job ends, each pod's summary into .k6/cloud-<time>/pod-<i>.json and a table; exits 1 on
+# a missing pod or summary, or a summary that looks like it holds a token, cookie or password (deleted).
+# delete: deletes namespace svp-load (the Job, its pods and their logs).
+
 # Before start: the stack runs on the cloud cluster with at least 30 READY videos (fewer and most views stop at the
 # gateway's one-per-minute rule, RL-3), nothing else loads it, and the gateway's trusted hops are decided (RL-1).
-# Watch: kubectl --context <ctx> -n svp-load get pods -w; Grafana's SLO dashboard; the gateway's 429s
-# (svp_rate_limited in each pod's summary must stay 0).
 # Pass: in every pod, every threshold passed and dropped_iterations 0; server-side p95/p99 read from Prometheus over
 # the hold window are recorded with the pods' numbers as the run's result.
-# Stop early: deploy/k6/cloud/run.sh --context <ctx> --domain <domain> delete.
 set -euo pipefail
 
 here=$(cd "$(dirname "$0")" && pwd)

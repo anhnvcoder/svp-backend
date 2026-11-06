@@ -1,26 +1,14 @@
 # RL-1 of the threat model (docs/threat-model.md): a forged X-Forwarded-For gives no client a rate limit bucket of its
-# own. After every login-ip bucket in Valkey has expired (GCRA: a key lives until its bucket is full again, at most
-# 30 s; none is deleted), 40 wrong logins through https://api.svp.localhost:8443 over one HTTP/2 connection (so one
-# client address at the gateway), 8 in flight at a time, each with a new email and its own forged X-Forwarded-For: 30
-# (the burst of login-ip) pass the rate limit, plus one for each second the decisions spread over (the bucket refills
-# one per second; the spread is read from the login-email keys, which hold the time of each decision), and the rest get
-# 429 RATE_LIMITED, at least one; the login-email key of every email that passed exists and of none that got 429 (so
-# the 429 came from login-ip, which is checked first); the login-ip keys added are at most 2 (k3d: one per node), on the
-# pod network 10.42.0.0/16, none for a forged address.
-#
-# These are judged on an attempt in which no login decision fell back to a gateway pod's in-memory limiter (a Valkey
-# call over the gateway's 50 ms takes that path, with its own burst per pod): on every gateway pod, the fallback login
-# decisions of svp_ratelimit_decisions_total are the same in a sample after the burst as in its last one before it
-# (Prometheus, through a port-forward on 127.0.0.1:19090). An attempt with a fallback decision, or one where that cannot
-# be told, is printed and does not count, as does one in which the gateway's pods changed (a new, ended, deleted or
-# restarted one: the instance label of the samples, random per process, names no pod); the test tries again once the
-# bucket is full, at most 3 attempts in all. web-8 spends the same bucket and waits for it to be full the same way.
-#
-# The attempts are one operation, which stops the test when none counts (as the bash drill ended the item); each check of
-# the attempt that counts is one operation after it, named by its ID, reading what the attempt recorded right after its
-# burst; continueOnError keeps the next ones running after one fails, and the test still fails. The scripts source
-# ratelimit.sh; their files live in the test's private work directory .k8s/drills/rl-1, made by the first step and
-# removed when the test ends. Valkey is only read (SCAN, PTTL, MGET, TIME in db 10).
+# own. 40 wrong logins over one HTTP/2 connection, each with its own forged address, share one login-ip bucket: its
+# burst (30) passes the rate limit, plus one per second the decisions spread over, and the rest get 429 RATE_LIMITED.
+
+# Judged on an attempt in which no login decision fell back to a gateway pod's in-memory limiter, at most 3 attempts;
+# web-8 spends the same bucket. Valkey is only read (SCAN, PTTL, MGET, TIME in db 10).
+
+# The attempts are one operation, which stops the test when none counts; each check of the attempt that counts is one
+# operation after it, named by its ID; continueOnError keeps the next ones running after one fails, and the test still
+# fails.
+# Design notes: docs/threat-model.md.
 apiVersion: chainsaw.kyverno.io/v1alpha1
 kind: Test
 metadata:

@@ -1,14 +1,14 @@
 # WEB-10 of the threat model (docs/threat-model.md): the object store's CORS answers the web client's origin only, and
-# for each bucket only what the web client does there. Preflights (OPTIONS) through Envoy to
-# https://s3.svp.localhost:8443, /media/... (GET) and /uploads (POST), from https://evil.example and from the compose
-# origins http://localhost:3001 and :3002 get no Access-Control-Allow-Origin, and neither do the two requests the web
-# client never makes, POST to /media and GET at /uploads/..., from https://svp.localhost:8443 itself (the CORS rules are
-# per bucket, each allowing only what the web client does there). Control: from https://svp.localhost:8443, GET at
-# /media/... and POST to /uploads are 2xx with exactly that origin, so the store answers CORS at all.
-#
-# The objects named are of this run (drill-threats-<UTC time>-<random>) and exist nowhere: a preflight reads nothing.
+# for each bucket only what the web client does there. Preflights through Envoy to https://s3.svp.localhost:8443 from
+# https://evil.example and the compose origins get no Access-Control-Allow-Origin, and neither do the two requests the
+# web client never makes (POST to /media, GET at /uploads/...), from https://svp.localhost:8443 itself.
+
+# Control: from https://svp.localhost:8443, GET at /media/... and POST to /uploads are 2xx with exactly that origin, so
+# the store answers CORS at all.
+
 # Each check and control is one step; a failed one marks the test failed and the next steps still run. curl takes the
 # cluster's CA from CURL_CA_BUNDLE, which the make target sets.
+# Design notes: docs/threat-model.md.
 apiVersion: chainsaw.kyverno.io/v1alpha1
 kind: Test
 metadata:

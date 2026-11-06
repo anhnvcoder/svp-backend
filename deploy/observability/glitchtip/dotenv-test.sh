@@ -1,14 +1,13 @@
 #!/usr/bin/env bash
-# Tests for the strict env file rule of dotenv.sh: the rule itself, then its users, init.sh (with a
-# fake COMPOSE that writes a test DSN and token where the job would), and `make env`,
-# `make db-bootstrap` (deploy/postgres/bootstrap.sh), `make test-stack` and the profile check of
-# `make up` (the root Makefile run in a temporary directory that links to the repository, with fake
-# psql, go and docker commands that log hashes, never values). Every env file is a fixture in a
-# temporary directory; the repository's .env is never read. Nothing reaches Postgres or the Docker
-# daemon; when the docker CLI is installed, `make compose-hash` (compose parses the file, prints a
-# hash per service) checks compose reads the quoted fixture as the plain one. Written for bash 3.2
-# (the macOS /bin/bash).
-#
+# Tests for the strict env file rule of dotenv.sh: the rule itself, then its users, init.sh (with a fake COMPOSE that
+# writes a test DSN and token where the job would), and `make env`, `make db-bootstrap` (deploy/postgres/bootstrap.sh),
+# `make test-stack` and the profile check of `make up` (the root Makefile run in a temporary directory that links to
+# the repository, with fake psql, go and docker commands that log hashes, never values).
+
+# Every env file is a fixture in a temporary directory; the repository's .env is never read. Nothing reaches Postgres
+# or the Docker daemon; when the docker CLI is installed, `make compose-hash` (compose parses the file, prints a hash
+# per service) checks compose reads the quoted fixture as the plain one. Written for bash 3.2 (the macOS /bin/bash).
+
 # Usage, from anywhere: deploy/observability/glitchtip/dotenv-test.sh
 set -euo pipefail
 

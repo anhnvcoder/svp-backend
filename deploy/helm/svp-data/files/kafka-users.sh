@@ -1,14 +1,12 @@
 #!/usr/bin/env bash
-# Creates the SASL SCRAM-SHA-256 user of each Kafka client and grants it the least ACLs it needs
-# (threat model IN-4, FF-6): a service writes only the topics of
-# the events it owns (and the dead-letter topics of the topics it consumes), reads only the topics it consumes, with
-# its own consumer group only. No application user gets CREATE, ALTER, DELETE or any right on the cluster.
-# Run by the redpanda-init Job of chart svp-data after create-topics.sh, as the superuser svp-admin (RPK_USER,
-# RPK_PASS, RPK_SASL_MECHANISM in the environment). Idempotent: an existing user gets its password reset to the
-# current one, and creating an ACL that exists is a no-op.
-#
-# Each user's password is the file of that name in $KAFKA_USERS_DIR (Secret kafka-users). rpk takes a new user's
-# password only as a flag, so it is on the command line of rpk inside this Job's container alone; it is never printed.
+# Creates the SASL SCRAM-SHA-256 user of each Kafka client and grants it the least ACLs it needs: a service writes only
+# the topics of the events it owns (and the dead-letter topics of those it consumes) and reads only the topics it
+# consumes, with its own consumer group only. No application user gets CREATE, ALTER, DELETE or any cluster right.
+
+# Run by the redpanda-init Job of chart svp-data after create-topics.sh, as the superuser svp-admin (RPK_USER, RPK_PASS,
+# RPK_SASL_MECHANISM in the environment). Idempotent: an existing user gets its password reset, creating an ACL that
+# exists is a no-op. Each user's password is the file of that name in $KAFKA_USERS_DIR (Secret kafka-users). rpk takes
+# a new user's password only as a flag, so it is on rpk's command line inside this Job's container alone, never printed.
 set -euo pipefail
 
 users_dir=${KAFKA_USERS_DIR:?}

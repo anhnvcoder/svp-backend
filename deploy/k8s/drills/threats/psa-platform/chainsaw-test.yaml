@@ -1,15 +1,17 @@
-# PSA-platform of docs/threat-model.md on cluster svp: every namespace but kube-system, kube-public, kube-node-lease and
-# default (the platform charts' included: cert-manager, envoy-gateway-system, cnpg-system, keda, argo-rollouts, kyverno,
-# argocd on the GitOps path) enforces PSA restricted at the podSecurityVersion of chart svp-cluster
-# (deploy/helm/svp-cluster/values.yaml), and every namespace of argocd/apps/components.json of svp-gitops that runs on k3d
-# exists (the clone deploy/k8s/lib.sh's gitops_dir names: SVP_GITOPS_DIR, or <workspace>/gitops); default, kube-public
-# and kube-node-lease carry no PSA label and the cluster default (deploy/k8s/pod-security-admission.yaml) refuses a
-# privileged pod with the node's / as hostPath there, restricted at that version (server-side dry run). Control: a
-# restricted pod is admitted in each. kube-system, exempt from the default, is printed as info with its reason.
-#
-# Each check is one operation named by its ID; continueOnError keeps the next checks running after one fails, and the
-# test still fails. Nothing is created: the pods are server-side dry runs. kubectl in the scripts uses the caller's
-# kubeconfig and context k3d-svp (templates/probe-up.yaml says why).
+# PSA-platform of the threat model (docs/threat-model.md) on cluster svp: every namespace but kube-system, kube-public,
+# kube-node-lease and default (the platform charts' included: cert-manager, envoy-gateway-system, cnpg-system, keda,
+# argo-rollouts, kyverno, argocd on the GitOps path) enforces PSA restricted at the podSecurityVersion of chart
+# svp-cluster (deploy/helm/svp-cluster/values.yaml).
+
+# Every namespace of argocd/apps/components.json of svp-gitops that runs on k3d exists (the clone deploy/k8s/lib.sh's
+# gitops_dir names: SVP_GITOPS_DIR, or <workspace>/gitops).
+
+# default, kube-public and kube-node-lease carry no PSA label and the cluster default
+# (deploy/k8s/pod-security-admission.yaml) refuses a privileged pod with the node's / as hostPath there, restricted at
+# that version (server-side dry run). Control: a restricted pod is admitted in each. kube-system, exempt from the
+# default, is printed as info with its reason.
+
+# kubectl in the scripts uses the caller's kubeconfig and context k3d-svp (templates/probe-up.yaml says why).
 apiVersion: chainsaw.kyverno.io/v1alpha1
 kind: Test
 metadata:

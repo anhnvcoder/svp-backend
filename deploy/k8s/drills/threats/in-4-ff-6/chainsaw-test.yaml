@@ -1,24 +1,29 @@
-# IN-4/FF-6 of the threat model (docs/threat-model.md): each Kafka user may write only its own topics and use only its own
-# consumer group, and the Admin API of Redpanda needs credentials. Each user (password from Secret svp-data/kafka-users,
-# passed on stdin, never printed) runs rpk in the broker container: producing to a topic not its own is
-# TOPIC_AUTHORIZATION_FAILED (svp-keda, which may write no topic, gets no producer id: CLUSTER_AUTHORIZATION_FAILED),
-# producing to its own topic works with an idempotent producer and WRITE on that topic only, describing the group of
-# another service is GROUP_AUTHORIZATION_FAILED, its own works; media-worker cannot produce to video.lifecycle.v1, nor read
-# another service's topic. The Admin API refuses node_config, cluster_config, security/users and brokers without
-# credentials and serves /public_metrics; control: rpk with the broker's own login reads admin_api_require_auth (true).
-#
-# Test records: one empty record (key drill-threats-<run>, header svp-drill=threats) to the dead-letter topic of each user
-# that has one; nothing consumes a dead-letter topic, and the dead-letter metric is counted by the services, not the
-# broker. user-service owns no dead-letter topic: its right to produce to user.follows.v1 is shown with a record larger
-# than the broker's 1 MiB limit, which the broker refuses with MESSAGE_TOO_LARGE once the user is authorized and with
+# IN-4/FF-6 of the threat model (docs/threat-model.md): each Kafka user may write only its own topics and use only its
+# own consumer group, and the Admin API of Redpanda needs credentials.
+
+# Each user (password from Secret svp-data/kafka-users, passed on stdin, never printed) runs rpk in the broker
+# container: producing to a topic not its own is TOPIC_AUTHORIZATION_FAILED (svp-keda, which may write no topic, gets no
+# producer id: CLUSTER_AUTHORIZATION_FAILED), producing to its own topic works with an idempotent producer and WRITE on
+# that topic only.
+
+# Describing the group of another service is GROUP_AUTHORIZATION_FAILED, its own works; media-worker cannot produce to
+# video.lifecycle.v1, nor read another service's topic.
+
+# The Admin API refuses node_config, cluster_config, security/users and brokers without credentials and serves
+# /public_metrics; control: rpk with the broker's own login reads admin_api_require_auth (true).
+
+# Test records: one empty record (key drill-threats-<run>, header svp-drill=threats) to the dead-letter topic of each
+# user that has one; nothing consumes a dead-letter topic, and the dead-letter metric is counted by the services, not
+# the broker.
+
+# user-service owns no dead-letter topic: its right to produce to user.follows.v1 is shown with a record larger than the
+# broker's 1 MiB limit, which the broker refuses with MESSAGE_TOO_LARGE once the user is authorized and with
 # TOPIC_AUTHORIZATION_FAILED otherwise (shown first by the same oversized record from feed-service, which may read
-# user.follows.v1 but not write it), so no record reaches a topic a service consumes. The high watermarks of the four
-# consumed topics are read before the first record and compared after the last (a topic rpk cannot read fails the check
-# rather than counting as unchanged); the first reading waits in .k8s/drills/in-4-ff-6-watermarks, deleted when the test
-# ends.
-#
-# Each check and control is one step; a failed one marks the test failed and the next steps still run. The first reading
-# of the high watermarks failing ends the test.
+# user.follows.v1 but not write it), so no record reaches a topic a service consumes.
+
+# The high watermarks of the four consumed topics are read before the first record and compared after the last (a topic
+# rpk cannot read fails the check rather than counting as unchanged); the first reading waits in
+# .k8s/drills/in-4-ff-6-watermarks, deleted when the test ends.
 apiVersion: chainsaw.kyverno.io/v1alpha1
 kind: Test
 metadata:
@@ -78,11 +83,13 @@ spec:
 
   # One Kafka operation per step, as the user named: the step prints "ok" when the operation worked (for produce: a
   # record was written, at a partition@offset), otherwise the first Kafka error code rpk printed ("none" when it printed
-  # none). stderr has rpk's answer as "OP rc=<exit status> code=<code> at=<partition@offset or ->". produce writes one
-  # empty record with rpk's default, idempotent producer, which first asks for a producer id (granted with WRITE on any
-  # topic); produce1 the same with acks 1, which is not idempotent, so only the right to write the topic itself is
-  # asked; oversized one record of 1.6 MB (incompressible, no compression, the client's own limit raised so the broker
-  # decides); group describes a group; consume reads one record without a group.
+  # none). stderr has rpk's answer as "OP rc=<exit status> code=<code> at=<partition@offset or ->".
+
+  # produce writes one empty record with rpk's default, idempotent producer, which first asks for a producer id (granted
+  # with WRITE on any topic); produce1 the same with acks 1, which is not idempotent, so only the right to write the
+  # topic itself is asked; oversized one record of 1.6 MB (incompressible, no compression, the client's own limit raised
+  # so the broker decides); group describes a group; consume reads one record without a group.
+
   # feed-service first: it may read user.follows.v1 (so its metadata is visible) but not write it; the broker refusing
   # its oversized record as unauthorized shows it checks the right to write before the size, which is what makes
   # MESSAGE_TOO_LARGE for user-service below a proof of its right.

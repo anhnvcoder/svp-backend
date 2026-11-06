@@ -1,7 +1,7 @@
-# Supply chain drill, case e: an image of the project (prefix of release source backend) by tag, without a digest,
-# sent as a server-side dry run of a pod of svp: refused by Kyverno's digest check within 1 s (the operation's
-# timeout), before any registry is asked. Declarative: Chainsaw's create with dryRun, the expected admission error
-# checked by its message.
+# Supply chain drill, case e: an image of the project (prefix of release source backend) by tag, without a digest, as a
+# dry run of a pod of svp: refused by Kyverno's digest check within 1 s (the operation's timeout), before any registry
+# is asked.
+
 # Helpers, inputs and the verdict lines: ../lib.sh.
 apiVersion: chainsaw.kyverno.io/v1alpha1
 kind: Test

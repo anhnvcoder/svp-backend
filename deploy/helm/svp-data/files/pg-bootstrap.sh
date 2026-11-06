@@ -1,14 +1,12 @@
 #!/usr/bin/env bash
-# Creates or updates the roles and databases of user-service, video-service, engagement-service, feed-service and
-# GlitchTip on the in-cluster Postgres svp-pg, by running deploy/postgres/bootstrap.sql (the file compose uses, mounted
-# at /init/bootstrap.sql) once per database as the superuser: the Kubernetes counterpart of
-# deploy/postgres/bootstrap.sh. Run by the pg-bootstrap Job of chart svp-data after every install and upgrade;
-# idempotent.
-#
+# Creates or updates the roles and databases of the services and GlitchTip on the in-cluster Postgres svp-pg, by running
+# deploy/postgres/bootstrap.sql (the file compose uses, mounted at /init/bootstrap.sql) once per database as the
+# superuser. Run by the pg-bootstrap Job of chart svp-data after every install and upgrade; idempotent.
+
 # The connection comes from PGHOST, PGPORT, PGUSER, PGPASSWORD, PGSSLMODE and PGDATABASE; the role passwords from
-# SVP_<SERVICE>_{MIGRATOR,APP}_DB_PASSWORD. Every password stays in the environment, never on a command line, and
-# none is printed. SVP_PG_MODE=external: the server is a managed Postgres outside the cluster (Amazon RDS, logged in to
-# as its master user, which is not a superuser), not CloudNativePG's svp-pg.
+# SVP_<SERVICE>_{MIGRATOR,APP}_DB_PASSWORD. Every password stays in the environment, never on a command line, and none
+# is printed. SVP_PG_MODE=external: a managed Postgres (Amazon RDS, master user, not a superuser), not CloudNativePG's.
+# Design notes: docs/explanation/deployment.md.
 set -euo pipefail
 
 wait_seconds=${SVP_WAIT_SECONDS:?}
@@ -56,22 +54,10 @@ if [[ $mode == external ]]; then
   exit 0
 fi
 
-# bootstrap.sql takes CONNECT away from PUBLIC on the svp_* databases only. The three databases initdb and CloudNativePG
-# make, postgres, app and template1, keep Postgres's default grant of CONNECT to PUBLIC, so every service role could log
-# in to them (and create temporary tables in the first two). None needs to: each service and its migrations use their
-# own svp_* database, and so does GlitchTip (MAINTENANCE_DATABASE_URL names svp_glitchtip). The superuser postgres (this
-# Job, the operator's instance manager, which also opens template1) skips privilege checks, and the owner app keeps
-# CONNECT on its database. Two roles of the operator are not superusers and get CONNECT by name: the metrics exporter
-# logs in as cnpg_metrics_exporter to postgres (the up and WAL metrics) and to the application database app (the
-# default monitoring queries), and streaming_replica opens ordinary connections to postgres from a replica, for
-# pg_rewind and replication slots (its streaming connections name no database). CREATE DATABASE needs no CONNECT on
-# template1.
-#
-# The instance manager creates those two roles once the server runs, which can be a moment after the superuser login
-# above first works: wait for them, within the same bound. The grants come before the revokes in one transaction, so
-# there is no moment when the operator's roles cannot connect, and a failed GRANT revokes nothing. Run on every install
-# and upgrade, so a cluster made before these lines gets them too (the operator's initdb runs only when the cluster is
-# created); GRANT and REVOKE are idempotent.
+# bootstrap.sql takes CONNECT away from PUBLIC on the svp_* databases only. postgres, app and template1, made by initdb
+# and CloudNativePG, keep the default grant, so every service role could log in to them, and none needs to. CONNECT is
+# granted by name to the two operator roles that do (cnpg_metrics_exporter, streaming_replica) and revoked from PUBLIC
+# in one transaction, once the operator has created those roles; GRANT and REVOKE are idempotent.
 until [[ $(psql -X -q -At -c "SELECT count(*) FROM pg_catalog.pg_roles
     WHERE rolname IN ('cnpg_metrics_exporter', 'streaming_replica')") == 2 ]]; do
   if ((SECONDS >= deadline)); then

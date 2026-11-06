@@ -1,50 +1,8 @@
-{{- /*
-Kyverno v1.19.1 ImageValidatingPolicy. Every release source of files/sources.json (one per repository that builds and
-signs images: name, repository, imagePrefix, services, drillImages, issuer, subject, provenanceRef, and promoter, the
-GitHub App that promotes its releases) has its own image prefix and its own attestor, and each image is checked
-against the source whose prefix it is under, never another's: an identity of one source cannot sign an image under
-another's prefix. The checks run in order and stop at the first that fails, each with its own message naming the
-images it refused and, from check 2 on, the source each belongs to:
-  1. every image of the pod is <imagePrefix><name>@sha256:<64 hex>, <name> one of the services or drill images of the
-     source with that prefix. Kyverno verifies only the images that matchImageReferences selects and lets every other
-     one through, so this check alone refuses an image of the local registry, of Docker Hub, or under a prefix with a
-     name its source does not publish; it reads the pod only, so such a pod is refused without any registry being
-     asked. That holds only for an image no glob matches: Kyverno fetches every matched image from its registry before
-     any check runs, and a registry that refuses (a repository that does not exist answers DENIED on GHCR) fails the
-     evaluation instead of this check's message. So matchImageReferences has two globs per published name,
-     <imagePrefix><name>@* and <imagePrefix><name>:*, never one per prefix (<imagePrefix>* let a pod with an unknown
-     name under a prefix reach GHCR first: verify.yml run 41081463084). The globs are gobwas/glob without separators,
-     where * matches any characters, / : and @ included. An image of a published name without a digest matches the
-     :* glob and is refused earlier still, by verifyDigest ("does not have a digest"), before Kyverno would look its
-     tag up;
-  2. a keyless cosign signature by the workflow identity (issuer + subject) of its source;
-  3. a vuln attestation (https://cosign.sigstore.dev/attestation/vuln/v1) signed by the same identity;
-  4. its predicate covers exactly linux/amd64 and linux/arm64 (scanner.result.platforms, the contract of
-     deploy/ci/vuln-predicate.sh);
-  5. no CRITICAL vulnerability on either platform;
-  6. metadata.scanFinishedOn at most maxAttestationAge ago.
-With requireProvenance (off by default, so the policy renders as without these), four more, after the six, for every
-source alike: an image without provenance is refused only once it passes every other check, so the message of a
-missing provenance never hides another fault:
-  7. a build provenance attestation (https://slsa.dev/provenance/v1, which actions/attest writes; cosign attest --type
-     slsaprovenance1 for the releases signed before) signed by the same identity;
-  8. its runDetails.builder.id is the subject of that identity;
-  9. its buildDefinition.externalParameters.workflow.repository is the repository of its source;
- 10. its buildDefinition.externalParameters.workflow.ref is the provenanceRef of its source.
-An image's source is picked in CEL by the prefix it starts with: the prefixes are checked here never to nest, so at
-most one matches, and every image Kyverno verifies matches one (matchImageReferences). Each verification names the
-attestor of that source alone; Kyverno calls it only for an image under that prefix (&& and ?: do not evaluate the
-side they skip, and when they did, a count of 0 from the wrong attestor would still not count).
-The payload of an attestation is the whole in-toto statement, so its paths start at .predicate; extractPayload reads it
-only once verifyAttestationSignatures has verified it in the same evaluation (check 3 comes first for vuln, check 7 for
-provenance). Each image then costs a third verification when Kyverno has not cached it.
-Two signature formats, told apart per image by Kyverno itself, so nothing here names them: the releases are signed in
-Sigstore bundles (OCI referrers of the digest), those signed before in cosign's older format (.sig and .att images
-beside it), and the same checks read either. An image with one bundle is read through its bundles only, so a release
-never mixes the two; in bundles any attestation of the identity also counts as a signature for check 2. The older
-format is admitted while a release of envs/stg/images/ or envs/prd/images/ of svp-gitops still carries it (a rollback
-reaches one too); once none does, the comments naming it go, and a rollback to such a release needs another decision.
-*/}}
+{{- /* Each release source of files/sources.json has its own image prefix and attestor; an image is checked only
+against the source whose prefix it is under. Six checks in order (image form, signature, vuln attestation,
+platforms, no CRITICAL, scan age), four more with requireProvenance. Sigstore bundles and cosign's older format
+are both read; the older is admitted while a release of envs/stg or envs/prd of svp-gitops carries it. */}}
+
 {{- /* svp-policy.pick: a CEL expression, the string KEY of the source whose imagePrefix image VAR starts with ('' for
 none), from a dict of sources (the validated list), key and var. */}}
 {{- define "svp-policy.pick" -}}
@@ -67,10 +25,9 @@ verification, with ATTESTOR standing for that source's attestor) is true for it.
 {{- fail "imageVerification.maxAttestationAge goes into CEL string literals: no quote, backslash or newline" }}
 {{- end }}
 {{- /* The table of release sources, checked here and nowhere else: a table the policy would render wrong (a value
-breaking out of a CEL string, two sources one image could belong to) fails here, and the scripts that read the table
-(release_sources of deploy/k8s/lib.sh) do not check it again, since every table they act on renders first (CI on the
-working tree, gitops-check.sh and Argo CD at an environment's revision). deploy/ci/sources-test.sh puts each rule
-through a broken table. */}}
+breaking out of a CEL string, two sources one image could belong to) fails here, and the scripts that read it
+(release_sources of deploy/k8s/lib.sh) do not check it again, since every table they act on renders first.
+deploy/ci/sources-test.sh puts each rule through a broken table. */}}
 {{- $table := fromJson (.Files.Get "files/sources.json") }}
 {{- if or (hasKey $table "Error") (not (kindIs "slice" $table.sources)) (empty $table.sources) }}
 {{- fail "files/sources.json must be a JSON object whose key sources lists at least one release source" }}
@@ -84,10 +41,9 @@ through a broken table. */}}
 {{- fail "files/sources.json: every entry of sources is an object" }}
 {{- end }}
 {{- /* promoter is the one optional key, checked as the others when given. A source without it was a retired one: a
-repository renamed, whose releases signed under its old name stayed admitted while an environment ran them. This table
-has none (deploy/ci/sources-test.sh fails when a source of it lacks promoter); an environment's charts.yaml may still
-pin an older commit whose table has such sources, which the template of that commit renders and the scripts read as
-retired (nothing builds, promotes or rescans for them). */}}
+repository renamed, whose releases signed under its old name stayed admitted while an environment ran them. This
+table has none (deploy/ci/sources-test.sh fails when a source lacks promoter); an environment's charts.yaml may
+still pin an older commit whose table has such sources, which the scripts read as retired. */}}
 {{- $keys := list "name" "repository" "imagePrefix" "issuer" "subject" "provenanceRef" }}
 {{- if hasKey $s "promoter" }}
 {{- $keys = append $keys "promoter" }}
@@ -172,11 +128,9 @@ spec:
   # Audit refuses nothing, and a Kyverno that is down lets every pod through.
   failurePolicy: Ignore
   {{- end }}
-  # 30 s, the most the API server allows (Kyverno's default is 10). A verification Kyverno has not cached reaches
-  # Sigstore's TUF and GHCR (Rekor is not called: the policy sets no ctlog, so Kyverno v1.19.1 checks the transparency
-  # log proof embedded in the signature bundle offline), and a single signature took 6-8 s on the lab's cluster (older
-  # format; for an image in Sigstore bundles Kyverno fetches every bundle of the digest for each verification, and
-  # the CLI, with no cache, took 36-46 s against 14-16 s for the older format); each
+  # 30 s, the most the API server allows (Kyverno's default is 10): an uncached verification reaches Sigstore's TUF and
+  # GHCR (Rekor is not called: the transparency log proof is checked offline), and a single signature took 6-8 s on the
+  # lab's cluster (older format; the CLI, with no cache, took 36-46 s for Sigstore bundles against 14-16 s); each
   {{- if $iv.requireProvenance }}
   # image is verified three times (signature, vuln attestation, provenance attestation), so three uncached 6-8 s
   # verifications come close to the limit (not measured yet with provenance). Under Enforce a webhook call that times
@@ -213,8 +167,8 @@ spec:
         apiVersions: [v1]
         operations: [CREATE, UPDATE]
         resources: [pods, pods/ephemeralcontainers]
-  # Two globs per name a source publishes (check 1 above says why not one per prefix): by digest, and by tag, which
-  # verifyDigest then refuses.
+  # Two globs per name a source publishes, never one per prefix (an unknown name under a prefix would reach GHCR first):
+  # by digest, and by tag, which verifyDigest then refuses.
   matchImageReferences:
     {{- range $s := $sources }}
     {{- range $img := concat $s.services $s.drillImages }}
@@ -248,7 +202,7 @@ spec:
         type: https://slsa.dev/provenance/v1
     {{- end }}
   variables:
-    # Every image of the pod, whatever its registry: what check 1 reads.
+    # Every image of the pod, whatever its registry: what the first check (image form) reads.
     - name: podImages
       expression: >-
         object.spec.?containers.orValue([]).map(c, c.image) +

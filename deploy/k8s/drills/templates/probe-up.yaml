@@ -1,14 +1,14 @@
 # Namespace svp-probe with pod probe, for the drills that try a connection from a pod no NetworkPolicy selects (nc, nslookup
 # of busybox). Use it as the first step of a test: `- use: {template: ../../templates/probe-up.yaml}`; the namespace is deleted
 # when the test ends, whether it failed or not.
-#
+
 # The namespace enforces Pod Security restricted at podSecurityVersion of deploy/helm/svp-cluster/values.yaml and has no
 # NetworkPolicy. The pod runs the image of Deployment svp/media-worker (pulled from the cluster's own registry), which has
 # busybox nc and nslookup, and meets the restricted standard, or the namespace would refuse it.
-#
+
 # A namespace of that name left by a killed run (it carries the label managed-by=probeOwner) is deleted first; one without
 # the label is someone else's: the step fails and, at the end of the test, nothing is deleted.
-#
+
 # Chainsaw runs each script with KUBECONFIG set to its own copy of the cluster it was started on (one context, named chainsaw).
 # kubectl in these scripts goes back to the caller's kubeconfig (CALLER_KUBECONFIG; empty means ~/.kube/config) and always
 # names context k3d-svp. The apply and wait steps use Chainsaw's own client, so the first step fails unless Chainsaw was
