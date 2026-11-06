@@ -66,7 +66,6 @@ func (f *fake) setAnswer(answer func(ctx context.Context) error) {
 	f.answer = answer
 }
 
-// fail makes every call answer code.
 func (f *fake) fail(code codes.Code) {
 	f.setAnswer(func(context.Context) error { return status.Error(code, "fake "+code.String()) })
 }
@@ -103,7 +102,6 @@ func invoke(ctx context.Context, conn *grpc.ClientConn, method string) error {
 	return conn.Invoke(ctx, method, &emptypb.Empty{}, &emptypb.Empty{})
 }
 
-// callN makes n calls to method and fails the test unless each returns want.
 func callN(t *testing.T, conn *grpc.ClientConn, method string, n int, want codes.Code) {
 	t.Helper()
 	for i := range n {
@@ -131,7 +129,6 @@ func wantRejected(t *testing.T, f *fake, conn *grpc.ClientConn, method string) {
 	}
 }
 
-// wantReaches checks that a call reaches f.
 func wantReaches(t *testing.T, f *fake, conn *grpc.ClientConn, method string) {
 	t.Helper()
 	before := f.count()

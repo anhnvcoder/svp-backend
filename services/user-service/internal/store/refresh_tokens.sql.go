@@ -94,11 +94,10 @@ const lockRefreshFamily = `-- name: LockRefreshFamily :exec
 SELECT pg_advisory_xact_lock(hashtextextended('refresh-family:' || $1::uuid::text, 0))
 `
 
-// Serializes every rotation, reuse check and logout of one family until the transaction ends, so
-// a rotation running beside a logout, or beside the reuse of an ancestor token, cannot add a live
-// token to a family that has just been revoked. Under
-// READ COMMITTED each statement after it sees all that the previous holder committed, so the
-// token must be read again once the lock is held.
+// Serializes every rotation, reuse check and logout of one family until the transaction ends, so a
+// rotation running beside a logout, or beside the reuse of an ancestor token, cannot add a live
+// token to a family that has just been revoked. Under READ COMMITTED each statement after it sees
+// all that the previous holder committed, so the token must be read again once the lock is held.
 func (q *Queries) LockRefreshFamily(ctx context.Context, familyID uuid.UUID) error {
 	_, err := q.db.Exec(ctx, lockRefreshFamily, familyID)
 	return err

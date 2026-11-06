@@ -98,6 +98,22 @@ Vì sao: [ADR-0020](../adr/0020-reliability-stage6.md), [ADR-0044](../adr/0044-g
 - Liveness, startup, healthcheck của compose và `/readyz` của gateway giữ health tổng `""`, không phụ thuộc database: restart không
   chữa được database chết.
 
+## Hạn ghi của Like và Unlike
+
+Vì sao: [ADR-0031](../adr/0031-chaos-findings-feed-engagement-tempo.md) §2.
+
+Phần Postgres của Like và Unlike ở engagement-service có hạn 1 s (`writeTimeout` trong
+`services/engagement-service/internal/server/server.go`), tính cả thời gian chờ kết nối của pool ghi. Mỗi thao tác là một câu lệnh
+chạy ở chế độ mặc định của pgx: chuẩn bị câu lệnh một lần cho mỗi kết nối rồi giữ lại. Số round trip vì vậy phụ thuộc kết nối:
+
+- kết nối đã chạy câu lệnh này: một round trip;
+- kết nối chạy câu lệnh lần đầu: hai (chuẩn bị, rồi thực thi);
+- kết nối mới: thêm TCP connect và khởi động Postgres cùng xác thực, tức vài round trip nữa;
+- kết nối rảnh quá 1 s: pool ping thêm một round trip trước khi giao kết nối.
+
+Với mỗi round trip 200 ms, kết nối có sẵn trả lời trong 200 đến 600 ms, nằm gọn trong hạn, còn kết nối mới thì không. Khi đó người
+gọi nhận `UNAVAILABLE` sau 1 s, thay vì chờ hết hạn gọi 3 s của gateway.
+
 ## Vận hành
 
 Vì sao: [ADR-0020](../adr/0020-reliability-stage6.md) §12, §14.

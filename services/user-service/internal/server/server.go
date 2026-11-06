@@ -172,7 +172,7 @@ func (s *Server) Register(ctx context.Context, req *userv1.RegisterRequest) (*us
 			return nil, s.internal(ctx, "insert user", err)
 		}
 		id := userID.String()
-		// The email and the display name never reach the log, only the user id (JWT-8).
+		// The email and the display name never reach the log, only the user id.
 		s.logger.InfoContext(logx.With(ctx, slog.String("user_id", id)), "user registered")
 		return &userv1.RegisterResponse{UserId: id}, nil
 	}
@@ -182,12 +182,12 @@ func (s *Server) Register(ctx context.Context, req *userv1.RegisterRequest) (*us
 // Login returns an access token and a refresh token that opens a new family for a matching email
 // and password. Every way of failing to authenticate returns the same error, and an unknown email
 // still runs a hash comparison, so neither the answer nor its timing tells whether the email is
-// registered (JWT-5).
+// registered.
 func (s *Server) Login(ctx context.Context, req *userv1.LoginRequest) (*userv1.LoginResponse, error) {
 	pw := secret.New(req.GetPassword())
 	email, ok := normalizeEmail(req.GetEmail())
 	// No account can have a malformed email or a password outside the length policy, so these
-	// fail without hashing; the bound also keeps huge passwords away from argon2 (JWT-9).
+	// fail without hashing; the bound also keeps huge passwords away from argon2.
 	if !ok || password.CheckLength(pw) != nil {
 		s.logger.InfoContext(ctx, "login failed", slog.String("cause", "malformed input"))
 		return nil, invalidCredentials()
@@ -237,7 +237,7 @@ func (s *Server) Login(ctx context.Context, req *userv1.LoginRequest) (*userv1.L
 	}, nil
 }
 
-// rehash stores a hash of pw made with the current parameters (JWT-7). A failure is logged and
+// rehash stores a hash of pw made with the current parameters. A failure is logged and
 // the login goes on: the old hash still works and the next login tries again.
 func (s *Server) rehash(ctx context.Context, userID uuid.UUID, pw secret.String) {
 	hash, err := s.hasher.Hash(ctx, pw)
@@ -378,7 +378,7 @@ func invalidCredentials() error {
 	return grpcerr.New(codes.Unauthenticated, ReasonInvalidCredentials, "invalid email or password")
 }
 
-// hashError answers RESOURCE_EXHAUSTED when every hashing slot stayed taken (JWT-9), and
+// hashError answers RESOURCE_EXHAUSTED when every hashing slot stayed taken, and
 // INTERNAL for anything else, such as a stored hash that cannot be read.
 func (s *Server) hashError(ctx context.Context, op string, err error) error {
 	if errors.Is(err, password.ErrBusy) {

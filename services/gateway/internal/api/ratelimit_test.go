@@ -244,7 +244,7 @@ func TestLoginIPLimitIgnoresForwardedHeaders(t *testing.T) {
 // proxy appended to X-Forwarded-For. A client that writes another element before it on every
 // request stays in one bucket, which leaves another client behind the same proxy unlimited; a
 // client reaching the gateway directly is counted by its connection, whatever element it writes
-// last (threat model RL-1).
+// last.
 func TestLoginIPLimitBehindProxy(t *testing.T) {
 	// Fallback limits: login-ip burst 15, one every 2 s.
 	e := newEnvBehind(t, httpx.NewClientAddr(1, []netip.Prefix{netip.MustParsePrefix("10.42.0.0/16")}), downLimits(t))

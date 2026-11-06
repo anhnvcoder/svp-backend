@@ -1,5 +1,5 @@
 // Package authtoken issues and verifies the platform's access tokens: JWTs signed with Ed25519
-// (alg EdDSA), selected by kid (docs/threat-model.md §4.1, JWT-1, JWT-2, JWT-3, JWT-10).
+// (alg EdDSA), selected by kid.
 //
 // user-service holds the private key and issues tokens; the gateway holds only public keys and
 // verifies them.
@@ -72,7 +72,7 @@ func (i *Issuer) Issue(userID string) (secret.String, time.Time, error) {
 }
 
 // Verifier checks tokens against a fixed set of public keys indexed by kid. Holding the old and
-// the new key at once lets keys rotate without logging anyone out (threat model SEC-4).
+// the new key at once lets keys rotate without logging anyone out.
 type Verifier struct {
 	keys   map[string]ed25519.PublicKey
 	parser *jwt.Parser
@@ -84,7 +84,7 @@ func NewVerifier(keys map[string]ed25519.PublicKey) *Verifier {
 		keys: keys,
 		parser: jwt.NewParser(
 			// The algorithm is fixed here and never taken from the token: alg none and
-			// HS256-keyed-with-the-public-key tokens fail before any key is looked up (JWT-1).
+			// HS256-keyed-with-the-public-key tokens fail before any key is looked up.
 			jwt.WithValidMethods([]string{jwt.SigningMethodEdDSA.Alg()}),
 			jwt.WithIssuer(IssuerName),
 			jwt.WithAudience(Audience),

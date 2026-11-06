@@ -139,7 +139,6 @@ func classify(err error, ignoreDeadline bool) error {
 	}
 }
 
-// stateValue is the svp.breaker.state value of s.
 func stateValue(s gobreaker.State) int64 {
 	switch s {
 	case gobreaker.StateHalfOpen:

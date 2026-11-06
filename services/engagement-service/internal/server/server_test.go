@@ -291,7 +291,6 @@ func TestUnlikeNeverGoesNegative(t *testing.T) {
 	s, _ := newServer(nil)
 	caller, other, videoID := ids.New(), ids.New(), ids.New()
 
-	// Unliking a video nobody liked creates no counter.
 	if err := unlike(t, s, caller, videoID); err != nil {
 		t.Fatal(err)
 	}

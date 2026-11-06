@@ -30,7 +30,7 @@ import (
 // stats handler of ClientTelemetry continues the trace in the services. The span is named after
 // the method until Routes names the matched route. Its client.address comes from clientAddr,
 // the same as the rate limits by IP: otelhttp would take the first element of X-Forwarded-For,
-// which the client writes (threat model RL-1).
+// which the client writes.
 //
 // server is the gateway's host:port, with a numeric port; it gives the server.address and
 // server.port of spans and metrics. Without it otelhttp takes both from the Host header, which
@@ -57,7 +57,6 @@ func Trace(server string, clientAddr ClientAddr) func(http.Handler) http.Handler
 	}
 }
 
-// isProbe reports whether r is one of the probes /healthz and /readyz, by its exact path.
 func isProbe(r *http.Request) bool {
 	return r.URL.Path == "/healthz" || r.URL.Path == "/readyz"
 }
@@ -151,8 +150,8 @@ type logState struct {
 }
 
 // AccessLog writes one line per request: method, route pattern, status, duration, response
-// size, trace_id, user_id when authenticated and rate_limit when a rate limit refused it. Headers, query string and bodies are never
-// logged, since they carry tokens and passwords (threat model JWT-8).
+// size, trace_id, user_id when authenticated and rate_limit when a rate limit refused it.
+// Headers, query string and bodies are never logged, since they carry tokens and passwords.
 func AccessLog(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		start := time.Now()
@@ -190,7 +189,6 @@ func AccessLog(next http.Handler) http.Handler {
 	})
 }
 
-// statusRecorder remembers the status and counts the bytes written through it.
 type statusRecorder struct {
 	http.ResponseWriter
 	status int
@@ -223,10 +221,10 @@ func (s *statusRecorder) Unwrap() http.ResponseWriter {
 const invalidTokenDetail = "missing or invalid access token"
 
 // RequireAuth lets a request through only with a valid access token in the Authorization header
-// ("Bearer <token>", scheme case-insensitive), never from the query string or a cookie (threat
-// model JWT-3). The user id then goes into the context (UserID) and the log context, and the
-// verified token into the context for OutgoingContext to forward. Any failure is a 401 problem with code INVALID_TOKEN, a WWW-Authenticate: Bearer
-// header and one detail for every reason.
+// ("Bearer <token>", scheme case-insensitive), never from the query string or a cookie. The
+// user id then goes into the context (UserID) and the log context, and the verified token into
+// the context for OutgoingContext to forward. Any failure is a 401 problem with code
+// INVALID_TOKEN, a WWW-Authenticate: Bearer header and one detail for every reason.
 func RequireAuth(verifier *authtoken.Verifier) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

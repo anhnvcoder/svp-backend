@@ -42,7 +42,7 @@ import (
 )
 
 const (
-	// MaxTitleRunes is the longest title accepted, counted in characters after trimming (OPS-3).
+	// MaxTitleRunes is the longest title accepted, counted in characters after trimming.
 	MaxTitleRunes = 200
 	// MaxSizeBytes is the "500 MB" upload limit, read as 500 MiB (524,288,000 bytes).
 	MaxSizeBytes = 500 << 20
@@ -50,12 +50,10 @@ const (
 	maxMediaTypeLen = len("video/") + 127
 
 	// uploadFormTTL is how long a presigned upload form is accepted: long enough for a slow mobile
-	// upload, short because anyone holding a leaked form can write to its key until then
-	// (UP-2).
+	// upload, short because anyone holding a leaked form can write to its key until then.
 	uploadFormTTL = 15 * time.Minute
 	// MaxOpenUploads is how many videos one author may have UPLOADING with a form still valid, so
-	// one account holds at most 1.5 GB of open upload forms
-	// (UP-7).
+	// one account holds at most 1.5 GB of open upload forms.
 	MaxOpenUploads = 3
 	// minRepeatFormTTL is the shortest form a repeated InitUpload signs: a shorter one is of no use
 	// for a 500 MiB file, so the call is refused instead.
@@ -169,9 +167,8 @@ func CallerInterceptor(verifier *authtoken.Verifier) grpc.UnaryServerInterceptor
 
 // InitUpload creates a video in UPLOADING owned by the caller and returns a form that uploads
 // exactly uploads/<video_id>, of 1 to size_bytes bytes with the normalized content type, for 15
-// minutes (UP-1). The form is a credential: it is never logged (UP-2). A caller who already has
-// MaxOpenUploads videos UPLOADING created within the form's lifetime gets RESOURCE_EXHAUSTED
-// (UP-7).
+// minutes. The form is a credential: it is never logged. A caller who already has
+// MaxOpenUploads videos UPLOADING created within the form's lifetime gets RESOURCE_EXHAUSTED.
 //
 // A call with a request_id the caller has used before creates nothing: it returns the video of
 // that request_id with a newly signed form when the request matches, the video is still UPLOADING
@@ -205,7 +202,7 @@ func (s *Server) InitUpload(ctx context.Context, req *videov1.InitUploadRequest)
 	// Signed before the video is stored: signing can fetch a credential over the network, and a
 	// video stored for a form that was never handed out would count against MaxOpenUploads until
 	// the form would have expired. A form signed for a video that is then refused is dropped
-	// unseen. The key comes from the id the server generated, never from the request (UP-4).
+	// unseen. The key comes from the id the server generated, never from the request.
 	form, err := s.storage.PresignPost(ctx, objstore.UploadsPrefix+id, req.GetSizeBytes(), contentType, uploadFormTTL)
 	if err != nil {
 		return nil, s.internal(ctx, "presign upload form", err)
@@ -229,8 +226,8 @@ func (s *Server) InitUpload(ctx context.Context, req *videov1.InitUploadRequest)
 	if earlier != nil {
 		return s.repeated(ctx, *earlier, p)
 	}
-	// user_id and trace_id are already in the context; video_id joins them on every later log
-	// (UP-8), only now that the video is stored, so no log names a video that does not exist.
+	// user_id and trace_id are already in the context; video_id joins them on every later log,
+	// only now that the video is stored, so no log names a video that does not exist.
 	ctx = logx.With(ctx, slog.String("video_id", id))
 	s.logger.InfoContext(ctx, "video created")
 
@@ -246,7 +243,7 @@ func (s *Server) InitUpload(ctx context.Context, req *videov1.InitUploadRequest)
 // created: with v and a form signed anew when p asks for the same title, size and content type
 // and v is still UPLOADING. The form of the first call is not stored, so it cannot be returned;
 // the new one ends with the window of the first, created_at + uploadFormTTL. Open uploads are
-// counted (UP-7) and swept by created_at, so a later end would let one account hold more than
+// counted and swept by created_at, so a later end would let one account hold more than
 // MaxOpenUploads valid forms and upload to a video the sweep has already failed. With less than
 // minRepeatFormTTL left the first call can no longer be answered again.
 func (s *Server) repeated(ctx context.Context, v store.Video, p store.CreateVideoParams) (*videov1.InitUploadResponse, error) {
@@ -351,7 +348,7 @@ func (s *Server) createVideoTx(ctx context.Context, p store.CreateVideoParams) (
 // CompleteUpload checks that uploads/<video_id> holds the declared size and content type, then
 // moves the video from UPLOADING to PROCESSING and writes video.uploaded to the outbox in one
 // transaction. A video already PROCESSING or READY is returned as is, so a retried call emits
-// nothing. A video of another user gets the same error as a missing one (UP-3).
+// nothing. A video of another user gets the same error as a missing one.
 func (s *Server) CompleteUpload(ctx context.Context, req *videov1.CompleteUploadRequest) (*videov1.CompleteUploadResponse, error) {
 	caller, err := callerID(ctx)
 	if err != nil {
@@ -456,7 +453,7 @@ func (s *Server) markProcessing(ctx context.Context, v store.Video, key string) 
 }
 
 // GetVideo returns a video that is READY, or any video of the caller's own. Every other case
-// returns the same NOT_FOUND error, so a hidden video looks exactly like a missing one (UP-3).
+// returns the same NOT_FOUND error, so a hidden video looks exactly like a missing one.
 func (s *Server) GetVideo(ctx context.Context, req *videov1.GetVideoRequest) (*videov1.GetVideoResponse, error) {
 	caller, err := callerID(ctx)
 	if err != nil {
@@ -482,7 +479,7 @@ func (s *Server) GetVideo(ctx context.Context, req *videov1.GetVideoRequest) (*v
 
 // GetPublicVideo returns a READY video to anyone, for the public share page; it has no caller.
 // A malformed id, a missing video and a video not READY all get the same NOT_FOUND as GetVideo, so
-// an anonymous caller cannot tell an unpublished video from a missing one (UP-3). A malformed id
+// an anonymous caller cannot tell an unpublished video from a missing one. A malformed id
 // is still rejected before the database is read.
 func (s *Server) GetPublicVideo(ctx context.Context, req *videov1.GetPublicVideoRequest) (*videov1.GetPublicVideoResponse, error) {
 	videoID, err := ids.Parse(req.GetVideoId())
@@ -504,7 +501,7 @@ func (s *Server) GetPublicVideo(ctx context.Context, req *videov1.GetPublicVideo
 
 // ListAuthorVideos returns a page of the videos of author_id, newest first by (created_at,
 // video_id). The author sees videos in every status; anyone else only READY ones, the rule of
-// GetVideo (UP-3). Which videos are listed comes from author_id and the caller only: the page
+// GetVideo. Which videos are listed comes from author_id and the caller only: the page
 // token holds a position, so an edited or borrowed token never shows a hidden video.
 func (s *Server) ListAuthorVideos(ctx context.Context, req *videov1.ListAuthorVideosRequest) (*videov1.ListAuthorVideosResponse, error) {
 	caller, err := callerID(ctx)
@@ -580,7 +577,7 @@ func callerID(ctx context.Context) (uuid.UUID, error) {
 
 // checkTitle trims title and requires 1 to MaxTitleRunes characters of valid UTF-8 without NUL
 // (Postgres text cannot hold NUL). The title is stored as given, without escaping: whoever
-// displays it must treat it as text (OPS-3).
+// displays it must treat it as text.
 func checkTitle(title string) (string, error) {
 	title = strings.TrimSpace(title)
 	if !utf8.ValidString(title) || strings.ContainsRune(title, 0) {

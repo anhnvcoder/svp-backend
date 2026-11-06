@@ -1,7 +1,7 @@
 // Package callerid finds the caller of a gRPC call: the gateway forwards the access token it
 // verified in the authorization metadata ("Bearer <token>"), and the service verifies that token
 // again with the same public keys, so a client that reaches the service directly cannot claim
-// to be anyone without a token signed by user-service (threat model IN-1, IN-2).
+// to be anyone without a token signed by user-service.
 //
 // There is deliberately no helper that copies incoming metadata onward: the gateway builds
 // outgoing metadata from scratch with only the values it sets.

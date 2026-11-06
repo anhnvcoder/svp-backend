@@ -74,7 +74,7 @@ func TestDecisionSeriesStartAtZero(t *testing.T) {
 	}
 }
 
-// TestDecisionsWhileRedisDown is threat model RL-2: decisions made without Redis are counted
+// TestDecisionsWhileRedisDown: decisions made without Redis are counted
 // under store="fallback", for a soft-closed class (allowed and limited) and an open one.
 func TestDecisionsWhileRedisDown(t *testing.T) {
 	captureLog(t)
@@ -127,7 +127,7 @@ func TestDecisionsOnRedis(t *testing.T) {
 
 // TestDecisionsOfCancelledRequestsNotCounted: with Redis up, a request whose context is already
 // cancelled (the client went away) fails its Redis call but is not counted under fallback, so
-// it cannot look like Redis failing (threat model RL-2).
+// it cannot look like Redis failing.
 func TestDecisionsOfCancelledRequestsNotCounted(t *testing.T) {
 	logs := captureLog(t)
 	client, prefix := testRedis(t)

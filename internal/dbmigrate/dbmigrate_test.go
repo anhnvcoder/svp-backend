@@ -93,7 +93,6 @@ func TestUpAppliesPendingMigrationsOnly(t *testing.T) {
 		t.Errorf("columns = %s, want id,name", got)
 	}
 
-	// Running again applies nothing.
 	if err := dbmigrate.Up(t.Context(), url, fsys); err != nil {
 		t.Fatalf("second Up() = %v", err)
 	}

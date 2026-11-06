@@ -12,7 +12,7 @@ import (
 	"time"
 )
 
-// Demuxer and decoder names handed to ffprobe and ffmpeg (FF-1, FF-2), checked against
+// Demuxer and decoder names handed to ffprobe and ffmpeg, checked against
 // `ffmpeg -demuxers` and `ffmpeg -decoders` of ffmpeg 9.0.2. A whitelist entry matches any
 // name of a demuxer, so "mov" admits "mov,mp4,m4a,3gp,3g2,mj2" and "matroska" admits
 // "matroska,webm"; playlist and reference demuxers (hls, concat, ...) stay out.
@@ -30,7 +30,7 @@ var (
 	audioCodecs    = []string{"aac", "mp3", "opus", "vorbis"}
 )
 
-// Input limits (FF-3).
+// Input limits.
 const (
 	maxStreams  = 8
 	maxSide     = 4096

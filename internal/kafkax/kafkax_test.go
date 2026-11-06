@@ -49,7 +49,6 @@ func (b *lockedBuffer) String() string {
 	return b.buf.String()
 }
 
-// records returns the decoded JSON log lines whose msg is msg.
 func (b *lockedBuffer) records(t *testing.T, msg string) []map[string]any {
 	t.Helper()
 	var out []map[string]any
@@ -115,7 +114,6 @@ func produce(t *testing.T, cl *kgo.Client, rs ...*kgo.Record) {
 	}
 }
 
-// running is a consumer started in the background.
 type running struct {
 	cancel context.CancelFunc
 	// finished is closed when Run returns; err is its result.
@@ -123,7 +121,6 @@ type running struct {
 	err      error
 }
 
-// stop cancels the consumer and returns Run's result.
 func (r *running) stop(t *testing.T) error {
 	t.Helper()
 	r.cancel()
@@ -212,7 +209,6 @@ func pollN(t *testing.T, cl *kgo.Client, n int, wait time.Duration) []*kgo.Recor
 	return out
 }
 
-// readTopic reads a topic from the start without a group.
 func readTopic(t *testing.T, brokers, topic string, n int, wait time.Duration) []*kgo.Record {
 	t.Helper()
 	cl, err := NewClient(brokers, "test-reader", kgo.ConsumeTopics(topic), kgo.FetchMaxWait(100*time.Millisecond))
@@ -231,7 +227,6 @@ func headerMap(r *kgo.Record) map[string]string {
 	return m
 }
 
-// commitCounter counts OffsetCommit requests the client writes.
 type commitCounter struct{ n atomic.Int32 }
 
 func (c *commitCounter) OnBrokerWrite(_ kgo.BrokerMetadata, key int16, _ int, _, _ time.Duration, err error) {
@@ -240,7 +235,6 @@ func (c *commitCounter) OnBrokerWrite(_ kgo.BrokerMetadata, key int16, _ int, _,
 	}
 }
 
-// joinCounter counts JoinGroup requests the client writes.
 type joinCounter struct{ n atomic.Int32 }
 
 func (c *joinCounter) OnBrokerWrite(_ kgo.BrokerMetadata, key int16, _ int, _, _ time.Duration, err error) {

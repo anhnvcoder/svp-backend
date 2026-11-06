@@ -1,6 +1,6 @@
 // Package transcode turns one local video file into HLS (up to three renditions) and a
-// thumbnail with ffprobe and ffmpeg found in PATH, under the limits of docs/threat-model.md
-// §4.3 (FF-1 to FF-3, FF-7). It knows nothing about Kafka or storage.
+// thumbnail with ffprobe and ffmpeg found in PATH, under the limits of docs/threat-model.md.
+// It knows nothing about Kafka or storage.
 //
 // Errors are ErrInvalidInput or ErrDurationExceeded (wrapped with a detail) when the probe shows
 // the file is the problem. Other errors are returned as they are, and the caller classifies them:
@@ -200,7 +200,7 @@ func scaleFilter(r rung) string {
 	return fmt.Sprintf("scale=w='if(gte(iw,ih),-2,%[1]d)':h='if(gte(iw,ih),%[1]d,-2)'", r.short)
 }
 
-// inputArgs opens the source under the whitelists (FF-1, FF-2).
+// inputArgs opens the source under the whitelists.
 func inputArgs(src string, extra ...string) []string {
 	args := []string{
 		"-hide_banner", "-nostdin", "-loglevel", "error", "-y",
@@ -214,7 +214,7 @@ func inputArgs(src string, extra ...string) []string {
 
 // hlsArgs builds the single ffmpeg run that encodes every rendition.
 func hlsArgs(src, outDir string, rungs []rung, audio bool) []string {
-	// -t as an input option caps what is decoded, whatever the metadata claims (FF-3).
+	// -t as an input option caps what is decoded, whatever the metadata claims.
 	args := inputArgs(src, "-t", strconv.Itoa(int(maxDuration.Seconds())))
 
 	var graph strings.Builder
@@ -238,7 +238,7 @@ func hlsArgs(src, outDir string, rungs []rung, audio bool) []string {
 		}
 	}
 
-	// Always re-encode, never copy a stream (FF-7).
+	// Always re-encode, never copy a stream.
 	args = append(args, "-c:v", "libx264", "-preset", "veryfast", "-pix_fmt", "yuv420p")
 	for i, r := range rungs {
 		args = append(args,
@@ -255,7 +255,7 @@ func hlsArgs(src, outDir string, rungs []rung, audio bool) []string {
 		args = append(args, "-c:a", "aac", "-b:a", strconv.Itoa(audioBitrate), "-ac", "2")
 	}
 	return append(args,
-		// Drop container, stream and chapter metadata of the source (FF-7).
+		// Drop container, stream and chapter metadata of the source.
 		"-map_metadata", "-1", "-map_chapters", "-1",
 		"-f", "hls",
 		"-hls_time", strconv.Itoa(segmentSeconds),
@@ -270,10 +270,7 @@ func hlsArgs(src, outDir string, rungs []rung, audio bool) []string {
 
 // thumbnailMaxShort caps the thumbnail's short side. The thumbnail is the poster a page shows
 // before the first frame, and on the feed it is the page's largest paint: at 720 px it weighs
-// about half of a 1080 px frame. The poster covers a portrait column, so its height sets how
-// sharp it looks: a portrait poster (720x1280) about fills a phone column at 1.75x, a landscape
-// one (1280x720) is scaled up about 1.8x there and 2.2x on a 2x desktop screen. That lasts until
-// the first frame, which the web player takes from the lowest rendition (360 px): softer still.
+// about half of a 1080 px frame.
 const thumbnailMaxShort = 720
 
 // thumbnailArgs grabs one frame at 1 s, or mid-video for a video under 2 s, at the size of the
@@ -319,7 +316,7 @@ func (e *toolError) Error() string {
 
 func (e *toolError) Unwrap() error { return e.err }
 
-// runTool runs name from PATH with an empty environment (FF-2). With timeout > 0 the run gets
+// runTool runs name from PATH with an empty environment. With timeout > 0 the run gets
 // its own deadline; when the deadline or ctx ends, exec.CommandContext kills the process
 // (SIGKILL) and Wait reaps it before runTool returns. Each run is a span named after the tool,
 // without its arguments: they hold the job's paths.

@@ -262,7 +262,7 @@ func TestConsumerConfigBlocksRebalance(t *testing.T) {
 	}
 }
 
-// A second video.ready of a stored video naming another author (forged, threat model IN-4) fans
+// A second video.ready of a stored video naming another author (forged) fans
 // out to nobody: followers are chosen by the stored author, so unfollowing that author later
 // still removes everything it delivered.
 func TestVideoReadyWithAnotherAuthorFansOutToNobody(t *testing.T) {
@@ -534,7 +534,7 @@ func TestSameRecordTwiceChangesNothing(t *testing.T) {
 
 // An old user.followed replayed alone after the edge's user.unfollowed (pushed back from the
 // dead-letter topic, say) brings the edge and its backfill back. This is the known limit of
-// ADR-0009: replays must keep partition order (TestReplayFollowUnfollowFollow); a safe lone
+// the design: replays must keep partition order (TestReplayFollowUnfollowFollow); a safe lone
 // replay needs edge tombstones with occurred_at, which the feed does not have.
 func TestOldFollowReplayedAfterUnfollowRestoresEdge(t *testing.T) {
 	needDB(t)
@@ -676,8 +676,7 @@ func TestUninterestingEventsAreSkipped(t *testing.T) {
 	}
 }
 
-// Every malformed or forged event goes to its dead-letter topic at once and writes nothing
-// (IN-5, FF-6).
+// Every malformed or forged event goes to its dead-letter topic at once and writes nothing.
 func TestInvalidEventsGoToDeadLetter(t *testing.T) {
 	needDB(t)
 	cluster, err := kfake.NewCluster(kfake.NumBrokers(1),
@@ -867,7 +866,7 @@ func TestVideoReadyStoresTrimmedTitle(t *testing.T) {
 }
 
 // A video.ready whose title Postgres cannot store (NUL) goes to the dead-letter topic, and the
-// records behind it are still applied: the consumer does not retry it forever (IN-5).
+// records behind it are still applied: the consumer does not retry it forever.
 func TestPoisonTitleDoesNotStallConsumer(t *testing.T) {
 	needDB(t)
 	cluster, err := kfake.NewCluster(kfake.NumBrokers(1),

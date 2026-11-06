@@ -103,7 +103,7 @@ type FanOutVideoParams struct {
 
 // Puts the video into the timeline of every follower of its author, with the published_at and
 // author stored in videos rather than the event's: a second video.ready naming another author
-// (forged, threat model IN-4) fans out to nobody.
+// (forged) fans out to nobody.
 func (q *Queries) FanOutVideo(ctx context.Context, arg FanOutVideoParams) (int64, error) {
 	result, err := q.db.Exec(ctx, fanOutVideo, arg.VideoID, arg.AuthorID)
 	if err != nil {

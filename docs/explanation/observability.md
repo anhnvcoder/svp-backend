@@ -215,6 +215,26 @@ flowchart LR
   `route`; dashboard Grafana `svp-web` vẽ p75 theo route (WEB-21). SLO trên RUM là `web-inp` ([SLO](reliability.md#slo)).
 - **Log:** web chỉ ghi stdout, không gửi log OTLP; Loki không có dòng của web.
 
+## Trace qua Kafka
+
+Vì sao: [ADR-0011](../adr/0011-observability-stage3.md) §3.
+
+`kafkax.Produce` cho mỗi record một producer span nằm dưới span của request, và đặt `traceparent` của chính span đó vào header
+của record. Ở `RecordView` của engagement-service (`view.recorded`, produce thẳng), lần produce bị cắt ngang không được thử
+lại, vì broker có thể đã nhận record.
+
+## Log trang khám phá
+
+Vì sao: [runbook `explore-cache-redis-timeout`](../runbooks/explore-cache-redis-timeout.md).
+
+Khi feed-service đọc Postgres để trả trang khám phá, nó ghi dòng `explore page loaded from database`:
+
+- `cache` cho biết vì sao cache không phục vụ lần đọc này, để đếm được các lần đọc Postgres do Redis chậm gây ra. Cảnh báo (WARN)
+  của cache chỉ ghi tối đa một lần mỗi phút nên không đếm được chúng. Lần nhìn cache ngay trước dòng log là lần quyết định có đọc
+  Postgres hay không.
+- `cache_write` cho biết việc ghi trang vào cache kết thúc ra sao. Lần ghi vượt ngân sách có thể không để lại trang nào, nên lần
+  đọc chung kế tiếp thấy `cache=miss` vì Redis chậm chứ không phải vì trang hết hạn.
+
 ## Cảnh báo
 
 Rule viết tay ở [`deploy/observability/prometheus/rules/svp-alerts.yaml`](../../deploy/observability/prometheus/rules/svp-alerts.yaml);

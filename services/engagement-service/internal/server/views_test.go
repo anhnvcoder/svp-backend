@@ -192,7 +192,6 @@ func TestStaleRetryAfterAnotherConsumerCountedFurther(t *testing.T) {
 	e := newViewsEnv(t, "stale_retry")
 	id := ids.New()
 	rs := e.produceViews(t, 0, repeat(id, 15)...)
-	// The other member counts offsets 0..12.
 	e.handle(t, rs[:13]...)
 
 	stale := &kafkax.Batch{Records: rs[3:8]}
@@ -569,7 +568,6 @@ func TestConsumerCountsThousandViewsOnceAfterRewind(t *testing.T) {
 	want := map[string]int64{}
 	perPartition := map[int32][][]byte{}
 	for i := range 1000 {
-		// Uneven counts per video, the first one hot.
 		id := videos[0]
 		if i%4 != 0 {
 			id = videos[1+i%len(videos[1:])]
@@ -620,7 +618,6 @@ func TestConsumerCountsThousandViewsOnceAfterRewind(t *testing.T) {
 		t.Errorf("next_offset moved past the end offsets %v", ends)
 	}
 
-	// The 4 malformed records went to the dead-letter topic once per delivery.
 	dlq := readTopic(t, e.brokers, TopicViews+kafkax.DLQSuffix, 8)
 	for _, r := range dlq {
 		if string(r.Value) != "malformed view" || headerValue(r, kafkax.HeaderDLQGroup) != ViewsGroup ||

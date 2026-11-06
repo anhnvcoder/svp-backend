@@ -57,14 +57,9 @@ const (
 	rollbackTimeout = 5 * time.Second
 
 	// writeTimeout bounds the Postgres part of Like and Unlike, the wait for a connection of the
-	// write pool included. Each is one statement run in pgx's default mode, which prepares a
-	// statement once per connection and keeps it: on a connection that has run it before it is
-	// one round trip, on a connection running it for the first time two (prepare, then execute),
-	// and a new connection adds the TCP connect and the Postgres startup with its authentication,
-	// several round trips more. The pool also pings a connection idle for more than a second
-	// before handing it out, one round trip more. With 200 ms a round trip, a pooled connection
-	// answers in 200 to 600 ms, well within this bound, while a new one does not: the caller then
-	// gets UNAVAILABLE after a second instead of waiting out the gateway's 3 s call deadline.
+	// write pool included. With 200 ms a round trip, a pooled connection answers in 200 to 600 ms,
+	// well within this bound, while a new one (TCP connect, startup, prepare) does not: the caller
+	// then gets UNAVAILABLE after a second instead of waiting out the gateway's 3 s call deadline.
 	writeTimeout = 1 * time.Second
 
 	// retryPushbackKey is the trailer by which a server tells a gRPC client's retry policy
@@ -316,8 +311,7 @@ func (s *Server) RecordView(ctx context.Context, req *engagementv1.RecordViewReq
 
 	produceCtx, cancel := context.WithTimeout(ctx, produceTimeout)
 	defer cancel()
-	// kafkax.Produce gives the record a producer span under the request's span, and that span's
-	// traceparent header. A produce cut short is not retried: the broker may have the record.
+	// A produce cut short is not retried: the broker may have the record.
 	err = kafkax.Produce(produceCtx, s.producer, &kgo.Record{Topic: TopicViews, Key: []byte(id), Value: value})
 	if err != nil {
 		s.logger.ErrorContext(logx.With(ctx, slog.String("video_id", id)), "produce view.recorded", slog.Any("error", err))
