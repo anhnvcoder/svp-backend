@@ -1,0 +1,26 @@
+{
+  "mediaType": "application/vnd.dev.sigstore.bundle.v0.3+json",
+  "verificationMaterial": {
+    "certificate": {
+      "rawBytes": "TUlJQ2Zha2U="
+    },
+    "tlogEntries": [
+      {
+        "logIndex": "1",
+        "kindVersion": {
+          "kind": "dsse",
+          "version": "0.0.1"
+        }
+      }
+    ]
+  },
+  "dsseEnvelope": {
+    "payload": "eyJfdHlwZSI6Imh0dHBzOi8vaW4tdG90by5pby9TdGF0ZW1lbnQvdjEiLCJzdWJqZWN0IjpbeyJuYW1lIjoiZ2hjci5pby9hbmhudmNvZGVyL3N2cC1iYWNrZW5kL2dhdGV3YXkiLCJkaWdlc3QiOnsic2hhMjU2IjoiNDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NCJ9fV0sInByZWRpY2F0ZVR5cGUiOiJodHRwczovL3NpZ3N0b3JlLmRldi9jb3NpZ24vc2lnbi92MSIsInByZWRpY2F0ZSI6e319Cg==",
+    "payloadType": "application/vnd.in-toto+json",
+    "signatures": [
+      {
+        "sig": "TUVVQ0lRZmFrZQ=="
+      }
+    ]
+  }
+}

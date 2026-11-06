@@ -1,0 +1,17 @@
+{
+  "mediaType": "application/vnd.dev.sigstore.bundle.v0.3+json",
+  "verificationMaterial": {
+    "certificate": {
+      "rawBytes": "TUlJQ2Zha2U="
+    },
+    "tlogEntries": [
+      {
+        "logIndex": "1",
+        "kindVersion": {
+          "kind": "dsse",
+          "version": "0.0.1"
+        }
+      }
+    ]
+  }
+}
