@@ -94,14 +94,20 @@ Loại tài liệu (Diátaxis): **reference**, tra cứu khi cần một lệnh 
 
 ## Lệnh của cluster
 
-- `make k8s-up` / `make k8s-down` / `make k8s-status`: `k8s-up` tạo (hay khởi động) registry và cluster, build và push sáu
-  image service Go tag `dev-<image ID>` (chỉ `--set`, không ghi file); web như `make up`: không đặt `WEB_FROM` hay `stg|image`
+- `make k8s-up` / `make k8s-down` / `make k8s-status`: `k8s-up` tạo (hay khởi động) registry và cluster, build sáu image service Go
+  một lượt bằng `docker buildx bake -f deploy/docker-bake.json` (bảng image, [ADR-0050](../adr/0050-bash-to-standard-tools.md)) và push
+  tag `dev-<image ID>` (state value của helmfile trong file tạm, không ghi file của repo); web như `make up`: không đặt `WEB_FROM` hay `stg|image`
   [`WEB_IMAGE=…`] thì release `web` chạy bản phát hành đó theo digest (node kéo ẩn danh từ GHCR, policy Audit), `WEB_FROM=clone` thì
   build và push thêm image `web` từ thư mục web; `IMAGES` bị từ chối (chỉ của `make up`), cài
   `argocd/apps/components.json` của bản clone `svp-gitops` theo wave với values `base/` của nó (thư mục cấu hình, mục
-  `make gitops-clone` dưới đây; không có thì in lệnh clone và dừng trước khi tạo gì) bằng
-  `deploy/k8s/install.sh` (trong đó chạy `secrets.sh` sau `svp-cluster`, `glitchtip-init.sh` sau `svp-observability`),
-  xuất CA ra `.k8s/ca.crt`. Với Postgres: giữ `serverName` (thế hệ lưu trữ) của Cluster `svp-pg` đang chạy bằng `--set`; từ
+  `make gitops-clone` dưới đây; không có thì in lệnh clone và dừng trước khi tạo gì) bằng helmfile (`HELMFILE_VERSION` của
+  `Makefile`, `make tools`): `deploy/k8s/helmfile.yaml.gotmpl` biến danh sách đó thành release (component của đường dev, `needs` theo
+  wave), glue `deploy/k8s/install.sh` chạy helmfile wave 0, 1, rồi `secrets.sh`, rồi các wave sau; điều release sau cần (chứng chỉ,
+  webhook, Prometheus, policy, metrics API của KEDA, backup cơ sở, DSN của GlitchTip qua `glitchtip-init.sh`, Rollout `Healthy`) là hook
+  postsync của release trước (`install.sh hook …`). Release lỗi thì helmfile không cài wave sau, in log lần migrate lỗi cuối và container
+  chưa ready. Reloader (component `reloader`) cài cùng lượt; cluster chạy workload mà chưa có Reloader hay workload chưa opt in đúng
+  bản render (cluster dựng trước) thì các wave sau chạy một lượt với Secret như cũ trước `secrets.sh`, xong mới đổi credential; cuối
+  lượt Reloader phải chạy và được patch mọi workload opt in, không thì FAIL. Xuất CA ra `.k8s/ca.crt`. Với Postgres: giữ `serverName` (thế hệ lưu trữ) của Cluster `svp-pg` đang chạy (state value `pgServerName` của helmfile); từ
   chối nâng `svp-data` khi `svp-pg` đang phục hồi (`bootstrap.recovery` có mà chưa Ready) hay đã mất mà còn Backup của nó;
   sau `svp-data` chờ WAL lưu liên tục và thế hệ đang chạy có backup cơ sở (chưa có thì chụp một bản; cluster mới chờ thêm vài
   phút); idempotent, cần `.env` (`make env`), từ chối cluster do Argo CD quản (có Application
@@ -116,25 +122,34 @@ Loại tài liệu (Diátaxis): **reference**, tra cứu khi cần một lệnh 
   chuẩn của 32 byte, sai dạng thì dừng; `svp/<service>-env` của gateway và bốn service gRPC có `JWT_VERIFY_KEYS` (khoá công khai,
   [ADR-0042](../adr/0042-caller-identity-grpc.md)), khoá ký chỉ ở `user-service-env`; ExternalSecret của đường GitOps dựng cùng
   key từ nguồn `jwt-verify`; `svp-data/pg-backup-s3` là đăng nhập của user `svp-pg-backup` của object store, chỉ sidecar của
-  plugin Barman Cloud trong pod Postgres đọc); mật khẩu superuser Redpanda đổi thì đặt vào broker đang chạy trước khi apply
-  (`redpanda_admin` của `deploy/k8s/lib.sh`, dùng chung với `make eks-secrets`; cần `redpanda-0` chạy; Admin API không trả lời hay không nhận mật khẩu nào thì dừng, không đổi Secret nào), object store
-  (Secret `s3-root`, `s3-users`) hay Redpanda chạy với mật khẩu khác `.env` thì restart; sau đó `make k8s-up` để Job init đặt mật khẩu mới và restart service
-  có Secret đổi (cluster GitOps: các bước tay ở đầu `deploy/k8s/gitops.sh`). **Hai chế độ, chọn theo namespace `svp-secrets`:**
+  plugin Barman Cloud trong pod Postgres đọc). Mỗi lần là **trọn một lượt xoay credential** (`deploy/k8s/rotate.sh`,
+  [ADR-0050](../adr/0050-bash-to-standard-tools.md) mục 5), đủ ba bước dù giá trị nào đổi: (1) máy chủ: mật khẩu superuser Redpanda đổi
+  thì đặt vào broker đang chạy trước (`redpanda_admin` của `deploy/k8s/lib.sh`, dùng chung với `make eks-secrets`; cần `redpanda-0`
+  chạy; Admin API không trả lời hay không nhận mật khẩu nào thì dừng, không đổi Secret nào), apply Secret của `svp-data`, rồi chờ mọi
+  pod của StatefulSet `s3` và `redpanda` chạy với giá trị của `.env` và Ready (Reloader restart chúng; so trong container qua stdin,
+  300 s mỗi replica, hết hạn thì FAIL nêu StatefulSet); (2) Job init của `svp-data` đặt mật khẩu mới (đường dev: helmfile, chỉ release
+  `svp-data`; cluster GitOps: một operation sync của Application `argocd/svp-data`, chờ `Succeeded`), lỗi thì dừng, Secret của client
+  không đổi; release hay Application chưa có (lần dựng) thì bỏ bước này; (3) client: Secret của `svp`, `svp-obs`, `keda`; Reloader
+  restart workload có Secret đổi, script không chờ, in lệnh `kubectl --context k3d-svp get pods -A -w` để theo dõi. Cùng `.env` thì
+  không Secret nào đổi, không gì restart; lượt chạy lại sau một lượt chết giữa chừng làm nốt init còn thiếu. Trước khi ghi gì, từ chối
+  cluster chạy workload của dự án mà chưa có Reloader, có workload chưa opt in theo đúng Secret của chart, hay (đường dev) Reloader không
+  được patch nó: dòng `FAIL  cluster svp is not ready for a change of credentials: <lý do>`, `make k8s-up` cài chúng. Rollout đang
+  canary lúc Secret của nó đổi thì để Reloader và Argo Rollouts xử lý như mọi restart. **Hai chế độ, chọn theo namespace `svp-secrets`:**
   cluster dev (không có namespace đó) nhận chính các Secret như trên; cluster GitOps dựng từ revision mà overlay stg bật
   `externalSecrets` của chart `svp-cluster` (có `svp-secrets`) chỉ nhận **nguồn**: mỗi entry của
   `deploy/helm/svp-cluster/files/external-secrets.yaml` một Secret ở `svp-secrets` (10 entry từ `.env`, key đặt tên như `.env`;
   entry thứ 11 `glitchtip-runtime` tạo rỗng khi chưa có và không bao giờ bị đổi ở đây; entry `argocd-notifications` chỉ khi chart
-  bật `externalSecrets.argocdNotifications`, xem [`eks.md`](eks.md)), rồi khi ExternalSecret đã có thì dựng lại từng cái từ
-  nguồn mới (`force-sync`, chờ `status.syncedResourceVersion` đổi và `Ready`; `es_force_sync` của `deploy/k8s/lib.sh`) trước khi
-  restart như trên. External Secrets Operator ([ADR-0026](../adr/0026-secrets-gitops.md)) dựng 28 Secret từ đó (k3d); cluster GitOps
+  bật `externalSecrets.argocdNotifications`, xem [`eks.md`](eks.md)), rồi khi ExternalSecret đã có thì dựng lại từ nguồn mới
+  (`force-sync`, chờ `status.syncedResourceVersion` đổi và `Ready`; `es_force_sync` của `deploy/k8s/lib.sh`), các ExternalSecret của
+  `svp-data` ở bước (1), các cái còn lại ở bước (3). External Secrets Operator ([ADR-0026](../adr/0026-secrets-gitops.md)) dựng 28 Secret từ đó (k3d); cluster GitOps
   từ revision không có External Secrets thì nhận Secret như đường dev. `k8s-glitchtip-init` ghi DSN vào Secret
   `svp/sentry`, token API chỉ đọc vào `svp-obs/glitchtip-api` và token tải source map vào `svp-obs/glitchtip-sourcemaps`
   (không vào `.env`, không in; cluster có `svp-secrets`: ghi vào nguồn `svp-secrets/glitchtip-runtime` rồi `force-sync` ba
-  ExternalSecret đó), restart service khởi động
-  khi chưa có DSN hiện tại; idempotent, `k8s-up` tự gọi, không cần `.env`. `k8s-ca` ghi CA của chứng chỉ TLS ra
+  ExternalSecret đó); `svp/sentry` đổi thì Reloader restart service đọc nó (Secret mới tạo thì không: `reloadOnCreate: false`,
+  service nhận ở lần restart sau); idempotent, `k8s-up` tự gọi, không cần `.env`. `k8s-ca` ghi CA của chứng chỉ TLS ra
   `.k8s/ca.crt`.
-- `make k8s-images`: build bảy image (sáu từ working tree, `web` từ thư mục web `web_dir` với `SVP_BUILD_ID=dev-<hash nội dung>`) và
-  push lên `127.0.0.1:5111` tag `dev-<image ID>` (đường dev).
+- `make k8s-images`: build bảy image (sáu từ working tree bằng `docker buildx bake -f deploy/docker-bake.json`, `web` từ thư mục web
+  `web_dir` với `SVP_BUILD_ID=dev-<hash nội dung>`) và push lên `127.0.0.1:5111` tag `dev-<image ID>` (đường dev).
   `make k8s-release` **đã bỏ**: image phát hành build, quét, ký trong CI (`images.yml`, [`ci.md`](ci.md)), job
   `promote` ghi khối `image` vào `envs/stg/images/<svc>.yaml` của repo `svp-gitops` (cùng `envs/stg/charts.yaml`) trên nhánh
   `bot/promote-stg` của repo đó và mở hay cập nhật một PR cuộn tự merge khi `gitops-ok` xanh (mục `images.yml` của [`ci.md`](ci.md)). Đường dev
@@ -176,9 +191,8 @@ Loại tài liệu (Diátaxis): **reference**, tra cứu khi cần một lệnh 
   `refs/heads/<nhánh>` (Argo CD nhận tên đầy đủ, không bao giờ tên ngắn, vì tên ngắn có thể phân giải sang tag cùng tên; `follow_branch`,
   cũng chạy riêng được: `deploy/k8s/gitops.sh follow <nhánh>`): nhánh không đổi thì chỉ root sync, dòng `ok … follows refs/heads/…,
   still at <sha>`; nhánh đã đi tiếp thì một dòng `note` nêu hai commit, Argo CD triển khai bản mới như mọi lần phát hành (canary của
-  gateway, web cần traffic: `make k8s-traffic-start`), script không chờ; `GITOPS_REV` là SHA thì cluster ở yên đó. `restart_workload`
-  của `deploy/k8s/lib.sh` (restart sau khi Secret đổi, cả `glitchtip-init.sh`) gặp Rollout đang canary (pod template khác `stableRS`,
-  pause, abort), trước hay giữa lúc restart, thì dừng ngay, nêu canary và cách gỡ, không chờ 300 s. Trước khi tạo gì, kiểm ở đúng revision đó cả 7 file `envs/stg/images/`: repository
+  gateway, web cần traffic: `make k8s-traffic-start`), script không chờ; `GITOPS_REV` là SHA thì cluster ở yên đó. Đổi credential trên
+  cluster này cũng là `make k8s-secrets` (chế độ GitOps ở trên): không bước tay, Reloader restart. Trước khi tạo gì, kiểm ở đúng revision đó cả 7 file `envs/stg/images/`: repository
   `<imagePrefix><svc>` của một nguồn phát hành có `<svc>` trong bảng nguồn ở commit `charts.yaml` của stg, manifest kéo ẩn danh được
   (package GHCR đã public), chữ ký và attestation `vuln` đúng identity của nguồn đó, không CRITICAL, không quá 48 giờ (`deploy/ci/values-check.sh --gitops` trên bản trích `envs/stg` của revision, gọi
   `verify-release.sh --gitops`, bằng `cosign` trên PATH, không có thì `COSIGN_IMAGE`; quá hạn thì in lệnh dispatch rescan), và khi
@@ -190,7 +204,7 @@ Loại tài liệu (Diátaxis): **reference**, tra cứu khi cần một lệnh 
   `argocd/bootstrap.json` (chart, version, values `base/argo-cd.yaml`, rồi `platforms/<platform>/argo-cd.yaml` khi revision có file
   đó; namespace `argocd`, PSA `restricted`) với plugin Gateway API
   của Argo Rollouts theo kiến trúc node (`nodeArch` đọc từ node, cluster lẫn kiến trúc thì dừng; bản amd64 ở
-  `base/argo-rollouts-amd64.yaml`, cùng file `install.sh` của đường dev đọc), AppProject `svp` và `default` đã khoá
+  `base/argo-rollouts-amd64.yaml`, cùng file helmfile của đường dev đọc), AppProject `svp` và `default` đã khoá
   (`argocd/project.yaml`), root `svp-root` (`env=stg`, chart `argocd/root` ở commit đã kiểm, render đúng một Application `svp-apps`
   của chart `argocd/apps`; `follow_branch` đổi `targetRevision` của root và value `targetRevision` của nó, revision của `svp-apps`
   khi env không ghim `gitopsRevision`); chờ mọi Application
@@ -221,7 +235,7 @@ Loại tài liệu (Diátaxis): **reference**, tra cứu khi cần một lệnh 
   đúng pid đã ghi và in số request theo status. **LOCAL LAB ONLY:** đăng ký user mới và xoá khoá rate limit đăng ký ở
   Valkey db 10 của cluster.
 - Diễn tập trên cluster là test Chainsaw ở `deploy/k8s/drills/<diễn tập>/` (nhãn `drill=<diễn tập>`, config chung `.chainsaw.yaml`,
-  StepTemplate chung ở `templates/`). `make drill-k8s-threats`, `drill-k8s-supplychain`, `drill-k8s-gitops` gọi
+  StepTemplate chung ở `templates/`). `make drill-k8s-threats`, `drill-k8s-supplychain`, `drill-k8s-gitops`, `drill-k8s-reloader` gọi
   `deploy/k8s/drills/run.sh <diễn tập>`: kiểm context trước (`SVP_KUBE_CONTEXT` trống hay `k3d-svp`, kubeconfig có context `k3d-svp`, API
   trả lời; sai thì dừng, không gọi cluster nào khác), rồi một lần `chainsaw test --kube-context k3d-svp --parallel 1` cho đúng một diễn tập
   (hai diễn tập không bao giờ chạy cùng lúc). Output vào `.k8s/drills/<diễn tập>-<UTC>.log`, report JUnit `.k8s/drills/<diễn tập>-<UTC>.xml`;
@@ -299,6 +313,20 @@ Loại tài liệu (Diátaxis): **reference**, tra cứu khi cần một lệnh 
   khoá rate limit nào.
 - `make drill-k8s-gitops`: các kiểm của cluster GitOps (`make k8s-gitops-up`), mỗi kiểm một test ở `deploy/k8s/drills/gitops/`; log và
   report JUnit `.k8s/drills/gitops-<UTC>.log`, `.xml`.
+- `make drill-k8s-reloader`: xoay credential thật trên cluster dev hay GitOps (test `deploy/k8s/drills/reloader/rotate/`, cần
+  `make k8s-smoke` chạy trước trên cùng cluster). Ghi giá trị mới vào `.env` (mật khẩu root object store, superuser Redpanda, role app
+  Postgres của `video-service` và GlitchTip, user Kafka của `feed-service` và KEDA, admin Grafana, thêm một khoá verify của
+  `tools/jwtkey` sau các khoá của `JWT_VERIFY_KEYS`, khoá Server Action của web), chạy `make k8s-secrets` một lần, rồi kiểm: Secret của
+  mỗi giá trị có version mới; mỗi workload đọc Secret đổi (bảng "Secret → workload" ở `reloader.sh` của test) chỉ còn pod mới, Ready
+  đủ replica, trong 300 s mỗi workload; workload khác không có pod mới; Rollout `gateway`, `web` giữ revision; Job init của `svp-data`
+  chạy lại và `Succeeded`; mỗi giá trị một phép chức năng: giá trị mới được nhận, giá trị cũ bị từ chối khi kiểm được từ ngoài (bảng
+  phép kiểm theo loại giá trị ở đầu test); rồi `make k8s-secrets` lần nữa với cùng `.env` không đổi Secret nào (trừ bản ghi release
+  của Helm), không thay pod nào, Job init vẫn chạy và `Succeeded`; cuối cùng `make k8s-smoke` xanh. Giá trị mới ở lại `.env` (lượt đỏ
+  giữa chừng: sửa nguyên nhân rồi `make k8s-secrets`); khoá verify thêm vào ở lại `JWT_VERIFY_KEYS`, khoá riêng của nó mất cùng diễn
+  tập. Giá trị mới do `deploy/k8s/drills/reloader/new-values.sh` sinh, hay đọc từ file `SVP_DRILL_NEW_VALUES` (mode 600; bắt buộc
+  trên GitHub Actions, nơi bước trước đã mask chúng); `run.sh` tìm giá trị cũ, mới và token API GlitchTip trong log và report. Log
+  và report JUnit `.k8s/drills/reloader-<UTC>.log`, `.xml`. **LOCAL LAB ONLY:** `make k8s-smoke` cuối xoá khoá rate limit đăng ký ở
+  Valkey db 10 của cluster.
 - `make k8s-ui-grafana`, `k8s-ui-prometheus`, `k8s-ui-alertmanager`, `k8s-ui-glitchtip`, `k8s-ui-argocd`: port-forward chỉ
   trên `127.0.0.1` (lần lượt 3000, 9090, 9093, 8000, 8081) trong lúc target chạy (Ctrl-C để đóng); không HTTPRoute,
   LoadBalancer hay NodePort nào cho UI (OPS-2). Grafana đăng nhập `admin` + `SVP_GRAFANA_ADMIN_PASSWORD`, GlitchTip bằng

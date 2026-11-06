@@ -65,9 +65,9 @@ cài đặt trên `anhnvcoder` → **Suspend** (mọi token của App ngừng ch
 2. Ghi vào `.env` (mode 600) bằng trình soạn, thay giá trị `SVP_ARGOCD_NOTIFY_PRIVATE_KEY_B64` bằng output của
    `base64 < <file>.pem | tr -d '\n'` (`.env` không nhận giá trị nhiều dòng); xoá file `.pem`.
 3. `AWS_PROFILE=anhnv-<env> make eks-secrets CONTEXT=<ctx>` (prd: tunnel tới API mở): kiểm account của profile và khoá (base64 chuẩn,
-   PEM đọc được, không passphrase; sai thì dừng, không ghi entry nào), ghi mọi entry rồi dựng lại mọi ExternalSecret và chờ `Ready`
-   ([`eks.md`](../reference/eks.md), mục "Đổi secret của env đang chạy"). Chỉ khoá này đổi thì không cần sync `svp-data` hay restart:
-   controller notifications đọc lại Secret.
+   PEM đọc được, không passphrase; sai thì dừng, không ghi entry nào), rồi làm trọn một lượt xoay credential: ghi mọi entry, dựng
+   lại ExternalSecret và chạy Job init của `svp-data` ([`eks.md`](../reference/eks.md), mục "Đổi secret của env đang chạy"). Chỉ khoá
+   này đổi thì không workload nào restart: controller notifications đọc lại Secret.
 4. Xác nhận như mục dưới, rồi mới xoá khoá cũ ở **Private keys** (xoay định kỳ).
 
 ## Khôi phục và xác nhận

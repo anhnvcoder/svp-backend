@@ -24,6 +24,9 @@ Loại tài liệu (Diátaxis): **reference**, tra cứu khi cần một lệnh 
   `SVP_AWS_PRD_ACCOUNT_ID` (id 12 chữ số của account env; script dừng trước mọi lệnh ghi khi account của `AWS_PROFILE` khác biến
   của env đó), `SVP_RDS_MASTER_PASSWORD` (chỉ `eks-secrets`: mật khẩu master của RDS, script buổi của `svp-infra` đọc từ AWS, thành
   key `SVP_PG_SUPERUSER_PASSWORD` của entry `pg-superuser`; không bao giờ đọc từ `.env`).
+- Không ở `.env`, chỉ cho `make drill-k8s-reloader` ([`k8s.md`](k8s.md)): `SVP_DRILL_NEW_VALUES`, đường dẫn tới file giá trị mới
+  (mode 600, mỗi dòng `NAME=value`, do `deploy/k8s/drills/reloader/new-values.sh` ghi); không đặt thì diễn tập tự sinh, trừ trên GitHub
+  Actions, nơi biến này bắt buộc (bước trước của job đã mask từng giá trị). Diễn tập ghi giá trị mới vào `.env` và để lại đó.
 - Quy tắc đọc `.env` (`deploy/observability/glitchtip/dotenv.sh`, dùng chung cho `make env`, `make test-stack`,
   `make glitchtip-init`, bootstrap Postgres và script diễn tập): mỗi dòng là dòng trống, comment `#` ở cột 1, hoặc
   `KEY=value` với `KEY` ở cột 1 và `=` ngay sau; giá trị trơn (ASCII in được, không khoảng trắng, nháy, `\`, `$`) hoặc nằm

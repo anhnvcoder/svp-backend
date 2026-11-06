@@ -2,33 +2,39 @@
 # of the public repository: one scenario per run dispatched by hand, and once a week compose-obs and gitops side by
 # side on main, every step. It builds the compose stack or the k3d cluster with the same make targets as a dev
 # machine and runs what that machine cannot hold (16 GB): the threat model drills, the object store's tests against the
-# stack, and the supply chain drill on a cluster Argo CD builds. Not a check of pull requests: no ruleset requires it,
-# and nothing but the dispatch and the weekly schedule triggers it.
+# stack, the change of credentials and the supply chain drill on the cluster of either path. Not a check of pull
+# requests: no ruleset requires it, and nothing but the dispatch and the weekly schedule triggers it.
 #
 #   gh workflow run verify.yml --ref <main or feat/stage6b-...> -f scenario=<scenario> [-f targets='<step> ...']
+#     [-f gitops_ref=<main or a commit of svp-gitops>]   (dev-k3d only)
 #
-# Scenarios: compose-obs (job compose: the compose stack with OBS=lgtm) and gitops (job gitops: the cluster Argo CD
-# builds from this repository and svp-gitops). Each target of a scenario is a step of its job, with a timeout-minutes of
-# its own; the step's id is the target's name, and the job's SVP_VERIFY_STEP_NAMES lists them in order, the first
-# being the build step (make up OBS=lgtm, make k8s-gitops-up) that builds what the others use. A step after the build
-# step runs when the build step succeeded, whatever the steps between gave (!cancelled()), and only when targets is
-# empty or names it; the job fails when a step that ran failed. The targets are checked before anything is built
-# (deploy/ci/verify-steps/steps.sh check), then each step's if: compares them as an expression, never in a shell; a
-# step that reads another's result is named with it (drill-k8s-threats reads the READY video of k8s-smoke).
+# Scenarios: compose-obs (job compose: the compose stack with OBS=lgtm), gitops (job gitops: the cluster Argo CD builds
+# from this repository and svp-gitops) and dev-k3d (job dev-k3d, dispatched only: the cluster of the dev path, make
+# k8s-up, at the commit gitops_ref of svp-gitops). Each target of a scenario is a step of its job, with a
+# timeout-minutes of its own; the step's id is the target's name, and the job's SVP_VERIFY_STEP_NAMES lists them in
+# order, the first being the build step (make up OBS=lgtm, make k8s-gitops-up, make k8s-up) that builds what the others
+# use. A step after the build step runs when the build step succeeded, whatever the steps between gave (!cancelled()),
+# and only when targets is empty or names it; the job fails when a step that ran failed. The targets are checked before
+# anything is built (deploy/ci/verify-steps/steps.sh check), then each step's if: compares them as an expression, never
+# in a shell; a step that reads another's result is named with it (drill-k8s-threats and drill-k8s-reloader read the
+# READY video of k8s-smoke). gitops_ref is checked as well, through env and a case, before anything is built.
 #
 # The repository is public, so the log and the artifact of every run are too, red or not:
 # - only workflow_dispatch (write access to the repository needed) and schedule (the code of main, no input), never
 #   pull_request_target or workflow_run; every job has contents: read and nothing more. No job holds a secret or an
 #   environment;
 # - every action is GitHub's own and pinned to a full commit SHA; checkout never leaves the token in .git/config;
-# - the input targets reaches the scripts only through env (SVP_VERIFY_TARGETS), and steps.sh checks it again with a
-#   case; if: compares the scenario and the targets as expressions. A scheduled run has no inputs: each job runs its
-#   own scenario, every step;
+# - the inputs targets and gitops_ref reach the scripts only through env (SVP_VERIFY_TARGETS, SVP_GITOPS_REF), each
+#   checked again with a case before use (steps.sh, the step Check gitops_ref); if: compares the scenario and the
+#   targets as expressions. A scheduled run has no inputs: each job runs its own scenario, every step;
 # - no code of another repository runs: the deployment configuration svp-gitops is cloned anonymously from GitHub (make
 #   gitops-clone) and only read, its images pulled by digest;
 # - make env writes a .env of fresh random secrets that lives on this runner until the job ends; the build step makes
 #   more (GlitchTip's tokens, the cluster's Secrets). deploy/ci/verify-mask.sh masks them in the log after make env and
-#   after the build step; every step's output goes to a file under $RUNNER_TEMP/verify/logs instead of the log; and
+#   after the build step; the new values of drill-k8s-reloader (which it writes into .env) are made and masked by
+#   deploy/k8s/drills/reloader/new-values.sh in a step of their own before the build step, into a private file of
+#   $RUNNER_TEMP/verify-reloader that the drill reads (SVP_DRILL_NEW_VALUES); every step's output goes to a file under
+#   $RUNNER_TEMP/verify/logs instead of the log; and
 #   deploy/ci/verify-collect.sh copies into the artifact only results machines read (the table of the steps, the
 #   drills' JUnit reports, the verdict lines of drill-obs-threats, the admission figures) that pass a scan for every
 #   known secret value and for token patterns (it drops the doubtful ones, with a warning). Nothing is ever printed
@@ -50,11 +56,17 @@ on:
         options:
           - compose-obs
           - gitops
+          - dev-k3d
       targets:
         description: Steps to run, separated by spaces (SVP_VERIFY_STEP_NAMES of the job); empty runs every one, the build step always runs
         type: string
         required: false
         default: ""
+      gitops_ref:
+        description: dev-k3d only, the revision of svp-gitops the cluster is built from, main or a full commit SHA (40 hex, a branch not merged yet)
+        type: string
+        required: false
+        default: main
   # Saturday 00:37 UTC, 07:37 in Vietnam (UTC+7), off the top of the hour (busy for GitHub's scheduler, which may delay
   # or drop a run then). GitHub runs it on the latest commit of main only, and turns it off after 60 days without any
   # activity in a public repository.
@@ -203,20 +215,21 @@ jobs:
   # digest under Kyverno's Enforce policy, at the commit of main of svp-gitops that make gitops-clone fetched (the
   # cluster runs as staging and stays at that commit through every step, so a release merged meanwhile changes nothing
   # the steps read). Then the staging overlay, the ExternalSecrets and Argo CD's metrics (make drill-k8s-gitops, the
-  # Chainsaw tests of deploy/k8s/drills/gitops/), the admission figures of the first sync, make k8s-smoke, the supply
-  # chain and threat model drills. Dispatched, and weekly on main beside job compose: SVP_VERIFY_SCHEDULED tells the
-  # supply chain step a run is the scheduled one, which leaves out the drill's cases whose drill-only image is past its
-  # maximum age (nobody rescans those before it).
+  # Chainsaw tests of deploy/k8s/drills/gitops/), the admission figures of the first sync, make k8s-smoke, the change of
+  # credentials through External Secrets (make drill-k8s-reloader, the steps after it run on the new credentials), the
+  # supply chain and threat model drills. Dispatched, and weekly on main beside job compose: SVP_VERIFY_SCHEDULED tells
+  # the supply chain step a run is the scheduled one, which leaves out the drill's cases whose drill-only image is past
+  # its maximum age (nobody rescans those before it).
   gitops:
     if: github.event_name == 'schedule' || inputs.scenario == 'gitops'
     runs-on: ubuntu-24.04
-    # Setup 20 minutes, the steps 60 + 9 + 3 + 15 + 40 + 30 and the mask 3, then 25 for the steps after them.
-    timeout-minutes: 205
+    # Setup 20 minutes, the steps 60 + 9 + 3 + 15 + 45 + 40 + 30 and the mask 3, then 25 for the steps after them.
+    timeout-minutes: 250
     permissions:
       contents: read
     env:
       SVP_VERIFY_TARGETS: ${{ inputs.targets }}
-      SVP_VERIFY_STEP_NAMES: k8s-gitops-up drill-k8s-gitops gitops-admission-metrics k8s-smoke drill-k8s-supplychain drill-k8s-threats
+      SVP_VERIFY_STEP_NAMES: k8s-gitops-up drill-k8s-gitops gitops-admission-metrics k8s-smoke drill-k8s-reloader drill-k8s-supplychain drill-k8s-threats
     steps:
       # As in job compose.
       - name: Check the ref
@@ -271,6 +284,12 @@ jobs:
           echo "SVP_GITOPS_SHA=$sha" >>"$GITHUB_ENV"
       - run: make env
       - run: deploy/ci/verify-mask.sh env
+      # The new values of drill-k8s-reloader, masked here as they are made (the drill's own output goes to a file).
+      - name: New values of drill-k8s-reloader
+        run: |
+          install -d -m 700 "$RUNNER_TEMP/verify-reloader"
+          deploy/k8s/drills/reloader/new-values.sh "$RUNNER_TEMP/verify-reloader/new-values"
+          echo "SVP_DRILL_NEW_VALUES=$RUNNER_TEMP/verify-reloader/new-values" >>"$GITHUB_ENV"
       - run: deploy/ci/verify-host.sh gitops
       - name: make k8s-gitops-up
         id: k8s-gitops-up
@@ -300,6 +319,12 @@ jobs:
         if: ${{ !cancelled() && steps.k8s-gitops-up.outcome == 'success' && (!inputs.targets || contains(format(' {0} ', inputs.targets), ' k8s-smoke ')) }}
         timeout-minutes: 15
         run: make k8s-smoke >"$SVP_VERIFY_OUT/logs/k8s-smoke.log" 2>&1 </dev/null
+      # A change of credentials with make k8s-secrets, which Reloader carries to the workloads; the new values stay.
+      - name: make drill-k8s-reloader
+        id: drill-k8s-reloader
+        if: ${{ !cancelled() && steps.k8s-gitops-up.outcome == 'success' && (!inputs.targets || contains(format(' {0} ', inputs.targets), ' drill-k8s-reloader ')) }}
+        timeout-minutes: 45
+        run: make drill-k8s-reloader >"$SVP_VERIFY_OUT/logs/drill-k8s-reloader.log" 2>&1 </dev/null
       - name: drill-k8s-supplychain
         id: drill-k8s-supplychain
         if: ${{ !cancelled() && steps.k8s-gitops-up.outcome == 'success' && (!inputs.targets || contains(format(' {0} ', inputs.targets), ' drill-k8s-supplychain ')) }}
@@ -325,6 +350,140 @@ jobs:
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: verify-gitops
+          path: ${{ runner.temp }}/verify-artifact/
+          retention-days: 30
+          if-no-files-found: warn
+      - name: make k8s-down
+        if: always() && steps.ref.outcome == 'success'
+        run: make k8s-down
+
+  # The dev path: make k8s-up builds the cluster as a dev machine does, from this checkout (the six backend images built
+  # here with docker buildx bake, the web client's staging release pulled from GHCR) and the clone of svp-gitops at
+  # gitops_ref, main or the commit of a branch not merged yet, installed with helmfile. Then make k8s-smoke, the change
+  # of credentials (make drill-k8s-reloader) and the supply chain drill with SUPPLYCHAIN_ENFORCE_TMP=1, which puts the
+  # dev path's image policy, Audit, in Enforce for its cases and back, and runs case k, the one case only the dev path
+  # can run (a vendor's image under a keyless policy, admitted while the policy audits). Dispatched only, never
+  # scheduled: the weekly runs keep the path that staging and production follow.
+  dev-k3d:
+    if: inputs.scenario == 'dev-k3d'
+    runs-on: ubuntu-24.04
+    # Setup 20 minutes, the steps 60 + 15 + 45 + 40 and the mask 3, then 25 for the steps after them.
+    timeout-minutes: 210
+    permissions:
+      contents: read
+    env:
+      SVP_VERIFY_TARGETS: ${{ inputs.targets }}
+      SVP_VERIFY_STEP_NAMES: k8s-up k8s-smoke drill-k8s-reloader drill-k8s-supplychain
+      SVP_GITOPS_REF: ${{ inputs.gitops_ref }}
+    steps:
+      # As in job compose.
+      - name: Check the ref
+        id: ref
+        run: |
+          case $GITHUB_EVENT_NAME:$GITHUB_REF in
+            schedule:refs/heads/main | workflow_dispatch:refs/heads/main | workflow_dispatch:refs/heads/feat/stage6b-*) ;;
+            *) echo "::error::verify runs on main, or dispatched on a feat/stage6b-* branch, not $GITHUB_EVENT_NAME on $GITHUB_REF"; exit 1 ;;
+          esac
+          echo "SVP_VERIFY_OUT=$RUNNER_TEMP/verify" >>"$GITHUB_ENV"
+          mkdir -p "$RUNNER_TEMP/verify/logs"
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Check the targets
+        run: deploy/ci/verify-steps/steps.sh check
+      # The value is never printed back (a line of the log that starts with :: is a command).
+      - name: Check gitops_ref
+        run: |
+          case $SVP_GITOPS_REF in
+            main) ;;
+            *)
+              if [[ ! $SVP_GITOPS_REF =~ ^[0-9a-f]{40}$ ]]; then
+                echo "::error::gitops_ref is main or a full commit SHA of svp-gitops (40 hex); nothing started"
+                exit 1
+              fi
+              ;;
+          esac
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: 1.27.3
+          cache-dependency-path: go.sum
+      # k3d, Helm, helmfile, Chainsaw and the other pinned tools, as in job gitops.
+      - id: tools
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/go/bin
+          key: tools-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('Makefile') }}
+      - name: Install the pinned tools
+        if: steps.tools.outputs.cache-hit != 'true'
+        run: make tools ci-tools
+      - run: echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
+      # ffmpeg for the test video of smoke, jq everywhere, nc for the drills' port checks.
+      - name: Install the tools of the scripts
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y -q --no-install-recommends ffmpeg jq netcat-openbsd
+      # svp-gitops at gitops_ref, read through SVP_GITOPS_DIR by every step after this one (deploy/k8s/lib.sh,
+      # gitops_dir): the components, their base/ values and the web release of staging.
+      - name: make gitops-clone
+        run: |
+          make gitops-clone GITOPS_REF="$SVP_GITOPS_REF"
+          echo "SVP_GITOPS_DIR=$GITHUB_WORKSPACE/.gitops/svp-gitops" >>"$GITHUB_ENV"
+      - run: make env
+      - run: deploy/ci/verify-mask.sh env
+      # The new values of drill-k8s-reloader, masked here as they are made (the drill's own output goes to a file).
+      - name: New values of drill-k8s-reloader
+        run: |
+          install -d -m 700 "$RUNNER_TEMP/verify-reloader"
+          deploy/k8s/drills/reloader/new-values.sh "$RUNNER_TEMP/verify-reloader/new-values"
+          echo "SVP_DRILL_NEW_VALUES=$RUNNER_TEMP/verify-reloader/new-values" >>"$GITHUB_ENV"
+      # The machine as job gitops needs it (k3d, 30 GiB free, the names of Envoy); the artifact names this scenario.
+      - name: Prepare the runner
+        run: |
+          deploy/ci/verify-host.sh gitops
+          echo dev-k3d >"$SVP_VERIFY_OUT/scenario"
+      - name: make k8s-up
+        id: k8s-up
+        timeout-minutes: 60
+        run: make k8s-up >"$SVP_VERIFY_OUT/logs/k8s-up.log" 2>&1 </dev/null
+      # As in job gitops: the cluster's Secrets and what make k8s-up added to .env (GlitchTip's tokens).
+      - name: Mask what the build step added
+        if: always() && steps.ref.outcome == 'success'
+        timeout-minutes: 3
+        run: |
+          deploy/ci/verify-mask.sh env
+          deploy/ci/verify-mask.sh cluster || echo "verify-mask: the cluster's Secrets were not read"
+      - name: make k8s-smoke
+        id: k8s-smoke
+        if: ${{ !cancelled() && steps.k8s-up.outcome == 'success' && (!inputs.targets || contains(format(' {0} ', inputs.targets), ' k8s-smoke ')) }}
+        timeout-minutes: 15
+        run: make k8s-smoke >"$SVP_VERIFY_OUT/logs/k8s-smoke.log" 2>&1 </dev/null
+      # A change of credentials with make k8s-secrets, which Reloader carries to the workloads; the new values stay.
+      - name: make drill-k8s-reloader
+        id: drill-k8s-reloader
+        if: ${{ !cancelled() && steps.k8s-up.outcome == 'success' && (!inputs.targets || contains(format(' {0} ', inputs.targets), ' drill-k8s-reloader ')) }}
+        timeout-minutes: 45
+        run: make drill-k8s-reloader >"$SVP_VERIFY_OUT/logs/drill-k8s-reloader.log" 2>&1 </dev/null
+      # The images of job gitops' step (deploy/ci/verify-steps/supplychain.sh), the policy in Enforce for each case.
+      - name: drill-k8s-supplychain
+        id: drill-k8s-supplychain
+        if: ${{ !cancelled() && steps.k8s-up.outcome == 'success' && (!inputs.targets || contains(format(' {0} ', inputs.targets), ' drill-k8s-supplychain ')) }}
+        timeout-minutes: 40
+        env:
+          SUPPLYCHAIN_ENFORCE_TMP: "1"
+        run: deploy/ci/verify-steps/supplychain.sh >"$SVP_VERIFY_OUT/logs/drill-k8s-supplychain.log" 2>&1 </dev/null
+      - name: Table of the steps
+        if: always() && steps.ref.outcome == 'success'
+        env:
+          SVP_VERIFY_STEPS: ${{ toJSON(steps) }}
+        run: deploy/ci/verify-steps/steps.sh table
+      - name: Collect and filter the results
+        if: always() && steps.ref.outcome == 'success'
+        run: deploy/ci/verify-collect.sh
+      - name: Keep the filtered results
+        if: always() && steps.ref.outcome == 'success'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: verify-dev-k3d
           path: ${{ runner.temp }}/verify-artifact/
           retention-days: 30
           if-no-files-found: warn

@@ -39,16 +39,19 @@ Loại tài liệu (Diátaxis): **reference**, tra cứu khi cần một lệnh 
   trên loopback (OPS-2).
 - `make up IMAGES=stg`, `WEB_FROM=clone|stg|image` [`WEB_IMAGE=ghcr.io/<repository>@sha256:<digest>`]
   ([ADR-0033](../adr/0033-svp-web-repo.md) §6, §7; `compose_images` của `deploy/k8s/lib.sh` đặt biến image mà
-  `deploy/compose/compose.yaml` đọc): không đặt `IMAGES` thì sáu service backend build từ working tree như trước; `IMAGES=stg` chạy
+  `deploy/compose/compose.yaml` đọc): không đặt `IMAGES` thì sáu service backend build từ working tree, một lượt bằng
+  `docker buildx bake -f deploy/docker-bake.json` (bảng image dùng chung với `make k8s-up` và CI,
+  [ADR-0050](../adr/0050-bash-to-standard-tools.md)) thành `svp/<service>:dev` trước compose; compose không tự build service backend
+  (`pull_policy: never`), nên `docker compose up` lẻ cần image do `make up` build; `IMAGES=stg` chạy
   bản phát hành stg của sáu service (bốn job migrate cùng image) theo digest của `envs/stg/images/` trong bản clone `svp-gitops` như
   đang có (không fetch), không build Go. `WEB_FROM` không đặt hay `stg`: bản web của stg theo digest (nên `make up` cần bản clone
   `svp-gitops` và mạng tới GHCR); `clone`: build web từ thư mục web (`web_dir`, mục `make web-clone` của [`k8s.md`](k8s.md)); `image`: `WEB_IMAGE`.
   Mỗi bản của stg phải là repository của một nguồn phát hành có service đó
   (bảng nguồn của working tree) và GHCR cho kéo ẩn danh (`WEB_IMAGE` cũng phải kéo ẩn danh được); `make up` `docker pull` từng digest
   theo kiến trúc máy trước khi dựng (kéo không được thì dừng trước khi chạy gì), bản phát hành chạy với `pull_policy: never`, có bản
-  phát hành thì bỏ `--build` (service còn lại vẫn build). Giá trị sai (`IMAGES` khác `stg`, `WEB_IMAGE` thiếu `WEB_FROM=image`, tag
+  phát hành thì sáu service của `IMAGES=stg` không bake, `--build` chỉ còn cho web khi `WEB_FROM=clone`. Giá trị sai (`IMAGES` khác `stg`, `WEB_IMAGE` thiếu `WEB_FROM=image`, tag
   thay digest) thì dừng nêu lý do. Chế độ này cho job e2e: target diễn tập dựng lại service bằng `compose up --no-deps` không mang
-  biến của `make up` (sẽ build lại service đó từ working tree), nên mọi script diễn tập (`deploy/compose/drills/common.sh`) từ chối
+  biến của `make up` (sẽ chạy image `svp/<service>:dev` của lần bake trước thay bản phát hành), nên mọi script diễn tập (`deploy/compose/drills/common.sh`) từ chối
   chạy khi một service mà diễn tập dừng hay dựng lại chạy image `ghcr.io/…` (web bản phát hành không chặn: không diễn tập nào dựng lại
   web), nêu service và lệnh dựng lại (`make down`, rồi `make up` không `IMAGES`),
   trước khi đụng gì. Web chạy bản phát hành thì

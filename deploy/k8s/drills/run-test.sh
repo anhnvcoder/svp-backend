@@ -1,8 +1,11 @@
 #!/usr/bin/env bash
-# Tests for deploy/k8s/drills/run.sh (make drill-k8s-threats, drill-k8s-supplychain, drill-k8s-gitops), without a
-# cluster, a network or Docker: a temporary copy of the repository's tree holds run.sh, deploy/k8s/lib.sh, made-up tests
-# under deploy/k8s/drills/<drill>/ and a fake deploy/ci/ghcr-digest.sh; fake chainsaw and kubectl come first on PATH,
-# each recording its arguments. The Secret values are made at run time, so no file of the repository holds one. Cases:
+# Tests for deploy/k8s/drills/run.sh (make drill-k8s-threats, drill-k8s-supplychain, drill-k8s-gitops,
+# drill-k8s-reloader), deploy/k8s/drills/reloader/new-values.sh and the snapshot helpers of
+# deploy/k8s/drills/reloader/rotate/reloader.sh, without a cluster, a network or Docker: a temporary
+# copy of the repository's tree holds run.sh, deploy/k8s/lib.sh, the rule of .env, new-values.sh, made-up tests under
+# deploy/k8s/drills/<drill>/, a made-up .env and a fake deploy/ci/ghcr-digest.sh; fake chainsaw, kubectl and go (for
+# go run ./tools/jwtkey) come first on PATH, each recording its arguments. The Secret values are made at run time, so no
+# file of the repository holds one. Cases:
 #   - the context: SVP_KUBE_CONTEXT other than k3d-svp, no context k3d-svp in the kubeconfig, its API not answering:
 #     each stops before chainsaw, and the first two before any call to a cluster;
 #   - threats: chainsaw gets context, configuration, folder, selector and --parallel 1, curl the CA; without External
@@ -17,7 +20,20 @@
 #     file; chainsaw red leaves the file and a non-zero exit;
 #   - supplychain: the values chainsaw gets for each row "diễn tập" of the image table of the drill (an image looked up
 #     when not given, a lookup that fails left empty, vulnerable never looked up, noProvenance=none as is), and the
-#     values given passed as they are.
+#     values given passed as they are;
+#   - reloader: chainsaw gets newValues, oldValues and stateDir, paths of private files and of a private folder (mode
+#     600, 700) that are gone at the end, never a value; the old values are those of .env, the new ones made by
+#     new-values.sh or read from SVP_DRILL_NEW_VALUES as they are; a new value, an old value or GlitchTip's API token in
+#     the output or the report fails the drill and is printed nowhere; it stops before chainsaw for SVP_DRILL_NEW_VALUES
+#     readable by others, lacking a variable or holding another, for GitHub Actions without SVP_DRILL_NEW_VALUES (no
+#     value made), for .env lacking a variable, without GlitchTip's token or without .k8s/ca.crt;
+#   - new-values.sh: one line per variable, each value new, mode 600, an existing file never overwritten; on GitHub
+#     Actions an ::add-mask:: line for each value and its base64, and nothing else; elsewhere nothing printed;
+#   - reloader/rotate/reloader.sh, sourced as the drill's steps do, on the lists fake kubectl gives of a cluster
+#     bootstrapped once: snapshot writes the pods of Deployments, Rollouts, StatefulSets and Clusters (not of Jobs), the
+#     Secrets without Helm's release records and no Secret data, the init Jobs of svp-data and nothing like them, the
+#     revisions; jobs_ran passes init Jobs that ran again and Succeeded and fails one the same as before, one gone and
+#     one not Succeeded; a list that fails stops snapshot.
 #
 # Usage, from anywhere: deploy/k8s/drills/run-test.sh
 set -euo pipefail
@@ -53,10 +69,12 @@ done
 
 # --- the tree: run.sh and deploy/k8s/lib.sh of this checkout, made-up tests, a fake ghcr-digest.sh.
 tree=$work/repo
-mkdir -p "$tree/deploy/k8s/drills" "$tree/deploy/ci"
+mkdir -p "$tree/deploy/k8s/drills/reloader" "$tree/deploy/ci" "$tree/deploy/observability/glitchtip"
 cp "$repo/deploy/k8s/lib.sh" "$tree/deploy/k8s/"
 cp "$repo/deploy/docker-bake.json" "$tree/deploy/"
 cp "$repo/deploy/k8s/drills/run.sh" "$tree/deploy/k8s/drills/"
+cp "$repo/deploy/k8s/drills/reloader/new-values.sh" "$tree/deploy/k8s/drills/reloader/"
+cp "$repo/deploy/observability/glitchtip/dotenv.sh" "$tree/deploy/observability/glitchtip/"
 # a_test DRILL FOLDER [EXTRA LABEL LINE]
 a_test() {
   mkdir -p "$tree/deploy/k8s/drills/$1/$2"
@@ -68,6 +86,7 @@ a_test threats ops-2
 a_test threats sec-5-6-7 '    requires: external-secrets'
 a_test threats sec-6-reader '    requires: external-secrets'
 for c in a b l; do a_test supplychain "case-$c"; done
+a_test reloader rotate
 cat >"$tree/deploy/ci/ghcr-digest.sh" <<'EOF'
 #!/usr/bin/env bash
 # fake: newest IMAGE prints $FAKE_STATE/ghcr/IMAGE, or fails with a line on stderr when it is missing.
@@ -94,6 +113,10 @@ case "$*" in
   "get --raw /readyz") [ ! -e "$s/down" ] ;;
   "get crd externalsecrets.external-secrets.io") [ -e "$s/eso" ] ;;
   "get secret "*" -o json") f=$s/secrets/$ns-$3.json; [ -s "$f" ] && cat "$f" ;;
+  # the lists and the Rollout revisions reloader.sh reads: lists/<namespace>-<resource>.json, lists/<namespace>-rollout-<name>
+  "get replicasets.apps -o json" | "get pods -o json" | "get secrets -o json" | "get jobs.batch -o json")
+    f=$s/lists/$ns-$2.json; [ -s "$f" ] && cat "$f" ;;
+  "get rollouts.argoproj.io "*" -o jsonpath="*) f=$s/lists/$ns-rollout-$3; [ -s "$f" ] && cat "$f" ;;
   *) echo "fake kubectl: unexpected call: $*" >&2; exit 3 ;;
 esac
 EOF
@@ -115,6 +138,21 @@ while [ $# -gt 0 ]; do
 done
 [ -z "$values" ] || cp "$values" "$s/values.json"
 find "$FAKE_TMP" -type f -name secrets -perm 600 >"$s/secrets-600" 2>/dev/null
+# reloader: the files and the folder its values name, as they are while chainsaw runs; $FAKE_STATE/leak names a line
+# (newValues NAME or oldValues NAME) whose value goes to the output.
+if [ -n "$values" ] && [ -n "$(jq -r '.newValues // ""' "$values")" ]; then
+  : >"$s/values-private"
+  for k in newValues oldValues; do
+    f=$(jq -r ".$k" "$values")
+    cp "$f" "$s/$k.seen"
+    find "$f" -type f -perm 600 >>"$s/values-private"
+  done
+  find "$(jq -r .stateDir "$values")" -type d -perm 700 >>"$s/values-private"
+  if [ -e "$s/leak" ]; then
+    read -r k name <"$s/leak"
+    echo "the value is $(sed -n "s/^$name=//p" "$(jq -r ".$k" "$values")")"
+  fi
+fi
 [ ! -e "$s/out" ] || cat "$s/out"
 if [ ! -e "$s/no-report" ]; then
   {
@@ -132,7 +170,15 @@ real_mktemp=$(command -v mktemp)
 # shellcheck disable=SC2016 # expanded by the fake, not here
 printf '#!/usr/bin/env bash\n[ "$*" = -d ] || { echo "fake mktemp: unexpected call: $*" >&2; exit 3; }\nexec %s -d "$FAKE_TMP/run.XXXXXX"\n' \
   "$real_mktemp" >"$bin/mktemp"
-chmod +x "$bin/kubectl" "$bin/chainsaw" "$bin/mktemp"
+# go: go run ./tools/jwtkey prints a new key pair in the form of tools/jwtkey; any other call fails.
+cat >"$bin/go" <<'EOF'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >>"$FAKE_STATE/go.log"
+[ "$*" = "run ./tools/jwtkey" ] || { echo "fake go: unexpected call: $*" >&2; exit 3; }
+kid=20261106-$(openssl rand -hex 4)
+printf 'JWT_SIGNING_KID=%s\nJWT_SIGNING_KEY=%s\nJWT_VERIFY_KEYS=%s:%s\n' "$kid" "$(openssl rand -base64 32)" "$kid" "$(openssl rand -base64 32)"
+EOF
+chmod +x "$bin/kubectl" "$bin/chainsaw" "$bin/mktemp" "$bin/go"
 export PATH="$bin:$PATH"
 
 # The Secret values: 6 Kafka users, the Grafana admin, the 3 object store users.
@@ -159,6 +205,8 @@ secret_json svp-data kafka-users K1 K2 K3 K4 K5 K6
 secret_json svp-obs grafana-admin admin-password
 secret_json svp-data pg-backup-s3 ACCESS_SECRET_KEY
 secret_json svp-data s3-users SVP_VIDEO_S3_SECRET_KEY SVP_MEDIA_WORKER_S3_SECRET_KEY
+openssl rand -hex 12 >"$values/svp-obs-glitchtip-api"
+secret_json svp-obs glitchtip-api SENTRY_AUTH_TOKEN
 # fresh [TESTS]: a new FAKE_STATE (cluster up with context k3d-svp, External Secrets Operator, the 10 values, chainsaw
 # green with TESTS testcases, default 4) and a tree without logs or reports but .k8s/ca.crt.
 fresh() {
@@ -166,7 +214,7 @@ fresh() {
   rm -rf "$FAKE_STATE" "$tree/.k8s" "$work/tmp"
   mkdir -p "$FAKE_STATE/ghcr" "$FAKE_STATE/secrets" "$tree/.k8s" "$work/tmp"
   echo k3d-svp >"$FAKE_STATE/contexts"
-  touch "$FAKE_STATE/eso" "$FAKE_STATE/kubectl.log" "$FAKE_STATE/ghcr.log"
+  touch "$FAKE_STATE/eso" "$FAKE_STATE/kubectl.log" "$FAKE_STATE/ghcr.log" "$FAKE_STATE/go.log"
   echo "fake CA" >"$tree/.k8s/ca.crt"
   cp "$work"/secrets/*.json "$FAKE_STATE/secrets/"
   echo "${1:-4}" >"$FAKE_STATE/tests"
@@ -426,6 +474,301 @@ same "supplychain: values given passed as they are" \
   "{\"unsigned\":\"$unsigned_ghcr\",\"vulnerable\":\"$vuln\",\"noProvenance\":\"$noprov_ghcr\",\"enforceTmp\":\"1\"}" "$got"
 same "supplychain: values given, nothing looked up" "" "$(cat "$FAKE_STATE/ghcr.log")"
 lacks "supplychain: no Secret search" "$out" "SECRETS"
+
+# --- reloader. A made-up .env of the tree with the variables the drill changes; the new values made by new-values.sh
+# (fake go) or given in a file of SVP_DRILL_NEW_VALUES.
+changed_vars="SVP_S3_ROOT_PASSWORD SVP_KAFKA_ADMIN_PASSWORD SVP_VIDEO_APP_DB_PASSWORD SVP_KAFKA_FEED_SERVICE_PASSWORD
+  SVP_KAFKA_KEDA_PASSWORD SVP_GLITCHTIP_APP_DB_PASSWORD SVP_GRAFANA_ADMIN_PASSWORD NEXT_SERVER_ACTIONS_ENCRYPTION_KEY
+  JWT_VERIFY_KEYS"
+new_vars="SVP_S3_ROOT_PASSWORD SVP_KAFKA_ADMIN_PASSWORD SVP_VIDEO_APP_DB_PASSWORD SVP_KAFKA_FEED_SERVICE_PASSWORD
+  SVP_KAFKA_KEDA_PASSWORD SVP_GLITCHTIP_APP_DB_PASSWORD SVP_GRAFANA_ADMIN_PASSWORD NEXT_SERVER_ACTIONS_ENCRYPTION_KEY
+  JWT_VERIFY_KEY_NEW JWT_DRILL_SIGNING_KEY"
+# env_of [SKIP]: the tree's .env, every variable the drill changes but SKIP, a value made now each, and one it keeps.
+env_of() {
+  local v
+  {
+    echo "# made by run-test.sh"
+    echo "SVP_PG_SUPERUSER_PASSWORD=$(openssl rand -hex 12)"
+    for v in $changed_vars; do [ "$v" = "${1:-}" ] || echo "$v=$(openssl rand -hex 12)"; done
+  } >"$tree/.env"
+  chmod 600 "$tree/.env"
+}
+# given_values FILE [SKIP] [EXTRA LINE]: a file of new values as new-values.sh writes it, mode 600.
+given_values() {
+  local v
+  {
+    for v in $new_vars; do [ "$v" = "${2:-}" ] || echo "$v=given-$(openssl rand -hex 12)"; done
+    [ -z "${3:-}" ] || echo "$3"
+  } >"$1"
+  chmod 600 "$1"
+}
+# names FILE: the names of the lines of FILE, sorted, on one line.
+names() { sed -n 's/=.*//p' "$1" | LC_ALL=C sort | paste -sd ' ' -; }
+reloader_run() {
+  set +e
+  out=$(cd "$work" && env -u GITHUB_ACTIONS -u SVP_DRILL_NEW_VALUES "$@" "$tree/deploy/k8s/drills/run.sh" reloader 2>&1)
+  rc=$?
+  set -e
+}
+sorted() { printf '%s\n' $1 | LC_ALL=C sort | paste -sd ' ' -; }
+
+fresh 1
+env_of
+cp "$tree/.env" "$work/env.before"
+reloader_run
+same "reloader: green run exits 0" 0 "$rc"
+args=$(cat "$FAKE_STATE/chainsaw.args")
+has "reloader: selector drill=reloader" "$args" "drill=reloader"
+has "reloader: chainsaw gets the values file" "$args" "--values"
+same "reloader: the values are newValues, oldValues and stateDir, paths only" "newValues oldValues stateDir" \
+  "$(jq -r 'keys | join(" ")' "$FAKE_STATE/values.json")"
+same "reloader: newValues has each new value, made by new-values.sh" "$(sorted "$new_vars")" "$(names "$FAKE_STATE/newValues.seen")"
+same "reloader: tools/jwtkey ran once for the new key" "run ./tools/jwtkey" "$(cat "$FAKE_STATE/go.log")"
+same "reloader: oldValues has each variable the drill changes" "$(sorted "$changed_vars")" "$(names "$FAKE_STATE/oldValues.seen")"
+same "reloader: oldValues holds the values of .env" "$(grep -E "^($(printf '%s' "$changed_vars" | tr -s ' \n' '|' | sed 's/|$//'))=" "$work/env.before" | LC_ALL=C sort)" \
+  "$(LC_ALL=C sort "$FAKE_STATE/oldValues.seen")"
+same "reloader: run.sh leaves .env as it is (the test changes it)" "" "$(cmp "$work/env.before" "$tree/.env" 2>&1)"
+same "reloader: the two files are mode 600 and the folder 700 while chainsaw runs" 3 "$(grep -c . "$FAKE_STATE/values-private" || true)"
+same "reloader: the values files are gone at the end" "" "$(find "$FAKE_TMP" -mindepth 1 2>/dev/null)"
+same "reloader: curl gets the cluster's CA" "$tree/.k8s/ca.crt" "$(cat "$FAKE_STATE/chainsaw.ca")"
+has "reloader: the search counts 9 old, 10 new values and the token" "$out" "ok    SECRETS: none of the 20 Secret values of the drill"
+new_values_all=$(cut -d= -f2- "$FAKE_STATE/newValues.seen")
+no_new() {
+  local v
+  while IFS= read -r v; do case $2 in *"$v"*) fail "$1: holds a new value" && return ;; esac; done <<<"$new_values_all"
+  ok "$1"
+}
+no_new "reloader: no new value in chainsaw's arguments" "$args"
+no_new "reloader: no new value in kubectl's arguments" "$(cat "$FAKE_STATE/kubectl.log")"
+fresh 1
+env_of
+echo "newValues SVP_GRAFANA_ADMIN_PASSWORD" >"$FAKE_STATE/leak"
+reloader_run
+red "reloader: a new value in the output fails the drill"
+has "reloader: names the leak" "$out" "FAIL  SECRETS: 1 line(s) of the drill's log and report hold one of the 20 Secret values"
+leaked=$(sed -n 's/^SVP_GRAFANA_ADMIN_PASSWORD=//p' "$FAKE_STATE/newValues.seen")
+[ -n "$leaked" ] && lacks "reloader: the leaked new value is not printed" "$out" "$leaked"
+has "reloader: the line is withheld from the terminal" "$out" "[a line of the output holds a Secret value: not shown]"
+fresh 1
+env_of
+echo "oldValues JWT_VERIFY_KEYS" >"$FAKE_STATE/leak"
+reloader_run
+red "reloader: an old value in the output fails the drill"
+leaked=$(sed -n 's/^JWT_VERIFY_KEYS=//p' "$tree/.env")
+lacks "reloader: the leaked old value is not printed" "$out" "$leaked"
+fresh 1
+env_of
+printf '  <failure>%s</failure>\n' "$(cat "$values/svp-obs-glitchtip-api")" >"$FAKE_STATE/report-extra"
+reloader_run
+red "reloader: GlitchTip's API token in the report fails the drill"
+lacks "reloader: the token is not printed" "$out" "$(cat "$values/svp-obs-glitchtip-api")"
+
+# SVP_DRILL_NEW_VALUES: taken as it is; refused when others may read it, a variable lacks or another is there.
+fresh 1
+env_of
+given_values "$work/given"
+reloader_run SVP_DRILL_NEW_VALUES="$work/given"
+same "reloader, SVP_DRILL_NEW_VALUES: green" 0 "$rc"
+same "reloader, SVP_DRILL_NEW_VALUES: newValues is that file" "$(cat "$work/given")" "$(cat "$FAKE_STATE/newValues.seen")"
+same "reloader, SVP_DRILL_NEW_VALUES: nothing made (no tools/jwtkey)" "" "$(cat "$FAKE_STATE/go.log")"
+fresh 1
+env_of
+chmod 644 "$work/given"
+reloader_run SVP_DRILL_NEW_VALUES="$work/given"
+red "reloader: SVP_DRILL_NEW_VALUES readable by others stops before chainsaw" before
+has "reloader: says the mode" "$out" "it must be mode 600"
+fresh 1
+env_of
+given_values "$work/given" JWT_DRILL_SIGNING_KEY
+reloader_run SVP_DRILL_NEW_VALUES="$work/given"
+red "reloader: SVP_DRILL_NEW_VALUES without JWT_DRILL_SIGNING_KEY stops before chainsaw" before
+has "reloader: names the variable missing" "$out" "lacks or has empty: JWT_DRILL_SIGNING_KEY"
+fresh 1
+env_of
+given_values "$work/given" "" "SVP_PG_SUPERUSER_PASSWORD=$(openssl rand -hex 12)"
+reloader_run SVP_DRILL_NEW_VALUES="$work/given"
+red "reloader: SVP_DRILL_NEW_VALUES with another variable stops before chainsaw" before
+has "reloader: names the other variable" "$out" "other lines than its variables: SVP_PG_SUPERUSER_PASSWORD"
+reloader_run SVP_DRILL_NEW_VALUES="$work/no-such-file"
+red "reloader: SVP_DRILL_NEW_VALUES naming no file stops before chainsaw" before
+fresh 1
+env_of
+reloader_run GITHUB_ACTIONS=true
+red "reloader: GitHub Actions without SVP_DRILL_NEW_VALUES stops before chainsaw" before
+has "reloader: says the values would not be masked" "$out" "made here they would not be masked"
+same "reloader: GitHub Actions without SVP_DRILL_NEW_VALUES makes no value" "" "$(cat "$FAKE_STATE/go.log")"
+fresh 1
+env_of SVP_KAFKA_KEDA_PASSWORD
+reloader_run
+red "reloader: .env without SVP_KAFKA_KEDA_PASSWORD stops before chainsaw" before
+has "reloader: names it" "$out" ".env lacks or has empty: SVP_KAFKA_KEDA_PASSWORD"
+fresh 1
+env_of
+rm "$FAKE_STATE/secrets/svp-obs-glitchtip-api.json"
+reloader_run
+red "reloader: no GlitchTip API token stops before chainsaw" before
+has "reloader: names the Secret" "$out" "Secret svp-obs/glitchtip-api"
+fresh 1
+env_of
+rm "$tree/.k8s/ca.crt"
+reloader_run
+red "reloader: no .k8s/ca.crt stops before chainsaw" before
+fresh 2
+env_of
+reloader_run
+red "reloader: 2 tests in the report where the folder has 1 fails"
+
+# --- new-values.sh.
+fresh
+nv=$tree/deploy/k8s/drills/reloader/new-values.sh
+set +e
+masks=$(env GITHUB_ACTIONS=true "$nv" "$work/nv1" 2>&1)
+rc=$?
+set -e
+same "new-values: exits 0" 0 "$rc"
+same "new-values: one line per variable" "$(sorted "$new_vars")" "$(names "$work/nv1")"
+same "new-values: the file is mode 600" "$work/nv1" "$(find "$work/nv1" -type f -perm 600)"
+same "new-values: GitHub Actions: two masks per value (it and its base64), nothing else" "20 0" \
+  "$(grep -c '^::add-mask::' <<<"$masks") $(grep -vc '^::add-mask::' <<<"$masks" || true)"
+missing_mask=
+while IFS= read -r line; do
+  v=${line#*=}
+  grep -qxF "::add-mask::$v" <<<"$masks" || missing_mask="$missing_mask ${line%%=*}"
+  grep -qxF "::add-mask::$(printf '%s' "$v" | base64 | tr -d '\n')" <<<"$masks" || missing_mask="$missing_mask ${line%%=*}(base64)"
+done <"$work/nv1"
+same "new-values: each value and its base64 masked" "" "$missing_mask"
+same "new-values: the verify key is <kid>:<key> of the pair, its private key the seed" "ok" \
+  "$(kid=$(sed -n 's/^JWT_VERIFY_KEY_NEW=//p' "$work/nv1" | cut -d: -f1); [[ $kid =~ ^[0-9]{8}-[0-9a-f]{8}$ ]] && grep -q '^JWT_DRILL_SIGNING_KEY=.' "$work/nv1" && echo ok)"
+same "new-values: NEXT_SERVER_ACTIONS_ENCRYPTION_KEY is the base64 of 32 bytes" "ok" \
+  "$(grep -qE '^NEXT_SERVER_ACTIONS_ENCRYPTION_KEY=[A-Za-z0-9+/]{43}=$' "$work/nv1" && echo ok)"
+"$nv" "$work/nv2" >"$work/nv2.out" 2>&1
+same "new-values: elsewhere nothing printed" "" "$(cat "$work/nv2.out")"
+same "new-values: two runs give other values" "" "$(LC_ALL=C comm -12 <(cut -d= -f2- "$work/nv1" | sort) <(cut -d= -f2- "$work/nv2" | sort))"
+cp "$work/nv1" "$work/nv1.copy"
+set +e
+"$nv" "$work/nv1" >/dev/null 2>&1
+rc=$?
+set -e
+same "new-values: an existing file is refused" 1 "$rc"
+same "new-values: ... and left as it was" "" "$(cmp "$work/nv1" "$work/nv1.copy" 2>&1)"
+
+# --- reloader.sh, sourced from its folder as the drill's steps do (it finds the repository with git and reads
+# nothing of it but the rule of .env), on lists of a cluster bootstrapped once: the init Jobs of svp-data stay there
+# after they Succeeded (hook policy before-hook-creation), beside a Job whose name only starts like one, pods of Jobs
+# and a Helm release record.
+fresh
+lists=$FAKE_STATE/lists
+mkdir -p "$lists" "$work/helper"
+# list NS RESOURCE < JSON: what fake kubectl gives for kubectl -n NS get RESOURCE -o json.
+list() { cat >"$lists/$1-$2.json"; }
+for ns in svp svp-data svp-obs keda; do
+  for r in replicasets.apps pods secrets; do echo '{"items":[]}' | list "$ns" "$r"; done
+done
+list svp replicasets.apps <<'EOF'
+{"items":[
+ {"metadata":{"name":"user-service-6b9","ownerReferences":[{"kind":"Deployment","name":"user-service","controller":true}]}},
+ {"metadata":{"name":"gateway-7c4","ownerReferences":[{"kind":"Rollout","name":"gateway","controller":true}]}}]}
+EOF
+list svp pods <<'EOF'
+{"items":[
+ {"metadata":{"name":"user-service-6b9-a","uid":"p-user-a","ownerReferences":[{"kind":"ReplicaSet","name":"user-service-6b9","controller":true}]},
+  "status":{"conditions":[{"type":"Ready","status":"True"}]}},
+ {"metadata":{"name":"gateway-7c4-a","uid":"p-gw-a","ownerReferences":[{"kind":"ReplicaSet","name":"gateway-7c4","controller":true}]},
+  "status":{"conditions":[{"type":"Ready","status":"False"}]}},
+ {"metadata":{"name":"video-service-migrate-3-x","uid":"p-migrate","ownerReferences":[{"kind":"Job","name":"video-service-migrate-3","controller":true}]},
+  "status":{}}]}
+EOF
+list svp-data pods <<'EOF'
+{"items":[
+ {"metadata":{"name":"s3-0","uid":"p-s3-0","deletionTimestamp":"2026-11-06T00:00:00Z","ownerReferences":[{"kind":"StatefulSet","name":"s3","controller":true}]},
+  "status":{"conditions":[{"type":"Ready","status":"True"}]}},
+ {"metadata":{"name":"redpanda-0","uid":"p-rp-0","ownerReferences":[{"kind":"StatefulSet","name":"redpanda","controller":true}]},"status":{}},
+ {"metadata":{"name":"svp-pg-1","uid":"p-pg-1","ownerReferences":[{"kind":"Cluster","name":"svp-pg","controller":true}]},
+  "status":{"conditions":[{"type":"Ready","status":"True"}]}},
+ {"metadata":{"name":"pg-bootstrap-k2x","uid":"p-pg-bootstrap","ownerReferences":[{"kind":"Job","name":"pg-bootstrap","controller":true}]},
+  "status":{}}]}
+EOF
+list keda replicasets.apps <<'EOF'
+{"items":[{"metadata":{"name":"keda-operator-5d","ownerReferences":[{"kind":"Deployment","name":"keda-operator","controller":true}]}}]}
+EOF
+list keda pods <<'EOF'
+{"items":[{"metadata":{"name":"keda-operator-5d-a","uid":"p-keda-a","ownerReferences":[{"kind":"ReplicaSet","name":"keda-operator-5d","controller":true}]},
+  "status":{"conditions":[{"type":"Ready","status":"True"}]}}]}
+EOF
+secret_data=$(openssl rand -hex 12 | tr -d '\n' | openssl base64 -A)
+list svp-data secrets <<EOF
+{"items":[
+ {"type":"Opaque","metadata":{"name":"s3-root","resourceVersion":"101"},"data":{"SVP_S3_ROOT_PASSWORD":"$secret_data"}},
+ {"type":"helm.sh/release.v1","metadata":{"name":"sh.helm.release.v1.svp-data.v2","resourceVersion":"102"},"data":{"release":"$secret_data"}}]}
+EOF
+list svp secrets <<'EOF'
+{"items":[{"type":"Opaque","metadata":{"name":"gateway-env","resourceVersion":"201"}}]}
+EOF
+list keda secrets <<'EOF'
+{"items":[{"type":"Opaque","metadata":{"name":"keda-kafka","resourceVersion":"401"}}]}
+EOF
+# job_list UID_PG UID_RP UID_S3 [S3_STATUS]: the Jobs of svp-data, the init Jobs Succeeded but s3-init, whose status is
+# S3_STATUS when given; an empty UID leaves that init Job out.
+job_list() {
+  local succeeded='{"succeeded":1}'
+  {
+    echo '{"items":['
+    echo "{\"metadata\":{\"name\":\"pg-bootstrap-manual\",\"uid\":\"j-manual\"},\"status\":$succeeded}"
+    [ -z "$2" ] || echo ",{\"metadata\":{\"name\":\"redpanda-init\",\"uid\":\"$2\"},\"status\":$succeeded}"
+    [ -z "$1" ] || echo ",{\"metadata\":{\"name\":\"pg-bootstrap\",\"uid\":\"$1\"},\"status\":$succeeded}"
+    [ -z "$3" ] || echo ",{\"metadata\":{\"name\":\"s3-init\",\"uid\":\"$3\"},\"status\":${4:-$succeeded}}"
+    echo ']}'
+  } | list svp-data jobs.batch
+}
+job_list j-pg-1 j-rp-1 j-s3-1 '{"active":1}'
+echo 7 >"$lists/svp-rollout-gateway"
+echo 3 >"$lists/svp-rollout-web"
+# helper COMMANDS: COMMANDS after sourcing reloader.sh in its folder; output in $out, exit status in $rc.
+helper() {
+  set +e
+  out=$(cd "$here/reloader/rotate" &&
+    env CALLER_KUBECONFIG= NEW_VALUES="$work/nv1" OLD_VALUES="$work/nv1" STATE_DIR="$work/helper" \
+      bash -c "set -euo pipefail; . ./reloader.sh; $1" 2>&1)
+  rc=$?
+  set -e
+}
+helper "snapshot before"
+same "reloader.sh: snapshot of a bootstrapped cluster exits 0" 0 "$rc"
+same "reloader.sh: snapshot prints nothing" "" "$out"
+same "reloader.sh: pods of Deployments, Rollouts, StatefulSets and Clusters, by workload, not those of Jobs" \
+  "Cluster/svp-data/svp-pg p-pg-1 ready svp-pg-1
+Deployment/keda/keda-operator p-keda-a ready keda-operator-5d-a
+Deployment/svp/user-service p-user-a ready user-service-6b9-a
+Rollout/svp/gateway p-gw-a starting gateway-7c4-a
+StatefulSet/svp-data/redpanda p-rp-0 starting redpanda-0
+StatefulSet/svp-data/s3 p-s3-0 terminating s3-0" "$(cat "$work/helper/pods-before" 2>&1)"
+same "reloader.sh: the Secrets' versions without Helm's release records" "keda/keda-kafka 401
+svp-data/s3-root 101
+svp/gateway-env 201" "$(cat "$work/helper/secrets-before" 2>&1)"
+lacks "reloader.sh: no Secret data in the snapshot" "$(cat "$work/helper"/*-before)" "$secret_data"
+same "reloader.sh: the init Jobs of svp-data, not a Job whose name only starts like one" "pg-bootstrap j-pg-1 1
+redpanda-init j-rp-1 1
+s3-init j-s3-1 0" "$(cat "$work/helper/jobs-before" 2>&1)"
+same "reloader.sh: the revisions of Rollouts gateway and web" "gateway 7
+web 3" "$(cat "$work/helper/revisions-before" 2>&1)"
+job_list j-pg-2 j-rp-2 j-s3-2
+helper 'init_jobs "$state/jobs-after"; jobs_ran "$state/jobs-before" "$state/jobs-after"'
+same "reloader.sh: init Jobs that ran again and Succeeded pass" 0 "$rc"
+same "reloader.sh: ... one ok line each" 3 "$(grep -c '^ok    Job svp-data/.* ran again and Succeeded$' <<<"$out" || true)"
+job_list j-pg-2 j-rp-1 j-s3-2 '{"failed":1}'
+helper 'init_jobs "$state/jobs-after"; jobs_ran "$state/jobs-before" "$state/jobs-after"'
+same "reloader.sh: an init Job the same as before and one not Succeeded fail" 1 "$rc"
+has "reloader.sh: names the one the same as before" "$out" "FAIL  Job svp-data/redpanda-init: the same Job as before the change"
+has "reloader.sh: names the one not Succeeded" "$out" "FAIL  Job svp-data/s3-init: ran again but has not Succeeded"
+has "reloader.sh: passes the one that ran again" "$out" "ok    Job svp-data/pg-bootstrap ran again and Succeeded"
+job_list j-pg-2 j-rp-2 ""
+helper 'init_jobs "$state/jobs-after"; jobs_ran "$state/jobs-before" "$state/jobs-after"'
+same "reloader.sh: an init Job gone fails" 1 "$rc"
+has "reloader.sh: names it" "$out" "FAIL  Job svp-data/s3-init: none after the change"
+rm "$lists/svp-data-jobs.batch.json"
+helper "snapshot again"
+same "reloader.sh: a list that fails stops snapshot" 1 "$rc"
+has "reloader.sh: names it" "$out" "FAIL  list the Jobs of namespace svp-data"
 
 if ((failures > 0)); then
   echo "FAIL  $failures check(s) failed" >&2

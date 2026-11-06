@@ -1,10 +1,11 @@
 #!/usr/bin/env bash
-# Step drill-k8s-supplychain of job gitops of .github/workflows/verify.yml: make drill-k8s-supplychain with the images it
-# needs, read from GHCR without credentials (deploy/ci/ghcr-digest.sh newest): the newest drill-unsigned as the unsigned
-# image of cases b, h and i (no signature or attestation names it), the newest drill-vulnerable for case c, and for case
-# l (signed and attested vuln, without build provenance) the newest drill-no-provenance. An image that cannot be read is
-# left out and the step fails after the drill, even when the drill passes: its case SKIPs, except drill-unsigned, which
-# the drill then looks up itself; case l gets none, never empty, which the drill reads as "look it up yourself".
+# Step drill-k8s-supplychain of jobs gitops and dev-k3d of .github/workflows/verify.yml: make drill-k8s-supplychain with
+# the images it needs, read from GHCR without credentials (deploy/ci/ghcr-digest.sh newest): the newest drill-unsigned
+# as the unsigned image of cases b, h and i (no signature or attestation names it), the newest drill-vulnerable for case
+# c, and for case l (signed and attested vuln, without build provenance) the newest drill-no-provenance. An image that
+# cannot be read is left out and the step fails after the drill, even when the drill passes: its case SKIPs, except
+# drill-unsigned, which the drill then looks up itself; case l gets none, never empty, which the drill reads as "look it
+# up yourself".
 #
 # Cases c and l pass only when their drill image's vuln attestation is within the policy's maximum age
 # (imageVerification.maxAttestationAge of chart svp-policy, 72h): dispatch images.yml -f drill=true less than that before
@@ -15,7 +16,8 @@
 # dispatch. The age is read as the drill reads it: the oldest scanFinishedOn of the attestations cosign verifies,
 # anonymously, with the identity of the release source whose prefix the image is under. An image whose age cannot be
 # read is kept: the drill reads it again and fails the case with what it got. A dispatched run keeps both whatever
-# their age.
+# their age. SUPPLYCHAIN_ENFORCE_TMP goes to the drill as it is: job dev-k3d sets it to 1, so that the dev path's policy
+# (Audit) is in Enforce for each case and back, job gitops leaves it empty (its policy enforces already).
 #
 # Usage, from the repo root: deploy/ci/verify-steps/supplychain.sh
 set -euo pipefail
@@ -63,7 +65,7 @@ echo "unsigned: ${unsigned:-none}; vulnerable: ${vulnerable:-none}"
 echo "without provenance: ${no_provenance:-none, case l SKIPs}"
 rc=0
 make drill-k8s-supplychain SUPPLYCHAIN_UNSIGNED="$unsigned" SUPPLYCHAIN_VULNERABLE="$vulnerable" \
-  SUPPLYCHAIN_NO_PROVENANCE="${no_provenance:-none}" || rc=$?
+  SUPPLYCHAIN_NO_PROVENANCE="${no_provenance:-none}" SUPPLYCHAIN_ENFORCE_TMP="${SUPPLYCHAIN_ENFORCE_TMP:-}" || rc=$?
 if [ -n "$missing" ]; then
   echo "FAIL  drill-k8s-supplychain ran without what GHCR did not give (above):$missing"
   exit 1

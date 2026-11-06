@@ -75,6 +75,24 @@ Chọn phương án A ở cả bốn mục. Ngoài ra:
    - diễn tập compose chuyển sang `svp-labs`.
 4. **Bash còn lại là glue ngắn**: đọc `.env`, gọi công cụ theo thứ tự, guard context. Bản tự viết còn giá trị học thì chuyển sang
    `svp-labs` theo luật của [0039](0039-mainpath-drills-scan-gate-sourcemaps.md).
+5. **Restart theo Secret là việc của Reloader trên mọi nền tảng** (k3d dev, k3d GitOps, EKS): Secret do External Secrets làm mới ở stg,
+   prd cũng cần restart, và một danh sách component phục vụ cả hai đường. Workload opt in bằng annotation theo tên Secret
+   (`secret.reloader.stakater.com/reload`, không `auto`); `reloadStrategy: annotations` ghi annotation vào pod template như
+   `kubectl rollout restart`, diff của Argo CD không thấy nó; Rollout restart bằng `spec.restartAt`, không có revision mới. Script không
+   restart, không chờ client: `make k8s-secrets` và `make eks-secrets` mỗi lần làm đủ một lượt xoay credential theo thứ tự máy chủ, rồi
+   Job init của `svp-data`, rồi client, có barrier chờ máy chủ chạy giá trị mới trước init. Ba rủi ro chấp nhận:
+   - Rollout đang canary lúc Secret của nó đổi thì để Reloader và Argo Rollouts xử lý như mọi restart, script không chặn;
+   - `reloadOnCreate: false` (Reloader v1.4 dùng chung một cờ cho mọi watcher, bật thì restart cả cụm lúc nó khởi động): Secret tạo sau
+     workload, hôm nay chỉ `svp/sentry` tuỳ chọn, chỉ tới workload ở lần restart sau. Xem lại khi Reloader v2 ổn định;
+   - Reloader ghi hash SHA của data Secret vào pod template (`reloader.stakater.com/last-reloaded-from`), manifest đó có thể vào
+     artifact công khai: data các Secret opt in là giá trị ngẫu nhiên dài, hash không cho đoán ngược.
+
+   Thay luồng xoay "sửa `.env`, `make k8s-secrets`, rồi `make k8s-up`" và bước tay của stg lab ở
+   [0026](0026-secrets-gitops.md) §7.
+6. **Kịch bản `dev-k3d` trở lại `verify.yml`, chỉ dispatch**: không chỗ nào khác chạy đường dev (máy 16 GB không chạy k3d). Nó chỉ dựng
+   đường dev rồi kiểm `make k8s-smoke`, xoay credential (`make drill-k8s-reloader`) và diễn tập chuỗi cung ứng có ca (k), ca chỉ đường
+   dev chạy được; bản đo một lần (RAM, KEDA, PDB, canary, backup) vẫn là bài lab của [0039](0039-mainpath-drills-scan-gate-sourcemaps.md)
+   bảng 1.
 
 ### Hệ quả
 
@@ -137,7 +155,7 @@ Chọn phương án A ở cả bốn mục. Ngoài ra:
   file, `targets` lọc bằng `if:`), script ngắn của bước ở `deploy/ci/verify-steps/` (`steps.sh`, `supplychain.sh`, `admission-metrics.sh`,
   `objstore.sh`, mỗi script một test cạnh nó); ba kiểm cluster của kịch bản `gitops` thành test Chainsaw ở `deploy/k8s/drills/gitops/`;
   `deploy/ci/verify-collect.sh` chỉ đưa lên artifact kết quả máy đọc, `verify-collect-test.sh` còn ca của phần lọc đó, ca restart sang
-  `deploy/k8s/restart-test.sh`; runner tự viết và các file kịch bản xoá; job `config` của `.github/workflows/ci.yml` chạy
+  `deploy/k8s/restart-test.sh` (giai đoạn đường dev k3d xoá cùng hàm restart, xem mục cuối); runner tự viết và các file kịch bản xoá; job `config` của `.github/workflows/ci.yml` chạy
   `make chainsaw-lint` và các test trên; `deploy/ci/changed-services.sh` (script của bước không build image). Lượt `verify.yml` của
   hai kịch bản trên nhánh của giai đoạn này: **kiểm sau push**.
 - Pipeline image (A1, A2, A3, A7 của phụ lục): ba composite action `.github/actions/image-leg/` (build `docker buildx build`, `docker save`,
@@ -150,6 +168,26 @@ Chọn phương án A ở cả bốn mục. Ngoài ra:
   (cả bước đầu của mỗi chân), cổng trivy của rescan và cổng grype của `make grype`; `sign-image-test.sh` còn ca của helper bundle mà rescan
   dùng; đổi file dưới `.github/actions/image-*/` build lại mọi image (`deploy/ci/changed-services.sh`); job `config` của
   `.github/workflows/ci.yml` chạy hai test mới. Predicate `vuln` không đổi (`deploy/ci/vuln-predicate.sh`).
+- Đường dev k3d (mục 4, mục 5; D1, D2 của phụ lục):
+  - helmfile ghim `HELMFILE_VERSION` của `Makefile` (cài ở `make tools`): `deploy/k8s/helmfile.yaml.gotmpl` đọc
+    `argocd/apps/components.json` của bản clone `svp-gitops` (không có danh sách component thứ hai), lọc component của đường dev, values
+    `base/`, `needs` theo wave; `deploy/k8s/install.sh` (`make k8s-up`) chỉ còn glue: guard, image, namespace, hai lượt helmfile quanh
+    `secrets.sh`, hook postsync của từng release thay các hàm chờ;
+  - Reloader là component `reloader` của `svp-gitops` (`base/reloader.yaml`, AppProject `argocd/project.yaml`); annotation opt in ở chart
+    `svp-service`, `svp-data` (StatefulSet `s3`), `svp-observability` (GlitchTip) và ở `base/` của Redpanda, Grafana, KEDA; namespace
+    `reloader` có PSA, NetworkPolicy ở chart `svp-cluster`;
+  - thứ tự xoay credential ở thư viện `deploy/k8s/rotate.sh` (test `rotate-test.sh`), dùng bởi `deploy/k8s/secrets.sh`
+    (`make k8s-secrets`, cả cluster GitOps qua External Secrets), `aws-secrets.sh` (`make eks-secrets`, test `aws-secrets-test.sh`) và
+    `install.sh`; `restart_on_secret_change`, `restart_workload`, `restart_brokers` cùng `deploy/k8s/restart-test.sh` xoá: hai ca canary
+    hết đối tượng (không còn guard canary), hai ca restart thành bước của diễn tập `reloader`, ca âm mới ở `rotate-test.sh` bù số ca âm;
+  - bảng image `deploy/docker-bake.json` (định dạng JSON của bake, không phải `docker-bake.hcl` ở gốc như phụ lục D1: bash đọc bằng
+    `jq` không cần docker, test nào chép `deploy/` vào cây tạm có sẵn bảng); `deploy/k8s/lib.sh` đọc bảng lúc được source
+    (`built_services`, `dockerfile`), image dev của `make k8s-up`, `make k8s-images` và sáu image của `make up` build bằng
+    `docker buildx bake`, `deploy/ci/plan.sh`, `changed-services.sh` và action `image-leg` đọc cùng bảng;
+  - diễn tập `make drill-k8s-reloader` (`deploy/k8s/drills/reloader/`, giá trị mới của `new-values.sh`, test glue ở
+    `deploy/k8s/drills/run-test.sh`): `make k8s-secrets` với giá trị mới, mỗi workload đọc Secret đổi thay pod, mỗi giá trị mới được
+    nhận và giá trị cũ bị từ chối, lượt cùng `.env` không đổi gì; chạy ở kịch bản `gitops` và kịch bản mới `dev-k3d` (chỉ dispatch,
+    input `gitops_ref`) của `.github/workflows/verify.yml`. Lượt `verify.yml` của nhánh giai đoạn này: **kiểm sau push**.
 
 ## Thông tin thêm
 

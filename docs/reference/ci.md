@@ -31,7 +31,7 @@ Loại tài liệu (Diátaxis): **reference**, tra cứu khi cần một lệnh 
     `verify-release-test.sh` cùng `values-check.sh`, `changed-services-test.sh`), `deploy/ci/promote-test.sh`
     (guard của hai job promote, danh sách bản phát hành của rescan),
     `deploy/ci/verify-collect-test.sh`, test các bước của `verify.yml` (`deploy/ci/verify-steps/steps-test.sh`, `supplychain-test.sh`,
-    `admission-metrics-test.sh`, `objstore-test.sh`), `deploy/k8s/drills/run-test.sh`, `deploy/k8s/restart-test.sh`, `make chainsaw-lint`,
+    `admission-metrics-test.sh`, `objstore-test.sh`), `deploy/k8s/drills/run-test.sh` (cùng `new-values.sh` của diễn tập `reloader`), `deploy/k8s/rotate-test.sh`, `make chainsaw-lint`,
     `deploy/k8s/drills/gitops/gitops-test.sh`, `make slo-check`, `make otelcol-validate`, `make env`
     rồi `make compose-config`, `deploy/observability/glitchtip/dotenv-test.sh`,
     `make helm-check`, `deploy/ci/sources-test.sh`, `deploy/ci/gitops-check-test.sh "$SVP_GITOPS_DIR"`, `make k6-check`,
@@ -180,11 +180,11 @@ Loại tài liệu (Diátaxis): **reference**, tra cứu khi cần một lệnh 
     [ADR-0039](../adr/0039-mainpath-drills-scan-gate-sourcemaps.md) §1; không check bắt buộc nào, không chạy ở PR): kiểm trên runner `ubuntu-24.04`
     những gì máy 16 GB không chạy nổi, bằng đúng target `make` như trên máy. Trigger: `workflow_dispatch` (chỉ người có quyền ghi; ref
     `main` hay `feat/stage6b-*`, ref khác dừng ở bước đầu) và lịch hằng tuần trên `main` (00:37 UTC thứ Bảy, 07:37 giờ Việt Nam; cả hai kịch bản
-    song song, mọi bước). Hai kịch bản, mỗi kịch bản một job; lượt lịch đầu sau khi thu gọn: **kiểm sau push**.
+    song song, mọi bước). Ba kịch bản, mỗi kịch bản một job (`dev-k3d` chỉ dispatch); lượt lịch đầu sau khi thu gọn: **kiểm sau push**.
     - `compose-obs` (job `compose`, hạn 155 phút): `make up OBS=lgtm`, `make smoke`, `make drill-obs-threats`, rồi `test-stack-objstore`
       (`deploy/ci/verify-steps/objstore.sh`: `make test-stack PKGS=./internal/objstore/...`, một ca SKIP là đỏ, gồm ba test của output bất
       biến): nơi duy nhất test `internal/objstore` chạy thật thay vì SKIP.
-    - `gitops` (job `gitops`, hạn 205 phút): `make k8s-gitops-up` (vai stg; `make gitops-clone` trước; `GITOPS_REV` là SHA của `origin/main` trong
+    - `gitops` (job `gitops`, hạn 250 phút): `make k8s-gitops-up` (vai stg; `make gitops-clone` trước; `GITOPS_REV` là SHA của `origin/main` trong
       bản clone, nên cluster ở yên commit đó suốt các bước kiểm, PR promote merge giữa chừng không đổi gì), `make drill-k8s-gitops` (ba test
       Chainsaw ở `deploy/k8s/drills/gitops/`: `gitops-env` (overlay stg có trong Application `gateway` và trên mọi pod gateway đang chạy, kiểm khai
       báo), `gitops-external-secrets` (ExternalSecret của cluster đúng bằng danh sách `files/external-secrets.yaml` của chart `svp-cluster` ở
@@ -200,31 +200,40 @@ Loại tài liệu (Diátaxis): **reference**, tra cứu khi cần một lệnh 
       `kyverno-resource-validating-webhook-cfg` (bucket chỉ có 10, 25, +Inf: `_count`, `_sum`, trung bình, số ≤ 10, ≤ 25, > 25); từ Kyverno (port-forward
       `kyverno-svc-metrics`:8000) `kyverno_admission_review_duration_seconds` và `kyverno_image_validating_policy_execution_duration_seconds` của
       policy `svp-images` (bucket 20, 30). Thiếu metric thì dòng `NOTE`, bước không đỏ: phép đo là bằng chứng, không phải cổng),
-      `make k8s-smoke` (chặt, không biến chuyển tiếp), `drill-k8s-supplychain` (`deploy/ci/verify-steps/supplychain.sh` gọi
+      `make k8s-smoke` (chặt, không biến chuyển tiếp), `make drill-k8s-reloader` (xoay credential qua External Secrets, mục của nó ở
+      [`k8s.md`](k8s.md); các bước sau chạy trên credential mới), `drill-k8s-supplychain` (`deploy/ci/verify-steps/supplychain.sh` gọi
       `make drill-k8s-supplychain`; ảnh chưa ký của ca (b), (h), (i) là digest mới nhất của
       `drill-unsigned` (không chữ ký, không attestation nên không có hạn 72 giờ); ca (l) là digest mới nhất của `drill-no-provenance` dưới
       prefix của `backend`, lấy như ca (c) lấy `drill-vulnerable`; cả ba do `deploy/ci/ghcr-digest.sh` đọc ẩn danh từ GHCR, không đọc được thì ca SKIP (trừ `drill-unsigned`: drill tự tra lại) và bước đỏ sau drill; chỉ ở lượt lịch, `SVP_VERIFY_SCHEDULED=true`,
       image của ca (c) hay (l) có attestation `vuln` quá 72 giờ thì không đưa cho drill: ca đó SKIP kèm dòng `NOTE` nêu tuổi và lệnh dispatch
       dựng lại image diễn tập (`-f drill=true`), mọi ca khác vẫn phải PASS; lượt dispatch quá hạn là đỏ, nên (c), (l) chỉ được chứng minh ở lượt
       dispatch sau lượt đó), `make drill-k8s-threats`.
-    - Đã rời `verify.yml`, nay là bài lab `drills/` của `svp-labs` (hoặc script diễn tập compose chạy tay): các kịch bản `dev-k3d`, `web-canary`, `k6-cloud-mini`, `chaos`, `velero`, phần còn lại của `compose-obs` (load-local,
+    - `dev-k3d` (job `dev-k3d`, hạn 210 phút, chỉ dispatch, [ADR-0050](../adr/0050-bash-to-standard-tools.md) mục 6): đường dev như trên
+      máy, `make k8s-up` (sáu image build trên runner bằng bake, web là bản phát hành stg, `make gitops-clone GITOPS_REF=<gitops_ref>`
+      trước), `make k8s-smoke`, `make drill-k8s-reloader`, `drill-k8s-supplychain` (như kịch bản `gitops`, với `SUPPLYCHAIN_ENFORCE_TMP=1`:
+      policy Audit của đường dev sang Enforce cho từng ca rồi trả lại, và ca (k), ca chỉ đường dev chạy được). Input `gitops_ref`: `main`
+      (mặc định) hay SHA đủ 40 hex của `svp-gitops`, để chạy với nhánh chưa merge; khác thì job đỏ trước khi dựng gì, không in lại giá trị.
+    - Đã rời `verify.yml`, nay là bài lab `drills/` của `svp-labs` (hoặc script diễn tập compose chạy tay): bản đo một lần của kịch bản `dev-k3d` (RAM, KEDA, PDB, canary, backup), các kịch bản `web-canary`, `k6-cloud-mini`, `chaos`, `velero`, phần còn lại của `compose-obs` (load-local,
       Lighthouse, `drill-duplicates`, `drill-kill-worker`, `drill-upload-cleanup`, `measure-upload`, `drill-alert-to-sentry`, đường quay lại
       `object-store-roundtrip`), bước chờ phát hành và `measure-gitops`, `verify-sample.sh`, `verify-tempo.sh`. Số đo và id lượt chạy ở các ADR 0014, 0017, 0019, 0020, 0021, 0022, 0031. Bản clone
       `svp-frontend`, Node, pnpm, Playwright và image source map không còn trong workflow; `web_ref` không còn là input.
     Dispatch và đọc kết quả (AI được chạy, chỉ khi người học giao): `gh workflow run verify.yml --ref <main|feat/stage6b-…>
-    -f scenario=<compose-obs|gitops> [-f targets='<bước> …']` (`targets` rỗng là mọi bước, bước dựng luôn chạy; tên bước là
+    -f scenario=<compose-obs|gitops|dev-k3d> [-f targets='<bước> …'] [-f gitops_ref=<main|SHA>]` (`targets` rỗng là mọi bước, bước dựng luôn chạy; tên bước là
     `SVP_VERIFY_STEP_NAMES` của job và cột đầu của `results.tsv`, ví dụ `targets='k8s-smoke drill-k8s-supplychain'`; tên lạ hay ký tự ngoài
-    `a-z`, `0-9`, `-`, khoảng trắng thì job đỏ trước khi dựng gì; chỉ lọc, không tự thêm bước: `drill-k8s-threats` cần `k8s-smoke` đi cùng),
+    `a-z`, `0-9`, `-`, khoảng trắng thì job đỏ trước khi dựng gì; chỉ lọc, không tự thêm bước: `drill-k8s-threats`, `drill-k8s-reloader` cần
+    `k8s-smoke` đi cùng),
     `gh run view <id> --log`, `gh run download <id> -n verify-<kịch bản>`. Mỗi target là một bước Actions, id là tên target, `timeout-minutes`
     riêng; output vào `$RUNNER_TEMP/verify/logs/<bước>.log`, không vào log job; bước sau bước dựng chạy khi bước dựng xanh dù bước giữa đỏ, và
     bị bỏ khi bước dựng đỏ; job đỏ khi một bước đã chạy đỏ. Hạn job đủ cho 20 phút cài đặt, tổng `timeout-minutes` của các bước và 25 phút cho
     các bước cuối (bảng kết quả, lọc, tải artifact, gỡ), chạy `always()` khi kiểm ref qua, kể cả khi huỷ hay quá giờ. Mỗi lượt chạy
-    `make gitops-clone` (`main` của `svp-gitops`, ẩn danh) và đặt `SVP_GITOPS_DIR` tới bản clone cho mọi bước sau; kịch bản `compose-obs` và
-    `gitops` chạy image web của bản phát hành stg. Cả hai job chỉ `contents: read`, không secret hay environment; `concurrency` một lượt mỗi
+    `make gitops-clone` (`main` của `svp-gitops`, `gitops_ref` ở `dev-k3d`, ẩn danh) và đặt `SVP_GITOPS_DIR` tới bản clone cho mọi bước sau;
+    cả ba kịch bản chạy image web của bản phát hành stg. Mọi job chỉ `contents: read`, không secret hay environment; `concurrency` một lượt mỗi
     kịch bản. Script: `deploy/ci/verify-host.sh` (cổng đĩa, `/etc/hosts` cho ba tên `*.svp.localhost`, lệch version kubectl), các bước ở
     `deploy/ci/verify-steps/` (`steps.sh check|table`: kiểm `targets`, bảng `results.tsv` từ outcome của từng bước; `supplychain.sh`,
     `admission-metrics.sh`, `objstore.sh`; mỗi script một test cạnh nó), `verify-mask.sh` (`::add-mask::` giá trị bí mật của `.env` sau `make
-    env` và sau bước dựng, cùng Secret trong cluster ở namespace `svp`, `svp-data`, `svp-obs`, `argocd`, `svp-secrets`), `verify-collect.sh`
+    env` và sau bước dựng, cùng Secret trong cluster ở namespace `svp`, `svp-data`, `svp-obs`, `argocd`, `svp-secrets`), bước "New values of
+    drill-k8s-reloader" của job `gitops` và `dev-k3d` (trước bước dựng: `deploy/k8s/drills/reloader/new-values.sh` sinh giá trị mới vào
+    file 600 ở `$RUNNER_TEMP/verify-reloader`, mask từng giá trị lúc sinh, diễn tập đọc qua `SVP_DRILL_NEW_VALUES`), `verify-collect.sh`
     (artifact `verify-<kịch bản>`, giữ 30 ngày: chỉ kết quả máy đọc theo danh sách cho phép: `results.tsv`, `scenario`, `df-before.txt`, dòng kết
     luận của `drill-obs-threats`, số đo admission, `.k8s/drills/{*.xml,*-skips.tsv,*.json,traffic-*.log}` gồm report JUnit của diễn tập Chainsaw và `<diễn tập>-skips.tsv` (mỗi
     dòng một ca SKIP kèm lý do, dòng cuối `total`: report JUnit tính bước SKIP là xanh nên file này mới cho biết ca nào bị bỏ; quét bí mật như file
