@@ -73,8 +73,7 @@ func WithName(name string) Option {
 }
 
 // open is New with the startup window as a parameter, so that tests need not wait 30 s. The window
-// bounds the startup check with its retries and the pool warm-up (pool_min_conns), whatever
-// connect_timeout the URL sets.
+// bounds the startup check with its retries, whatever connect_timeout the URL sets.
 func open(ctx context.Context, databaseURL string, window time.Duration, opts ...Option) (*pgxpool.Pool, error) {
 	var o options
 	for _, opt := range opts {
@@ -84,19 +83,30 @@ func open(ctx context.Context, databaseURL string, window time.Duration, opts ..
 	if err != nil {
 		return nil, err
 	}
-	// The pool warms up (pool_min_conns) on the context it is created with: bound it too, so that
-	// Close after a failed Ping does not wait for connections still dialing. Warm-up cut short
-	// here is redone by the pool's periodic health check.
+	// pgxpool connects lazily and warms up (pool_min_conns) in the background, ignoring the
+	// deadline of the context it is created with; Close then waits for those dials, up to
+	// connect_timeout. So the startup check is one connection of its own, closed at once, made
+	// before the pool exists: a failed check has no pool to close, and the warm-up only dials a
+	// server that has just answered.
 	startCtx, cancel := context.WithTimeout(ctx, window)
 	defer cancel()
-	pool, err := pgxpool.NewWithConfig(startCtx, cfg)
+	connCfg := cfg.ConnConfig.Copy()
+	err = pgretry.Connect(startCtx, func(ctx context.Context) error {
+		conn, err := pgx.ConnectConfig(ctx, connCfg)
+		if err != nil {
+			return err
+		}
+		// The server answered; a failed Terminate message changes nothing, the socket is closed
+		// either way.
+		_ = conn.Close(ctx)
+		return nil
+	})
+	if err != nil {
+		return nil, fmt.Errorf("pgpool: connect to database: %w", err)
+	}
+	pool, err := pgxpool.NewWithConfig(ctx, cfg)
 	if err != nil {
 		return nil, fmt.Errorf("pgpool: create pool: %w", err)
-	}
-	// pgxpool connects lazily; fail at startup instead of on the first request.
-	if err := pgretry.Connect(startCtx, pool.Ping); err != nil {
-		pool.Close()
-		return nil, fmt.Errorf("pgpool: connect to database: %w", err)
 	}
 	var statsOpts []otelpgx.StatsOption
 	if o.name != "" {
