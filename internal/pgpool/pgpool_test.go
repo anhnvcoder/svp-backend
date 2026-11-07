@@ -321,6 +321,47 @@ func testDatabaseURL(t *testing.T, name string) *url.URL {
 	return u
 }
 
+// TestNewWarmsUpToMinConns: a pool on a reachable server warms up to pool_min_conns, and the
+// startup check's own connection does not stay open beside them.
+func TestNewWarmsUpToMinConns(t *testing.T) {
+	const minConns = 2
+	admin := pgtest.New(t, "svp_pgpool_warmup_test", fstest.MapFS{"00001_create_accounts.sql": {Data: []byte(createAccounts)}})
+	u, err := url.Parse(admin.Config().ConnString())
+	if err != nil {
+		t.Fatal(err)
+	}
+	appName := fmt.Sprintf("svp_pgpool_warmup_%d", time.Now().UnixNano())
+	q := u.Query()
+	q.Set("pool_min_conns", fmt.Sprint(minConns))
+	q.Set("application_name", appName)
+	u.RawQuery = q.Encode()
+
+	pool, err := New(t.Context(), u.String())
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	t.Cleanup(pool.Close)
+
+	var total int32
+	var backends int
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		total = pool.Stat().TotalConns()
+		if err := admin.QueryRow(t.Context(),
+			"SELECT count(*) FROM pg_stat_activity WHERE application_name = $1", appName).Scan(&backends); err != nil {
+			t.Fatal(err)
+		}
+		if (total == minConns && backends == minConns) || time.Now().After(deadline) {
+			break
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	if total != minConns || backends != minConns {
+		t.Errorf("pool has %d connections and the server %d backends named %s, want %d and %d",
+			total, backends, appName, minConns, minConns)
+	}
+}
+
 // TestNewFailsFastOnConfigurationErrors: errors from the server are not retried.
 func TestNewFailsFastOnConfigurationErrors(t *testing.T) {
 	base := testDatabaseURL(t, "svp_pgpool_config_test")
