@@ -187,8 +187,7 @@ S3, PSA `v1.36`, NLB giữ IP, hairpin, metrics-server, IMDSv2, `rds_superuser`,
 ## Nguồn
 
 Đọc 2026-10-31; danh sách đầy đủ [N1]–[N41] ở phụ lục. [N2] <https://aws.amazon.com/eks/pricing/>, [N7] <https://aws.amazon.com/rds/postgresql/pricing/>,
-[N9] <https://aws.amazon.com/s3/pricing/>, [N10] <https://aws.amazon.com/cloudfront/pricing/>, [N11] <https://aws.amazon.com/secrets-manager/pricing/>,
-[N16] <https://aws.amazon.com/apprunner/>, [N18] <https://docs.aws.amazon.com/eks/latest/userguide/kubernetes-versions.html>, [N30] <https://letsencrypt.org/docs/rate-limits/>.
+[N9] <https://aws.amazon.com/s3/pricing/>, [N10] <https://aws.amazon.com/cloudfront/pricing/>, [N11] <https://aws.amazon.com/secrets-manager/pricing/>, [N16] <https://aws.amazon.com/apprunner/>, [N18] <https://docs.aws.amazon.com/eks/latest/userguide/kubernetes-versions.html>, [N30] <https://letsencrypt.org/docs/rate-limits/>.
 
 ## Thông tin thêm
 
@@ -198,3 +197,4 @@ Phụ lục: [`appendix/0034-aws-stage7.md`](appendix/0034-aws-stage7.md) (trạ
 
 - §2 "Biến cá nhân", §9 "S3": [0038](0038-s3-bucket-names.md): tên bucket.
 - §2, §3, §4, §5, §6, §7, §10, §11, §13, §14: [0048](0048-prd-aws.md): AWS Organizations, sandbox chỉ còn là management, stg và prd ở account `svp-stg`, `svp-prd`, mỗi account một profile, state, zone `<env>.aws.<miền>` và budget; root `aws/org`, `aws/accounts/<env>`, `aws/gitops/<env>`; region store từ `cluster.region`, SCP chỉ cho `ap-southeast-1`, `us-east-1`; Karpenter để sau; `cluster.*` qua annotation cluster Secret của GitOps Bridge, thêm khoá `externalSecretsRoles`; Secret EKS của stg và prd từ Secrets Manager, endpoint S3 có policy ở prd; giá trị prd và wiring riêng của root prd; gỡ và quét theo account; trình tự buổi bằng `terraform apply` hai root.
+- Câu 19, §9 "CloudFront": [0052](0052-cloudfront-flat-rate-free.md): distribution media của stg và prd trên gói flat-rate Free thay pay-as-you-go, có web ACL WAF ở cả hai env; `PriceClass_All` thay `PriceClass_200`; CORS của media bằng policy managed `Managed-SimpleCORS`.

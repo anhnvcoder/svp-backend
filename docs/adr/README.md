@@ -141,6 +141,7 @@ Phụ lục: [`appendix/NNNN-<slug>.md`](appendix/NNNN-<slug>.md) (chỉ khi có
 | [0049](0049-kafka-prd.md) | Kafka của prd là Redpanda trong cluster bằng chart và component `redpanda` của stg: ba broker mỗi AZ một, replication factor 3 với `acks=all` (đa số Raft thay `min.insync.replicas=2`), mỗi broker nửa core | Chấp nhận |
 | [0050](0050-bash-to-standard-tools.md) | Bash tự viết của đường chính nhường cho công cụ chuẩn: bootstrap EKS bằng GitOps Bridge, diễn tập bằng Chainsaw, kiểm cấu hình bằng JSON Schema và conftest, đường dev k3d bằng helmfile và Reloader; bỏ adapter CI và đường quay lại MinIO | Chấp nhận |
 | [0051](0051-dns-prd-apex.md) | Zone gốc `aws.<miền>` của lab ở account `svp-prd`, zone `stg.aws.<miền>` là zone con do zone prd uỷ quyền; management không còn hosted zone | Chấp nhận |
+| [0052](0052-cloudfront-flat-rate-free.md) | CloudFront của media ở stg và prd chạy trên gói flat-rate Free ($0, không phí vượt), có web ACL WAF ở cả hai env; CORS của media bằng policy managed `Managed-SimpleCORS`, `PriceClass_All` cố định | Chấp nhận |
 
 ## Chuẩn áp dụng
 

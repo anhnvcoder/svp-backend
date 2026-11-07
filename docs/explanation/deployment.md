@@ -540,7 +540,7 @@ flowchart LR
 | Cluster | k3d, 2 node | EKS, managed node group 3 × `m7g.large` Spot |
 | Postgres | Native (compose), CloudNativePG (k3d) | RDS PostgreSQL 15 single-AZ; Service `ExternalName` `svp-pg-rw` giữ chuỗi kết nối |
 | Object store | RustFS `s3` | S3 `uploads`, `media`; credential Pod Identity |
-| CDN | Không có | CloudFront trước `media` (OAC) |
+| CDN | Không có | CloudFront trước `media` (OAC), gói flat-rate Free có web ACL WAF ([ADR-0052](../adr/0052-cloudfront-flat-rate-free.md)) |
 | Redis, Kafka | Native Redis (compose), Valkey; Redpanda | Valkey, Redpanda trong cluster |
 | Vào hệ thống | Loopback, Envoy với CA tự ký | NLB L4 giữ IP client, Envoy với chứng chỉ Let's Encrypt, DNS Route 53 do ExternalDNS ghi |
 | NetworkPolicy | network policy controller của k3s | Network policy agent của VPC CNI |

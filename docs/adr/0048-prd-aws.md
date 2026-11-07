@@ -188,8 +188,7 @@ Buổi T = 4 giờ. H₀ (theo giờ khi prd chạy, chưa gồm Kafka) ~$0,90/g
 
 Đọc 2026-11-05; đủ [N1]–[N21] và giá ở phụ lục. [N1] <https://docs.aws.amazon.com/organizations/latest/userguide/orgs_best-practices_mgmt-acct.html>,
 [N5] <https://github.com/hashicorp/terraform-provider-kubernetes/blob/main/docs/index.md>, [N13] <https://github.com/gitops-bridge-dev/gitops-bridge>,
-[N15] <https://github.com/argoproj/argo-cd/blob/v3.5.5/docs/operator-manual/applicationset/Generators-Cluster.md>,
-[N21] <https://github.com/argoproj/argo-cd/blob/v3.5.5/reposerver/repository/repository.go#L807-L812>.
+[N15] <https://github.com/argoproj/argo-cd/blob/v3.5.5/docs/operator-manual/applicationset/Generators-Cluster.md>, [N21] <https://github.com/argoproj/argo-cd/blob/v3.5.5/reposerver/repository/repository.go#L807-L812>.
 
 ## Thông tin thêm
 
@@ -198,3 +197,4 @@ Phụ lục: [`appendix/0048-prd-aws.md`](appendix/0048-prd-aws.md) (phương á
 ### Chỉnh bởi
 
 - §1, §2: [0051](0051-dns-prd-apex.md): zone gốc `aws.<miền>` ở account `svp-prd`, zone `stg.aws.<miền>` là zone con do zone prd uỷ quyền; management không còn hosted zone.
+- Phương án "Edge prd", §3, §4: [0052](0052-cloudfront-flat-rate-free.md): lý do loại "CloudFront flat-rate plan" (theo tháng, không theo buổi) không còn đúng vì gói Free giá $0 và huỷ ngay; distribution media của stg và prd trên gói Free, root stg cũng gọi module `waf` (cùng provider alias `us_east_1`), `web_acl_arn` của `media` bắt buộc.
