@@ -234,9 +234,9 @@ func (p *Projector) handleVideo(ctx context.Context, r *kgo.Record) error {
 }
 
 // checkVideoReady checks every field the feed stores or serves, so a forged or broken event goes
-// to the dead-letter topic instead of failing every retry and stalling both topics (IN-5). The
+// to the dead-letter topic instead of failing every retry and stalling both topics. The
 // keys end up in URLs the gateway builds, so they get the same check as video-service gives
-// media-worker's (FF-6); the title gets video-service's own title rule.
+// media-worker's; the title gets video-service's own title rule.
 func checkVideoReady(e *videov1.VideoReady) (store.InsertVideoParams, error) {
 	videoID, err := ids.Parse(e.GetVideoId())
 	if err != nil {

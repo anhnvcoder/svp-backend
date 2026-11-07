@@ -1,17 +1,34 @@
 {{- /*
-Metrics of Postgres svp-pg: Prometheus scrapes the exporter of the
-CloudNativePG instance manager on its port metrics (9187), which serves the cnpg_* metrics (WAL archiver, replication,
-database sizes) and the Barman Cloud plugin's barman_cloud_cloudnative_pg_io_* (last available and last failed
-backup, first recoverability point), read by alerts PostgresWALArchivingFailing and PostgresBackupTooOld
-(svp-alerts.yaml). Instance pods only: the pods of CloudNativePG's Jobs (initdb, recovery) carry cnpg.io/cluster too
-but have no metrics port.
+Metrics of Postgres svp-pg: Prometheus scrapes the exporter of the CloudNativePG instance manager on its port metrics
+(9187), which serves the cnpg_* metrics (WAL archiver, replication, database sizes).
+*/}}
 
+{{- /*
+It also serves the Barman Cloud plugin's barman_cloud_cloudnative_pg_io_* (last available and last failed backup,
+first recoverability point), read by alerts PostgresWALArchivingFailing and PostgresBackupTooOld (svp-alerts.yaml).
+*/}}
+
+{{- /*
+Instance pods only: the pods of CloudNativePG's Jobs (initdb, recovery) carry cnpg.io/cluster too but have no metrics
+port.
+*/}}
+
+{{- /*
 The PodMonitor lives in svp-obs although the pods are in svp-data, as envoy-svp does (templates/envoy.yaml): the
-Prometheus operator watches svp-obs only (base/kube-prometheus-stack.yaml of svp-gitops), so the PodMonitor
-CloudNativePG can make itself (spec.monitoring.enablePodMonitor) would be made in svp-data and never read. Prometheus
-finds the pods with its own cluster-wide right to list pods; policy prometheus opens its egress to 9187, and policy
-postgres of chart svp-data the ingress.
+Prometheus operator watches svp-obs only (base/kube-prometheus-stack.yaml of svp-gitops),
+*/}}
 
+{{- /*
+so the PodMonitor CloudNativePG can make itself (spec.monitoring.enablePodMonitor) would be made in svp-data and never
+read.
+*/}}
+
+{{- /*
+Prometheus finds the pods with its own cluster-wide right to list pods; policy prometheus opens its egress to 9187,
+and policy postgres of chart svp-data the ingress.
+*/}}
+
+{{- /*
 None with postgres.mode external: no CloudNativePG instance to scrape.
 */}}
 {{- if not (include "svp-observability.postgresExternal" .) }}

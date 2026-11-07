@@ -39,7 +39,7 @@ ON CONFLICT (video_id) DO NOTHING;
 -- name: FanOutVideo :execrows
 -- Puts the video into the timeline of every follower of its author, with the published_at and
 -- author stored in videos rather than the event's: a second video.ready naming another author
--- (forged, threat model IN-4) fans out to nobody.
+-- (forged) fans out to nobody.
 INSERT INTO timeline (user_id, published_at, video_id)
 SELECT f.follower_id, v.published_at, v.video_id
 FROM follows f JOIN videos v ON v.video_id = @video_id AND v.author_id = @author_id

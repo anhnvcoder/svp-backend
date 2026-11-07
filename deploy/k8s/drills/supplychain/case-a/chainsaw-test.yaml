@@ -1,7 +1,8 @@
-# Supply chain drill, case a: the image a pod of svp runs, a signed release of source backend on GHCR, sent twice as a
-# server-side dry run of a pod of svp: admitted both times; the second answer comes from Kyverno's verification cache,
-# and the time of both is printed. With the provenance rule on, this shows a release with provenance passes it. SKIP
-# while no pod of svp runs an image of GHCR (the dev path's images are unsigned dev builds).
+# Supply chain drill, case a: the signed release of source backend that a pod of svp runs, sent twice as a server-side
+# dry run of a pod of svp: admitted both times, the second answer from Kyverno's verification cache; both times are
+# printed. With the provenance rule on, it shows a release with provenance passes it. SKIP while no pod of svp runs a
+# GHCR image (the dev path's images are unsigned dev builds).
+
 # Helpers, inputs and the verdict lines: ../lib.sh.
 apiVersion: chainsaw.kyverno.io/v1alpha1
 kind: Test

@@ -27,7 +27,6 @@ func captureLog(t *testing.T) *bytes.Buffer {
 	return &buf
 }
 
-// logRecords returns the decoded log lines whose msg is msg.
 func logRecords(t *testing.T, buf *bytes.Buffer, msg string) []map[string]any {
 	t.Helper()
 	var out []map[string]any

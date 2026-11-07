@@ -49,8 +49,8 @@ const metadataMinAge = time.Second
 // than in each main so that every client of a service, the dead-letter producer inside a
 // consumer included, authenticates the same way: a client built without them would be refused
 // by a broker with ACLs. SCRAM does not send the password, only a proof of it, but the
-// connection itself is plain TCP: encrypting traffic inside the cluster (threat model IN-3) is a
-// later step than authenticating it, and the local setups do without it.
+// connection itself is plain TCP: encrypting traffic inside the cluster is a later step than
+// authenticating it, and the local setups do without it.
 //
 // The client's warnings and errors, a refused password included, go to the default slog logger.
 // NewClient does not connect; the first request does.
@@ -151,7 +151,6 @@ func Produce(ctx context.Context, cl *kgo.Client, rs ...*kgo.Record) error {
 	return nil
 }
 
-// header returns the value of the first header named key, and whether there is one.
 func header(r *kgo.Record, key string) (string, bool) {
 	for _, h := range r.Headers {
 		if h.Key == key {

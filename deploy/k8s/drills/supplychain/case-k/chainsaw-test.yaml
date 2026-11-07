@@ -1,10 +1,11 @@
 # Supply chain drill, case k: the keyless path with another vendor's public image (CloudNativePG's operator v1.28.1 on
-# GHCR, signed by its release workflow; identity from docs/src/security.md of cloudnative-pg/cloudnative-pg and the
-# certificate of its signature). Two temporary policies, one with the right subject, one with a wrong one (the same
-# workflow on refs/heads/main), each for pods of svp with its own drill label: the image is admitted by the first,
-# refused by the second. Both are deleted and their webhooks gone before the test ends, also when a step fails. Runs
-# only while svp-images is in Audit (the dev path, with enforceTmp; it is the one case that does not put the policy in
-# Enforce), since Enforce refuses that image by its prefix: SKIP on a policy in Enforce.
+# GHCR, signed by its release workflow). Two temporary policies, each for pods of svp with its own drill label, one with
+# the right subject and one with a wrong one (the same workflow on refs/heads/main): the image is admitted by the first,
+# refused by the second. Both are gone before the test ends, also when a step fails.
+
+# Runs only while svp-images is in Audit (the dev path, with enforceTmp), since Enforce refuses that image by its
+# prefix: SKIP on a policy in Enforce.
+
 # Helpers, inputs and the verdict lines: ../lib.sh.
 apiVersion: chainsaw.kyverno.io/v1alpha1
 kind: Test

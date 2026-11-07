@@ -1,17 +1,17 @@
 # shellcheck shell=bash
-# Helpers shared by the scripts that drive the core stack through the gateway (smoke.sh, later
-# drills): API requests, test users, generated test videos, the presigned upload, completion,
-# waiting for READY, anonymous HLS downloads and looking a video up in a feed. Written for bash 3.2
-# (the macOS /bin/bash).
-#
-# Source it after setting `base` (the gateway URL). It creates the private work directory $work,
-# removed on exit. Rules every helper keeps: passwords, tokens and presigned form fields are never
-# printed and never on a command line (jq and curl read them from the environment or from files
-# in $work); every work file is private (umask 077); every request has a --max-time.
-#
-# LOCAL LAB ONLY: sourcing it deletes the gateway's per-IP register rate limit keys in Redis
-# (reset_register_limit below), so that smoke and drill runs within one hour do not use up the
-# register burst. Never point these scripts at a shared or production stack.
+# Helpers shared by the scripts that drive the core stack through the gateway (smoke.sh, drills): API requests, test
+# users, generated test videos, the presigned upload, completion, waiting for READY, anonymous HLS downloads and looking
+# a video up in a feed. Written for bash 3.2 (the macOS /bin/bash).
+
+# Source it after setting `base` (the gateway URL). It creates the private work directory $work, removed on exit. Rules
+# every helper keeps: passwords, tokens and presigned form fields are never printed and never on a command line (jq and
+# curl read them from the environment or from files in $work); every work file is private (umask 077); every request has
+# a --max-time.
+
+# LOCAL LAB ONLY: sourcing it deletes the gateway's per-IP register rate limit keys in Redis (reset_register_limit
+# below), so that smoke and drill runs within one hour do not use up the register burst. Never point these scripts at a
+# shared or production stack.
+# Design notes: docs/reference/k8s.md.
 
 # Seconds an API request may take: a server that accepts the connection and never answers must
 # not hang the script.
@@ -29,20 +29,10 @@ fail() {
   exit 1
 }
 
-# reset_register_limit: LOCAL LAB ONLY. Every request of these scripts reaches the gateway from the
-# one Docker bridge address, and every script registers fresh users, so runs within an hour would
-# use up the per-IP register burst of 20. Deletes the register
-# buckets (svp:gw:rl:register:*) in the gateway's Redis db 10 on 127.0.0.1:6379 with SCAN + DEL,
-# and no other key; the limit itself is not raised.
-#
-# With SVP_STACK=k3d (make k8s-smoke) the gateway runs in the local k3d cluster svp, behind Envoy,
-# and counts in the cluster's Valkey db 10 instead: the same SCAN + DEL of the same keys runs
-# there through `kubectl exec` (context k3d-svp only), since Valkey has no address on the host.
-# With SVP_STACK=eks (make eks-smoke, eks-seed, eks-rl-reset) the same runs in the Valkey of the
-# EKS cluster that SVP_KUBE_CONTEXT names, svp-stg or svp-prd and nothing else: a lab cluster of
-# this project, never a shared one. Its load balancer keeps the client's address, so the runs from
-# one machine share one address there too, and pods of a load test may get the addresses of
-# earlier ones.
+# reset_register_limit: LOCAL LAB ONLY. Every request reaches the gateway from one Docker bridge address, so runs
+# within an hour use up the per-IP register burst of 20. Deletes the register buckets (svp:gw:rl:register:*) in the
+# gateway's Redis db 10 on 127.0.0.1:6379 with SCAN + DEL, no other key; the limit itself is not raised. SVP_STACK=k3d:
+# the same in the cluster's Valkey (context k3d-svp only); eks: svp-stg or svp-prd only, never a shared cluster.
 reset_register_limit() {
   local key n=0 cli where
   case ${SVP_STACK:-compose} in
@@ -136,7 +126,6 @@ make_video() {
     -shortest -movflags +faststart "$1" || fail "generate a $2 s $3 test video"
 }
 
-# file_size FILE: prints the size of FILE in bytes.
 file_size() { wc -c <"$1" | tr -d ' '; }
 
 # create_video NAME AUTH_FILE TITLE SIZE_BYTES CONTENT_TYPE: POST /videos; sets <NAME>_id and keeps
@@ -156,10 +145,9 @@ create_video() {
 upload_url() { jq -r '.upload_url' "$work/$1.upload"; }
 upload_key() { jq -r '.form_fields.key' "$work/$1.upload"; }
 
-# upload_file NAME FILE: POSTs FILE to video NAME's presigned form as multipart/form-data, every
-# form field first and the file last, as the storage requires. The URL and fields go to curl in a
-# config file, not on its command line. Leaves the storage's answer in $work/body and prints the
-# HTTP status.
+# upload_file NAME FILE: POSTs FILE to video NAME's presigned form as multipart/form-data, every form field first and
+# the file last, as the storage requires. The URL and fields go to curl in a config file, not on its command line.
+# Leaves the storage's answer in $work/body and prints the HTTP status.
 upload_file() {
   local cfg="$work/$1.curl"
   # --form-string sends a value as is; --form would read a value starting with @ or < as a file.

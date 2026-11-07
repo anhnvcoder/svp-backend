@@ -1,25 +1,21 @@
 #!/bin/sh
-# Creates the buckets, their CORS rules, the anonymous read policy of `media` and one user per
-# service on the local object store (RustFS). Each service gets its own user and policy limited to
-# the prefixes it needs, and never the root credential, so a compromised service cannot read or
-# write the other's objects; `media` allows anonymous GetObject only, never listing, and `uploads`
-# nothing anonymous (threat model UP-4, UP-5, UP-6, FF-4). Browsers may read answers cross-origin
-# only from the origins in S3_CORS_ALLOWED_ORIGINS and only for what the web client does: POST a
-# presigned form to uploads, GET (and HEAD) under media (WEB-10). The store's global CORS list stays
+# Creates the buckets, their CORS rules, the anonymous read policy of `media` and one user per service on the local
+# object store (RustFS). Each service gets its own user and policy limited to the prefixes it needs, and never the root
+# credential, so a compromised service cannot read or write the other's objects; `media` allows anonymous GetObject
+# only, never listing, and `uploads` nothing anonymous (threat model UP-4, UP-5, UP-6, FF-4).
+
+# Browsers may read answers cross-origin only from the origins in S3_CORS_ALLOWED_ORIGINS and only for what the web
+# client does: POST a presigned form to uploads, GET (and HEAD) under media (WEB-10). The store's global CORS list stays
 # empty, so a bucket without rules of its own sends no CORS header at all.
-#
-# Run by the one-shot s3-init container, with the store's image: its curl signs each request
-# (SigV4) as the root user and calls the S3 API and RustFS's admin API (/rustfs/admin/v3, which
-# takes plain JSON). Idempotent: running it again keeps the buckets and their objects, and resets
-# the users' secret keys and policies, the bucket policies and the CORS rules to what this script
-# and its environment say. Prints no secret.
-#
-# Optional, each made only when its secret key is set:
-# - SVP_PG_BACKUP_S3_SECRET_KEY (the k3d cluster's init Job): bucket pg-backups and user
-#   svp-pg-backup, for the backups of Postgres svp-pg (threat model BAK-1).
-# - SVP_S3_PROBE_SECRET_KEY (compose only): bucket objstore-probe and user svp-objstore-probe, used
-#   only by the integration tests of internal/objstore. A multipart upload needs
-#   AbortMultipartUpload to clean up, which the service users do not have and must not get.
+
+# Optional, each made only when its secret key is set: SVP_PG_BACKUP_S3_SECRET_KEY (the k3d cluster's init Job): bucket
+# pg-backups and user svp-pg-backup, for the backups of Postgres svp-pg (BAK-1); SVP_S3_PROBE_SECRET_KEY (compose only):
+# bucket objstore-probe and user svp-objstore-probe, used only by the integration tests of internal/objstore. A
+# multipart upload needs AbortMultipartUpload to clean up, which the service users do not have and must not get.
+
+# Run by the one-shot s3-init container. Idempotent: running it again keeps the buckets and their objects, and resets
+# the users' secret keys and policies, the bucket policies and the CORS rules. Prints no secret.
+# Design notes: docs/reference/compose.md.
 set -eu
 
 : "${S3_ROOT_PASSWORD:?}" "${SVP_VIDEO_S3_SECRET_KEY:?}" "${SVP_MEDIA_WORKER_S3_SECRET_KEY:?}" "${S3_CORS_ALLOWED_ORIGINS:?}"

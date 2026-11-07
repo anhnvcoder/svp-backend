@@ -17,7 +17,7 @@ import (
 // there are (hops) and take the element the farthest of them appended: the hops-th from the
 // right. Counting too few hops puts every client into one bucket, the address of the proxy in
 // front; counting too many reads an element the client wrote, so a client gets a new IP on every
-// request and slips past every limit by IP (threat model RL-1).
+// request and slips past every limit by IP.
 //
 // The zero value trusts no proxy and takes the connection's address, ignoring every header: the
 // safe choice when nothing is in front of the gateway (compose), since there any header comes
@@ -64,7 +64,6 @@ func (c ClientAddr) Of(r *http.Request) string {
 	return addr.Unmap().String()
 }
 
-// fromTrustedProxy reports whether conn, the connection's address, lies in a trusted range.
 func (c ClientAddr) fromTrustedProxy(conn netip.Addr) bool {
 	for _, p := range c.trusted {
 		if p.Contains(conn) {

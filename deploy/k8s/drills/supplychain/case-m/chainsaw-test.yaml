@@ -1,20 +1,18 @@
 # Supply chain drill, case m: the release sources apart (files/sources.json of chart svp-policy), for every ordered pair
-# of sources A and B of the table:
-#   - names: an image under A's prefix whose name only B publishes (a service or drill image of B, not of A), by a
-#     digest: refused by the prefix rule (the first check), whatever the digest, without any registry asked (no glob
-#     of the policy matches it); SKIP when every name of B is also A's;
-#   - identities, A→B: a release of B that a pod of svp runs, under a temporary copy of the policy (same chart, its
-#     table with the issuer and subject of A and B swapped, mode Enforce, only pods of svp labelled
-#     svp-drill=supplychain-swap): refused by the signature rule naming source B, since Kyverno verifies an image with
-#     the attestor of the source whose prefix it is under, which in the copy has A's identity; had it picked A's
-#     attestor, which has B's identity there, the pod would pass. One copy per pair of sources serves both directions
-#     and is deleted after them, its webhook gone, also when the step fails. Not A's release with its digest under B's
-#     prefix: GHCR has no manifest of another repository's digest, and Kyverno fetches a matched image before any check,
-#     so that answer is a registry error. SKIP while no release of B runs in svp (before that source's first release
-#     reaches the cluster);
-#   - a release of each source other than backend that a pod of svp runs: admitted (case a is backend's); SKIP while
-#     none runs.
-# The pairs come from the table, so the steps loop over it and print one verdict line per pair and direction.
+# of sources A and B of the table; the steps loop over it and print one verdict line per pair and direction. Names: an
+# image under A's prefix whose name only B publishes is refused by the prefix rule (the first check) whatever the
+# digest, with no registry asked; SKIP when every name of B is also A's.
+
+# Identities, A to B: a release of B that a pod of svp runs, under a temporary copy of the policy (A's and B's issuer
+# and subject swapped, mode Enforce, pods labelled svp-drill=supplychain-swap), is refused by the signature rule naming
+# B: Kyverno verifies an image with the attestor of the source whose prefix it is under, which in the copy has A's
+# identity; had it picked A's attestor, which has B's identity there, the pod would pass.
+
+# One copy per pair serves both directions; it is deleted after them, its webhook gone, also when the step fails. Not
+# A's release with its digest under B's prefix: GHCR has no manifest of another repository's digest, so that answer is a
+# registry error. SKIP while no release of B runs in svp. A release of each source other than backend that a pod of svp
+# runs is admitted (case a is backend's); SKIP while none runs.
+
 # Helpers, inputs and the verdict lines: ../lib.sh.
 apiVersion: chainsaw.kyverno.io/v1alpha1
 kind: Test

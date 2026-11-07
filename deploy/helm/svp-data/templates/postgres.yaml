@@ -1,16 +1,21 @@
 {{- /*
-Postgres for every service, run by the CloudNativePG operator (threat model IN-6, IN-9): one
-instance, several databases, each service with its own migrator and app roles. Clients reach it at
-svp-pg-rw.svp-data:5432 with sslmode=require (the operator issues the server certificate).
+Postgres for every service, run by the CloudNativePG operator: one instance, several databases, each service with its
+own migrator and app roles. Clients reach it at svp-pg-rw.svp-data:5432 with sslmode=require.
+*/}}
 
-Authentication: the operator's pg_hba allows only peer logins on the pod's own socket, certificate logins for
-replication, and `host all all all scram-sha-256` for every TCP connection. Nothing is added, so a TCP login always
-needs its SCRAM password and no rule trusts anyone (unlike the host's Postgres, which trusts loopback).
+{{- /*
+The operator's pg_hba allows only peer logins on the pod's own socket, certificate logins for replication, and
+`host all all all scram-sha-256` for every TCP connection; nothing is added, so no rule trusts anyone.
+*/}}
 
-With postgres.mode external (a managed Postgres such as Amazon RDS) there is no Cluster: Service svp-pg-rw, which
-CloudNativePG makes for its primary, is an ExternalName instead, so clients keep the same host. Its DNS answer is a CNAME
-to postgres.external.host. sslmode=require encrypts the connection without checking the server's name, which here is
-not the name the clients dial: the managed server's certificate is not verified against the CA that issued it.
+{{- /*
+With postgres.mode external (a managed Postgres such as RDS) there is no Cluster: svp-pg-rw is an ExternalName, so
+clients keep the same host. Its DNS answer is a CNAME to postgres.external.host.
+*/}}
+
+{{- /*
+sslmode=require encrypts the connection without checking the server's name, which here is not the name the clients
+dial: the managed server's certificate is not verified against the CA that issued it.
 */}}
 {{- if include "svp-data.postgresExternal" . }}
 apiVersion: v1

@@ -17,8 +17,6 @@
 // start or to serve: a failed or slow cache read falls back to Postgres. serve exports telemetry
 // when OTEL_EXPORTER_OTLP_ENDPOINT is set, profiles when PYROSCOPE_SERVER_ADDRESS is, and reports
 // errors when SENTRY_DSN is.
-//
-// Release images are built, scanned and signed in CI, and clusters run them by digest.
 package main
 
 import (

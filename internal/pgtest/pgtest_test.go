@@ -24,7 +24,6 @@ func migrations(t *testing.T) fs.FS {
 	return sub
 }
 
-// requireURL skips tests that talk to Postgres when EnvURL is unset.
 func requireURL(t *testing.T) string {
 	t.Helper()
 	u := os.Getenv(EnvURL)

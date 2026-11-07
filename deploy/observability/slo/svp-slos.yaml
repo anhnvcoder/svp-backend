@@ -1,21 +1,20 @@
-# SLO spec of the platform. `make slo` turns it into
-# deploy/observability/prometheus/rules/slo-generated.yaml with Sloth; edit this file, not that one.
-# 30-day window, Sloth's default multi-window burn rates: page 14.4x (1h/5m) and 6x (6h/30m),
-# ticket 3x (1d/2h) and 1x (3d/6h). Alertmanager pages only severity="page", so every page alert
-# carries a runbook_url to its runbook in docs/runbooks/ on main; ticket alerts wake nobody and have none.
-#
-# HTTP totals count the `_count` series of the gateway histogram; `http_route` holds the path
-# pattern without the method. An error query that may have no series yet ends in `or vector(0)`;
-# a total query never does, so no traffic gives no ratio rather than a fake good one.
+# SLO spec of the platform. `make slo` turns it into deploy/observability/prometheus/rules/slo-generated.yaml with
+# Sloth; edit this file, not that one. 30-day window, Sloth's default multi-window burn rates: page 14.4x (1h/5m) and 6x
+# (6h/30m), ticket 3x (1d/2h) and 1x (3d/6h). Alertmanager pages only severity="page", so every page alert carries a
+# runbook_url to its runbook in docs/runbooks/ on main; ticket alerts wake nobody and have none.
+
+# HTTP totals count the `_count` series of the gateway histogram; `http_route` holds the path pattern without the
+# method. An error query that may have no series yet ends in `or vector(0)`; a total query never does, so no traffic
+# gives no ratio rather than a fake good one.
 version: "prometheus/v1"
 service: "svp"
 # Sloth's default plugins, in their default order, with one setting changed: the 30-day SLI
-# (slo:sli_error:ratio_rate30d, and the period burn rate and budget remaining built on it) is the
-# SLI's own error and total queries over [30d], like every shorter window, instead of the mean of
-# 30 days of 5 m ratios. That mean is NaN as soon as one 5 m window had no request (0/0), which on
-# this lab is nearly always; the raw ratio stays finite while any request fell in the 30 days, and
-# weighs each request the same. It costs Prometheus a read of 30 days of the raw series per
-# evaluation.
+# (slo:sli_error:ratio_rate30d, and the period burn rate and budget remaining built on it) is the SLI's own error and
+# total queries over [30d], like every shorter window, instead of the mean of 30 days of 5 m ratios.
+
+# That mean is NaN as soon as one 5 m window had no request (0/0), which on this lab is nearly always; the raw ratio
+# stays finite while any request fell in the 30 days, and weighs each request the same. It costs Prometheus a read of 30
+# days of the raw series per evaluation.
 slo_plugins:
   overridePrevious: true
   chain:
@@ -128,11 +127,13 @@ slos:
     sli:
       events:
         # The web histogram has no `http_route` (Next never sets rpcMetadata.route), so a page cannot be told from
-        # `/rum`, `/monitoring`, `/healthz` or a `/_next/static` asset, and no label of this histogram can filter
-        # them without one series per URL. The SLI therefore counts every response of the server: a 5xx of a page,
-        # a Server Action or `/rum` is an error the user meets, and the near-always-200 probe and asset traffic
-        # makes the ratio a little more optimistic than the pages alone. Latency has no SLO for the same reason:
-        # fast assets and `/rum` would pull the percentile below the real page latency.
+        # `/rum`, `/monitoring`, `/healthz` or a `/_next/static` asset, and no label can filter them without one series
+        # per URL.
+
+        # The SLI therefore counts every response: a 5xx of a page, a Server Action or `/rum` is an error the user
+        # meets, and the near-always-200 probe and asset traffic makes the ratio a little more optimistic than the pages
+        # alone. Latency has no SLO for the same reason: fast assets and `/rum` would pull the percentile below the real
+        # page latency.
         error_query: >-
           sum(rate(http_server_request_duration_seconds_count{service_name="web",http_response_status_code=~"5.."}[{{.window}}]))
           or vector(0)

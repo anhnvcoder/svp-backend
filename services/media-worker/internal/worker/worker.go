@@ -1,6 +1,5 @@
 // Package worker consumes video.uploaded from video.lifecycle.v1, transcodes the source to HLS
-// and publishes transcode.completed or transcode.failed to media.transcodes.v1 (architecture
-// §7.1).
+// and publishes transcode.completed or transcode.failed to media.transcodes.v1.
 //
 // Output is immutable: a version is the event_id of the video.uploaded, and its objects live under
 // media/<video_id>/<version>/. Each try uploads into a directory of its own, <version>/<attempt>/,
@@ -8,7 +7,7 @@
 // may already hold is ever written again and every object can be cached for a year. A try that
 // finds the master already there transcodes nothing and publishes the stored result again.
 //
-// Error classes (A-1-review, M-1-review): a bad event goes to the dead-letter topic; a file that
+// Error classes: a bad event goes to the dead-letter topic; a file that
 // is not a usable video (whitelist refusal, corrupt data, limits, ffprobe or ffmpeg failing,
 // killed by a signal or timed out) is answered with transcode.failed at once, so a crafted file
 // runs only once and never blocks its partition through retries; only storage, Kafka and
@@ -317,7 +316,7 @@ func (j *job) run(ctx context.Context) (*mediav1.TranscodeEvent, error) {
 	case errors.Is(err, objstore.ErrNotFound):
 		return j.w.failed(j.up, mediav1.TranscodeFailureReason_TRANSCODE_FAILURE_REASON_SOURCE_MISSING, err), nil
 	case errors.Is(err, objstore.ErrTooLarge):
-		// The object grew after CompleteUpload checked it (UP-2): not the file that was accepted.
+		// The object grew after CompleteUpload checked it: not the file that was accepted.
 		return j.w.failed(j.up, mediav1.TranscodeFailureReason_TRANSCODE_FAILURE_REASON_INVALID_INPUT, err), nil
 	case err != nil:
 		return nil, err

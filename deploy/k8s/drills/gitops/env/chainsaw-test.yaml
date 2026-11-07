@@ -1,9 +1,11 @@
 # gitops-env, on the GitOps cluster svp (make k8s-gitops-up, which runs as staging): the overlays of envs/stg of
-# svp-gitops reached the cluster. Application argocd/gateway carries envs/stg/gateway.yaml in the valuesObject of its
-# sources (level 1 of the root passes it down), so the first SENTRY_ENVIRONMENT under env there is stg; and every
-# running gateway pod has SENTRY_ENVIRONMENT=stg in its gateway container (the only variable of the pod spec read): at
-# least one such pod, and none with another value or without one.
-#
+# svp-gitops reached the cluster.
+
+# Application argocd/gateway carries envs/stg/gateway.yaml in the valuesObject of its sources (level 1 of the root
+# passes it down), so the first SENTRY_ENVIRONMENT under env there is stg; and every running gateway pod has
+# SENTRY_ENVIRONMENT=stg in its gateway container (the only variable of the pod spec read): at least one such pod,
+# and none with another value or without one.
+
 # Declarative only (assert, error) on the cluster Chainsaw is started on (run.sh: --kube-context k3d-svp); nothing is
 # created. Each check is one operation; continueOnError keeps the next one running after one fails, and the test still
 # fails.

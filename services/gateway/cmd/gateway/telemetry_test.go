@@ -16,7 +16,7 @@ import (
 	"github.com/anhnvcoder/svp-backend/internal/sentryx"
 )
 
-// TestNoPprofOnDefaultMux is threat model OPS-1: no package of the gateway registers
+// TestNoPprofOnDefaultMux: no package of the gateway registers
 // net/http/pprof, whose import alone would serve it on http.DefaultServeMux.
 func TestNoPprofOnDefaultMux(t *testing.T) {
 	t.Parallel()

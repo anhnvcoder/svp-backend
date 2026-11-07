@@ -1,40 +1,8 @@
 #!/usr/bin/env bash
 # Tests for the order of a change of credentials (deploy/k8s/rotate.sh) through deploy/k8s/secrets.sh, on the dev path
-# and on the GitOps path's staging with External Secrets, and for the glue of deploy/k8s/install.sh around it (the
-# order of its helmfile runs, the drill traffic of a canary). Fake kubectl, helmfile, helm and drill traffic first on
-# PATH or in a throwaway copy of this checkout's deploy/, each appending what it was asked to one log in the order of
-# the calls; a throwaway git repository stands for the clone of svp-gitops. A fake .env whose secrets are made at run
-# time, so no file of the repository holds one. Runs on macOS and Linux: no network, no Docker, no cluster. Cases:
-#   - the dev path: servers (Redpanda's password, the Secrets of svp-data) -> barrier -> init (helmfile, release
-#     svp-data alone) -> clients (svp, svp-obs, keda), on a running cluster whose workloads name the Secrets their
-#     render does (on the workload or its pod template; one not made yet is no gap) and that Reloader may patch; a new
-#     cluster (no release svp-data, no server yet) skips the init and still applies the clients;
-#   - a run that dies after the servers' step (the init fails: only SVP_PG_BACKUP_S3_SECRET_KEY changed) applies no
-#     client Secret; the next run with the same .env runs the init again, then the clients;
-#   - the GitOps path: the sources, the ExternalSecrets of svp-data built again, barrier, one sync of Application
-#     svp-data (Succeeded), the other ExternalSecrets built again: exactly two groups; a sync that Failed stops it
-#     before the clients' group; before Argo CD exists (deploy/k8s/gitops.sh), the sources alone;
-#   - a cluster not ready for a change of credentials, refused before anything is written: without Reloader (both
-#     paths); with s3 naming no Secret for Reloader (both paths); on the dev path, a client naming fewer Secrets than
-#     its chart, and Reloader's ServiceAccount not allowed to patch Rollouts;
-#   - the barrier: servers already on the value of .env (no wait), on it after a few reads (Reloader restarting), never
-#     on it (fails naming the StatefulSet once 300 s a replica are over), a pod that cannot be read (fails at once);
-#   - install.sh: helmfile's waves 0 and 1, secrets.sh, the later waves, then the cluster ready for a change of
-#     credentials (a new cluster whose Reloader may not patch the Rollouts fails there); a cluster made before
-#     Reloader, whose gateway gets a new image, gets the later waves once before secrets.sh with drill traffic around
-#     that run (none around the second, whose templates the first left Healthy), and when that run fails, the traffic
-#     stops and secrets.sh does not run; a cluster whose Reloader runs but whose s3 does not opt in yet (a run stopped
-#     half way) gets the later waves once before secrets.sh too; canary_ahead (an unchanged template on a Healthy
-#     Rollout: no canary; unchanged but paused or aborted, or a changed template: a canary ahead); drill traffic
-#     started before the later waves and stopped after them, a failure included, and traffic already running left
-#     running;
-#   - install.sh's hooks on a release of chart svp-service whose helm upgrade failed: the log of the migrate Job's last
-#     failed attempt, copied while it ran and marked as a log line of namespace svp, then a failure naming the release;
-#   - no command of any case restarts a workload (kubectl rollout, a patch or an annotation of a Deployment, StatefulSet
-#     or Rollout) or writes an annotation of Reloader, and no output or argument holds a secret value or its base64.
-# The services' pods and their restarts are checked by the drill reloader on a real cluster (make drill-k8s-reloader).
-#
-# Usage, from anywhere: deploy/k8s/rotate-test.sh
+# and the GitOps path's staging, and for the glue of deploy/k8s/install.sh around it: fake kubectl, helmfile, helm and
+# drill traffic log their calls in order; a fake .env made at run time, so no file of the repository holds a secret.
+# macOS and Linux, no network, Docker or cluster: the services' restarts are checked by make drill-k8s-reloader.
 set -euo pipefail
 
 here=$(cd "$(dirname "$0")" && pwd)
@@ -57,25 +25,8 @@ for tool in git jq openssl perl; do
   }
 done
 
-# --- the fakes. FAKE_STATE is the folder of their log (calls) and of the state of the fake cluster:
-#   namespaces        the namespaces that exist, one a line
-#   statefulsets      the StatefulSets of svp-data (s3, redpanda), one a line; replicas-<name> their replicas (1)
-#   stale-<pod>       how many compares of <pod> still find another value than .env (never: every one)
-#   pod-error         every read of a pod fails as an unavailable API server would
-#   reloader          the available replicas of Deployment reloader/reloader (missing: no such Deployment)
-#   render-later      what helmfile template of waves 2 and later prints (the workloads that opt in to Reloader)
-#   live-<namespace>-<resource>-<name>
-#                     the JSON of workload <name> (resource deployments.apps, statefulsets.apps or
-#                     rollouts.argoproj.io): it exists, with its annotations
-#   cannot            "<namespace> <resource>" a line: what Reloader's ServiceAccount may not patch
-#   next-<file>       moved over <file> by a helmfile sync of the later waves that succeeds (what it installs)
-#   release           Helm release svp-data is installed
-#   eso, argo         the CRD of ExternalSecrets, of Argo CD's Applications exists; argo-app: Application svp-data
-#   argo-phase        the phase of its operation (default Succeeded)
-#   helmfile-fail     a helmfile sync whose arguments hold this text fails
-#   rollout-<name>, phase-<name>, render-<name>, manifest-<name>
-#                     Rollout svp/<name> exists, its status.phase, what helmfile template and helm get manifest print
-#                     (a helmfile sync of the later waves that succeeds copies each render-<name> to manifest-<name>)
+# --- the fakes. FAKE_STATE is the folder of their log (calls) and of the state of the fake cluster: namespaces,
+# statefulsets, reloader, release, live-<namespace>-<resource>-<name>, render-<name>...
 # No Reloader annotation is ever on a command line: the scripts read a workload as JSON.
 bin=$work/bin
 mkdir -p "$bin"
@@ -448,10 +399,9 @@ fi
 keep_calls
 
 # --- 7. a cluster not ready for a change of credentials: refused before anything is written, on both paths. Made
-# before Reloader (no Reloader); or Reloader runs, but s3 does not name its Secret for it yet (a run of make k8s-up
-# that stopped before svp-data; on the GitOps path, Argo CD not there yet); on the dev path also a client that names
-# fewer Secrets than its chart, and a Reloader whose ServiceAccount may not patch the Rollouts (its chart rendered
-# before their API was served).
+# before Reloader; or s3 names no Secret for Reloader yet (make k8s-up stopped before svp-data; GitOps: no Argo CD yet);
+# on the dev path also a client naming fewer Secrets than its chart, and a Reloader whose ServiceAccount may not patch
+# the Rollouts (its chart rendered before their API was served).
 for c in "dev no-reloader" "gitops no-reloader" "dev s3" "gitops s3" "dev client" "dev rbac"; do
   set -- $c
   if [ "$1" = dev ]; then new_state svp-data svp svp-obs keda; else new_state svp-data svp svp-obs svp-secrets; fi
@@ -725,11 +675,10 @@ for c in "0 own" "1 own" "0 running"; do
   keep_calls
 done
 
-# --- 10. install.sh's hooks around a release whose helm upgrade failed on its migrate Job: presync starts the watcher
-# of the Job, postsync (helmfile passes failed) stops it, prints the log of its last failed attempt and fails naming the
-# release. Both hooks are children of one process, as of helmfile (|| exit keeps bash from running the second in its
-# own place, which would give it another parent). postsync runs once the watcher has copied the log into the hooks'
-# folder (svp-helmfile-<that process>), whenever that is, or after 30 s, so a slow machine does not fail the case.
+# --- 10. install.sh's hooks around a release whose helm upgrade failed on its migrate Job: presync starts the watcher,
+# postsync (helmfile passes failed) stops it, prints the log of its last failed attempt and fails naming the release.
+# Both hooks are children of one process, as of helmfile (|| exit keeps bash from running the second in its own place,
+# under another parent). postsync waits up to 30 s for the watcher's log in svp-helmfile-<that process>, for slow ones.
 new_state svp
 mkdir -p "$work/tmp"
 rc=0

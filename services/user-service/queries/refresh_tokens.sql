@@ -8,11 +8,10 @@ SELECT family_id, user_id FROM refresh_tokens
 WHERE token_hash = $1;
 
 -- name: LockRefreshFamily :exec
--- Serializes every rotation, reuse check and logout of one family until the transaction ends, so
--- a rotation running beside a logout, or beside the reuse of an ancestor token, cannot add a live
--- token to a family that has just been revoked. Under
--- READ COMMITTED each statement after it sees all that the previous holder committed, so the
--- token must be read again once the lock is held.
+-- Serializes every rotation, reuse check and logout of one family until the transaction ends, so a
+-- rotation running beside a logout, or beside the reuse of an ancestor token, cannot add a live
+-- token to a family that has just been revoked. Under READ COMMITTED each statement after it sees
+-- all that the previous holder committed, so the token must be read again once the lock is held.
 SELECT pg_advisory_xact_lock(hashtextextended('refresh-family:' || sqlc.arg(family_id)::uuid::text, 0));
 
 -- name: GetRefreshToken :one

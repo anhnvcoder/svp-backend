@@ -56,7 +56,6 @@ func recordSpans(t *testing.T) *tracetest.SpanRecorder {
 	return sr
 }
 
-// serverSpans returns the ended server spans of the test service.
 func serverSpans(sr *tracetest.SpanRecorder) []sdktrace.ReadOnlySpan {
 	var out []sdktrace.ReadOnlySpan
 	for _, s := range sr.Ended() {
@@ -79,7 +78,6 @@ func (b *lockedBuffer) Write(p []byte) (int, error) {
 	return b.buf.Write(p)
 }
 
-// records returns the decoded JSON log lines whose msg is msg.
 func (b *lockedBuffer) records(t *testing.T, msg string) []map[string]any {
 	t.Helper()
 	b.mu.Lock()
@@ -161,7 +159,6 @@ func start(t *testing.T, interceptors ...grpc.UnaryServerInterceptor) *harness {
 	return startReady(t, alwaysReady, interceptors...)
 }
 
-// startReady is start with the given readiness check.
 func startReady(t *testing.T, ready readiness, interceptors ...grpc.UnaryServerInterceptor) *harness {
 	t.Helper()
 	var lc net.ListenConfig
@@ -176,7 +173,6 @@ func startReady(t *testing.T, ready readiness, interceptors ...grpc.UnaryServerI
 	return startOn(t, lis, conn, ready, interceptors...)
 }
 
-// startBufconn serves on an in-memory listener.
 func startBufconn(t *testing.T, interceptors ...grpc.UnaryServerInterceptor) *harness {
 	t.Helper()
 	lis := bufconn.Listen(1 << 20)
@@ -580,7 +576,6 @@ func healthStatus(t *testing.T, h *harness, service string) healthpb.HealthCheck
 	return resp.GetStatus()
 }
 
-// watchUntil reads the health stream until it reports want.
 func watchUntil(t *testing.T, stream healthpb.Health_WatchClient, want healthpb.HealthCheckResponse_ServingStatus) {
 	t.Helper()
 	for {

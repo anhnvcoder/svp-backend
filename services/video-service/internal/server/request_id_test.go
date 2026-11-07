@@ -178,7 +178,7 @@ func createdAgo(t *testing.T, videoID string, ago time.Duration) time.Time {
 }
 
 // A repeated call within the first form's window gets a form that ends with that window, not 15
-// minutes from the repeat, so repeats never hold more open forms than the limit counts (UP-7).
+// minutes from the repeat, so repeats never hold more open forms than the limit counts.
 func TestInitUploadRepeatedRequestIDFormEndsWithFirstWindow(t *testing.T) {
 	needDB(t)
 	s, _ := newServer()

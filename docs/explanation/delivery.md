@@ -90,6 +90,74 @@ flowchart LR
   chối); đường dev Audit. Namespace khác không qua webhook. Image bên thứ ba (operator, dữ liệu, observability, Argo CD, Kyverno)
   ghim digest, kiểm tĩnh trong CI bằng bước 4 của `deploy/ci/gitops-check.sh` (`make helm-check`, check của `svp-gitops`), chưa
   kiểm chữ ký nhà cung cấp.
+- **Thứ tự các phép của policy:** các phép chạy theo thứ tự và dừng ở phép đầu tiên sai, mỗi phép một message nêu image bị từ chối và,
+  từ phép 2, nguồn của image. Phép 1 chỉ đọc pod nên từ chối image của registry cục bộ, của Docker Hub hay tên lạ dưới một prefix mà
+  không hỏi registry nào; Kyverno chỉ xác minh image mà `matchImageReferences` chọn và cho mọi image khác đi qua. Điều đó chỉ đúng với
+  image không glob nào khớp: Kyverno lấy mọi image được chọn từ registry của nó trước mọi phép, và registry từ chối (repository không
+  tồn tại thì GHCR trả `DENIED`) làm đánh giá lỗi thay vì ra message của phép 1. Vì vậy `matchImageReferences` có hai glob mỗi tên được
+  phát hành (`<imagePrefix><tên>@*`, `<imagePrefix><tên>:*`; glob kiểu gobwas không có dấu phân tách, `*` khớp cả `/`, `:`, `@`),
+  không một glob mỗi prefix: `<imagePrefix>*` để pod có tên lạ dưới prefix tới GHCR trước
+  ([lý do](../reference/k8s.md#kyverno-và-nguồn-phát-hành)). Image của một tên
+  được phát hành mà không có digest khớp glob `:*` và bị `verifyDigest` từ chối sớm hơn ("does not have a digest"), trước khi Kyverno tra
+  tag. Với `requireProvenance`, bốn phép thêm đứng sau sáu phép đầu cho mọi nguồn như nhau: image thiếu provenance chỉ bị từ chối khi đã
+  qua mọi phép khác, nên message thiếu provenance không che lỗi nào khác. Nguồn của một image được chọn trong CEL theo prefix nó bắt đầu
+  bằng: các prefix đã được kiểm không lồng nhau nên nhiều nhất một nguồn khớp, và mỗi phép xác minh chỉ gọi attestor của nguồn đó (`&&` và
+  `?:` không tính vế bị bỏ qua). Payload của một attestation là cả statement in-toto nên đường dẫn bắt đầu ở `.predicate`;
+  `extractPayload` chỉ đọc sau khi `verifyAttestationSignatures` đã xác minh nó trong cùng lần đánh giá (phép 3 đứng trước cho `vuln`,
+  phép 7 cho provenance). Mỗi image vì vậy tốn một lần xác minh thứ ba khi Kyverno chưa có trong cache. Hai định dạng chữ ký được
+  Kyverno tự phân biệt theo từng image nên policy không nêu tên chúng; image có một bundle thì chỉ đọc qua bundle, nên một bản phát
+  hành không bao giờ trộn hai định dạng, và trong bundle mọi attestation của identity cũng tính là chữ ký cho phép 2. Định dạng cũ còn
+  được nhận chừng nào một bản phát hành trong `envs/stg/images/` hay `envs/prd/images/` của `svp-gitops` còn mang nó (rollback cũng có
+  thể tới một bản như vậy); hết bản thì các comment nhắc nó bỏ đi, và rollback về một bản như vậy cần quyết định khác.
+- **Timeout của policy:** `webhookConfiguration.timeoutSeconds` là 30 giây, mức tối đa API server cho (mặc định của Kyverno là 10). Một
+  lần xác minh chưa có cache tới TUF của Sigstore và GHCR; Rekor không được gọi vì policy không đặt `ctlog`, nên Kyverno v1.19.1 kiểm
+  bằng chứng transparency log nhúng trong Sigstore bundle ngoại tuyến. Một chữ ký mất 6–8 giây trên cluster của lab (định dạng cũ); với
+  image dạng bundle Kyverno lấy mọi bundle của digest cho mỗi lần xác minh, và CLI không cache mất 36–46 giây so với 14–16 giây của định
+  dạng cũ. Tuổi tối đa của attestation (`maxAttestationAge`, một CEL duration) là 72 giờ: rescan hằng ngày làm mới nó, nên 72 giờ chịu
+  được hai lượt chạy lỡ.
+- **Policy sẵn sàng:** script coi policy `svp-images` (hay policy tạm của diễn tập) sẵn sàng khi Kyverno đã biên dịch nó
+  (`status.conditionStatus.ready`) và `kyverno-resource-validating-webhook-cfg` có một webhook cho nó: webhook có `failurePolicy` của
+  policy (hay giá trị gọi hàm nêu, `Fail` hoặc `Ignore`), `objectSelector` của policy, và rule mà `namespaceSelector` mang phép khớp
+  namespace `svp` của policy (Kyverno AND nó với selector của ConfigMap của chính nó). Policy có `webhookConfiguration.timeoutSeconds`
+  riêng (`svp-images` và mọi policy tạm của diễn tập) có webhook riêng, `ivpol.validate.kyverno.svc-fail-finegrained-<policy>`
+  (`-ignore-` khi Audit); script vẫn tìm webhook theo cái nó chọn chứ không theo tên đó, vì tên thuộc quyền Kyverno đổi
+  (`image_policy_ready` của `deploy/k8s/lib.sh`).
+- **Bảng nguồn phát hành:** `files/sources.json` của chart `svp-policy` là chỗ duy nhất khai mọi nguồn (trường và nguồn hiện có ở
+  [`reference/k8s.md`](../reference/k8s.md#kyverno-và-nguồn-phát-hành)). Nó nằm trong chart chứ không ở overlay nên một nguồn thêm hay
+  bỏ tới stg trước prd cùng `revision` của chart, và không môi trường nào đổi được. Identity keyless khai trong đó là của `images.yml`
+  trên `main` của repo nguồn: SAN của chứng chỉ Fulcio là `server_url` cộng `job_workflow_ref`, nên lượt chạy ở nhánh khác hay của
+  workflow khác bị từ chối. Policy nhận đúng các image này với đúng các identity này, và script đọc cùng file, nên cái script kiểm
+  chính là cái admission kiểm. Luật của bảng viết một lần trong template (`deploy/ci/sources-test.sh`); script không kiểm lại chúng
+  và chỉ giữ hai luật về prefix (`release_sources`, hai hàm chọn nguồn), vì bảng có thể chưa qua render nào: lý do ở
+  [`reference/k8s.md`](../reference/k8s.md#kyverno-và-nguồn-phát-hành). `release_sources` còn fail khi REV không phải commit của clone này
+  hay là commit từ trước khi có bảng: không môi trường nào ghim commit như vậy nữa nên nguồn duy nhất của nó không được dựng lại từ
+  values của thời đó; ghim commit mới hơn. Bảng của commit cũ có thể còn nguồn nghỉ hưu, không có `promoter` (repo đã đổi tên, nguồn kế
+  thừa là nguồn khác): các bản phát hành ký dưới tên cũ vẫn được nhận chừng nào một môi trường còn chạy chúng, nhưng không gì build,
+  promote hay rescan cho nguồn đó. Mọi nguồn của bảng working tree đều có `promoter` (`deploy/ci/sources-test.sh`).
+- **Đọc file image của service:** `values_field FIELD` (`deploy/k8s/lib.sh`) đọc `image.FIELD` (`repository`, `tag`, `digest`) từ file
+  values của một service và in không nháy, `""` khi rỗng. Nó chỉ đọc đúng dạng các file này có: một dòng `FIELD: <giá trị>` (thụt hai dấu cách) trong khối
+  `image:` cấp cao nhất, giá trị trần hay trong nháy kép, không comment sau nó, đúng dạng của FIELD (`repository` `[0-9a-z.:/_-]*`, `tag`
+  rỗng hay 12 hex thường là một commit, `digest` rỗng hay `sha256:<64 hex>`). Dạng khác thì fail và nêu vấn đề trên stderr thay vì đoán,
+  vì kết quả đi tới registry, cosign và git; mã thoát 3 là không có dòng đó, 4 là dòng đó hai lần, 5 là giá trị sai dạng.
+  `release_image SERVICE WHERE` đọc file image của SERVICE từ stdin (WHERE nêu nó trong message, như `envs/stg/images/gateway.yaml at
+  1a2b3c4d5e6f`) và in `REPOSITORY@DIGEST` của bản phát hành mà file nêu, khi cluster GitOps kéo được nó: `image.digest` đã đặt (PR
+  promote ghi), `image.repository` là image của SERVICE ở một nguồn phát hành có xuất bản SERVICE (`release_source_of`, bảng của working
+  tree), và GHCR phục vụ manifest đó cho một lần kéo ẩn danh. Không thì fail và nêu nguyên nhân; không tạo gì. Bản phát hành có chữ ký và
+  attestation `vuln` còn mới không là việc kiểm của `deploy/ci/verify-release.sh`.
+- **Diễn tập admission controller chết:** ca (g) của `make drill-k8s-supplychain` làm Deployment của Kyverno giữ replica nhưng pod bị
+  dừng và pod thay thế không lịch được (strategy `Recreate` và `nodeSelector` mà không node nào có), như khi nó crash hay node mất. Không
+  scale về 0, vì Kyverno v1.19.1 xoá mọi cấu hình webhook của nó khi dừng mà Deployment đòi 0 replica (`IsGoingDown`,
+  `pkg/utils/runtime/utils.go`), và khi đó mọi pod đi qua. Pod của `svp` bị từ chối (webhook fail closed), pod ở namespace `svp-probe`
+  (tạo cho ca bằng template dùng chung, Pod Security `restricted`, ngoài phạm vi webhook) được nhận; giữa các lần thử Deployment vẫn muốn
+  replica của nó mà không có pod Ready. Cuối ca, kể cả khi một bước lỗi, Deployment được đặt lại và Ready; trên cluster GitOps sync tự động
+  của Argo CD tắt trước (Application gốc `svp-root`, rồi Application `kyverno`) để Argo CD không hoàn tác thay đổi giữa ca, và bật lại
+  `kyverno` trước. Webhook của policy (selector, `failurePolicy`, rule) sau khi Kyverno trở lại giống như trước. Image gửi là bản phát
+  hành đã ký mà một pod `svp` chạy, không thì image của registry cục bộ (đường dev). Hàm, đầu vào và dòng kết luận ở `deploy/k8s/drills/supplychain/lib.sh`.
+- **Image chưa ký của diễn tập:** `unsigned_image` dùng giá trị `unsigned` khi được cho, không thì `drill-unsigned` mới nhất dưới
+  prefix của nguồn `backend` trên GHCR (`deploy/ci/ghcr-digest.sh newest`, ẩn danh; dòng lỗi cuối ở `$work/unsigned.err`), rỗng khi
+  không có. CI đẩy nó không chữ ký và không attestation nên không gì trên GHCR trỏ tới nó. Không dùng manifest nền tảng của index một bản
+  phát hành đã ký: trong Sigstore bundle, attestation của bản đó trỏ cả tới từng manifest nền tảng và Kyverno tính chúng là chữ ký, nên nó
+  qua phép chữ ký rồi bị từ chối muộn hơn, ở attestation `vuln`; các ca b, h và i khi đó phụ thuộc định dạng.
 - **Renovate** (ADR-0015 §10): App Mend cho repo này và `svp-gitops`, mở PR hằng tuần cho Go module, action (SHA), base image, công
   cụ của `Makefile` (repo này), chart upstream, image ghim trong `base/`, commit checker (`svp-gitops`, bỏ qua `envs/**`); chờ bản
   phát hành 3 ngày; repo này tự merge khi `ci-ok`, `images-ok` xanh chỉ `digest`, `pinDigest` của base image và image của chart

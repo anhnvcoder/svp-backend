@@ -47,6 +47,32 @@ có quyền bucket đó. Mỗi lần phục hồi ghi vào một thế hệ lưu
 WAL. PodMonitor đưa `cnpg_*`, `barman_cloud_*` vào Prometheus; cảnh báo `PostgresWALArchivingFailing` (page) và
 `PostgresBackupTooOld` (ticket).
 
+- **Nơi lưu:** plugin Barman Cloud lưu WAL và backup cơ sở, từ sidecar trong pod Postgres, vào bucket `pg-backups` của object store
+  `s3` trong cluster bằng user `svp-pg-backup`, có policy chỉ cho bucket đó (`deploy/s3/pg-backup-policy.json`, do Job `s3-init`
+  tạo; không service nào có user này). Secret key của nó lấy từ `.env` (`SVP_PG_BACKUP_S3_SECRET_KEY`) vào Secret `pg-backup-s3`
+  (`deploy/k8s/secrets.sh`). Bucket nằm cùng cluster, cùng ổ với dữ liệu, và store ở đây không có KMS: đủ để lab diễn tập phục hồi
+  (WAL, điểm trong thời gian, các thế hệ lưu trữ) và đo RTO, RPO của nó, không phải một bản sao sống sót khi cluster mất. Trong
+  bucket mỗi thế hệ lưu trữ có prefix riêng, là `serverName` của plugin (`postgres.backup.serverName`). Với `postgres.mode:
+  external` chart không tạo backup: Postgres được quản lý giữ backup của chính nó.
+- **Lịch backup cơ sở:** mỗi ngày lúc 03:00 UTC (cron của CloudNativePG có trường giây ở đầu), và một lần ngay khi object được tạo,
+  để cluster mới có điểm phục hồi trong vài phút thay vì tới 03:00 kế tiếp (`PostgresBackupTooOld` cháy khi không có backup nào
+  trong một giờ). Object `ScheduledBackup` `svp-pg-daily` là hook (weight 1) sau các Job init: CloudNativePG khởi `Backup` tức thì
+  trên primary Ready đầu tiên và không bao giờ thử lại lần đã thất bại, trong khi bucket `pg-backups` và login `svp-pg-backup` chỉ có sau khi Job `s3-init` chạy,
+  sau khi tài nguyên thường của release sẵn sàng (Argo CD: PostSync, hook theo thứ tự weight). Là tài nguyên thường thì `Backup` của
+  nó sẽ đua với Job đó trên cluster mới và thất bại vĩnh viễn. Mỗi lần upgrade hay sync tạo lại object; CloudNativePG khi đó không
+  lấy thêm `Backup` tức thì thứ hai khi object của lần đầu còn (nó nhận lại object đó), và `make k8s-up` tự lấy một backup cơ sở
+  khi thế hệ đang chạy chưa có (`pg_base_backup` trong `deploy/k8s/install.sh`). Các `Backup` nó tạo không thuộc object nào, để việc
+  tạo lại object hay xoá Cluster khi phục hồi ([runbook](../runbooks/postgres-restore.md)) không xoá chúng; plugin xoá những `Backup`
+  của Cluster đang chạy mà chính sách retention đã xoá khỏi bucket. Không object nào của bucket bị xoá trừ bởi chính sách đó.
+- **Nâng chart `svp-data` sau phục hồi:** `pg_backup_sets` trong `deploy/k8s/rotate.sh` đặt `pg_server` về thế hệ lưu trữ của Cluster
+  `svp-pg` đang chạy (giá trị state `pgServerName` của `deploy/k8s/helmfile.yaml.gotmpl`). Mỗi lần phục hồi tạo lại `svp-pg` lưu vào
+  thế hệ mới (`postgres.backup.serverName`), còn mặc định của chart là thế hệ đầu: nâng cấp không có giá trị này sẽ trỏ việc lưu WAL
+  của Cluster đã phục hồi về thế hệ nó phục hồi từ đó, nơi archive không rỗng, và việc lưu sẽ lỗi. Cluster mới, hay Cluster tạo trước
+  khi có backup (chưa có `serverName`), để giá trị rỗng: mặc định của chart. Cluster không còn mà `Backup` của nó còn nghĩa là nó bị
+  xoá sau khi đã có dữ liệu (một lần phục hồi dừng giữa chừng): chart sẽ tạo một database rỗng thay chỗ, nên script dừng trước khi
+  nâng chart `svp-data`. Script cũng dừng với Cluster đang được phục hồi (`bootstrap.recovery` đã đặt, chưa Ready): nâng cấp sẽ bỏ
+  `bootstrap.recovery` và `externalClusters`, mà chart chỉ render trên dòng lệnh của chính lần phục hồi, trong khi lần phục hồi còn
+  đọc chúng.
 - **Diễn tập khôi phục** (bài lab `drills/` của `svp-labs`) xoá Cluster và ổ rồi dựng lại cùng tên từ backup: RTO đo trên máy
   151 s (`MODE=latest`, một lượt) và 85, 126 s (`MODE=pitr`, hai lượt; ADR-0020 "Restore RTO/RPO"); trên runner CI (4 vCPU, không
   so với máy) `latest` 95,2 và 92,8 s, `pitr` 80,8 và 84,3 s.
@@ -71,6 +97,22 @@ Vì sao: [ADR-0020](../adr/0020-reliability-stage6.md), [ADR-0044](../adr/0044-g
   khi database trả lời.
 - Liveness, startup, healthcheck của compose và `/readyz` của gateway giữ health tổng `""`, không phụ thuộc database: restart không
   chữa được database chết.
+
+## Hạn ghi của Like và Unlike
+
+Vì sao: [ADR-0031](../adr/0031-chaos-findings-feed-engagement-tempo.md) §2.
+
+Phần Postgres của Like và Unlike ở engagement-service có hạn 1 s (`writeTimeout` trong
+`services/engagement-service/internal/server/server.go`), tính cả thời gian chờ kết nối của pool ghi. Mỗi thao tác là một câu lệnh
+chạy ở chế độ mặc định của pgx: chuẩn bị câu lệnh một lần cho mỗi kết nối rồi giữ lại. Số round trip vì vậy phụ thuộc kết nối:
+
+- kết nối đã chạy câu lệnh này: một round trip;
+- kết nối chạy câu lệnh lần đầu: hai (chuẩn bị, rồi thực thi);
+- kết nối mới: thêm TCP connect và khởi động Postgres cùng xác thực, tức vài round trip nữa;
+- kết nối rảnh quá 1 s: pool ping thêm một round trip trước khi giao kết nối.
+
+Với mỗi round trip 200 ms, kết nối có sẵn trả lời trong 200 đến 600 ms, nằm gọn trong hạn, còn kết nối mới thì không. Khi đó người
+gọi nhận `UNAVAILABLE` sau 1 s, thay vì chờ hết hạn gọi 3 s của gateway.
 
 ## Vận hành
 

@@ -45,7 +45,6 @@ type Batch struct {
 	Records []*kgo.Record
 }
 
-// add appends the records of fetches.
 func (b *Batch) add(fetches kgo.Fetches) {
 	fetches.EachPartition(func(p kgo.FetchTopicPartition) {
 		b.Records = append(b.Records, p.Records...)

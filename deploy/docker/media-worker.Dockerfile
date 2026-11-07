@@ -1,8 +1,7 @@
-# media-worker image: the Go build of
-# service.Dockerfile, on an Alpine runtime that carries ffmpeg and ffprobe. Distroless has no
-# ffmpeg, so this image has a shell and apk; compose makes up for it (read-only root, no
-# capabilities, non-root user, no internet). No secret goes into the build: credentials are
-# environment variables given at run time.
+# media-worker image: the Go build of service.Dockerfile, on an Alpine runtime that carries ffmpeg and ffprobe.
+# Distroless has no ffmpeg, so this image has a shell and apk; compose makes up for it (read-only root, no capabilities,
+# non-root user, no internet). No secret goes into the build: credentials are environment variables given at run time.
+
 # No `# syntax=` line: BuildKit's built-in frontend already runs RUN --mount, and a syntax image would be pulled
 # from Docker Hub by a tag that can be pushed again, the one unpinned image of the build.
 

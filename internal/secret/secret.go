@@ -1,6 +1,5 @@
 // Package secret holds passwords and tokens in a type that prints as [REDACTED] through fmt,
-// log/slog and encoding/json, so a value that ends up in a log line or an error does not leak
-// (threat model JWT-8).
+// log/slog and encoding/json, so a value that ends up in a log line or an error does not leak.
 package secret
 
 import (

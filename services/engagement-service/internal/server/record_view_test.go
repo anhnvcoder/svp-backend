@@ -72,7 +72,6 @@ func TestRecordViewProducesViewRecorded(t *testing.T) {
 	s, _ := newServerWithoutDB(newProducer(t, brokers))
 	caller, videoID := ids.New(), ids.New()
 	recorder := recordSpans(t)
-	// The span the gRPC server instrumentation opens for the call.
 	ctx, span := otel.Tracer("test").Start(t.Context(), "svp.engagement.v1.EngagementService/RecordView",
 		trace.WithSpanKind(trace.SpanKindServer))
 

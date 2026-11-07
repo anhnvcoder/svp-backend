@@ -164,6 +164,318 @@ flowchart LR
 - **Chi phí:** RAM của cả cluster lúc nghỉ 5,9–6,8 GiB theo `docker stats` (gồm ~1–2 GiB page cache; phần anon ~3,9 GiB),
   đỉnh ~8 GiB khi media-worker scale lên, so với 1,7–2,6 GiB của compose `core` + `obs`; cách đo ở ADR-0014 §2.
 
+## Chart Helm của project
+
+Năm chart ở `deploy/helm/`: `svp-cluster` (nền tảng của cluster: namespace, chứng chỉ, cổng vào, NetworkPolicy, ExternalSecret),
+`svp-data` (tầng dữ liệu), `svp-observability` (phần observability của project ở namespace `svp-obs`), `svp-service` (một chart
+chung cho 6 service và web) và `svp-policy` (policy image, xem [phát hành](delivery.md#cicd-và-chuỗi-cung-ứng)). Lệnh cài và kiểm ở [`reference/k8s.md`](../reference/k8s.md); phần này ghi vì sao
+chart cấu hình như vậy.
+
+### Cài đặt: namespace và kiểu apply
+
+- **Namespace có trước release.** `install.sh` tạo namespace của wave 0 và của project với Pod Security `restricted`, chart `svp-cluster`
+  tạo namespace của nền tảng. `--create-namespace` kiểu server-side của Helm 4 sẽ apply một Namespace riêng dưới field manager mà mọi
+  release dùng chung, và lần apply đó xoá nhãn mà `svp-cluster` đặt. `svp-cluster` tạo các namespace nền tảng của values
+  (`argo-rollouts`, `cnpg-system`, `keda`, `kyverno`, `reloader`) để Pod Security có hiệu lực trước pod đầu tiên của chart của chúng;
+  `install.sh` tạo namespace của project trước đó với cùng nhãn, vì Envoy Gateway (wave 0) gắn một Role vào từng namespace nó theo dõi
+  và Helm không tạo được Role trong namespace chưa có. `svp-cluster` tiếp quản các namespace đó (`takeOwnership` trong
+  `helmfile.yaml.gotmpl`), vì Helm từ chối một object có sẵn mà thiếu annotation của release trừ khi được bảo tiếp quản. Mọi object
+  `svp-cluster` render là của project, dưới tên không chart nào khác dùng.
+- **Release có canary (gateway, web) apply phía client.** Argo Rollouts ghi vào hai object của chart: selector của Service `<release>` và
+  `<release>-canary` (`rollouts-pod-template-hash`) và trọng số trong HTTPRoute của release. Apply server-side của Helm 4 gửi cả
+  selector và `rules` của chart, hai field atomic do controller và plugin của nó quản, nên upgrade lỗi vì xung đột (với
+  `--force-conflicts` thì selector bị xoá, mọi request đi tới cả pod stable lẫn canary cho tới khi controller nhận ra). Upgrade phía client
+  chỉ patch phần khác nhau giữa manifest của release trước và release này, nên Service hay route không đổi giữ nguyên như controller
+  đặt. `--wait` của Helm không bao giờ thấy Rollout sẵn sàng: Helm chỉ chờ hook (không `--wait` là `hookOnly` của Helm 4), và hook
+  postsync chờ Rollout (`wait_rollout` của `install.sh`).
+
+### Secret và Reloader
+
+- Mỗi service báo lỗi gọi tên Secret `sentry` trong annotation `secret.reloader.stakater.com/reload` (chart `svp-service`), nên Reloader
+  (component `reloader` của `svp-gitops`) restart nó khi DSN trong Secret đó đổi; gateway và web là Rollout nên restart qua cơ chế restart
+  của Argo Rollouts (không tạo revision). Reloader không restart gì khi Secret mới được tạo (`reloadOnCreate` tắt, `base/reloader.yaml` của
+  `svp-gitops`): trên đường dev, `glitchtip-init.sh` tạo nó trước khi wave của service bắt đầu; trên đường GitOps và EKS, Secret có
+  (rỗng) ngay khi ExternalSecret của nó có, nên service đọc DSN lúc khởi động hay Reloader restart khi nó được điền. Workload mà template
+  không đọc Secret `sentry` (media-worker) không bị đụng.
+- `opt_in_gaps` (`deploy/k8s/rotate.sh`) đọc các dòng của `opt_in_render` và in, nối bằng dấu chấm phẩy, những gì chặn Reloader restart các
+  workload đó: mỗi workload có mà gọi tên Secret khác (hay không có) trong `$reload_key` so với chart của nó, và mỗi namespace và kind mà
+  ServiceAccount của Reloader không được patch (restart là một patch). Chart của Reloader chỉ cấp quyền đó trên Rollout khi cluster đã
+  phục vụ API của chúng lúc render (vì vậy release `reloader` có `needs` trong `deploy/k8s/helmfile.yaml.gotmpl`). Workload chưa được tạo
+  thì nhận annotation cùng release của nó. Không có gì để sửa thì không in gì.
+
+### `svp-cluster`
+
+- **TLS của cổng vào.** Issuer tự ký ký CA, issuer CA ký hai chứng chỉ mà Envoy phục vụ (wildcard và `svp-apex` chỉ cho `svp.localhost`).
+  Client chỉ tin CA (`make k8s-ca` ghi ra `.k8s/ca.crt`), không cài gì vào kho tin cậy của máy, và cert-manager gia hạn cả hai như trên
+  cluster cloud. Với `tls.issuer: acme` (cluster trên internet), Let's Encrypt ký cả hai qua ClusterIssuer `svp-acme`: cert-manager chứng
+  minh quyền với tên bằng bản ghi TXT trong hosted zone Route 53 (DNS-01, thử thách duy nhất phủ được wildcard) bằng credential AWS của
+  chính pod của nó (EKS Pod Identity, không key nào trong Secret); khi đó không tạo CA local. `server` là `production`, hay `staging` để thử
+  issuer mà không tốn hạn mức của production cho chứng chỉ cùng tên (5 mỗi 7 ngày); client không tin chứng chỉ staging. `email` là liên hệ
+  của tài khoản ACME, bắt buộc.
+- **Cổng vào.** `GatewayClass` `svp` và `Gateway` `svp` ở `svp-edge`, xuất ra máy ở `127.0.0.1:8443` qua load balancer của k3d, hai
+  listener HTTPS cổng 443: `https` cho `*.svp.localhost` (API, storage) và `https-apex` cho `svp.localhost` (web), mà wildcard không phủ;
+  mỗi cái phục vụ chứng chỉ chỉ nêu tên host của nó. Một chứng chỉ cho cả hai tên sẽ hợp lệ cho `s3.svp.localhost` trên kết nối mở tới
+  `svp.localhost` (cùng địa chỉ), nên trình duyệt có thể gửi request HLS qua kết nối HTTP/2 đó (RFC 9113 mục 9.1.1), nơi Envoy chọn
+  listener apex theo SNI và không route nào của nó khớp `s3`. Không route nào tới UI vận hành được gắn vào (OPS-2): UI đó vào qua
+  `kubectl port-forward` và đăng nhập riêng. Trên EKS, annotation của Service Envoy (`values: envoy.service`) làm AWS Load Balancer
+  Controller đặt một NLB trước nó, chỉ TCP: Envoy vẫn terminate TLS. NLB phải đưa cho Envoy địa chỉ riêng của client, một hop mà gateway
+  tin trong `X-Forwarded-For`, nên các check trong chart làm fail mọi annotation của controller đó sẽ đưa địa chỉ của NLB: target type
+  khác `ip` đi qua node port của kube-proxy (với `externalTrafficPolicy: Cluster` là địa chỉ của node), và với target type `ip` NLB chỉ
+  giữ địa chỉ client khi `preserve_client_ip.enabled=true`.
+- **Namespace và Pod Security.** Namespace theo vai trò: `svp` (sáu service Go và web), `svp-data` (Postgres, Valkey, Redpanda, object
+  store `s3`), `svp-obs` (observability, GlitchTip), `svp-edge` (Gateway và chứng chỉ wildcard). Pod Security Admission `enforce`
+  `restricted`: pod phải chạy không phải root, bỏ mọi capability, dùng seccomp `RuntimeDefault` và cấm leo quyền; chart không đạt thì sửa ở
+  values của nó, không nới namespace. `warn` và `audit` cùng mức để `kubectl` và audit log nêu tên cái `enforce` từ chối. Namespace nền
+  tảng của `values.yaml` nhận cùng nhãn Pod Security và không gì khác. `install.sh` và `gitops.sh` render riêng template này (không
+  release) cho các namespace chúng tạo trước chart, nên chúng mang cùng nhãn: cả hai tạo namespace của project trước wave 0, vì Envoy
+  Gateway bind một Role ở mỗi namespace nó theo dõi; `install.sh` tạo thêm namespace của wave 0 (`platformNamespaces` đặt bằng chúng),
+  `gitops.sh` tạo `argocd`. Chart này sau đó tiếp quản namespace của project. Khi `externalSecrets` bật với store `kubernetes` (stg của
+  đường GitOps) thêm namespace `externalSecrets.sourceNamespace`: Secret nguồn của `templates/external-secrets.yaml`, không pod;
+  `gitops.sh` render template với overlay đó nên nó có trước khi `secrets.sh` điền.
+- **Namespace của chart nền tảng** (`values.yaml`) được tạo ở đây, trước chart của chúng (wave sau), chỉ để Pod Security `restricted` có
+  hiệu lực từ pod đầu tiên: không NetworkPolicy, không route. Thiếu nhãn thì ai tạo được pod trong namespace đó (controller của nó, nếu bị
+  chiếm) khởi động được pod đặc quyền có `hostPath` của node và đọc mọi Secret của cluster từ đó. `argo-rollouts`: Role riêng của chart ở
+  đó (không giá trị nào của chart 2.43.8 thu hẹp được) cho controller tạo Job, sửa Deployment và pod. Mọi pod mà các chart ghim render với
+  values của project đều đạt `restricted` (`helm template`, kiểm từng luật), và controller của chúng không tự khởi động pod ở đây:
+  CloudNativePG chạy instance và Job ở `svp-data`, KEDA chỉ khởi động Job cho `ScaledJob` (không có), Argo Rollouts chạy pod của gateway ở
+  `svp`. `reloader`: Reloader được patch pod template của mọi workload ở namespace nó theo dõi. Namespace của wave 0 (`cert-manager`,
+  `envoy-gateway-system`) phải có trước chart này (chart cần CRD của chúng): `install.sh` và Application Argo CD của chúng gán nhãn;
+  `gitops.sh` gán nhãn `argocd`. Cả hai script cũng tạo namespace của project nêu trên.
+- **NetworkPolicy mặc định chặn** hai chiều cho mọi pod của namespace project (IN-2, FF-5): pod không tới được và không được tới bởi gì
+  cho tới khi policy của chart riêng của nó mở đúng luồng đó, nên pod bị chiếm không quét được cluster hay gọi ra internet. Namespace nền
+  tảng (`cert-manager`, `envoy-gateway-system`...) không bị chặn mặc định: chart của chúng không kèm policy, webhook của chúng được API
+  server gọi từ mạng của node, và chúng không giữ dữ liệu của project. Không cần mở dù có chặn: probe của kubelet và `kubectl
+  port-forward` đến từ node mà pod chạy, mà NetworkPolicy không chặn được. Namespace `kyverno` nhận cùng ba policy (pod gọi API server
+  mang `svp-kube-api=allow`) và hai policy nữa ở cuối file; namespace `reloader` cũng vậy mà không gì thêm (controller, nhãn
+  `svp-kube-api=allow`, chỉ nói chuyện với API server, không gì đi vào); với `externalSecrets` bật (đường GitOps) namespace
+  `external-secrets` cũng vậy (controller chỉ nói chuyện với API server, không gì đi vào: không webhook, không gì scrape metrics), và với
+  store `aws` thêm TCP 443 ra địa chỉ công khai (Secrets Manager, STS) và TCP 80 tới EKS Pod Identity Agent. Namespace nguồn của store
+  `kubernetes` không có pod và vẫn bị chặn.
+  - **Admission controller của Kyverno.** Vào: lời gọi admission của API server tới cổng webhook. API server chạy trên node server: lời
+    gọi tới pod trên node đó đến từ chính node, lời gọi tới pod trên node agent đi ra qua interface VXLAN của server
+    (`kyverno.vxlanAddresses`), nên chỉ các địa chỉ đó và mạng của các node được vào, không pod nào. Trên EKS `nodeSubnet` là CIDR của
+    VPC: network interface của control plane nằm trong cùng subnet private với node nên không dải hẹp hơn nào chứa chúng, và VPC CNI cấp
+    mọi pod một địa chỉ của VPC nên mọi pod cũng được vào cổng webhook. Chấp nhận: namespace của project chặn egress mặc định, nên chỉ
+    pod của namespace nền tảng (có Envoy) có thêm tầm với đó. Ra: TCP 443 chỉ tới địa chỉ công khai, cho registry và kho TUF của Sigstore
+    mà nó xác minh image theo; mọi dải private bị loại (`kyverno.privateRanges`), nên registry local lẫn bất kỳ gì trên mạng của node hay
+    host đều không tới được. Reports controller chỉ cần API server.
+  - **Broker Redpanda với nhau** (release `redpanda`, `svp-data`, wave 3): RPC cổng 33145 (seed, Raft, replication; broker không tới được
+    seed thì không bao giờ lập cluster) và Admin API cổng 9644 (sidecar và lifecycle hook gọi Admin API của mọi broker). Đặt ở đây, wave 1,
+    chứ không ở chart `svp-data` (wave 4): root chỉ chuyển sang wave 4 khi Redpanda khoẻ, mà ba broker không có policy này không bao giờ
+    khoẻ. Render trên mọi nền tảng; với một broker nó chỉ cho broker tới chính nó. Kafka cổng 9092 giữ đóng giữa các broker: chỉ client nội
+    bộ của HTTP proxy và schema registry dùng, và không gì gọi hai thứ đó.
+  - **External Secrets Operator với store `aws`** không có khối `auth`: controller lấy credential AWS từ EKS Pod Identity Agent, nghe trên
+    node ở địa chỉ link-local `169.254.170.23` cổng 80 (địa chỉ mà `AWS_CONTAINER_CREDENTIALS_FULL_URI` trỏ SDK tới). Policy ở trên loại
+    mọi dải private, link-local gồm cả, nên policy này mở đúng địa chỉ và cổng đó, chỉ cho pod này. Agent cũng trả lời ở `[fd00:ec2::23]:80`;
+    cluster IPv6 cần địa chỉ đó thay vào đây.
+  - **Pod Envoy của Gateway `svp`**, trên cluster mà Envoy quay ra internet: khi một policy chọn chúng, không gì khác tới được chúng, nên
+    pod của cluster không tới được các cổng khác của Envoy. Vào: 10443, cổng Envoy Gateway cấp cho 443 của listener trong pod (cổng dưới
+    1024 được cộng 10000 để Envoy bind không cần đặc quyền), từ mọi địa chỉ (NLB giữ địa chỉ riêng của từng client); cổng metrics từ
+    Prometheus ở `svp-obs` (phân tích canary đọc chúng); health check của NLB ở cổng riêng từ VPC, nơi các node NLB nằm (nếu check ở
+    `traffic-port` thì nó kiểm 10443, vốn đã mở). Probe của kubelet đến từ node, mà NetworkPolicy không chặn được. Ra: không hạn chế (Envoy
+    tới controller của nó và mọi backend).
+- **RBAC của operator CloudNativePG** (ServiceAccount `cnpg-system/cloudnative-pg`, chart `cloudnative-pg` 0.29.1 ở wave 2) được render
+  ở chart này vì `base/cloudnative-pg.yaml` của `svp-gitops` tắt RBAC của chính chart: chart bind rule theo namespace hoặc toàn cluster
+  hoặc chỉ ở namespace release, mà Cluster duy nhất của project, `svp-pg`, ở `svp-data`. Rule là của chart (`templates/_helpers.tpl` của
+  chart 0.29.1): `clusterwideRules` ở ClusterRole (node, ClusterImageCatalog; không Secret, không pod) trừ `get` và `patch` trên webhook
+  configuration, và `commonRules` nguyên vẹn ở Role của `svp-data` thôi. Operator chỉ patch webhook configuration để ghi CA của chính nó
+  vào đó, và `patch` trên chúng cho phép token bị lấy trỏ một webhook tới pod của operator cho mọi Secret ghi trong cluster: nó chạy
+  với `MANAGE_WEBHOOK_CONFIGURATIONS=false` (`base/cloudnative-pg.yaml`) và cainjector của cert-manager ghi CA thay
+  (`templates/cnpg-webhook-certificate.yaml`). Operator theo dõi `svp-data` và `cnpg-system` (`WATCH_NAMESPACE`, đúng hai namespace có
+  RoleBinding): informer của nó list và watch mọi kind nó cache ở mỗi namespace, nên mỗi Role đọc mọi kind của `commonRules`. `svp-data`
+  là nơi nó chạy pod và Job của `svp-pg` và tạo Secret, ServiceAccount, Role, RoleBinding của chúng: toàn bộ `commonRules`. `cnpg-system`
+  không có Cluster; operator ở đó vì ConfigMap, Service của plugin Barman Cloud, EndpointSlice và Secret TLS (nó tìm plugin chỉ bằng
+  cách watch ở đó), Lease bầu leader, event của nó, và PKI của chính nó: CloudNativePG 1.30.1 tạo Secret `cnpg-ca-secret` (type `Opaque`)
+  lúc khởi động khi thiếu và cập nhật khi gần hết hạn (`pkg/certs/k8s.go`, `ensureRootCACertificate` và `renewCACertificate`), và sẽ patch
+  `cnpg-webhook-cert` (type `kubernetes.io/tls`, do cert-manager cấp) nếu thấy nó gần hết hạn. Nên Role của nó ở `cnpg-system` đọc, và chỉ
+  ghi Secret (create, update, patch; không delete), event và Lease: không pod, `pods/exec`, Deployment, Job, PVC, ServiceAccount, Role hay
+  RoleBinding được ghi ở đó. Namespace đó cũng chạy plugin, mà ServiceAccount của nó đọc mọi Secret của cluster (có khoá ký JWT của
+  `svp`; `base/plugin-barman-cloud.yaml`): với `commonRules` ở đó, token operator bị lấy có thể exec vào pod của plugin, chạy pod hay patch
+  Deployment của nó bằng ServiceAccount đó và đọc hết. Tạo Secret ở `cnpg-system` vẫn là một đường như vậy: Secret type
+  `kubernetes.io/service-account-token` nêu ServiceAccount `plugin-barman-cloud` nhận token của ServiceAccount đó. RBAC không thu hẹp
+  `create` theo tên được (`resourceNames` không áp cho create), và operator bỏ PKI của nó chỉ khi đặt env `WEBHOOK_CERT_DIR`, rồi đọc file
+  `apiserver.crt`, `apiserver.key` mà mount Secret `cnpg-webhook-cert` của chart (`tls.crt`, `tls.key`) không cung cấp. Do đó
+  ValidatingAdmissionPolicy `svp-cnpg-operator-secrets`, kiểm ngay trong API server (không webhook nào có thể chết): với request của
+  ServiceAccount operator, Secret được tạo hay sửa ở `cnpg-system` phải là `cnpg-ca-secret` type `Opaque`, hoặc (chỉ update)
+  `cnpg-webhook-cert` type `kubernetes.io/tls`. Còn lại: đọc Secret của `cnpg-system` (các Secret TLS của plugin), và ghi hai Secret đó. Tên
+  khác tên của chart (`cloudnative-pg`), nên cluster cài trước không giữ gì của chart: release của chart xoá ClusterRole và
+  ClusterRoleBinding của nó ở lần upgrade tiếp theo, sau khi chart này đã tạo những cái này. Viết ở wave 1 cho operator của wave 2: một
+  RoleBinding có thể nêu ServiceAccount chưa tồn tại, và policy nêu user theo chuỗi. Mối đe doạ và cách kiểm: BAK-1 trong [threat model](../threat-model.md).
+- **Chứng chỉ của webhook CloudNativePG** (Service `cnpg-webhook-service` ở `cnpg-system`) do cert-manager cấp thay vì operator. Để
+  nguyên, operator tự tạo CA và ghi vào MutatingWebhookConfiguration và ValidatingWebhookConfiguration của nó, việc cần `patch` trên mọi
+  webhook configuration của cluster: đủ để đổi rule và đích của một webhook sao cho API server gửi nó mọi Secret ghi ở bất kỳ namespace
+  nào. Ở đây cert-manager ghi cặp khoá vào Secret `cnpg-webhook-cert`, cái mà chart mount vào pod operator và operator phục vụ từ đó, và
+  cainjector ghi chứng chỉ vào cả hai webhook configuration (annotation `cert-manager.io/inject-ca-from` trong
+  `base/cloudnative-pg.yaml`; quyền của cainjector là một ngoại lệ ghi ở `base/cert-manager.yaml`, cả hai của `svp-gitops`). Operator chạy
+  với `MANAGE_WEBHOOK_CONFIGURATIONS=false`, không đụng chúng và không giữ quyền nào trên chúng (`templates/cnpg-rbac.yaml`).
+  CloudNativePG 1.30.1 vẫn đọc Secret này lúc khởi động và mỗi giờ (`pkg/certs/k8s.go`) và ký chứng chỉ mới vào đó bằng CA của nó khi tên
+  DNS khác đúng `cnpg-webhook-service.cnpg-system.svc` hay chứng chỉ hết hạn trong 7 ngày. Do đó chỉ một tên DNS đó, và gia hạn mặc định
+  của cert-manager (30 ngày trước khi hết hạn của chứng chỉ 90 ngày), luôn trước khi operator can thiệp. Tự ký: API server tin đúng một
+  chứng chỉ này, không gì khác cert-manager cấp. Lúc gia hạn, API server tin chứng chỉ mới ngay trong khi operator phục vụ chứng chỉ cũ cho
+  tới khi kubelet làm mới Secret đã mount (khoảng một phút); ghi vào resource của CloudNativePG bị từ chối trong lúc đó (`failurePolicy:
+  Fail`) và bên tạo ra chúng thử lại, như khi operator tự xoay. `install.sh` chờ chứng chỉ này trước khi cài operator, nên operator không
+  bao giờ khởi động mà thiếu nó rồi tự tạo một cái; trên đường GitOps, health check Certificate của Argo CD làm việc đó giữa các wave.
+- **ExternalSecret của đường GitOps** (`externalSecrets` của `values.yaml`; bật ở `envs/stg` và `envs/prd` của `svp-gitops`, tắt ở đường
+  dev, nơi `secrets.sh` apply từ `.env`). Với mỗi namespace có ExternalSecret (`svp`, `svp-data`, `svp-obs`, `keda`, và `argocd` khi
+  `externalSecrets.argocdNotifications`):
+  - SecretStore `svp-store` là nguồn giá trị. Store `kubernetes` (cluster lab): Secret ở namespace `externalSecrets.sourceNamespace`, đọc
+    qua API server bằng ServiceAccount `externalSecrets.storeServiceAccount` của namespace store, mà controller lấy token cho (store
+    provider `kubernetes` không dùng được ServiceAccount của chính controller). Store `aws` (prd): AWS Secrets Manager, entry
+    `svp/<env>/<entry>`, qua role IAM của namespace trong `externalSecrets.aws.roles`, assume bằng EKS Pod Identity của controller.
+  - Chỉ store `kubernetes`: ServiceAccount đó, không mount token ở đâu; một Role ở namespace nguồn cho nó chỉ `get` đúng entry mà
+    ExternalSecret của namespace này gọi tên (`resourceNames`), không gì khác, không list hay watch; và một Role ở đây cho controller tạo
+    token cho đúng ServiceAccount đó (ClusterRole của chart, vốn làm được cho mọi ServiceAccount của cluster, được thu hẹp trong
+    `base/external-secrets.yaml` của `svp-gitops`).
+  - Một ExternalSecret mỗi Secret của `files/external-secrets.yaml`, cùng tên, `refreshPolicy: OnChange` (với `s3.mode: external` thì bỏ
+    Secret và key của object store trong cluster, đánh dấu ở đó): Secret được dựng khi ExternalSecret được tạo và chỉ dựng lại khi spec
+    hay metadata của nó đổi, đó là cách một giá trị đổi tới được nó (`secrets.sh` và `glitchtip-init.sh` annotate `force-sync` sau khi ghi
+    nguồn). Làm mới định kỳ sẽ đặt mật khẩu mới vào Secret trước các restart và Job phải đi trước (Redpanda nhận mật khẩu superuser mới
+    trước khi Secret `redpanda-bootstrap` được đổi, object store restart trước khi Job init của nó đăng nhập bằng mật khẩu mới).
+  - `SelfSubjectRulesReview` mà store `kubernetes` gửi để kiểm ServiceAccount của nó được `get` Secret ở namespace nguồn không cần rule ở
+    đây: mọi user đã xác thực đều tạo được (ClusterRole `system:basic-user`).
+
+  ValidatingAdmissionPolicy `svp-external-secrets-writes` giữ các lần ghi Secret của controller, việc RBAC không thu hẹp được (ClusterRole
+  của chart: controller watch metadata của mọi Secret của cluster bất kể cờ, nên cần list và watch, và ghi Secret của mọi namespace),
+  trong các namespace của ExternalSecret, và không bao giờ Secret type `kubernetes.io/service-account-token`, thứ sẽ trao cho nó token của
+  bất kỳ ServiceAccount nào của namespace. Ở namespace của chart khác (`sharedNamespace` trong `files/external-secrets.yaml`: `argocd`,
+  mà Secret giữ mật khẩu admin, credential cluster và khoá ký của Argo CD) chỉ các Secret liệt kê ở đó, mỗi cái đúng type của nó; mọi
+  Secret khác ở đó bị từ chối. Chỉ store `kubernetes`, như ServiceAccount đó: hai ValidatingAdmissionPolicy `svp-store-serviceaccount-pods`
+  và `-tokens` giữ ServiceAccount của các store cho controller, vốn lấy token qua TokenRequest API và không tạo pod: ở mọi namespace, không
+  pod nào được chạy dưới nó (`automountServiceAccountToken: false` của ServiceAccount chỉ là mặc định mà pod spec hay projected token
+  volume ghi đè được, và pod như vậy đọc mọi entry nguồn của namespace nó) và không Secret nào được giữ token của nó (cái mà pod của
+  ServiceAccount khác có thể mount). Policy trên pod phủ mọi workload: Deployment, Job hay StatefulSet chỉ khởi động qua pod mà controller
+  của nó tạo, mà policy này từ chối (workload hiện `FailedCreate`); static pod không được nêu ServiceAccount. `serviceAccountName` của
+  pod không đổi được sau khi tạo nên `CREATE` là đủ.
+
+### `svp-data`
+
+- **Thứ tự cài và nguồn Secret.** Namespace `svp-data` cài ở wave 4 của `argocd/apps/components.json` của `svp-gitops`: sau operator
+  CloudNativePG và KEDA (wave 2, CRD của chúng mà `Cluster` và `ClusterTriggerAuthentication` cần), Redpanda và plugin Barman Cloud (wave
+  3, CRD của nó mà `ObjectStore` cần), trước observability và service. Mọi Secret nó đọc do `deploy/k8s/secrets.sh` ghi từ `.env` trước
+  release này; không cái nào ở trong git.
+- **Hai chế độ Postgres.** `cluster`: Postgres `svp-pg` do CloudNativePG chạy trong namespace này, WAL và base backup vào object store
+  `s3` (`templates/postgres.yaml`, `backup.yaml`). `external`: Postgres managed ngoài cluster (Amazon RDS), tự giữ backup: không
+  `Cluster`, không backup, và Service `svp-pg-rw` thành `ExternalName` tới `external.host`, nên mọi chuỗi kết nối
+  (`svp-pg-rw.svp-data:5432`) giống nhau trên mọi nền tảng. Job `pg-bootstrap` vẫn tạo role và database ở đó, bằng login của Secret
+  `pg-superuser` (trên RDS là master user `postgres`).
+- **Thế hệ archive.** Giá trị này là prefix của bucket mà `svp-pg` ghi WAL và base backup vào. Cluster phục hồi từ backup phải archive vào
+  một prefix mới, trống (Job recovery từ chối archive đã có WAL, và hai thế hệ trong một prefix sẽ trộn backup của chúng), nên mỗi lần
+  phục hồi ([`postgres-restore.md`](../runbooks/postgres-restore.md)) bắt đầu thế hệ tiếp theo, `svp-pg-<yymmddhhmmss>` (UTC), và
+  `install.sh` truyền thế hệ mà Cluster đang chạy dùng bằng `--set` để `make k8s-up` giữ nó. Giá trị mặc định là của thế hệ đầu, của
+  cluster mới.
+- **Giá trị phục hồi** chỉ đặt bởi một lần phục hồi, trên dòng lệnh của đúng một upgrade tạo lại `svp-pg` từ backup, không bao giờ trong
+  file: `source` là thế hệ archive để phục hồi (cái mà Cluster đã xoá archive vào), `targetTime` (RFC 3339) là mốc tuỳ chọn để dừng
+  recovery (PITR). CloudNativePG chỉ đọc `bootstrap` khi tạo instance đầu tiên, nên upgrade kế tiếp không có các giá trị này gỡ chúng khỏi
+  Cluster và không đổi gì trong database đã phục hồi.
+- **CORS của object store.** Các origin mà trang của nó được đọc phản hồi của store, do Job `s3-init` đặt làm rule CORS của từng bucket:
+  POST tới `uploads`, GET và HEAD tới `media`, không gì khác. Trình duyệt nói chuyện với store khác origin: hls.js tải playlist và segment
+  bằng XHR, trang upload POST file bằng XHR (listener tiến độ của nó khiến thành preflight) (threat model WEB-10). Trong cluster chỉ có
+  origin của web: web của compose và `make dev` của `svp-frontend` (`http://localhost:3001`, `:3002`) dùng store của compose, không bao
+  giờ cái này. Dấu phẩy không có khoảng trắng.
+- **NetworkPolicy của `svp-data`** (threat model IN-2, IN-4, IN-9). Chart `svp-cluster` đã chặn mọi pod của namespace hai chiều và mở DNS,
+  và mở API server cho pod mang nhãn `svp-kube-api=allow` (instance Postgres, sidecar Redpanda). Mỗi policy ở đây mở một cổng server cho
+  các pod dùng nó, chọn bằng nhãn, nên pod ở nơi khác của cluster (hay một client thêm sau mà thiếu nhãn) không tới được gì. Client ở
+  `svp` và `svp-obs` cũng cần policy egress riêng ở đó; KEDA, operator CloudNativePG và Envoy ở namespace nền tảng, vốn không chặn gì
+  chiều ra. Pod duy nhất ở đây gọi pod khác của namespace là Postgres, mà backup của nó đi tới object store `s3` (policy
+  `postgres-backup`). Cổng là cổng của pod: NetworkPolicy thấy gói sau khi Service đã được dịch sang pod. Với `postgres.mode: external` không
+  có pod Postgres: Job `pg-bootstrap` tới Postgres managed ở `postgres.external.cidrs`. Với `s3.mode: external` không có pod object
+  store và không Job `s3-init`.
+- **Valkey** thay Redis của host, ở `valkey.svp-data:6379` với cùng số db và tiền tố khoá: gateway db 10 (`svp:gw:`), feed-service db 14
+  (`svp:feed:`), web db 9 (`svp:web:`, session và khoá làm mới của nó). Rate limit, cache và session đều không đáng lưu: khi pod restart,
+  mọi session web mất và người dùng đăng nhập lại. `noeviction` như trên host: khi đầy, ghi lỗi (gateway quay về bộ đếm trong tiến trình
+  kèm metric, đăng nhập lỗi) thay vì khoá rate limit hay session của ai đó bị bỏ im lặng. Không mật khẩu: số db không phải ranh giới
+  giữa các client (IN-7, chấp nhận ở local); NetworkPolicy chỉ cho gateway, feed-service và web tới. Một session giữ access token và
+  refresh token của người dùng, nên cả ba đều đọc và ghi được mọi session. Chấp nhận trên máy lab một người dùng (threat model WEB-22):
+  pod gateway bị chiếm vốn đã hành động được như bất kỳ người dùng nào qua gRPC (IN-2), và pod feed-service bị chiếm, vốn không tới gateway
+  hay internet, chỉ chép được token của ai đó vào session của kẻ tấn công. Xem lại trên cloud (Valkey với AUTH, ACL theo client và TLS,
+  hay một instance riêng cho session), hay sớm hơn nếu feed-service có thêm đường ra.
+- **Quyền CONNECT của Postgres trong cluster.** `bootstrap.sql` (`files/pg-bootstrap.sh`) gỡ `CONNECT` khỏi `PUBLIC` chỉ trên các
+  database `svp_*`. Ba database mà `initdb` và CloudNativePG tạo, `postgres`, `app` và `template1`, giữ quyền mặc định `CONNECT` cho
+  `PUBLIC` của Postgres, nên mọi role của service đăng nhập được vào đó (và tạo bảng tạm ở hai cái đầu). Không cái nào cần: mỗi service và
+  migration của nó dùng database `svp_*` riêng, GlitchTip cũng vậy (`MAINTENANCE_DATABASE_URL` nêu `svp_glitchtip`). Superuser `postgres`
+  (Job này, instance manager của operator, cũng mở `template1`) bỏ qua kiểm quyền, và owner `app` giữ `CONNECT` trên database của nó. Hai
+  role của operator không phải superuser và nhận `CONNECT` theo tên: metrics exporter đăng nhập `cnpg_metrics_exporter` vào `postgres`
+  (metric up và WAL) và vào database ứng dụng `app` (query giám sát mặc định), và `streaming_replica` mở kết nối thường tới `postgres` từ
+  replica, cho `pg_rewind` và replication slot (kết nối streaming của nó không nêu database). `CREATE DATABASE` không cần `CONNECT` trên
+  `template1`. Instance manager tạo hai role đó khi server chạy, có thể sau một lúc kể từ khi login superuser ở trên lần đầu chạy được:
+  Job chờ chúng, trong cùng giới hạn thời gian. `GRANT` đứng trước `REVOKE` trong một transaction nên không có lúc nào role của operator
+  không kết nối được, và `GRANT` lỗi thì không `REVOKE` gì. Chạy ở mọi lần install và upgrade, nên cluster tạo trước các dòng này cũng
+  nhận chúng (`initdb` của operator chỉ chạy khi cluster được tạo); `GRANT` và `REVOKE` idempotent.
+
+### `svp-service`
+
+- **Deployment.** Cấu hình chỉ qua biến môi trường như compose: biến thường từ values, biến bí mật từ Secret `<service>-env` mà
+  `deploy/k8s/secrets.sh` ghi từ `.env`. Tiến trình chỉ đọc môi trường khi khởi động, nên workload gọi tên các Secret nó đọc
+  (`<service>-env`, và `sentry` khi `errorTracking`) trong annotation `secret.reloader.stakater.com/reload`: Reloader restart nó khi dữ
+  liệu của một trong chúng đổi (Secret mới tạo không làm restart: xem [Secret và Reloader](#secret-và-reloader)). Gọi theo tên, không `reloader.stakater.com/auto`: Secret mà
+  pod không đọc không bao giờ restart nó. Với `canary` đặt (gateway, web) nó là Rollout của Argo Rollouts: cùng pod template, và revision
+  mới ra như canary sau Envoy thay vì rolling update. ReplicaSet của mỗi revision có nhãn `rollouts-pod-template-hash`, mà controller
+  thêm vào selector của Service `<release>` (stable) và `<release>-canary`. Reloader restart Rollout bằng
+  `reloader.stakater.com/rollout-strategy: restart`: nó đặt `spec.restartAt`, và Argo Rollouts evict từng pod cũ hơn thời điểm đó:
+  không revision mới, không canary.
+- **Job `migrate`.** Service có database chạy migration bằng một Job `migrate` với role migrator của nó trước mỗi install và upgrade, một
+  lần, không phải ở mỗi replica; pod chạy dài chỉ giữ role app. goose chỉ áp cái còn thiếu nên lần chạy không có gì mới không làm gì.
+  Migration lỗi làm release lỗi: Helm (và Argo CD, đọc `pre-install`/`pre-upgrade` là PreSync) dừng trước khi pod mới thay pod cũ, nên không
+  service nào chạy với schema cũ hơn code của nó. Hook chạy trước mọi resource thường của release, trong namespace chặn mọi thứ mặc định:
+  ServiceAccount và policy egress của Job là hook cùng loại với weight thấp hơn, nên chúng có trước Job cả trên cluster mới.
+  `before-hook-creation` thay từng cái ở lần chạy sau, nên Job đã hoàn thành giữ pod và log cho tới lúc đó. Job lỗi thì không: Job
+  controller xoá pod, và log theo nó, khi Job lỗi; `install.sh` chép log của mỗi lần thử lỗi khi pod còn và in ra. Pod của Job mang tên
+  service (nhãn mà policy của Postgres ở `svp-data` mở cổng 5432 cho) với component `migrate`, nên không Service lẫn policy riêng của
+  service chọn chúng. Địa chỉ của pod mới chỉ tới được Postgres khi network policy controller của k3s đã thêm nó vào policy của `svp-data`,
+  khoảng 2 giây sau khi pod khởi động (đã đo), và `migrate` lỗi ngay khi bị từ chối kết nối. Container vì vậy được restart trong cùng pod
+  (`OnFailure` giữ pod và địa chỉ của nó; pod mới lại đua): ngay lập tức, rồi sau back-off của kubelet 10 giây và 20 giây. Job lỗi khi
+  container restart lần thứ ba, khoảng 40 giây sau khi khởi động (đã đo); ba lần restart chừa chỗ cho Postgres ngừng ngắn, và migration
+  còn lỗi sau đó là lỗi thật làm release lỗi.
+- **HPA, PDB, KEDA.** `hpa`: HorizontalPodAutoscaler theo CPU, đọc từ metrics-server mà k3s kèm. Utilization là phần trăm CPU request
+  của container, mà mọi release đặt, nên gateway xin 100m scale ra khi pod trung bình 70m. `pdb`: PodDisruptionBudget, chỉ ở nơi luôn có ít
+  nhất hai replica chạy: HPA có minimum từ hai trở lên, hay số replica cố định từ hai trở lên không có autoscaler (web; ở overlay prd
+  còn user-, video- và engagement-service). Một gián đoạn tự nguyện (drain node, eviction) khi đó chỉ lấy một pod một lần, không bao giờ pod
+  cuối đang phục vụ. Nó chọn pod theo nhãn, nên với Rollout nó đếm pod stable và canary như nhau; restart của chính Argo Rollouts
+  (`spec.restartAt`) cũng evict qua nó. `keda`: ScaledObject của KEDA theo lag của consumer group Kafka của service; KEDA tự tạo và điều
+  khiển HPA `keda-hpa-<release>`. Scaler Kafka đăng nhập qua `ClusterTriggerAuthentication` `keda-kafka` (user Redpanda `svp-keda`, chỉ
+  được DESCRIBE), do chart `svp-data` tạo một lần cho cả cluster: operator KEDA chỉ đọc được Secret của namespace `keda`
+  (`base/keda.yaml` của `svp-gitops`), nên login không thể là `TriggerAuthentication` cạnh ScaledObject. Operator chạy ở namespace `keda`,
+  không chặn egress; policy ingress của Redpanda ở `svp-data` mở 9092 cho nó.
+- **Canary.** Release có `canary` (gateway, web) có: strategy của Rollout, Service `<release>-canary`, và hai AnalysisTemplate:
+  `<release>-canary` (nền) và `<release>-canary-gate` (bước trước 100%), quyết định từ metric của Envoy canary được promote hay abort.
+  HTTPRoute của release (`api` cho gateway, `web` cho web) chia traffic giữa hai Service (`templates/httproute.yaml`). Backend canary có
+  Envoy cluster riêng, `httproute/<namespace>/<route>/rule/0/backend/1`, chỉ vì mỗi `backendRef` của route mang một filter (Envoy Gateway
+  không thì đặt cả hai Service vào một cluster, mà không metric nào phân biệt được). Counter của nó có khi trọng số của canary lớn hơn 0.
+  - Mỗi revision mới: `setWeight 25` (controller scale ReplicaSet canary lên 25% replica, làm tròn lên nên một pod trên hai, và khi nó
+    sẵn sàng, plugin Gateway API đặt HTTPRoute của release thành 75/25); `pause` 60 giây; `setWeight 50` (vẫn một pod); `pause` 60 giây;
+    gate (một bước analysis); rồi 100%: canary thành stable, route về 100/0 và ReplicaSet cũ được scale xuống 30 giây sau.
+  - Analysis nền chạy từ bước đầu tới cuối, bắt sớm canary hỏng. Riêng nó không giữ được canary khỏi 100%: các bước không chờ nó, và khi
+    Rollout hoàn thành nó bị dừng và kết thúc `Successful` bất kể đã đo gì (không đo gì cả nếu mọi query tới giờ đều timeout). Gate mới
+    là thứ promote: AnalysisRun của nó đo thêm một lần trên phút cuối ở 50%, và bước chỉ xong khi run đó `Successful`, nên canary chỉ tới
+    100% sau một lần đo hợp lệ của từng metric.
+  - AnalysisRun lỗi hay errored (nền hay gate) abort Rollout: route về 100/0 ngay và pod canary đi sau 30 giây, pod stable không bao giờ
+    bị đụng. Run inconclusive (quá ít response để phán đoán) tạm dừng Rollout tới khi ai đó resume hay abort: nó không bao giờ promote.
+  - Bước không hoàn thành được (pod canary không bao giờ Ready) abort Rollout sau 600 giây (`progressDeadlineAbort`). Hạn đó không chạy
+    khi Rollout đang tạm dừng cũng như trong gate (Rollouts coi bước analysis là vô hạn); gate tự kết thúc trong 50 giây (AnalysisTemplate).
+  - Template mới bằng template stable (release được đặt lại sau abort) lại là revision stable: Rollout về `Healthy` không cần canary.
+  - Hai metric của backend canary trên phút cuối, trong hai AnalysisTemplate chỉ khác thời điểm đo: `<release>-canary` (nền) đo mỗi
+    30 giây từ giây 60 sau khi canary bắt đầu (lúc đó một cửa sổ traffic đầy đủ ở 25% đã tới nó; đo ngay thì cửa sổ đầu luôn thiếu
+    response), `failureLimit: 1` cho một lần đo xấu qua, lần thứ hai làm run fail. `<release>-canary-gate` (bước trước 100%) đo một lần
+    mỗi metric (`count: 1`), `failureLimit: 0`: với một lần đo không có lần lạc nào để cho qua. `inconclusiveLimit` giữ 0 ở cả hai, nên
+    lần đo inconclusive đầu tiên dừng Rollout.
+  - Mỗi query trả -1 khi canary có dưới 30 response không phải 4xx trong cửa sổ: không điều kiện nào đúng, lần đo là Inconclusive và
+    canary không được promote. Traffic diễn tập (`deploy/k8s/drills/traffic.sh`) đưa gateway khoảng 150 mỗi phút ở 25% (khoảng 10 request
+    API mỗi giây) và web khoảng 45 (`/login` khoảng 3 lần mỗi giây); traffic phần lớn là 401 hay 429 (token hết hạn, bị rate limit) không
+    đạt 30, nên canary hỏng không qua được bằng traffic hỏng. 4xx bị loại khỏi mẫu số của tỉ lệ để không làm loãng 5xx.
+  - Query mà Prometheus không trả lời, hay trả lỗi, là một lần đo ở trạng thái Error, thử lại 10 giây sau khi nó kết thúc; Error không
+    tính là thành công cũng không là thất bại, và `consecutiveErrorLimit: 2` khiến lần Error thứ ba liên tiếp làm cả run lỗi, abort
+    Rollout. `timeout: 10` bỏ query treo sau 10 giây thay vì 30 giây mặc định của provider, nên tính bằng giây từ đầu mỗi run:
+    - nền, Prometheus treo: Error ở 70, 90 và 110 (query từ 60, 80, 100): abort khoảng 110, trước khi hai pause kết thúc (ít nhất 120 sau
+      khi bắt đầu, cộng thời gian khởi động pod canary); từ chối ngay: abort khoảng 80. Với 30 giây mặc định và 4 error, hai error đầu chỉ
+      tới khoảng 90 và 130: các bước đã chạy hết trước và run nền bị dừng `Successful` mà không có một lần đo nào.
+    - gate, Prometheus treo: Error ở 10, 30 và 50: abort khoảng 50, không bao giờ promote; run phục hồi kịp thì được phán theo câu trả
+      lời đầu tiên, nhiều nhất 50 giây sau khi gate bắt đầu (hai Error, rồi một query tới 10 giây).
+    - canary tốt, Prometheus chạy: run nền đo ở 60 và 90 (và 120 khi pod khởi động chậm); gate đo ngay và promote ngay khi query trả về,
+      chậm hơn hai pause đơn thuần khoảng một giây.
+  - Hai ngưỡng là `canaryLimits` của release (file values của nó nêu lý do cho con số): `p99Ms`, p99 tính bằng ms, và `errorRatio`, tỉ lệ
+    5xx. Histogram bucket mặc định của Envoy thô (100, 250, 500, 1000 ms), nên p99 là nội suy giữa hai bucket và tỉ lệ 5xx là tiêu chí
+    chính.
+
 ## AWS
 
 Vì sao: [ADR-0034](../adr/0034-aws-stage7.md) (nền tảng, lý do và bảng đầy đủ), [ADR-0038](../adr/0038-s3-bucket-names.md).

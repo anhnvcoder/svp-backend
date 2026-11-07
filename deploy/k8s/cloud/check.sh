@@ -1,13 +1,9 @@
 #!/usr/bin/env bash
-# Static check of the manifests of the k6 Job of the cloud cluster, run by `make cloud-check`. Nothing here reaches a
-# cluster or reads .env; it needs helm, jq, docker and network access (GitHub).
-#
-#   1. Renders the k6 Job with deploy/k6/cloud/render.sh (run with no argument, manifests on stdout).
-#   2. kubeconform -strict against the Kubernetes schemas of CLOUD_K8S_VERSION at a pinned commit of
-#      yannh/kubernetes-json-schema. Strict: an unknown field fails. A kind without a schema fails: there is no
-#      -ignore-missing-schemas.
-#   3. What a schema cannot say: every image is pinned by exactly one @sha256:<64 hex>.
-#
+# Static check of the manifests of the cloud cluster's k6 Job (`make cloud-check`): the Job rendered by
+# deploy/k6/cloud/render.sh, kubeconform -strict against the Kubernetes schemas of CLOUD_K8S_VERSION (an unknown field
+# or a kind without a schema fails), and every image pinned by exactly one @sha256:<64 hex>. Reaches no cluster, reads
+# no .env; needs helm, jq, docker and network access (GitHub).
+
 # Usage: deploy/k8s/cloud/check.sh [ROOT]
 #   ROOT: a directory laid out like this repository (default: the repository), from which deploy/k6/ is read; a copy
 #   with one field broken shows what the check reports for it. Nothing is written outside a temporary directory.
@@ -54,13 +50,11 @@ yaml2json() {
   helm template y2j "$tmp/y2j" | grep '^{' || true
 }
 
-# 1. The k6 Job.
 bash "$root/deploy/k6/cloud/render.sh" >"$tmp/manifests/rendered__k6-cloud.yaml" || fail "deploy/k6/cloud/render.sh"
 echo "rendered deploy/k6/cloud/render.sh"
 
 failed=0
 
-# 2. kubeconform, with the Kubernetes schemas fetched from GitHub at the pinned commit.
 if "${docker_run[@]}" -v "$tmp/manifests:/manifests:ro" "$KUBECONFORM_IMAGE" \
   -strict -summary -kubernetes-version "$CLOUD_K8S_VERSION" \
   -schema-location "https://raw.githubusercontent.com/yannh/kubernetes-json-schema/$k8s_schemas_commit/{{.NormalizedKubernetesVersion}}-standalone{{.StrictSuffix}}/{{.ResourceKind}}{{.KindSuffix}}.json" \
@@ -71,7 +65,7 @@ else
   failed=1
 fi
 
-# 3. Images: every string field named image, and every env value whose name has the word IMAGE, on every document as
+# Images: every string field named image, and every env value whose name has the word IMAGE, on every document as
 # JSON.
 cp "$tmp/manifests"/* "$tmp/y2j/in/"
 yaml2json >"$tmp/docs.jsonl"

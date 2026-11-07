@@ -1,33 +1,10 @@
 #!/usr/bin/env bash
-# Tests for the scripts that write the entries of AWS Secrets Manager of an EKS cluster (deploy/k8s/aws-secrets.sh of
-# make eks-secrets, deploy/k8s/glitchtip-init.sh of make eks-glitchtip-init), without AWS, a cluster or a network:
-# fake aws and kubectl first on PATH, each appending its arguments to one log in the order of the calls, the fake aws
-# keeping a copy of each entry's JSON it was given as file://. helm is the real one, for helm template alone. Everything
-# is a fixture in a temporary directory: a copy of this checkout's deploy/ with a fake .env, its secrets made at run
-# time, so no file of the repository holds one. Cases:
-#   - a first run on svp-stg (entry glitchtip-runtime without a version, no ExternalSecret): every entry of chart
-#     svp-cluster's ExternalSecrets for EKS written once, with exactly its keys (pg-superuser from
-#     SVP_RDS_MASTER_PASSWORD, the Telegram keys empty, none of the in-cluster object store), glitchtip-runtime with its
-#     three keys empty, every aws call with the profile and the region on its command line, the account read first,
-#     the files in a folder of mode 700 that is gone after, no kubectl call, no force-sync;
-#   - a run again (glitchtip-runtime has a version): glitchtip-runtime not written, Redpanda's password set before the
-#     first write, then in the order of deploy/k8s/rotate.sh: the ExternalSecret of svp-data built again after the
-#     last write, the broker compared with .env (it runs that password: no wait), one sync of Application svp-data
-#     until it Succeeded, then the three other ExternalSecrets; nothing restarted by the script;
-#   - a run again with a changed password of Redpanda's superuser, three brokers on the previous one for a few reads
-#     (Reloader restarting them): the sync of svp-data waits until each runs the password of .env;
-#   - the same with broker redpanda-0 not running for a few reads: waited for until it runs the password of .env;
-#     whose pod cannot be read: the script stops naming it, no sync of svp-data, no client's ExternalSecret;
-#   - a run again on a cluster without Reloader, or whose Redpanda does not name its Secrets for Reloader yet:
-#     refused before any write; a sync of svp-data that Failed: stops naming it, no client's ExternalSecret built
-#     again;
-#   - svp-prd: entries svp/prd/*, the account of SVP_AWS_PRD_ACCOUNT_ID;
-#   - stops before any write: AWS_PROFILE unset, another account, SVP_RDS_MASTER_PASSWORD unset, a variable missing
-#     in .env, an entry the infrastructure has not made, a run again with the cluster out of reach;
-#   - deploy/k8s/glitchtip-init.sh on svp-stg: GlitchTip's DSN and tokens written into entry glitchtip-runtime, then
-#     its three ExternalSecrets built again; without AWS_PROFILE it stops before kubectl.
-# No log, output or argument may hold a secret value or its base64.
-#
+# Tests for the scripts that write the entries of AWS Secrets Manager of an EKS cluster (deploy/k8s/aws-secrets.sh and
+# glitchtip-init.sh on EKS), without AWS, a cluster or a network: fake aws and kubectl first on PATH log their calls in
+# order, the fake aws keeping a copy of each entry's JSON it was given; helm is the real one, for helm template alone.
+
+# Everything is a fixture in a temporary directory: a copy of this checkout's deploy/ with a fake .env, its secrets made
+# at run time, so no file of the repository holds one. No log, output or argument may hold a secret value or its base64.
 # Usage, from anywhere: deploy/k8s/aws-secrets-test.sh
 set -euo pipefail
 
@@ -281,7 +258,7 @@ aws_calls_ok() {
   [ -z "$(ls -A "$FAKE_STATE/tmp")" ] || echo "left in TMPDIR: $(ls -A "$FAKE_STATE/tmp")"
 }
 
-# --- 1. a first run on svp-stg.
+# --- a first run on svp-stg.
 new_state
 run aws-secrets.sh "$work/first.out" SVP_RDS_MASTER_PASSWORD="$rds_password"
 problems=$( (written_ok stg; aws_calls_ok) | paste -sd ';' -)
@@ -297,7 +274,7 @@ else
 fi
 no_leak "aws-secrets.sh, a first run" "$work/first.out" "$FAKE_STATE/calls"
 
-# --- 2. a run again: glitchtip-runtime has a version. In the order of deploy/k8s/rotate.sh: Redpanda's password, the
+# --- a run again: glitchtip-runtime has a version. In the order of deploy/k8s/rotate.sh: Redpanda's password, the
 # entries, the ExternalSecret of svp-data, the barrier, the sync of svp-data, the other ExternalSecrets.
 new_state v-runtime
 run aws-secrets.sh "$work/again.out" SVP_RDS_MASTER_PASSWORD="$rds_password"
@@ -325,7 +302,7 @@ else
 fi
 no_leak "aws-secrets.sh, a run again" "$work/again.out" "$FAKE_STATE/calls"
 
-# --- 2b. a run again with a changed password of Redpanda's superuser: three brokers run with the previous one for three
+# --- a run again with a changed password of Redpanda's superuser: three brokers run with the previous one for three
 # reads (Reloader restarting them), then with that of .env.
 new_state v-runtime
 printf 3 >"$FAKE_STATE/replicas"
@@ -349,7 +326,7 @@ else
 fi
 no_leak "aws-secrets.sh, a run again with a changed password of Redpanda's superuser" "$work/changed.out" "$FAKE_STATE/calls"
 
-# --- 2c. the same, broker redpanda-0 not running for two reads (Reloader restarting it): it is compared only once it runs.
+# --- the same, broker redpanda-0 not running for two reads (Reloader restarting it): it is compared only once it runs.
 new_state v-runtime
 printf '%s' "$old_kafka" >"$FAKE_STATE/rpk-pass"
 printf 2 >"$FAKE_STATE/not-running"
@@ -362,7 +339,7 @@ else
   fail "aws-secrets.sh, a run again, the broker not running for a while: exit $rc"$'\n'"$(sed 's/^/      /' "$work/not-running.out")"
 fi
 
-# --- 2d. the same, the pod of broker redpanda-0 cannot be read (the API server unavailable): the script stops naming it
+# --- the same, the pod of broker redpanda-0 cannot be read (the API server unavailable): the script stops naming it
 # instead of taking the broker as up to date; no sync of svp-data, no client's ExternalSecret.
 new_state v-runtime
 printf '%s' "$old_kafka" >"$FAKE_STATE/rpk-pass"
@@ -377,13 +354,13 @@ else
 fi
 no_leak "aws-secrets.sh, a run again, the broker's pod not readable" "$work/pod-error.out" "$FAKE_STATE/calls"
 
-# --- 2e. a run again on a cluster without Reloader: refused before any write.
+# --- a run again on a cluster without Reloader: refused before any write.
 new_state v-runtime
 : >"$FAKE_STATE/no-reloader"
 run aws-secrets.sh "$work/out" SVP_RDS_MASTER_PASSWORD="$rds_password"
 refused "aws-secrets.sh, a run again on a cluster without Reloader" "$work/out" "runs the project's workloads but no Reloader"
 
-# --- 2g. a run again on a cluster whose Reloader runs but whose Redpanda does not name its Secrets for it yet (Argo CD
+# --- a run again on a cluster whose Reloader runs but whose Redpanda does not name its Secrets for it yet (Argo CD
 # has not synced the revision that annotates it): refused before any write, since Reloader would restart no broker.
 new_state v-runtime
 : >"$FAKE_STATE/no-opt-in"
@@ -391,7 +368,7 @@ run aws-secrets.sh "$work/out" SVP_RDS_MASTER_PASSWORD="$rds_password"
 refused "aws-secrets.sh, a run again on a cluster whose Redpanda does not opt in to Reloader yet" "$work/out" \
   "StatefulSet svp-data/redpanda names no Secret in secret.reloader.stakater.com/reload yet"
 
-# --- 2f. a run again whose sync of svp-data Failed: stops naming it, no client's ExternalSecret built again.
+# --- a run again whose sync of svp-data Failed: stops naming it, no client's ExternalSecret built again.
 new_state v-runtime
 printf Failed >"$FAKE_STATE/argo-phase"
 run aws-secrets.sh "$work/sync-failed.out" SVP_RDS_MASTER_PASSWORD="$rds_password"
@@ -403,7 +380,7 @@ else
   fail "aws-secrets.sh, a run again whose sync of svp-data Failed: exit $rc"$'\n'"$(sed 's/^/      /' "$work/sync-failed.out")"
 fi
 
-# --- 3. svp-prd.
+# --- svp-prd.
 new_state
 run aws-secrets.sh "$work/prd.out" SVP_RDS_MASTER_PASSWORD="$rds_password" SVP_KUBE_CONTEXT=svp-prd \
   AWS_PROFILE=anhnv-prd FAKE_PROFILE=anhnv-prd FAKE_ACCOUNT=$prd_account
@@ -414,7 +391,7 @@ else
   fail "aws-secrets.sh on svp-prd: exit $rc; $problems"$'\n'"$(sed 's/^/      /' "$work/prd.out")"
 fi
 
-# --- 4. what stops it before any write.
+# --- what stops it before any write.
 new_state
 run aws-secrets.sh "$work/out" SVP_RDS_MASTER_PASSWORD="$rds_password" AWS_PROFILE=
 refused "aws-secrets.sh without AWS_PROFILE" "$work/out" "AWS_PROFILE is not set"
@@ -446,7 +423,7 @@ new_state v-runtime
 run aws-secrets.sh "$work/out" SVP_RDS_MASTER_PASSWORD="$rds_password"
 refused "aws-secrets.sh, a run again with the cluster out of reach" "$work/out" "cluster svp-stg is not reachable"
 
-# --- 5. deploy/k8s/glitchtip-init.sh on svp-stg.
+# --- deploy/k8s/glitchtip-init.sh on svp-stg.
 new_state v-runtime
 run glitchtip-init.sh "$work/glitchtip.out"
 got=$(entry stg glitchtip-runtime)

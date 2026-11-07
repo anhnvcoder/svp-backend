@@ -2,10 +2,9 @@
 # (wave 1 of argocd/apps/components.json of svp-gitops), after cert-manager and Envoy Gateway brought their CRDs.
 
 # The project's namespaces. Every one gets Pod Security "restricted", a default-deny NetworkPolicy and allow-dns.
-# routes: HTTPRoutes of this namespace may attach to Gateway svp. kubeAPI: pods labelled svp-kube-api=allow may reach the
-# API server (operators and sidecars that need it live in svp-data and svp-obs only). deploy/k8s/install.sh and
-# deploy/k8s/gitops.sh create them before wave 0 from templates/namespaces.yaml, labels included (Envoy Gateway binds a
-# Role in each one it watches); this chart then takes them over and adds the rest.
+# routes: HTTPRoutes of this namespace may attach to Gateway svp. kubeAPI: pods labelled svp-kube-api=allow reach the
+# API server (operators and sidecars that need it live in svp-data and svp-obs only). The install scripts create them
+# before wave 0 (Envoy Gateway binds a Role in each one it watches); this chart then takes them over.
 namespaces:
   - name: svp
     routes: true
@@ -23,14 +22,7 @@ namespaces:
 # Namespaces of platform charts made here, before their chart (a later wave), only so that Pod Security "restricted" is
 # enforced on their first pod: no NetworkPolicy, no routes. Without the label, whoever may create pods in such a
 # namespace (its controller, taken over) could start a privileged pod with a hostPath of the node there and read every
-# Secret of the cluster from it. argo-rollouts: the chart's own Role there (which no value of chart 2.43.8 narrows) lets
-# the controller create Jobs, update Deployments and pods. Every pod the pinned charts render with the project's values
-# meets "restricted" (helm template, checked rule by rule), and their controllers start no pod of their own here:
-# CloudNativePG runs its instances and Jobs in svp-data, KEDA starts Jobs only for a ScaledJob (none), Argo Rollouts the
-# gateway's pods in svp. reloader: Reloader may patch the pod template of every workload of the namespaces it watches.
-# The namespaces of wave 0 (cert-manager, envoy-gateway-system) must exist before this chart, which needs their CRDs:
-# deploy/k8s/install.sh and their Argo CD Applications label them; deploy/k8s/gitops.sh labels argocd. Both scripts
-# make the project's namespaces above too.
+# Secret of the cluster from it. Wave 0's cert-manager and envoy-gateway-system must exist before this chart.
 platformNamespaces:
   - name: argo-rollouts
   - name: cnpg-system
@@ -38,11 +30,10 @@ platformNamespaces:
   - name: kyverno
   - name: reloader
 
-# Kyverno (wave 2), the one platform namespace whose pods also get
-# NetworkPolicies here: it verifies images against registries and Sigstore on the internet, and the API server sends it
-# every pod of svp (Kyverno itself starts no pod there). default-deny and allow-dns as in the project's namespaces,
-# allow-kube-api for its pods labelled svp-kube-api=allow (base/kyverno.yaml of svp-gitops), and two of its own
-# (templates/networkpolicies.yaml): the API server's webhook calls in, TCP 443 out to public addresses only.
+# Kyverno (wave 2), the one platform namespace whose pods also get NetworkPolicies here: it verifies images against
+# registries and Sigstore on the internet, and the API server sends it every pod of svp (Kyverno itself starts no pod
+# there). default-deny and allow-dns as in the project's namespaces, allow-kube-api for its pods labelled
+# svp-kube-api=allow (base/kyverno.yaml of svp-gitops), and two of its own (templates/networkpolicies.yaml).
 kyverno:
   namespace: kyverno
   # The admission controller's webhook server (its Service's 443 forwards there).
@@ -54,11 +45,10 @@ kyverno:
   vxlanAddresses:
     - 10.42.0.0/32
     - 10.42.1.0/32
-  # Left out of the egress on 443, so the admission controller reaches only the internet: GHCR
-  # (ghcr.io, pkg-containers.githubusercontent.com) and Sigstore's TUF repository (tuf-repo-cdn.sigstore.dev), which
-  # NetworkPolicy cannot name. 10.0.0.0/8 holds the k3d nodes and the local registry (nodeSubnet below), the pods and
-  # the Services; the other ranges are the private, shared and link-local ones (the host, Docker's networks, a cloud's
-  # metadata service).
+  # Left out of the egress on 443, so the admission controller reaches the internet only: GHCR (ghcr.io,
+  # pkg-containers.githubusercontent.com) and Sigstore's TUF repository (tuf-repo-cdn.sigstore.dev), which NetworkPolicy
+  # cannot name. 10.0.0.0/8 holds the k3d nodes and the local registry (nodeSubnet below), the pods and the Services;
+  # the others are private, shared and link-local (the host, Docker's networks, a cloud's metadata service).
   privateRanges:
     - 10.0.0.0/8
     - 172.16.0.0/12
@@ -94,11 +84,9 @@ wildcardHost: "*.svp.localhost"
 apexHost: svp.localhost
 
 # Who signs the two certificates of Gateway svp (templates/certificates.yaml). selfSigned: a local CA of cert-manager,
-# trusted by clients that load it (`make k8s-ca`), for a cluster no one reaches from the internet. acme: Let's Encrypt,
-# DNS-01 on the Route 53 hosted zone hostedZoneId that holds wildcardHost and apexHost; cert-manager's controller takes
-# its AWS credentials from its pod (EKS Pod Identity), so no key is in a Secret. server: production, or staging to try
-# the issuer without spending production's limit on certificates for the same names (5 per 7 days); clients trust no
-# staging certificate. email: the ACME account's contact, required.
+# trusted by clients that load it (`make k8s-ca`). acme: Let's Encrypt, DNS-01 on the Route 53 hosted zone hostedZoneId
+# that holds wildcardHost and apexHost; no key is in a Secret (cert-manager's controller uses EKS Pod Identity). server:
+# staging spares production's limit on certificates for the same names (5 per 7 days); clients trust no staging one.
 tls:
   issuer: selfSigned
   acme:
@@ -119,10 +107,9 @@ envoy:
     # Envoy the load balancer's address instead of the client's: the gateway's rate limits and logs key on that address.
     annotations: {}
   # NetworkPolicy envoy of envoy-gateway-system (templates/networkpolicies.yaml), for a cluster whose Envoy faces the
-  # internet: only these reach the Envoy pods of Gateway svp, in: its HTTPS port from every address (clients come with
-  # their own address), its metrics port from svp-obs (Prometheus), and the port of the NLB's health check (annotation
-  # service.beta.kubernetes.io/aws-load-balancer-healthcheck-port, when it names one) from healthCheckCIDR, the VPC's
-  # CIDR where the NLB's nodes are. Off on k3d: no policy selects those pods, which any pod may reach.
+  # internet: only the HTTPS port (every address, clients come with their own), the metrics port (svp-obs, Prometheus)
+  # and the NLB's health check port (from healthCheckCIDR, the VPC's CIDR) reach the Envoy pods of Gateway svp. Off on
+  # k3d: no policy selects those pods, which any pod may reach.
   networkPolicy:
     enabled: false
     healthCheckCIDR: ""
@@ -144,11 +131,10 @@ s3:
 storageClass:
   enabled: false
 
-# The Secrets of the GitOps path (stg, prd): one ExternalSecret per Secret the services and the platform read, each
-# built by External Secrets Operator (component external-secrets, wave 0, GitOps path only) from a store of values
-# outside git, plus one SecretStore per namespace that holds ExternalSecrets (templates/external-secrets.yaml, the list
-# in files/external-secrets.yaml). Off here: the dev path applies the same Secrets from .env (deploy/k8s/secrets.sh) and
-# renders none of this; envs/stg and envs/prd of svp-gitops turn it on. Names only, never a value.
+# The Secrets of the GitOps path (stg, prd): one ExternalSecret per Secret that services and platform read, built by
+# External Secrets Operator (wave 0) from a store of values outside git, plus one SecretStore per namespace that holds
+# ExternalSecrets (templates/ and files/external-secrets.yaml). Off here: the dev path applies them from .env
+# (deploy/k8s/secrets.sh); envs/stg and envs/prd of svp-gitops turn it on. Names only, never a value.
 externalSecrets:
   enabled: false
   # kubernetes: the Secrets of namespace sourceNamespace of the same cluster, one per entry, which deploy/k8s/secrets.sh

@@ -1,12 +1,22 @@
 {{- /*
-Traffic of the service's pods (threat model IN-2, FF-5). Chart svp-cluster denies every pod of
-svp in both directions and opens DNS; this policy opens the rest, by pod labels: ingress on the service's own port
-from the peers in ingressFrom only (Envoy for the gateway, the gateway for a gRPC service), egress to the peers in
-egressTo only, so a compromised pod reaches only what its service really talks to, never the internet. A service
-with an empty ingressFrom (media-worker) is reached by no pod at all. The servers in svp-data and svp-obs have their
-own ingress policies for these pods.
-A peer of externalPeers is reached by address instead (a managed database or object store outside the cluster).
+Chart svp-cluster denies every pod of svp in both directions and opens DNS; this policy opens the rest, by pod labels.
 */}}
+
+{{- /*
+Ingress on the service's own port from the peers in ingressFrom only (Envoy for the gateway, the gateway for a gRPC
+service), egress to the peers in egressTo only.
+*/}}
+
+{{- /*
+So a compromised pod reaches only what its service really talks to, never the internet; a service with an empty
+ingressFrom (media-worker) is reached by no pod at all.
+*/}}
+
+{{- /*
+The servers in svp-data and svp-obs have their own ingress policies for these pods. A peer of externalPeers is reached
+by address instead (a managed database or object store outside the cluster).
+*/}}
+
 {{- range $name, $_ := .Values.externalPeers }}
 {{- if not (hasKey $.Values.peers $name) }}{{ fail (printf "externalPeers: unknown peer %q" $name) }}{{ end }}
 {{- end }}

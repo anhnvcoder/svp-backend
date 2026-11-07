@@ -1,6 +1,7 @@
 # One Dockerfile for every Go service, so the toolchain pin, static build and distroless runtime are defined once; pick
 # the service with --build-arg SERVICE=<directory under services/>. No secret goes into the
 # build: configuration and keys are environment variables given at run time.
+
 # No `# syntax=` line: BuildKit's built-in frontend already runs RUN --mount, and a syntax image would be pulled
 # from Docker Hub by a tag that can be pushed again, the one unpinned image of the build.
 

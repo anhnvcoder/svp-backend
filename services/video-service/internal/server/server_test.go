@@ -378,7 +378,7 @@ func (p postPolicy) hasCondition(t *testing.T, want any) bool {
 }
 
 // The form lets the client write exactly uploads/<video_id>, of 1 to size_bytes bytes with the
-// normalized content type, for 15 minutes (UP-1); it never reaches the logs (UP-2).
+// normalized content type, for 15 minutes; it never reaches the logs.
 func TestInitUploadReturnsPresignedForm(t *testing.T) {
 	needDB(t)
 	s, logs := newServer()

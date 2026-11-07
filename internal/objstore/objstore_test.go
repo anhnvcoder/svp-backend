@@ -93,7 +93,6 @@ func TestBucketByPrefix(t *testing.T) {
 	}
 }
 
-// decodePolicy returns the expiration and conditions of a base64 POST policy.
 func decodePolicy(t *testing.T, policy string) (string, []any) {
 	t.Helper()
 	raw, err := base64.StdEncoding.DecodeString(policy)
@@ -335,7 +334,7 @@ func TestDeletePrefixRejects(t *testing.T) {
 }
 
 // The keys media-worker writes pass; anything a storage or a URL parser could read as another
-// path, or naming another video, does not (FF-6).
+// path, or naming another video, does not.
 func TestIsMediaKey(t *testing.T) {
 	t.Parallel()
 	const id = "0190a6e4-7b2c-7d3e-9f40-123456789abc"

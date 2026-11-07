@@ -1,12 +1,6 @@
 #!/usr/bin/env bash
-# Tests for deploy/redpanda/create-topics.sh (files/create-topics.sh here, the script the init Job of this chart and
-# compose's redpanda-init run) without a broker: a fake rpk first on PATH records each call and keeps the topics it
-# was asked to create, with their replicas, in a file, as rpk does with --if-not-exists (an existing topic is left as
-# it is, the call succeeds). Cases:
-#   - TOPIC_REPLICAS unset: every topic is created with -r 1;
-#   - TOPIC_REPLICAS=3: every topic is created with -r 3;
-#   - topics that exist with one replica, TOPIC_REPLICAS=3: no call creates them without --if-not-exists, no call
-#     alters a topic or its partitions, and each keeps its one replica.
+# Tests for deploy/redpanda/create-topics.sh (files/create-topics.sh here) without a broker: a fake rpk first on PATH
+# records each call and keeps the topics it was asked to create, with their replicas.
 #
 # Usage, from anywhere: deploy/helm/svp-data/files/create-topics-test.sh
 set -euo pipefail

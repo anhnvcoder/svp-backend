@@ -166,12 +166,10 @@ func TestSetupUnavailableCollectorDoesNotBlock(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// Exceed both queues to exercise their non-blocking overflow behavior as well. An export to
-	// the closed port runs until the export timeout, so a call that waited on an export would take
-	// at least exportTimeout. A non-blocking call takes microseconds; even on a loaded machine
-	// under -race, all 3000 iterations together have taken well under half a second. Checking
-	// the slowest single iteration against a fifth of the export timeout keeps both cases apart
-	// whatever the machine's speed.
+	// Exceed both queues to exercise their non-blocking overflow behavior as well. An export to the
+	// closed port runs until the export timeout, so a call that waited on an export would take at
+	// least exportTimeout; a non-blocking call takes microseconds. Checking the slowest single
+	// iteration against a fifth of the export timeout keeps both cases apart whatever the speed.
 	var slowest time.Duration
 	for range 3000 {
 		start = time.Now()

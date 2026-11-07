@@ -186,7 +186,7 @@ func (s *Server) UpdateDisplayName(ctx context.Context, req *userv1.UpdateDispla
 	if err != nil {
 		return nil, s.internal(ctx, "update display name", err)
 	}
-	// The name itself stays out of the log: users may set their real name (JWT-8). The callerid
+	// The name itself stays out of the log: users may set their real name. The callerid
 	// interceptor already put user_id into ctx.
 	s.logger.InfoContext(ctx, "display name updated")
 	return &userv1.UpdateDisplayNameResponse{

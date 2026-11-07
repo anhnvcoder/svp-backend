@@ -1,9 +1,8 @@
 # OPS-1 of the threat model (docs/threat-model.md): no debug or metrics endpoint is reachable through Envoy.
 # /debug/pprof/, /debug/pprof/heap and /metrics at https://api.svp.localhost:8443 are 404; control: /healthz 200 (Envoy
 # reaches the gateway, so a 404 is the gateway's answer, not a route that is down).
-#
-# Each check and control is one step; a failed one marks the test failed and the next steps still run. The gateway not
-# ready within 60 s ends the test. curl takes the cluster's CA from CURL_CA_BUNDLE, which the make target sets.
+
+# curl takes the cluster's CA from CURL_CA_BUNDLE, which the make target sets.
 apiVersion: chainsaw.kyverno.io/v1alpha1
 kind: Test
 metadata:

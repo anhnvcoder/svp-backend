@@ -1,23 +1,12 @@
 #!/usr/bin/env bash
 # The load test of deploy/k6/main.js against the running compose stack (`make up`), run by `make load-local` (profile
 # local) and `make load-ci` (profile ci, the CI job `stack`).
-#
-#   1. Refuses unless the gateway and web containers of compose project svp run and no node or registry of the k3d
-#      cluster svp does; it never starts anything.
-#   2. LOCAL LAB ONLY: deletes the gateway's per-IP register rate limit keys (svp:gw:rl:register:*) in Redis db 10 on
-#      127.0.0.1:6379 with SCAN + DEL (reset_register_limit of deploy/compose/lib.sh, as make smoke does), since the
-#      pool registers from the one address of the k6 container. Never point this script at a shared stack.
-#   3. Runs K6_IMAGE in a container on the compose network svp_web, where the gateway and the web client are: the
-#      gateway at http://gateway:8080, and the web at http://web:3001 with Host and Origin of http://localhost:3001,
-#      the APP_ORIGIN Next's Server Action check and the web's CSRF check compare against. The gateway sees the k6
-#      container's own address, apart from the web container's, so the two never share a per-IP rate limit bucket.
-#      K6_NO_USAGE_REPORT: k6 would otherwise report each run to Grafana's usage server.
-#   4. Writes .k6/<profile>-<yyyymmddThhmmssZ>/summary.json (from handleSummary, no setup data) and machine.json (the
-#      Docker VM's CPUs and memory, power source), then greps the folder: a token, cookie or password in it fails the
-#      run.
-#
+# LOCAL LAB ONLY: deletes the gateway's per-IP register rate limit keys (svp:gw:rl:register:*) in Redis db 10 on
+# 127.0.0.1:6379, since the pool registers from the one address of the k6 container. Never point it at a shared stack.
+
 # Usage: K6_IMAGE=<image> deploy/k6/load.sh local|ci  (SVP_K6_HOLD=<n>s|m overrides how long the full rate holds)
 # Exit status: 0 when every threshold passed, 1 otherwise (k6's own status is printed).
+# Design notes: docs/reference/compose.md.
 set -euo pipefail
 
 profile=${1:-}

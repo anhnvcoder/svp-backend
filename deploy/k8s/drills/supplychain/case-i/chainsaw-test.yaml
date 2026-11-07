@@ -1,8 +1,7 @@
 # Supply chain drill, case i: an UPDATE of a running pod of svp that sets a container's image to an unsigned one, as a
-# server-side dry run of a strategic patch: refused. "Unsigned" is the unsigned image of case b (refused by the
-# signature rule), or the dev image of the local registry when there is none (refused by the prefix rule). A script
-# step: Chainsaw's patch sends a JSON merge patch, which would replace the pod's whole list of containers, and the API
-# server would refuse that before Kyverno is asked.
+# dry run of a strategic patch: refused. A script step: Chainsaw's patch sends a JSON merge patch, which would replace
+# the pod's whole list of containers, and the API server would refuse that before Kyverno is asked.
+
 # Helpers, inputs and the verdict lines: ../lib.sh.
 apiVersion: chainsaw.kyverno.io/v1alpha1
 kind: Test

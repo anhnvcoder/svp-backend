@@ -53,15 +53,15 @@ func (s *Server) TranscodeConsumerConfig(brokers string) kafkax.ConsumerConfig {
 	}
 }
 
-// HandleTranscode is the kafkax.Handler of TopicMediaTranscodes (architecture §7.1).
+// HandleTranscode is the kafkax.Handler of TopicMediaTranscodes.
 // transcode.completed moves a PROCESSING video to READY and writes video.ready to the outbox in
 // one transaction; transcode.failed moves it to FAILED, then deletes its files, the saga's
 // compensation step. Both moves are one-way, so a redelivered event moves nothing and needs no
 // processed_events table: READY ignores it, FAILED deletes the files again.
 //
 // The event comes from media-worker, which handles untrusted files: it is only acted on for a
-// PROCESSING video and with keys under media/<video_id>/ (FF-6). Anything else goes to the
-// dead-letter topic (IN-5).
+// PROCESSING video and with keys under media/<video_id>/. Anything else goes to the
+// dead-letter topic.
 func (s *Server) HandleTranscode(ctx context.Context, r *kgo.Record, _ kafkax.Attempt) error {
 	var ev mediav1.TranscodeEvent
 	if err := proto.Unmarshal(r.Value, &ev); err != nil {
@@ -242,7 +242,7 @@ func (s *Server) notProcessing(ctx context.Context, id uuid.UUID, event string) 
 		return s.deleteFiles(ctx, id)
 	case statusUploading:
 		// media-worker only hears of a video once it is PROCESSING: the event is forged or
-		// misrouted, and must not kill an upload in progress (FF-6).
+		// misrouted, and must not kill an upload in progress.
 		return kafkax.Permanent(fmt.Errorf("%s for a video still UPLOADING", event))
 	}
 	// PROCESSING now but not at the UPDATE: CompleteUpload committed in between, so the event

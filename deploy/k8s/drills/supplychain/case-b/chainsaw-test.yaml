@@ -1,9 +1,8 @@
-# Supply chain drill, case b: the unsigned image in a real Deployment of svp (not a dry run): its ReplicaSet reports
-# FailedCreate with the signature rule's message; a pod of it created fails the case; the Deployment is deleted again,
-# also when a step fails. The unsigned image is value unsigned when given, otherwise the newest drill-unsigned under
-# the prefix of release source backend on GHCR (deploy/ci/ghcr-digest.sh newest, anonymous): CI pushes it with no
-# signature and no attestation, so nothing on GHCR refers to it (unsigned_image of ../lib.sh says why not a platform
-# manifest of a signed release). SKIP when neither is there, with the command that builds the drill images.
+# Supply chain drill, case b: the unsigned image in a real Deployment of svp, not a dry run: its ReplicaSet reports
+# FailedCreate with the signature rule's message, a pod of it created fails the case, and the Deployment is deleted
+# again, also when a step fails. The image is value unsigned, else the newest drill-unsigned on GHCR (unsigned_image of
+# ../lib.sh). SKIP when neither is there, with the command that builds them.
+
 # Helpers, inputs and the verdict lines: ../lib.sh.
 apiVersion: chainsaw.kyverno.io/v1alpha1
 kind: Test

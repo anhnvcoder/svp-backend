@@ -1,15 +1,13 @@
 #!/usr/bin/env bash
-# Creates the event topics and their dead-letter topics on the compose Redpanda. Topics are created here, not by
-# auto-create or by the services, so the topology lives in one place in the repo and a mistyped name fails.
-# Run by the one-shot redpanda-init
-# container; the broker comes from RPK_BROKERS, the Admin API from RPK_ADMIN_HOSTS. Idempotent:
-# a topic that already exists is left as it is, and the cluster property is set to the same value.
-#
+# Creates the event topics and their dead-letter topics on the compose Redpanda, run by the one-shot redpanda-init
+# container (broker from RPK_BROKERS, Admin API from RPK_ADMIN_HOSTS). Topics are created here, not by auto-create or by
+# the services, so the topology lives in one place in the repo and a mistyped name fails. Idempotent: a topic that
+# already exists is left as it is, and the cluster property is set to the same value.
+
 # TOPIC_REPLICAS is the replication factor of every topic: 1 on a single broker (compose, the default), 3 on three
-# brokers. Redpanda has no min.insync.replicas: each partition is a Raft group, and a write with acks=all (franz-go's
-# default) is answered once a majority of its replicas holds it, 2 of 3. It applies only to topics this run creates:
-# --if-not-exists leaves an existing topic with the replicas it has; changing it there takes
-# `rpk topic alter-config <topic> --set replication.factor=<n>`.
+# brokers. It applies only to topics this run creates: --if-not-exists leaves an existing topic with the replicas it
+# has; changing it there takes `rpk topic alter-config <topic> --set replication.factor=<n>`.
+# Design notes: docs/reference/compose.md.
 set -euo pipefail
 
 replicas=${TOPIC_REPLICAS:-1}

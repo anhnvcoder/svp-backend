@@ -1,15 +1,12 @@
 # shellcheck shell=bash
-# Helpers of the drill test reloader-rotate (chainsaw-test.yaml beside this file, make drill-k8s-reloader). Each script
-# of the test sources this file from the test's folder, where Chainsaw runs it: `. ./reloader.sh`. Written for bash 3.2
-# (the macOS /bin/bash).
-#
-# The script's environment needs CALLER_KUBECONFIG, the caller's kubeconfig (empty: ~/.kube/config; Chainsaw sets
-# KUBECONFIG to its own copy of the cluster, templates/probe-up.yaml says why), and NEW_VALUES, OLD_VALUES and
-# STATE_DIR, the Chainsaw values newValues, oldValues and stateDir of deploy/k8s/drills/run.sh: the files of the new
-# and the old values (lines NAME=value, mode 600) and the test's private folder, which run.sh removes when the drill
-# ends. A value is read from those files only, never from a command line; it leaves this machine only on the stdin of
-# kubectl exec or in a private curl config file of $STATE_DIR, removed at once; nothing here prints one, nor a token.
-# kubectl always names context k3d-svp; curl takes the cluster's CA from CURL_CA_BUNDLE, which run.sh sets.
+# Helpers of the drill test reloader-rotate (chainsaw-test.yaml beside this file, make drill-k8s-reloader), sourced by
+# each script of the test from its folder (`. ./reloader.sh`). Written for bash 3.2 (the macOS /bin/bash). curl takes
+# the cluster's CA from CURL_CA_BUNDLE, which run.sh sets.
+
+# Needs CALLER_KUBECONFIG (empty: ~/.kube/config; Chainsaw sets KUBECONFIG to its own copy of the cluster) and
+# NEW_VALUES, OLD_VALUES (files of NAME=value lines, mode 600) and STATE_DIR (the test's private folder, removed by
+# run.sh). A value is read from those files only, never from a command line; it leaves this machine only on the stdin of
+# kubectl exec or in a private curl config file of $STATE_DIR, removed at once. Nothing here prints a value or a token.
 
 umask 077
 : "${CALLER_KUBECONFIG?the env of the script sets CALLER_KUBECONFIG to the caller KUBECONFIG}"
@@ -59,11 +56,10 @@ SVP_GRAFANA_ADMIN_PASSWORD svp-obs/grafana-admin
 JWT_VERIFY_KEYS svp/user-service-env svp/video-service-env svp/engagement-service-env svp/feed-service-env svp/gateway-env
 NEXT_SERVER_ACTIONS_ENCRYPTION_KEY svp/web-env'
 
-# The table "Secret -> workload" of the change of credentials (ADR-0050): each Secret whose change restarts a
-# workload, and that workload as Kind/namespace/name. The Secrets it leaves out restart nothing: pg-superuser
-# (CloudNativePG sets the password itself), the inputs of the init Jobs of svp-data (pg-roles, s3-users, kafka-users,
-# pg-backup-s3), the migrate Jobs' <service>-migrate-env, glitchtip-admin, and Alertmanager's, which it reads from
-# files. Written from the table, not from the workloads' annotations, so that a workload that does not opt in fails.
+# The table "Secret -> workload": each Secret whose change restarts a workload, and that workload as
+# Kind/namespace/name. Left out, as they restart nothing: pg-superuser (CloudNativePG sets the password itself), the
+# inputs of the init Jobs of svp-data, <service>-migrate-env, glitchtip-admin and Alertmanager's (read from files).
+# Written from the table, not from the workloads' annotations, so that a workload that does not opt in fails.
 readers='svp-data/s3-root StatefulSet/svp-data/s3
 svp-data/redpanda-bootstrap StatefulSet/svp-data/redpanda
 svp-data/redpanda-superusers StatefulSet/svp-data/redpanda

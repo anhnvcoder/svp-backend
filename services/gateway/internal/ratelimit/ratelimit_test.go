@@ -369,7 +369,6 @@ func TestMemorySweepsExpiredKeys(t *testing.T) {
 	}
 }
 
-// size is the number of keys m holds.
 func (m *memory) size() int {
 	m.mu.Lock()
 	defer m.mu.Unlock()

@@ -1,56 +1,10 @@
 #!/usr/bin/env bash
-# Drill: the threat model rows checked on the observability stack (docs/threat-model.md) on the stack of
-# `make up OBS=lgtm`. Each item prints
-# ok or FAIL lines; an item that fails does not stop the next ones (the stack is restored first),
-# and the script exits non-zero when any failed:
-#   JWT-8  a fresh user with a random email and password registers, logs in (access token), reads
-#          GET /feed/explore with the token (200) and logs in with another random password (401);
-#          with user-service stopped it logs in again and, with the token, follows a random user
-#          id: each 503, or 504 when the gateway's connection still waits on the stopped
-#          container's address, with a trace_id in the problem body; user-service starts again.
-#          The traces of these requests (Tempo), every log line of every service meanwhile (Loki)
-#          and the GlitchTip events of both 5xx hold neither the email, either password nor the
-#          access token, nor an Authorization header or a Bearer value (plain string search in the
-#          downloaded JSON);
-#   UP-8   POST /videos, upload and complete: video-service logs "video created" and "upload
-#          completed" with user_id, video_id and trace_id (Loki), and the gateway's access log line
-#          of each trace_id has the same user_id (the gateway logs no video_id: trace_id joins them);
-#   OPS-1  GET /debug/pprof/, /debug/pprof/heap and /metrics through the gateway are 404; the
-#          project publishes exactly 127.0.0.1 ports 8080 (gateway), 3001 (web), 9000 (s3, the
-#          object store's S3 API), 19092 (redpanda), 3000 (lgtm: Grafana), 8000 (glitchtip) and 9093
-#          (alertmanager), each to the same container port (every binding on the loopback), so the
-#          Collector, Prometheus, Tempo, Loki and Pyroscope publish nothing;
-#   RL-2   the gateway recreated with REDIS_URL on an unresolvable .invalid host (the native
-#          Redis is never stopped): after three logins Prometheus has
-#          svp_ratelimit_decisions_total{store="fallback"} > 0 for the new gateway instance, and
-#          Alertmanager a new RateLimitFallbackActive alert within 4 minutes of the first login;
-#          the gateway is recreated with its default settings;
-#   WEB-9  through the web client at http://localhost:3001 (threat model 4.9), as a browser
-#          without JavaScript would: GET /login?next=<a random marker in the query>, register and
-#          log in through the /register and /login forms (their Server Actions; the session
-#          cookie svp_sid stays in a private cookie jar), log out and in again, the feed (/ and
-#          /api/feed/explore), an upload (POST /api/videos, the presigned form, POST
-#          /api/videos/{id}/complete), web-vitals beacons to /rum (one valid, two whose path
-#          holds the email or the ?next= query: dropped), and one error report to /monitoring
-#          whose message and stack carry the email, the session's access and refresh tokens,
-#          the sid, the ?next= URL and the presigned form's signature and policy in a URL query
-#          (the redaction rules must take them out). Then no GlitchTip event of tag service=web
-#          received since, no trace of service.name=web (Tempo), no log line of any service
-#          meanwhile (Loki; the web client logs to stdout only) and no Prometheus series of
-#          service_name=web or of svp_web_vital_* holds the email (any case), the password,
-#          the access or refresh token (read from the session in Redis db 9, never printed),
-#          the sid, the ?next= marker, the form's policy or signature, the names upload_url,
-#          form_fields or X-Amz-Signature, or a string shaped like a JWT. Controls: the error
-#          report's event is in GlitchTip, Tempo has a trace of service web, Prometheus a
-#          series svp_web_vital_lcp_seconds_count{route="/"}, Loki the "upload completed" line
-#          of the video (so "not found" is not "no data"). The session is logged out at the end.
-# On exit (passed or not) every stack service runs again with its default settings. Reads no
-# database but the web client's session store in Redis db 9 (GET of the drill user's own
-# session); reads from .env only the GlitchTip variables, never printing a value. Registers three
-# users (two at the gateway, one through the web client). LOCAL LAB ONLY: sourcing
-# deploy/compose/lib.sh deletes the gateway's register rate limit keys in Redis db 10.
-#
-# Usage (from the repo root, stack up with OBS=lgtm): make drill-obs-threats
+# Drill of the threat model rows JWT-8, UP-8, OPS-1, RL-2, WEB-9 on `make up OBS=lgtm`; a failed item does not stop the
+# rest (the stack is restored first), and the script exits non-zero when any failed. Reads no database but the web
+# session in Redis db 9, from .env only the GlitchTip variables (never printed).
+
+# LOCAL LAB ONLY: sourcing deploy/compose/lib.sh deletes the gateway's register rate limit keys in Redis db 10.
+# Design notes: docs/threat-model.md.
 set -euo pipefail
 
 base=${1:-http://127.0.0.1:8080}
@@ -374,9 +328,8 @@ form_fields() {
 
 # web_form PAGE FIELDS_FILE: reads PAGE with the session of the cookie jar and posts its form as a browser without
 # JavaScript does, with the fields of FIELDS_FILE (a JSON object; the values reach curl in a private config file, never
-# on a command line) and the app's own origin; the answer goes to $work/form.out and form_status is set to the HTTP
-# status: 303 when the action redirects (signed in), 200 when the form comes back with an error. Sets a variable
-# instead of printing, like prom_query: a fail inside $(...) would only end the subshell.
+# on a command line) and the app's own origin; the answer goes to $work/form.out. Sets form_status (303 when the action
+# redirects, signed in; 200 when the form returns an error), not printed: a fail in $(...) would end only the subshell.
 web_form() {
   local status
   status=$(web_get "$1" "$work/form.html")

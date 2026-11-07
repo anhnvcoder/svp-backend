@@ -61,11 +61,9 @@ type dependency struct {
 
 // New returns the gateway's HTTP handler: every route on its own mux, behind Trace, Recover,
 // AccessLog and ValidUTF8, with RequireAuth in front of the routes that need a caller. Every
-// route but healthz and readyz is rate limited by limits: register, login,
-// refresh, logout and the public video by client IP, the others by the authenticated user,
-// after RequireAuth. A
-// request that matches no route gets a problem response too. userConn, videoConn, feedConn and engagementConn reach
-// user-service, video-service, feed-service and engagement-service. mediaBaseURL is the public
+// route but healthz and readyz is rate limited by limits: register, login, refresh, logout and
+// the public video by client IP, the others by the authenticated user, after RequireAuth. A
+// request that matches no route gets a problem response too. mediaBaseURL is the public
 // base that media object keys are appended to, without a trailing slash. clientAddr finds the
 // client's address, for the rate limits by IP and the client.address of spans alike. serverName
 // is the gateway's host:port, with a numeric port, named in its HTTP spans and metrics (see
@@ -80,7 +78,7 @@ func New(userConn, videoConn, feedConn, engagementConn grpc.ClientConnInterface,
 		feeds:        feedv1.NewFeedServiceClient(feedConn),
 		engagement:   engagementv1.NewEngagementServiceClient(engagementConn),
 		// engagement-service is left out on purpose: the feed degrades to items without stats
-		// when it is down (architecture §7.2), so the gateway stays ready and keeps serving.
+		// when it is down, so the gateway stays ready and keeps serving.
 		deps: []dependency{
 			{name: "user-service", health: healthpb.NewHealthClient(userConn)},
 			{name: "video-service", health: healthpb.NewHealthClient(videoConn)},
@@ -136,7 +134,7 @@ func (s *server) allow(w http.ResponseWriter, r *http.Request, c ratelimit.Class
 }
 
 // callContext returns the context of a gRPC call made for r: metadata built from scratch by
-// OutgoingContext (threat model IN-1) and the call deadline.
+// OutgoingContext and the call deadline.
 func callContext(r *http.Request) (context.Context, context.CancelFunc) {
 	return context.WithTimeout(httpx.OutgoingContext(r.Context()), callTimeout)
 }
@@ -204,7 +202,7 @@ type tokenResponse struct {
 }
 
 // login checks the client IP before reading the body, and the (IP, email) pair once the body
-// decodes (threat model JWT-4).
+// decodes.
 func (s *server) login(w http.ResponseWriter, r *http.Request) {
 	ip := ratelimit.ClientIP(r, s.clientAddr)
 	if !s.allow(w, r, ratelimit.LoginIP, ip) {
@@ -241,7 +239,7 @@ type refreshTokenRequest struct {
 // token is the credential. Both check the client IP before reading the body (class refresh). A
 // missing or empty refresh_token goes on to user-service, which answers it like any other token
 // it cannot use. The refresh token is a credential: it never goes into a log line, a span or a
-// problem (threat model JWT-8).
+// problem.
 //
 // The Refresh call is never retried, not even on UNAVAILABLE: the presented token is used up, so
 // a second attempt would be a reuse and revoke the whole family.
@@ -327,8 +325,8 @@ type userProfile struct {
 }
 
 // getMe reads the caller's profile with GetProfiles. Unlike the authors added to videos, the
-// profile is the answer itself, so the call has the whole call deadline and its errors go
-// through the §8.4 table. GetProfiles leaves out an id without a user, which here means the
+// profile is the answer itself, so the call has the whole call deadline and its errors are
+// mapped like any other. GetProfiles leaves out an id without a user, which here means the
 // token outlived its account (a database reset): 404 USER_NOT_FOUND, the reason user-service
 // gives on the other routes of the caller's own profile.
 func (s *server) getMe(w http.ResponseWriter, r *http.Request) {
@@ -355,7 +353,7 @@ type profileUpdate struct {
 
 // updateMe changes the caller's display name. A missing or empty display_name goes on to
 // user-service, which refuses it like any other invalid name (INVALID_DISPLAY_NAME). The name
-// is never logged: users may put their real name in it (threat model WEB-18).
+// is never logged: users may put their real name in it.
 func (s *server) updateMe(w http.ResponseWriter, r *http.Request) {
 	var req profileUpdate
 	if !httpx.DecodeJSON(w, r, &req) {
@@ -398,7 +396,7 @@ type initUploadResponse struct {
 }
 
 // initUpload creates the video and returns the presigned POST. upload_url and form_fields are a
-// short-lived credential: they go to the client only and never to the log (threat model UP-2).
+// short-lived credential: they go to the client only and never to the log.
 // The optional Idempotency-Key goes on as the request_id of InitUpload, which answers a repeated
 // call with the video of the first.
 func (s *server) initUpload(w http.ResponseWriter, r *http.Request) {
@@ -518,8 +516,7 @@ type publicVideoStats struct {
 // getPublicVideo serves the public share page. It never reads the
 // Authorization header, a wrong token included, so nothing here has a caller: GetPublicVideo
 // and GetStats go out without a token, and the answer is the same for everyone. The rate
-// limit by client IP comes before any call, so a caller over it costs no service anything
-// (threat model WEB-15).
+// limit by client IP comes before any call, so a caller over it costs no service anything.
 //
 // Only a 200 may be kept by a shared cache, for 30 seconds: counters lag by about a minute
 // anyway. Everything else is no-store: a 404 is heuristically cacheable (RFC 9110 section
@@ -626,10 +623,9 @@ func (s *server) mediaURL(key string) string {
 
 func (s *server) toVideoResponse(v *videov1.Video) videoResponse {
 	out := videoResponse{
-		VideoID:  v.GetVideoId(),
-		AuthorID: v.GetAuthorId(),
-		Title:    v.GetTitle(),
-		// VIDEO_STATUS_READY → READY.
+		VideoID:      v.GetVideoId(),
+		AuthorID:     v.GetAuthorId(),
+		Title:        v.GetTitle(),
 		Status:       strings.TrimPrefix(v.GetStatus().String(), "VIDEO_STATUS_"),
 		CreatedAt:    v.GetCreatedAt().AsTime(),
 		PlaylistURL:  s.mediaURL(v.GetPlaylistKey()),
@@ -668,7 +664,7 @@ func (s *server) unlike(w http.ResponseWriter, r *http.Request) {
 }
 
 // recordView answers 202 without a body: the view is queued, and view_count catches up later.
-// A user's view of a video counts once a minute (threat model RL-3): a repeat gets the same 202
+// A user's view of a video counts once a minute: a repeat gets the same 202
 // without reaching engagement-service, so the client learns nothing and has nothing to retry.
 // Only a canonical video id gets a key; any other goes on as before and engagement-service
 // rejects it. When the call fails the key is dropped in the background, without holding the
@@ -741,7 +737,7 @@ func (s *server) exploreFeed(w http.ResponseWriter, r *http.Request) {
 }
 
 // pageQuery reads the paging query of a feed or a video list: the cursor goes on unread as
-// page_token (architecture §8.3) and page_size must be an integer; their values are the
+// page_token and page_size must be an integer; their values are the
 // service's to check. On a page_size that is not an integer, an empty one included (only an
 // absent page_size means the default), it writes the 400 and returns false.
 func pageQuery(w http.ResponseWriter, r *http.Request) (size int32, token string, ok bool) {
@@ -820,8 +816,8 @@ func (s *server) addExtras(r *http.Request, videoIDs, authorIDs []string) (map[s
 }
 
 // getStats returns the stats of ids by video id, or nil when GetStats fails. The error is only
-// logged: a slow or failing engagement-service must not fail the answer (architecture §7.2),
-// so it does not go through the §8.4 table. While engagement-service's circuit breaker is open
+// logged: a slow or failing engagement-service must not fail the answer, so the error is not
+// mapped to a response. While engagement-service's circuit breaker is open
 // the call fails at once, without waiting for statsTimeout.
 func (s *server) getStats(r *http.Request, ids []string) map[string]*videoStats {
 	ctx, cancel := context.WithTimeout(httpx.OutgoingContext(r.Context()), statsTimeout)
@@ -847,8 +843,7 @@ func (s *server) getStats(r *http.Request, ids []string) map[string]*videoStats 
 
 // getAuthors returns the profiles of ids, each asked once, by user id, or nil when GetProfiles
 // fails. As in getStats the error is only logged, and while user-service's circuit breaker is
-// open the call fails at once. The log line holds no profile: display names may be real names
-// (threat model WEB-18).
+// open the call fails at once. The log line holds no profile: display names may be real names.
 func (s *server) getAuthors(r *http.Request, ids []string) map[string]*profile {
 	seen := make(map[string]bool, len(ids))
 	unique := make([]string, 0, len(ids))

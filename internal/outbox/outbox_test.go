@@ -59,7 +59,6 @@ func (b *lockedBuffer) Write(p []byte) (int, error) {
 	return b.buf.Write(p)
 }
 
-// records returns the decoded JSON log lines whose msg is msg.
 func (b *lockedBuffer) records(t *testing.T, msg string) []map[string]any {
 	t.Helper()
 	b.mu.Lock()
@@ -134,7 +133,6 @@ func start(t *testing.T, r *Relay) (stop func()) {
 	return stop
 }
 
-// newEvent returns a video.uploaded event for video id.
 func newEvent(id string) *videov1.VideoEvent {
 	return &videov1.VideoEvent{
 		Meta:  NewMeta(),
@@ -215,7 +213,6 @@ func poll(t *testing.T, cl *kgo.Client, d time.Duration) []*kgo.Record {
 	return fetches.Records()
 }
 
-// eventID returns the event_id in the envelope of a record's value.
 func eventID(t *testing.T, r *kgo.Record) string {
 	t.Helper()
 	var ev videov1.VideoEvent

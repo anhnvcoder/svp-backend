@@ -1,16 +1,15 @@
 #!/usr/bin/env bash
 # Tests for the Chainsaw tests of make drill-k8s-gitops (deploy/k8s/drills/gitops/), without a cluster:
+
 #   - external-secrets and argocd-metrics, whose checks are scripts, run as they are with chainsaw test --no-cluster in a
-#     throwaway git repository holding a copy of deploy/k8s/drills/ and of the chart files they read at the commit the
-#     cluster runs its charts at, a fake kubectl first on PATH (and for argocd-metrics a fake nc and curl standing for
-#     the port-forward and Prometheus): each case must pass or fail with its own message, and no Secret value may reach
-#     the output;
+#     throwaway git repository holding a copy of deploy/k8s/drills/ and of the chart files they read, a fake kubectl
+#     first on PATH (and for argocd-metrics a fake nc and curl standing for the port-forward and Prometheus): each case
+#     must pass or fail with its own message, and no Secret value may reach the output;
+
 #   - env, whose checks are declarative, by its own assertion trees (read from the file with yq, YQ_IMAGE of the
 #     Makefile, through Docker without network) given to chainsaw assert against made-up objects: an object the assert
 #     must match, or the error must not (chainsaw assert succeeding on an object means the error operation fails).
 # chainsaw is the pinned one (make tools); bash, git, jq and Docker.
-#
-# Usage, from anywhere: deploy/k8s/drills/gitops/gitops-test.sh
 set -euo pipefail
 
 here=$(cd "$(dirname "$0")" && pwd)
@@ -52,10 +51,11 @@ gone_rev=$(printf '%040d' 7)
 
 # The fake kubectl, from the files of $FAKE_DIR: ExternalSecrets of es (one NAMESPACE/NAME per line, each Ready with key
 # "key", unless listed in not-ready; its Secret of type Opaque with that key, unless listed in no-secret, or with keys
-# "key,other" when listed in other-keys), Application svp-cluster rendering the lines of rendered (NAMESPACE/NAME, then
-# prune for one with requiresPruning) at chart revision charts-rev (FAKE_APP_FAIL=1: it cannot be read), Application
-# svp-observability at that revision, the Applications of apps (one name per line); a port-forward that runs until
-# killed.
+# "key,other" when listed in other-keys),
+
+# Application svp-cluster rendering the lines of rendered (NAMESPACE/NAME, then prune for one with requiresPruning) at
+# chart revision charts-rev (FAKE_APP_FAIL=1: it cannot be read), Application svp-observability at that revision, the
+# Applications of apps (one name per line); a port-forward that runs until killed.
 mkdir -p "$work/bin"
 cat >"$work/bin/kubectl" <<'EOF'
 #!/usr/bin/env bash

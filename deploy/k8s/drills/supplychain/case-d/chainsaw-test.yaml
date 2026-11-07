@@ -1,8 +1,8 @@
 # Supply chain drill, case d: an image of the local registry (k3d-svp-registry:5111) and one of Docker Hub by digest,
-# each sent as a server-side dry run of a pod of svp: refused by the prefix rule, each answer within 1 s (the
-# operation's timeout: Kyverno asks no registry for an image outside the prefix). The local image is the first one a
-# pod of svp runs, else a dev image of that registry by name. Declarative: Chainsaw's create with dryRun, the expected
-# admission error checked by its message.
+# each as a dry run of a pod of svp: refused by the prefix rule, each answer within 1 s (the operation's timeout:
+# Kyverno asks no registry for an image outside the prefix). The local image is the first one a pod of svp runs, else a
+# dev image of that registry by name.
+
 # Helpers, inputs and the verdict lines: ../lib.sh.
 apiVersion: chainsaw.kyverno.io/v1alpha1
 kind: Test

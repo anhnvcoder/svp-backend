@@ -1,7 +1,6 @@
 # Defaults shared by the seven releases of svp-service (the six Go services and the web client). Each release's own
 # values are base/services/<service>.yaml of svp-gitops; the release name is the service name, which names the pods'
 # label app.kubernetes.io/name, the Service, the ServiceAccount and the Secrets.
-# Installed by deploy/k8s/install.sh as wave 7 of argocd/apps/components.json of svp-gitops, once every dependency runs.
 
 image:
   # -- GitOps path: ghcr.io/anhnvcoder/svp-backend/<service>, from the release's values file. Dev path: `make
@@ -59,7 +58,7 @@ podAnnotations: {}
 # -- A service with a database runs `migrate` with its migrator role in a Job before each install and upgrade.
 migrate: false
 
-# -- Every container of the project has requests and limits (threat model FF-3); the values file sets them per service.
+# -- Every container of the project has requests and limits; the values file sets them per service.
 resources: {}
 # -- Requests and limits of the migrate Job container.
 migrateResources:
@@ -93,8 +92,7 @@ preStopSleepSeconds: null
 
 # -- Pods each release may be reached from (ingressFrom) and may reach (egressTo), by name of the peers below; DNS is
 # open to every pod of svp already (chart svp-cluster). The namespace denies everything else in both directions, so
-# the lists are the whole of a service's traffic (IN-2, FF-5). Ingress is opened on
-# the service's own port only.
+# the lists are the whole of a service's traffic. Ingress is opened on the service's own port only.
 ingressFrom: []
 # -- Peers each release may reach, by name; see `ingressFrom`.
 egressTo: []
@@ -165,8 +163,8 @@ peers:
 # objects on Amazon S3), by address: name of a peer above -> list of {cidr, ports}, each one rule of the egress of
 # every release whose egressTo names that peer, and of the migrate Job for postgres. Such an entry takes the place of
 # the peer's pods. Empty: every peer is the pods above. On EKS, postgres is the database subnets' CIDRs on 5432; s3 is
-# TCP 443 to each IPv4 range AWS publishes for S3 in the cluster's region (the addresses the VPC's gateway endpoint
-# routes; they change over time, so the list is read when the cluster's Terraform is applied), never 0.0.0.0/0:
+# TCP 443 to each IPv4 range AWS publishes for S3 in the cluster's region (they change over time, so the list is read
+# when the cluster's Terraform is applied), never 0.0.0.0/0:
 # media-worker runs ffmpeg on uploaded files, and a worker taken over by a crafted file must not reach any other host.
 # s3 also holds the EKS Pod Identity Agent, 169.254.170.23/32 TCP 80, where the pods that reach S3 (the only ones with
 # an AWS role) get their credentials. An entry of 0.0.0.0/0 or ::/0 fails the render.

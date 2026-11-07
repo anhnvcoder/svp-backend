@@ -1,14 +1,14 @@
 # IN-9 of the threat model (docs/threat-model.md): Postgres lets no one in without a password. The pg_hba rules of the
-# primary of Cluster svp-data/svp-pg have no trust, every TCP rule is scram-sha-256 or cert, and the last rule is host all
-# all all scram-sha-256 (CloudNativePG's default, to which the project adds nothing). From GlitchTip's pod (allowed to
-# 5432) a connection without a password, as postgres and as svp_user_app, with and without TLS, is refused with "no
-# password supplied"; control: a wrong password is refused with "password authentication failed" (the server checks it).
-# Inside the primary, TCP to 127.0.0.1 without a password is refused too (the old hole of the host's Postgres was trust
-# on loopback).
-#
-# Reads Postgres only: SELECT on pg_hba_file_rules, through peer login on the pod's socket as the image's postgres user
-# (the one way in without a password, by design). Each check and control is one step; a failed one marks the test failed
-# and the next steps still run.
+# primary of Cluster svp-data/svp-pg have no trust, every TCP rule is scram-sha-256 or cert, and the last rule is host
+# all all all scram-sha-256 (CloudNativePG's default, to which the project adds nothing).
+
+# From GlitchTip's pod (allowed to 5432) a connection without a password, as postgres and as svp_user_app, with and
+# without TLS, is refused with "no password supplied"; control: a wrong password is refused with "password
+# authentication failed" (the server checks it). Inside the primary, TCP to 127.0.0.1 without a password is refused
+# too (the old hole of the host's Postgres was trust on loopback).
+
+# Reads Postgres only: SELECT on pg_hba_file_rules, through peer login on the pod's socket as the image's postgres
+# user (the one way in without a password, by design).
 apiVersion: chainsaw.kyverno.io/v1alpha1
 kind: Test
 metadata:

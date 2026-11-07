@@ -1,14 +1,12 @@
-# Supply chain drill, case g: the admission controller down. Its Deployment keeps its replica, but the pod is stopped
-# and its replacement cannot be scheduled (strategy Recreate and a nodeSelector no node has), as when it crashes or its
-# node is gone. Not by scaling it to 0: Kyverno v1.19.1 deletes all its webhook configurations when it stops while its
-# Deployment asks for 0 replicas (IsGoingDown, pkg/utils/runtime/utils.go), so a scale to 0 lets every pod through.
-# A pod of svp is refused (the webhook fails closed), a pod of namespace svp-probe (made for the case by the shared
-# template, Pod Security restricted, outside the webhook's scope) is admitted; the Deployment still wants its replica
-# and has no ready pod between the probes. Then, also when a step failed, the Deployment is put back and ready, and on
-# the GitOps cluster the automated sync of Argo CD is on again: it is turned off first, the root Application svp-root
-# then Application kyverno, so Argo CD does not undo the change in the middle of the case, and put back kyverno first.
-# The webhooks of the policy (selectors, failurePolicy, rules) are the same after Kyverno came back as before.
-# The image sent is the signed release a pod of svp runs, else the local registry's image (the dev path).
+# Supply chain drill, case g: the admission controller down, its pod stopped and its replacement unschedulable (strategy
+# Recreate, a nodeSelector no node has): a pod of svp is refused (the webhook fails closed), a pod of svp-probe (outside
+# the webhook's scope) is admitted. Not by scaling to 0: Kyverno v1.19.1 then deletes all its webhook configurations
+# (IsGoingDown, pkg/utils/runtime/utils.go), so every pod would pass.
+
+# Afterwards, also when a step failed, the Deployment is put back and ready and the policy's webhooks are as before. On
+# the GitOps cluster the automated sync of Argo CD is turned off first (svp-root, then kyverno) so it does not undo the
+# change, and put back kyverno first. The image sent is the signed release a pod of svp runs, else the local registry's.
+
 # Helpers, inputs and the verdict lines: ../lib.sh.
 apiVersion: chainsaw.kyverno.io/v1alpha1
 kind: Test

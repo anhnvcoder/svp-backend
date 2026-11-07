@@ -38,12 +38,13 @@ liệt kê target):
   `make test`, `make cover`, `make check` (`make test TESTFLAGS=-count=1` chạy lại không dùng cache, như CI), `LINTFLAGS`
   thêm cờ cho golangci-lint của `make lint`.
 - `make zizmor` ([ADR-0041](../adr/0041-github-hardening.md) (g)): lint bảo mật workflow bằng zizmor `ZIZMOR_IMAGE` (image chính thức ghim `tag@sha256`,
-  repo gắn chỉ đọc) với `--persona=regular` trên cả repo; mọi finding làm lệnh thoát khác 0. Có `GH_TOKEN` thì chạy thêm audit online (impostor
+  repo gắn chỉ đọc) với `--persona=regular` trên cả repo; mọi finding làm lệnh thoát khác 0 (mã 11 đến 14). Image đa kiến trúc: cùng một tham chiếu trên máy dev arm64 và runner amd64.
+  Có `GH_TOKEN` thì chạy thêm audit online (impostor
   commit, action có lỗ hổng), không thì offline (mặc định trên máy). `ZIZMOR_FORMAT=github` in annotation của Actions, `ZIZMOR_SARIF=<đường dẫn>`
   ghi SARIF (không chặn). Ngoại lệ ở `.github/zizmor.yml`, mỗi mục một comment lý do. Không thuộc `make check`; CI chạy nó ở job `zizmor` của `ci.yml`.
 - `make docs-check [DOCS='<file hay glob>']`: kiểm tĩnh mọi file Markdown. Chạy lần lượt markdownlint-cli2 (`MARKDOWNLINT_IMAGE`, luật
   ở `.markdownlint.yaml`, mỗi luật tắt hay chỉnh có comment lý do) và lychee `--offline --include-fragments` (`LYCHEE_IMAGE`, cấu hình ở
-  `lychee.toml`; link nội bộ và anchor heading, link ra site khác không kiểm). Hai image chính thức ghim `tag@sha256`, chạy
+  `lychee.toml`; link nội bộ và anchor heading, link ra site khác không kiểm, vì mạng không ổn định và một kiểm tra phụ thuộc mạng đỏ vì lý do nằm ngoài thay đổi). Hai image chính thức ghim `tag@sha256`, chạy
   `--network none`, repo gắn chỉ đọc; link tương đối ra ngoài repo (tới `plans/`) báo lỗi. Cả hai công cụ luôn chạy; lệnh thoát khác 0 khi
   một trong hai báo lỗi. Mặc định là mọi `.md` git theo dõi và file mới chưa theo dõi; `DOCS` thu hẹp (đường dẫn tương đối gốc repo).
 - `make helm-docs`, `make helm-docs-check`: `deploy/helm/svp-service/README.md` (bảng values của chart dùng chung bởi bảy release) sinh bởi
@@ -57,24 +58,48 @@ liệt kê target):
   `PKGS=`, xem từng dòng bằng `go tool cover -html=cover.out`.
 - `make vulncheck` ([ADR-0030](../adr/0030-devsecops-supplement.md) §1, trong `make check-go` trước test, cần mạng tới
   `vuln.go.dev`, không biến bỏ qua): govulncheck `-format json ./...` bằng đúng Go của directive `go` trong `go.mod`
-  (`GOTOOLCHAIN=go<directive>`; directive phải có số patch, `go 1.27.3`), rồi gate `tools/vulngate` quyết: lỗ hổng mức symbol
+  (`GOTOOLCHAIN=go<directive>`, tải bản đó khi Go đã cài khác; directive phải có số patch, `go 1.27.3`; nhờ vậy kết quả đúng với binary
+  phát hành), rồi gate `tools/vulngate` quyết (govulncheck thoát 0 ở chế độ JSON bất kể tìm thấy gì; output ghi ra file, không qua pipe, để
+  chính govulncheck lỗi, như không có mạng tới `vuln.go.dev` hay lỗi build, cũng làm target thất bại): lỗ hổng mức symbol
   (code gọi tới) đỏ, in id, module@version, bản sửa và trace; mức module, package chỉ một dòng `INFO`; mọi dòng `FROM golang:` của
   `deploy/docker/*.Dockerfile` phải mang đúng bản Go đã quét (lệch, tag không đủ ba số, hay không còn dòng nào là đỏ). Nâng Go thì
   cùng một PR đổi directive, hai Dockerfile và `go-version` của workflow. Ngoại lệ chỉ ở `.govulncheck-ignore.json` (gốc repo,
   chỉ tạo khi có mục đầu tiên; hiện không có): khoá `ignore`, mỗi mục đúng `id`, `module`, `version` (như frame đầu, `stdlib`
   cho thư viện chuẩn), `statement` có nội dung, `expired_at` sau hôm nay (UTC) và không quá 30 ngày; chỉ cho lỗ hổng chưa có bản
   vá (có bản vá thì nâng), mục trùng, hết hạn hay không còn khớp finding nào là đỏ.
-- `make regal-lint` và `make regal-fix`: lint Rego của `deploy/ci/ignorefile-policies/` và `deploy/ci/gitops-tree-policies/` bằng Regal
-  (linter của dự án OPA) từ image chính thức `REGAL_IMAGE` ghim `tag@sha256`, `--network none`, mỗi thư mục một lượt như
-  `make conftest-verify`. `regal-lint` chỉ đọc, exit khác 0 khi có vi phạm (cả mức warning); `regal-fix` ghi vào hai thư mục
-  các sửa tự động (`opa fmt`, danh sách ở `regal fix --help`), phần còn lại sửa tay. Luật ở `.regal/config.yaml`: mặc định, chỉ tắt
-  hay chỉnh luật nào có lý do ghi ngay trong file (policy do conftest đọc: namespace theo package, `data.*` do `--data` đưa vào,
-  độ dài dòng 200 vì thông điệp là một chuỗi không ngắt được). Không thuộc `make check`; CI chạy `make regal-lint` ở job
-  `config`, hook `pre-commit` chạy khi commit đổi `*.rego`.
+- `make kyverno-test`: policy trên manifest mà đường GitOps render (`deploy/ci/gitops-policies/`), không cluster, không mạng; Kyverno CLI từ
+  image chính thức ghim digest, là minor của Kyverno mà các cluster chạy (chart `kyverno` của `argocd/apps/components.json` ở
+  `svp-gitops`), để CLI đọc policy như admission. Luật và fixture ở [`ci.md`](ci.md#gitops-checksh-values-checksh-và-policy-kyverno).
+- `make helm-check`: mọi chart của working tree, như đường GitOps render với cấu hình deploy của `svp-gitops`: bản clone mà `gitops_dir`
+  của `deploy/k8s/lib.sh` chỉ tới (`../gitops` cạnh checkout chính, hay `SVP_GITOPS_DIR`, mà CI trỏ vào bản clone của `make
+  gitops-clone`, tức `main` của `svp-gitops`). Đó là `deploy/ci/gitops-check.sh --worktree`, check mà `svp-gitops` chạy trên thay đổi
+  của chính nó, với chart của working tree thay cho commit mà mỗi môi trường ghim; các bước và luật của nó ở
+  [`ci.md`](ci.md#gitops-checksh-values-checksh-và-policy-kyverno). Cần Docker và mạng tới các repo chart. Thay đổi cần giá trị mới
+  trong `base/` thì merge vào `svp-gitops` trước, rồi mới vào đây.
+- `make conftest-verify`: kiểm bằng conftest, từ image chính thức ghim digest và không mạng, các policy Rego của `deploy/ci/ignorefile-policies/`
+  (luật của `.trivyignore.yaml`, `.grype.yaml`, `deploy/ci/trivy-config-ignore.yaml`) và `deploy/ci/gitops-tree-policies/` (luật của một
+  cây `svp-gitops`); chi tiết ở [`ci.md`](ci.md#policy-rego). `yq` (`YQ_IMAGE`) bắt khoá viết hai lần, mà parser của conftest che mất.
+- `make trivy-config`: quét misconfiguration của Dockerfile, chart và manifest bằng trivy ghim. Chỉ báo cáo: exit 0 bất kể tìm thấy
+  gì. Phát hiện là lựa chọn có chủ đích thì `deploy/ci/trivy-config-ignore.yaml` bỏ, mỗi mục cho đường dẫn của nó và tới `expired_at`,
+  lý do ghi trong file. `TRIVY_CONFIG_SARIF` đặt thành đường dẫn tuyệt đối thì ghi báo cáo SARIF ở đó (CI tải lên); không đặt thì in
+  bảng ra terminal. Repo được mount chỉ đọc và container chạy bằng uid của người gọi, nên báo cáo thuộc về họ; bộ policy mà trivy
+  tải về nằm trong cache bên trong container.
+- `make grype`: cổng grype của pipeline image, chạy từ một máy: `deploy/ci/scan-gate.sh --grype` chạy grype trên SBOM SPDX với
+  `--fail-on critical` và `.grype.yaml` (Critical nào còn lại sau luật của nó là đỏ). `SBOM=<đường dẫn tuyệt đối>` quét tài liệu đó;
+  `IMAGE=<ref>@sha256:<digest> [ARCH=amd64|arm64]` trước hết cho syft ghim đọc image của nền tảng đó từ registry, ẩn danh. grype cần
+  mạng cho DB của nó, và DB không tải được thì target thất bại. `SVP_GRYPE_CACHE`, khi đặt, giữ DB ở thư mục đó (khoảng 3 GB sau
+  khi giải nén); không đặt thì ở `$TMPDIR`.
+- `make regal-lint` và `make regal-fix`: lint Rego của hai thư mục policy trên bằng Regal (linter của dự án OPA) từ image chính thức
+  `REGAL_IMAGE` ghim `tag@sha256`, `--network none`. `regal-lint` chỉ đọc, exit khác 0 khi có vi phạm (cả mức warning); `regal-fix` ghi
+  các sửa tự động (`opa fmt`, danh sách ở `regal fix --help`), phần còn lại sửa tay. Luật ở `.regal/config.yaml`: mặc định, chỉ tắt hay
+  chỉnh luật nào có lý do ghi ngay trong file (policy do conftest đọc: namespace theo package, `data.*` do `--data` đưa vào, độ dài
+  dòng 200 vì thông điệp là một chuỗi không ngắt được). Không thuộc `make check`; CI chạy ở job `config` ([`ci.md`](ci.md)), hook `pre-commit`
+  chạy khi commit đổi `*.rego`.
 - `make chainsaw-lint` ([ADR-0050](../adr/0050-bash-to-standard-tools.md) mục 2): kiểm tĩnh các diễn tập Chainsaw dưới
   `deploy/k8s/drills/`, không cần cluster. Mỗi file YAML ở đó phải là đúng một trong ba loại: `chainsaw-test.yaml` (`chainsaw lint
   test`), `.chainsaw.yaml` (`chainsaw lint configuration`), StepTemplate dưới `templates/` (kubeconform `-strict` từ
-  `KUBECONFORM_IMAGE`, `--network none`); file khác là lỗi, nêu tên file. `chainsaw lint` ở `CHAINSAW_VERSION` chỉ nhận `test` và
+  `KUBECONFORM_IMAGE`, `--network none`); file khác là lỗi, nêu tên file (file không được gì kiểm thì không phải file xanh). kubeconform lỗi với kind không có schema, nên file
+  kind khác dưới `templates/` đỏ. `chainsaw lint` ở `CHAINSAW_VERSION` chỉ nhận `test` và
   `configuration`, nên schema StepTemplate của đúng tag đó chép vào `deploy/k8s/drills/.schemas/json/` (chạy offline), `.schemas/source`
   ghi URL nguồn và target đỏ khi tag trong URL khác `CHAINSAW_VERSION`: nâng version thì chép lại schema từ tag mới. Chainsaw ghim
   `CHAINSAW_VERSION` ở `Makefile` (`# renovate:`), cài bằng `make tools`. Cấu hình chung `deploy/k8s/drills/.chainsaw.yaml` (chạy
@@ -85,8 +110,11 @@ liệt kê target):
   người gọi (`env('KUBECONFIG')`) và luôn ghi `--context k3d-svp`; bước `apply`, `wait` dùng client của Chainsaw, nên `probe-up.yaml`
   dừng FAIL khi Chainsaw không chạy trên cùng server với context `k3d-svp` (thiếu `--kube-context k3d-svp`).
 - `make fuzz [FUZZTIME=30s] [PKGS=…]` (ADR-0030 §2): chạy lần lượt mọi `FuzzXxx` (mỗi gói một `fuzz_test.go`: `pagetoken`,
-  `authtoken`, `objstore`, `httpx` của gateway, `server` của user-service; 10 target) bằng `go test -fuzz`, không `-race`,
-  dừng ở target đầu tiên đỏ và in đường dẫn input go ghi ra dưới `testdata/fuzz/<target>/`; seed chạy trong `make test`. Lỗi
+  `authtoken`, `objstore`, `httpx` của gateway, `server` của user-service; 10 target) bằng `go test -fuzz`, vốn nhận đúng một target
+  của một package mỗi lượt, nên các target chạy lần lượt và lần đỏ đầu tiên dừng phần còn lại, in đường dẫn input go ghi ra dưới
+  `testdata/fuzz/<target>/`. Target được tìm bằng cách đọc các file `*_test.go`, không phải `go test -list`: liệt kê chạy `TestMain`,
+  mà `TestMain` có thể dựng một database. Không `-race`: nó làm fuzz chậm đi nhiều lần, và `make test` đã chạy mọi seed với `-race`.
+  Corpus sinh ra ở lại trong `GOCACHE`. Seed chạy trong `make test`. Lỗi
   tìm ra thì sửa hàm và commit input đó (test đỏ trước khi sửa). Chỉ chạy tay, không có trong CI.
 
 ## Web client chạy từ checkout này

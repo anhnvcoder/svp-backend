@@ -1,10 +1,11 @@
 -- Roles and database of one service: a migrator that owns the schema and an app role limited to DML, so a running
 -- service that is compromised cannot change its schema. Idempotent: run it any number of times, as a superuser (the
 -- local Postgres, CloudNativePG's svp-pg) or as a role with only CREATEROLE and CREATEDB (the master user of Amazon
--- RDS, a member of rds_superuser, which is no superuser). bootstrap.sh runs it once per service with
---   psql -v db=<database> -v migrator=<role> -v app=<role>
--- and the two role passwords in the environment variables SVP_MIGRATOR_PASSWORD and
--- SVP_APP_PASSWORD, so they never appear on a command line.
+-- RDS, a member of rds_superuser, which is no superuser).
+
+-- bootstrap.sh runs it once per service with psql -v db=<database> -v migrator=<role> -v app=<role> and the two role
+-- passwords in the environment variables SVP_MIGRATOR_PASSWORD and SVP_APP_PASSWORD, so they never appear on a command
+-- line.
 \set ON_ERROR_STOP on
 -- Terse errors: no "LINE n:" excerpt that could echo a password back.
 \set VERBOSITY terse

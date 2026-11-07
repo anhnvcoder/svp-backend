@@ -27,6 +27,35 @@ Loại tài liệu (Diátaxis): **reference**, tra cứu khi cần một lệnh 
   vài lần chạy trong một giờ sẽ cạn burst 20. Việc xoá này **chỉ dùng ở lab local**, không trỏ script vào stack dùng
   chung. Smoke luôn đòi master có version và kiểm đủ `Cache-Control` (mọi bản phát hành ghi key có version từ
   [ADR-0029](../adr/0029-immutable-media-versions.md); biến chuyển tiếp `SVP_SMOKE_LEGACY_MEDIA` đã bỏ, [ADR-0037](../adr/0037-mainpath-standard-tools.md) §4).
+- Postgres và Redis là bản native trên host (`127.0.0.1:5432`, `127.0.0.1:6379`), service gọi qua `host.docker.internal`; mỗi
+  service có Redis db riêng nên không service nào đọc khoá của service khác. Không service lõi nào phụ thuộc service của `obs`.
+  Cổng publish chỉ trên loopback của host: gateway, web client (3001), API S3 của object store (9000), listener cho host của
+  Redpanda và, khi có `obs`, Grafana (3000), Alertmanager (9093), GlitchTip (8000). Cổng gRPC nằm trong mạng compose
+  ([threat model](../threat-model.md) IN-2); Collector (4317) và Prometheus (9090), Tempo (3200), Loki (3100), Pyroscope (4040) của LGTM
+  cũng vậy, từ host đọc chúng qua datasource proxy của Grafana.
+- Ba mạng. `default` chứa mọi thứ trừ media-worker và web. `worker` (internal, không route ra ngoài) chỉ chứa media-worker, Redpanda,
+  object store và Collector, nên worker chạy ffmpeg trên file người dùng tải lên không tới được gateway, service gRPC, Postgres,
+  LGTM hay internet (threat model FF-4, FF-5); Collector ở đó chỉ nhận telemetry, không làm proxy cho worker. `web` chỉ chứa web,
+  gateway và, khi có `obs`, GlitchTip và Collector: server Next render mọi trang thay cho trình duyệt, nên code chạy được trong đó
+  (lớp RCE của React Server Components, CVE-2025-55182) chỉ tới được API HTTP của gateway, tracker lỗi nó báo tới và Collector nó gửi
+  telemetry tới. Nó không tới được service gRPC (chúng kiểm access token của người gọi nhưng không kiểm container nào gọi,
+  [ADR-0042](../adr/0042-caller-identity-grpc.md), nên code trong web cầm token của một phiên sẽ gọi chúng như user đó, vượt
+  rate limit và kiểm đầu vào của gateway; threat model IN-2), không tới được Redpanda (compose không xác thực) hay object store theo
+  tên compose. Mạng `web` không internal vì web tới Redis db của nó trên host qua `host.docker.internal`; chính tên đó mở mọi
+  cổng loopback của host cho container, nên code chạy trong web vẫn tới được những gì publish ở đó (listener host 19092 của
+  Redpanda không xác thực, cổng 9000 của object store, các Redis db khác, Postgres với luật trust và, khi có `obs`, Grafana,
+  Alertmanager, GlitchTip). Chấp nhận ở lab compose, nơi Redis là của host (threat model WEB-13); bản k3d đóng bằng NetworkPolicy.
+- Web client mở bằng `http://localhost:3001`, là `APP_ORIGIN` mà redirect sau đăng nhập và form của cookie dựa theo.
+  `http://127.0.0.1:3001` cũng đăng nhập được, với cookie phiên riêng (trình duyệt gửi `Sec-Fetch-Site: same-origin` ở đó, kiểm CSRF
+  chấp nhận trước khi so `Origin`), nhưng không phát và không tải video lên được vì CORS của bucket chỉ cho origin `localhost`.
+- `TOPIC_REPLICAS` ([`deploy/redpanda/create-topics.sh`](../../deploy/redpanda/create-topics.sh)) là replication factor của mọi
+  topic: 1 trên một broker (compose, mặc định), 3 trên ba broker. Redpanda không có `min.insync.replicas`: mỗi partition là một
+  nhóm Raft, và ghi với `acks=all` (mặc định của franz-go) được trả lời khi đa số replica đã giữ nó, 2 trong 3
+  ([ADR-0049](../adr/0049-kafka-prd.md)). Giá trị chỉ áp cho topic lần chạy này tạo: `--if-not-exists` để topic đã có giữ số replica
+  nó có; muốn đổi thì `rpk topic alter-config <topic> --set replication.factor=<n>`.
+- Job `s3-init` chạy với image của object store: `curl` của nó ký từng request (SigV4) bằng user root và gọi API S3 cùng API quản trị
+  của RustFS (`/rustfs/admin/v3`, nhận JSON thường). Idempotent: chạy lại giữ bucket và object, đặt lại secret key và policy của
+  user, bucket policy và CORS theo đúng script và môi trường của nó. Không in secret.
 - `make up OBS=lgtm|elastic|off` (ADR-0011 §9–10, ADR-0012). Không đặt `OBS`: chỉ `core`, SDK telemetry bật nhưng không có
   Collector để tới (export lỗi bị bỏ, không làm service lỗi). `OBS=lgtm` thêm profile `obs`: `otelcol` (Collector, không
   publish), `lgtm` (Grafana `127.0.0.1:3000` cùng Prometheus, Loki, Tempo, Pyroscope trong một container),
@@ -65,7 +94,11 @@ Loại tài liệu (Diátaxis): **reference**, tra cứu khi cần một lệnh 
   source map `svp-sourcemaps` scope `project:releases`), thêm `SENTRY_DSN`, `SENTRY_AUTH_TOKEN`, `SENTRY_ORG`,
   `SENTRY_PROJECT`, `SENTRY_API_URL`, `SENTRY_SOURCEMAPS_TOKEN` vào `.env` khi còn thiếu hay rỗng;
   idempotent, không đổi giá trị đã đặt. `make up OBS=lgtm` tự gọi nó. Database `svp_glitchtip` trên Postgres native, hai
-  role `svp_glitchtip_migrator`, `svp_glitchtip_app` do bootstrap Postgres của `make up` tạo.
+  role `svp_glitchtip_migrator`, `svp_glitchtip_app` do bootstrap Postgres của `make up` tạo. Job `glitchtip-init` trong compose chạy
+  cùng việc đó (migrate `svp_glitchtip`, rồi tạo admin, organization, team, project `svp` và token API của diễn tập) và chỉ in số
+  đếm; `glitchtip` chỉ khởi động sau khi nó thành công. `make glitchtip-init` chạy nó thêm một lần, gắn thư mục output để lấy DSN và
+  token cho `.env` (`deploy/observability/glitchtip/init.sh`). Migrate và `createcachetable` đi qua role migrator vì role app không
+  tạo được bảng.
 - `make otelcol-validate`: `validate` của Collector ghim (`--network none`) cho cấu hình `obs`, cấu hình `obs-elastic`
   (file `deploy/observability/elastic/otelcol-config.yaml` ghép đè lên file `obs`) và cấu hình của cluster k3d
   (`deploy/observability/otelcol/k8s-config.yaml`); chạy lại sau khi sửa một trong ba.
@@ -105,21 +138,98 @@ Loại tài liệu (Diátaxis): **reference**, tra cứu khi cần một lệnh 
   `deploy/k6/main.js` với từng profile (`local`, `ci`, `cloud`), `--network none`, sạch là không in gì. `make load-local`
   (profile `local`, ~24 req/s giữ 5 phút, threshold theo SLO gồm độ trễ) và `make load-ci` (profile `ci`, vài req/s 60 s, chỉ
   threshold lỗi; job `stack` của CI dùng): trên stack `make up` đang chạy (`OBS=lgtm` để đọc phía server trong Prometheus), có
-  video `READY` (`make smoke` tạo); từ chối khi stack tắt hay cluster k3d chạy; container k6 vào mạng `svp_web`, gọi
-  `http://gateway:8080` và `http://web:3001` (`Host`, `Origin` là `http://localhost:3001`); tóm tắt ở
-  `.k6/<profile>-<time>/summary.json` (gitignore; không `setup_data`, token, cookie, mật khẩu, grep kiểm), exit ≠ 0 khi một
-  threshold trượt. **LOCAL LAB ONLY:** cả hai xoá khoá `svp:gw:rl:register:*` ở db 10 như `make smoke`.
+  video `READY` (`make smoke` tạo); từ chối trừ khi container gateway và web của project compose `svp` chạy và không node hay
+  registry nào của cluster k3d `svp` chạy, không bao giờ khởi động gì; container k6 vào mạng `svp_web`, gọi
+  `http://gateway:8080` và `http://web:3001` (`Host`, `Origin` là `http://localhost:3001`, là `APP_ORIGIN` mà kiểm tra Server Action
+  của Next và kiểm CSRF của web so với); gateway thấy địa chỉ riêng của container k6, tách khỏi container web, nên hai bên không
+  chung bucket rate limit theo IP; `K6_NO_USAGE_REPORT` đặt vì nếu không k6 báo mỗi lượt chạy tới server usage của Grafana; tóm tắt ở
+  `.k6/<profile>-<time>/summary.json` (gitignore; từ `handleSummary`, không `setup_data`), cùng `machine.json` (CPU và bộ nhớ của VM
+  Docker, nguồn điện); thư mục được grep, có token, cookie hay mật khẩu trong đó thì lượt chạy thất bại; exit 0 khi mọi threshold
+  đạt, ngược lại 1 (in kèm exit status của k6). **LOCAL LAB ONLY:** cả hai xoá khoá `svp:gw:rl:register:*` ở db 10 bằng
+  `SCAN` + `DEL` như `make smoke`, vì pool đăng ký từ một địa chỉ của container k6; không trỏ script vào stack dùng chung.
+- Kịch bản `deploy/k6/main.js` chạy kịch bản API của `api.js` và kịch bản web của `web.js` trong một tiến trình k6, theo tốc độ của
+  profile mà `SVP_K6_PROFILE` chọn (`local`, `ci`, `cloud`; `lib/config.js`). Biến môi trường: `SVP_K6_PROFILE`; `SVP_API_URL`
+  (gateway), `SVP_WEB_URL` (địa chỉ k6 gọi tới web client) và `SVP_WEB_ORIGIN` (origin người dùng mở web, gửi làm `Host` và `Origin`);
+  `SVP_K6_HOLD` và `SVP_K6_RAMP` (thời gian giữ tốc độ đầy đủ và thời gian tăng dần tới đó, mặc định theo profile; số nguyên kèm
+  `s`, `m` hay `h`); `SVP_K6_RESULTS` (thư mục ghi `summary.json`; không đặt thì ra stdout); `SVP_K6_PODS` và
+  `SVP_K6_FORWARDED_FOR` (chỉ Job cloud).
+- Mọi tốc độ trong `lib/config.js` tính theo phút, nên route dưới một request mỗi giây (`POST /videos`) không cần tốc độ lẻ. Tốc độ
+  của profile `cloud` là tổng của cả Job: k6 chia chúng cho `pods` tiến trình bằng `--execution-segment`, còn mỗi pod đăng ký pool
+  user riêng trong `setup()` (một pool cho mỗi địa chỉ nguồn). `SVP_K6_PODS` (chỉ profile `cloud`, 1 tới 20) chạy Job với ít pod hơn
+  20 của thiết kế, mỗi pod giữ tải của một pod thiết kế: mọi tốc độ thành tổng thiết kế nhân `SVP_K6_PODS / 20`, nên cỡ pool và tốc
+  độ theo user giữ nguyên.
+- Cỡ pool giữ mọi giới hạn theo user và theo địa chỉ của gateway ngoài tầm với, bất kể route, lớp và khoá: `users` đăng ký và đăng
+  nhập một lần ở gateway (burst đăng ký 20 mỗi địa chỉ, burst đăng nhập 30), `webSessions` trong số đó đăng nhập thêm một lần qua
+  form của web; tốc độ đọc của một user dưới 10/s và `POST /videos` của nó dưới 3 upload mở mỗi 15 phút của video-service. `pods`
+  là số tiến trình k6 chia tốc độ, mỗi tiến trình một pool riêng: số theo user chỉ đúng khi từng pod chạy phần của nó (`setup()` kiểm
+  các execution segment với số đó).
+- Số iteration một executor arrival-rate được chạy cùng lúc tính theo pod rồi nhân `pods`: khoảng 300 ms công việc cho mỗi request
+  đang bay trước khi nó khởi thêm VU, và chỗ cho độ trễ tăng tới 2 s trước khi bỏ iteration (`dropped_iterations` khi đó báo). k6 chia
+  VU cho các execution segment như chia tốc độ, và chỉ cấp iteration của một scenario cho segment nhận được ít nhất một `maxVUs` của
+  nó: nếu tính trên tổng của Job, route chậm (`POST /videos`, tối đa 3 VU) sẽ chạy trên 3 trong 20 pod với 36 user của chúng thay vì
+  cả 240, và pod không có VU cấp sẵn bỏ iteration đầu tiên trong lúc khởi một VU.
+- `turn(data)` (`api.js`) cho user của iteration này và, với route cần, video của nó. User trong pool lần lượt theo thứ tự
+  (`iterationInInstance` đếm iteration của scenario trong instance này, nên trên pod cloud, chỉ chạy execution segment của nó, lượt
+  vẫn đi hết pool của chính pod). Video tiến sau mỗi lượt của cùng một user, từ offset riêng: nếu lấy từ iteration chia dư cho số
+  video như user, hai thứ quay đồng bộ và một user chỉ thấy `videos / gcd(users, videos)` video (5 trong 30 với 12 user), lặp lại
+  các cặp (user, video) mà RL-3 chặn ở gateway.
+- Job k6 trên cluster cloud (`deploy/k6/cloud/`): 20 pod profile `cloud`, 1 000 request feed mỗi giây (tổng 1 250 req/s) giữ ít nhất
+  10 phút. Người học chạy với context kubectl của cluster cloud, không từ `make`; cần `kubectl` và `jq`; context `k3d-*` (laptop
+  16 GB) bị từ chối trước mọi lệnh kubectl. `render.sh` in manifest ra stdout (namespace `svp-load`, ConfigMap `svp-k6-scripts` chứa
+  script của `deploy/k6/` như trong working tree, Job Indexed của `job.yaml.in`), không chạm cluster và không đọc `.env`;
+  `run.sh` áp output đó và `make cloud-check` kiểm nó (chạy `render.sh` không đối số). Image là `K6_IMAGE` đọc từ `Makefile` gốc: một nơi ghim k6
+  cho `make load-local`, CI và Job này, Renovate chỉ cập nhật dòng đó.
+- Đối số của `deploy/k6/cloud/run.sh --context <ctx> --domain <domain> start|logs|delete` (`render.sh` nhận cùng các cờ, trừ
+  `--context`, và thêm `--envoy-ip`):
+  - `--domain`: host công khai của web (API ở `api.<domain>`), như listener và certificate của Envoy đặt tên (mặc định của
+    `render.sh` là `svp.invalid`, chỉ cho kiểm tĩnh). `--envoy-ip`: ClusterIP của Service Envoy, nơi tên công khai phân giải tới
+    trong pod (mặc định `192.0.2.1`, địa chỉ tài liệu, chỉ cho kiểm tĩnh).
+  - `--forwarded-for`: chỉ khi cluster tin 2 hop `X-Forwarded-For` (load balancer trước Envoy); mỗi pod ghi IP của nó vào đó như
+    load balancer sẽ làm (threat model RL-7).
+  - `--ca-file`: file PEM của CA ký certificate Envoy, khi một CA riêng ký (Envoy sau load balancer giữ certificate công khai); pod
+    tin CA đó thêm vào root mà image có, không thay chúng. Chỉ nhận certificate, file chứa khoá riêng bị từ chối. Không có cờ thì
+    pod tin root của image.
+  - `--pods`: 1 tới 20 pod (mặc định 20), mỗi pod giữ tải của một pod thiết kế nên tổng co theo số pod (`lib/config.js`,
+    `SVP_K6_PODS`). `--ramp`, `--hold`: thời gian tăng và giữ, như `2m` (mặc định 10m mỗi cái); đặt một trong hai thì hạn của Job
+    tính theo độ dài lượt chạy thay vì mặc định 3600 s.
+  - `start`: tìm ClusterIP của Service Envoy của Gateway `svp`, render manifest và áp chúng (namespace, ConfigMap, Job `svp-k6`);
+    từ chối khi đã có Job `svp-k6`. `logs`: sau khi Job kết thúc, dòng tóm tắt của từng pod vào `.k6/cloud-<time>/pod-<i>.json` và
+    một bảng của chúng; exit 1 khi số pod của Job khác số completion, một pod không in tóm tắt hay một tóm tắt có thứ giống token,
+    cookie hay mật khẩu (khi đó nó bị xoá). `delete`: xoá namespace `svp-load` (Job, pod và log của chúng).
+- Trước `start`: stack chạy trên cluster cloud với ít nhất 30 video `READY` (ít hơn thì hầu hết lượt xem dừng ở luật một-mỗi-phút
+  của gateway, RL-3), không gì khác đang tải nó, và số hop tin cậy của gateway đã quyết (RL-1). Theo dõi bằng
+  `kubectl --context <ctx> -n svp-load get pods -w`, dashboard SLO của Grafana và 429 của gateway (`svp_rate_limited` trong tóm tắt
+  của mỗi pod phải bằng 0). Đạt: ở mọi pod mọi threshold đạt và `dropped_iterations` bằng 0; p95, p99 phía server đọc từ
+  Prometheus trong cửa sổ giữ được ghi cùng số của các pod làm kết quả lượt chạy. Dừng sớm bằng `run.sh --context <ctx> --domain
+  <domain> delete`.
+- `deploy/k6/cloud/job.yaml.in` là mẫu mà `render.sh` điền (`@K6_IMAGE@`, `@DOMAIN@`, `@ENVOY_IP@`, `@FORWARDED_FOR@`,
+  `@SCRIPT_ITEMS@`, `@PODS@`, `@DEADLINE@`, `@RAMP@`, `@HOLD@`); nó không phải manifest đứng một mình (đuôi `.yaml.in`, `make
+  cloud-check` không đọc nó mà kiểm output của `render.sh`). Namespace `svp-load` nằm ngoài `svp` nên policy image của Kyverno không
+  áp, và chạy dưới PSA restricted. 20 pod của một Job Indexed, mỗi pod chạy execution segment riêng của profile `cloud`: k6 chia tốc
+  độ, mỗi pod đăng ký pool riêng từ IP pod của nó (không khoá rate limit nào bị xoá trên cloud). 20 là `pods` của profile `cloud`
+  trong `lib/config.js`, nơi tính VU và pool theo pod; `setup()` từ chối lượt chạy với số segment khác. Ít pod hơn (`render.sh
+  --pods`) giữ các dòng đánh dấu `@PODS@`: `SVP_K6_PODS` báo số pod cho script, tốc độ co theo nó, mỗi pod giữ tải của một pod thiết
+  kế. Dòng `@RAMP@`, `@HOLD@` chỉ còn khi có `render.sh --ramp`, `--hold`. Pod gọi Service của Envoy trong cluster: `hostAliases`
+  trỏ tên công khai vào ClusterIP của nó, nên TLS kiểm certificate thật còn tải không đi qua load balancer công khai hay internet.
+- Dòng `@CA@` của `job.yaml.in` chỉ còn khi có `render.sh --ca-file`, cho Envoy mà một CA riêng ký (CA của cluster sau load balancer
+  giữ certificate công khai): chúng mount ConfigMap `svp-k6-ca` và trỏ `SSL_CERT_FILE` vào nó. k6 không có cờ cho CA; `crypto/x509`
+  của Go, mà k6 dùng trên Linux, đọc file đó thay file bundle của image nhưng vẫn đọc mọi file certificate trong `/etc/ssl/certs` và
+  `/etc/pki/tls/certs` (chỉ `SSL_CERT_DIR` mới thay các thư mục đó). Vì vậy CA riêng được tin thêm vào root mà image có ở các thư mục
+  ấy, không thay chúng. TLS vẫn được kiểm, không bao giờ bị bỏ qua.
 
 ## DAST
 
 - `make dast` (DAST theo OpenAPI, [ADR-0030](../adr/0030-devsecops-supplement.md) §3, target ở
   `deploy/dast/dast.mk`, logic ở `deploy/dast/run.sh`, cấu hình `deploy/dast/schemathesis.toml`): Schemathesis chỉ bằng
   `SCHEMATHESIS_IMAGE` ghim của `Makefile`, trên stack `make up` đang chạy (`core` là đủ); từ chối khi gateway không chạy, mạng
-  `svp_web` không có hay cluster k3d chạy. Đăng ký và đăng nhập một user thử (token chỉ trong môi trường, không in), container
+  `svp_web` không có hay cluster k3d chạy, không bao giờ khởi động gì. Chờ `/readyz` để stack còn đang khởi động không bị báo là lỗi
+  API. Đăng ký và đăng nhập một user thử qua `http://127.0.0.1:8080` (token chỉ trong môi trường, không in, không nằm trên dòng lệnh;
+  vào container bằng `-e SVP_DAST_TOKEN` không kèm giá trị, docker đọc từ môi trường), container
   vào `svp_web` gọi `http://gateway:8080` với 20 operation của `services/gateway/openapi.yaml` (trừ `/healthz`, `/readyz`), phase
   `examples`, `coverage`, `fuzzing`, check không 5xx, status, content type, schema và header của response, `ignored_auth`,
   `negative_data_rejection`; `--rate-limit 5/s`, `--max-examples 25`, seed ngẫu nhiên (`SVP_DAST_SEED=<n>` chạy lại seed của
-  `report.json`), hạn cả lượt 10 phút (gồm pull image). Mọi output của Schemathesis vào `.dast/<time>/schemathesis.log` (mode 700,
+  `report.json`), hạn cả lượt 10 phút (`SVP_DAST_TIMEOUT`, gồm pull image; quá hạn thì script dừng container và kill docker client, vì macOS không có
+  `timeout(1)`). Container có địa chỉ riêng nên bucket rate limit theo IP của nó tách khỏi bước đăng ký ở trên và mọi bước khác. Mọi output của Schemathesis vào `.dast/<time>/schemathesis.log` (mode 700,
   gitignore; cùng `junit.xml`, `requests.har` mang body của response, không bao giờ rời máy), terminal chỉ có tóm tắt in từ
   `report.json` và `summary.json` (phân bố status, tỷ lệ 429) sau khi hai tệp qua phép dò bí mật (JWT, token, cookie, chữ ký
   presigned, chính token của lượt); exit theo Schemathesis (0 đạt, 1 check trượt, 2 không chạy được), quá hạn hay lộ bí mật là 1.
@@ -138,3 +248,14 @@ Loại tài liệu (Diátaxis): **reference**, tra cứu khi cần một lệnh 
   định, luôn bật lại mọi service khi kết thúc; biến này **chỉ dùng cho diễn tập**, không đặt trong `.env`. Không đọc database nào;
   trên Redis chỉ xoá `svp:gw:rl:register:*` ở db 10 (như ở trên) và đọc session của chính user diễn tập ở db 9. Nó đọc Prometheus,
   Tempo, Loki qua datasource proxy của Grafana, API Alertmanager và API GlitchTip bằng token chỉ đọc, không in giá trị nào của `.env`.
+- Trước diễn tập, `obs_preflight` (`deploy/compose/drills/common.sh`) đợi tối đa 60 s để metric của gateway xuất hiện trên stack vừa
+  dựng. Gateway xuất metric mỗi 15 s (`internal/telemetry`), lần đầu một chu kỳ sau khi nó khởi động (reader định kỳ của OpenTelemetry
+  SDK xuất ở mỗi tick, không xuất lúc khởi động), và `make up --wait` trả về vài giây sau khi gateway chạy, nên diễn tập chạy ngay
+  sau đó chưa thấy mẫu nào. 60 s chứa bốn chu kỳ xuất, cộng batch của Collector (1 s) và việc nhận dữ liệu của LGTM.
+- `obs_report` in các dòng WARN về đường đi của metric gateway tới Prometheus. Với `otelcol`, `lgtm` và gateway: trạng thái, health,
+  số lần restart và số giây từ khi container khởi động; với `lgtm` còn số giây từ khi script chạy của nó ghi `/tmp/ready` (khi
+  Collector riêng của nó nghe ở 4317) và số dòng log là mẫu mà Prometheus của nó từ chối; log của Collector dưới dạng số đếm (lỗi
+  export theo nguyên nhân, tuổi của lỗi đầu tiên và mới nhất, dòng từ chối hay bỏ dữ liệu, từ chối vì bộ nhớ); số cảnh báo
+  "telemetry export failed" gateway đã ghi. Sau đó là tuổi của mẫu mới nhất của `go_goroutine_count` (metric mà preflight đọc) trong
+  Prometheus của từng service Go, và tên các metric `go_` của gateway ở đó. Chỉ tên và số, không bao giờ một dòng log của container:
+  dòng kết luận của diễn tập tới artifact công khai của `verify.yml`. Hàm này không bao giờ thất bại.

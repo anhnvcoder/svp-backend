@@ -191,7 +191,6 @@ func TestClientMakesOneAttempt(t *testing.T) {
 	}
 }
 
-// logRecorder collects what go-redis logs.
 type logRecorder struct {
 	mu    sync.Mutex
 	lines []string

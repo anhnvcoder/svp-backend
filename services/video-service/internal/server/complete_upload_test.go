@@ -167,7 +167,7 @@ func TestCompleteUploadInvalidID(t *testing.T) {
 	}
 }
 
-// Another user's video, in any status, gets exactly the error of a missing one (UP-3), and
+// Another user's video, in any status, gets exactly the error of a missing one, and
 // nothing about it changes.
 func TestCompleteUploadOfAnotherUserLooksLikeMissing(t *testing.T) {
 	needDB(t)

@@ -1,40 +1,25 @@
-# The releases of the dev path (`make k8s-up`, deploy/k8s/install.sh), for helmfile (HELMFILE_VERSION of the Makefile):
-# every component of argocd/apps/components.json of the clone of svp-gitops that the dev path installs, with its values
-# files of base/ there, so both paths install the same charts, versions and base values from one list. The GitOps path
-# builds its Argo CD Applications from that same file; no second list of components exists. Only base/ of the clone is
-# read, never envs/: the dev path builds its own images.
-#
-# A component is an upstream chart (repo + chart + version; a Helm OCI repository is written oci://...) or a chart of
-# this repository (path, read from this working tree), with an optional values file relative to the top of the clone.
-# Left out: a component with gitopsOnly (External Secrets Operator: the dev path's Secrets come from .env through
-# deploy/k8s/secrets.sh) and one whose platforms leave out k3d (a controller of the cloud); no platforms means every
-# platform. A component with archValues gets the values file named there for nodeArch after its values, as on the
-# GitOps path. Each release carries its wave as label wave and needs every release of the wave before it (the highest
-# lower wave that has a release here), so helmfile installs the waves in order; deploy/k8s/rotate.sh (dev_helmfile)
-# runs one release at a time (--concurrency 1), as Argo CD's waves do not need but this machine's memory does. Release
-# reloader also needs argo-rollouts, of its own wave: its chart reads from the cluster whether Rollouts exist.
-#
-# The GitOps root reads platforms/k3d/ of the clone too, this file base/ alone: base/ is written for k3d, the dev path's
-# cluster, so a value of k3d goes there, read by both paths. A file under platforms/k3d/ would make this path install
-# something other than what Argo CD runs on k3d without a word, so the render fails on one, but for README.md and
-# svp-cluster.yaml holding externalSecrets alone: where the Secrets come from is the GitOps path's own, as gitopsOnly
-# is (the dev path applies them from .env).
-#
-# State values, given by dev_helmfile of deploy/k8s/rotate.sh on the command line or in a temporary file, never in a
-# file of this repository:
-#   gitopsDir     the clone of svp-gitops (gitops_dir of deploy/k8s/lib.sh); required
-#   nodeArch      amd64 or arm64, the architecture of the nodes of cluster svp; required
-#   images        <release>: {repository, tag, digest} for each release of chart svp-service: the dev image make k8s-up
-#                 has just built, or the web release web_source of lib.sh chose. A release without one fails in the
-#                 chart's render, naming it (image.repository is empty for release ...)
-#   pgServerName  the archive generation of the running Cluster svp-pg (pg_backup_sets of rotate.sh); unset on a
-#                 Cluster without one, which gets the chart's default
-#
-# What must hold after a release before the next may rely on it runs in a hook of that release: presync and postsync
-# call `deploy/k8s/install.sh hook <event> <release> <namespace> <kind> <canaryRoute> <failed>` (kind service for a
-# release of chart svp-service, component otherwise; failed when helm failed). A hook that fails, as a release that
-# fails, stops helmfile before the next wave, with a status other than 0. Neither runs for `helmfile template`, which asks
-# no cluster.
+# The releases of the dev path (`make k8s-up`, install.sh), for helmfile: every component of argocd/apps/components.json
+# of the clone of svp-gitops with its values files of base/ (never envs/), so both paths install the same charts,
+# versions and base values from one list. Left out: gitopsOnly (External Secrets Operator: the dev path's Secrets come
+# from .env) and a component whose platforms leave out k3d.
+
+# Each release carries its wave as label wave and needs every release of the wave before it, so helmfile installs the
+# waves in order; dev_helmfile of deploy/k8s/rotate.sh runs one release at a time (--concurrency 1), as Argo CD's waves
+# do not need but this machine's memory does. Release reloader also needs argo-rollouts: its chart reads whether
+# Rollouts exist.
+
+# The GitOps root reads platforms/k3d/ too, this file base/ alone: a file under platforms/k3d/ would make this path
+# install something other than what Argo CD runs without a word, so the render fails on one (but README.md and
+# svp-cluster.yaml holding externalSecrets alone: where the Secrets come from is the GitOps path's own).
+
+# State values, given by dev_helmfile on the command line or in a temporary file, never in a file of this repository:
+#   gitopsDir, nodeArch   the clone of svp-gitops (gitops_dir of lib.sh), amd64 or arm64; required
+#   images                <release>: {repository, tag, digest} for each release of chart svp-service
+#   pgServerName          the archive generation of the running Cluster svp-pg; unset on a Cluster without one
+
+# Presync and postsync call `deploy/k8s/install.sh hook <event> <release> <namespace> <kind> <canaryRoute> <failed>`; a
+# failing hook or release stops helmfile before the next wave. Neither runs for `helmfile template`.
+# Design notes: docs/reference/k8s.md.
 {{- $gitops := .StateValues | get "gitopsDir" "" | required "state value gitopsDir (the clone of svp-gitops) is not set: run make k8s-up, or pass --state-values-set gitopsDir=<clone>" }}
 {{- $arch := .StateValues | get "nodeArch" "" }}
 {{- if not (has $arch (list "amd64" "arm64")) }}
@@ -66,9 +51,9 @@
 
 helmDefaults:
   kubeContext: k3d-svp
-  # Every namespace exists before its release: install.sh makes those of wave 0 and the project's with Pod Security
-  # "restricted", chart svp-cluster the platform's. Helm 4's server-side --create-namespace would apply a Namespace of
-  # its own under the field manager every release shares, and that apply removes the labels svp-cluster set.
+  # Every namespace exists before its release (install.sh and chart svp-cluster make them): Helm 4's server-side
+  # --create-namespace would apply a Namespace under the field manager every release shares and remove svp-cluster's
+  # labels.
   createNamespace: false
   # The next wave relies on this one's CRDs, webhooks and pods being ready (cert-manager's startupapicheck hook, for
   # one, returns only once its webhook answers), so no blind sleep is needed between waves.
@@ -146,10 +131,10 @@ cluster would get a Reloader that cannot restart the gateway or the web client. 
 {{- end }}
 {{- end }}
 {{- if eq $c.name "svp-cluster" }}
-    # svp-cluster makes the platform namespaces of its values (argo-rollouts, cnpg-system, keda, kyverno, reloader) so
-    # that Pod Security is enforced there before their chart's first pod, and install.sh has made the project's before
-    # it (with the same labels): Helm refuses an existing object that lacks its release's annotations unless told to
-    # take it over. Every object svp-cluster renders is the project's own, under a name no other chart uses.
+    # Takes over the platform namespaces svp-cluster makes (so Pod Security is enforced before their chart's first pod)
+    # and the project's that install.sh made, with the same labels: Helm refuses an existing object that lacks its
+    # release's annotations unless told to take it over. Every object svp-cluster renders is the project's own, under a
+    # name no other chart uses.
     takeOwnership: true
 {{- end }}
 {{- if eq $c.name "svp-policy" }}
@@ -176,7 +161,7 @@ cluster would get a Reloader that cannot restart the gateway or the web client. 
 {{- end }}
 {{- if $service }}
 {{- with getOrNil $c.name $images }}
-    # The image of make k8s-up (image_sets of deploy/k8s/install.sh), never written to a file of the repository.
+    # The image of make k8s-up, never written to a file of the repository.
     set:
       - name: image.repository
         value: {{ .repository | quote }}
@@ -186,15 +171,10 @@ cluster would get a Reloader that cannot restart the gateway or the web client. 
         value: {{ .digest | quote }}
 {{- end }}
 {{- if $canary }}
-    # A release with canary set (the gateway, the web client) is applied client-side. Argo Rollouts writes into two
-    # objects of the chart: the selectors of Services <release> and <release>-canary (rollouts-pod-template-hash) and
-    # the weights in the release's HTTPRoute. Helm 4's server-side apply sends the chart's whole selector and rules,
-    # both atomic fields now managed by the controller and its plugin, and the upgrade fails on the conflict (with
-    # --force-conflicts it would strip the selectors instead, sending every request to stable and canary pods alike
-    # until the controller notices). A client-side upgrade patches only what changed between the previous release's
-    # manifest and this one, so an unchanged Service or route is left as the controller set it. Helm's --wait never
-    # sees the Rollout as ready: Helm waits for hooks only (no --wait is Helm 4's hookOnly), the postsync hook for the
-    # Rollout (wait_rollout of install.sh).
+    # Client-side apply for a release with canary set (the gateway, the web client): Argo Rollouts writes the Services'
+    # selectors and the HTTPRoute's weights, atomic fields that Helm 4's server-side apply sends whole and fails on. A
+    # client-side upgrade patches only what changed, so an unchanged Service or route stays as the controller set it.
+    # Helm's --wait never sees the Rollout as ready: the postsync hook waits for it.
     serverSide: "false"
     wait: false
 {{- end }}

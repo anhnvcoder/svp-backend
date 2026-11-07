@@ -1,13 +1,12 @@
-# Collector of the `obs-elastic` profile, the Elastic stack kept only to compare with LGTM.
-# Not a config of its own: compose passes
-# ../otelcol/config.yaml first and this file second, and the Collector merges the second over the
-# first (maps key by key, a list replaced whole). The receivers and processors, the scrubbing of
-# sensitive attributes among them (JWT-8), therefore come from that file alone, and the two stacks
-# get the same data. This file only adds the exporter to APM Server (apm-server:8200), which writes
-# traces, metrics and logs to Elasticsearch for Kibana, and points every pipeline and the
-# Collector's own metrics at it. The `otlp_grpc/lgtm` exporter of the first file is left defined
-# but in no pipeline, so the Collector never starts it. `make otelcol-validate` checks the merge.
-# Nothing here is published on the host.
+# Collector of the `obs-elastic` profile, the Elastic stack kept only to compare with LGTM. Not a config of its own:
+# compose passes ../otelcol/config.yaml first and this file second, and the Collector merges the second over the first
+# (maps key by key, a list replaced whole). The receivers and processors, the scrubbing of sensitive attributes among
+# them, therefore come from that file alone, and the two stacks get the same data.
+
+# This file only adds the exporter to APM Server (apm-server:8200), which writes traces, metrics and logs to
+# Elasticsearch for Kibana, and points every pipeline and the Collector's own metrics at it. The `otlp_grpc/lgtm`
+# exporter of the first file is left defined but in no pipeline, so the Collector never starts it.
+# `make otelcol-validate` checks the merge. Nothing here is published on the host.
 
 exporters:
   # APM Server takes OTLP/gRPC and HTTP on its one port, without TLS or a token here: security is

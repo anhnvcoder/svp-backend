@@ -752,7 +752,7 @@ func TestHandleObjectLargerThanAnnounced(t *testing.T) {
 	t.Parallel()
 	e := newEnv(t)
 	id := ids.New()
-	// The object was replaced after CompleteUpload checked a 10-byte file (UP-2).
+	// The object was replaced after CompleteUpload checked a 10-byte file.
 	e.store.put(objstore.UploadsPrefix+id, make([]byte, 11))
 	f := e.failure(t, uploaded(t, id, 10, nil))
 	if f.GetReason() != mediav1.TranscodeFailureReason_TRANSCODE_FAILURE_REASON_INVALID_INPUT {

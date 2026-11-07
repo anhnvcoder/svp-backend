@@ -1,10 +1,7 @@
 # shellcheck shell=bash
-# Helpers of the observability drill (obs-threats.sh): docker compose through the command `make`
-# passes in $COMPOSE, stopping and recreating a service with drill-only settings, uploading a video,
-# read-only queries to the observability stack of `make up OBS=lgtm` (Prometheus, Tempo and Loki
-# through Grafana, Alertmanager, the GlitchTip API), and putting the stack back on exit.
-# Written for bash 3.2 (the macOS /bin/bash).
-#
+# Helpers of the observability drill (obs-threats.sh): docker compose through the command `make` passes in $COMPOSE,
+# stopping and recreating a service with drill-only settings, uploading a video, read-only queries to the stack of
+# `make up OBS=lgtm`, and putting the stack back on exit. Written for bash 3.2.
 # Source it after setting `base` (the gateway URL); it sources ../lib.sh, whose rules it keeps.
 
 # shellcheck source=deploy/compose/lib.sh
@@ -89,12 +86,10 @@ recreate_service() {
     fail "recreate $service${1:+ with $*}: $(tail -n 1 "$work/recreate.log") (see make logs SVC=$service)"
 }
 
-# Read-only access to the stack of `make up OBS=lgtm`. Prometheus, Tempo and Loki are reached
-# through Grafana's datasource proxy, since their own ports are not published;
-# Alertmanager and GlitchTip through their loopback ports. The GlitchTip API token (read-only:
-# event:read, project:read) is read from .env into a shell variable that is never exported,
-# printed, written to a file or put on a command line: the printf builtin writes the header to
-# curl's stdin.
+# Read-only access to the stack of `make up OBS=lgtm`. Prometheus, Tempo and Loki are reached through Grafana's
+# datasource proxy, since their own ports are not published; Alertmanager and GlitchTip through their loopback ports.
+# The GlitchTip API token (read-only: event:read, project:read) is read from .env into a shell variable that is never
+# exported, printed, written to a file or put on a command line: the printf builtin writes the header to curl's stdin.
 
 repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)
 env_file=$repo_root/.env
@@ -148,12 +143,10 @@ loki_query() {
   ((n < loki_limit)) || fail "Loki query returned $n lines, its limit; lines would be missing: $1"
 }
 
-# tempo_search TRACEQL START END: the traces matching TRACEQL between START and END (seconds since
-# the epoch) into $work/tempo-traces, one "START_SECONDS TRACE_ID" line each, oldest first. Trace
-# ids are padded to 32 hex digits: Tempo drops leading zeros, logs and GlitchTip keep them.
-# Tempo answers 400 "start must be before end" when START is exactly 30 s before its now, to the
-# second (it splits the range there and one part is empty); a second later the search works, so
-# that answer is asked again.
+# tempo_search TRACEQL START END: the traces matching TRACEQL between START and END (seconds since the epoch) into
+# $work/tempo-traces, one "START_SECONDS TRACE_ID" line each, oldest first. Trace ids are padded to 32 hex digits:
+# Tempo drops leading zeros, logs and GlitchTip keep them. Tempo answers 400 "start must be before end" when START is
+# exactly 30 s before its now (it splits the range there); a second later the search works, so that answer is retried.
 tempo_search() {
   local status try
   for try in 1 2 3; do
@@ -325,12 +318,10 @@ sentry_event_json() {
   [[ $sentry_status == 200 ]] || fail "GlitchTip GET event $1 is 200 (status $sentry_status)"
 }
 
-# obs_preflight: the stack of `make up OBS=lgtm` answers: Grafana, and Prometheus, Tempo and Loki
-# through it, Alertmanager, the GlitchTip API with the drill token; the gateway's metrics reached
-# Prometheus (through the Collector) within the last 45 s, waited for up to metrics_wait seconds on a
-# stack just started, with the WARN lines of obs_report when they do not come; and .env holds
-# SENTRY_DSN, without which the services report no error, so a drill would wait for an event that
-# cannot come.
+# obs_preflight: the stack of `make up OBS=lgtm` answers (Grafana, Prometheus, Tempo, Loki, Alertmanager, the GlitchTip
+# API), the gateway's metrics reached Prometheus within the last 45 s (waited for up to metrics_wait seconds, with the
+# WARN lines of obs_report when they do not come), and .env holds SENTRY_DSN: without it the services report no error
+# and a drill would wait for an event that cannot come.
 obs_preflight() {
   local status age start waited=
   local age_query='time() - max(timestamp(go_goroutine_count{service_name="gateway"}))'
@@ -367,11 +358,10 @@ obs_preflight() {
   ok "observability stack up: Grafana, Prometheus, Tempo, Loki, Alertmanager, GlitchTip API (gateway metrics ${age%.*} s old${waited:+, after waiting $waited s})"
 }
 
-# Seconds obs_preflight waits for the gateway's metrics on a stack just started. The gateway exports
-# its metrics every 15 s (internal/telemetry), the first time one interval after it starts (the
-# OpenTelemetry SDK's periodic reader exports on each tick, none at start), and `make up --wait`
-# returns a few seconds after the gateway starts, so a drill run right after it finds no sample yet.
-# 60 s holds four export intervals, with the Collector's batch (1 s) and LGTM's ingestion on top.
+# Seconds obs_preflight waits for the gateway's metrics on a stack just started. The gateway exports its metrics every
+# 15 s, the first time one interval after it starts, and `make up --wait` returns a few seconds after the gateway
+# starts, so a drill run right after it finds no sample yet. 60 s holds four export intervals, with the Collector's
+# batch (1 s) and LGTM's ingestion on top.
 metrics_wait=${metrics_wait:-60}
 
 # metrics_fresh AGE: AGE (seconds, or never) is under 45 s, the freshness the alert rules ask of
@@ -383,15 +373,10 @@ sample_age() { if [[ $1 == never ]]; then echo "none within 5 min"; else echo "$
 
 docker_() { env -u DOCKER_DEFAULT_PLATFORM docker "$@"; }
 
-# obs_report: WARN lines on the path of the gateway's metrics to Prometheus. For otelcol, lgtm and
-# gateway: state, health, restarts and seconds since the container started; for lgtm also since its
-# run script wrote /tmp/ready (once its own Collector listens on 4317) and how many of its log lines
-# are samples its Prometheus refused; the Collector's log as counts (export failures by cause, the
-# age of the first and the newest, lines rejecting or dropping data, refusals for memory); how many
-# "telemetry export failed" warnings the gateway logged. Then the age of the newest sample of
-# go_goroutine_count (the metric the preflight reads) in Prometheus of each Go service, and the
-# names of the gateway's go_ metrics there. Names and numbers only, never a line of a container's
-# log: the verdict lines of a drill reach the public artifact of verify.yml. Never fails.
+# obs_report: WARN lines on the path of the gateway's metrics to Prometheus: the state of otelcol, lgtm and gateway,
+# counts from their logs (export failures by cause, samples Prometheus refused, refusals for memory), and the age of
+# the newest go_goroutine_count sample of each Go service. Names and numbers only, never a line of a container's log:
+# the verdict lines of a drill reach the public artifact of verify.yml. Never fails.
 obs_report() {
   local t ids svc id line ready n f cr de dns other rej mem first last status
   t=$(now)

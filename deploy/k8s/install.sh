@@ -1,34 +1,8 @@
 #!/usr/bin/env bash
-# The dev path (`make k8s-up`): installs or upgrades every component of argocd/apps/components.json of the deployment
-# configuration svp-gitops (the working tree of its clone, gitops_dir of deploy/k8s/lib.sh) into the running cluster
-# svp with helmfile: deploy/k8s/helmfile.yaml.gotmpl turns that list into releases (the components of the dev path,
-# their base/ values, a wave a step: needs) and dev_helmfile of deploy/k8s/rotate.sh runs it. The GitOps path builds its
-# Argo CD Applications from the same file, so both install the same charts, versions and base values. This script is
-# the glue around helmfile:
-#   1. the guards: cluster svp reachable and not one of Argo CD's;
-#   2. the services' images, built and pushed first, so a build that fails stops the run before anything is installed;
-#      each release of chart svp-service gets its image through a state value of helmfile in a temporary file (never a
-#      file of the repository): the local registry, the service's dev tag and an empty digest. The repository, tag and
-#      digest in envs/<env>/images/ of svp-gitops name releases on GHCR for the GitOps path; this path neither reads nor
-#      pulls them, except the web client's unless WEB_FROM=clone builds it from the clone of svp-frontend (web_source of
-#      lib.sh: stg by default, or image with WEB_IMAGE): then web is not built and its release runs, by digest, pulled by
-#      the nodes from GHCR without credentials;
-#   3. the namespaces of wave 0 and the project's, with Pod Security "restricted", before any chart;
-#   4. helmfile, waves 0 and 1 (chart svp-cluster makes the namespaces and the gateway); then deploy/k8s/secrets.sh,
-#      the Secrets from .env, in the order of a change of credentials (rotate.sh); then helmfile, the waves after;
-#      each run of those waves with drill traffic while a canary of the gateway or the web client is ahead.
-# What must hold after a release before the next may rely on it (a certificate, a webhook, Prometheus, the policy,
-# KEDA's metrics API, a base backup, GlitchTip's DSN, a Rollout Healthy, an HPA that reads CPU) runs in that release's
-# postsync hook: helmfile calls this script as `install.sh hook <event> <release> <namespace> <kind> <canaryRoute>
-# <failed>` (hook below). A release that fails names itself, the log of its migrate Job's last failed attempt and the
-# containers of its namespace that are not ready; helmfile installs no later wave (the other releases of the same wave
-# still run, as in an Argo CD sync wave) and ends with a status other than 0, and so does this script.
-#
-# No restart here: Reloader (component reloader, installed by this same helmfile) restarts each workload that opts in
-# when a Secret it reads changes. A cluster made before Reloader runs, or one whose workloads do not all opt in yet,
-# gets every release with the Secrets as they are first (install_releases), so that Reloader and every workload's
-# annotation are in place before secrets.sh changes a credential. Run by `make k8s-up` after the registry and the
-# cluster exist; running it again only upgrades what changed.
+# The dev path (`make k8s-up`): installs every component of argocd/apps/components.json of svp-gitops into cluster svp
+# with helmfile (helmfile.yaml.gotmpl lists the releases) after building the images; also the hook helmfile runs per
+# release. Run again, it only upgrades what changed.
+# Design notes: docs/reference/k8s.md.
 set -euo pipefail
 
 # shellcheck source=deploy/k8s/lib.sh
@@ -42,12 +16,10 @@ dev_path='.gitopsOnly != true and ((has("platforms") | not) or (.platforms | ind
 
 # --- the hooks of the releases (deploy/k8s/helmfile.yaml.gotmpl).
 
-# The migrate Job of chart svp-service restarts its container inside one pod (restartPolicy OnFailure, see the
-# chart), and once the Job fails the Job controller deletes that pod and its log with it: Helm then reports only
-# BackoffLimitExceeded. watch_migrate NAMESPACE JOB OLD_UID LOG HELMFILE runs in the background from the presync hook
-# of a service's release while it installs, and copies the log of the Job's latest failed attempt to LOG every 2 s,
-# while the pod is there; OLD_UID is the Job of the previous run, which Helm replaces, and is not read. It ends when the
-# postsync hook stops it, or once process HELMFILE (helmfile, the hooks' parent) is gone.
+# watch_migrate NAMESPACE JOB OLD_UID LOG HELMFILE: from the presync hook, copies the log of the migrate Job's latest
+# failed attempt to LOG every 2 s while its pod exists, until the postsync hook stops it or process HELMFILE is gone.
+# The Job controller deletes a failed Job's pod and its log (Helm reports only BackoffLimitExceeded). OLD_UID is the
+# previous run's Job, which Helm replaces, and is not read.
 watch_migrate() {
   local ns=$1 job=$2 old=$3 log=$4 parent=$5 state uid out
   while kill -0 "$parent" 2>/dev/null && sleep 2; do
@@ -77,14 +49,9 @@ way_out() {
     "make k8s-up; make k8s-traffic-stop" >&2
 }
 
-# wait_rollout NAMESPACE NAME: once the controller has seen the Rollout's current generation, waits until it is
-# Healthy: at once when the upgrade made no new revision (or one whose template is the stable one again), otherwise
-# after the canary's steps (25%, 60 s, 50%, 60 s, 100%) with its background analysis, about 3 minutes. Fails when the
-# canary is aborted (its AnalysisRun failed, or a step passed the progress deadline) or paused by an inconclusive
-# AnalysisRun, which never promotes on its own, and names the AnalysisRun; also after 900 s, beyond the progress
-# deadline of 600 s. Each failure first prints the way out (way_out). The progress lines and an abort name the
-# background AnalysisRun; an inconclusive pause names the run that is Inconclusive, the gate step's
-# (currentStepAnalysisRunStatus) or the background one, since either pauses the Rollout.
+# wait_rollout NAMESPACE NAME: waits until the Rollout is Healthy (about 3 minutes when a canary runs: 25%, 60 s, 50%,
+# 60 s, 100%). Fails, after way_out, when the canary is aborted or paused by an inconclusive AnalysisRun (which never
+# promotes on its own), naming the AnalysisRun; also after 900 s, beyond the progress deadline of 600 s.
 wait_rollout() {
   local ns=$1 name=$2 deadline=$((SECONDS + 900)) json gen obs phase abort reasons step weight run hash irun last=
   while :; do
@@ -135,15 +102,10 @@ rollout_doc() {
   awk '/^---/ { if (r) exit; d = ""; next } { d = d $0 "\n" } /^kind: Rollout$/ { r = 1 } END { if (r) printf "%s", d }'
 }
 
-# pg_base_backup: after chart svp-data, that Postgres svp-pg archives its WAL and that its archive generation has a base
-# backup to restore from. On a new cluster ScheduledBackup svp-pg-daily
-# takes the first one at once (immediate; a hook of the chart, made once the s3-init Job has made bucket pg-backups
-# and its login). On the upgrade that adds the plugin to a Cluster made before it, though, CloudNativePG starts that
-# Backup on whichever primary pod is Ready, which may still be the old one, without the plugin's sidecar: the Backup
-# then fails, for good (CloudNativePG never retries one; the schedule's next run is at 03:00 UTC). So once the primary
-# runs the sidecar and no Backup of svp-pg is in progress, a generation with no successful base backup in the status of
-# ObjectStore svp-pg-backup gets one here. Then WAL archiving must work (condition ContinuousArchiving, which the WAL
-# switch of a base backup sets at the latest).
+# pg_base_backup: after chart svp-data, that Postgres svp-pg archives WAL and its archive generation has a base backup.
+# On the upgrade that adds the plugin to a Cluster made before it, the first Backup can start on the old primary,
+# without the plugin's sidecar, and fails for good (CloudNativePG never retries one; the schedule's next run is at 03:00
+# UTC): so a generation with no successful base backup gets one here once the primary runs the sidecar.
 pg_base_backup() {
   local gen last name
   wait_until 600 "the primary of Postgres svp-pg Ready with the Barman Cloud plugin's sidecar (kubectl --context k3d-svp -n svp-data get cluster svp-pg)" \
@@ -366,14 +328,10 @@ hook() {
 
 # --- the glue around helmfile.
 
-# rollouts_plugin_check: Argo Rollouts' Gateway API traffic router plugin is a native binary, which the controller
-# downloads when it starts and executes at the first reconcile of a Rollout with a canary. Its values file
-# base/argo-rollouts.yaml pins the linux-arm64 asset, for the nodes of a Mac; on amd64 nodes (a Linux
-# x86_64 host, such as a CI runner) that binary cannot run: the controller fails to start the plugin on every reconcile,
-# before it scales the Rollout's ReplicaSet, so the gateway never gets a pod. There the file archValues of
-# components.json names for amd64 is read after it, as on the GitOps path, and replaces the plugin with the asset of
-# the same release built for amd64. Both files must name one release, so a new release cannot update one pin and leave
-# the other behind: each holds exactly one plugin location, and the locations differ only in the asset's name.
+# rollouts_plugin_check: Argo Rollouts' Gateway API plugin is a native binary, and base/argo-rollouts.yaml pins the
+# linux-arm64 asset, which cannot run on amd64 nodes (the gateway never gets a pod). There archValues of components.json
+# replaces it with the same release built for amd64; both files must name one release, so each holds exactly one
+# plugin location and a new release cannot update only one pin.
 rollouts_plugin_check() {
   local file loc release='' all
   all=$(jq -r '.components[] | select(.name == "argo-rollouts") | .values, ((.archValues // {})[])' "$components") ||
@@ -391,12 +349,10 @@ rollouts_plugin_check() {
   ok "Argo Rollouts gets the Gateway API plugin built for $node_arch nodes (release ${release##*/})"
 }
 
-# canary_ahead NAMESPACE NAME: false only when the coming upgrade of release NAME renders Rollout NAME exactly as the
-# release's current revision does and that Rollout is Healthy: no canary will run, so no drill traffic is started (each
-# start registers users and deletes the register rate limit keys). A Rollout that differs in anything, or whose canary
-# is in progress, paused or aborted, counts as a canary ahead, as does one that cannot be rendered or read. The chart
-# reads nothing from the cluster, so `helmfile template` of the release, with the state values the sync gets, renders
-# what the upgrade will.
+# canary_ahead NAMESPACE NAME: false only when the coming upgrade renders Rollout NAME exactly as the release's current
+# revision does and it is Healthy: no canary will run, so no drill traffic is started (each start registers users and
+# deletes the register rate limit keys). Anything else, or a Rollout that cannot be rendered or read, counts as ahead;
+# `helmfile template` renders what the upgrade will (the chart reads nothing from the cluster).
 canary_ahead() {
   local ns=$1 name=$2 new old
   [ "$(kc -n "$ns" get rollout "$name" -o jsonpath='{.status.phase}')" = Healthy ] || return 0
@@ -405,16 +361,10 @@ canary_ahead() {
   [ -z "$new" ] || [ "$new" != "$old" ]
 }
 
-# The gateway and the web client are Argo Rollouts Rollouts: an upgrade that changes the pod template (new code, or a
-# value a drill left in the release) is a new revision, which goes out as a canary only when Envoy has measured enough
-# responses of it. So when such a Rollout exists and a canary is ahead (canary_ahead), drill traffic
-# (deploy/k8s/drills/traffic.sh, which requests both) starts before each helmfile run of the waves after wave 1 (the
-# one after the Secrets, and on a cluster not ready for a change of credentials the one before them too: sync_later),
-# whose postsync hooks wait for each Rollout (wait_rollout), and stops once that run is over, a failure included (also
-# the EXIT trap).
-# An upgrade that leaves the templates alone makes no revision (the dev tags follow the image ID) and starts no traffic.
-# Traffic that was already running (make k8s-traffic-start) is used and left running; only the pid this script started
-# is stopped.
+# The gateway and the web client are Rollouts: an upgrade that changes the pod template is a new revision, which goes
+# out as a canary only when Envoy has measured enough responses of it. So while a canary is ahead (canary_ahead), drill
+# traffic (deploy/k8s/drills/traffic.sh) runs during each helmfile run of the waves after wave 1 and stops after it, a
+# failure included (also the EXIT trap). Traffic already running (make k8s-traffic-start) is used and left running.
 traffic=$repo_root/deploy/k8s/drills/traffic.sh
 own_traffic=
 start_canary_traffic() {
@@ -471,16 +421,10 @@ sync_later() {
   [ "$rc" = 0 ] || fail "helmfile sync of waves 2 and later$what (the release above)"
 }
 
-# install_releases: helmfile in the order of the dev path. Waves 0 and 1 first: chart svp-cluster makes the namespaces
-# the Secrets go into. Then the Secrets (deploy/k8s/secrets.sh: servers, init Jobs of svp-data, clients), then every
-# later wave, which reads them. A cluster that runs the project's workloads but is not ready for a change of
-# credentials (rotate_unready of rotate.sh: no Reloader, made before it; or a workload without the annotation its
-# chart now renders, or that Reloader may not restart, as after a run that stopped half way through those waves)
-# gets those later waves once before the Secrets, with the Secrets as they are, so that Reloader and every workload's
-# annotation are in place before a credential changes: Reloader restarts a workload when a Secret it names changes,
-# not when it starts or when the annotation arrives. Once every release is in, the cluster must be ready for the next
-# change of credentials, a new cluster included (Reloader allowed to restart the Rollouts, whose API its chart reads
-# as it renders).
+# install_releases: helmfile in the order of the dev path: waves 0 and 1 (svp-cluster makes the namespaces the Secrets
+# go into), then the Secrets (deploy/k8s/secrets.sh), then the later waves, which read them. A cluster not ready for a
+# change of credentials (rotate_unready of rotate.sh) gets the later waves once before the Secrets: Reloader restarts a
+# workload when a Secret it names changes, not when it starts or when the annotation arrives.
 install_releases() {
   echo "helmfile sync: waves 0 and 1 (chart svp-cluster makes the project's namespaces and the gateway)"
   dev_helmfile sync -l wave=0 -l wave=1 || fail "helmfile sync of waves 0 and 1 (the release above)"
@@ -521,16 +465,10 @@ main() {
   dev_helmfile_images=$work/images.json
   image_values >"$dev_helmfile_images" || fail "write the images of the releases of chart svp-service"
 
-  # Pod Security "restricted" on the namespaces of wave 0 (cert-manager, envoy-gateway-system) before their charts' first
-  # pod. Chart svp-cluster labels every namespace of a later wave, but comes after these charts, whose CRDs it needs. The
-  # Namespaces are rendered by svp-cluster's own template (the same labels, at the same version) and applied server-side
-  # under a field manager of their own: a namespace that a previous run's --create-namespace made gets the labels added,
-  # and no release's later apply removes them, since no release creates a namespace (createNamespace false in
-  # deploy/k8s/helmfile.yaml.gotmpl).
-  # The project's namespaces (namespaces of svp-cluster's values, with the same labels too) are made here as well: Envoy
-  # Gateway, of wave 0, binds a Role in each namespace it watches (base/envoy-gateway.yaml), and Helm
-  # cannot create a Role in a namespace that does not exist yet. svp-cluster takes them over (takeOwnership in
-  # helmfile.yaml.gotmpl).
+  # Pod Security "restricted" on the namespaces of wave 0 and the project's before any chart's first pod: svp-cluster
+  # comes after the charts whose CRDs it needs, and Envoy Gateway (wave 0) binds a Role in each project namespace, which
+  # Helm cannot create in a namespace that does not exist. Applied server-side under their own field manager, so no
+  # release removes the labels (none creates a namespace); svp-cluster takes over the project's namespaces.
   wave0=$(jq -c "[.components[] | select(.wave == 0 and $dev_path) | {name: .namespace}] | unique" "$components") ||
     fail "read the namespaces of wave 0 in $components"
   hc template svp-cluster "$repo_root/deploy/helm/svp-cluster" --show-only templates/namespaces.yaml \
@@ -539,9 +477,9 @@ main() {
     fail "create and label the namespaces of wave 0 and the project's with Pod Security restricted"
   ok "namespaces of wave 0 ($(jq -r 'map(.name) | join(", ")' <<<"$wave0")) and the project's enforce Pod Security restricted"
 
-  # The architecture of the nodes, which ensure_cluster has checked all run the host's: a component with archValues in
-  # components.json gets the values file named there for it after its values, as the GitOps path does
-  # (chart argocd/apps of svp-gitops; rollouts_plugin_check says why). dev_helmfile reads it again for helmfile.
+  # The architecture of the nodes (ensure_cluster checked they all run the host's): a component with archValues in
+  # components.json gets the values file named there after its values, as on the GitOps path (rollouts_plugin_check says
+  # why).
   node_arch=$(kc get nodes -o jsonpath='{.items[0].metadata.labels.kubernetes\.io/arch}') ||
     fail "read the architecture of the nodes of svp"
   case $node_arch in

@@ -1,19 +1,19 @@
 # FF-5 of the threat model (docs/threat-model.md): media-worker, which handles untrusted uploads, reaches only what it
 # needs. From media-worker (kubectl exec, busybox nslookup and nc -z): the internet (an IP and a name), the gateway, the
-# four gRPC services, Postgres, Valkey and the API server are closed; the object store, Kafka and the Collector open. A
-# name that resolves makes a closed port the policy, not a missing service.
-#
-# The controls show each closed target answers a client the policy lets in: /readyz through Envoy (the gateway reaches
-# user-, video- and feed-service), the explore feed of a drill user with stats on every item (the gateway reaches
-# engagement-service), /healthz (Envoy reaches the gateway), GlitchTip's pod opens 5432, a login leaves its rate limit
-# key in Valkey (the gateway reaches 6379), and pod probe of namespace svp-probe (no egress policy) reaches the API
-# server. The internet has no control case: it is tried from media-worker only; example.com resolves there, so its
-# failure is the connection.
-#
-# Each check and control is one step; a failed one marks the test failed and the next steps still run. A step whose
-# setup fails (namespace svp-probe, the drill user) ends the test, and the template's cleanup deletes svp-probe. LOCAL LAB
-# ONLY: the test deletes the register rate limit keys svp:gw:rl:register:* in the cluster's Valkey db 10 (SCAN + DEL)
-# before it registers its drill user, and otherwise only reads Valkey (SCAN in db 10).
+# four gRPC services, Postgres, Valkey and the API server are closed; the object store, Kafka and the Collector open.
+
+# A name that resolves makes a closed port the policy, not a missing service. The controls show each closed target
+# answers a client the policy lets in: /readyz through Envoy (the gateway reaches user-, video- and feed-service), the
+# explore feed of a drill user with stats on every item (the gateway reaches engagement-service), /healthz (Envoy
+# reaches the gateway).
+
+# Also GlitchTip's pod opens 5432, a login leaves its rate limit key in Valkey (the gateway reaches 6379), and pod probe
+# of namespace svp-probe (no egress policy) reaches the API server. The internet has no control case: it is tried from
+# media-worker only; example.com resolves there, so its failure is the connection.
+
+# The template's cleanup deletes svp-probe. LOCAL LAB ONLY: the test deletes the register rate limit keys
+# svp:gw:rl:register:* in the cluster's Valkey db 10 (SCAN + DEL) before it registers its drill user, and otherwise only
+# reads Valkey (SCAN in db 10).
 apiVersion: chainsaw.kyverno.io/v1alpha1
 kind: Test
 metadata:

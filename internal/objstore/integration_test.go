@@ -51,7 +51,6 @@ const (
 	probeBucket = "objstore-probe"
 )
 
-// requireEnv skips the test unless every variable in names is set, and returns their values.
 func requireEnv(t *testing.T, names ...string) []string {
 	t.Helper()
 	values := make([]string, len(names))
@@ -404,7 +403,6 @@ func editPolicy(t *testing.T, policy string, edit func(conds []any)) string {
 	return base64.StdEncoding.EncodeToString(after)
 }
 
-// withField returns a copy of fields with k set to v.
 func withField(fields map[string]string, k, v string) map[string]string {
 	out := maps.Clone(fields)
 	out[k] = v
@@ -659,13 +657,10 @@ func TestIntegrationWorkerReadsMedia(t *testing.T) {
 
 // TestIntegrationMultipartChecksum uploads an object of more than 5 MiB in two parts, each with
 // a CRC32 checksum, the way the Velero AWS plugin uploads large files with aws-sdk-go-v2. The SDK
-// sends that checksum in one of two forms, and the store must take both: in an
-// x-amz-checksum-crc32 header over HTTP, as backup tools send it to an in-cluster http://
-// endpoint, and in an aws-chunked trailer, which the SDK picks only when the request URL is
-// https. The trailer pass therefore goes through a TLS proxy of the test's own in front of the
-// HTTP endpoint, as a TLS gateway fronts the store in the cluster. Each pass checks on the
-// client's transport that every part was sent in its form, so it cannot pass on the other one.
-// It runs as the probe user, on the probe bucket only.
+// sends that checksum in an x-amz-checksum-crc32 header over HTTP, or in an aws-chunked trailer
+// when the request URL is https; the store must take both, so the trailer pass goes through a TLS
+// proxy of the test's own. Each pass checks on the client's transport that every part was sent in
+// its form. It runs as the probe user, on the probe bucket only.
 func TestIntegrationMultipartChecksum(t *testing.T) {
 	v := requireEnv(t, envS3Endpoint, envProbeAccess, envProbeSecret)
 	endpoint, accessKey, secretKey := v[0], v[1], v[2]
