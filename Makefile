@@ -22,7 +22,7 @@ SLOTH_VERSION              := v0.16.0
 # renovate: datasource=go depName=github.com/k3d-io/k3d/v5
 K3D_VERSION                := v5.9.0
 # renovate: datasource=docker depName=rancher/k3s
-K3S_IMAGE_TAG              := v1.36.5-k3s1
+K3S_IMAGE_TAG              := v1.36.6-k3s1
 # One line on purpose: a backslash-newline inside the single quotes of a recipe reaches the shell as a literal backslash
 # on GNU Make 4.x (Make 3.81 joined the lines), and the linker then gets a broken -ldflags.
 K3D_LDFLAGS                := -X github.com/k3d-io/k3d/v5/version.Version=$(K3D_VERSION) -X github.com/k3d-io/k3d/v5/version.K3sVersion=$(K3S_IMAGE_TAG)
