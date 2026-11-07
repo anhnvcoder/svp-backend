@@ -188,7 +188,7 @@ slo: ## Generate the SLO recording and burn-rate alert rules from deploy/observa
 # base/otel-collector.yaml of svp-gitops (keep the four in step), run with no network and the config
 # files at the paths compose mounts them.
 # renovate: datasource=docker depName=otel/opentelemetry-collector-contrib
-OTELCOL_IMAGE := otel/opentelemetry-collector-contrib:0.162.0@sha256:39923a8e431bd1f57be82411999d389fcfe40857492e4365456d97a4c1f74be6
+OTELCOL_IMAGE := otel/opentelemetry-collector-contrib:0.164.0@sha256:340c9ca6a36617084c6661bdc4f0fe92b7cda5a805d61673ec8db375fddc522b
 OTELCOL := env -u DOCKER_DEFAULT_PLATFORM docker run --rm --network none \
 	-v $(CURDIR)/deploy/observability/otelcol/config.yaml:/etc/otelcol/config.yaml:ro \
 	-v $(CURDIR)/deploy/observability/elastic/otelcol-config.yaml:/etc/otelcol/elastic.yaml:ro \
