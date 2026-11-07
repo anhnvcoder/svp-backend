@@ -65,7 +65,7 @@ x-telemetry-app-env: &telemetry-app-env
   SENTRY_ENVIRONMENT: ${SENTRY_ENVIRONMENT:-local}
 
 x-redpanda-image: &redpanda-image redpandadata/redpanda:v26.2.6@sha256:8b1076e0d61bfceb66594dc01536427ce0b529f8ead35fdab9763ab6085891ce
-x-s3-image: &s3-image rustfs/rustfs:1.0.3@sha256:9ca9559533b537d10482fe923288b676ad08f92a7069d9a17327fbae3cab688b
+x-s3-image: &s3-image rustfs/rustfs:1.0.4@sha256:ed9210d6411d77ffceb70d94b964a3cb7d225983368bc25bebe01e995293dcc2
 x-glitchtip-image: &glitchtip-image glitchtip/glitchtip:6.2.6@sha256:a3d8eb1b36c1e1603d55ab32711ea3dd8115874742a781a57391a62a16e0dff6
 
 # Settings shared by `glitchtip` and `glitchtip-init`. Database svp_glitchtip on the native Postgres: the app role for
