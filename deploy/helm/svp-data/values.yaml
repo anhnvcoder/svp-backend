@@ -72,7 +72,7 @@ s3:
 
 redpanda:
   # The broker image, for rpk in the init Job.
-  image: docker.io/redpandadata/redpanda:v26.2.4@sha256:c98c2f04a751e6646012cc701bac5183252cee44c88ba1dfa412e4c7124f2e89
+  image: docker.io/redpandadata/redpanda:v26.2.6@sha256:8b1076e0d61bfceb66594dc01536427ce0b529f8ead35fdab9763ab6085891ce
   brokers: redpanda.svp-data.svc.cluster.local:9092
   # Brokers of release redpanda, the statefulset.replicas its values set: the init Job gets the Admin API of each one
   # (redpanda-<n>.redpanda), so it still runs while one is down.
