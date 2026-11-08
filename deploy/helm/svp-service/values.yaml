@@ -149,11 +149,6 @@ peers:
     namespace: svp-data
     labels: {app.kubernetes.io/name: kafka}
     ports: [9096]
-  # The broker before kafka, which no chart runs any more; kept while releases' values files still name it.
-  redpanda:
-    namespace: svp-data
-    labels: {app.kubernetes.io/name: redpanda, app.kubernetes.io/instance: redpanda}
-    ports: [9092]
   s3:
     namespace: svp-data
     labels: {app.kubernetes.io/name: s3}

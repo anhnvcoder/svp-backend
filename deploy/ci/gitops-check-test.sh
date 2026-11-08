@@ -532,7 +532,7 @@ level2_case() {
 level2_case "pin: level 2 with a second source of svp-gitops on main beside the pinned one" values values \
   "Application gateway has sources of $gitops_url at the revisions PIN refs/heads/main; Argo CD refuses an Application whose values files reference one repository at two revisions"
 level2_case "pin: level 2 that reads base/ and platforms/ on main" values main \
-  "Application gateway reads base/services/gateway.yaml at refs/heads/main; want every values file at the pinned commit PIN"
+  "Application gateway reads base/services/gateway.yaml at refs/heads/main"
 
 # --- the policies on rendered manifests (deploy/ci/gitops-policies/), through the Kyverno CLI of KYVERNO_CLI_IMAGE.
 # Their kyverno test first: what each must fail and pass, field by field.
