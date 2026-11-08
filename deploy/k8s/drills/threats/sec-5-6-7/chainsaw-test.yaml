@@ -60,7 +60,7 @@ spec:
             /^  enabledBy: / { by = 1 }
             /^  values:$/ { vals = 1; next }
             /^  [^ ]/ { vals = 0 }
-            vals && /^    [^ :]+: [a-z0-9-]+\/[A-Za-z0-9_]+$/ { e = $2; sub(/\/.*/, "", e); print ns, e, (by ? ns "/" name : "") }' \
+            vals && /^    [^ :]+: [a-z0-9-]+\/[A-Za-z0-9_.]+$/ { e = $2; sub(/\/.*/, "", e); print ns, e, (by ? ns "/" name : "") }' \
             "$(git rev-parse --show-toplevel)/deploy/helm/svp-cluster/files/external-secrets.yaml" |
             while read -r ns entry es; do
               if [ -n "$es" ] && ! kubectl --context k3d-svp -n "${es%/*}" get externalsecrets.external-secrets.io "${es#*/}" >/dev/null 2>&1; then
