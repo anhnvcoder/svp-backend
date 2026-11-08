@@ -30,7 +30,7 @@ get() {
 get pods
 get jobs
 get events --field-selector type=Warning
-helm --kube-context k3d-svp list -A -a -o json >"$work/releases.json" ||
+helm --kube-context k3d-svp list -A -o json >"$work/releases.json" ||
   fail "read the Helm releases of cluster k3d-svp"
 cat "$secrets/env.values" "$secrets/cluster.values" 2>/dev/null | LC_ALL=C sort -u >"$work/values" || :
 

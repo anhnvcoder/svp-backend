@@ -789,7 +789,7 @@ cat >"$work/bin/helm" <<'EOF'
 #!/usr/bin/env bash
 echo "helm $*" >>"$FAKE_KUBECTL_DIR/calls"
 [ "${FAKE_KUBECTL_FAIL:-}" = 1 ] && { echo "Kubernetes cluster unreachable" >&2; exit 1; }
-[ "$*" = "--kube-context k3d-svp list -A -a -o json" ] || exit 2
+[ "$*" = "--kube-context k3d-svp list -A -o json" ] || exit 2
 cat "$FAKE_KUBECTL_DIR/releases.json"
 EOF
 chmod 755 "$work/bin/helm"
