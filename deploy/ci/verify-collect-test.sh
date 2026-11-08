@@ -802,8 +802,25 @@ jq -n --arg s "$cluster_secret" '{items: [
        message: "WAIT-MESSAGE-MARKER"}}, lastState: {terminated: {reason: "Error", exitCode: 1, message: $s}}}]}},
   {metadata: {namespace: "svp-data", name: "svp-ops-abc"}, status: {phase: "Pending",
      conditions: [{type: "PodScheduled", status: "False", reason: "Unschedulable"}],
-     initContainerStatuses: [{name: "wait", ready: false, restartCount: 0, state: {running: {}}}]}}]}' \
+     initContainerStatuses: [{name: "wait", ready: false, restartCount: 0, state: {running: {}}}]}},
+  {metadata: {namespace: "svp", name: "web-0"}, status: {phase: "Running",
+     containerStatuses: [{name: "web", ready: false, restartCount: 3, state: {waiting: {reason: "CrashLoopBackOff"}},
+       lastState: {terminated: {reason: "Error", exitCode: 2}}}]}},
+  {metadata: {namespace: "svp-data", name: "kafka-init-x"}, status: {phase: "Running",
+     containerStatuses: [{name: "init", ready: true, restartCount: 1, state: {running: {}},
+       lastState: {terminated: {reason: "Completed", exitCode: 0}}}]}}]}' \
   >"$ks/cluster.pods.json"
+# The log of the attempt before: 45 lines, so only the last 40 may reach the artifact; the first five hold a marker.
+mkdir -p "$ks/logs"
+{
+  for i in 1 2 3 4 5; do echo "EARLY-LINE-MARKER $i"; done
+  echo "ERROR sasl login: password=hunter2 rejected"
+  echo "ERROR sasl login with $kafka_secret failed, retry with $kafka_secret"
+  echo "config SECRET_KEY: abc123 token=xyz Credential=foo"
+  echo "plain line stays"
+  for i in $(seq 1 36); do echo "filler $i"; done
+} >"$ks/logs/svp-data.kafka-0.kafka.previous"
+echo "WEB-LOG-MARKER" >"$ks/logs/svp.web-0.web.previous"
 jq -n '{items: [{metadata: {namespace: "svp-data", name: "kafka-init"}, status: {failed: 2, conditions: [
   {type: "Failed", status: "True", reason: "BackoffLimitExceeded", message: "JOB-MESSAGE-MARKER"}]}}]}' \
   >"$ks/cluster.jobs.json"
@@ -842,11 +859,24 @@ for m in SPEC-MARKER COND-MESSAGE-MARKER WAIT-MESSAGE-MARKER JOB-MESSAGE-MARKER;
   if grep -qF -- "$m" "$st"; then fail "state: no $m"; else ok "state: no $m"; fi
 done
 if [ "$(grep -c -e '^--context k3d-svp get ' -e '^helm --kube-context k3d-svp ' "$ks/calls")" = 4 ] &&
-  [ "$(wc -l <"$ks/calls" | tr -d ' ')" = 4 ] && ! grep -qi secret "$ks/calls"; then
-  ok "state: four reads, each on context k3d-svp, no Secret"
+  [ "$(wc -l <"$ks/calls" | tr -d ' ')" = 5 ] && ! grep -qi secret "$ks/calls"; then
+  ok "state: four reads and one log, each on context k3d-svp, no Secret"
 else
-  fail "state: four reads, each on context k3d-svp, no Secret"
+  fail "state: four reads and one log, each on context k3d-svp, no Secret"
 fi
+same "state: the log is read from the attempt before, of the one container that crashed in a log namespace" \
+  '--context k3d-svp -n svp-data logs kafka-0 -c kafka --previous --tail=40 --request-timeout=10s' \
+  "$(grep ' logs ' "$ks/calls")"
+same "state: the last 40 lines of the log, no earlier one" '40 0' \
+  "$(jq -r '.logs[0].lines | "\(length) \(map(select(startswith("EARLY-LINE-MARKER"))) | length)"' "$st" 2>/dev/null)"
+same "state: the log of a container in namespace svp is not taken" '1 svp-data/kafka-0/kafka' \
+  "$(jq -r '"\(.logs | length) \(.logs[0] | "\(.namespace)/\(.pod)/\(.container)")"' "$st" 2>/dev/null)"
+same "state: a known value in a log line becomes ***, once per occurrence" \
+  'ERROR sasl login with *** failed, retry with ***' "$(jq -r '.logs[0].lines[] | select(startswith("ERROR sasl login with"))' "$st" 2>/dev/null)"
+same "state: password=, secret, token, credential pairs of a log line become ***" \
+  'ERROR sasl login: *** rejected | config *** *** *** | plain line stays' \
+  "$(jq -r '.logs[0].lines | [.[] | select(startswith("ERROR sasl login:") or startswith("***") or startswith("config")
+    or . == "plain line stays")] | join(" | ")' "$st" 2>/dev/null)"
 collect_out=$so collect state "$work/secrets-k3d"
 expect state "\$SVP_VERIFY_OUT/k8s-state.json" kept
 no_leak state

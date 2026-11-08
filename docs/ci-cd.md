@@ -483,7 +483,7 @@ Trang một lượt chạy (Actions → chọn lượt) có đồ thị job, dan
   - `files.txt`: file nào được giữ, file nào bị bỏ và theo luật nào; rồi report JUnit của diễn tập Chainsaw (`k8s-drills/<diễn tập>-<UTC>.xml`),
     dòng kết luận của `drill-obs-threats` (`logs/drill-obs-threats.verdicts.log`), số đo admission (`logs/gitops-admission-metrics.log`)
     và, khi bước `make k8s-up` của `dev-k3d` đỏ, trạng thái cluster `k8s-state.json` của `deploy/ci/verify-k8s-state.sh` (pod và container,
-    Job, event `Warning` đã mask, release Helm; không spec, log hay giá trị Secret).
+    Job, event `Warning` đã mask, release Helm, và 40 dòng cuối log lần chạy trước của container crash ở namespace hạ tầng, đã che; không spec hay giá trị Secret).
     Output của các bước khác không lên artifact (có thể trích log service hay container bên thứ ba): bước đỏ thì đọc report JUnit, hay
     chạy lại đúng lệnh `make` của bước đó trên máy.
 - **Chạy lại:** "Re-run failed jobs" tạo một lần chạy mới (attempt) của cùng lượt; mỗi attempt có log và artifact riêng.

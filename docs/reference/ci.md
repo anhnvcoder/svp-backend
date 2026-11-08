@@ -455,12 +455,18 @@ Các script này chạy trong job của `verify.yml` (kịch bản, bước và 
     nhị phân 200 KiB.
 - **`verify-k8s-state.sh`** ghi trạng thái cluster `k3d-svp` vào `$SVP_VERIFY_OUT/k8s-state.json` khi `make k8s-up` của job `dev-k3d` đỏ: log của bước
   dựng ở lại runner, nên artifact chỉ nhận phần máy đọc này. Bước "Mask what the build step added" gọi nó sau `verify-mask.sh cluster` (outcome của
-  `k8s-up` qua `env:`), trong cùng hạn 3 phút, nên ngân sách `timeout-minutes` của job không đổi. Chỉ lấy trường trạng thái, không spec, log hay
-  termination message: pod (namespace, tên, phase, điều kiện chưa đạt; mỗi container và init container: `ready`, `restartCount`, lý do waiting,
+  `k8s-up` qua `env:`), trong cùng hạn 3 phút, nên ngân sách `timeout-minutes` của job không đổi. Chỉ lấy trường trạng thái, không spec hay
+  termination message, và log trong đúng một trường hợp (xem "Log của container crash" dưới): pod (namespace, tên, phase, điều kiện chưa đạt; mỗi container và init container: `ready`, `restartCount`, lý do waiting,
   lý do và exit code của lần kết thúc hiện tại và trước đó), Job (số đang chạy, xong, lỗi; điều kiện), event `Warning` (reason, số lần, lần cuối, đối tượng,
   message với mọi giá trị của `env.values`, `cluster.values` thay bằng `***`), release Helm (namespace, tên, revision, trạng thái, chart, lần cập nhật).
   `kubectl`, `helm` chỉ với context `k3d-svp`, mỗi lần đọc của `kubectl` hạn 10 giây; đọc không được thì thoát 1, không ghi file, bước vẫn xanh.
   `verify-collect.sh` dò file lại như mọi file đọc từ cluster.
+  - **Log của container crash** (trường `logs`): chẩn đoán một broker hay operator crash cần log của nó, mà log của bước dựng ở lại runner.
+    Chỉ container (kể cả init container) đang `CrashLoopBackOff` hay có lần chạy trước thoát khác 0, ở namespace của `log_tail_namespaces`
+    (`deploy/k8s/lib.sh`, script đọc dòng đó chứ không `source`), trừ pod Postgres của CloudNativePG và GlitchTip như `unready_report`:
+    `kubectl logs --previous --tail=40` của lần chạy trước, cắt lại còn 40 dòng cuối. Che hai lớp trên mỗi dòng: mọi giá trị của `env.values`,
+    `cluster.values` thành `***`, rồi mẫu `(password|secret|token|credential)[^ ]*[=:] *\S+` (không phân biệt hoa thường) thành `***`.
+    Log không đọc được thì container đó bị bỏ, không làm bước đỏ thêm; `verify-collect.sh` vẫn dò file như trên.
 - **`verify-collect.sh`** dựng artifact công khai của một lượt: chép file của danh sách cho phép vào `$SVP_VERIFY_ARTIFACT` (mặc định `verify-artifact` trong `$RUNNER_TEMP`, `/tmp` trên máy), mỗi file
   chỉ sau khi dò, rồi in vào log job bản tóm tắt chỉ lấy từ các bản chép. Ai cũng đọc được artifact và log của repo public, nên nó đóng khi nghi ngờ: file không chắc thì bỏ, kèm cảnh báo
   (annotation trên GitHub) nêu file và luật, không bao giờ nêu đoạn khớp.
