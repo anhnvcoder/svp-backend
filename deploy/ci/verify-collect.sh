@@ -127,7 +127,7 @@ if [ -d "$out" ]; then
       logs/drill-obs-threats.log)
         grep -aE -e "$verdict_re" -e "$drill_end_re" "$file" | grep -avE -- "$service_log_re" >"$work/verdicts" || :
         consider "$work/verdicts" "$src (verdict lines)" logs/drill-obs-threats.verdicts.log verdicts ;;
-      logs/gitops-admission-metrics.log)
+      logs/gitops-admission-metrics.log | k8s-state.json)
         consider "$file" "$src" "$sub" stack ;;
       *) drop "$src" not-allowed ;;
     esac

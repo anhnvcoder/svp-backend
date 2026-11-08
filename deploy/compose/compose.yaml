@@ -193,11 +193,12 @@ services:
       - *ops-volume
       - svp-tls:/etc/svp-tls:ro
       - *ca-volume
-    # broker.sh writes its configuration under /tmp, and the broker and tools log to stdout only. Not noexec: the
-    # compression libraries unpack their native code into /tmp.
+    # broker.sh writes its configuration under /tmp, and the broker and tools log to stdout only. exec, since Docker
+    # mounts a tmpfs noexec by default: the compression libraries (snappy, zstd) unpack their native code into /tmp
+    # and load it from there, and without it the broker cannot append a snappy batch.
     read_only: true
     tmpfs:
-      - /tmp:size=64m
+      - /tmp:size=64m,exec
     cap_drop: [ALL]
     security_opt: ["no-new-privileges:true"]
     healthcheck:

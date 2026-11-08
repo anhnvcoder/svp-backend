@@ -88,6 +88,11 @@ kafka:
   resources:
     requests: {cpu: 100m, memory: 768Mi}
     limits: {cpu: "1", memory: 1280Mi}
+  # Job kafka-init: about forty Kafka CLI commands of one JVM each, and a JVM's start is CPU bound. Under the 500m of
+  # the other init Jobs the script runs about as long as Helm's timeout; one core makes it a few times faster.
+  initResources:
+    requests: {cpu: 50m, memory: 64Mi}
+    limits: {cpu: "1", memory: 512Mi}
 
 # Deployment svp-ops: the one place in the cluster where scripts, drills and runbooks run the Kafka CLI and valkey-cli
 # (kubectl exec deploy/svp-ops -c kafka -- /opt/svp/bin/svp-kafka ..., -c valkey -- /opt/svp/bin/svp-valkey ...), as
@@ -122,6 +127,7 @@ s3:
 
 # The init Jobs (Postgres bootstrap, the object store s3, Kafka). waitSeconds bounds how long the first two wait for
 # their server after an install or upgrade before they fail; kafka-init.sh retries its login for ten minutes itself.
+# resources: of the first two; Job kafka-init has kafka.initResources.
 initJobs:
   waitSeconds: 300
   resources:

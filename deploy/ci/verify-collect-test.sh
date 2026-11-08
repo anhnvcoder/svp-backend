@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Tests verify-collect.sh, verify-mask.sh, deploy/k8s/lib.sh reports, and gitops.sh follow with fake fixtures.
+# Tests verify-collect.sh, verify-mask.sh, verify-k8s-state.sh, deploy/k8s/lib.sh reports, gitops.sh follow with fakes.
 # Fake secrets are generated at run time so no repository file holds one; fake kubectl isolates the run.
 # Runs on macOS and Linux: no network, Docker, or cluster needed.
 # Usage, from anywhere: deploy/ci/verify-collect-test.sh
@@ -780,6 +780,86 @@ expect rebuilt .k8s/drills/rebuilt-1.json secret-value
 no_leak rebuilt
 rm -rf "$work/kube" "$d/rebuilt-1.json"
 mv "$work/kube.orig" "$work/kube"
+
+# The state of a cluster whose build failed: status fields only, and no kept value in an event message.
+ks=$work/kube-state
+so=$work/out-state
+mkdir -p "$ks" "$so" && echo dev-k3d >"$so/scenario"
+cat >"$work/bin/helm" <<'EOF'
+#!/usr/bin/env bash
+echo "helm $*" >>"$FAKE_KUBECTL_DIR/calls"
+[ "${FAKE_KUBECTL_FAIL:-}" = 1 ] && { echo "Kubernetes cluster unreachable" >&2; exit 1; }
+[ "$*" = "--kube-context k3d-svp list -A -a -o json" ] || exit 2
+cat "$FAKE_KUBECTL_DIR/releases.json"
+EOF
+chmod 755 "$work/bin/helm"
+jq -n --arg s "$cluster_secret" '{items: [
+  {metadata: {namespace: "svp-data", name: "kafka-0"},
+   spec: {containers: [{name: "kafka", env: [{name: "X", value: "SPEC-MARKER"}]}]},
+   status: {phase: "Running", conditions: [{type: "PodScheduled", status: "True"},
+     {type: "Ready", status: "False", reason: "ContainersNotReady", message: "COND-MESSAGE-MARKER"}],
+     containerStatuses: [{name: "kafka", ready: false, restartCount: 4, state: {waiting: {reason: "CrashLoopBackOff",
+       message: "WAIT-MESSAGE-MARKER"}}, lastState: {terminated: {reason: "Error", exitCode: 1, message: $s}}}]}},
+  {metadata: {namespace: "svp-data", name: "svp-ops-abc"}, status: {phase: "Pending",
+     conditions: [{type: "PodScheduled", status: "False", reason: "Unschedulable"}],
+     initContainerStatuses: [{name: "wait", ready: false, restartCount: 0, state: {running: {}}}]}}]}' \
+  >"$ks/cluster.pods.json"
+jq -n '{items: [{metadata: {namespace: "svp-data", name: "kafka-init"}, status: {failed: 2, conditions: [
+  {type: "Failed", status: "True", reason: "BackoffLimitExceeded", message: "JOB-MESSAGE-MARKER"}]}}]}' \
+  >"$ks/cluster.jobs.json"
+jq -n --arg m "Readiness probe failed: AUTH $kafka_secret refused, again $kafka_secret" '{items: [
+  {metadata: {namespace: "svp-data", name: "kafka-0.1"}, type: "Warning", reason: "Unhealthy", count: 7,
+   lastTimestamp: "2026-11-08T14:20:00Z", involvedObject: {kind: "Pod", namespace: "svp-data", name: "kafka-0"},
+   message: $m}]}' >"$ks/cluster.events.json"
+echo '[{"name": "svp-data", "namespace": "svp-data", "revision": "1", "status": "failed", "chart": "svp-data-0.1.0",
+  "app_version": "", "updated": "2026-11-08 14:13:00 +0000 UTC"}]' >"$ks/releases.json"
+: >"$ks/calls"
+# state NAME OUT [VAR=VALUE...]: runs verify-k8s-state.sh into OUT against the fixture of $ks.
+state() {
+  local name=$1 o=$2
+  shift 2
+  env "${job[@]}" PATH="$work/bin:$PATH" FAKE_KUBECTL_DIR="$ks" SVP_VERIFY_OUT="$o" SVP_VERIFY_SECRETS="$work/secrets-k3d" \
+    "$@" "$here/verify-k8s-state.sh" >"$work/$name.log" 2>&1
+}
+if state state "$so"; then ok "state: exit 0"; else fail "state: exit 0"; fi
+st=$so/k8s-state.json
+same "state: a container's readiness, restarts, waiting reason and how its attempt before ended" \
+  '{"name":"kafka","ready":false,"restartCount":4,"waiting":"CrashLoopBackOff","terminated":null,"lastTerminated":{"reason":"Error","exitCode":1}}' \
+  "$(jq -c '.pods[0].containers[0]' "$st" 2>/dev/null)"
+same "state: only the unmet conditions of a pod, type and reason" '[{"type":"Ready","reason":"ContainersNotReady"}]' \
+  "$(jq -c '.pods[0].unmetConditions' "$st" 2>/dev/null)"
+same "state: a pending pod and its init containers" 'Pending Unschedulable wait' \
+  "$(jq -r '.pods[1] | "\(.phase) \(.unmetConditions[0].reason) \(.initContainers[0].name)"' "$st" 2>/dev/null)"
+same "state: a Job's failures and conditions, without their message" \
+  '{"failed":2,"conditions":[{"type":"Failed","status":"True","reason":"BackoffLimitExceeded"}]}' \
+  "$(jq -c '.jobs[0] | {failed, conditions}' "$st" 2>/dev/null)"
+same "state: a Warning event, each kept value of its message replaced" \
+  '{"namespace":"svp-data","reason":"Unhealthy","count":7,"lastTimestamp":"2026-11-08T14:20:00Z","object":{"kind":"Pod","namespace":"svp-data","name":"kafka-0"},"message":"Readiness probe failed: AUTH *** refused, again ***"}' \
+  "$(jq -c '.warnings[0]' "$st" 2>/dev/null)"
+same "state: a Helm release and its status" 'svp-data svp-data failed 1' \
+  "$(jq -r '.releases[0] | "\(.namespace) \(.name) \(.status) \(.revision)"' "$st" 2>/dev/null)"
+for m in SPEC-MARKER COND-MESSAGE-MARKER WAIT-MESSAGE-MARKER JOB-MESSAGE-MARKER; do
+  if grep -qF -- "$m" "$st"; then fail "state: no $m"; else ok "state: no $m"; fi
+done
+if [ "$(grep -c -e '^--context k3d-svp get ' -e '^helm --kube-context k3d-svp ' "$ks/calls")" = 4 ] &&
+  [ "$(wc -l <"$ks/calls" | tr -d ' ')" = 4 ] && ! grep -qi secret "$ks/calls"; then
+  ok "state: four reads, each on context k3d-svp, no Secret"
+else
+  fail "state: four reads, each on context k3d-svp, no Secret"
+fi
+collect_out=$so collect state "$work/secrets-k3d"
+expect state "\$SVP_VERIFY_OUT/k8s-state.json" kept
+no_leak state
+if state state-dead "$work/out-state-dead" FAKE_KUBECTL_FAIL=1; then
+  fail "state: a cluster that does not answer fails the step"
+else
+  ok "state: a cluster that does not answer fails the step"
+fi
+if [ -e "$work/out-state-dead/k8s-state.json" ]; then
+  fail "state: no file from a cluster that does not answer"
+else
+  ok "state: no file from a cluster that does not answer"
+fi
 
 echo compose-obs >"$out/scenario"
 printf '%s\n' '--- PASS: TestIntegrationPresignedPost (0.20s)' \

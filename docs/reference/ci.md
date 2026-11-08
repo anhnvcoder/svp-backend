@@ -225,7 +225,7 @@ Loại tài liệu (Diátaxis): **reference**, tra cứu khi cần một lệnh 
     drill-k8s-reloader" của job `gitops` và `dev-k3d` (trước bước dựng: `deploy/k8s/drills/reloader/new-values.sh` sinh giá trị mới vào
     file 600 ở `$RUNNER_TEMP/verify-reloader`, mask từng giá trị lúc sinh, diễn tập đọc qua `SVP_DRILL_NEW_VALUES`), `verify-collect.sh`
     (artifact `verify-<kịch bản>`, giữ 30 ngày: chỉ kết quả máy đọc theo danh sách cho phép: `results.tsv`, `scenario`, `df-before.txt`, dòng kết
-    luận của `drill-obs-threats`, số đo admission, `.k8s/drills/{*.xml,*-skips.tsv,*.json,traffic-*.log}` gồm report JUnit của diễn tập Chainsaw và `<diễn tập>-skips.tsv` (mỗi
+    luận của `drill-obs-threats`, số đo admission, `k8s-state.json` khi `make k8s-up` đỏ, `.k8s/drills/{*.xml,*-skips.tsv,*.json,traffic-*.log}` gồm report JUnit của diễn tập Chainsaw và `<diễn tập>-skips.tsv` (mỗi
     dòng một ca SKIP kèm lý do, dòng cuối `total`: report JUnit tính bước SKIP là xanh nên file này mới cho biết ca nào bị bỏ; quét bí mật như file
     khác); output của các bước khác không bao giờ lên; quét theo giá trị bí mật đã biết và theo mẫu (JWT, Bearer, `Set-Cookie`, khoá riêng, cookie phiên), file
     nghi bị bỏ kèm `::warning::`, `files.txt` liệt kê file giữ và bỏ). `deploy/ci/verify-collect-test.sh` chạy trên máy và ở job `config` (giá
@@ -453,14 +453,22 @@ Các script này chạy trong job của `verify.yml` (kịch bản, bước và 
     nhiều mảnh ngắn; mask các mảnh đó vô hại, còn dạng đã lưu (base64 thuần) vẫn được mask nguyên. Điểm cắt là các code point mà `[[:cntrl:]]` của `jq` khớp (U+0000–001F,
     U+007F–009F) và U+FFFD, mỗi cái đổi thành newline rồi tách, thời gian tỉ lệ với giá trị: `splits()` của `jq` với regex chạy trong thời gian tăng theo bình phương, hàng phút với một giá trị
     nhị phân 200 KiB.
+- **`verify-k8s-state.sh`** ghi trạng thái cluster `k3d-svp` vào `$SVP_VERIFY_OUT/k8s-state.json` khi `make k8s-up` của job `dev-k3d` đỏ: log của bước
+  dựng ở lại runner, nên artifact chỉ nhận phần máy đọc này. Bước "Mask what the build step added" gọi nó sau `verify-mask.sh cluster` (outcome của
+  `k8s-up` qua `env:`), trong cùng hạn 3 phút, nên ngân sách `timeout-minutes` của job không đổi. Chỉ lấy trường trạng thái, không spec, log hay
+  termination message: pod (namespace, tên, phase, điều kiện chưa đạt; mỗi container và init container: `ready`, `restartCount`, lý do waiting,
+  lý do và exit code của lần kết thúc hiện tại và trước đó), Job (số đang chạy, xong, lỗi; điều kiện), event `Warning` (reason, số lần, lần cuối, đối tượng,
+  message với mọi giá trị của `env.values`, `cluster.values` thay bằng `***`), release Helm (namespace, tên, revision, trạng thái, chart, lần cập nhật).
+  `kubectl`, `helm` chỉ với context `k3d-svp`, mỗi lần đọc của `kubectl` hạn 10 giây; đọc không được thì thoát 1, không ghi file, bước vẫn xanh.
+  `verify-collect.sh` dò file lại như mọi file đọc từ cluster.
 - **`verify-collect.sh`** dựng artifact công khai của một lượt: chép file của danh sách cho phép vào `$SVP_VERIFY_ARTIFACT` (mặc định `verify-artifact` trong `$RUNNER_TEMP`, `/tmp` trên máy), mỗi file
   chỉ sau khi dò, rồi in vào log job bản tóm tắt chỉ lấy từ các bản chép. Ai cũng đọc được artifact và log của repo public, nên nó đóng khi nghi ngờ: file không chắc thì bỏ, kèm cảnh báo
   (annotation trên GitHub) nêu file và luật, không bao giờ nêu đoạn khớp.
   - Danh sách cho phép là kết quả máy đọc, không bao giờ output của một bước (có thể trích log của service hay container bên thứ ba, mà artifact không được giữ; nó ở lại runner). Từ kết quả của lượt
     (`$SVP_VERIFY_OUT`, mặc định `verify` trong `$RUNNER_TEMP`, không bao giờ tải cả thư mục): file ghi ngay trên runner là `results.tsv` (bảng bước, `steps.sh`), `scenario`,
     `df-before.txt` (`verify-host.sh`); file đọc từ stack hay cluster là `logs/drill-obs-threats.log`, trong đó chỉ dòng kết luận (`ok`, `PASS`, `FAIL`, `SKIP`, `WARN` và dòng đóng
-    "drill-obs-threats: all checks passed"; không dòng log JSON hay trích access log) vào artifact, dưới tên `logs/drill-obs-threats.verdicts.log`, và `logs/gitops-admission-metrics.log`
-    (các dòng tóm tắt của `admission-metrics.sh`). Mọi file khác ở đó (output của mọi bước khác) được liệt kê trong `files.txt` là `not-allowed`.
+    "drill-obs-threats: all checks passed"; không dòng log JSON hay trích access log) vào artifact, dưới tên `logs/drill-obs-threats.verdicts.log`, `logs/gitops-admission-metrics.log`
+    (các dòng tóm tắt của `admission-metrics.sh`) và `k8s-state.json` (`verify-k8s-state.sh`). Mọi file khác ở đó (output của mọi bước khác) được liệt kê trong `files.txt` là `not-allowed`.
   - Từ checkout (đều đọc từ stack hay cluster): `.k8s/drills/*.xml` (report JUnit của mỗi diễn tập Chainsaw), `*-skips.tsv` (danh sách ca SKIP và lý do: report JUnit tính SKIP là qua),
     `*.json` và `traffic-*.log` (mỗi dòng một thời điểm, user, route, status, độ trễ). Mọi thứ khác dưới chỗ đó được liệt kê `not-allowed`: log của mỗi diễn tập Chainsaw và mọi log service không bao giờ
     vào; file ẩn bị bỏ bằng luật riêng kèm cảnh báo. Phần còn lại của checkout (`.env`, kubeconfig, `.k8s/ca.*`, `.k8s/helm/`) không được nhìn tới.

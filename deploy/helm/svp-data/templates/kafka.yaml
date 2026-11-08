@@ -206,7 +206,7 @@ spec:
                 name: kafka-users
           {{- end }}
           resources:
-            {{- toYaml .Values.initJobs.resources | nindent 12 }}
+            {{- toYaml .Values.kafka.initResources | nindent 12 }}
           securityContext:
             {{- include "svp-data.containerSecurityContext" . | nindent 12 }}
           volumeMounts:
