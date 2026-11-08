@@ -11,7 +11,7 @@ source "$(dirname "${BASH_SOURCE[0]}")/../lib.sh"
 read -r -a compose_cmd <<<"$COMPOSE"
 
 # Every service a drill may stop or kill; on exit they are all started again.
-stack_services=(redpanda s3 user-service video-service engagement-service feed-service gateway media-worker)
+stack_services=(kafka s3 user-service video-service engagement-service feed-service gateway media-worker)
 
 compose() { "${compose_cmd[@]}" "$@"; }
 
@@ -365,7 +365,7 @@ obs_preflight() {
 metrics_wait=${metrics_wait:-60}
 
 # metrics_fresh AGE: AGE (seconds, or never) is under 45 s, the freshness the alert rules ask of
-# every gauge (ADR-0011 §8).
+# every gauge.
 metrics_fresh() { awk -v a="$1" 'BEGIN { exit !(a != "never" && a + 0 < 45) }'; }
 
 # sample_age AGE: AGE in words, for a line.

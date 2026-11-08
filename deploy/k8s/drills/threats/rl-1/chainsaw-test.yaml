@@ -114,10 +114,6 @@ spec:
           EOF
             done
             rl1_t_start=$(valkey_now)
-            # valkey-cli through kubectl exec runs in the Valkey container, so its CPU counts against Valkey's CPU limit, which
-            # one exec can use up for the current 100 ms period: Valkey then waits for the next period, longer than the
-            # gateway's 50 ms. The logins start a second after the test's last exec there.
-            sleep 1
             rl1_pods_before=$(gateway_pods) || rl1_pods_before=
             curl -sS --parallel --parallel-max "$rl1_parallel" -K "$work/rl1.curl" >"$work/rl1.wo" || true
             rl1_t_end=$(valkey_now)

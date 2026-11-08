@@ -1,6 +1,6 @@
 # 0049. Kafka của prd là Redpanda trong cluster bằng đúng chart và component `redpanda` của stg: ba broker mỗi AZ một, topic replication factor 3 với `acks=all` (đa số Raft 2/3 thay `min.insync.replicas=2`), mỗi broker nửa core để vừa ba node của prd
 
-- Trạng thái: Chấp nhận
+- Trạng thái: Bị thay bởi [0053](0053-msk-elasticache-valkey.md)
 - Ngày: 2026-11-05
 - Người quyết: AI theo giao của người học (2026-11-05)
 

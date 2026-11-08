@@ -9,9 +9,16 @@ lệnh ở [`reference/compose.md`](../reference/compose.md), [`reference/k8s.md
 Vì sao: [ADR-0011](../adr/0011-observability-stage3.md), so sánh Elastic ở [ADR-0012](../adr/0012-elastic-vs-grafana-stage3.md).
 
 Mọi service đẩy trace, metric (mỗi 15 s) và log qua OTLP/gRPC tới Collector `otelcol` (`otel/opentelemetry-collector-contrib`, nằm
-ở cả mạng `default` và `worker`, cổng 4317 không publish; memory limiter, xoá attribute nhạy cảm, batch, scrape lag Redpanda). Không
+ở cả mạng `default` và `worker`, cổng 4317 không publish; memory limiter, xoá attribute nhạy cảm, batch, đọc lag Kafka). Không
 service nào mở `/metrics` hay pprof.
 
+- **Lag Kafka** ([ADR-0053](../adr/0053-msk-elasticache-valkey.md) §15): receiver `kafka_metrics` (`kafkametrics` của bản contrib
+  đang ghim) đăng nhập `svp-otelcol` SCRAM-SHA-512 trên TLS ở `kafka:9096` mỗi 15 s, scraper `brokers` và `consumers`; ACL của user này chỉ
+  DESCRIBE 8 topic và 4 group nên Collector không đọc hay ghi được record nào. Biến cùng tên ở compose, k3d và EKS:
+  `SVP_OTELCOL_KAFKA_BROKERS`, `SVP_OTELCOL_KAFKA_CA_FILE` (`/etc/svp-ca/ca.crt` ở local, rỗng trên EKS: root hệ thống),
+  `SVP_KAFKA_OTELCOL_PASSWORD`. Client của receiver tạo ở lần scrape đầu, nên broker không tới được chỉ làm hỏng scrape của receiver này.
+  Dashboard, rule, runbook và drill dùng `kafka_consumer_group_lag_ratio`, `kafka_consumer_group_lag_sum_ratio`, `kafka_brokers` (nhãn
+  `kafka_cluster_alias="svp"`).
 - **Profile `obs`** (`make up OBS=lgtm`) thêm `lgtm` (Grafana `127.0.0.1:3000` cùng Prometheus giữ 30 ngày, Loki, Tempo,
   Pyroscope; 5 service đẩy profile tới `lgtm:4040`, media-worker không), `alertmanager` (`127.0.0.1:9093`, gửi `severity=page` tới
   Telegram khi `.env` có bot) và `glitchtip` (`127.0.0.1:8000`, tracker lỗi qua giao thức Sentry, database `svp_glitchtip` trên
@@ -45,8 +52,8 @@ service nào mở `/metrics` hay pprof.
 Vì sao: [ADR-0014](../adr/0014-kubernetes-local-stage4.md) §11.
 
 Cùng SDK và cùng file với compose (rule, dashboard, SLO dùng lại bằng symlink), nhưng tách thành thành phần riêng trong namespace
-`svp-obs`: Collector (OTLP 4317, đẩy metric sang Prometheus bằng OTLP, log sang Loki, trace sang Tempo, scrape `/public_metrics` của
-Redpanda), kube-prometheus-stack (Prometheus, Alertmanager gửi Telegram, Grafana), Loki, Tempo có metrics-generator, Pyroscope,
+`svp-obs`: Collector (OTLP 4317, đẩy metric sang Prometheus bằng OTLP, log sang Loki, trace sang Tempo, đọc lag của
+Kafka bằng receiver `kafka_metrics`), kube-prometheus-stack (Prometheus, Alertmanager gửi Telegram, Grafana), Loki, Tempo có metrics-generator, Pyroscope,
 GlitchTip trên database `svp_glitchtip` của `svp-pg`. Không UI nào có route hay cổng node: chỉ `make k8s-ui-*` (port-forward trên
 `127.0.0.1`), Grafana và GlitchTip có đăng nhập. Sơ đồ cluster ở [`deployment.md`](deployment.md#kubernetes-cục-bộ-k3d).
 
@@ -63,11 +70,11 @@ và Loki qua OTLP/HTTP, Tempo qua OTLP/gRPC. Tên và nhãn metric vì vậy ra 
 dashboard, rule chạy không đổi. Giữ hai file khớp nhau; `make otelcol-validate` kiểm cả hai. Chỉ hàng đợi của exporter khác có chủ
 đích: ở đây giới hạn theo byte, vì ba exporter dùng chung một `memory_limiter`.
 
-- **Redpanda:** lag consumer group và metric broker như ở compose. `/public_metrics` của Admin API Redpanda không cần đăng nhập dù
-  Admin API đòi, nên Collector này không giữ credential của Redpanda. `enable_consumer_group_metrics` do Job `redpanda-init` của
-  chart `svp-data` đặt (`deploy/redpanda/create-topics.sh`). Mọi broker đều được scrape, mỗi broker xuất metric của chính nó: tìm qua
-  bản ghi SRV của cổng `admin` ở Service headless `redpanda`, mỗi broker một bản ghi dù số lượng bao nhiêu, target là tên riêng của
-  broker (`redpanda-<n>.redpanda.svp-data.svc.cluster.local:9644`) nên `instance` giữ tên đó.
+- **Kafka:** lag consumer group và số broker như ở compose, cùng receiver `kafka_metrics` với user `svp-otelcol`, mật khẩu từ Secret
+  `svp-obs/otelcol-kafka` (khoá `password`); k3d nối `kafka.svp-data.svc.cluster.local:9096` và tin CA local, EKS nối bootstrap SCRAM của
+  MSK (`cluster.kafkaBrokers`) với root hệ thống. Receiver hỏi metadata của cluster qua bootstrap nên một cấu hình phủ mọi broker, bao
+  nhiêu cũng vậy. NetworkPolicy egress của Collector mở 9096 tới pod `kafka` (`kafka.mode: cluster`) hay `kafka.external.cidrs`
+  (`external`, dải subnet database).
 - **Bộ nhớ:** trong container 256 MiB (`resources.limits.memory` của chart), Collector từ chối dữ liệu từ 144 MiB heap (giới hạn
   mềm, `limit_mib` trừ `spike_limit_mib`) và ép GC từ 192 MiB, thay vì bị OOM-kill. Một instance phục vụ ba pipeline và đo heap của cả
   tiến trình, nên khi vượt giới hạn mềm mọi receiver bị từ chối, bất kể tín hiệu nào làm đầy nó; hàng đợi exporter có giới hạn giữ

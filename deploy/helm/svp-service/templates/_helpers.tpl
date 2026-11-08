@@ -38,6 +38,10 @@ the kubelet check, seccomp RuntimeDefault, no privilege escalation, no capabilit
 runAsNonRoot: true
 runAsUser: 65532
 runAsGroup: 65532
+{{- if .Values.localCA }}
+# The group a volume of the local CA's Secret (mode 0440) is readable by.
+fsGroup: 65532
+{{- end }}
 seccompProfile:
   type: RuntimeDefault
 {{- end }}

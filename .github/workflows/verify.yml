@@ -42,7 +42,7 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  # Rate-limit key resets during smoke and drill touch only this run's Redis service container.
+  # Rate-limit key resets during smoke and drill touch only this run's Valkey container.
   compose:
     if: github.event_name == 'schedule' || inputs.scenario == 'compose-obs'
     runs-on: ubuntu-24.04
@@ -64,16 +64,6 @@ jobs:
           - 172.17.0.1:5432:5432
         options: >-
           --health-cmd "pg_isready -U postgres"
-          --health-interval 5s
-          --health-timeout 5s
-          --health-retries 20
-      redis:
-        image: docker.io/library/redis:8.8.3-trixie@sha256:418e397fd48d66e450af13baab123397f2d2580b07ef310c3a5dbe96c3d731f1
-        ports:
-          - 127.0.0.1:6379:6379
-          - 172.17.0.1:6379:6379
-        options: >-
-          --health-cmd "redis-cli ping"
           --health-interval 5s
           --health-timeout 5s
           --health-retries 20
@@ -99,11 +89,11 @@ jobs:
           go-version: 1.27.3
           cache-dependency-path: go.sum
       - run: make ci-bridge-check
-      # CLI tools for Postgres bootstrap, Redis rate-limit resets, and smoke test video generation.
+      # CLI tools for Postgres bootstrap and smoke test video generation.
       - name: Install the tools of the scripts
         run: |
           sudo apt-get update -q
-          sudo apt-get install -y -q --no-install-recommends postgresql-client redis-tools ffmpeg jq
+          sudo apt-get install -y -q --no-install-recommends postgresql-client ffmpeg jq
       # Clones svp-gitops to obtain staging web release configuration for make up.
       - name: make gitops-clone
         run: |

@@ -38,7 +38,7 @@ func TestServeMalformedKafkaBrokersNamesTheVariable(t *testing.T) {
 	for _, name := range []string{"SENTRY_DSN", "OTEL_EXPORTER_OTLP_ENDPOINT", "PYROSCOPE_SERVER_ADDRESS"} {
 		t.Setenv(name, "")
 	}
-	for _, brokers := range []string{" , ", "redpanda:notaport"} {
+	for _, brokers := range []string{" , ", "kafka:notaport"} {
 		t.Setenv("KAFKA_BROKERS", brokers)
 		err := serve(t.Context(), slog.New(slog.DiscardHandler))
 		if err == nil || !strings.Contains(err.Error(), "KAFKA_BROKERS") {
@@ -114,7 +114,7 @@ func serveEnv(t *testing.T) {
 func TestServeLogsFailureBeforeClosingReporters(t *testing.T) {
 	serveEnv(t)
 	// Checked after the error tracker is set up, before the database is opened.
-	t.Setenv("KAFKA_BROKERS", "redpanda:notaport")
+	t.Setenv("KAFKA_BROKERS", "kafka:notaport")
 	probe := &failureProbe{}
 	err := serve(t.Context(), slog.New(probe))
 	if err == nil || !strings.Contains(err.Error(), "KAFKA_BROKERS") {
@@ -361,7 +361,7 @@ func TestServeRequiresVerifyKeys(t *testing.T) {
 		"S3_SECRET_ACCESS_KEY": "secret-value",
 	})
 	t.Setenv("DATABASE_URL", "postgres://unused@127.0.0.1:1/unused")
-	t.Setenv("KAFKA_BROKERS", "redpanda:9092")
+	t.Setenv("KAFKA_BROKERS", "kafka:9096")
 	t.Setenv("UPLOAD_ABANDON_AFTER", "")
 	t.Setenv("UPLOAD_SWEEP_INTERVAL", "")
 	for _, keys := range []string{"", "k1:not-base64"} {

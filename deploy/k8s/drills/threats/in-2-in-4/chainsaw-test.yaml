@@ -2,18 +2,18 @@
 # platform.
 
 # Pod probe of namespace svp-probe (PSA restricted, no NetworkPolicy, the image media-worker runs: busybox nc and
-# nslookup) resolves every name below but connects to none: gRPC 9101-9104, gateway 8080, web 3001, Redpanda Kafka 9092
-# and Admin API 9644, Postgres 5432, Valkey 6379, the object store s3 9000. A name that resolves makes a closed port the
-# policy, not a missing service.
+# nslookup) resolves every name below but connects to none: gRPC 9101-9104, gateway 8080, web 3001, Kafka 9096,
+# Postgres 5432, Valkey 6379, the object store s3 9000. A name that resolves makes a closed port the policy, not a
+# missing service.
 
 # The controls show each closed target answers a client the policy lets in: /readyz through Envoy (the gateway reaches
 # user-, video- and feed-service), the explore feed of a drill user with stats on every item in one of up to 3 pages
 # (the gateway reaches engagement-service, which /readyz leaves out on purpose), /healthz (Envoy reaches the gateway).
 
-# Also media-worker reaches Kafka and the object store, Prometheus has up{job="redpanda"} == 1 from a scrape under 120 s
-# old (the Collector scrapes 9644), GlitchTip's pod opens 5432, a login leaves its rate limit key in Valkey (the gateway
-# reaches 6379), the object store's /health/live through Envoy, the web client's /healthz through Envoy (Envoy reaches
-# web:3001).
+# Also media-worker reaches Kafka and the object store, Prometheus has kafka_brokers >= 1 from a scrape under 120 s old
+# (the Collector's kafkametrics receiver logs in to 9096), GlitchTip's pod opens 5432, a login leaves its rate limit key
+# in Valkey (the gateway reaches 6379), the object store's /health/live and the web client's /healthz through Envoy
+# (Envoy reaches web:3001).
 
 # The cleanup of the templates deletes svp-probe and stops the port-forward. LOCAL LAB ONLY: the test deletes the
 # register rate limit keys svp:gw:rl:register:* in the cluster's Valkey db 10 (SCAN + DEL) before it registers its drill
@@ -111,18 +111,11 @@ spec:
     - {name: target, value: web.svp.svc.cluster.local:3001}
     - {name: want, value: dns closed}
     try: *reach
-  - name: "IN-2/IN-4: from svp-probe redpanda.svp-data:9092 closed"
+  - name: "IN-2/IN-4: from svp-probe kafka.svp-data:9096 closed"
     bindings:
     - {name: fromNamespace, value: svp-probe}
     - {name: from, value: pod/probe}
-    - {name: target, value: redpanda.svp-data.svc.cluster.local:9092}
-    - {name: want, value: dns closed}
-    try: *reach
-  - name: "IN-2/IN-4: from svp-probe redpanda-0.redpanda.svp-data:9644 closed"
-    bindings:
-    - {name: fromNamespace, value: svp-probe}
-    - {name: from, value: pod/probe}
-    - {name: target, value: redpanda-0.redpanda.svp-data.svc.cluster.local:9644}
+    - {name: target, value: kafka.svp-data.svc.cluster.local:9096}
     - {name: want, value: dns closed}
     try: *reach
   - name: "IN-2/IN-4: from svp-probe svp-pg-rw.svp-data:5432 closed"
@@ -162,11 +155,11 @@ spec:
             echo "$n"' sh \
             user-service.svp.svc.cluster.local video-service.svp.svc.cluster.local \
             engagement-service.svp.svc.cluster.local feed-service.svp.svc.cluster.local gateway.svp.svc.cluster.local \
-            web.svp.svc.cluster.local redpanda.svp-data.svc.cluster.local redpanda-0.redpanda.svp-data.svc.cluster.local \
+            web.svp.svc.cluster.local kafka.svp-data.svc.cluster.local \
             svp-pg-rw.svp-data.svc.cluster.local valkey.svp-data.svc.cluster.local s3.svp-data.svc.cluster.local
         check:
           ($error): ~
-          (trim_space($stdout)): "11"
+          (trim_space($stdout)): "10"
       continueOnError: true
 
   - name: "IN-2/IN-4: control: /readyz through Envoy 200: the gateway reaches user-, video- and feed-service (9101, 9102, 9104)"
@@ -194,15 +187,15 @@ spec:
           umask 077
           keys=$(mktemp)
           trap 'rm -f "$keys"' EXIT
-          kubectl --context k3d-svp -n svp-data exec deploy/valkey -c valkey -- \
-            valkey-cli -n 10 --scan --pattern 'svp:gw:rl:register:*' >"$keys"
+          kubectl --context k3d-svp -n svp-data exec deploy/svp-ops -c valkey -- \
+            /opt/svp/bin/svp-valkey -n 10 --scan --pattern 'svp:gw:rl:register:*' >"$keys"
           n=0
           while IFS= read -r key; do
             [ -n "$key" ] || continue
-            kubectl --context k3d-svp -n svp-data exec deploy/valkey -c valkey -- valkey-cli -n 10 DEL "$key" >/dev/null
+            kubectl --context k3d-svp -n svp-data exec deploy/svp-ops -c valkey -- /opt/svp/bin/svp-valkey -n 10 DEL "$key" >/dev/null
             n=$((n + 1))
           done <"$keys"
-          echo "register rate limit reset ($n keys deleted in Valkey db 10 of cluster svp)"
+          echo "register rate limit reset ($n keys deleted in Valkey db 10 of cluster svp, through svp-ops)"
         check:
           ($error): ~
   # The drill user is registered and logged in here; its access token stays in a private temporary file, never printed.
@@ -250,11 +243,11 @@ spec:
     - {name: url, value: https://api.svp.localhost:8443/healthz}
     - {name: want, value: "200"}
     try: *status
-  - name: "IN-2/IN-4: control: from media-worker redpanda.svp-data:9092 open"
+  - name: "IN-2/IN-4: control: from media-worker kafka.svp-data:9096 open"
     bindings:
     - {name: fromNamespace, value: svp}
     - {name: from, value: deploy/media-worker}
-    - {name: target, value: redpanda.svp-data.svc.cluster.local:9092}
+    - {name: target, value: kafka.svp-data.svc.cluster.local:9096}
     - {name: want, value: dns open}
     try: *reach
   - name: "IN-2/IN-4: control: from media-worker s3.svp-data:9000 open"
@@ -267,9 +260,10 @@ spec:
   - name: "IN-2/IN-4: setup: port-forward to Prometheus on 127.0.0.1:19090"
     use:
       template: ../../templates/port-forward.yaml
-  # The age comes from timestamp() of the plain selector: on an expression such as `up == 1` it returns the evaluation
-  # time instead.
-  - name: "IN-2/IN-4: control: Prometheus has up{job=\"redpanda\"} == 1 from a scrape under 120 s old: the Collector scrapes redpanda-0:9644"
+  # The age comes from timestamp() of the plain selector: on an expression such as `kafka_brokers >= 1` it returns the
+  # evaluation time instead. The receiver's brokers scraper needs only the login and TLS, so a fresh sample of at least
+  # one broker shows the Collector reaches Kafka.
+  - name: "IN-2/IN-4: control: Prometheus has kafka_brokers{kafka_cluster_alias=\"svp\"} >= 1 from a scrape under 120 s old: the Collector logs in to kafka:9096"
     try:
     - script:
         content: |
@@ -277,16 +271,17 @@ spec:
           promql() {
             curl -sf --max-time 10 http://127.0.0.1:19090/api/v1/query --data-urlencode "query=$1" | jq -c '.data.result'
           }
-          up=$(promql 'up{job="redpanda"}' | jq -r 'if length > 0 and all(.[]; .value[1] == "1") then "1" else (map(.value[1]) | join(",")) end')
-          age=$(promql 'time() - timestamp(up{job="redpanda"})' | jq -r 'map(.value[1] | tonumber) | max // empty')
+          up=$(promql 'kafka_brokers{kafka_cluster_alias="svp"}' |
+            jq -r 'if length > 0 and all(.[]; (.value[1] | tonumber) >= 1) then "1" else (map(.value[1]) | join(",")) end')
+          age=$(promql 'time() - timestamp(kafka_brokers{kafka_cluster_alias="svp"})' | jq -r 'map(.value[1] | tonumber) | max // empty')
           if [ "$up" = 1 ] && [ -n "$age" ] && awk -v a="$age" 'BEGIN { exit !(a < 120) }'; then
-            echo "up 1, fresh"
+            echo "brokers seen, fresh"
           else
-            echo "up '$up', age '$age'"
+            echo "brokers '$up', age '$age'"
           fi
         check:
           ($error): ~
-          (trim_space($stdout)): up 1, fresh
+          (trim_space($stdout)): brokers seen, fresh
       continueOnError: true
   - name: "IN-2/IN-4: control: GlitchTip's pod (svp-obs) opens svp-pg-rw.svp-data:5432"
     try:
@@ -322,8 +317,8 @@ spec:
           status=$(curl -sS --max-time 5 -o /dev/null -w '%{http_code}' -X POST -H 'Content-Type: application/json' \
             --data-binary "@$work/login.json" https://api.svp.localhost:8443/auth/login || true)
           hash=$(printf '%s' "$email" | tr 'A-Z' 'a-z' | shasum -a 256 | cut -c1-32)
-          keys=$(kubectl --context k3d-svp -n svp-data exec deploy/valkey -c valkey -- \
-            valkey-cli -n 10 --scan --pattern "svp:gw:rl:login-email:*:$hash" | wc -l | tr -d ' ')
+          keys=$(kubectl --context k3d-svp -n svp-data exec deploy/svp-ops -c valkey -- \
+            /opt/svp/bin/svp-valkey -n 10 --scan --pattern "svp:gw:rl:login-email:*:$hash" | wc -l | tr -d ' ')
           echo "status $status, keys $keys"
         check:
           ($error): ~

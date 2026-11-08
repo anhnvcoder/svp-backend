@@ -47,7 +47,7 @@ value() {
 # (deploy/k8s/secrets.sh; with External Secrets, the ExternalSecrets of chart svp-cluster build these same Secrets from
 # the source Secrets of svp-secrets, which are not among those namespaces).
 changes='SVP_S3_ROOT_PASSWORD svp-data/s3-root
-SVP_KAFKA_ADMIN_PASSWORD svp-data/redpanda-bootstrap svp-data/redpanda-superusers
+SVP_KAFKA_ADMIN_PASSWORD svp-data/kafka-admin svp-data/svp-ops
 SVP_VIDEO_APP_DB_PASSWORD svp-data/pg-roles svp/video-service-env
 SVP_KAFKA_FEED_SERVICE_PASSWORD svp-data/kafka-users svp/feed-service-env
 SVP_KAFKA_KEDA_PASSWORD svp-data/kafka-users keda/keda-kafka
@@ -61,8 +61,8 @@ NEXT_SERVER_ACTIONS_ENCRYPTION_KEY svp/web-env'
 # inputs of the init Jobs of svp-data, <service>-migrate-env, glitchtip-admin and Alertmanager's (read from files).
 # Written from the table, not from the workloads' annotations, so that a workload that does not opt in fails.
 readers='svp-data/s3-root StatefulSet/svp-data/s3
-svp-data/redpanda-bootstrap StatefulSet/svp-data/redpanda
-svp-data/redpanda-superusers StatefulSet/svp-data/redpanda
+svp-data/svp-ops Deployment/svp-data/svp-ops
+svp-data/valkey-acl Deployment/svp-data/valkey
 svp/user-service-env Deployment/svp/user-service
 svp/video-service-env Deployment/svp/video-service
 svp/engagement-service-env Deployment/svp/engagement-service
@@ -76,7 +76,7 @@ svp-obs/grafana-admin Deployment/svp-obs/kps-grafana
 keda/keda-kafka Deployment/keda/keda-operator'
 
 namespaces="svp svp-data svp-obs keda"
-init_job_names="pg-bootstrap redpanda-init s3-init"
+init_job_names="pg-bootstrap kafka-init s3-init"
 
 # expected_secrets: every Secret the drill's change writes, one per line, sorted.
 expected_secrets() { printf '%s\n' "$changes" | awk '{ for (i = 2; i <= NF; i++) print $i }' | LC_ALL=C sort -u; }
@@ -124,7 +124,7 @@ secret_versions() {
 # changed_secrets BEFORE AFTER: the Secrets of two secret_versions files whose version differs, or that only one has.
 changed_secrets() { LC_ALL=C join -a 1 -a 2 -e - -o 0,1.2,2.2 "$1" "$2" | awk '$2 != $3 { print $1 }'; }
 
-# init_jobs FILE: one line "name uid succeeded" per init Job of chart svp-data there is (pg-bootstrap, redpanda-init,
+# init_jobs FILE: one line "name uid succeeded" per init Job of chart svp-data there is (pg-bootstrap, kafka-init,
 # s3-init: hooks of the chart, a new Job at each sync).
 init_jobs() {
   kc -n svp-data get jobs.batch -o json | jq -r --arg names " $init_job_names " \
@@ -420,19 +420,19 @@ control_check() {
   return $rc
 }
 
-# rpk_login USER old|new VARIABLE: rpk cluster info in the broker container as Kafka user USER with the old or new
-# value of VARIABLE (on stdin, read into RPK_PASS, rpk's own variable); prints ok, or the first Kafka error code rpk
-# printed (none when it printed none).
-rpk_login() {
+# kafka_login USER old|new VARIABLE: a login to Kafka as user USER with the old or new value of VARIABLE, through
+# svp-kafka of Deployment svp-ops (SVP_AS_USER, the password the first line on stdin); prints ok,
+# SASL_AUTHENTICATION_FAILED, or the name of the first other Java exception the tool printed (none when none).
+kafka_login() {
   value "$2" "$3" | {
     cat
     echo
-  } | kc -n svp-data exec -i redpanda-0 -c redpanda -- bash -c '
-    IFS= read -r RPK_PASS
-    export RPK_PASS RPK_USER=$1
-    out=$(timeout 20 rpk cluster info 2>&1) && { echo ok; exit 0; }
-    code=$(printf "%s\n" "$out" | grep -oE "[A-Z]+(_[A-Z]+)+" | head -n 1)
-    echo "${code:-none}"' bash "$1"
+  } | kc -n svp-data exec -i deploy/svp-ops -c kafka -- env "SVP_AS_USER=$1" sh -c '
+    out=$(/opt/svp/bin/svp-kafka broker-api-versions 2>&1) && { echo ok; exit 0; }
+    case $out in
+      *SaslAuthenticationException*) echo SASL_AUTHENTICATION_FAILED ;;
+      *) code=$(printf "%s\n" "$out" | grep -oE "[A-Za-z]+Exception" | head -n 1); echo "${code:-none}" ;;
+    esac'
 }
 
 # psql_login ROLE DATABASE old|new VARIABLE: SELECT 1 as ROLE on DATABASE over TCP to 127.0.0.1 inside the primary of
@@ -515,15 +515,19 @@ web_key() {
 }
 
 # feed_group: "<state> <members> <hosts not of a feed-service pod>" of Kafka group feed-service, read as svp-admin (the
-# broker container's own login): Stable with one member or more, each at the address of a running feed-service pod,
-# reads "Stable <n> -".
+# login of svp-kafka in Deployment svp-ops): Stable with one member or more, each at the address of a running
+# feed-service pod, reads "Stable <n> -".
 feed_group() {
-  local out state members ips stray
-  out=$(kc -n svp-data exec redpanda-0 -c redpanda -- rpk group describe feed-service 2>&1) || out=
-  state=$(printf '%s\n' "$out" | awk '$1 == "STATE" { print $2 }')
-  members=$(printf '%s\n' "$out" | awk '$1 == "MEMBERS" { print $2 }')
+  local out hosts state members ips stray
+  # --state: GROUP COORDINATOR (ID) ASSIGNMENT-STRATEGY STATE #MEMBERS; --members: one row per member, HOST /<ip>.
+  out=$(kc -n svp-data exec deploy/svp-ops -c kafka -- /opt/svp/bin/svp-kafka consumer-groups --describe \
+    --group feed-service --state 2>&1) || out=
+  hosts=$(kc -n svp-data exec deploy/svp-ops -c kafka -- /opt/svp/bin/svp-kafka consumer-groups --describe \
+    --group feed-service --members 2>&1) || hosts=
+  state=$(printf '%s\n' "$out" | awk '$1 == "feed-service" { print $(NF - 1) }')
+  members=$(printf '%s\n' "$out" | awk '$1 == "feed-service" { print $NF }')
   ips=" $(kc -n svp get pods -l app.kubernetes.io/name=feed-service -o jsonpath='{.items[*].status.podIP}') "
-  stray=$(printf '%s\n' "$out" | grep -oE '([0-9]{1,3}\.){3}[0-9]{1,3}' | sort -u | while read -r ip; do
+  stray=$(printf '%s\n' "$hosts" | awk '$1 == "feed-service"' | grep -oE '([0-9]{1,3}\.){3}[0-9]{1,3}' | sort -u | while read -r ip; do
     case $ips in *" $ip "*) ;; *) echo "$ip" ;; esac
   done | paste -sd ',' -)
   echo "${state:-unknown} ${members:-0} ${stray:--}"

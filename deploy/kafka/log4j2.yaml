@@ -1,0 +1,19 @@
+# Logging of the local broker (broker.sh): everything to stdout, read with docker logs or kubectl logs, and no log
+# file, so the container's root file system can stay read-only.
+Configuration:
+  Appenders:
+    Console:
+      name: STDOUT
+      PatternLayout:
+        pattern: "[%d] %p %m (%c)%n"
+  Loggers:
+    Root:
+      level: INFO
+      AppenderRef:
+        - ref: STDOUT
+    Logger:
+      # Every request at INFO would flood the log; warnings still show.
+      - name: kafka.request.logger
+        level: WARN
+      - name: kafka.network.RequestChannel$
+        level: WARN

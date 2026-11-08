@@ -2,7 +2,9 @@
 
 - Severity: `page`. Rule: `deploy/observability/prometheus/rules/svp-alerts.yaml`, bốn biến thể cùng tên, nhãn `loop` và
   `service_name`.
-- Chuẩn bị biến `PROM`, `AM`, hàm `dc`: [README](README.md#chuẩn-bị-trong-terminal).
+- Chuẩn bị biến `PROM`, `AM`, hàm `dc`: [README](README.md#chuẩn-bị-trong-terminal). Lệnh Kafka đi qua `svp-kafka` (Kafka CLI
+  của image `apache/kafka`, đăng nhập `svp-admin`, [ADR-0053](../adr/0053-msk-elasticache-valkey.md) §13): compose trong container
+  `kafka`, k3d và EKS trong Deployment `svp-ops` của namespace `svp-data`.
 
 ## Ý nghĩa và tác động tới người dùng
 
@@ -12,7 +14,7 @@ cũ, hoặc chưa thành công lần nào suốt cả ngưỡng ([ADR-0011](../a
 
 | `loop` | Service | Chu kỳ | Cháy sau | Người dùng thấy khi đứng |
 | --- | --- | --- | --- | --- |
-| `outbox-relay` | `user-service`, `video-service` | 200 ms khi rảnh | 2 phút | Event không ra Redpanda: video upload xong không được transcode, video `READY` và follow không vào feed |
+| `outbox-relay` | `user-service`, `video-service` | 200 ms khi rảnh | 2 phút | Event không ra Kafka: video upload xong không được transcode, video `READY` và follow không vào feed |
 | `outbox-cleanup` | `user-service`, `video-service` | 10 phút | 32 phút | Không thấy gì ngay; bảng outbox lớn dần |
 | `upload-sweep` | `video-service` | 5 phút | 18 phút | Không thấy gì ngay; video bỏ dở không chuyển `FAILED`, object `uploads/<id>` không bị xoá |
 | `timeline-prune` | `feed-service` | 1 giờ | 3 giờ 10 phút | Không thấy gì ngay; dòng timeline quá 30 ngày không bị xoá |
@@ -32,8 +34,9 @@ make ps
 # log lỗi của từng vòng
 make logs SVC=video-service | grep -E 'outbox relay failed, retrying|outbox cleanup failed|upload sweep failed|delete abandoned upload'
 make logs SVC=feed-service | grep -E 'prune timeline|timeline pruned'
-# outbox-relay: Redpanda còn nhận không (relay produce vào đó)
-dc exec -T redpanda rpk cluster health
+# outbox-relay: Kafka còn nhận không (relay produce vào đó): broker trả lời và svp-admin đăng nhập được
+make ps | grep kafka
+dc exec -T kafka /opt/svp/bin/svp-kafka broker-api-versions | grep -c 'id:'
 ```
 
 k3d:
@@ -42,7 +45,8 @@ k3d:
 kubectl --context k3d-svp -n svp get pods -l app.kubernetes.io/name=video-service
 kubectl --context k3d-svp -n svp logs -l app.kubernetes.io/name=video-service --since=30m --tail=3000 | grep -E 'outbox relay failed|outbox cleanup failed|upload sweep failed|delete abandoned upload'
 kubectl --context k3d-svp -n svp logs -l app.kubernetes.io/name=feed-service --since=4h --tail=5000 | grep -E 'prune timeline|timeline pruned'
-kubectl --context k3d-svp -n svp-data get pods redpanda-0
+kubectl --context k3d-svp -n svp-data get pods kafka-0
+kubectl --context k3d-svp -n svp-data exec deploy/svp-ops -c kafka -- /opt/svp/bin/svp-kafka broker-api-versions | grep -c 'id:'
 kubectl --context k3d-svp -n svp-data get cluster svp-pg
 ```
 
@@ -51,8 +55,8 @@ max, chờ kết nối).
 
 ## Nguyên nhân thường gặp
 
-1. **`outbox-relay`: Redpanda không nhận** (broker dừng, k3d: SASL/ACL sai sau khi đổi mật khẩu): log `outbox relay failed,
-   retrying` với lỗi produce.
+1. **`outbox-relay`: Kafka không nhận** (broker dừng; mật khẩu SCRAM của service lệch broker sau khi đổi mật khẩu, hay ACL thiếu):
+   log `outbox relay failed, retrying` với lỗi produce (`SASL_AUTHENTICATION_FAILED`, `TOPIC_AUTHORIZATION_FAILED` hay lỗi kết nối).
 2. **Postgres của service lỗi hay chậm**: mọi vòng của service đó cùng lỗi; pool hết kết nối.
 3. **Lỗi object store** (`upload-sweep`): object store (`s3`) chết hay sai quyền, log `delete abandoned upload`; theo thiết kế lượt dừng và thử
    lại ở chu kỳ sau ([ADR-0010](../adr/0010-redis-ratelimit-cache-resilience-stage2c.md) §5).
@@ -62,7 +66,7 @@ max, chờ kết nối).
 
 ## Giảm thiểu
 
-- Sửa phụ thuộc (Redpanda, Postgres, object store `s3`) trước; vòng tự chạy lại ở chu kỳ kế, không cần restart.
+- Sửa phụ thuộc (Kafka, Postgres, object store `s3`) trước; vòng tự chạy lại ở chu kỳ kế, không cần restart.
 - `outbox-relay` đứng mà phụ thuộc khoẻ (nguyên nhân 5): restart service để vòng chạy lại: compose `dc restart video-service`,
   k3d `kubectl --context k3d-svp -n svp rollout restart deployment/video-service`. Event chưa gửi nằm trong bảng outbox
   (không bị xoá khi chưa gửi), relay gửi bù khi chạy lại.
@@ -83,7 +87,7 @@ Tuổi của vòng quay về dưới một chu kỳ, cảnh báo hết ở lần
 
 ## Leo thang
 
-- `outbox-relay` đứng quá 15 phút dù Redpanda và Postgres khoẻ: không có goroutine dump để xem (pprof không publish, OPS-1),
+- `outbox-relay` đứng quá 15 phút dù Kafka và Postgres khoẻ: không có goroutine dump để xem (pprof không publish, OPS-1),
   nên ghi lại thời điểm và log, restart, mở postmortem; Pyroscope (`make up OBS=lgtm`) có profile CPU của lúc đó.
 - Postgres native (compose) là chung với dự án khác: không restart, báo chủ máy.
 - `upload-sweep` lỗi vì quyền của object store: kiểm policy của user `svp-video-service` (`deploy/s3/video-service-policy.json`,

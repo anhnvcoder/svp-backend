@@ -189,7 +189,10 @@ slo: ## Generate the SLO recording and burn-rate alert rules from deploy/observa
 # files at the paths compose mounts them.
 # renovate: datasource=docker depName=otel/opentelemetry-collector-contrib
 OTELCOL_IMAGE := otel/opentelemetry-collector-contrib:0.164.0@sha256:340c9ca6a36617084c6661bdc4f0fe92b7cda5a805d61673ec8db375fddc522b
+# The config reads the Kafka scraper's broker, password and CA from the environment, with no default (a default would
+# hide a missing setting); validate needs placeholders only, since it reaches no broker.
 OTELCOL := env -u DOCKER_DEFAULT_PLATFORM docker run --rm --network none \
+	-e SVP_KAFKA_OTELCOL_PASSWORD=validate -e SVP_OTELCOL_KAFKA_BROKERS=kafka:9096 -e SVP_OTELCOL_KAFKA_CA_FILE= \
 	-v $(CURDIR)/deploy/observability/otelcol/config.yaml:/etc/otelcol/config.yaml:ro \
 	-v $(CURDIR)/deploy/observability/elastic/otelcol-config.yaml:/etc/otelcol/elastic.yaml:ro \
 	-v $(CURDIR)/deploy/observability/otelcol/k8s-config.yaml:/etc/otelcol/k8s.yaml:ro \
@@ -439,7 +442,7 @@ hooks: ## Point git at .githooks (run once per clone)
 # Each target runs the target of svp-frontend its help names, in the clone web_dir of deploy/k8s/lib.sh names
 # (<workspace>/frontend, or SVP_WEB_DIR), with that clone's Node, pnpm and Playwright browsers, against this checkout's
 # stack, scripts and .env (SVP_BACKEND_DIR). LOCAL LAB ONLY: the e2e seed and every Playwright worker, measure-upload
-# and Lighthouse delete the gateway's register rate limit keys in Redis db 10, as make smoke does.
+# and Lighthouse delete the gateway's register rate limit keys in Valkey db 10, as make smoke does.
 IN_WEB = dir=$$(bash -c '$(K8S_LIB) && web_dir') && SVP_BACKEND_DIR='$(CURDIR)' $(MAKE) --no-print-directory -C "$$dir"
 
 web-e2e: ## Playwright end-to-end tests of the web client on Chromium and WebKit against the stack of make up (make e2e of svp-frontend)

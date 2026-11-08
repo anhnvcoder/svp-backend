@@ -8,11 +8,12 @@ thành phần nào, nối với nhau ra sao và vì sao khác nhau. Lệnh chạ
 
 ## Compose
 
-Vì sao: [ADR-0008](../adr/0008-async-upload-pipeline-stage2a.md), [ADR-0022](../adr/0022-local-object-store-minio-replacement.md).
+Vì sao: [ADR-0008](../adr/0008-async-upload-pipeline-stage2a.md), [ADR-0022](../adr/0022-local-object-store-minio-replacement.md),
+[ADR-0053](../adr/0053-msk-elasticache-valkey.md).
 
-Postgres và Redis native trên máy (mỗi service một database, xem [`AGENTS.md`](../../AGENTS.md) mục "Database và Redis"), object
-store RustFS thay S3, không có CDN (client đọc thẳng store). Redpanda và object store chạy trong compose profile `core`. Giới hạn RAM,
-CPU của từng container ở [`deploy/compose/compose.yaml`](../../deploy/compose/compose.yaml).
+Postgres native trên máy (mỗi service một database, xem [`AGENTS.md`](../../AGENTS.md) mục "Database và Redis"), object store RustFS
+thay S3, không có CDN (client đọc thẳng store). Kafka, Valkey và object store chạy trong compose profile `core`. Giới hạn RAM, CPU của
+từng container ở [`deploy/compose/compose.yaml`](../../deploy/compose/compose.yaml).
 
 - **Object store `s3`** (RustFS ghim version và digest, non-root, root fs chỉ đọc, console tắt;
   [ADR-0022](../adr/0022-local-object-store-minio-replacement.md)): `s3` là endpoint tương thích S3 API (không phải AWS S3), chạy
@@ -24,27 +25,37 @@ CPU của từng container ở [`deploy/compose/compose.yaml`](../../deploy/comp
   `UPLOAD_ORIGIN` là `http://127.0.0.1:9000`. Compose có thêm user thử `svp-objstore-probe` chỉ cho bucket `objstore-probe` của
   test tích hợp. Không có đường quay lại MinIO ([ADR-0050](../adr/0050-bash-to-standard-tools.md)): đổi store thì chép bằng
   công cụ S3 chuẩn (`mc mirror`, `rclone`).
-- **Redpanda:** một broker; topic và `.dlq` do container init tạo, broker tắt tự tạo topic. Trong compose là
-  `redpanda:9092`, từ máy host là `127.0.0.1:19092`.
+- **Kafka** (cùng phần mềm, xác thực, TLS và cổng với Amazon MSK của stg, prd): service `kafka`, image `apache/kafka`, một tiến trình
+  KRaft (broker và controller), client nói SASL_SSL SCRAM-SHA-512 ở `kafka:9096` với cert do CA local của `make env` ký (container
+  một lần `tls-init` chép cert và khoá vào volume `svp-tls` với owner là user của image server); listener controller và liên broker là
+  PLAINTEXT bind `localhost` của container. Không publish cổng nào. Container init `kafka-init` (`deploy/kafka/kafka-init.sh`, cùng
+  script với Job `kafka-init` của chart `svp-data`) đăng nhập `svp-admin`, cấp `svp-admin` ALL trên mọi tài nguyên trước mọi ACL khác,
+  tạo topic và `.dlq` (broker tắt tự tạo topic, RF 1), user của từng client và ACL literal của chúng; service có Kafka chờ nó xong.
 - **engagement-service và feed-service** ([ADR-0009](../adr/0009-engagement-feed-stage2b.md) mục 12): gRPC ở `:9103` và
   `:9104` chỉ trong mạng compose, không publish ra máy (gateway gọi `engagement-service:9103`, `feed-service:9104`); database riêng
   `svp_engagement`, `svp_feed`. Số đo: lúc nghỉ 9–23 MiB mỗi service; feed-service đỉnh 82 MiB khi nạp 200.000 follow.
-- **Redis** ([ADR-0010](../adr/0010-redis-ratelimit-cache-resilience-stage2c.md) mục 1): bản native `127.0.0.1:6379` dùng
-  chung với dự án khác, không có container; compose trỏ `REDIS_URL` tới `host.docker.internal:6379/<db>`. Gateway dùng
-  db 10, tiền tố khoá `svp:gw:` (rate limit, `svp:gw:rl:<lớp>:<định danh>`); web db 9, tiền tố `svp:web:` (session, khoá
-  single-flight của refresh); feed-service db 14, tiền tố `svp:feed:` (cache trang đầu feed khám phá); test db 15, mỗi test một
-  tiền tố `svp:test:<hex>:`. Mọi khoá có TTL (Redis local `maxmemory 0`, `noeviction`). Client có timeout ngắn (dial 100 ms,
-  đọc/ghi 50 ms); service khởi động và vẫn ready khi Redis lỗi, vì mọi chỗ dùng Redis đều có đường lui
+- **Valkey** ([ADR-0010](../adr/0010-redis-ratelimit-cache-resilience-stage2c.md) mục 1, ADR-0053 §8, §9; cùng phần mềm với ElastiCache
+  for Valkey): container `valkey`, TLS ở `valkey:6379` (không cổng thường, không publish), user `default` tắt, mỗi client một user ACL
+  chỉ được db và tiền tố của mình, qua `REDIS_URL=rediss://<user>:<mật khẩu>@valkey:6379/<db>`: gateway `svp-gateway` db 10, tiền tố
+  `svp:gw:` (rate limit, `svp:gw:rl:<lớp>:<định danh>`); web `svp-web` db 9, tiền tố `svp:web:` (session, khoá single-flight của
+  refresh); feed-service `svp-feed-service` db 14, tiền tố `svp:feed:` (cache trang đầu feed khám phá). aclfile do `make up` ghi từ mật
+  khẩu của `.env` (`deploy/valkey/aclfile.sh`, access string của ADR-0053 §9). Không persistence, `maxmemory 64mb`, `noeviction`; mọi
+  khoá có TTL. `make test` vẫn dùng Redis native `127.0.0.1:6379` db 15, mỗi test một tiền tố `svp:test:<hex>:`. Client có timeout ngắn
+  (dial 100 ms, đọc/ghi 50 ms); service khởi động và vẫn ready khi Valkey lỗi, vì mọi chỗ dùng nó đều có đường lui
   ([đọc feed](../architecture.md#62-đọc-feed), [REST ở gateway](../reference/contracts.md#rest-ở-gateway)).
+- **CLI vận hành** (ADR-0053 §13): script trên máy chạm Kafka và Valkey chỉ qua `/opt/svp/bin/svp-kafka` (Kafka CLI, đăng nhập `svp-admin`)
+  và `/opt/svp/bin/svp-valkey` (`valkey-cli --tls`, đăng nhập `svp-ops`), mount chỉ đọc từ `deploy/ops/` vào container `kafka`, `valkey`
+  và chạy bằng `docker compose exec`; `SVP_AS_USER=<user>` đăng nhập user thường để kiểm quyền, mật khẩu là dòng đầu của stdin.
 - **web** ([ADR-0016](../adr/0016-web-client.md) §5–7, [ADR-0019](../adr/0019-web-k3d-supply-chain-observability.md)): Next.js
   standalone trong image distroless, publish `127.0.0.1:3001`, origin `http://localhost:3001`; gọi duy nhất `http://gateway:8080`;
-  session ở Redis native db 9 (tiền tố `svp:web:`, khoá là `sha256(sid)`). Container chỉ đọc, bỏ mọi capability, non-root, giới
-  hạn pid. Nằm trong mạng compose riêng `web` chỉ chung với gateway, `otelcol` và `glitchtip` (hai cái sau thuộc profile `obs`,
-  để web gửi OTLP và lỗi), không tới service gRPC, Redpanda, object store theo tên compose; nhưng có `host.docker.internal` để tới
-  Redis của máy, nên vẫn tới mọi cổng publish trên loopback của máy (threat model WEB-13, chấp nhận ở compose). Gateway compose
-  bật `TRUST_TRACE_CONTEXT` ([quan sát web](observability.md#web)).
+  session ở Valkey db 9 (user `svp-web`, tiền tố `svp:web:`, khoá là `sha256(sid)`; Node tin CA local qua `NODE_EXTRA_CA_CERTS`).
+  Container chỉ đọc, bỏ mọi capability, non-root, giới hạn pid. Nằm trong mạng compose riêng `web` chỉ chung với gateway, `valkey`,
+  `otelcol` và `glitchtip` (hai cái sau thuộc profile `obs`, để web gửi OTLP và lỗi), không tới service gRPC, Kafka, object store theo
+  tên compose. Web không cần dịch vụ nào của máy, nhưng Docker Desktop vẫn phân giải `host.docker.internal` ở mọi container, nên nó vẫn
+  tới mọi cổng publish trên loopback của máy (threat model WEB-13, chấp nhận ở compose). Gateway compose bật `TRUST_TRACE_CONTEXT`
+  ([quan sát web](observability.md#web)).
 - **Mạng riêng của media-worker:** worker chạy ffmpeg trên file người dùng tải lên, nên chỉ nằm trong mạng compose `worker`
-  (`internal`, không route ra ngoài) cùng Redpanda, object store `s3` và Collector `otelcol`; nó không tới được gateway, các service
+  (`internal`, không route ra ngoài) cùng Kafka, object store `s3` và Collector `otelcol`; nó không tới được gateway, các service
   gRPC, Postgres hay internet. Container chỉ đọc, bỏ mọi capability, giới hạn 2 CPU, 2 GB.
 - **Observability:** Collector, profile `obs` và `obs-elastic` ở [`observability.md`](observability.md#compose).
 
@@ -72,8 +83,9 @@ flowchart LR
         end
         subgraph data["svp-data"]
             pg[("Postgres svp-pg<br/>CloudNativePG")]
-            vk[("Valkey")]
-            rp[["Redpanda<br/>SASL + ACL"]]
+            vk[("Valkey<br/>TLS, user ACL")]
+            rp[["Kafka<br/>SCRAM-SHA-512 TLS + ACL"]]
+            ops["svp-ops<br/>CLI vận hành"]
             s3[("Object store s3<br/>RustFS")]
         end
         subgraph obs["svp-obs"]
@@ -96,12 +108,14 @@ flowchart LR
     svc --> rp
     mw --> rp
     mw --> s3
+    ops --> rp
+    ops --> vk
     app -.->|OTLP| col
     col --> prom
     ui --> prom
 ```
 
-- **Namespace:** `svp` (6 service và web), `svp-data` (Postgres, Valkey, Redpanda, object store `s3`), `svp-obs` (observability,
+- **Namespace:** `svp` (6 service và web), `svp-data` (Postgres, Valkey, Kafka, object store `s3`, `svp-ops`), `svp-obs` (observability,
   GlitchTip), `svp-edge` (`Gateway`, chứng chỉ wildcard); công cụ ở `cert-manager`, `envoy-gateway-system`, `cnpg-system`, `keda`,
   `argo-rollouts`, `kyverno` và `argocd` (chỉ đường GitOps). Mọi namespace trừ `kube-system` chạy Pod Security `restricted`; bốn
   namespace của project có NetworkPolicy chặn mặc định hai chiều, mỗi luồng ở bảng ADR-0014 §3 một policy theo label pod
@@ -118,14 +132,19 @@ flowchart LR
   cùng địa chỉ node nên rơi vào tối đa hai bucket rate limit (ADR-0014 §9).
 - **Dữ liệu trong cluster** (ADR-0014 §4, §5), không đụng Postgres/Redis native: Postgres `svp-pg` một instance do
   CloudNativePG quản, cùng tên database `svp_<svc>` và cặp role migrator/app như compose, đăng nhập `scram-sha-256`;
-  Valkey không persistence, gateway db 10, feed-service db 14, web db 9 (session); Redpanda một broker, SASL SCRAM mỗi service
-  một user, ACL theo bảng của ADR-0014 §5 (compose không SASL); object store `s3` (StatefulSet một replica, `s3.svp-data:9000`)
+  Valkey (Deployment `valkey`, `valkey.mode: cluster`) và Kafka (StatefulSet `kafka` một broker, Job `kafka-init`, `kafka.mode: cluster`)
+  cùng image, cùng cấu hình, cùng user và ACL như compose ([ADR-0053](../adr/0053-msk-elasticache-valkey.md)): Valkey TLS ở
+  `valkey.svp-data.svc.cluster.local:6379`, không persistence, gateway db 10, feed-service db 14, web db 9 (session), mỗi client một
+  user; Kafka SASL_SSL SCRAM-SHA-512 ở `kafka.svp-data.svc.cluster.local:9096` (broker quảng bá tên Service, tên có trong SAN của CA
+  local), mỗi client một user, ACL literal. Cert và khoá của CA local, aclfile và mật khẩu user Kafka là Secret của `svp-data` (Pod mount
+  với `defaultMode: 0440` và `fsGroup`); client tin CA qua `SSL_CERT_DIR` (Go), `NODE_EXTRA_CA_CERTS` (web), tham số `ca` (KEDA),
+  `tls.ca_file` (Collector). Object store `s3` (StatefulSet một replica, `s3.svp-data:9000`)
   cùng bucket, user, policy và script init như compose, không user thử. Mật khẩu sinh bằng `make env`, đưa vào Secret bằng `deploy/k8s/secrets.sh`, không nằm
   trong git. Trên đường GitOps ([ADR-0026](../adr/0026-secrets-gitops.md)) `secrets.sh` chỉ ghi nguồn vào namespace
   `svp-secrets`; External Secrets Operator (component `external-secrets`, wave 0, chỉ đường GitOps) dựng Secret từ ExternalSecret
   của chart `svp-cluster` (`deploy/helm/svp-cluster/templates/external-secrets.yaml`), mỗi namespace một SecretStore chỉ đọc đúng
-  entry của nó; stg và prd trên EKS đọc AWS Secrets Manager, entry do `deploy/k8s/aws-secrets.sh` (`make eks-secrets`) ghi
-  ([AWS](#aws)). Repo chỉ có tên Secret, key và nguồn. Đổi một credential là một lệnh, `make k8s-secrets` (k3d, cả cluster GitOps) hay
+  entry của nó; stg và prd trên EKS đọc AWS Secrets Manager, entry do `deploy/k8s/aws-secrets.sh` (`make eks-secrets`) ghi, trừ
+  `kafka-admin`, `kafka-users`, `valkey-users` mà Terraform ghi cùng lúc tạo user MSK và ElastiCache ([AWS](#aws)). Repo chỉ có tên Secret, key và nguồn. Đổi một credential là một lệnh, `make k8s-secrets` (k3d, cả cluster GitOps) hay
   `make eks-secrets` (EKS), làm theo thứ tự máy chủ, rồi Job init của `svp-data` đặt mật khẩu mới, rồi client; Reloader (component
   `reloader`, mọi nền tảng) restart workload opt in khi Secret nó đọc đổi, không script nào restart
   ([ADR-0050](../adr/0050-bash-to-standard-tools.md) mục 5).
@@ -222,8 +241,8 @@ chart cấu hình như vậy.
   tin trong `X-Forwarded-For`, nên các check trong chart làm fail mọi annotation của controller đó sẽ đưa địa chỉ của NLB: target type
   khác `ip` đi qua node port của kube-proxy (với `externalTrafficPolicy: Cluster` là địa chỉ của node), và với target type `ip` NLB chỉ
   giữ địa chỉ client khi `preserve_client_ip.enabled=true`.
-- **Namespace và Pod Security.** Namespace theo vai trò: `svp` (sáu service Go và web), `svp-data` (Postgres, Valkey, Redpanda, object
-  store `s3`), `svp-obs` (observability, GlitchTip), `svp-edge` (Gateway và chứng chỉ wildcard). Pod Security Admission `enforce`
+- **Namespace và Pod Security.** Namespace theo vai trò: `svp` (sáu service Go và web), `svp-data` (Postgres, Valkey, Kafka, object
+  store `s3`, `svp-ops`), `svp-obs` (observability, GlitchTip), `svp-edge` (Gateway và chứng chỉ wildcard). Pod Security Admission `enforce`
   `restricted`: pod phải chạy không phải root, bỏ mọi capability, dùng seccomp `RuntimeDefault` và cấm leo quyền; chart không đạt thì sửa ở
   values của nó, không nới namespace. `warn` và `audit` cùng mức để `kubectl` và audit log nêu tên cái `enforce` từ chối. Namespace nền
   tảng của `values.yaml` nhận cùng nhãn Pod Security và không gì khác. `install.sh` và `gitops.sh` render riêng template này (không
@@ -259,11 +278,6 @@ chart cấu hình như vậy.
     pod của namespace nền tảng (có Envoy) có thêm tầm với đó. Ra: TCP 443 chỉ tới địa chỉ công khai, cho registry và kho TUF của Sigstore
     mà nó xác minh image theo; mọi dải private bị loại (`kyverno.privateRanges`), nên registry local lẫn bất kỳ gì trên mạng của node hay
     host đều không tới được. Reports controller chỉ cần API server.
-  - **Broker Redpanda với nhau** (release `redpanda`, `svp-data`, wave 3): RPC cổng 33145 (seed, Raft, replication; broker không tới được
-    seed thì không bao giờ lập cluster) và Admin API cổng 9644 (sidecar và lifecycle hook gọi Admin API của mọi broker). Đặt ở đây, wave 1,
-    chứ không ở chart `svp-data` (wave 4): root chỉ chuyển sang wave 4 khi Redpanda khoẻ, mà ba broker không có policy này không bao giờ
-    khoẻ. Render trên mọi nền tảng; với một broker nó chỉ cho broker tới chính nó. Kafka cổng 9092 giữ đóng giữa các broker: chỉ client nội
-    bộ của HTTP proxy và schema registry dùng, và không gì gọi hai thứ đó.
   - **External Secrets Operator với store `aws`** không có khối `auth`: controller lấy credential AWS từ EKS Pod Identity Agent, nghe trên
     node ở địa chỉ link-local `169.254.170.23` cổng 80 (địa chỉ mà `AWS_CONTAINER_CREDENTIALS_FULL_URI` trỏ SDK tới). Policy ở trên loại
     mọi dải private, link-local gồm cả, nên policy này mở đúng địa chỉ và cổng đó, chỉ cho pod này. Agent cũng trả lời ở `[fd00:ec2::23]:80`;
@@ -329,8 +343,8 @@ chart cấu hình như vậy.
   - Một ExternalSecret mỗi Secret của `files/external-secrets.yaml`, cùng tên, `refreshPolicy: OnChange` (với `s3.mode: external` thì bỏ
     Secret và key của object store trong cluster, đánh dấu ở đó): Secret được dựng khi ExternalSecret được tạo và chỉ dựng lại khi spec
     hay metadata của nó đổi, đó là cách một giá trị đổi tới được nó (`secrets.sh` và `glitchtip-init.sh` annotate `force-sync` sau khi ghi
-    nguồn). Làm mới định kỳ sẽ đặt mật khẩu mới vào Secret trước các restart và Job phải đi trước (Redpanda nhận mật khẩu superuser mới
-    trước khi Secret `redpanda-bootstrap` được đổi, object store restart trước khi Job init của nó đăng nhập bằng mật khẩu mới).
+    nguồn). Làm mới định kỳ sẽ đặt mật khẩu mới vào Secret trước các restart và Job phải đi trước (Job `kafka-init` đặt mật khẩu mới của user
+    Kafka trước khi client restart với nó, object store restart trước khi Job init của nó đăng nhập bằng mật khẩu mới).
   - `SelfSubjectRulesReview` mà store `kubernetes` gửi để kiểm ServiceAccount của nó được `get` Secret ở namespace nguồn không cần rule ở
     đây: mọi user đã xác thực đều tạo được (ClusterRole `system:basic-user`).
 
@@ -350,8 +364,8 @@ chart cấu hình như vậy.
 ### `svp-data`
 
 - **Thứ tự cài và nguồn Secret.** Namespace `svp-data` cài ở wave 4 của `argocd/apps/components.json` của `svp-gitops`: sau operator
-  CloudNativePG và KEDA (wave 2, CRD của chúng mà `Cluster` và `ClusterTriggerAuthentication` cần), Redpanda và plugin Barman Cloud (wave
-  3, CRD của nó mà `ObjectStore` cần), trước observability và service. Mọi Secret nó đọc do `deploy/k8s/secrets.sh` ghi từ `.env` trước
+  CloudNativePG và KEDA (wave 2, CRD của chúng mà `Cluster` và `ClusterTriggerAuthentication` cần) và plugin Barman Cloud (wave 3, CRD
+  của nó mà `ObjectStore` cần), trước observability và service. Mọi Secret nó đọc do `deploy/k8s/secrets.sh` ghi từ `.env` trước
   release này; không cái nào ở trong git.
 - **Hai chế độ Postgres.** `cluster`: Postgres `svp-pg` do CloudNativePG chạy trong namespace này, WAL và base backup vào object store
   `s3` (`templates/postgres.yaml`, `backup.yaml`). `external`: Postgres managed ngoài cluster (Amazon RDS), tự giữ backup: không
@@ -373,22 +387,38 @@ chart cấu hình như vậy.
   origin của web: web của compose và `make dev` của `svp-frontend` (`http://localhost:3001`, `:3002`) dùng store của compose, không bao
   giờ cái này. Dấu phẩy không có khoảng trắng.
 - **NetworkPolicy của `svp-data`** (threat model IN-2, IN-4, IN-9). Chart `svp-cluster` đã chặn mọi pod của namespace hai chiều và mở DNS,
-  và mở API server cho pod mang nhãn `svp-kube-api=allow` (instance Postgres, sidecar Redpanda). Mỗi policy ở đây mở một cổng server cho
+  và mở API server cho pod mang nhãn `svp-kube-api=allow` (instance Postgres). Mỗi policy ở đây mở một cổng server cho
   các pod dùng nó, chọn bằng nhãn, nên pod ở nơi khác của cluster (hay một client thêm sau mà thiếu nhãn) không tới được gì. Client ở
   `svp` và `svp-obs` cũng cần policy egress riêng ở đó; KEDA, operator CloudNativePG và Envoy ở namespace nền tảng, vốn không chặn gì
   chiều ra. Pod duy nhất ở đây gọi pod khác của namespace là Postgres, mà backup của nó đi tới object store `s3` (policy
   `postgres-backup`). Cổng là cổng của pod: NetworkPolicy thấy gói sau khi Service đã được dịch sang pod. Với `postgres.mode: external` không
   có pod Postgres: Job `pg-bootstrap` tới Postgres managed ở `postgres.external.cidrs`. Với `s3.mode: external` không có pod object
   store và không Job `s3-init`.
-- **Valkey** thay Redis của host, ở `valkey.svp-data:6379` với cùng số db và tiền tố khoá: gateway db 10 (`svp:gw:`), feed-service db 14
-  (`svp:feed:`), web db 9 (`svp:web:`, session và khoá làm mới của nó). Rate limit, cache và session đều không đáng lưu: khi pod restart,
-  mọi session web mất và người dùng đăng nhập lại. `noeviction` như trên host: khi đầy, ghi lỗi (gateway quay về bộ đếm trong tiến trình
-  kèm metric, đăng nhập lỗi) thay vì khoá rate limit hay session của ai đó bị bỏ im lặng. Không mật khẩu: số db không phải ranh giới
-  giữa các client (IN-7, chấp nhận ở local); NetworkPolicy chỉ cho gateway, feed-service và web tới. Một session giữ access token và
-  refresh token của người dùng, nên cả ba đều đọc và ghi được mọi session. Chấp nhận trên máy lab một người dùng (threat model WEB-22):
-  pod gateway bị chiếm vốn đã hành động được như bất kỳ người dùng nào qua gRPC (IN-2), và pod feed-service bị chiếm, vốn không tới gateway
-  hay internet, chỉ chép được token của ai đó vào session của kẻ tấn công. Xem lại trên cloud (Valkey với AUTH, ACL theo client và TLS,
-  hay một instance riêng cho session), hay sớm hơn nếu feed-service có thêm đường ra.
+- **Hai chế độ Valkey** (`valkey.mode`). `cluster`: Deployment `valkey` (image và cấu hình của container `valkey` ở compose), TLS ở
+  `valkey.svp-data.svc.cluster.local:6379` với cert của CA local (Secret `valkey-tls`), aclfile từ Secret `valkey-acl`. `external`:
+  ElastiCache for Valkey do Terraform tạo với cùng user và access string; không pod Valkey, `valkey.host` là primary endpoint, và egress 6379
+  của `svp-ops` chỉ tới `valkey.external.cidrs` (dải subnet database). Cùng số db và tiền tố khoá ở cả hai: gateway db 10 (`svp:gw:`),
+  feed-service db 14 (`svp:feed:`), web db 9 (`svp:web:`, session và khoá làm mới của nó). Rate limit, cache và session đều không đáng
+  lưu: khi pod restart, mọi session web mất và người dùng đăng nhập lại. `noeviction` như ElastiCache của project: khi đầy, ghi lỗi
+  (gateway quay về bộ đếm trong tiến trình kèm metric, đăng nhập lỗi) thay vì khoá rate limit hay session của ai đó bị bỏ im lặng. Mỗi
+  client một user ACL chỉ được db, tiền tố và lệnh nó gửi (access string của ADR-0053 §9), `default` tắt, nên số db là ranh giới quyền
+  (threat model IN-7): gateway và feed-service không đọc được session ở db 9 (WEB-22); NetworkPolicy chỉ cho gateway, feed-service, web
+  và `svp-ops` tới 6379.
+- **Hai chế độ Kafka** (`kafka.mode`). `cluster`: StatefulSet `kafka` một broker (image `apache/kafka`, chạy `deploy/kafka/broker.sh` với
+  `server.properties` như container `kafka` của compose), SASL_SSL SCRAM-SHA-512 ở `kafka.svp-data.svc.cluster.local:9096`; broker format
+  volume ở lần chạy đầu với credential của `svp-admin`, nên topic, user và ACL sống qua restart pod. `external`: Amazon MSK; không pod
+  broker, `kafka.brokers` là bootstrap SCRAM của MSK, egress 9096 của Job `kafka-init` và `svp-ops` chỉ tới `kafka.external.cidrs`. Job
+  `kafka-init` chạy cùng script ở cả hai (`deploy/kafka/kafka-init.sh`): cấp `svp-admin` ALL trên cluster, mọi topic, group,
+  transactional id trước mọi ACL khác (`allow.everyone.if.no.acl.found=true` như mặc định của MSK, nên mọi tài nguyên phải có ACL; threat
+  model IN-4), tạo topic và ACL, tạo user chỉ ở `cluster` (MSK giữ user bằng secret `AmazonMSK_*`), thử đăng nhập lại tới 10 phút vì MSK áp
+  secret SCRAM mới chậm.
+- **CLI vận hành: Deployment `svp-ops`** (ADR-0053 §13). Một replica, hai container `kafka` (Kafka CLI của image `apache/kafka`) và
+  `valkey` (`valkey-cli` của image Valkey), lệnh `sleep infinity`; wrapper `svp-kafka`, `svp-valkey` của `deploy/ops/` mount từ ConfigMap
+  vào `/opt/svp/bin` (`defaultMode: 0555`). Script, drill, runbook chạy `kubectl --context <ctx> -n svp-data exec deploy/svp-ops -c kafka
+  -- /opt/svp/bin/svp-kafka …` (`-c valkey -- /opt/svp/bin/svp-valkey …`), giống nhau trên k3d và EKS trừ context. Pod giữ mật khẩu
+  `svp-admin` và `svp-ops` (Secret `svp-ops`), đổi lấy một đường duy nhất kiểm được thay vì pod tạm mỗi lần: PSA `restricted`, root FS chỉ
+  đọc (`emptyDir` `/tmp`), không token ServiceAccount, không Service, NetworkPolicy không ingress và egress chỉ 9096, 6379 (threat model
+  IN-10). `SVP_AS_USER` đăng nhập user thường, mật khẩu là dòng đầu của stdin, lấy từ Secret của chính client đó.
 - **Quyền CONNECT của Postgres trong cluster.** `bootstrap.sql` (`files/pg-bootstrap.sh`) gỡ `CONNECT` khỏi `PUBLIC` chỉ trên các
   database `svp_*`. Ba database mà `initdb` và CloudNativePG tạo, `postgres`, `app` và `template1`, giữ quyền mặc định `CONNECT` cho
   `PUBLIC` của Postgres, nên mọi role của service đăng nhập được vào đó (và tạo bảng tạm ở hai cái đầu). Không cái nào cần: mỗi service và
@@ -432,10 +462,11 @@ chart cấu hình như vậy.
   còn user-, video- và engagement-service). Một gián đoạn tự nguyện (drain node, eviction) khi đó chỉ lấy một pod một lần, không bao giờ pod
   cuối đang phục vụ. Nó chọn pod theo nhãn, nên với Rollout nó đếm pod stable và canary như nhau; restart của chính Argo Rollouts
   (`spec.restartAt`) cũng evict qua nó. `keda`: ScaledObject của KEDA theo lag của consumer group Kafka của service; KEDA tự tạo và điều
-  khiển HPA `keda-hpa-<release>`. Scaler Kafka đăng nhập qua `ClusterTriggerAuthentication` `keda-kafka` (user Redpanda `svp-keda`, chỉ
-  được DESCRIBE), do chart `svp-data` tạo một lần cho cả cluster: operator KEDA chỉ đọc được Secret của namespace `keda`
+  khiển HPA `keda-hpa-<release>`. Scaler Kafka đăng nhập qua `ClusterTriggerAuthentication` `keda-kafka` (user Kafka `svp-keda`, chỉ
+  được DESCRIBE; Secret `keda/keda-kafka`: `sasl=scram_sha512`, `tls=enable`, `ca` chỉ ở local), do chart `svp-data` tạo một lần cho cả cluster: operator KEDA chỉ đọc được Secret của namespace `keda`
   (`base/keda.yaml` của `svp-gitops`), nên login không thể là `TriggerAuthentication` cạnh ScaledObject. Operator chạy ở namespace `keda`,
-  không chặn egress; policy ingress của Redpanda ở `svp-data` mở 9092 cho nó.
+  không chặn egress; policy ingress `kafka` ở `svp-data` mở 9096 cho nó (với `kafka.mode: external` không có pod broker, SG của MSK nhận
+  node SG của EKS).
 - **Canary.** Release có `canary` (gateway, web) có: strategy của Rollout, Service `<release>-canary`, và hai AnalysisTemplate:
   `<release>-canary` (nền) và `<release>-canary-gate` (bước trước 100%), quyết định từ metric của Envoy canary được promote hay abort.
   HTTPRoute của release (`api` cho gateway, `web` cho web) chia traffic giữa hai Service (`templates/httproute.yaml`). Backend canary có
@@ -478,7 +509,8 @@ chart cấu hình như vậy.
 
 ## AWS
 
-Vì sao: [ADR-0034](../adr/0034-aws-stage7.md) (nền tảng, lý do và bảng đầy đủ), [ADR-0038](../adr/0038-s3-bucket-names.md).
+Vì sao: [ADR-0034](../adr/0034-aws-stage7.md) (nền tảng, lý do và bảng đầy đủ), [ADR-0038](../adr/0038-s3-bucket-names.md),
+[ADR-0053](../adr/0053-msk-elasticache-valkey.md) (MSK, ElastiCache), [ADR-0054](../adr/0054-data-subnet-tier.md) (subnet database).
 
 Hạ tầng ở repo `svp-infra` (cài đặt GitHub: [`runbooks/svp-infra-setup.md`](../runbooks/svp-infra-setup.md)). Thiết kế: một
 cluster stg ở `ap-southeast-1`, dựng và xoá trong mỗi buổi; prd là cluster thứ hai theo chuẩn production, chỉ khác stg ở biến.
@@ -507,11 +539,15 @@ flowchart LR
         subgraph vpc["VPC, 2 AZ"]
             nlb["NLB L4<br/>target ip, giữ IP client"]
             nat["NAT gateway"]
-            rds[("RDS PostgreSQL 15<br/>subnet private")]
+            subgraph dbnet["subnet database, không route ra Internet"]
+                rds[("RDS PostgreSQL 15")]
+                msk[["Amazon MSK<br/>2 broker, SCRAM-SHA-512 TLS 9096"]]
+                ec[("ElastiCache for Valkey<br/>TLS 6379, user RBAC")]
+            end
             subgraph eks["EKS svp-stg, node Graviton Spot"]
                 envoy["Envoy Gateway<br/>TLS Let's Encrypt"]
                 app["svp: web, gateway,<br/>4 service gRPC, media-worker"]
-                data["svp-data: Redpanda, Valkey"]
+                data["svp-data: Job kafka-init, svp-ops"]
                 obs["svp-obs: Prometheus, Loki,<br/>Tempo, Pyroscope, GlitchTip"]
                 ctl["Argo CD, LBC, ExternalDNS,<br/>cert-manager, ESO, KEDA"]
             end
@@ -521,9 +557,13 @@ flowchart LR
     client -->|"HTTPS api"| nlb
     nlb --> envoy
     envoy --> app
-    app --> data
+    app -->|"9096, SCRAM TLS"| msk
+    app -->|"6379, TLS"| ec
+    data -->|"9096"| msk
+    data -->|"6379"| ec
     app -->|"5432, TLS"| rds
     obs -->|"svp_glitchtip"| rds
+    obs -->|"lag: kafkametrics"| msk
     app -->|"Pod Identity,<br/>S3 gateway endpoint"| up
     app -->|"ghi HLS"| media
     browser -->|"POST presigned"| up
@@ -541,11 +581,13 @@ flowchart LR
 | Postgres | Native (compose), CloudNativePG (k3d) | RDS PostgreSQL 15 single-AZ; Service `ExternalName` `svp-pg-rw` giữ chuỗi kết nối |
 | Object store | RustFS `s3` | S3 `uploads`, `media`; credential Pod Identity |
 | CDN | Không có | CloudFront trước `media` (OAC), gói flat-rate Free có web ACL WAF ([ADR-0052](../adr/0052-cloudfront-flat-rate-free.md)) |
-| Redis, Kafka | Native Redis (compose), Valkey; Redpanda | Valkey, Redpanda trong cluster |
+| Kafka | `apache/kafka` một broker (container `kafka`, StatefulSet `kafka`), SCRAM-SHA-512 TLS 9096, CA local | Amazon MSK provisioned (stg 2 × `kafka.t3.small`, RF 2, min ISR 1; prd 3 × `kafka.m7g.large`, RF 3, min ISR 2), cùng giao thức, user là secret `AmazonMSK_*` |
+| Valkey | Container `valkey`, Deployment `valkey`, TLS 6379, aclfile | ElastiCache for Valkey 9.1 cluster mode tắt (stg 1 × `cache.t4g.micro`; prd primary + replica `cache.m7g.large`, Multi-AZ), cùng access string |
+| Subnet dữ liệu | Không có | RDS, MSK, ElastiCache ở subnet database (khối 6 của VPC, route table chỉ `local`); `cluster.dbCidrs` là dải của subnet đó |
 | Vào hệ thống | Loopback, Envoy với CA tự ký | NLB L4 giữ IP client, Envoy với chứng chỉ Let's Encrypt, DNS Route 53 do ExternalDNS ghi |
 | NetworkPolicy | network policy controller của k3s | Network policy agent của VPC CNI |
 | StorageClass, metrics-server | `local-path`, metrics-server của k3s | `gp3` do chart `svp-cluster` tạo, addon `metrics-server` |
-| Secret | `.env` (compose), ESO provider `kubernetes` (k3d GitOps) | ESO provider `aws`: Secrets Manager + Pod Identity, giá trị từ `make eks-secrets` |
+| Secret | `.env` (compose), ESO provider `kubernetes` (k3d GitOps) | ESO provider `aws`: Secrets Manager + Pod Identity, giá trị từ `make eks-secrets`; mật khẩu Kafka, Valkey do Terraform sinh và ghi write-only (không vào plan, state) |
 | Hạ tầng | `make up`, `make k8s-up`, `make k8s-gitops-up` | Terraform `aws/envs/<env>` của `svp-infra`, `make eks-secrets`, rồi Terraform `aws/gitops/<env>` (Argo CD và root) |
 
 Version của k3s và EKS ghim ở `K3S_IMAGE_TAG` của [`Makefile`](../../Makefile) và ở cấu hình Terraform của `svp-infra`. Bảng đủ (kể
@@ -559,9 +601,9 @@ Argo CD); `envs/stg` dùng chung cho k3d stg và EKS stg.
    (role chỉ ghi `uploads/<video_id>`), URL là endpoint vùng của bucket (`https://<bucket uploads>.s3.ap-southeast-1.amazonaws.com`,
    virtual-hosted).
 2. Trình duyệt POST file thẳng lên S3 (CORS chỉ nhận origin web, hạn form 15 phút); `CompleteUpload`: video-service `HEAD` object qua S3
-   gateway endpoint (không qua NAT), outbox phát `video.uploaded` vào Redpanda.
+   gateway endpoint (không qua NAT), outbox phát `video.uploaded` vào MSK.
 3. media-worker (KEDA theo lag) tải file gốc từ `uploads`, chạy ffmpeg, ghi HLS bất biến vào bucket `media` (master chỉ tạo một lần bằng
    `If-None-Match: *`); `transcode.completed` → video-service chuyển `READY`, phát `video.ready` → feed-service fan-out vào timeline (RDS).
-4. Feed: gateway → feed-service (cache khám phá ở Valkey); URL HLS trong response là `https://<tên CloudFront>/` + khoá của object.
+4. Feed: gateway → feed-service (cache khám phá ở ElastiCache); URL HLS trong response là `https://<tên CloudFront>/` + khoá của object.
 5. Phát: trình duyệt GET master, playlist, segment từ CloudFront (cache theo `Cache-Control: … immutable`); CloudFront đọc `media` bằng
    OAC, đọc thẳng bucket bị từ chối (threat model AWS-2).

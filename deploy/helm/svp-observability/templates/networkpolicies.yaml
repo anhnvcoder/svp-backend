@@ -25,8 +25,32 @@ podSelector:
   matchLabels:
     {{- toYaml (index .root.Values.pods .name) | nindent 4 }}
 {{- end }}
-# The Collector: OTLP from the seven releases of svp (services.otlp), out to the three backends, and Redpanda's
-# /public_metrics (no login is needed or held, so no credential has to be given to the Collector).
+{{- define "svp-observability.kafkaPeer" -}}
+{{- if not (has .Values.kafka.mode (list "cluster" "external")) }}
+{{- fail (printf "kafka.mode is %q: cluster (the broker in the cluster) or external (a managed Kafka)" (toString .Values.kafka.mode)) }}
+{{- end -}}
+- to:
+    {{- if eq .Values.kafka.mode "external" }}
+    {{- if not .Values.kafka.external.cidrs }}
+    {{- fail "kafka.mode external needs kafka.external.cidrs, the CIDRs of the managed brokers' addresses" }}
+    {{- end }}
+    {{- range .Values.kafka.external.cidrs }}
+    - ipBlock:
+        cidr: {{ . }}
+    {{- end }}
+    {{- else }}
+    - namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: {{ .Values.kafka.namespace }}
+      podSelector:
+        matchLabels:
+          {{- toYaml .Values.kafka.labels | nindent 10 }}
+    {{- end }}
+  ports:
+    - {protocol: TCP, port: {{ .Values.kafka.port }}}
+{{- end }}
+# The Collector: OTLP from the seven releases of svp (services.otlp), out to the three backends, and the Kafka brokers,
+# where its kafka_metrics receiver reads consumer group lag as user svp-otelcol.
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
@@ -53,16 +77,7 @@ spec:
         {{- include "svp-observability.peer" (dict "root" . "name" "tempo") | nindent 8 }}
       ports:
         - {protocol: TCP, port: 4317}
-    - to:
-        - namespaceSelector:
-            matchLabels:
-              kubernetes.io/metadata.name: svp-data
-          podSelector:
-            matchLabels:
-              app.kubernetes.io/name: redpanda
-              app.kubernetes.io/instance: redpanda
-      ports:
-        - {protocol: TCP, port: 9644}
+    {{- include "svp-observability.kafkaPeer" . | nindent 4 }}
 ---
 # Prometheus: OTLP from the Collector, remote write from Tempo's metrics-generator, queries from Grafana and from the
 # Argo Rollouts controller (the AnalysisRuns of the gateway's canary). Out: alerts to Alertmanager and the scrapes of

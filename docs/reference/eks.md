@@ -11,8 +11,18 @@ Loại tài liệu (Diátaxis): **reference**, tra cứu khi cần một lệnh 
   `secrets.sh` và hàm chỉ của k3d như registry, tạo cluster, CA, diễn tập từ chối `svp-*`); không qua `k8s-exclusive`. Argo CD và root
   của cluster EKS do root Terraform `aws/gitops/<env>` của `svp-infra` dựng (mẫu GitOps Bridge,
   [ADR-0050](../adr/0050-bash-to-standard-tools.md)), không còn target `eks-*` nào bootstrap. **LOCAL LAB ONLY:** `eks-smoke`,
-  `eks-seed`, `eks-rl-reset` xoá khoá `svp:gw:rl:register:*` ở Valkey db 10 của cluster đó (qua `kubectl exec`), chỉ cho stg, prd của
+  `eks-seed`, `eks-rl-reset` xoá khoá `svp:gw:rl:register:*` ở db 10 của ElastiCache của cluster đó, qua CLI vận hành (`svp-valkey` trong
+  container `valkey` của Deployment `svp-ops`, user `svp-ops` mà ACL chỉ cho xoá đúng hai tiền tố của `AGENTS.md`), chỉ cho stg, prd của
   lab.
+  - Kafka là Amazon MSK và Valkey là Amazon ElastiCache ([ADR-0053](../adr/0053-msk-elasticache-valkey.md)); cả hai do Terraform của `svp-infra`
+    tạo (module `msk`, `elasticache`), không có broker hay Valkey chạy trong cluster. Client nói với chúng như với `kafka` và `valkey` của compose
+    và k3d: SASL_SSL SCRAM-SHA-512 cổng 9096 và `rediss://` cổng 6379, chỉ khác địa chỉ (hợp đồng `cluster` bên dưới) và CA: cert của MSK, ElastiCache
+    nối về CA công khai của Amazon trong root hệ thống nên không đặt `SSL_CERT_DIR` hay CA nào. Mật khẩu của user Kafka, Valkey do Terraform sinh
+    và ghi một lần cho cả MSK/ElastiCache lẫn entry Secrets Manager `svp/<env>/kafka-admin`, `kafka-users`, `valkey-users`; `make eks-secrets`
+    không ghi ba entry này, chỉ kiểm chúng tồn tại. Chart `svp-data` chạy ở `kafka.mode: external`, `valkey.mode: external`: Job `kafka-init`
+    (PostSync) tạo topic và ACL trên MSK, Deployment `svp-ops` là CLI vận hành; NetworkPolicy của hai pod đó chỉ mở tới `cluster.dbCidrs` (subnet
+    database) cổng 9096, 6379. Lệnh vận hành mẫu:
+    `kubectl --context svp-<env> -n svp-data exec deploy/svp-ops -c kafka -- /opt/svp/bin/svp-kafka topics --list`.
   - Nguồn của mọi Secret trên EKS là AWS Secrets Manager, entry `svp/<env>/<entry>` region `ap-southeast-1` (vỏ entry không giá trị do
     module `external-secrets` của `svp-infra` tạo); `make eks-secrets`, `make eks-glitchtip-init` ghi giá trị với `AWS_PROFILE` của
     account env (biến ở [`environment.md`](environment.md)). Mỗi lệnh `aws` ghi `--profile` và `--region` ngay trong lệnh; trước lần đọc
@@ -22,8 +32,9 @@ Loại tài liệu (Diátaxis): **reference**, tra cứu khi cần một lệnh 
   - `AWS_PROFILE=anhnv-<env> make eks-secrets CONTEXT=svp-<env>` (`deploy/k8s/aws-secrets.sh`): entry và key đọc từ render
     ExternalSecret của chart `svp-cluster` (`files/external-secrets.yaml`, object store managed, `externalSecrets.argocdNotifications`
     bật): `pg-superuser` (`SVP_PG_SUPERUSER_PASSWORD` từ biến môi trường `SVP_RDS_MASTER_PASSWORD`, bắt buộc, không đọc `.env`),
-    `pg-roles`, `kafka-admin`, `kafka-users`, `jwt-signing`, `jwt-verify`, `web`, `obs`, `argocd-notifications` (key đặt tên như `.env`,
-    giá trị từ `.env`; hai biến Telegram tuỳ chọn, rỗng thì ghi rỗng), không `s3-root`, `s3-users`; `glitchtip-runtime` ghi ba key
+    `pg-roles`, `jwt-signing`, `jwt-verify`, `web`, `obs`, `argocd-notifications` (key đặt tên như `.env`,
+    giá trị từ `.env`; hai biến Telegram tuỳ chọn, rỗng thì ghi rỗng), không `s3-root`, `s3-users`, và không `kafka-admin`, `kafka-users`,
+    `valkey-users` (của Terraform; chỉ kiểm chúng đã có, nên apply root `aws/envs/<env>` trước); `glitchtip-runtime` ghi ba key
     rỗng chỉ khi entry chưa có version `AWSCURRENT`, không bao giờ ghi đè. Thiếu biến bắt buộc, khoá Server Action hay khoá GitHub App
     sai dạng (kiểm như `k8s-secrets`), entry chưa có (chưa apply root env) thì dừng trước mọi lệnh ghi. Lần đầu (`glitchtip-runtime`
     chưa có version) không hỏi cluster; lần sau là đổi secret của env đang chạy, xem dưới.
@@ -50,7 +61,10 @@ Loại tài liệu (Diátaxis): **reference**, tra cứu khi cần một lệnh 
     đặt); `S3_PATH_STYLE` `true` (mặc định, store local) hay `false` (virtual-hosted, cho S3); giá trị khác thì service không khởi động.
   - Lớp nền tảng của `svp-gitops`: root hai tầng, `svp-root` (chart `argocd/root`) render Application `svp-apps` (chart
     `argocd/apps`), nhận `platform` (`k3d` hay `eks`) và trên EKS `cluster` (hợp đồng khoá ở `deploy/ci/cluster-values.example.yaml`,
-    trên EKS lấy từ annotation của cluster Secret mà root `aws/gitops/<env>` tạo); values đọc theo thứ tự `base/` <
+    trên EKS lấy từ annotation của cluster Secret mà root `aws/gitops/<env>` tạo; hai khoá của MSK, ElastiCache: `kafkaBrokers`, chuỗi
+    `host:9096,host:9096,…` là output `bootstrap_brokers` của module `msk`, và `valkeyHost`, host không cổng là `primary_endpoint_address` của module
+    `elasticache`, mà `platforms/eks/*.values.tpl` đọc để đặt `KAFKA_BROKERS`, host của Valkey trong `REDIS_URL`, `kafka.brokers` và `valkey.host`
+    của `svp-data`, `SVP_OTELCOL_KAFKA_BROKERS` của Collector); values đọc theo thứ tự `base/` <
     `platforms/<platform>/<tên>.yaml` < `envs/<env>/` < `envs/<env>/images/` < `valuesObject` sinh từ
     `platforms/<platform>/<tên>.values.tpl`; Argo CD (không là component) đọc `base/argo-cd.yaml` rồi
     `platforms/<platform>/argo-cd.yaml` khi có (`gitops.sh` cài trên k3d, `gitops-check.sh` render cùng thứ tự); revision không có
@@ -62,7 +76,7 @@ Loại tài liệu (Diátaxis): **reference**, tra cứu khi cần một lệnh 
 
 Lệnh `terraform` và script buổi ở `svp-infra` (`aws/scripts/`); mỗi bước xong mới sang bước sau:
 
-1. Apply root `aws/envs/<env>` (cluster, RDS, vỏ entry Secrets Manager).
+1. Apply root `aws/envs/<env>` (cluster, RDS, MSK, ElastiCache, vỏ entry Secrets Manager; mật khẩu Kafka, Valkey được sinh và ghi trong cùng apply).
 2. `AWS_PROFILE=anhnv-<env> make eks-secrets CONTEXT=svp-<env>`: nguồn có trước Argo CD.
 3. Chỉ prd: PR promote prd đã merge; mở tunnel tới API (output `api_tunnel_command`).
 4. Apply root `aws/gitops/<env>` (Argo CD, AppProject, cluster Secret, root).
@@ -82,25 +96,22 @@ AWS_PROFILE=anhnv-<env> make eks-secrets CONTEXT=svp-<env>
 Lệnh làm trọn một lượt xoay credential theo cùng thứ tự với `make k8s-secrets` trên k3d (`deploy/k8s/rotate.sh`,
 [ADR-0050](../adr/0050-bash-to-standard-tools.md) mục 5); người vận hành không sync, không restart gì:
 
-1. Cluster phải chạy Reloader, StatefulSet `redpanda` phải opt in theo tên Secret của nó, không thì dừng trước mọi lệnh ghi
+1. Cluster phải chạy Reloader (và workload opt in theo tên Secret của chúng), không thì dừng trước mọi lệnh ghi
    (`FAIL  cluster svp-<env> is not ready for a change of credentials: <lý do>`).
-2. Mật khẩu superuser Redpanda đổi thì đặt vào broker đang chạy trước (`redpanda_admin` của `deploy/k8s/lib.sh`, dùng chung với
-   `secrets.sh`; broker không chạy hay không nhận mật khẩu nào thì dừng, không ghi entry nào).
-3. Ghi mọi entry (trừ `glitchtip-runtime`, đã có giá trị).
-4. `force-sync` các ExternalSecret của `svp-data`, rồi chờ mọi broker chạy với mật khẩu superuser mới và Ready. Broker và sidecar đọc
-   mật khẩu (`RPK_PASS`) từ environment chỉ lúc khởi động: Reloader rolling restart StatefulSet `redpanda` khi Secret của nó đổi, từng
-   broker (ordinal cao trước), broker mới Ready rồi mới sang broker sau; prd ba broker luôn còn hai, đủ đa số Raft. Hook `preStop` của
-   broker cũ không đăng nhập được để drain: partition do nó làm leader bầu leader mới, producer `acks=all` chờ và thử lại. Argo CD chỉ
-   chạy hook PostSync của `svp-data` khi tài nguyên đã Healthy, nên bước 5 chờ bước này. Quá 300 giây mỗi broker thì dừng, nêu
-   StatefulSet (xem `AWS_PROFILE=anhnv-<env> kubectl --context svp-<env> -n reloader logs deployment/reloader`).
-5. Một sync của Application `svp-data` (hook PostSync `pg-bootstrap`, `redpanda-init` đặt mật khẩu mới trong Postgres, Redpanda), chờ
-   đúng lượt sync đó `Succeeded`; `Failed`, `Error` hay quá 600 giây thì dừng, ExternalSecret của client chưa dựng lại: client restart
-   trước khi Job đặt mật khẩu mới thì đăng nhập bằng mật khẩu hệ thống chưa có.
-6. `force-sync` mọi ExternalSecret còn lại; Reloader restart workload có Secret đổi: Deployment bằng rolling update, Rollout `gateway`,
+2. Ghi mọi entry của `.env` (trừ `glitchtip-runtime`, đã có giá trị; trừ ba entry Kafka, Valkey của Terraform).
+3. `force-sync` các ExternalSecret của `svp-data`.
+4. Một sync của Application `svp-data` (hook PostSync `pg-bootstrap` đặt mật khẩu mới trong Postgres, `kafka-init` đăng nhập MSK bằng `svp-admin`
+   và đặt lại topic, ACL), chờ đúng lượt sync đó `Succeeded`; `Failed`, `Error` hay quá 600 giây thì dừng, ExternalSecret của client chưa dựng
+   lại: client restart trước khi Job đặt mật khẩu mới thì đăng nhập bằng mật khẩu hệ thống chưa có.
+5. `force-sync` mọi ExternalSecret còn lại; Reloader restart workload có Secret đổi: Deployment bằng rolling update, Rollout `gateway`,
    `web` bằng `spec.restartAt` (không tạo revision, nên không thành canary). Script không chờ bước này.
 
-Dòng cần thấy, theo thứ tự: `ok    ExternalSecrets of the server built again from their source`, `ok    StatefulSet redpanda: each of its
-<n> pod(s) runs with the RPK_PASS of .env and is Ready`, `ok    init Jobs of svp-data done (sync of Application svp-data Succeeded)`,
+Mật khẩu của user Kafka, Valkey không sinh bằng lệnh này mà ở Terraform: tăng `msk_password_version` (Kafka) hay `valkey_password_version`
+(Valkey) của root env, apply, rồi chạy `aws/scripts/bootstrap.sh <env> secrets` của `svp-infra` (gọi lệnh trên với mật khẩu master RDS). Thiếu
+lượt này thì cluster giữ mật khẩu cũ: ExternalSecret có `refreshPolicy: OnChange`, không tự đọc lại entry. MSK áp secret mới tới broker trong
+tối đa 10 phút, và kết nối mới của pod chưa restart có thể bị từ chối trong khoảng đó (ADR-0053 §12).
+
+Dòng cần thấy, theo thứ tự: `ok    ExternalSecrets of the server built again from their source`, `ok    init Jobs of svp-data done (sync of Application svp-data Succeeded)`,
 `ok    ExternalSecrets of the clients built again from their source`, `ok    Reloader restarts each workload whose Secret changed`. Một
 dòng `FAIL` thì sửa nguyên nhân rồi chạy lại đúng lệnh trên: lượt nào cũng làm đủ các bước, gồm init còn thiếu của lượt trước. Theo dõi
 restart:

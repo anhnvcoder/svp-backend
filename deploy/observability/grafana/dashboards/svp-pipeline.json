@@ -58,7 +58,7 @@
   "panels": [
     {
       "type": "row",
-      "title": "Kafka (Redpanda scrape)",
+      "title": "Kafka (kafka_metrics receiver)",
       "id": 1,
       "collapsed": false,
       "gridPos": {
@@ -84,8 +84,8 @@
             "uid": "prometheus"
           },
           "refId": "A",
-          "expr": "max by (redpanda_group) (redpanda_kafka_consumer_group_lag_max{service_name=\"redpanda\"})",
-          "legendFormat": "{{redpanda_group}}",
+          "expr": "max by (group) (kafka_consumer_group_lag_ratio{kafka_cluster_alias=\"svp\"})",
+          "legendFormat": "{{group}}",
           "range": true,
           "instant": false,
           "exemplar": false
@@ -130,7 +130,7 @@
     {
       "type": "timeseries",
       "title": "Consumer lag by group and topic",
-      "description": "High watermark minus the group's committed offset, summed over partitions.",
+      "description": "High watermark minus the group's committed offset, summed over partitions (partitions the group never committed are left out).",
       "datasource": {
         "type": "prometheus",
         "uid": "prometheus"
@@ -142,8 +142,8 @@
             "uid": "prometheus"
           },
           "refId": "A",
-          "expr": "clamp_min(sum by (redpanda_group, redpanda_topic) (redpanda_kafka_max_offset{service_name=\"redpanda\", redpanda_namespace=\"kafka\"} - on (redpanda_topic, redpanda_partition) group_right redpanda_kafka_consumer_group_committed_offset{service_name=\"redpanda\"}), 0)",
-          "legendFormat": "{{redpanda_group}} ← {{redpanda_topic}}",
+          "expr": "max by (group, topic) (kafka_consumer_group_lag_sum_ratio{kafka_cluster_alias=\"svp\"})",
+          "legendFormat": "{{group}} ← {{topic}}",
           "range": true,
           "instant": false,
           "exemplar": false

@@ -1181,9 +1181,11 @@ tests:
   # Lag of feed-service for 2 minutes fires; media-worker lag during one transcode does not.
   - interval: 15s
     input_series:
-      - series: 'redpanda_kafka_consumer_group_lag_max{service_name="redpanda",redpanda_group="feed-service",shard="0"}'
+      - series: 'kafka_consumer_group_lag_ratio{kafka_cluster_alias="svp",group="feed-service",topic="user.follows.v1",partition="0"}'
         values: '0 3x12 0x4'
-      - series: 'redpanda_kafka_consumer_group_lag_max{service_name="redpanda",redpanda_group="media-worker",shard="0"}'
+      - series: 'kafka_consumer_group_lag_ratio{kafka_cluster_alias="svp",group="feed-service",topic="user.follows.v1",partition="1"}'
+        values: '0x17'
+      - series: 'kafka_consumer_group_lag_ratio{kafka_cluster_alias="svp",group="media-worker",topic="video.lifecycle.v1",partition="0"}'
         values: '0 1x40 0'
     alert_rule_test:
       - eval_time: 105s
@@ -1194,7 +1196,7 @@ tests:
         exp_alerts:
           - exp_labels:
               severity: page
-              redpanda_group: feed-service
+              group: feed-service
             exp_annotations:
               summary: "Kafka consumer group feed-service has had lag for 2 minutes"
               runbook_url: "https://github.com/anhnvcoder/svp-backend/blob/main/docs/runbooks/kafka-consumer-lag-high.md"

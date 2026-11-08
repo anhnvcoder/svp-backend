@@ -4,7 +4,7 @@ StorageClass gp3, the default class of an EKS cluster (storageClass.enabled; off
 
 {{- /*
 The EBS CSI driver's add-on makes no StorageClass and EKS marks none as the default, while the charts' volume claims
-name no class (Redpanda, Prometheus, ...) and take the default: without this one they stay Pending.
+name no class (Prometheus, ...) and take the default: without this one they stay Pending.
 */}}
 
 {{- /*

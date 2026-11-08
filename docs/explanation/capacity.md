@@ -47,7 +47,7 @@ Vì sao: [ADR-0005](../adr/0005-feed-fan-out-on-write.md) (timeline), [ADR-0009]
 | Postgres: follow | 1 triệu × 50 cạnh, ~160 B/cạnh kể cả 2 index | ~8 GB, lưu 2 nơi (user-service và bản sao ở feed-service) |
 | Postgres: timeline | 1.000 × 2.000 = 2 triệu dòng/ngày, giữ 30 ngày, ~110 B/dòng | 60 triệu dòng ≈ 7 GB |
 | Postgres: video, like | video ~1 KB/dòng; like 300k dòng/ngày | video không đáng kể; like ~15 GB/năm |
-| Redpanda: lượt xem | 6 triệu × ~200 B, giữ 7 ngày | ~8 GB |
+| Kafka: lượt xem | 6 triệu × ~200 B, giữ 7 ngày | ~8 GB mỗi bản sao (prd RF 3 trên MSK: ~24 GB) |
 
 ## Rút ra gì
 

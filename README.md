@@ -8,7 +8,7 @@ flowchart LR
     web["web (repo svp-frontend)"]
     gw["gateway"]
     svc["user, video, engagement, feed-service"]
-    bus[["Redpanda"]]
+    bus[["Kafka"]]
     mw["media-worker"]
     obj[("Object storage")]
     client --> web --> gw
@@ -52,10 +52,10 @@ Hệ thống chia ba repo ([ADR-0033](docs/adr/0033-svp-web-repo.md), [ADR-0025]
 Cần sẵn trên máy:
 
 - Docker, và Go theo version ghim trong `go.mod`.
-- Postgres và Redis chạy trên máy, không nằm trong compose: Postgres `127.0.0.1:5432`, Redis `127.0.0.1:6379`. Database và db Redis riêng
-  của từng service ở [`AGENTS.md`](AGENTS.md).
-- Công cụ dòng lệnh: `psql` (`make up` tạo role và database trên Postgres native), `redis-cli`, `curl`, `jq`, `openssl`, `ffmpeg`
-  (`make smoke` sinh video thử và gọi API).
+- Postgres chạy trên máy, không nằm trong compose: `127.0.0.1:5432`. Redis native `127.0.0.1:6379` chỉ cho `make test` (db 15) và `make dev`
+  của web (db 9); Kafka và Valkey của stack là container của compose. Database và db Valkey riêng của từng service ở [`AGENTS.md`](AGENTS.md).
+- Công cụ dòng lệnh: `psql` (`make up` tạo role và database trên Postgres native), `curl`, `jq`,
+  `openssl` (`make env` sinh mật khẩu và CA local), `ffmpeg` (`make smoke` sinh video thử và gọi API).
 - Bản clone `svp-gitops` ở `../gitops` (hay `SVP_GITOPS_DIR`): `make up` đọc từ đó digest của web client, kéo ẩn danh từ GHCR; đường
   dev của cluster (`make k8s-up`, `make helm-check`) cũng đọc `base/` ở đó.
 - Bản clone `svp-frontend` ở `../frontend` (hay `SVP_WEB_DIR`) chỉ khi cần mã web: `make up WEB_FROM=clone`, `make web-e2e`, Lighthouse.
@@ -71,8 +71,8 @@ Chạy thử từng bước, kèm đọc một trace: [`docs/tutorials/first-run
 
 ```sh
 make help        # liệt kê mọi target
-make env         # tạo .env (mode 600) với secret ngẫu nhiên; không bao giờ in giá trị
-make up          # tạo role/database trên Postgres native rồi dựng stack compose: Redpanda, object storage, các service, web
+make env         # tạo .env (mode 600) với secret ngẫu nhiên và CA local của Kafka, Valkey (.local/ca/); không bao giờ in giá trị
+make up          # tạo role/database trên Postgres native rồi dựng stack compose: Kafka (SASL_SSL 9096), Valkey (TLS), object storage, các service, web
 make smoke       # luồng đầu-cuối qua gateway: đăng ký, upload tới READY, phát HLS, feed, like, follow
 ```
 
@@ -83,6 +83,10 @@ Mở `http://localhost:3001` (dùng đúng `localhost`, không dùng `127.0.0.1`
 Object store là service `s3` (compose và k3d): một endpoint tương thích S3 API (RustFS, [ADR-0022](docs/adr/0022-local-object-store-minio-replacement.md));
 code gọi nó qua `internal/objstore`. Kiểm tra (`make check`, `make vulncheck`, `make fuzz`, `make dast`, `make grype`) và mọi lệnh khác
 ở [`docs/reference/`](docs/reference/).
+
+Kafka (`apache/kafka`, SCRAM-SHA-512 trên TLS) và Valkey (TLS, user theo db và tiền tố khoá) chạy cùng phần mềm, cổng và xác thực với MSK và
+ElastiCache của stg, prd ([ADR-0053](docs/adr/0053-msk-elasticache-valkey.md)). Script chạm chúng đi qua CLI vận hành `deploy/ops/`
+(`svp-kafka`, `svp-valkey`), chạy trong container của chúng; mô tả ở [`reference/compose.md`](docs/reference/compose.md).
 
 ## Chạy ở đâu
 
@@ -106,13 +110,14 @@ Compose và k3d không chạy cùng lúc: mỗi bên từ chối khi bên kia đ
 | `services/media-worker/` | Consumer transcode bằng ffmpeg ra HLS, không có database. |
 | `services/engagement-service/` | Like, unlike, lượt xem gom theo lô (database `svp_engagement`). |
 | `services/feed-service/` | Feed following (fan-out on write), feed khám phá có cache (database `svp_feed`). |
-| `internal/` | Thư viện dùng chung: kết nối Postgres và retry, Kafka, outbox, Redis, telemetry, gRPC, env. |
+| `internal/` | Thư viện dùng chung: kết nối Postgres và retry, Kafka, outbox, Redis (Valkey), telemetry, gRPC, env. |
 | `proto/` | Contract `.proto` của gRPC và event, quản lý bằng buf. Sửa ở đây rồi chạy `make generate`. |
 | `gen/` | Code Go sinh từ `proto/`; commit cùng thay đổi, không sửa tay. Code sinh từ SQL (sqlc) ở `services/*/internal/store`. |
 | `tools/` | Công cụ nhỏ: `jwtkey` (khoá JWT), `vulngate` (gate của `make vulncheck`). |
-| `deploy/compose/` | Stack compose `make up`, script smoke và diễn tập. |
+| `deploy/compose/` | Stack compose `make up`, `local-ca.sh` (CA local), script smoke và diễn tập. |
 | `deploy/docker/` | Dockerfile của service Go và media-worker (Dockerfile web ở gốc `svp-frontend`). |
-| `deploy/postgres/`, `deploy/redpanda/`, `deploy/s3/` | Bootstrap database, topic Kafka (compose), bucket, user, policy và CORS của object storage. |
+| `deploy/postgres/`, `deploy/s3/` | Bootstrap database; bucket, user, policy và CORS của object storage. |
+| `deploy/kafka/`, `deploy/valkey/`, `deploy/ops/` | Broker `apache/kafka` (cấu hình, script init topic, user, ACL), aclfile của Valkey, CLI vận hành `svp-kafka`, `svp-valkey`. |
 | `deploy/observability/` | Collector, Prometheus và rule SLO, Alertmanager, Grafana LGTM, GlitchTip, Elastic (so sánh). |
 | `deploy/k8s/` | Cluster k3d: `helmfile.yaml.gotmpl` cùng glue `install.sh` (đường dev), `gitops.sh`, `secrets.sh` và `rotate.sh` (xoay credential, Reloader restart), `k8s.mk`, PSA, `drills/` (Chainsaw), `cloud/` (kiểm tĩnh Job k6). Values, overlay và digest của các môi trường ở `svp-gitops`. |
 | `deploy/helm/` | Chart Helm: `svp-service` (chung cho mọi service), `svp-cluster`, `svp-data`, `svp-observability`, `svp-policy` (Kyverno). |

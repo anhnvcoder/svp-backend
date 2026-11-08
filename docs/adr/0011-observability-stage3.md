@@ -188,3 +188,4 @@ Phụ lục: [`appendix/0011-observability-stage3.md`](appendix/0011-observabili
 - §8: [0021](0021-deferred-verification-stage6b.md): `RateLimitFallbackActive` theo tỷ lệ quyết định dự phòng của từng instance, có sàn số lượng và `for: 1m`; thêm ticket `RateLimitFallbackElevated`.
 - §11: [0013](0013-kafka-metadata-min-age.md): `MetadataMinAge` 1 s cho mọi client franz-go.
 - §11: [0020](0020-reliability-stage6.md): ngân sách kết nối Postgres lúc khởi động 5 s thành cửa sổ thử lại 30 s.
+- §1, §5, §8: [0053](0053-msk-elasticache-valkey.md): Collector đọc lag bằng receiver `kafkametrics` (user `svp-otelcol`, SCRAM-SHA-512 trên TLS) thay scrape `redpanda:9644/public_metrics` và `enable_consumer_group_metrics` của Redpanda; rule lag dùng metric `kafka.consumer_group.lag` của receiver.

@@ -124,44 +124,6 @@ spec:
       ports:
         - protocol: TCP
           port: 443
-{{- /* The brokers of release redpanda (svp-data) with one another: RPC on 33145 (seeds, Raft, replication) and the
-Admin API on 9644 (the sidecar and hooks call every broker's). Here, in wave 1, not in chart svp-data (wave 4):
-the root moves to wave 4 only once Redpanda is healthy, which three brokers without this policy never are. Kafka
-on 9092 stays closed between brokers. */}}
----
-apiVersion: networking.k8s.io/v1
-kind: NetworkPolicy
-metadata:
-  name: redpanda-peers
-  namespace: svp-data
-spec:
-  podSelector:
-    matchLabels:
-      app.kubernetes.io/name: redpanda
-      app.kubernetes.io/instance: redpanda
-  policyTypes: [Ingress, Egress]
-  ingress:
-    - from:
-        - podSelector:
-            matchLabels:
-              app.kubernetes.io/name: redpanda
-              app.kubernetes.io/instance: redpanda
-      ports:
-        - protocol: TCP
-          port: 33145
-        - protocol: TCP
-          port: 9644
-  egress:
-    - to:
-        - podSelector:
-            matchLabels:
-              app.kubernetes.io/name: redpanda
-              app.kubernetes.io/instance: redpanda
-      ports:
-        - protocol: TCP
-          port: 33145
-        - protocol: TCP
-          port: 9644
 {{- if and $es.enabled (eq $es.store "aws") }}
 ---
 apiVersion: networking.k8s.io/v1

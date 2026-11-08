@@ -77,6 +77,29 @@ func TestOptionsFresh(t *testing.T) {
 	}
 }
 
+// TestOptionsUserPassword checks the REDIS_URL of a Valkey with TLS and ACL users: TLS is on and
+// checks the host's name, and the user, password and db come from the URL; a bad URL of that
+// form fails without the password in the error.
+func TestOptionsUserPassword(t *testing.T) {
+	t.Parallel()
+	const pass = "0123456789abcdefABCDEF0123456789" //nolint:gosec // a made-up password
+	o, err := Options("rediss://svp-gateway:" + pass + "@valkey:6379/10")
+	if err != nil {
+		t.Fatalf("Options() error = %v", err)
+	}
+	if o.Addr != "valkey:6379" || o.DB != 10 || o.Username != "svp-gateway" || o.Password != pass {
+		t.Errorf("Addr, DB, Username = %q, %d, %q (password match %v); want valkey:6379, 10, svp-gateway, true",
+			o.Addr, o.DB, o.Username, o.Password == pass)
+	}
+	if o.TLSConfig == nil || o.TLSConfig.ServerName != "valkey" || o.TLSConfig.InsecureSkipVerify {
+		t.Errorf("TLSConfig = %+v, want TLS checking the name valkey", o.TLSConfig)
+	}
+	_, err = Options("rediss://svp-gateway:" + pass + "@valkey:6379/ten")
+	if !errors.Is(err, ErrInvalidURL) || strings.Contains(err.Error(), pass) {
+		t.Errorf("Options() error = %v, want ErrInvalidURL without the password", err)
+	}
+}
+
 func TestNewInvalidHidesURL(t *testing.T) {
 	t.Parallel()
 	const secret = "s3cret-pw"

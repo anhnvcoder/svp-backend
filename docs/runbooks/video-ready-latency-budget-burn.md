@@ -2,7 +2,9 @@
 
 - Severity: `page` (runbook này) và `ticket` (cùng tên, chỉ ở Alertmanager). Rule sinh bằng Sloth từ SLO `video-ready-latency`
   của `deploy/observability/slo/svp-slos.yaml` (`make slo`).
-- Chuẩn bị biến `PROM`, `AM`, hàm `dc`: [README](README.md#chuẩn-bị-trong-terminal).
+- Chuẩn bị biến `PROM`, `AM`, hàm `dc`: [README](README.md#chuẩn-bị-trong-terminal). Lệnh Kafka đi qua `svp-kafka` (Kafka CLI
+  của image `apache/kafka`, đăng nhập `svp-admin`, [ADR-0053](../adr/0053-msk-elasticache-valkey.md) §13): compose trong container
+  `kafka`, k3d và EKS trong Deployment `svp-ops` của namespace `svp-data`.
 
 ## Ý nghĩa và tác động tới người dùng
 
@@ -28,8 +30,10 @@ curl -sG "$PROM/api/v1/query" --data-urlencode 'query=sum by (outcome) (increase
 curl -sG "$PROM/api/v1/query" --data-urlencode 'query=histogram_quantile(0.95, sum by (le, outcome) (rate(svp_video_ready_duration_seconds_bucket{service_name="video-service"}[1h])))' | jq -c '.data.result[] | [.metric.outcome, .value[1]]'
 curl -sG "$PROM/api/v1/query" --data-urlencode 'query=histogram_quantile(0.95, sum by (le, outcome) (rate(svp_transcode_duration_seconds_bucket{service_name="media-worker"}[1h])))' | jq -c '.data.result[] | [.metric.outcome, .value[1]]'
 # hàng đợi: lag của media-worker (video.lifecycle.v1) và video-service (media.transcodes.v1)
-dc exec -T redpanda rpk group describe media-worker | grep -E 'MEMBERS|TOTAL-LAG'
-dc exec -T redpanda rpk group describe video-service | grep -E 'MEMBERS|TOTAL-LAG'
+# STATE, #MEMBERS (0 là consumer không chạy), rồi tổng LAG của group
+dc exec -T kafka /opt/svp/bin/svp-kafka consumer-groups --describe --group media-worker --state
+dc exec -T kafka /opt/svp/bin/svp-kafka consumer-groups --describe --group media-worker | awk '$1 == "media-worker" { lag += $6 } END { print "TOTAL-LAG", lag + 0 }'
+dc exec -T kafka /opt/svp/bin/svp-kafka consumer-groups --describe --group video-service | awk '$1 == "video-service" { lag += $6 } END { print "TOTAL-LAG", lag + 0 }'
 make logs SVC=media-worker
 env -u DOCKER_DEFAULT_PLATFORM docker stats --no-stream
 ```
@@ -39,7 +43,7 @@ k3d:
 ```sh
 kubectl --context k3d-svp -n svp get pods -l app.kubernetes.io/name=media-worker -o wide
 kubectl --context k3d-svp -n svp get scaledobject media-worker
-kubectl --context k3d-svp -n svp-data exec redpanda-0 -c redpanda -- rpk group describe media-worker
+kubectl --context k3d-svp -n svp-data exec deploy/svp-ops -c kafka -- /opt/svp/bin/svp-kafka consumer-groups --describe --group media-worker
 kubectl --context k3d-svp -n svp logs -l app.kubernetes.io/name=media-worker --since=1h --tail=1000
 kubectl --context k3d-svp top nodes
 ```

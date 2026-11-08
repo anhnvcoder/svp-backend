@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # Drill of the threat model rows JWT-8, UP-8, OPS-1, RL-2, WEB-9 on `make up OBS=lgtm`; a failed item does not stop the
 # rest (the stack is restored first), and the script exits non-zero when any failed. Reads no database but the web
-# session in Redis db 9, from .env only the GlitchTip variables (never printed).
+# session in Valkey db 9 (through svp-valkey, as svp-ops), from .env only the GlitchTip variables (never printed).
 
-# LOCAL LAB ONLY: sourcing deploy/compose/lib.sh deletes the gateway's register rate limit keys in Redis db 10.
+# LOCAL LAB ONLY: sourcing deploy/compose/lib.sh deletes the gateway's register rate limit keys in Valkey db 10.
 # Design notes: docs/threat-model.md.
 set -euo pipefail
 
@@ -12,7 +12,7 @@ base=${1:-http://127.0.0.1:8080}
 source "$(dirname "$0")/common.sh"
 
 # The Redis-down setting of the gateway: .invalid never resolves (RFC 2606).
-redis_down_url=redis://redis-down.invalid:6379/10
+redis_down_url=rediss://svp-gateway@redis-down.invalid:6379/10
 fallback_alert_timeout=240
 jwt8_5xx='http_server_request_duration_seconds_count{service_name="gateway",http_route=~"/auth/login|/me/following/.+",http_response_status_code=~"5.."}'
 jwt8_traces='{ resource.service.name = "gateway" && span:kind = server && (span.http.route = "/auth/register" || span.http.route = "/auth/login" || span.http.route = "/feed/explore" || span.http.route = "/me/following/{user_id}") }'
@@ -21,7 +21,6 @@ expected_publishers="alertmanager 127.0.0.1:9093->9093
 gateway 127.0.0.1:8080->8080
 glitchtip 127.0.0.1:8000->8000
 lgtm 127.0.0.1:3000->3000
-redpanda 127.0.0.1:19092->19092
 s3 127.0.0.1:9000->9000
 web 127.0.0.1:3001->3001"
 
@@ -363,7 +362,7 @@ holds() {
 }
 
 # web9_logout: the EXIT trap of the WEB-9 item (run_item runs it in a subshell): logs the web session out, so it does
-# not stay in Redis db 9 for its 30 days.
+# not stay in Valkey db 9 for its 30 days.
 web9_logout() {
   [[ -n $(web_sid) ]] || return 0
   [[ $(web_post /logout "$work/web9-logout" "${web_same_origin[@]}") == 303 ]] &&
@@ -442,11 +441,11 @@ web9() {
   [[ $status == 202 ]] || fail "WEB-9: POST /api/videos/{id}/complete through the web client is 202 (status $status)"
   ok "WEB-9: through the web client: feed (/ and /api/feed/explore 200), video $id created, uploaded and completed"
 
-  # The values no telemetry may hold; the tokens come from the session itself (Redis db 9, key svp:web:sess:<SHA-256
+  # The values no telemetry may hold; the tokens come from the session itself (Valkey db 9, key svp:web:sess:<SHA-256
   # of the sid>), read into this private file only.
-  redis-cli -h 127.0.0.1 -p 6379 -n 9 GET "svp:web:sess:$(web_sid | tr -d '\n' | shasum -a 256 | cut -c1-64)" \
+  valkey_cli -n 9 GET "svp:web:sess:$(web_sid | tr -d '\n' | shasum -a 256 | cut -c1-64)" </dev/null \
     >"$work/web9.session" ||
-    fail "WEB-9: read the drill user's web session in Redis db 9"
+    fail "WEB-9: read the drill user's web session in Valkey db 9"
   policy=$(jq -r '[.form_fields | to_entries[] | select(.key | ascii_downcase == "policy") | .value][0] // ""' "$work/web9.upload")
   signature=$(jq -r '[.form_fields | to_entries[] | select(.key | ascii_downcase == "x-amz-signature") | .value][0] // ""' \
     "$work/web9.upload")

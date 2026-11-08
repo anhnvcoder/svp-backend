@@ -1,1 +1,0 @@
-../../../redpanda/create-topics.sh

@@ -19,6 +19,9 @@ mediaDomain: d000000000000.cloudfront.net
 s3Cidrs:
   - 198.51.100.0/24
   - 203.0.113.0/24
+# Bootstrap brokers of Amazon MSK (host:9096 per broker, comma separated) and the primary endpoint of ElastiCache.
+kafkaBrokers: b-1.svp-stg.kafka.example:9096,b-2.svp-stg.kafka.example:9096
+valkeyHost: master.svp-stg.cache.example
 # Required map: IAM roles assumed by SecretStore of each namespace (svp, svp-data, svp-obs, keda, argocd).
 externalSecretsRoles:
   svp: arn:aws:iam::111111111111:role/svp-stg-external-secrets-svp

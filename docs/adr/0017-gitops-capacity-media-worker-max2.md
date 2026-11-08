@@ -92,3 +92,4 @@ gốc với các ghi chú có ngày, hai lượt đo trước quyết định, p
   Actions thay cho cluster cloud.
 - Kiểm lại (c) và RAM: [0039](0039-mainpath-drills-scan-gate-sourcemaps.md): một phần bị thay: `drill-k8s-keda` rời đường chính thành
   bài lab, đo lại trên EKS bằng k6 của buổi AWS.
+- Đường script tạo topic: [0053](0053-msk-elasticache-valkey.md): `deploy/kafka/` của Apache Kafka thay `deploy/redpanda/create-topics.sh`.

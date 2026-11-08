@@ -85,15 +85,16 @@ opt_in_gaps() {
   printf '%s' "${gaps#; }"
 }
 
-# rotate_unready dev|argocd: true when the cluster runs the project's workloads (StatefulSet s3 or redpanda of svp-data)
-# and a change of credentials would not reach each of them yet, with what is missing in $unready_why: no available
-# Reloader, a workload not opted in, or Reloader may not restart it. dev checks every workload the releases render;
-# argocd only the servers the barrier waits for. A cluster that cannot be read stops the script.
+# rotate_unready dev|argocd: true when the cluster runs the project's workloads (in svp-data StatefulSet s3 or kafka, or
+# Deployment svp-ops, the one of every platform) and a change of credentials would not reach each of them yet, with what
+# is missing in $unready_why: no available Reloader, a workload not opted in, or Reloader may not restart it. dev checks
+# every workload the releases render, argocd only the servers the barriers wait for. An unreadable cluster stops it.
 rotate_unready() {
-  local mode=$1 servers available sts json lines
+  local mode=$1 servers available kind resource name json lines
   unready_why=
-  servers=$(kc -n svp-data get statefulsets -o name) || fail "list the StatefulSets of namespace svp-data; run $again again"
-  printf '%s\n' "$servers" | grep -qxE 'statefulset[.a-z]*/(s3|redpanda)' || return 1
+  servers=$(kc -n svp-data get statefulsets,deployments -o name) ||
+    fail "list the StatefulSets and Deployments of namespace svp-data; run $again again"
+  printf '%s\n' "$servers" | grep -qxE '(statefulset[.a-z]*/(s3|kafka)|deployment[.a-z]*/svp-ops)' || return 1
   available=$(kc -n reloader get deployment reloader --ignore-not-found -o jsonpath='{.status.availableReplicas}') ||
     fail "read Deployment reloader/reloader; run $again again"
   if [ "${available:-0}" -lt 1 ]; then
@@ -104,11 +105,14 @@ rotate_unready() {
     lines=$(opt_in_render) || exit 1
     unready_why=$(opt_in_gaps <<<"$lines") || exit 1
   else
-    for sts in s3 redpanda; do
-      printf '%s\n' "$servers" | grep -qxE "statefulset[.a-z]*/$sts" || continue
-      json=$(kc -n svp-data get statefulsets.apps "$sts" -o json) || fail "read StatefulSet svp-data/$sts; run $again again"
+    for kind in StatefulSet/s3 Deployment/valkey; do
+      name=${kind#*/}
+      kind=${kind%/*}
+      resource=$(tr '[:upper:]' '[:lower:]' <<<"$kind")
+      printf '%s\n' "$servers" | grep -qxE "${resource}[.a-z]*/$name" || continue
+      json=$(kc -n svp-data get "${resource}s.apps" "$name" -o json) || fail "read $kind svp-data/$name; run $again again"
       [ -n "$(jq -r --arg k "$reload_key" '.metadata.annotations[$k] // .spec.template.metadata.annotations[$k] // ""' <<<"$json")" ] ||
-        unready_why="${unready_why:+$unready_why; }StatefulSet svp-data/$sts names no Secret in $reload_key yet"
+        unready_why="${unready_why:+$unready_why; }$kind svp-data/$name names no Secret in $reload_key yet"
     done
   fi
   [ -n "$unready_why" ]
@@ -185,6 +189,47 @@ rotate_barrier() {
   ok "StatefulSet $sts: each of its $replicas pod(s) runs with the $var of .env and is Ready"
 }
 
+# valkey_current: true when Valkey (Deployment svp-data/valkey) takes each of its users with its password of .env (the
+# variables SVP_VALKEY_<USER>_PASSWORD the caller read), otherwise sets server_why. Valkey reads its ACL file only when
+# it starts. One SELECT of each user's db through svp-valkey of Deployment svp-ops, each password on stdin.
+valkey_current() {
+  local err rc=0
+  # Exit 3 inside the container means "a user is refused", told apart from kubectl's own failures.
+  # shellcheck disable=SC2016 # expanded by the container's sh
+  err=$(printf '%s\n' "$SVP_VALKEY_GATEWAY_PASSWORD" "$SVP_VALKEY_FEED_SERVICE_PASSWORD" "$SVP_VALKEY_WEB_PASSWORD" \
+    "$SVP_VALKEY_OPS_PASSWORD" | kc -n svp-data exec -i deploy/svp-ops -c valkey -- sh -c '
+      for u in svp-gateway:10 svp-feed-service:14 svp-web:9 svp-ops:10; do
+        IFS= read -r pw
+        out=$(printf "%s\n" "$pw" | SVP_AS_USER=${u%:*} /opt/svp/bin/svp-valkey SELECT "${u#*:}" 2>&1) || exit 4
+        [ "$out" = OK ] || exit 3
+      done' 2>&1) || rc=$?
+  case $rc in
+    0) ;;
+    3)
+      server_why="refuses a user's password of .env"
+      return 1
+      ;;
+    *)
+      server_why="could not be logged in to through Deployment svp-ops ($err)"
+      return 1
+      ;;
+  esac
+}
+
+# valkey_barrier: when Deployment svp-data/valkey exists, waits up to 300 s until it takes every password of .env
+# (valkey_current): the time Reloader takes to restart it once Secret valkey-acl changed. Fails naming it after that.
+valkey_barrier() {
+  local found deadline=$((SECONDS + 300))
+  found=$(kc -n svp-data get deployment valkey --ignore-not-found -o name) || fail "read Deployment svp-data/valkey; run $again again"
+  [ -n "$found" ] || return 0
+  until valkey_current; do
+    ((SECONDS < deadline)) ||
+      fail "Deployment svp-data/valkey $server_why 300s after Secret valkey-acl changed: Reloader did not restart it (kubectl --context $kube_context -n reloader logs deployment/reloader; its annotation secret.reloader.stakater.com/reload must name valkey-acl); the init Jobs of svp-data and the clients' Secrets wait for it. Run $again again once it runs with the ACL file of .env"
+    sleep 2
+  done
+  ok "Deployment valkey: takes every user's password of .env"
+}
+
 # rotate_es_sync server|clients: has External Secrets Operator build again the ExternalSecrets of namespace svp-data
 # (server), or every other one (clients), and waits for them (es_force_sync of lib.sh); a cluster with none of them
 # yet (Argo CD makes them with chart svp-cluster) is skipped with a line.
@@ -216,7 +261,7 @@ rotate_init_dev() {
     echo "skip  init Jobs of svp-data: release svp-data is not installed yet; they run when make k8s-up installs it"
     return 0
   fi
-  echo "helmfile sync of release svp-data alone: its init Jobs set the new passwords in Postgres, the object store and Redpanda"
+  echo "helmfile sync of release svp-data alone: its init Jobs set the new passwords in Postgres, the object store and Kafka"
   dev_helmfile sync -l name=svp-data ||
     fail "the init Jobs of svp-data (helmfile sync of release svp-data, above) did not set the new passwords; the clients' Secrets were not changed. Run $again again once the cause is fixed"
   ok "init Jobs of svp-data done: the servers take the new passwords"
@@ -241,7 +286,7 @@ rotate_init_argocd() {
   kc -n argocd patch "$app" --type merge \
     -p "{\"operation\":{\"initiatedBy\":{\"username\":\"$stamp\"},\"sync\":{}}}" >/dev/null ||
     fail "start a sync of Application argocd/svp-data; run $again again"
-  echo "sync of Application svp-data ($stamp): its PostSync Jobs set the new passwords in Postgres and Redpanda"
+  echo "sync of Application svp-data ($stamp): its PostSync Jobs set the new passwords of the servers' users (Postgres, and the object store and Kafka where they run in the cluster)"
   while :; do
     state=$(kc -n argocd get "$app" -o json | jq -r --arg stamp "$stamp" '.status.operationState // {}
       | if .operation.initiatedBy.username == $stamp then "\(.phase // "Running") \(.message // "" | gsub("\n"; " "))"

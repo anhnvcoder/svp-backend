@@ -21,11 +21,11 @@ import (
 
 func TestServeRequiresItsVariables(t *testing.T) {
 	for _, tc := range []struct{ databaseURL, brokers, want string }{
-		{"", "redpanda:9092", "DATABASE_URL"},
+		{"", "kafka:9096", "DATABASE_URL"},
 		{"postgres://unused@127.0.0.1:1/unused", "", "KAFKA_BROKERS"},
 		// The broker list is checked before the database is opened, so this URL is never dialled.
 		{"postgres://unused@127.0.0.1:1/unused", " , ", "KAFKA_BROKERS"},
-		{"postgres://unused@127.0.0.1:1/unused", "redpanda:notaport", "KAFKA_BROKERS"},
+		{"postgres://unused@127.0.0.1:1/unused", "kafka:notaport", "KAFKA_BROKERS"},
 	} {
 		t.Setenv("DATABASE_URL", tc.databaseURL)
 		t.Setenv("KAFKA_BROKERS", tc.brokers)
@@ -52,7 +52,7 @@ func TestServeReportsAFailureBeforeTheErrorTrackerStops(t *testing.T) {
 	t.Setenv("SENTRY_DSN", "http://public@"+tracker.Listener.Addr().String()+"/1")
 	t.Setenv("OTEL_SDK_DISABLED", "true")
 	t.Setenv("JWT_VERIFY_KEYS", calleridtest.VerifyKeys())
-	t.Setenv("KAFKA_BROKERS", "redpanda:9092")
+	t.Setenv("KAFKA_BROKERS", "kafka:9096")
 	// pgpool rejects this URL once the tracker has started. Every later failure, a malformed
 	// LISTEN_ADDR included, returns through the same deferred call.
 	t.Setenv("DATABASE_URL", "postgres://%zz")
@@ -117,7 +117,7 @@ func TestPoolSizes(t *testing.T) {
 func TestServeRejectsInvalidMaxConns(t *testing.T) {
 	const secret = "s3cret-pw"
 	t.Setenv("DATABASE_URL", "postgres://svp:"+secret+"@127.0.0.1:1/svp_engagement")
-	t.Setenv("KAFKA_BROKERS", "redpanda:9092")
+	t.Setenv("KAFKA_BROKERS", "kafka:9096")
 	t.Setenv("DATABASE_MAX_CONNS", "1")
 	err := serve(t.Context(), slog.New(slog.DiscardHandler))
 	if err == nil || !strings.Contains(err.Error(), "DATABASE_MAX_CONNS") {
@@ -197,7 +197,7 @@ func TestRunConsumerReturnsCreateError(t *testing.T) {
 func TestServeRequiresVerifyKeys(t *testing.T) {
 	t.Setenv("DATABASE_URL", "postgres://unused@127.0.0.1:1/unused")
 	t.Setenv("DATABASE_MAX_CONNS", "")
-	t.Setenv("KAFKA_BROKERS", "redpanda:9092")
+	t.Setenv("KAFKA_BROKERS", "kafka:9096")
 	for _, keys := range []string{"", "k1:not-base64"} {
 		t.Setenv("JWT_VERIFY_KEYS", keys)
 		err := serve(t.Context(), slog.New(slog.DiscardHandler))

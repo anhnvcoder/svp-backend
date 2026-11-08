@@ -19,7 +19,7 @@ Mỗi runbook có đủ các mục sau, theo đúng thứ tự (mục nào khôn
 3. **Nguyên nhân thường gặp**: theo thứ tự hay gặp, mỗi cái có dấu hiệu nhận ra trong kết quả của bước 2.
 4. **Giảm thiểu**: bước làm ngay để người dùng bớt bị ảnh hưởng, kể cả khi chưa biết nguyên nhân gốc.
 5. **Khôi phục và xác nhận**: đưa hệ thống về bình thường và bằng chứng đã về (truy vấn, cảnh báo resolve, `make smoke`).
-6. **Leo thang**: khi nào dừng xử lý tại chỗ, bước nặng hơn là gì, ai cần biết (dự án khác dùng chung Redis, Postgres native),
+6. **Leo thang**: khi nào dừng xử lý tại chỗ, bước nặng hơn là gì, ai cần biết (dự án khác dùng chung Postgres native),
    khi nào mở postmortem ([mẫu](../postmortems/README.md)).
 7. **Liên kết**: dashboard, ADR, diễn tập tái hiện được sự cố (`make drill-…`, `make measure-…`); không có diễn tập thì ghi
    rõ.
@@ -80,11 +80,14 @@ cuối) và `kubectl --context k3d-svp -n svp logs -l app.kubernetes.io/name=<se
 
 - Docker và compose qua `make` (`make ps`, `make logs SVC=…`, `make up OBS=lgtm`); lệnh tay luôn có tiền tố
   `env -u DOCKER_DEFAULT_PLATFORM` (hàm `dc` ở trên). Không chạy `dc config` không có `--quiet`: nó in `.env` đã điền.
-- `kubectl` luôn có `--context k3d-svp`; không lệnh nào vào cluster khác.
-- Cổng ghi rõ trong lệnh: Redis native `redis-cli -h 127.0.0.1 -p 6379 -n <db>` (gateway db 10, feed-service db 14, web db
-  9), Postgres native `-h 127.0.0.1 -p 5432`. Redis native và Postgres native **dùng chung với dự án khác**: không restart,
-  không `FLUSHDB`/`FLUSHALL`, không xoá khoá ngoài hai tiền tố mà `AGENTS.md` cho phép (`svp:gw:rl:register:*` ở db 10,
-  `svp:feed:explore:*` ở db 14).
+- `kubectl` luôn có `--context k3d-svp`; cùng lệnh với context của cluster EKS chỉ người học chạy.
+- Kafka và Valkey của stack chỉ qua **CLI vận hành** ([ADR-0053](../adr/0053-msk-elasticache-valkey.md) §13), không công cụ
+  Kafka, `redis-cli` hay `valkey-cli` trên máy, không pod tạm: compose `dc exec -T kafka /opt/svp/bin/svp-kafka <công cụ> …` (Kafka CLI,
+  đăng nhập `svp-admin`) và `dc exec -T valkey /opt/svp/bin/svp-valkey -n <db> …` (`valkey-cli --tls`, đăng nhập `svp-ops`); k3d
+  `kubectl --context k3d-svp -n svp-data exec deploy/svp-ops -c kafka -- /opt/svp/bin/svp-kafka …` và `… -c valkey --
+  /opt/svp/bin/svp-valkey -n <db> …`. Gateway db 10, feed-service db 14, web db 9. `svp-ops` chỉ đọc khoá `svp:*` và xoá đúng hai tiền
+  tố mà `AGENTS.md` cho phép (`svp:gw:rl:register:*` ở db 10, `svp:feed:explore:*` ở db 14); không `FLUSHDB`/`FLUSHALL`.
+- Postgres native ghi rõ cổng `-h 127.0.0.1 -p 5432`; nó **dùng chung với dự án khác**: không restart.
 - Không in giá trị secret: không `cat .env`, không `env` trong container, không `kubectl get secret -o yaml`. Cần đổi secret
   thì sửa `.env` bằng trình soạn thảo rồi chạy target của Makefile.
 - Lệnh chạm GitHub để ghi (dispatch workflow, mở PR, merge) và mọi lệnh chạm AWS/GCP do người học chạy; runbook ghi rõ

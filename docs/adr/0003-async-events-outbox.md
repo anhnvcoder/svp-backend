@@ -89,3 +89,4 @@ cân nhắc khi số bước và nhánh lỗi tăng tới mức khó theo dõi l
 ### Chỉnh bởi
 
 - Quyết định (cách khoá relay outbox): [0008](0008-async-upload-pipeline-stage2a.md): thay `FOR UPDATE SKIP LOCKED` bằng advisory lock để giữ thứ tự theo key; phần còn lại giữ nguyên.
+- Bối cảnh (broker), Hệ quả: [0053](0053-msk-elasticache-valkey.md): broker là Apache Kafka thay Redpanda: Amazon MSK provisioned ở stg, prd, image `apache/kafka` (KRaft) ở compose, k3d; outbox, at-least-once với consumer idempotent và DLQ giữ nguyên.

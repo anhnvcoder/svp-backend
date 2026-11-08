@@ -88,6 +88,17 @@ argocd:
   labels: {app.kubernetes.io/name: argocd-application-controller}
   metricsPort: 8082
 
+# The Kafka brokers, which the Collector reads consumer group lag from on port (the SASL_SSL listener). cluster: the
+# broker pod of chart svp-data in namespace, chosen by labels. external: a managed Kafka outside the cluster (Amazon
+# MSK), reached at the addresses of external.cidrs.
+kafka:
+  mode: cluster
+  external:
+    cidrs: []
+  namespace: svp-data
+  labels: {app.kubernetes.io/name: kafka}
+  port: 9096
+
 # Postgres svp-pg in svp-data, the only peer outside svp-obs that GlitchTip and its init Job call; Prometheus scrapes its
 # instance's exporter on metricsPort (PodMonitor svp-pg), the port CloudNativePG names metrics.
 postgres:

@@ -179,8 +179,7 @@ RFC một trang cạnh ADR: `docs/rfc/README.md` (mẫu: Vấn đề, Phương �
 
 ## Hiện thực ở
 
-- k6 (§2): `deploy/k6/` (`main.js`, `api.js`, `web.js`, `lib/`, `load.sh`, `k6.mk`), `deploy/k6/cloud/` (`render.sh`, `job.yaml.in`, `run.sh`).
-- SLO web và cảnh báo (§3): `deploy/observability/slo/svp-slos.yaml`, `deploy/observability/prometheus/rules/svp-alerts.yaml`.
+- k6 (§2): `deploy/k6/` (`main.js`, `api.js`, `web.js`, `lib/`, `load.sh`, `k6.mk`), `deploy/k6/cloud/` (`render.sh`, `job.yaml.in`, `run.sh`). SLO web và cảnh báo (§3): `deploy/observability/slo/svp-slos.yaml`, `deploy/observability/prometheus/rules/svp-alerts.yaml`.
 - Backup và phục hồi Postgres (§5): `deploy/helm/svp-data/templates/backup.yaml`, `deploy/helm/svp-data/values.yaml`, `deploy/k8s/values/plugin-barman-cloud.yaml`, `deploy/helm/svp-observability/templates/postgres.yaml`, `deploy/s3/init.sh`, `deploy/k8s/secrets.sh` (biến của `deploy/compose/compose.mk`), `deploy/k8s/install.sh`, `deploy/k8s/lib.sh`, `deploy/k8s/drills/backup.sh`, `deploy/k8s/drills/threats/bak-1/`, `deploy/ci/trivy-config-ignore.yaml`.
 - Velero, Chaos Mesh, kubeconform (§6–§8): `deploy/k8s/cloud/` (`chaos/`, `velero/`, `values/`, `check.sh`, `charts.json`), `cloud-check` của `deploy/k8s/k8s.mk`, `renovate.json`.
 - Probe (§10): `deploy/helm/svp-service/templates/deployment.yaml`. Thử lại Postgres (§11): `internal/pgretry/`, `internal/pgpool/`, `internal/dbmigrate/`.
@@ -198,3 +197,4 @@ Phụ lục: [`appendix/0020-reliability-stage6.md`](appendix/0020-reliability-s
 - §5, Tên chốt, §16: [0022](0022-local-object-store-minio-replacement.md): đích backup là RustFS `s3.svp-data:9000` thay MinIO (bucket, user `svp-pg-backup`, policy giữ, policy ở `deploy/s3/pg-backup-policy.json`); việc tồn "Thay MinIO" đã hiện thực.
 - §7: [0031](0031-chaos-findings-feed-engagement-tempo.md): feed-service hai replica kèm PDB cho (a); Like/Unlike một câu SQL, hạn ghi 1 s, 503 `DEPENDENCY_UNAVAILABLE` không thử lại, pool riêng cho `GetStats` cho (b); Tempo tự giới hạn bộ nhớ.
 - §2, §5, §6, §7, §8, §9: [0039](0039-mainpath-drills-scan-gate-sourcemaps.md): một phần bị thay: chế độ runner của `deploy/k6/cloud/run.sh`, diễn tập `drill-k8s-backup`, Velero, Chaos Mesh trên k3d, hai media-worker và RAM thành bài lab; `make cloud-check` chỉ còn Job k6.
+- §6, §7, Hệ quả: [0053](0053-msk-elasticache-valkey.md): Kafka, Redis của cluster cloud chạy ngoài cluster (Amazon MSK provisioned, ElastiCache for Valkey): Velero không còn PV Redpanda để giữ và bước "Redpanda healthy" của diễn tập không còn áp; thí nghiệm (c) `pod-failure` ở `svp-data` không còn tắt broker; điều kiện "Redpanda còn trong cluster cloud" của "Xem lại khi" đã được quyết bằng Kafka managed (prd ba broker ba AZ, RF 3, `min.insync.replicas` 2).

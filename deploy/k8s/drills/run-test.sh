@@ -152,10 +152,13 @@ EOF
 chmod +x "$bin/kubectl" "$bin/chainsaw" "$bin/mktemp" "$bin/go"
 export PATH="$bin:$PATH"
 
-# The Secret values: 6 Kafka users, the Grafana admin, the 3 object store users.
+# The Secret values: 7 Kafka users, the Valkey password of svp-feed-service (in its REDIS_URL), the Grafana admin, the
+# 3 object store users.
 values=$work/values
 mkdir -p "$values"
-for i in 1 2 3 4 5 6; do openssl rand -hex 12; done >"$values/svp-data-kafka-users"
+for i in 1 2 3 4 5 6 7; do openssl rand -hex 12; done >"$values/svp-data-kafka-users"
+valkey_feed=$(openssl rand -hex 12)
+echo "rediss://svp-feed-service:$valkey_feed@valkey.svp-data.svc.cluster.local:6379/14" >"$values/svp-feed-service-env"
 openssl rand -hex 12 >"$values/svp-obs-grafana-admin"
 openssl rand -hex 12 >"$values/svp-data-pg-backup-s3"
 { openssl rand -hex 12; openssl rand -hex 12; } >"$values/svp-data-s3-users"
@@ -172,13 +175,14 @@ secret_json() {
   done | jq -s '{data: add}' >"$work/secrets/$ns-$name.json"
 }
 mkdir -p "$work/secrets"
-secret_json svp-data kafka-users K1 K2 K3 K4 K5 K6
+secret_json svp-data kafka-users K1 K2 K3 K4 K5 K6 K7
+secret_json svp feed-service-env REDIS_URL
 secret_json svp-obs grafana-admin admin-password
 secret_json svp-data pg-backup-s3 ACCESS_SECRET_KEY
 secret_json svp-data s3-users SVP_VIDEO_S3_SECRET_KEY SVP_MEDIA_WORKER_S3_SECRET_KEY
 openssl rand -hex 12 >"$values/svp-obs-glitchtip-api"
 secret_json svp-obs glitchtip-api SENTRY_AUTH_TOKEN
-# fresh [TESTS]: a new FAKE_STATE (cluster up with context k3d-svp, External Secrets Operator, the 10 values, chainsaw
+# fresh [TESTS]: a new FAKE_STATE (cluster up with context k3d-svp, External Secrets Operator, the 12 values, chainsaw
 # green with TESTS testcases, default 4) and a tree without logs or reports but .k8s/ca.crt.
 fresh() {
   export FAKE_STATE=$work/state FAKE_TMP=$work/tmp
@@ -258,7 +262,7 @@ for want in "--kube-context"$'\n'"k3d-svp" "--config"$'\n'"deploy/k8s/drills/.ch
 done
 lacks "threats: no values file" "$args" "--values"
 same "threats: curl gets the cluster's CA" "$tree/.k8s/ca.crt" "$(cat "$FAKE_STATE/chainsaw.ca")"
-has "threats: the search found nothing" "$out" "ok    SECRETS: none of the 10 Secret values"
+has "threats: the search found nothing" "$out" "ok    SECRETS: none of the 12 Secret values"
 has "threats: the output reaches the terminal" "$out" "step two"
 log=$(ls "$tree"/.k8s/drills/threats-*.log 2>/dev/null || true)
 if [[ $log =~ /threats-[0-9]{8}T[0-9]{6}Z\.log$ ]]; then ok "threats: log .k8s/drills/threats-<UTC>.log"; else
@@ -347,7 +351,7 @@ fresh 4
 printf 'before\nthe password is %s here\nafter\n' "$secret1" >"$FAKE_STATE/out"
 drill threats
 red "threats: a Secret value in the output fails the drill"
-has "threats: names the leak" "$out" "FAIL  SECRETS: 1 line(s) of the drill's log and report hold one of the 10 Secret values"
+has "threats: names the leak" "$out" "FAIL  SECRETS: 1 line(s) of the drill's log and report hold one of the 12 Secret values"
 no_value "threats: the leaked value is not printed" "$out"
 has "threats: the line is withheld from the terminal" "$out" "[a line of the output holds a Secret value: not shown]"
 has "threats: the other lines still reach the terminal" "$out" "after"
@@ -358,12 +362,19 @@ red "threats: a Secret value in the report fails the drill"
 has "threats: names the leak in the report" "$out" "FAIL  SECRETS: 1 line(s)"
 no_value "threats: the value of the report is not printed" "$out"
 
-# --- fewer than 10 values: red before chainsaw.
+# --- fewer than 12 values: red before chainsaw.
 fresh 4
 rm "$FAKE_STATE/secrets/svp-obs-grafana-admin.json"
 drill threats
-red "threats: 9 Secret values fail before chainsaw" before
-has "threats: says how many it read" "$out" "(got 9)"
+red "threats: 11 Secret values fail before chainsaw" before
+has "threats: says how many it read" "$out" "(got 11)"
+
+# --- the Valkey password of svp-feed-service is searched for alone, not only inside its REDIS_URL.
+fresh 4
+printf 'before\nthe Valkey password is %s here\nafter\n' "$valkey_feed" >"$FAKE_STATE/out"
+drill threats
+red "threats: the Valkey password of svp-feed-service in the log fails the drill"
+has "threats: names that leak" "$out" "FAIL  SECRETS: 1 line(s) of the drill's log and report hold one of the 12 Secret values"
 fresh 4
 rm "$tree/.k8s/ca.crt"
 drill threats
@@ -653,7 +664,7 @@ list svp-data pods <<'EOF'
 {"items":[
  {"metadata":{"name":"s3-0","uid":"p-s3-0","deletionTimestamp":"2026-11-06T00:00:00Z","ownerReferences":[{"kind":"StatefulSet","name":"s3","controller":true}]},
   "status":{"conditions":[{"type":"Ready","status":"True"}]}},
- {"metadata":{"name":"redpanda-0","uid":"p-rp-0","ownerReferences":[{"kind":"StatefulSet","name":"redpanda","controller":true}]},"status":{}},
+ {"metadata":{"name":"kafka-0","uid":"p-kafka-0","ownerReferences":[{"kind":"StatefulSet","name":"kafka","controller":true}]},"status":{}},
  {"metadata":{"name":"svp-pg-1","uid":"p-pg-1","ownerReferences":[{"kind":"Cluster","name":"svp-pg","controller":true}]},
   "status":{"conditions":[{"type":"Ready","status":"True"}]}},
  {"metadata":{"name":"pg-bootstrap-k2x","uid":"p-pg-bootstrap","ownerReferences":[{"kind":"Job","name":"pg-bootstrap","controller":true}]},
@@ -678,20 +689,20 @@ EOF
 list keda secrets <<'EOF'
 {"items":[{"type":"Opaque","metadata":{"name":"keda-kafka","resourceVersion":"401"}}]}
 EOF
-# job_list UID_PG UID_RP UID_S3 [S3_STATUS]: the Jobs of svp-data, the init Jobs Succeeded but s3-init, whose status is
-# S3_STATUS when given; an empty UID leaves that init Job out.
+# job_list UID_PG UID_KAFKA UID_S3 [S3_STATUS]: the Jobs of svp-data, the init Jobs Succeeded but s3-init, whose status
+# is S3_STATUS when given; an empty UID leaves that init Job out.
 job_list() {
   local succeeded='{"succeeded":1}'
   {
     echo '{"items":['
     echo "{\"metadata\":{\"name\":\"pg-bootstrap-manual\",\"uid\":\"j-manual\"},\"status\":$succeeded}"
-    [ -z "$2" ] || echo ",{\"metadata\":{\"name\":\"redpanda-init\",\"uid\":\"$2\"},\"status\":$succeeded}"
+    [ -z "$2" ] || echo ",{\"metadata\":{\"name\":\"kafka-init\",\"uid\":\"$2\"},\"status\":$succeeded}"
     [ -z "$1" ] || echo ",{\"metadata\":{\"name\":\"pg-bootstrap\",\"uid\":\"$1\"},\"status\":$succeeded}"
     [ -z "$3" ] || echo ",{\"metadata\":{\"name\":\"s3-init\",\"uid\":\"$3\"},\"status\":${4:-$succeeded}}"
     echo ']}'
   } | list svp-data jobs.batch
 }
-job_list j-pg-1 j-rp-1 j-s3-1 '{"active":1}'
+job_list j-pg-1 j-kafka-1 j-s3-1 '{"active":1}'
 echo 7 >"$lists/svp-rollout-gateway"
 echo 3 >"$lists/svp-rollout-web"
 # helper COMMANDS: COMMANDS after sourcing reloader.sh in its folder; output in $out, exit status in $rc.
@@ -711,28 +722,28 @@ same "reloader.sh: pods of Deployments, Rollouts, StatefulSets and Clusters, by 
 Deployment/keda/keda-operator p-keda-a ready keda-operator-5d-a
 Deployment/svp/user-service p-user-a ready user-service-6b9-a
 Rollout/svp/gateway p-gw-a starting gateway-7c4-a
-StatefulSet/svp-data/redpanda p-rp-0 starting redpanda-0
+StatefulSet/svp-data/kafka p-kafka-0 starting kafka-0
 StatefulSet/svp-data/s3 p-s3-0 terminating s3-0" "$(cat "$work/helper/pods-before" 2>&1)"
 same "reloader.sh: the Secrets' versions without Helm's release records" "keda/keda-kafka 401
 svp-data/s3-root 101
 svp/gateway-env 201" "$(cat "$work/helper/secrets-before" 2>&1)"
 lacks "reloader.sh: no Secret data in the snapshot" "$(cat "$work/helper"/*-before)" "$secret_data"
-same "reloader.sh: the init Jobs of svp-data, not a Job whose name only starts like one" "pg-bootstrap j-pg-1 1
-redpanda-init j-rp-1 1
+same "reloader.sh: the init Jobs of svp-data, not a Job whose name only starts like one" "kafka-init j-kafka-1 1
+pg-bootstrap j-pg-1 1
 s3-init j-s3-1 0" "$(cat "$work/helper/jobs-before" 2>&1)"
 same "reloader.sh: the revisions of Rollouts gateway and web" "gateway 7
 web 3" "$(cat "$work/helper/revisions-before" 2>&1)"
-job_list j-pg-2 j-rp-2 j-s3-2
+job_list j-pg-2 j-kafka-2 j-s3-2
 helper 'init_jobs "$state/jobs-after"; jobs_ran "$state/jobs-before" "$state/jobs-after"'
 same "reloader.sh: init Jobs that ran again and Succeeded pass" 0 "$rc"
 same "reloader.sh: ... one ok line each" 3 "$(grep -c '^ok    Job svp-data/.* ran again and Succeeded$' <<<"$out" || true)"
-job_list j-pg-2 j-rp-1 j-s3-2 '{"failed":1}'
+job_list j-pg-2 j-kafka-1 j-s3-2 '{"failed":1}'
 helper 'init_jobs "$state/jobs-after"; jobs_ran "$state/jobs-before" "$state/jobs-after"'
 same "reloader.sh: an init Job the same as before and one not Succeeded fail" 1 "$rc"
-has "reloader.sh: names the one the same as before" "$out" "FAIL  Job svp-data/redpanda-init: the same Job as before the change"
+has "reloader.sh: names the one the same as before" "$out" "FAIL  Job svp-data/kafka-init: the same Job as before the change"
 has "reloader.sh: names the one not Succeeded" "$out" "FAIL  Job svp-data/s3-init: ran again but has not Succeeded"
 has "reloader.sh: passes the one that ran again" "$out" "ok    Job svp-data/pg-bootstrap ran again and Succeeded"
-job_list j-pg-2 j-rp-2 ""
+job_list j-pg-2 j-kafka-2 ""
 helper 'init_jobs "$state/jobs-after"; jobs_ran "$state/jobs-before" "$state/jobs-after"'
 same "reloader.sh: an init Job gone fails" 1 "$rc"
 has "reloader.sh: names it" "$out" "FAIL  Job svp-data/s3-init: none after the change"

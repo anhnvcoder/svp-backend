@@ -351,8 +351,10 @@ jobs:
       - run: deploy/k8s/eks-context-test.sh
       # AWS Secrets Manager scripts tested with fake tools (no secret leaks in args/output): no cloud account.
       - run: deploy/k8s/aws-secrets-test.sh
-      # Topic creation tested with fake rpk: no network, no broker.
-      - run: deploy/helm/svp-data/files/create-topics-test.sh
+      # Kafka init (topics, users, ACLs) and the svp-kafka, svp-valkey wrappers tested with fake tools: no network, no
+      # broker.
+      - run: deploy/helm/svp-data/files/kafka-init-test.sh
+      - run: deploy/ops/ops-test.sh
       # k6 inspect catches malformed scenarios: no network, no compose stack.
       - run: make k6-check
       # kubeconform -strict of the k6 Job of the cloud cluster (deploy/k6/cloud/render.sh): a wrong field or kind is
@@ -486,7 +488,7 @@ jobs:
 
   # End-to-end compose stack report outside ci-ok: flaky runs on shared runners must not block a merge.
   # Six backend services built from PR, web client from staging release.
-  # make env writes random secrets that are never printed/uploaded; rate-limit resets touch only runner's Redis.
+  # make env writes random secrets that are never printed/uploaded; rate-limit resets touch only this run's Valkey.
   stack:
     name: stack (end-to-end, report only)
     needs: changes
@@ -503,7 +505,7 @@ jobs:
       SVP_WEB_DIR: ${{ github.workspace }}/.web/svp-frontend
     services:
       # Published on 127.0.0.1 (runner) and 172.17.0.1 (docker0 gateway for host.docker.internal), never on every
-      # interface; Postgres 15.
+      # interface; Postgres 15. Kafka and Valkey are containers of the compose stack.
       # Compose services log in with role passwords bootstrapped by make up (TCP requires password).
       postgres:
         image: docker.io/library/postgres:15.19-trixie@sha256:64b99032e218b66b1d1a6334995056e1aa57f50a0c522cc856e72dff0e4b0d63
@@ -514,17 +516,6 @@ jobs:
           - 172.17.0.1:5432:5432
         options: >-
           --health-cmd "pg_isready -U postgres"
-          --health-interval 5s
-          --health-timeout 5s
-          --health-retries 20
-      # The gateway (db 10), feed-service (db 14) and the web's sessions (db 9) of this run only.
-      redis:
-        image: docker.io/library/redis:8.8.3-trixie@sha256:418e397fd48d66e450af13baab123397f2d2580b07ef310c3a5dbe96c3d731f1
-        ports:
-          - 127.0.0.1:6379:6379
-          - 172.17.0.1:6379:6379
-        options: >-
-          --health-cmd "redis-cli ping"
           --health-interval 5s
           --health-timeout 5s
           --health-retries 20
@@ -539,11 +530,11 @@ jobs:
           cache-dependency-path: go.sum
       # Fails early if host-gateway differs from 172.17.0.1, preventing hard-to-diagnose connection timeouts.
       - run: make ci-bridge-check
-      # Script tools from Ubuntu archive (no third-party action): psql (needs >= 15 for \getenv), redis-cli, ffmpeg, jq.
+      # Script tools from Ubuntu archive (no third-party action): psql (needs >= 15 for \getenv), ffmpeg, jq.
       - name: Install the tools of the scripts
         run: |
           sudo apt-get update -q
-          sudo apt-get install -y -q --no-install-recommends postgresql-client redis-tools ffmpeg jq
+          sudo apt-get install -y -q --no-install-recommends postgresql-client ffmpeg jq
       # Both public repositories, over HTTPS without credentials: no token, no secret. svp-frontend at the commit of the web
       # release of staging (image.tag of envs/stg/images/web.yaml in that clone of svp-gitops).
       - run: make gitops-clone
@@ -589,9 +580,13 @@ jobs:
         run: make dast
         continue-on-error: true
         timeout-minutes: 15
+      # The logs of the one-shot and data containers, which print no secret: the broker hides password settings, and
+      # the init scripts print none.
       - name: Container state
         if: failure()
-        run: make ps
+        run: |
+          make ps
+          make logs SVC='tls-init kafka kafka-init valkey'
       # load.sh fails on secret leak but leaves files in place: re-checked here so summary.json uploads only if clean.
       # machine.json and other raw results stay on runner.
       - name: Pick the k6 summary

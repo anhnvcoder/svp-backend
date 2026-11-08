@@ -4,8 +4,8 @@ Loại tài liệu (Diátaxis): **reference**, tra cứu khi cần một lệnh 
 
 ## Stack compose
 
-- `make up` / `make smoke` / `make down`: dựng stack compose profile `core` (bootstrap Postgres, Redpanda + tạo topic,
-  object store `s3` (RustFS, [ADR-0022](../adr/0022-local-object-store-minio-replacement.md)) + job `s3-init` tạo
+- `make up` / `make smoke` / `make down`: dựng stack compose profile `core` (bootstrap Postgres, `tls-init` (cert và khoá của CA local vào volume `svp-tls`), Kafka `kafka` + `kafka-init` (topic, user, ACL),
+  Valkey `valkey`, object store `s3` (RustFS, [ADR-0022](../adr/0022-local-object-store-minio-replacement.md)) + job `s3-init` tạo
   bucket, user, policy, CORS, migrate, gateway, user-service, video-service, media-worker, engagement-service,
   feed-service, web client `web`), chạy luồng đầu-cuối qua gateway ở `127.0.0.1:8080` (gồm refresh token, dùng lại token
   cũ thì cả họ bị thu hồi, logout, follow, hồ sơ: handle tự chọn, trùng handle 409, handle sinh `u_…`, `GET`/`PATCH /me`
@@ -15,44 +15,62 @@ Loại tài liệu (Diátaxis): **reference**, tra cứu khi cần một lệnh 
   `video.uploaded`, biến thể và thumbnail dưới thư mục lần thử `<version>/<attempt>/`; master, một playlist biến thể, một segment
   và thumbnail mang `Cache-Control: max-age=31536000, immutable`), `GET /public/videos/{id}` không token 200 với video `READY`
   và một 404 cho video chưa `READY` lẫn id ngẫu nhiên, video vào feed following và explore kèm `author`, like/unlike, lượt
-  xem, unfollow), rồi gỡ stack (giữ volume). Gateway dùng Redis native db 10 (rate limit), feed-service db 14 (cache feed
-  khám phá), qua `host.docker.internal:6379`; web dùng db 9 (session). Object store chỉ nhận CORS từ `http://localhost:3001` và
+  xem, unfollow), rồi gỡ stack (giữ volume). Gateway dùng Valkey db 10 (rate limit), feed-service db 14 (cache feed
+  khám phá), web db 9 (session), mỗi client một user riêng qua `rediss://<user>:<mật khẩu>@valkey:6379/<db>` (**Kafka và Valkey** dưới). Object store chỉ nhận CORS từ `http://localhost:3001` và
   `http://localhost:3002`, theo bucket (`s3-init` đặt `PutBucketCors`: `uploads` chỉ `POST`, `media` chỉ `GET`, `HEAD`; danh
   sách toàn cục `RUSTFS_CORS_ALLOWED_ORIGINS` rỗng nên bucket khác không có header CORS; WEB-10): mở web bằng
   `127.0.0.1:3001` thì đăng nhập được nhưng không phát và không tải video lên được. Cổng publish chỉ trên `127.0.0.1`: 8080 gateway, 3001 web (mở
-  bằng `http://localhost:3001`), 9000 object store (API S3; console tắt, không cổng 9001), 19092 Redpanda (Kafka API). Xem object bằng
-  `curl --aws-sigv4` chạy trong container `s3`, không mở cổng nào thêm. `make ps` và `make logs SVC=<tên>` để xem. `make smoke` và `make drill-obs-threats` cần
-  `redis-cli` trên máy và Redis native đang chạy: trước khi chạy, script xoá khoá rate limit đăng ký theo IP
-  `svp:gw:rl:register:*` ở db 10 (`SCAN` + `DEL`, không `FLUSHDB`), vì mọi request đi ra từ một IP bridge của Docker và
+  bằng `http://localhost:3001`), 9000 object store (API S3; console tắt, không cổng 9001); Kafka và Valkey không publish cổng nào. Xem object bằng
+  `curl --aws-sigv4` chạy trong container `s3`, không mở cổng nào thêm. `make ps` và `make logs SVC=<tên>` để xem. Trước khi chạy, `make smoke` và `make drill-obs-threats`
+  xoá khoá rate limit đăng ký theo IP `svp:gw:rl:register:*` ở db 10 của Valkey (`SCAN` + `DEL`, không `FLUSHDB`) qua CLI vận hành
+  `svp-valkey` chạy trong container `valkey` (user `svp-ops`; không cần `redis-cli` trên máy), vì mọi request đi ra từ một IP bridge của Docker và
   vài lần chạy trong một giờ sẽ cạn burst 20. Việc xoá này **chỉ dùng ở lab local**, không trỏ script vào stack dùng
   chung. Smoke luôn đòi master có version và kiểm đủ `Cache-Control` (mọi bản phát hành ghi key có version từ
   [ADR-0029](../adr/0029-immutable-media-versions.md); biến chuyển tiếp `SVP_SMOKE_LEGACY_MEDIA` đã bỏ, [ADR-0037](../adr/0037-mainpath-standard-tools.md) §4).
-- Postgres và Redis là bản native trên host (`127.0.0.1:5432`, `127.0.0.1:6379`), service gọi qua `host.docker.internal`; mỗi
-  service có Redis db riêng nên không service nào đọc khoá của service khác. Không service lõi nào phụ thuộc service của `obs`.
-  Cổng publish chỉ trên loopback của host: gateway, web client (3001), API S3 của object store (9000), listener cho host của
-  Redpanda và, khi có `obs`, Grafana (3000), Alertmanager (9093), GlitchTip (8000). Cổng gRPC nằm trong mạng compose
+- Postgres là bản native trên host (`127.0.0.1:5432`), service gọi qua `host.docker.internal`. Kafka và Valkey là container của stack
+  (**Kafka và Valkey** dưới); mỗi client có user và db hay khoá riêng nên không service nào đọc khoá của service khác. Redis native
+  `127.0.0.1:6379` không thuộc stack: chỉ `make test` (db 15) và `make dev` của web dùng nó. Không service lõi nào phụ thuộc service
+  của `obs`. Cổng publish chỉ trên loopback của host: gateway, web client (3001), API S3 của object store (9000) và, khi có `obs`,
+  Grafana (3000), Alertmanager (9093), GlitchTip (8000). Cổng gRPC nằm trong mạng compose
   ([threat model](../threat-model.md) IN-2); Collector (4317) và Prometheus (9090), Tempo (3200), Loki (3100), Pyroscope (4040) của LGTM
   cũng vậy, từ host đọc chúng qua datasource proxy của Grafana.
-- Ba mạng. `default` chứa mọi thứ trừ media-worker và web. `worker` (internal, không route ra ngoài) chỉ chứa media-worker, Redpanda,
+- Ba mạng. `default` chứa mọi thứ trừ media-worker và web. `worker` (internal, không route ra ngoài) chỉ chứa media-worker, Kafka,
   object store và Collector, nên worker chạy ffmpeg trên file người dùng tải lên không tới được gateway, service gRPC, Postgres,
   LGTM hay internet (threat model FF-4, FF-5); Collector ở đó chỉ nhận telemetry, không làm proxy cho worker. `web` chỉ chứa web,
   gateway và, khi có `obs`, GlitchTip và Collector: server Next render mọi trang thay cho trình duyệt, nên code chạy được trong đó
   (lớp RCE của React Server Components, CVE-2025-55182) chỉ tới được API HTTP của gateway, tracker lỗi nó báo tới và Collector nó gửi
   telemetry tới. Nó không tới được service gRPC (chúng kiểm access token của người gọi nhưng không kiểm container nào gọi,
   [ADR-0042](../adr/0042-caller-identity-grpc.md), nên code trong web cầm token của một phiên sẽ gọi chúng như user đó, vượt
-  rate limit và kiểm đầu vào của gateway; threat model IN-2), không tới được Redpanda (compose không xác thực) hay object store theo
-  tên compose. Mạng `web` không internal vì web tới Redis db của nó trên host qua `host.docker.internal`; chính tên đó mở mọi
-  cổng loopback của host cho container, nên code chạy trong web vẫn tới được những gì publish ở đó (listener host 19092 của
-  Redpanda không xác thực, cổng 9000 của object store, các Redis db khác, Postgres với luật trust và, khi có `obs`, Grafana,
-  Alertmanager, GlitchTip). Chấp nhận ở lab compose, nơi Redis là của host (threat model WEB-13); bản k3d đóng bằng NetworkPolicy.
+  rate limit và kiểm đầu vào của gateway; threat model IN-2), không tới được Kafka hay object store theo
+  tên compose; Valkey thì tới được, nhưng user `svp-web` của nó chỉ chạm db 9 và `svp:web:*`. Mạng `web` không internal vì Docker không
+  publish cổng của container chỉ gắn vào mạng internal; web không có mục `host.docker.internal`, nhưng Docker Desktop phân giải tên đó ở
+  mọi container, nên code chạy trong web vẫn tới được cổng loopback của host (cổng 9000 của object store, Postgres với luật trust và,
+  khi có `obs`, Grafana, Alertmanager, GlitchTip). Chấp nhận ở lab compose (threat model WEB-13); bản k3d đóng bằng NetworkPolicy.
 - Web client mở bằng `http://localhost:3001`, là `APP_ORIGIN` mà redirect sau đăng nhập và form của cookie dựa theo.
   `http://127.0.0.1:3001` cũng đăng nhập được, với cookie phiên riêng (trình duyệt gửi `Sec-Fetch-Site: same-origin` ở đó, kiểm CSRF
   chấp nhận trước khi so `Origin`), nhưng không phát và không tải video lên được vì CORS của bucket chỉ cho origin `localhost`.
-- `TOPIC_REPLICAS` ([`deploy/redpanda/create-topics.sh`](../../deploy/redpanda/create-topics.sh)) là replication factor của mọi
-  topic: 1 trên một broker (compose, mặc định), 3 trên ba broker. Redpanda không có `min.insync.replicas`: mỗi partition là một
-  nhóm Raft, và ghi với `acks=all` (mặc định của franz-go) được trả lời khi đa số replica đã giữ nó, 2 trong 3
-  ([ADR-0049](../adr/0049-kafka-prd.md)). Giá trị chỉ áp cho topic lần chạy này tạo: `--if-not-exists` để topic đã có giữ số replica
-  nó có; muốn đổi thì `rpk topic alter-config <topic> --set replication.factor=<n>`.
+- **Kafka và Valkey** ([ADR-0053](../adr/0053-msk-elasticache-valkey.md)): chạy cùng phần mềm, cổng và xác thực với MSK và ElastiCache for Valkey.
+  - `tls-init` (một lần, uid 0) chép cert, khoá của CA local và aclfile của Valkey từ `.local/` (CA do `make env` sinh, aclfile do `make up` ghi từ mật khẩu của `.env`) vào volume
+    `svp-tls` với owner là uid của image server, khoá mode 0400; `kafka`, `valkey` mount volume đó chỉ đọc và chờ `tls-init` xong.
+    Client chỉ cần `ca.crt` (công khai) tại `/etc/svp-ca/ca.crt`: service Go đặt `SSL_CERT_DIR=/etc/svp-ca`, web `NODE_EXTRA_CA_CERTS`, công cụ
+    Kafka và `valkey-cli` đặt `SVP_CA_FILE`. Chạy được cả trên Docker Desktop macOS và runner Linux. `make env` sinh CA một lần, không ghi
+    đè; thiếu thì `make up` dừng và bảo chạy `make env`.
+  - `kafka`: image `apache/kafka`, một tiến trình KRaft (broker và controller), `SASL_SSL` SCRAM-SHA-512 cổng `kafka:9096` (cổng SCRAM của MSK),
+    ACL bật, không tự tạo topic; listener controller và liên broker là PLAINTEXT bind `localhost`. Một broker nên mọi replication factor và
+    `min.insync.replicas` là 1 (gồm ba khoá nội bộ `offsets.topic.replication.factor`, `transaction.state.log.*`). `kafka-init`
+    (`deploy/kafka/kafka-init.sh`, cũng là Job `kafka-init` của chart `svp-data`) đăng nhập `svp-admin`, cấp `svp-admin` ALL trên mọi tài nguyên,
+    tạo topic (không truyền replication factor: topic lấy mặc định của broker), user (mật khẩu từ `.env`) và ACL từng user; service có Kafka chờ nó xong.
+    Idempotent: chạy lại giữ topic, đặt lại mật khẩu user, ACL đã có thì không đổi.
+  - `valkey`: image Valkey, TLS cổng `valkey:6379` (không cổng thường), aclfile với `svp-gateway` (db 10, `svp:gw:*`), `svp-feed-service` (db 14,
+    `svp:feed:*`), `svp-web` (db 9, `svp:web:*`) và `svp-ops`; `default` tắt; không lưu đĩa, `maxmemory` 64 MB, `noeviction`.
+  - **CLI vận hành**, đường duy nhất để script chạm hai thứ này: `deploy/ops/svp-kafka` và `svp-valkey`, mount chỉ đọc vào `/opt/svp/bin` của container
+    `kafka`, `valkey`. Từ máy: `env -u DOCKER_DEFAULT_PLATFORM docker compose --env-file .env -f deploy/compose/compose.yaml --profile core exec -T valkey
+    /opt/svp/bin/svp-valkey -n 10 --scan --pattern 'svp:gw:rl:register:*'` (`exec -T kafka /opt/svp/bin/svp-kafka topics --list`, và `consumer-groups`,
+    `acls`, `configs`…). `svp-kafka <công cụ> …` chạy `kafka-<công cụ>.sh` đăng nhập `svp-admin`; `svp-valkey …` chạy `valkey-cli --tls` đăng nhập
+    `svp-ops` (đọc `svp:*` ở db 9, 10, 14, `DEL` chỉ trên `svp:gw:rl:register:*` ở db 10 và `svp:feed:explore:*` ở db 14: đúng luật xoá khoá
+    của `AGENTS.md`). `SVP_AS_USER=<user>` (`exec -T valkey env SVP_AS_USER=<user> /opt/svp/bin/svp-valkey …`) đăng nhập user khác để thử quyền của nó, mật khẩu là dòng đầu của stdin; mật khẩu
+    không bao giờ ở dòng lệnh hay output. Helper của script là `valkey_cli` trong `deploy/compose/lib.sh`. `deploy/ops/ops-test.sh` thử hai wrapper không cần broker hay server (CI chạy nó).
+  - Replication factor khác 1 chỉ có trên MSK (stg 2, prd 3), nơi `aws_msk_configuration` đặt; topic đã có giữ số replica nó có.
 - Job `s3-init` chạy với image của object store: `curl` của nó ký từng request (SigV4) bằng user root và gọi API S3 cùng API quản trị
   của RustFS (`/rustfs/admin/v3`, nhận JSON thường). Idempotent: chạy lại giữ bucket và object, đặt lại secret key và policy của
   user, bucket policy và CORS theo đúng script và môi trường của nó. Không in secret.
@@ -105,14 +123,13 @@ Loại tài liệu (Diátaxis): **reference**, tra cứu khi cần một lệnh 
 - `make slo`: sinh `deploy/observability/prometheus/rules/slo-generated.yaml` từ `deploy/observability/slo/svp-slos.yaml`
   bằng Sloth; file sinh được commit, chạy lại sau khi sửa spec. `make slo-check`: promtool của image LGTM ghim, không
   mạng: `check config` cho cấu hình Prometheus và hai file rule, rồi `test rules` (`svp-alerts.test.yaml`).
-- `make test-stack`: `go test -race -count=1 -v` trên stack đang chạy (`make up`), đặt các biến `SVP_TEST_*` cho object store
-  và Redpanda, nên integration test của `internal/objstore` chạy thật thay vì SKIP (gồm ca multipart CRC32 bằng user thử
+- `make test-stack`: `go test -race -count=1 -v` trên stack đang chạy (`make up`), đặt các biến `SVP_TEST_*` cho object store, nên integration test của `internal/objstore` chạy thật thay vì SKIP (gồm ca multipart CRC32 bằng user thử
   `svp-objstore-probe`, dạng header qua `http://` và dạng trailer qua proxy TLS của test; `Cache-Control` lưu và trả lại khi GET
   ẩn danh, ghi có điều kiện `If-None-Match: *` chỉ một lần thành công, user của media-worker đọc và liệt kê được `media/`). Chỉ ba secret S3 (hai service và
   user thử) lấy từ `.env`; endpoint,
-  access key, broker, `SVP_TEST_POSTGRES_URL` và `SVP_TEST_REDIS_URL` cố định trong `deploy/compose/compose.mk` và
+  access key, `SVP_TEST_POSTGRES_URL` và `SVP_TEST_REDIS_URL` cố định trong `deploy/compose/compose.mk` và
   `Makefile`. Thu hẹp bằng `PKGS=` như `make test`, `TESTFLAGS` thêm cờ.
-- `make clean-data`: gỡ stack (mọi profile) và xoá volume của nó (topic Redpanda, bucket của object store `s3-data`, thư mục
+- `make clean-data`: gỡ stack (mọi profile) và xoá volume của nó (topic, user và ACL của Kafka, bucket của object store `s3-data`, thư mục
   tạm của media-worker, dữ liệu LGTM, silence của Alertmanager, chỉ mục Elasticsearch); Postgres native (cả `svp_glitchtip`)
   không bị đụng; volume của project mà compose không còn khai được giữ và in ra. Chỉ chạy khi cần làm lại dữ liệu từ đầu.
 - Diễn tập compose đo một lần (`drill-kill-worker`, `drill-duplicates`, `drill-duplicates-feed`, `drill-engagement-down`,
@@ -124,7 +141,7 @@ Loại tài liệu (Diátaxis): **reference**, tra cứu khi cần một lệnh 
   GlitchTip đã khởi tạo (`SENTRY_DSN`, `SENTRY_AUTH_TOKEN` trong `.env`, do `make up OBS=lgtm` hay `make glitchtip-init`
   ghi; script chỉ nhận `SENTRY_API_URL=http://127.0.0.1:8000`, không cổng loopback nào khác). Kiểm: JWT-8 (trace, log, event GlitchTip của request login/feed/follow, cả lúc user-service tắt, không có email, mật
   khẩu, token), UP-8 (`video created`, `upload completed` có `user_id`, `video_id`, `trace_id`), OPS-1 (`/debug/pprof/`,
-  `/metrics` trả 404; project publish đúng 7 cổng loopback, gồm web 3001 và `s3` 9000, không 9001), RL-2 (gateway dựng lại với Redis `.invalid` thì metric
+  `/metrics` trả 404; project publish đúng 6 cổng loopback, gồm web 3001 và `s3` 9000, không 9001), RL-2 (gateway dựng lại với Valkey `.invalid` thì metric
   `store="fallback"` > 0 và cảnh báo `RateLimitFallbackActive` trong 4 phút), WEB-9 (web trên compose: email, token,
   sid, `?next=`, chữ ký presigned từ form của web, `/rum` và `/monitoring` không có trong GlitchTip, Tempo, Loki, Prometheus;
   đối chứng có dữ liệu của web). **Telegram tuỳ chọn:** người học tự tạo bot
@@ -246,7 +263,7 @@ Loại tài liệu (Diátaxis): **reference**, tra cứu khi cần một lệnh 
 
 - `drill-obs-threats` dừng user-service và dựng lại gateway với cấu hình diễn tập qua `SVP_GATEWAY_REDIS_URL` rồi trả về mặc
   định, luôn bật lại mọi service khi kết thúc; biến này **chỉ dùng cho diễn tập**, không đặt trong `.env`. Không đọc database nào;
-  trên Redis chỉ xoá `svp:gw:rl:register:*` ở db 10 (như ở trên) và đọc session của chính user diễn tập ở db 9. Nó đọc Prometheus,
+  trên Valkey chỉ xoá `svp:gw:rl:register:*` ở db 10 (như ở trên, qua CLI vận hành) và đọc session của chính user diễn tập ở db 9. Nó đọc Prometheus,
   Tempo, Loki qua datasource proxy của Grafana, API Alertmanager và API GlitchTip bằng token chỉ đọc, không in giá trị nào của `.env`.
 - Trước diễn tập, `obs_preflight` (`deploy/compose/drills/common.sh`) đợi tối đa 60 s để metric của gateway xuất hiện trên stack vừa
   dựng. Gateway xuất metric mỗi 15 s (`internal/telemetry`), lần đầu một chu kỳ sau khi nó khởi động (reader định kỳ của OpenTelemetry

@@ -1798,7 +1798,7 @@ func TestEngagementErrors(t *testing.T) {
 		{"view malformed id", http.MethodPost, "/videos/NOT-a-uuid/views", invalidID, http.StatusBadRequest, "INVALID_VIDEO_ID", "video_id must be a canonical lowercase UUID"},
 		{
 			"view broker down", http.MethodPost, "/videos/" + videoID + "/views",
-			grpcerr.New(codes.Unavailable, "BROKER_DOWN", "produce to redpanda:9092 failed"),
+			grpcerr.New(codes.Unavailable, "BROKER_DOWN", "produce to kafka:9096 failed"),
 			http.StatusServiceUnavailable, "UNAVAILABLE", "",
 		},
 	} {
@@ -1811,7 +1811,7 @@ func TestEngagementErrors(t *testing.T) {
 			if p.Code != tc.wantCode || p.Detail != tc.wantDetail {
 				t.Errorf("code, detail = %q, %q; want %q, %q", p.Code, p.Detail, tc.wantCode, tc.wantDetail)
 			}
-			if strings.Contains(rec.Body.String(), "redpanda") || strings.Contains(rec.Body.String(), "BROKER_DOWN") {
+			if strings.Contains(rec.Body.String(), "kafka:9096") || strings.Contains(rec.Body.String(), "BROKER_DOWN") {
 				t.Errorf("body leaks the internal error: %s", rec.Body.String())
 			}
 			want := videoID

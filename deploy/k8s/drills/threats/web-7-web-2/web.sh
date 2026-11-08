@@ -166,13 +166,40 @@ web_tokens() {
   sid=$(web_sid)
   [[ -n $sid ]] || fail "the web session cookie is in the test's cookie jar"
   key="svp:web:sess:$(printf '%s' "$sid" | shasum -a 256 | cut -c1-64)"
-  kc -n svp-data exec deploy/valkey -c valkey -- valkey-cli -n 9 GET "$key" >"$work/web.session" ||
+  kc -n svp-data exec deploy/svp-ops -c valkey -- /opt/svp/bin/svp-valkey -n 9 GET "$key" >"$work/web.session" ||
     fail "read the drill user's web session in Valkey db 9"
   WEB_SID=$sid jq -r '"access-token\t\(.access_token // "")", "refresh-token\t\(.refresh_token // "")", "sid\t\(env.WEB_SID)"' \
     "$work/web.session" >"$work/web.tokens" 2>/dev/null || : >"$work/web.tokens"
   rm -f "$work/web.session"
   [[ $(awk -F '\t' '$2 != ""' "$work/web.tokens" | wc -l | tr -d ' ') == 3 ]] ||
     fail "the drill user's web session in Valkey db 9 (svp:web:sess:<SHA-256 of the sid>) has an access and a refresh token"
+}
+
+# web_session_as USER: a GET of the drill user's web session in db 9 as the Valkey user USER of a service, its password
+# the one of REDIS_URL in Secret svp/<USER without svp->-env, on stdin of svp-valkey (Deployment svp-ops); prints NOPERM
+# when Valkey's ACL refuses it, "read the session" when it answers, the first word of anything else. Never the answer.
+web_session_as() {
+  local sid key url pw
+  sid=$(web_sid)
+  [[ -n $sid ]] || fail "the web session cookie is in the test's cookie jar"
+  key="svp:web:sess:$(printf '%s' "$sid" | shasum -a 256 | cut -c1-64)"
+  url=$(kc -n svp get secret "${1#svp-}-env" -o json | jq -r '.data.REDIS_URL // empty | @base64d') || url=
+  pw=${url#rediss://"$1":}
+  pw=${pw%%@*}
+  [[ $url == rediss://"$1":* && $pw =~ ^[A-Za-z0-9]+$ ]] ||
+    fail "read the Valkey password of $1 from REDIS_URL of Secret svp/${1#svp-}-env"
+  printf '%s\n' "$pw" | kc -n svp-data exec -i deploy/svp-ops -c valkey -- env "SVP_AS_USER=$1" \
+    /opt/svp/bin/svp-valkey -n 9 GET "$key" >"$work/web.as" 2>&1 || true
+  pw=''
+  url=''
+  if grep -q NOPERM "$work/web.as"; then
+    echo NOPERM
+  elif grep -q access_token "$work/web.as"; then
+    echo "read the session"
+  else
+    echo "other: $(grep -oE '^[A-Za-z]+' "$work/web.as" | head -n 1)"
+  fi
+  rm -f "$work/web.as"
 }
 
 # holds VALUES_FILE FILE: the names of the values of VALUES_FILE ("NAME<TAB>VALUE[<TAB>i]" lines; i: any case) that

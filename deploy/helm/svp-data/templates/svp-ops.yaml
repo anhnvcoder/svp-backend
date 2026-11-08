@@ -1,0 +1,124 @@
+{{- /*
+The operations CLI of the cluster: the only way scripts, drills, runbooks and session commands reach Kafka and Valkey,
+on every platform alike (kubectl exec deploy/svp-ops -c kafka -- /opt/svp/bin/svp-kafka ..., -c valkey --
+/opt/svp/bin/svp-valkey ...), as svp-admin and svp-ops, or as another user with SVP_AS_USER and its password on stdin.
+*/}}
+
+{{- /*
+The pod holds the passwords of svp-admin and svp-ops (Secret svp-ops): no ServiceAccount token, no Service, no ingress,
+egress only to Kafka on 9096 and Valkey on 6379 (networkpolicies.yaml), Pod Security restricted.
+*/}}
+
+{{- /* Design notes: docs/explanation/deployment.md. */}}
+{{- $kafkaExternal := include "svp-data.kafkaExternal" . }}
+{{- $valkeyExternal := include "svp-data.valkeyExternal" . }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: svp-ops-bin
+  namespace: {{ .Release.Namespace }}
+data:
+  # deploy/ops/ through symlinks: compose runs the same two wrappers.
+  svp-kafka: |-
+    {{- .Files.Get "files/svp-kafka" | nindent 4 }}
+  svp-valkey: |-
+    {{- .Files.Get "files/svp-valkey" | nindent 4 }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: svp-ops
+  namespace: {{ .Release.Namespace }}
+  annotations:
+    secret.reloader.stakater.com/reload: svp-ops
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: svp-ops
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: svp-ops
+    spec:
+      automountServiceAccountToken: false
+      # sleep runs as PID 1 and ignores SIGTERM, and nothing needs draining: a restart need not wait the default 30 s.
+      terminationGracePeriodSeconds: 5
+      # No KAFKA_* variables of Service kafka in the environment, which Kafka's own scripts read as settings.
+      enableServiceLinks: false
+      securityContext:
+        # The appuser of image apache/kafka for both containers (valkey-cli needs no account); fsGroup lets them read
+        # the CA certificate mounted with mode 0440.
+        {{- include "svp-data.podSecurityContext" (dict "uid" 1000 "gid" 1000 "fsGroup" true) | nindent 8 }}
+      containers:
+        - name: kafka
+          image: {{ .Values.kafka.image }}
+          command: ["sleep", "infinity"]
+          env:
+            - name: KAFKA_BROKERS
+              value: {{ .Values.kafka.brokers | quote }}
+            {{- if not $kafkaExternal }}
+            - name: SVP_CA_FILE
+              value: /etc/svp-ca/ca.crt
+            {{- end }}
+            - name: SVP_KAFKA_ADMIN_PASSWORD
+              valueFrom:
+                secretKeyRef: {name: svp-ops, key: SVP_KAFKA_ADMIN_PASSWORD}
+          resources:
+            {{- toYaml .Values.svpOps.resources.kafka | nindent 12 }}
+          securityContext:
+            {{- include "svp-data.containerSecurityContext" . | nindent 12 }}
+          volumeMounts:
+            - name: bin
+              mountPath: /opt/svp/bin
+              readOnly: true
+            {{- if not $kafkaExternal }}
+            - name: ca
+              mountPath: /etc/svp-ca
+              readOnly: true
+            {{- end }}
+            # svp-kafka's client properties file, and the JVM's own files.
+            - name: tmp
+              mountPath: /tmp
+        - name: valkey
+          image: {{ .Values.valkey.image }}
+          command: ["sleep", "infinity"]
+          env:
+            - name: VALKEY_HOST
+              value: {{ .Values.valkey.host | quote }}
+            {{- if not $valkeyExternal }}
+            - name: SVP_CA_FILE
+              value: /etc/svp-ca/ca.crt
+            {{- end }}
+            - name: SVP_VALKEY_OPS_PASSWORD
+              valueFrom:
+                secretKeyRef: {name: svp-ops, key: SVP_VALKEY_OPS_PASSWORD}
+          resources:
+            {{- toYaml .Values.svpOps.resources.valkey | nindent 12 }}
+          securityContext:
+            {{- include "svp-data.containerSecurityContext" . | nindent 12 }}
+          volumeMounts:
+            - name: bin
+              mountPath: /opt/svp/bin
+              readOnly: true
+            {{- if not $valkeyExternal }}
+            - name: ca
+              mountPath: /etc/svp-ca
+              readOnly: true
+            {{- end }}
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: bin
+          configMap:
+            name: svp-ops-bin
+            defaultMode: 0555
+        {{- if not (and $kafkaExternal $valkeyExternal) }}
+        - name: ca
+          secret:
+            secretName: local-ca
+            defaultMode: 0440
+        {{- end }}
+        - name: tmp
+          emptyDir:
+            sizeLimit: 16Mi

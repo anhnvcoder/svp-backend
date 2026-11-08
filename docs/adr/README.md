@@ -138,10 +138,12 @@ Phụ lục: [`appendix/NNNN-<slug>.md`](appendix/NNNN-<slug>.md) (chỉ khi có
 | [0046](0046-web-session-lifetime.md) | Session BFF của web có idle timeout 7 ngày và absolute timeout 30 ngày tường minh, không chỉ dựa vào hạn refresh token | Chấp nhận |
 | [0047](0047-pr-title-required-condition.md) | `pr-title` thành check bắt buộc ở một repo khi `pr-title.yml` đã trên `main` và đã xanh ở ít nhất một PR, không đòi PR bot | Chấp nhận |
 | [0048](0048-prd-aws.md) | prd trên AWS: AWS Organizations với account `svp-stg`, `svp-prd` và management chỉ để quản trị; prd chuẩn production từ cùng module với stg; bootstrap EKS bằng GitOps Bridge ở root Terraform riêng; Secret của EKS từ Secrets Manager; prd ghim commit `svp-gitops` mà stg đã chạy | Chấp nhận |
-| [0049](0049-kafka-prd.md) | Kafka của prd là Redpanda trong cluster bằng chart và component `redpanda` của stg: ba broker mỗi AZ một, replication factor 3 với `acks=all` (đa số Raft thay `min.insync.replicas=2`), mỗi broker nửa core | Chấp nhận |
+| [0049](0049-kafka-prd.md) | Kafka của prd là Redpanda trong cluster bằng chart và component `redpanda` của stg: ba broker mỗi AZ một, replication factor 3 với `acks=all` (đa số Raft thay `min.insync.replicas=2`), mỗi broker nửa core | Bị thay bởi [0053](0053-msk-elasticache-valkey.md) |
 | [0050](0050-bash-to-standard-tools.md) | Bash tự viết của đường chính nhường cho công cụ chuẩn: bootstrap EKS bằng GitOps Bridge, diễn tập bằng Chainsaw, kiểm cấu hình bằng JSON Schema và conftest, đường dev k3d bằng helmfile và Reloader; bỏ adapter CI và đường quay lại MinIO | Chấp nhận |
 | [0051](0051-dns-prd-apex.md) | Zone gốc `aws.<miền>` của lab ở account `svp-prd`, zone `stg.aws.<miền>` là zone con do zone prd uỷ quyền; management không còn hosted zone | Chấp nhận |
 | [0052](0052-cloudfront-flat-rate-free.md) | CloudFront của media ở stg và prd chạy trên gói flat-rate Free ($0, không phí vượt), có web ACL WAF ở cả hai env; CORS của media bằng policy managed `Managed-SimpleCORS`, `PriceClass_All` cố định | Chấp nhận |
+| [0053](0053-msk-elasticache-valkey.md) | Kafka, Redis của stg và prd là Amazon MSK provisioned (Kafka 4.1 KRaft, SCRAM-SHA-512 trên TLS, ACL theo service) và ElastiCache for Valkey 9.1 (cluster mode tắt, TLS, user ACL theo db và tiền tố); compose, k3d chạy Apache Kafka KRaft (`apache/kafka`) và Valkey cùng cơ chế; luật chung managed/local cho mọi cloud | Chấp nhận |
+| [0054](0054-data-subnet-tier.md) | VPC của stg, prd có ba tầng subnet: public (NAT, NLB), private (node EKS), database (RDS, MSK, ElastiCache) ở khối 6 của dải VPC với route table riêng không `0.0.0.0/0`; `cluster.dbCidrs` là dải subnet database | Chấp nhận |
 
 ## Chuẩn áp dụng
 

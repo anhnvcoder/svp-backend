@@ -197,3 +197,4 @@ Phụ lục: [`appendix/0016-web-client.md`](appendix/0016-web-client.md) (trạ
 - §11: [0019](0019-web-k3d-supply-chain-observability.md): cơ chế tin `traceparent`; phần cần cluster GitOps và RAM lớn hơn dời giai đoạn 7 (§12 của 0019).
 - §11: [0022](0022-local-object-store-minio-replacement.md): CORS MinIO toàn cục, MinIO community thay bằng RustFS, CORS theo bucket.
 - Vị trí `web/` và các target `web-*` từ 2026-10-31: [0033](0033-svp-web-repo.md).
+- §5: [0053](0053-msk-elasticache-valkey.md): session db 9 ở compose là container `valkey` TLS, user `svp-web`; Redis native db 9 chỉ còn cho `make dev`.

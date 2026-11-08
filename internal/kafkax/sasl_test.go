@@ -1,13 +1,21 @@
 package kafkax
 
-// SCRAM-SHA-256 from KAFKA_SASL_USERNAME and KAFKA_SASL_PASSWORD. The tests set the environment
-// with t.Setenv, so none of them runs in parallel.
+// SCRAM-SHA-512 over TLS from KAFKA_SASL_USERNAME and KAFKA_SASL_PASSWORD. The tests set the
+// environment with t.Setenv and the package's testRootCAs, so none of them runs in parallel.
 
 import (
 	"bytes"
 	"context"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
+	"crypto/tls"
+	"crypto/x509"
+	"crypto/x509/pkix"
 	"errors"
 	"fmt"
+	"math/big"
+	"net"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -24,12 +32,84 @@ const (
 	saslPass = "s3cret-scram-pass"
 )
 
-// saslCluster starts an in-memory Kafka that accepts only SCRAM-SHA-256 as saslUser with
-// saslPass, with one-partition topics and the extra opts, and returns it with its broker list.
+// testCA is a certificate authority made for one test.
+type testCA struct {
+	cert *x509.Certificate
+	key  *ecdsa.PrivateKey
+}
+
+func newTestCA(t *testing.T) *testCA {
+	t.Helper()
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tmpl := &x509.Certificate{
+		SerialNumber: big.NewInt(1), Subject: pkix.Name{CommonName: "kafkax test CA"},
+		NotBefore: time.Now().Add(-time.Hour), NotAfter: time.Now().Add(time.Hour),
+		IsCA: true, BasicConstraintsValid: true, KeyUsage: x509.KeyUsageCertSign,
+	}
+	der, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, &key.PublicKey, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cert, err := x509.ParseCertificate(der)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return &testCA{cert: cert, key: key}
+}
+
+// trust makes the clients NewClient builds trust ca alone until the test ends.
+func (ca *testCA) trust(t *testing.T) {
+	t.Helper()
+	pool := x509.NewCertPool()
+	pool.AddCert(ca.cert)
+	prev := testRootCAs
+	testRootCAs = pool
+	t.Cleanup(func() { testRootCAs = prev })
+}
+
+// serverConfig returns a broker's TLS config with a certificate ca signs for the names and IPs.
+func (ca *testCA) serverConfig(t *testing.T, names []string, ips []net.IP) *tls.Config {
+	t.Helper()
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tmpl := &x509.Certificate{
+		SerialNumber: big.NewInt(2), Subject: pkix.Name{CommonName: "kafkax test broker"},
+		NotBefore: time.Now().Add(-time.Hour), NotAfter: time.Now().Add(time.Hour),
+		KeyUsage: x509.KeyUsageDigitalSignature, ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+		DNSNames: names, IPAddresses: ips,
+	}
+	der, err := x509.CreateCertificate(rand.Reader, tmpl, ca.cert, &key.PublicKey, ca.key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return &tls.Config{MinVersion: tls.VersionTLS12,
+		Certificates: []tls.Certificate{{Certificate: [][]byte{der}, PrivateKey: key}}}
+}
+
+// localhostIPs are the addresses an in-memory broker listens on.
+var localhostIPs = []net.IP{net.IPv4(127, 0, 0, 1)}
+
+// saslCluster starts an in-memory Kafka that accepts only TLS with SCRAM-SHA-512 as saslUser
+// with saslPass, with one-partition topics and the extra opts, makes the clients trust its CA
+// and returns it with its broker list.
 func saslCluster(t *testing.T, topics []string, opts ...kfake.Opt) (*kfake.Cluster, string) {
 	t.Helper()
+	ca := newTestCA(t)
+	ca.trust(t)
+	return startSASLCluster(t, topics, append([]kfake.Opt{kfake.TLS(ca.serverConfig(t, nil, localhostIPs))}, opts...)...)
+}
+
+// startSASLCluster starts an in-memory Kafka that accepts SCRAM-SHA-512 as saslUser with
+// saslPass, over TLS only when opts say so.
+func startSASLCluster(t *testing.T, topics []string, opts ...kfake.Opt) (*kfake.Cluster, string) {
+	t.Helper()
 	c, err := kfake.NewCluster(append([]kfake.Opt{kfake.NumBrokers(1), kfake.SeedTopics(1, topics...),
-		kfake.EnableSASL(), kfake.Superuser("SCRAM-SHA-256", saslUser, saslPass)}, opts...)...)
+		kfake.EnableSASL(), kfake.Superuser("SCRAM-SHA-512", saslUser, saslPass)}, opts...)...)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -37,8 +117,9 @@ func saslCluster(t *testing.T, topics []string, opts ...kfake.Opt) (*kfake.Clust
 	return c, strings.Join(c.ListenAddrs(), ",")
 }
 
-// With the right credentials every client NewClient builds authenticates: a producer, a group
-// consumer and the dead-letter producer inside it, and a reader.
+// With the right credentials every client NewClient builds connects over TLS and authenticates:
+// a producer, a group consumer and the dead-letter producer inside it, and a reader. The broker
+// accepts only TLS, so none of them got through in plain TCP.
 func TestSASLRightPassword(t *testing.T) {
 	_, brokers := saslCluster(t, []string{"in", "in.dlq"})
 	t.Setenv(saslUsernameVar, saslUser)
@@ -59,13 +140,91 @@ func TestSASLRightPassword(t *testing.T) {
 // countSASLAuthenticate counts the SASLAuthenticate requests c receives from now on, leaving
 // their handling to c.
 func countSASLAuthenticate(c *kfake.Cluster) *atomic.Int32 {
+	return countRequests(c, kmsg.SASLAuthenticate)
+}
+
+// countRequests counts the requests of key c receives from now on, leaving their handling to c.
+func countRequests(c *kfake.Cluster, key kmsg.Key) *atomic.Int32 {
 	var n atomic.Int32
-	c.ControlKey(int16(kmsg.SASLAuthenticate), func(kmsg.Request) (kmsg.Response, error, bool) {
+	c.ControlKey(int16(key), func(kmsg.Request) (kmsg.Response, error, bool) {
 		c.KeepControl()
 		n.Add(1)
 		return nil, nil, false
 	})
 	return &n
+}
+
+// tlsRefused checks that a client NewClient builds for brokers sends nothing to c, the
+// SASLHandshake that starts authentication included, fails Produce at its deadline, and logs a
+// connection WARN whose error contains wantErr, the password nowhere.
+func tlsRefused(t *testing.T, c *kfake.Cluster, brokers, wantErr string) {
+	t.Helper()
+	const wrong = "never-sent-pass"
+	t.Setenv(saslUsernameVar, saslUser)
+	t.Setenv(saslPasswordVar, wrong)
+	handshakes := countRequests(c, kmsg.SASLHandshake)
+	logs := defaultLogs(t)
+	// A broker without TLS reads the ClientHello as the size of a request and waits for the rest,
+	// so the handshake ends only at the dial timeout, 10 s by default; a Kafka broker closes the
+	// connection at once, as the size is over its socket.request.max.bytes.
+	cl, err := NewClient(brokers, "test-producer", kgo.DialTimeout(250*time.Millisecond))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(cl.Close)
+	ctx, cancel := context.WithTimeout(t.Context(), time.Second)
+	defer cancel()
+
+	err = produceWithin(t, 10*time.Second, ctx, cl, &kgo.Record{Topic: "out", Value: []byte("v")})
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Errorf("Produce() = %v, want the call's deadline", err)
+	}
+	if n := handshakes.Load(); n != 0 {
+		t.Errorf("the broker got %d SASL handshakes, want none before TLS is set up", n)
+	}
+	var warned bool
+	for _, prefix := range []string{"kafka client: unable to open connection to broker",
+		"kafka client: unable to open connection to broker due to an immediate EOF, which often means the client is using TLS when the broker is not expecting it (is TLS misconfigured?)"} {
+		for _, rec := range logs.records(t, prefix) {
+			if rec["level"] == "WARN" && rec["addr"] == brokers && strings.Contains(fmt.Sprint(rec["err"]), wantErr) {
+				warned = true
+			}
+		}
+	}
+	if !warned {
+		t.Errorf("no connection WARN naming %q for %s; the log:\n%s", wantErr, brokers, logs)
+	}
+	if strings.Contains(logs.String(), wrong) {
+		t.Error("the log carries the password")
+	}
+	if err != nil && strings.Contains(err.Error(), wrong) {
+		t.Errorf("Produce() error %q carries the password", err)
+	}
+}
+
+// A broker without TLS gets no request from a client with credentials: the client does not fall
+// back to plain TCP, and the failed handshake shows in the log.
+func TestTLSPlaintextBrokerRefused(t *testing.T) {
+	c, brokers := startSASLCluster(t, []string{"out"})
+	tlsRefused(t, c, brokers, "")
+}
+
+// A broker whose certificate does not name its host, or comes from a CA the client does not
+// trust, is refused before any SASL request, and the log names the certificate error.
+func TestTLSCertificateRefused(t *testing.T) {
+	t.Run("wrong name", func(t *testing.T) {
+		ca := newTestCA(t)
+		ca.trust(t)
+		c, brokers := startSASLCluster(t, []string{"out"},
+			kfake.TLS(ca.serverConfig(t, []string{"kafka.example"}, nil)))
+		tlsRefused(t, c, brokers, "certificate")
+	})
+	t.Run("unknown CA", func(t *testing.T) {
+		newTestCA(t).trust(t)
+		c, brokers := startSASLCluster(t, []string{"out"},
+			kfake.TLS(newTestCA(t).serverConfig(t, nil, localhostIPs)))
+		tlsRefused(t, c, brokers, "certificate")
+	})
 }
 
 // With a wrong password kfake checks the SCRAM proof, fails it with "invalid password" and drops
@@ -222,8 +381,8 @@ func TestNewClientSASLMissingVariable(t *testing.T) {
 	}
 }
 
-// Both variables set but empty count as unset: no SASL, so a broker without authentication, as
-// on the compose stack, takes the client.
+// Both variables set but empty count as unset: no SASL and no TLS, so a broker without
+// authentication, as only the in-memory brokers of the tests are, takes the client.
 func TestNewClientSASLEmptyVariables(t *testing.T) {
 	t.Setenv(saslUsernameVar, "")
 	t.Setenv(saslPasswordVar, "")

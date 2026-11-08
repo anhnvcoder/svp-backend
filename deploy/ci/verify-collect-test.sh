@@ -93,7 +93,7 @@ b64v() {
 # Includes identifier keys alongside secrets to verify they remain unmasked and searchable.
 jq -n --argjson backup "$(b64v ACCESS_KEY_ID=svp-pg-backup "ACCESS_SECRET_KEY=$cluster_secret" "username=$role_name")" \
   --argjson s3root "$(b64v S3_ROOT_USER=svp-admin "S3_ROOT_PASSWORD=$cluster_secret")" \
-  --argjson keda "$(b64v sasl=scram_sha256 tls=disable username=svp-keda "password=$kafka_secret")" \
+  --argjson keda "$(b64v sasl=scram_sha512 tls=enable username=svp-keda "password=$kafka_secret")" \
   --arg multi "$(b64 "route:
   receiver: telegram
   $line_secret
@@ -114,7 +114,7 @@ jq -n --argjson admin "$(b64v GLITCHTIP_ADMIN_EMAIL=admin@svp.local "GLITCHTIP_A
     {type: "Opaque", metadata: {name: "glitchtip-admin"}, data: $admin},
     {type: "Opaque", metadata: {name: "grafana-admin"}, data: $grafana},
     {type: "Opaque", metadata: {name: "operator-config"}, data: {"config.gz": $binary}}]}' >"$work/kube/svp-obs.json"
-identifiers="svp-pg-backup svp-admin scram_sha256 svp-keda svp-feed-service svp-user-service admin@svp.local
+identifiers="svp-pg-backup svp-admin scram_sha512 svp-keda svp-feed-service svp-user-service admin@svp.local
 admin-of-grafana kid-of-the-signing-key"
 export FAKE_KUBECTL_DIR=$work/kube
 
@@ -123,10 +123,10 @@ unready_pods() {
   jq -n "{items: $1}" >"$work/kube/pods-$2.json"
 }
 unready_pods '[
-  {metadata: {name: "redpanda-0", labels: {"app.kubernetes.io/name": "redpanda"}},
-   spec: {containers: [{name: "redpanda", terminationMessagePolicy: "FallbackToLogsOnError"}, {name: "sidecar"}]},
+  {metadata: {name: "kafka-0", labels: {"app.kubernetes.io/name": "kafka"}},
+   spec: {containers: [{name: "kafka", terminationMessagePolicy: "FallbackToLogsOnError"}, {name: "sidecar"}]},
    status: {phase: "Running", containerStatuses: [
-     {name: "redpanda", ready: false, restartCount: 2, state: {waiting: {reason: "CrashLoopBackOff"}},
+     {name: "kafka", ready: false, restartCount: 2, state: {waiting: {reason: "CrashLoopBackOff"}},
       lastState: {terminated: {reason: "Error", exitCode: 1, message: "INFRA-MESSAGE-MARKER"}}},
      {name: "sidecar", ready: true, restartCount: 0, state: {running: {}}}]}},
   {metadata: {name: "svp-pg-1", labels: {"cnpg.io/cluster": "svp-pg"}},
@@ -134,7 +134,7 @@ unready_pods '[
    status: {phase: "Running", containerStatuses: [
      {name: "postgres", ready: false, restartCount: 1, state: {running: {}},
       lastState: {terminated: {reason: "Error", exitCode: 1, message: "PG-MESSAGE-MARKER"}}}]}},
-  {metadata: {name: "redpanda-init-x"}, spec: {containers: [{name: "init"}]},
+  {metadata: {name: "kafka-init-x"}, spec: {containers: [{name: "init"}]},
    status: {phase: "Succeeded", containerStatuses: [
      {name: "init", ready: false, restartCount: 0, state: {terminated: {reason: "Completed", exitCode: 0}}}]}}]' \
   svp-data
@@ -154,10 +154,10 @@ unready_pods '[
      {name: "media-worker", ready: false, restartCount: 1, state: {running: {}},
       lastState: {terminated: {reason: "Error", exitCode: 1, message: "APP-FALLBACK-MARKER"}}}]}}]' svp
 mkdir -p "$work/kube/logs"
-printf '%s\n' "Could not initialize seastar: std::runtime_error (insufficient physical memory: needed 1073741824" \
-  "" INFRA-TAIL-MARKER >"$work/kube/logs/svp-data.redpanda-0.redpanda"
-echo INFRA-PREVIOUS-MARKER >"$work/kube/logs/svp-data.redpanda-0.redpanda.previous"
-echo SIDECAR-MARKER >"$work/kube/logs/svp-data.redpanda-0.sidecar"
+printf '%s\n' "ERROR Exiting Kafka due to fatal exception during startup. (kafka.Kafka$)" \
+  "" INFRA-TAIL-MARKER >"$work/kube/logs/svp-data.kafka-0.kafka"
+echo INFRA-PREVIOUS-MARKER >"$work/kube/logs/svp-data.kafka-0.kafka.previous"
+echo SIDECAR-MARKER >"$work/kube/logs/svp-data.kafka-0.sidecar"
 echo 'ERROR: duplicate key, STATEMENT: INSERT ... PG-LOG-MARKER' >"$work/kube/logs/svp-data.svp-pg-1.postgres"
 echo 'GET /api/1/envelope/?sentry_key=GLITCHTIP-MARKER' >"$work/kube/logs/svp-obs.glitchtip-abc.glitchtip"
 for f in svp.gateway-abc.gateway svp.gateway-abc.gateway.previous svp.media-worker-abc.media-worker \
@@ -173,7 +173,7 @@ unready=$work/unready.txt
 ) 2>"$unready" >/dev/null
 has_line() { if grep -qxF -- "$2" "$unready"; then ok "unready: $1"; else fail "unready: $1"; fi; }
 has_line "an infrastructure container's state, how it ended and its message" \
-  "pod svp-data/redpanda-0, container redpanda: waiting CrashLoopBackOff, 2 restart(s); attempt before: terminated Error (exit 1): INFRA-MESSAGE-MARKER"
+  "pod svp-data/kafka-0, container kafka: waiting CrashLoopBackOff, 2 restart(s); attempt before: terminated Error (exit 1): INFRA-MESSAGE-MARKER"
 has_line "its log, each line marked with its namespace" "    [svp-data] INFRA-TAIL-MARKER"
 has_line "an empty line of its log marked too" "    [svp-data] "
 has_line "the log of its attempt before" "    [svp-data] INFRA-PREVIOUS-MARKER"
@@ -185,7 +185,7 @@ has_line "GlitchTip's state" "pod svp-obs/glitchtip-abc, container glitchtip: wa
 has_line "Postgres' state, without its message" \
   "pod svp-data/svp-pg-1, container postgres: running, 1 restart(s); attempt before: terminated Error (exit 1)"
 for m in APP-LOG-MARKER APP-FALLBACK-MARKER GLITCHTIP-MARKER PG-LOG-MARKER PG-MESSAGE-MARKER SIDECAR-MARKER \
-  redpanda-init-x; do
+  kafka-init-x; do
   if grep -qF -- "$m" "$unready"; then fail "unready: no $m in its output"; else ok "unready: no $m in its output"; fi
 done
 if grep -E ' logs (gateway|media-worker|glitchtip|svp-pg)-' "$work/kube/calls" | grep -q .; then
@@ -464,7 +464,7 @@ printf '%s\t%s\t%s\n' k8s-gitops-up failure '' k8s-smoke failure '' drill-k8s-gi
   cat "$timeout_report"
   echo "    [svp] APP-FORGED-MARKER"
   echo "    [envoy-gateway-system] ENVOY-MARKER"
-  echo "FAIL  install redpanda"
+  echo "FAIL  install kafka"
 } >"$out/logs/k8s-gitops-up.log"
 {
   echo "ok    step 1"

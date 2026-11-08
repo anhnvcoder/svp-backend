@@ -46,7 +46,7 @@ import (
 	"github.com/anhnvcoder/svp-backend/services/media-worker/internal/transcode"
 )
 
-// Topics and consumer group. The topics must be ones redpanda-init creates, since the broker does
+// Topics and consumer group. The topics must be ones kafka-init creates, since the broker does
 // not create topics on first use.
 const (
 	InputTopic  = "video.lifecycle.v1"

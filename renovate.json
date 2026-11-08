@@ -108,7 +108,7 @@
       "groupName": "image digests"
     },
     {
-      "description": "Images of the workflows' service containers (Postgres, Redis of ci.yml and verify.yml): .github/ has a Code Owner, so their digests are merged by hand, in their own pull request, so that the image digests group above still merges by itself.",
+      "description": "Images of the workflows' service containers (Postgres of ci.yml and verify.yml, Redis of the tests in ci.yml): .github/ has a Code Owner, so their digests are merged by hand, in their own pull request, so that the image digests group above still merges by itself.",
       "matchManagers": ["github-actions"],
       "matchDepTypes": ["service", "container"],
       "matchUpdateTypes": ["digest", "pinDigest"],
@@ -174,9 +174,26 @@
       "prBodyNotes": ["A code or rule generator changed: run make tools, then make generate (and make slo for Sloth), and commit the regenerated files; the generate job of ci.yml fails until they match."]
     },
     {
-      "description": "The same broker image in compose and in chart svp-data: one pull request (the redpanda chart and its values are in svp-gitops).",
-      "matchDepNames": ["docker.io/redpandadata/redpanda", "redpandadata/redpanda"],
-      "groupName": "redpanda chart"
+      "description": "The same Kafka broker image in compose and in chart svp-data (broker, kafka-init, svp-ops): one pull request.",
+      "matchDepNames": ["docker.io/apache/kafka", "apache/kafka"],
+      "groupName": "kafka image"
+    },
+    {
+      "description": "The local Kafka keeps the x.y of Amazon MSK's Standard brokers: a new minor or major waits for approval on the Dependency Dashboard, and goes with kafka_version of module msk of svp-infra once MSK offers it.",
+      "matchDepNames": ["docker.io/apache/kafka", "apache/kafka"],
+      "matchUpdateTypes": ["minor", "major"],
+      "dependencyDashboardApproval": true
+    },
+    {
+      "description": "The same Valkey image in compose (valkey, tls-init) and in chart svp-data (valkey, svp-ops): one pull request.",
+      "matchDepNames": ["docker.io/valkey/valkey", "valkey/valkey"],
+      "groupName": "valkey image"
+    },
+    {
+      "description": "The local Valkey keeps the x.y of ElastiCache for Valkey: a new minor or major waits for approval on the Dependency Dashboard, and goes with engine_version of module elasticache of svp-infra once ElastiCache offers it.",
+      "matchDepNames": ["docker.io/valkey/valkey", "valkey/valkey"],
+      "matchUpdateTypes": ["minor", "major"],
+      "dependencyDashboardApproval": true
     },
     {
       "description": "The Collector image of compose (otelcol, otelcol-elastic) and of make otelcol-validate (OTELCOL_IMAGE) stays the same in all three places, and the same as the cluster's (base/otel-collector.yaml of svp-gitops, which its own Renovate updates).",

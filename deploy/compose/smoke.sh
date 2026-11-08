@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # End-to-end smoke test of the core stack through the gateway: users, videos, the presigned upload, transcode, HLS
 # playback, feeds, likes, views, follows and refresh tokens. Prints one ok/FAIL line per step and exits non-zero on the
-# first failure. Needs curl, jq, openssl, ffmpeg and redis-cli on the host, and the native Redis on 127.0.0.1:6379
-# (lib.sh resets the register rate limit there).
+# first failure. Needs curl, jq, openssl and ffmpeg on the host; lib.sh resets the register rate limit in the stack's
+# Valkey through docker compose exec.
 
 # Usage: deploy/compose/smoke.sh [base-url]   (default http://127.0.0.1:8080)
 
@@ -11,7 +11,7 @@
 # Cache-Control: max-age=31536000, immutable.
 
 # `make k8s-smoke` and `make eks-smoke` run the same steps against a cluster, with SVP_STACK=k3d or eks so lib.sh resets
-# the limit in the cluster's Valkey instead of the host's Redis.
+# the limit in the cluster's Valkey (Deployment svp-ops) instead of the compose stack's.
 # Design notes: docs/reference/k8s.md.
 set -euo pipefail
 
@@ -149,7 +149,7 @@ status=$(complete_upload clip "$work/a.auth")
   fail "complete upload is 202 PROCESSING (status $status, $(problem_summary), video status $(field status))"
 ok "complete upload: 202 PROCESSING"
 
-# The transcode runs asynchronously (outbox, Redpanda, media-worker, Redpanda, video-service).
+# The transcode runs asynchronously (outbox, Kafka, media-worker, Kafka, video-service).
 wait_ready clip "$work/a.auth" 180
 playlist_url=$(field playlist_url)
 thumbnail_url=$(field thumbnail_url)

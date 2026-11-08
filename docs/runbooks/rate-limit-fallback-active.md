@@ -20,7 +20,9 @@ dự phòng trong 2 phút); instance không có quyết định nào (0/0 không
 theo instance nên một pod mất Redis vẫn cháy dù pod kia khoẻ. Counter reset khi gateway khởi động lại không gây cháy giả hay bỏ
 sót: `increase` coi reset là bắt đầu lại từ 0, còn instance mới sinh là series mới.
 
-Redis của gateway là db 10: compose dùng Redis native qua `host.docker.internal:6379`, k3d dùng Valkey `valkey.svp-data:6379`.
+Redis của gateway là Valkey db 10, user `svp-gateway`, TLS: compose `valkey:6379`, k3d `valkey.svp-data.svc.cluster.local:6379`, EKS
+ElastiCache for Valkey. Lệnh vào Valkey đi qua `svp-valkey` (`valkey-cli --tls`, đăng nhập `svp-ops`,
+[ADR-0053](../adr/0053-msk-elasticache-valkey.md) §13): compose trong container `valkey`, k3d và EKS trong Deployment `svp-ops`.
 
 Theo bảng của [ADR-0010](../adr/0010-redis-ratelimit-cache-resilience-stage2c.md) §2 (và hai lớp thêm sau, khai cùng chỗ ở
 `services/gateway/internal/ratelimit/ratelimit.go`):
@@ -40,9 +42,10 @@ khám phá đọc Postgres: xem thêm [explore-cache-redis-timeout.md](explore-c
 Compose:
 
 ```sh
-# 1. Redis native trả lời không, độ trễ (Ctrl-C sau ~10 s; --latency chỉ gửi PING)
-redis-cli -h 127.0.0.1 -p 6379 -n 10 ping
-redis-cli -h 127.0.0.1 -p 6379 -n 10 --latency
+# 1. Valkey trả lời không, độ trễ (Ctrl-C sau ~10 s; --latency chỉ gửi PING)
+make ps | grep valkey
+dc exec -T valkey /opt/svp/bin/svp-valkey -n 10 PING
+dc exec valkey /opt/svp/bin/svp-valkey -n 10 --latency
 # 2. Gateway nói gì: lỗi kết nối, quá hạn, hay tên miền .invalid (gateway còn cấu hình của diễn tập)
 make logs SVC=gateway | grep 'rate limit store unavailable'
 # 3. Quyết định theo store trong 5 phút (redis so với fallback)
@@ -53,11 +56,11 @@ curl -sG "$PROM/api/v1/query" --data-urlencode 'query=sum by (service_instance_i
 curl -sG "$PROM/api/v1/query" --data-urlencode 'query=sum by (error_type) (increase(db_client_connections_use_time_milliseconds_count{service_name="gateway",db_system="redis"}[5m]))' | jq -c '.data.result[] | [.metric.error_type, .value[1]]'
 ```
 
-k3d:
+k3d (EKS: cùng lệnh với context của cluster EKS, người học chạy; không có pod `valkey`, đọc trạng thái ElastiCache ở console):
 
 ```sh
 kubectl --context k3d-svp -n svp-data get pods -l app.kubernetes.io/name=valkey -o wide
-kubectl --context k3d-svp -n svp-data exec deploy/valkey -c valkey -- valkey-cli -n 10 ping
+kubectl --context k3d-svp -n svp-data exec deploy/svp-ops -c valkey -- /opt/svp/bin/svp-valkey -n 10 PING
 kubectl --context k3d-svp -n svp logs -l app.kubernetes.io/name=gateway --since=15m --tail=2000 | grep 'rate limit store unavailable'
 curl -sG "$PROM/api/v1/query" --data-urlencode 'query=sum by (store) (increase(svp_ratelimit_decisions_total{service_name="gateway"}[5m]))' | jq -c '.data.result[] | [.metric.store, .value[1]]'
 ```
@@ -67,8 +70,8 @@ timeout, thời gian dùng kết nối p95).
 
 ## Redis mất hay chỉ vượt hạn lẻ tẻ
 
-Đọc bước 3b và bước 4: **Redis mất** thì tỷ lệ của instance gần 1, `ping` lỗi (hay tên miền `.invalid`), log bước 2 lặp liên tục.
-**Vượt hạn lẻ tẻ** thì tỷ lệ chỉ vài phần nghìn (game day: khoảng 3 trên 1 200 quyết định mỗi phút), `ping` vẫn
+Đọc bước 3b và bước 4: **Redis mất** thì tỷ lệ của instance gần 1, `PING` lỗi (hay tên miền `.invalid`), log bước 2 lặp liên tục.
+**Vượt hạn lẻ tẻ** thì tỷ lệ chỉ vài phần nghìn (game day: khoảng 3 trên 1 200 quyết định mỗi phút), `PING` vẫn
 `PONG`, bước 4 có vài `context_timeout`; loại này không page.
 
 ## Vượt hạn lẻ tẻ: `RateLimitFallbackElevated` (ticket)
@@ -81,22 +84,26 @@ vào đánh giá hạn 50 ms của [ADR-0020](../adr/0020-reliability-stage6.md)
 
 1. **Diễn tập để lại cấu hình** (compose): `make drill-obs-threats` (và `drill-rate-limit` của bài lab `drills/` của `svp-labs`) dựng lại gateway với
    `SVP_GATEWAY_REDIS_URL` trỏ tên miền `.invalid` rồi trả về khi kết thúc; script bị ngắt giữa chừng thì gateway vẫn trỏ
-   `.invalid`. Dấu hiệu: log bước 2 có `.invalid`, `redis-cli ping` vẫn `PONG`.
-2. **Redis native không chạy hay không nhận kết nối** (compose): `ping` lỗi.
-3. **Redis chậm hơn 50 ms**: Redis native dùng chung với dự án khác đang bận, máy bão hoà CPU (pin, Low Power Mode), Docker VM
-   chậm. Dấu hiệu: `ping` được nhưng `--latency` có max cao, bước 4 có `context_timeout`.
+   `.invalid`. Dấu hiệu: log bước 2 có `.invalid`, `svp-valkey PING` vẫn `PONG`.
+2. **Container `valkey` dừng hay chưa healthy** (compose): `make ps` không `healthy`, `PING` lỗi.
+3. **Valkey chậm hơn 50 ms**: máy bão hoà CPU (pin, Low Power Mode), Docker VM chậm. Dấu hiệu: `PING` được nhưng `--latency` có max
+   cao, bước 4 có `context_timeout`.
 4. **Valkey pod restart, chưa Ready, hay NetworkPolicy chặn** (k3d).
+5. **Gateway bị Valkey từ chối đăng nhập** (mật khẩu `svp-gateway` trong `REDIS_URL` khác aclfile sau khi đổi mật khẩu, hay cert không
+   tin được): log bước 2 có `WRONGPASS`, `NOPERM` hay lỗi TLS, `PING` của `svp-ops` vẫn `PONG`.
 
 ## Giảm thiểu
 
 - Nguyên nhân 1: `make up OBS=lgtm` dựng lại gateway với `REDIS_URL` mặc định (biến diễn tập không nằm trong `.env`). Không
   đặt `SVP_GATEWAY_REDIS_URL` trong `.env`.
-- Nguyên nhân 2, 3: Redis native là của cả máy. Bật lại theo cách nó được cài trên máy; **không** restart khi dự án khác đang
-  dùng mà chưa hỏi, **không** `FLUSHDB`/`FLUSHALL`. Trong lúc chờ, stack vẫn chạy với giới hạn đóng mềm: không cần làm gì thêm
-  cho người dùng.
+- Nguyên nhân 2: `make up OBS=lgtm` (dựng lại `tls-init`, `valkey` khi chúng dừng); **không** `FLUSHDB`/`FLUSHALL`. Trong lúc chờ,
+  stack vẫn chạy với giới hạn đóng mềm: không cần làm gì thêm cho người dùng.
+- Nguyên nhân 3: giảm tải máy (cắm sạc, tắt Low Power Mode, dừng việc nặng khác); không đổi hạn 50 ms.
 - Nguyên nhân 4: `kubectl --context k3d-svp -n svp-data rollout restart deployment/valkey`. Valkey không lưu xuống đĩa
   (`--save ""`, `--appendonly no`): restart xoá mọi khoá rate limit, cache khám phá và **mọi phiên đăng nhập của web (db 9)**,
-  người dùng web phải đăng nhập lại.
+  người dùng web phải đăng nhập lại (compose: `dc restart valkey`, cùng hệ quả).
+- Nguyên nhân 5: đổi mật khẩu theo đúng thứ tự của target (compose: `make up` ghi lại aclfile từ `.env` và tạo lại `valkey`, vì mật khẩu
+  Valkey đổi thì cấu hình của container `valkey` đổi; k3d `make k8s-secrets`), rồi gateway restart với `REDIS_URL` mới.
 
 ## Khôi phục và xác nhận
 
@@ -113,8 +120,8 @@ hồi, người vừa bị giới hạn ở fallback được tính lại từ t
 
 ## Leo thang
 
-- Redis native không lên được, hay chậm vì dự án khác: báo chủ của dự án đó (db 0, 5, 7 không phải của dự án này); stack chạy
-  tiếp ở chế độ đóng mềm, ghi lại thời gian cho postmortem.
+- Valkey không lên được sau restart (log `make logs SVC=valkey`, `make logs SVC=tls-init`: cert, aclfile): stack chạy tiếp ở chế độ
+  đóng mềm, ghi lại thời gian cho postmortem.
 - Fallback kéo dài > 30 phút trên môi trường có người dùng thật: lớp mở (`write`, `read`) không còn giới hạn, đây là rủi ro
   lạm dụng (RL-2 của [threat model](../threat-model.md)); ở lab không có người dùng ngoài nên chỉ ghi nhận.
 - Lệnh Redis quá hạn lặp lại khi máy không bận: ghi số `context_timeout` và p99 vào đánh giá hạn 50 ms của

@@ -19,7 +19,7 @@ Loại tài liệu (Diátaxis): **reference**, tra cứu khi cần một lệnh 
   (mục "Script CI cho cây của nguồn khác" dưới đây) ở `HEAD` với workflow `local`; lệnh ghi qua API của GitHub (dispatch) chỉ
   được in ra. CI trên GitLab là bài lab của `svp-labs`:
   - `.github/workflows/ci.yml` (PR, push `main`, dispatch): `check` (`make check-go TESTFLAGS=-count=1`, Postgres và
-    Redis là service container trên `127.0.0.1`, ffmpeg), `generate` (`make generate-check`), `buf` (`buf breaking` so với
+    Redis native là service container trên `127.0.0.1`, ffmpeg), `generate` (`make generate-check`), `buf` (`buf breaking` so với
     merge-base của PR, `main` trước push, hay merge-base với `origin/main` khi dispatch), `api-contract` (luật version của hợp đồng
     REST, [ADR-0033](../adr/0033-svp-web-repo.md) §1: `make api-contract-check BASE=<base>` với base tính như job `buf`, rồi
     `deploy/ci/contract-test.sh`), `config`
@@ -32,7 +32,7 @@ Loại tài liệu (Diátaxis): **reference**, tra cứu khi cần một lệnh 
     (guard của hai job promote, danh sách bản phát hành của rescan),
     `deploy/ci/verify-collect-test.sh`, test các bước của `verify.yml` (`deploy/ci/verify-steps/steps-test.sh`, `supplychain-test.sh`,
     `admission-metrics-test.sh`, `objstore-test.sh`), `deploy/k8s/drills/run-test.sh` (cùng `new-values.sh` của diễn tập `reloader`), `deploy/k8s/rotate-test.sh`, `make chainsaw-lint`,
-    `deploy/k8s/drills/gitops/gitops-test.sh`, `make slo-check`, `make otelcol-validate`, `make env`
+    `deploy/k8s/drills/gitops/gitops-test.sh`, `deploy/helm/svp-data/files/kafka-init-test.sh` và `deploy/ops/ops-test.sh` (script init Kafka và hai wrapper CLI vận hành với công cụ giả, không broker), `make slo-check`, `make otelcol-validate`, `make env`
     rồi `make compose-config`, `deploy/observability/glitchtip/dotenv-test.sh`,
     `make helm-check`, `deploy/ci/sources-test.sh`, `deploy/ci/gitops-check-test.sh "$SVP_GITOPS_DIR"`, `make k6-check`,
     `make cloud-check`),
@@ -46,9 +46,10 @@ Loại tài liệu (Diátaxis): **reference**, tra cứu khi cần một lệnh 
     nào PR không đụng vùng của nó thì skip, `ci-ok` nhận các skip đó; job khác `skipped` thì đỏ; job `web` cũ ở CI của
     `svp-frontend` từ khi web tách repo). Job `stack` (ADR-0020 §15; **chỉ báo, ngoài `ci-ok`**, không chặn merge; xem lại
     khi 20 lượt liên tiếp xanh, không lượt đỏ do môi trường, thì đưa vào `ci-ok`): `ubuntu-24.04`, tối đa 45 phút,
-    `contents: read`, không secret; Postgres, Redis là service container publish trên `127.0.0.1` và IP bridge `172.17.0.1`
-    (`make ci-bridge-check` dừng job khi gateway của network `bridge` khác địa chỉ đó; chỉ cho CI), gói apt
-    `postgresql-client redis-tools ffmpeg jq`, rồi `make gitops-clone`, `make web-clone` (commit của bản web stg; `SVP_GITOPS_DIR`,
+    `contents: read`, không secret; Postgres là service container publish trên `127.0.0.1` và IP bridge `172.17.0.1`
+    (`make ci-bridge-check` dừng job khi gateway của network `bridge` khác địa chỉ đó; chỉ cho CI; Kafka và Valkey là container của stack compose,
+    không publish cổng), gói apt
+    `postgresql-client ffmpeg jq`, rồi `make gitops-clone`, `make web-clone` (commit của bản web stg; `SVP_GITOPS_DIR`,
     `SVP_WEB_DIR` ở `env` của job), Node theo `.nvmrc` và pnpm theo `packageManager` của bản clone, `make install` và Playwright Chromium,
     WebKit trong bản clone, `make env`, `make up` (sáu service build từ PR, web là bản phát hành stg theo digest), `make smoke`,
     `make web-e2e` (e2e của `svp-frontend` ở commit của web stg), `make load-ci`, `make web-lighthouse` (đỏ không làm job đỏ), `make dast` (cuối cùng,
@@ -415,7 +416,7 @@ Các script này chạy trong job của `verify.yml` (kịch bản, bước và 
 
 - **`verify-host.sh compose-obs|gitops`** kiểm và chuẩn bị máy (runner `ubuntu-24.04`, hay VM Linux thuê thay nó) trước mọi target `make`. Thiếu gì thì
   fail kèm số liệu, để một lượt sẽ chết sau hàng giờ vì thiếu đĩa hay thiếu tên dừng ngay ở đây. Chỉ chạy trên Linux (`df` của GNU). Ghi tên kịch bản vào
-  `$SVP_VERIFY_OUT/scenario` cho `verify-collect.sh`. Bốn việc:
+  `$SVP_VERIFY_OUT/scenario` cho `verify-collect.sh`. Ba việc:
   1. Đĩa: chỗ trống của filesystem chứa thư mục dữ liệu Docker phải bằng ít nhất phần kịch bản cần thêm (mức theo kịch bản ở đầu script: bản đo lần chạy
      đầu của `compose-obs` nhân 1,25; với `gitops` là image phát hành, image của khoảng 40 container bên thứ ba trong containerd store của hai node
      và volume) cộng 15% dung lượng cộng 2 GiB. Mức 15% giữ kubelet dưới ngưỡng dọn image mặc định (85%). Thiếu thì xoá các bộ công cụ của image runner
@@ -425,8 +426,6 @@ Các script này chạy trong job của `verify.yml` (kịch bản, bước và 
      `127.0.0.1:8443`, nên một tên còn phân giải ra `::1` gây kết nối bị từ chối hay lỗi); rồi `getent ahosts` của từng tên phải ra `127.0.0.1` và
      không gì khác.
   3. Chỉ k3d: `kubectl` của máy lệch tối đa một minor so với k3s của cluster (`K3S_IMAGE_TAG` của `Makefile`), theo chính sách version skew của kubectl.
-  4. Chỉ k3d: in `vm.min_free_kbytes`. Seastar trừ giá trị này khỏi giới hạn cgroup của broker trước khi kiểm `--memory`, và `base/redpanda.yaml` của
-     `svp-gitops` chừa chỗ cho nó (66 MiB trên runner x86_64, 44 MiB trong VM của Docker Desktop).
 - **`verify-mask.sh env|cluster`** mask giá trị bí mật của một lượt trong log job và giữ chúng ở thư mục riêng cho `verify-collect.sh` dò artifact. Repo public
   nên log cũng public, đỏ hay không: mask là lớp thứ hai, sau luật không script nào in bí mật.
   - `env`: giá trị của `.env` có tên kết thúc bằng `PASSWORD`, `SECRET`, `SECRET_KEY`, `TOKEN`, `_KEY` hay `_KEYS`, và `SENTRY_DSN`, đọc theo luật của

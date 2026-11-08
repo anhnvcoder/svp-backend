@@ -1,4 +1,4 @@
-{{- /* Namespaces by role: svp (the six Go services and the web client), svp-data (Postgres, Valkey, Redpanda, the
+{{- /* Namespaces by role: svp (the six Go services and the web client), svp-data (Postgres, Valkey, Kafka, the
 object store s3), svp-obs (observability, GlitchTip), svp-edge (Gateway and certificates). Pod Security
 Admission enforces "restricted": a chart that cannot meet it is fixed in its values, the namespace is not
 loosened. install.sh and gitops.sh render this template alone for the namespaces they make before this chart. */}}

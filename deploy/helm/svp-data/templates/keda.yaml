@@ -1,14 +1,11 @@
 {{- /*
 Login of KEDA's Kafka scaler, which reads the lag of group media-worker for the ScaledObject of chart svp-service:
+Kafka user svp-keda, SCRAM-SHA-512 over TLS as the services, from Secret keda-kafka of namespace keda. With the broker
+in the cluster it also trusts the local CA (ca of Secret local-ca there); a managed broker's CA is a public one.
 */}}
 
 {{- /*
-Redpanda user svp-keda, SCRAM-SHA-256 without TLS as the services, from Secret keda-kafka of namespace keda
-(deploy/k8s/secrets.sh).
-*/}}
-
-{{- /*
-svp-keda may only DESCRIBE topic video.lifecycle.v1 and group media-worker (files/kafka-users.sh), which is what
+svp-keda may only DESCRIBE topic video.lifecycle.v1 and group media-worker (deploy/kafka/kafka-init.sh), which is what
 reading committed and end offsets needs.
 */}}
 
@@ -43,4 +40,9 @@ spec:
     - parameter: {{ . }}
       name: keda-kafka
       key: {{ . }}
+    {{- end }}
+    {{- if not (include "svp-data.kafkaExternal" .) }}
+    - parameter: ca
+      name: local-ca
+      key: ca.crt
     {{- end }}

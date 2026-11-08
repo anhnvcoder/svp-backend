@@ -134,8 +134,7 @@ do `svp-cluster` tạo [N24], RDS thay CloudNativePG, S3 + CloudFront thay RustF
 ### 9. Dữ liệu
 
 - **RDS:** một instance cho mọi service, PostgreSQL 15, `db.t4g.small`, gp3 20 GB, subnet private, chỉ nhận 5432 từ security group của node, `rds.force_ssl = 1`,
-  mã hoá, mật khẩu master ở Secrets Manager (`manage_master_user_password`); **master username cố định `postgres`** [N41], `rds_superuser`, không superuser [N36]:
-  `deploy/postgres/bootstrap.sql` chạy được dưới quyền đó, Job `pg-bootstrap` nối `PGSSLMODE=require`.
+  mã hoá, mật khẩu master ở Secrets Manager (`manage_master_user_password`); **master username cố định `postgres`** [N41], `rds_superuser`, không superuser [N36] (phụ lục).
 - **S3:** bucket `uploads`, `media` tên `<tiền tố>-uploads-<hậu tố ngẫu nhiên>`, chặn public, `BucketOwnerEnforced`, SSE-S3, CORS theo bucket như local, lifecycle
   `uploads` theo quyết định 2026-10-18 cộng huỷ multipart dở sau 1 ngày; stg `force_destroy`; policy IAM dịch đúng `deploy/s3/*-policy.json`; `If-None-Match: *` [N33],
   CRC32 full-object [N34]. **CloudFront:** OAC, viewer HTTPS, cache theo `Cache-Control`, `PriceClass_200` [N10]; URL HLS `https://<mediaDomain>/` + khoá object.
@@ -186,8 +185,7 @@ S3, PSA `v1.36`, NLB giữ IP, hairpin, metrics-server, IMDSv2, `rds_superuser`,
 
 ## Nguồn
 
-Đọc 2026-10-31; danh sách đầy đủ [N1]–[N41] ở phụ lục. [N2] <https://aws.amazon.com/eks/pricing/>, [N7] <https://aws.amazon.com/rds/postgresql/pricing/>,
-[N9] <https://aws.amazon.com/s3/pricing/>, [N10] <https://aws.amazon.com/cloudfront/pricing/>, [N11] <https://aws.amazon.com/secrets-manager/pricing/>, [N16] <https://aws.amazon.com/apprunner/>, [N18] <https://docs.aws.amazon.com/eks/latest/userguide/kubernetes-versions.html>, [N30] <https://letsencrypt.org/docs/rate-limits/>.
+Đọc 2026-10-31; danh sách đầy đủ [N1]–[N41] ở phụ lục. [N2] <https://aws.amazon.com/eks/pricing/>, [N7] <https://aws.amazon.com/rds/postgresql/pricing/>, [N9] <https://aws.amazon.com/s3/pricing/>, [N10] <https://aws.amazon.com/cloudfront/pricing/>, [N11] <https://aws.amazon.com/secrets-manager/pricing/>, [N16] <https://aws.amazon.com/apprunner/>, [N18] <https://docs.aws.amazon.com/eks/latest/userguide/kubernetes-versions.html>, [N30] <https://letsencrypt.org/docs/rate-limits/>.
 
 ## Thông tin thêm
 
@@ -198,3 +196,5 @@ Phụ lục: [`appendix/0034-aws-stage7.md`](appendix/0034-aws-stage7.md) (trạ
 - §2 "Biến cá nhân", §9 "S3": [0038](0038-s3-bucket-names.md): tên bucket.
 - §2, §3, §4, §5, §6, §7, §10, §11, §13, §14: [0048](0048-prd-aws.md): AWS Organizations, sandbox chỉ còn là management, stg và prd ở account `svp-stg`, `svp-prd`, mỗi account một profile, state, zone `<env>.aws.<miền>` và budget; root `aws/org`, `aws/accounts/<env>`, `aws/gitops/<env>`; region store từ `cluster.region`, SCP chỉ cho `ap-southeast-1`, `us-east-1`; Karpenter để sau; `cluster.*` qua annotation cluster Secret của GitOps Bridge, thêm khoá `externalSecretsRoles`; Secret EKS của stg và prd từ Secrets Manager, endpoint S3 có policy ở prd; giá trị prd và wiring riêng của root prd; gỡ và quét theo account; trình tự buổi bằng `terraform apply` hai root.
 - Câu 19, §9 "CloudFront": [0052](0052-cloudfront-flat-rate-free.md): distribution media của stg và prd trên gói flat-rate Free thay pay-as-you-go, có web ACL WAF ở cả hai env; `PriceClass_All` thay `PriceClass_200`; CORS của media bằng policy managed `Managed-SimpleCORS`.
+- Câu 11, §7, §8, §12: [0053](0053-msk-elasticache-valkey.md): Kafka, Redis của stg và prd là Amazon MSK provisioned và ElastiCache for Valkey (cluster mode tắt) thay Redpanda, Valkey trong cluster EKS; client nối SASL SCRAM-SHA-512 trên TLS, Valkey bằng user ACL; hợp đồng `cluster.*` thêm khoá `kafkaBrokers`, `valkeyHost`, `dbCidrs` thêm egress 9096, 6379 tới MSK, ElastiCache cùng subnet; buổi stg thêm ~$0,6 cho MSK, ElastiCache.
+- §7, §9 "RDS": [0054](0054-data-subnet-tier.md): VPC ba tầng; RDS, MSK, ElastiCache ở subnet database (route table không `0.0.0.0/0`) thay subnet private của node; `cluster.dbCidrs` là dải của subnet database.

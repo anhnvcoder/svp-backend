@@ -1,16 +1,13 @@
 # IN-4/FF-6 of the threat model (docs/threat-model.md): each Kafka user may write only its own topics and use only its
-# own consumer group, and the Admin API of Redpanda needs credentials.
+# own consumer group, and the broker takes no login with a wrong password.
 
-# Each user (password from Secret svp-data/kafka-users, passed on stdin, never printed) runs rpk in the broker
-# container: producing to a topic not its own is TOPIC_AUTHORIZATION_FAILED (svp-keda, which may write no topic, gets no
-# producer id: CLUSTER_AUTHORIZATION_FAILED), producing to its own topic works with an idempotent producer and WRITE on
-# that topic only.
+# Each user runs the Kafka CLI through svp-kafka of Deployment svp-ops (SVP_AS_USER; its password, from the Secret the
+# client itself reads, on stdin, never printed): producing to a topic not its own is TOPIC_AUTHORIZATION_FAILED
+# (svp-keda, which may write no topic, gets no producer id: CLUSTER_AUTHORIZATION_FAILED), producing to its own topic
+# works with an idempotent producer and WRITE on that topic only.
 
 # Describing the group of another service is GROUP_AUTHORIZATION_FAILED, its own works; media-worker cannot produce to
-# video.lifecycle.v1, nor read another service's topic.
-
-# The Admin API refuses node_config, cluster_config, security/users and brokers without credentials and serves
-# /public_metrics; control: rpk with the broker's own login reads admin_api_require_auth (true).
+# video.lifecycle.v1, nor read another service's topic. Control: svp-admin, svp-kafka's own login, lists the ACLs.
 
 # Test records: one empty record (key drill-threats-<run>, header svp-drill=threats) to the dead-letter topic of each
 # user that has one; nothing consumes a dead-letter topic, and the dead-letter metric is counted by the services, not
@@ -21,8 +18,8 @@
 # TOPIC_AUTHORIZATION_FAILED otherwise (shown first by the same oversized record from feed-service, which may read
 # user.follows.v1 but not write it), so no record reaches a topic a service consumes.
 
-# The high watermarks of the four consumed topics are read before the first record and compared after the last (a topic
-# rpk cannot read fails the check rather than counting as unchanged); the first reading waits in
+# The end offsets of the four consumed topics are read as svp-admin before the first record and compared after the last
+# (a topic that cannot be read fails the check rather than counting as unchanged); the first reading waits in
 # .k8s/drills/in-4-ff-6-watermarks, deleted when the test ends.
 apiVersion: chainsaw.kyverno.io/v1alpha1
 kind: Test
@@ -31,7 +28,7 @@ metadata:
   labels:
     drill: threats
 spec:
-  description: "IN-4/FF-6: Kafka ACLs per user (own topics and group only, no record reaches a consumed topic) and the Admin API of Redpanda without credentials"
+  description: "IN-4/FF-6: Kafka ACLs per user (own topics and group only, no record reaches a consumed topic) and no login with a wrong password"
   # An existing namespace: Chainsaw neither creates nor deletes it.
   namespace: svp-data
   steps:
@@ -45,17 +42,17 @@ spec:
           set -eu
           export KUBECONFIG="$CALLER_KUBECONFIG"
           state=$(git rev-parse --show-toplevel)/.k8s/drills/in-4-ff-6-watermarks
-          # "TOPIC SUM" of the high watermarks per consumed topic, as svp-admin (the login the broker container has). No
-          # line for a topic whose table is not the expected one (last column HIGH-WATERMARK, a number on every partition
-          # row, at least one row), so a reading that failed can never compare as unchanged.
+          # "TOPIC SUM" of the end offsets per consumed topic, as svp-admin (svp-kafka's own login). No line for a topic
+          # whose answer is not the expected one (TOPIC:PARTITION:OFFSET on every line, at least one), so a reading that
+          # failed can never compare as unchanged.
           ends=
           for t in user.follows.v1 video.lifecycle.v1 media.transcodes.v1 engagement.views.v1; do
-            out=$(kubectl --context k3d-svp -n svp-data exec redpanda-0 -c redpanda -- rpk topic describe "$t" -p) ||
-              { echo "FAIL  IN-4: rpk topic describe $t failed" >&2; exit 1; }
-            sum=$(printf '%s\n' "$out" | awk 'NR == 1 { if ($NF != "HIGH-WATERMARK") bad = 1; next }
-              $NF !~ /^[0-9]+$/ { bad = 1 } { s += $NF; n++ }
-              END { if (!bad && n > 0) print s }')
-            [ -n "$sum" ] || { echo "FAIL  IN-4: rpk topic describe $t gave no partition or an unexpected table" >&2; exit 1; }
+            out=$(kubectl --context k3d-svp -n svp-data exec deploy/svp-ops -c kafka -- \
+              /opt/svp/bin/svp-kafka get-offsets --topic "$t" --time -1) ||
+              { echo "FAIL  IN-4: get-offsets of $t failed" >&2; exit 1; }
+            sum=$(printf '%s\n' "$out" | awk -F: -v t="$t" '$1 != t || NF != 3 || $3 !~ /^[0-9]+$/ { bad = 1; next }
+              { s += $3; n++ } END { if (!bad && n > 0) print s }')
+            [ -n "$sum" ] || { echo "FAIL  IN-4: get-offsets of $t gave no partition or an unexpected answer" >&2; exit 1; }
             ends="$ends$t $sum;"
           done
           case $STAGE in
@@ -82,13 +79,13 @@ spec:
           rm -f "$(git rev-parse --show-toplevel)/.k8s/drills/in-4-ff-6-watermarks"
 
   # One Kafka operation per step, as the user named: the step prints "ok" when the operation worked (for produce: a
-  # record was written, at a partition@offset), otherwise the first Kafka error code rpk printed ("none" when it printed
-  # none). stderr has rpk's answer as "OP rc=<exit status> code=<code> at=<partition@offset or ->".
+  # record was written, the topic's end offsets grew), otherwise the Kafka error of the first Java exception the tool
+  # printed ("none" when it printed none). stderr has the answer as "OP rc=<exit status> code=<code> written=<n|->".
 
-  # produce writes one empty record with rpk's default, idempotent producer, which first asks for a producer id (granted
-  # with WRITE on any topic); produce1 the same with acks 1, which is not idempotent, so only the right to write the
-  # topic itself is asked; oversized one record of 1.6 MB (incompressible, no compression, the client's own limit raised
-  # so the broker decides); group describes a group; consume reads one record without a group.
+  # produce writes one empty record with an idempotent producer, which first asks for a producer id (granted with WRITE
+  # on any topic); produce1 the same with acks 1, not idempotent, so only the right to write the topic itself is asked;
+  # oversized one record of 1.6 MB (incompressible, no compression, the client's own limit raised so the broker
+  # decides); group describes a group; consume reads one record without a group; badlogin logs in with a wrong password.
 
   # feed-service first: it may read user.follows.v1 (so its metadata is visible) but not write it; the broker refusing
   # its oversized record as unauthorized shows it checks the right to write before the size, which is what makes
@@ -107,46 +104,101 @@ spec:
         content: |
           set -eu
           export KUBECONFIG="$CALLER_KUBECONFIG"
-          # Run by bash in the broker container: the password is the first line on stdin, read into RPK_PASS (rpk's own
-          # variable) and never on a command line; then one line per operation.
+          # Run by sh in container kafka of svp-ops: the password is the first line on stdin, kept in a shell variable
+          # and given to each svp-kafka call on its stdin as SVP_AS_USER, never on a command line; then one line per
+          # operation.
           ops='
-          IFS= read -r RPK_PASS
-          export RPK_PASS RPK_USER=$1
+          IFS= read -r pw
+          user=$1
           key=drill-threats-$2
           shift 2
+          umask 077
           big=$(mktemp)
-          trap "rm -f \"$big\"" EXIT
+          rec=$(mktemp)
+          trap "rm -f \"$big\" \"$rec\"" EXIT
+          # as TOOL ARGS...: svp-kafka TOOL as the user, the lines of $rec after its password on stdin.
+          as() { { printf "%s\n" "$pw"; cat "$rec"; } | SVP_AS_USER=$user timeout 45 /opt/svp/bin/svp-kafka "$@"; }
+          # ends TOPIC: the sum of the end offsets of TOPIC as the user (WRITE implies DESCRIBE); empty when not read.
+          ends() {
+            : >"$rec"
+            as get-offsets --topic "$1" --time -1 2>/dev/null | awk -F: -v t="$1" "\$1 == t && \$3 ~ /^[0-9]+\$/ { s += \$3; n++ } END { if (n) print s }"
+          }
+          # produce TOPIC PRODUCER_ARGS...: the record of $rec (headers, key, value split by tabs) to TOPIC.
+          produce() {
+            t=$1
+            shift
+            as console-producer --topic "$t" --property parse.headers=true --property parse.key=true \
+              --producer-property max.block.ms=20000 --producer-property delivery.timeout.ms=30000 \
+              --producer-property request.timeout.ms=20000 --producer-property compression.type=none "$@" 2>&1
+          }
           for op in "$@"; do
             arg=${op#*:}
+            before= after=
             case ${op%%:*} in
-              produce) out=$(printf "\n" | timeout 20 rpk topic produce "$arg" -k "$key" -H svp-drill=threats 2>&1); rc=$? ;;
-              produce1) out=$(printf "\n" | timeout 20 rpk topic produce "$arg" --acks 1 -k "$key" -H svp-drill=threats 2>&1); rc=$? ;;
+              produce | produce1)
+                before=$(ends "$arg")
+                printf "svp-drill:threats\t%s\t\n" "$key" >"$rec"
+                if [ "${op%%:*}" = produce ]; then
+                  out=$(produce "$arg" --producer-property acks=all --producer-property enable.idempotence=true); rc=$?
+                else
+                  out=$(produce "$arg" --producer-property acks=1 --producer-property enable.idempotence=false); rc=$?
+                fi
+                after=$(ends "$arg") ;;
               oversized)
-                [ -s "$big" ] || { head -c 1200000 /dev/urandom | base64 -w0; echo; } >"$big"
-                out=$(timeout 30 rpk topic produce "$arg" -k "$key" -z none --max-message-bytes 4000000 <"$big" 2>&1); rc=$? ;;
-              group) out=$(timeout 20 rpk group describe "$arg" 2>&1); rc=$? ;;
-              consume) out=$(timeout 20 rpk topic consume "$arg" -n 1 -o start 2>&1); rc=$? ;;
+                [ -s "$big" ] || { head -c 1200000 /dev/urandom | base64 | tr -d "\n"; echo; } >"$big"
+                { printf "svp-drill:threats\t%s\t" "$key"; cat "$big"; } >"$rec"
+                out=$(produce "$arg" --producer-property max.request.size=4000000 --producer-property acks=all); rc=$? ;;
+              group) : >"$rec"; out=$(as consumer-groups --describe --group "$arg" 2>&1); rc=$? ;;
+              consume)
+                : >"$rec"
+                out=$(as console-consumer --topic "$arg" --partition 0 --offset earliest --max-messages 1 --timeout-ms 15000 2>&1); rc=$? ;;
+              badlogin)
+                : >"$rec"
+                out=$(printf "%s\n" "x$(head -c 12 /dev/urandom | od -An -tx1 | tr -d " \n")" |
+                  SVP_AS_USER=$user timeout 45 /opt/svp/bin/svp-kafka broker-api-versions 2>&1); rc=$? ;;
               *) out=; rc=99 ;;
             esac
-            code=$(printf "%s\n" "$out" | grep -oE "[A-Z]+(_[A-Z]+)+" | head -n 1)
-            at=$(printf "%s\n" "$out" | sed -n "s/^Produced to partition \([0-9]*\) at offset \([0-9]*\).*/\1@\2/p")
-            echo "$op rc=$rc code=${code:-none} at=${at:--}"
+            # The Kafka error of the first exception of the authorization or the size; another one by its class name.
+            # The tools exit 0 on most of them. A group the user may describe that has no member or offset yet (a new
+            # cluster) is GroupIdNotFoundException, which the broker answers only after the authorization: no error.
+            case $out in
+              *ClusterAuthorizationException*) code=CLUSTER_AUTHORIZATION_FAILED ;;
+              *GroupAuthorizationException*) code=GROUP_AUTHORIZATION_FAILED ;;
+              *TopicAuthorizationException*) code=TOPIC_AUTHORIZATION_FAILED ;;
+              *RecordTooLargeException*) code=MESSAGE_TOO_LARGE ;;
+              *SaslAuthenticationException*) code=SASL_AUTHENTICATION_FAILED ;;
+              *GroupIdNotFoundException*) code= ;;
+              *Exception*) code=$(printf "%s\n" "$out" | grep -oE "[A-Za-z]+Exception" | head -n 1) ;;
+              *) code= ;;
+            esac
+            written=-
+            [ -z "$before" ] || [ -z "$after" ] || written=$((after - before))
+            echo "$op rc=$rc code=${code:-none} written=$written"
           done'
           run=$(date -u +%Y%m%dT%H%M%SZ)-$(openssl rand -hex 2)
-          pw=$(kubectl --context k3d-svp -n svp-data get secret kafka-users -o json |
-            jq -r --arg u "$KAFKA_USER" '.data[$u] // empty | @base64d') || pw=
-          [ -n "$pw" ] || { echo "FAIL  IN-4: read the password of $KAFKA_USER from Secret svp-data/kafka-users" >&2; exit 1; }
-          line=$(printf '%s\n' "$pw" | kubectl --context k3d-svp -n svp-data exec -i redpanda-0 -c redpanda -- \
-            bash -c "$ops" bash "$KAFKA_USER" "$run" "$KAFKA_OP") ||
-            { pw=; echo "FAIL  IN-4: run the Kafka check as $KAFKA_USER in redpanda-0" >&2; exit 1; }
+          # The password from the Secret the client itself reads: a service's <service>-env, KEDA's keda-kafka, the
+          # Collector's otelcol-kafka.
+          case $KAFKA_USER in
+            svp-keda) src=keda/keda-kafka key=password ;;
+            svp-otelcol) src=svp-obs/otelcol-kafka key=password ;;
+            *) src=svp/${KAFKA_USER#svp-}-env key=KAFKA_SASL_PASSWORD ;;
+          esac
+          pw=$(kubectl --context k3d-svp -n "${src%/*}" get secret "${src#*/}" -o json |
+            jq -r --arg k "$key" '.data[$k] // empty | @base64d') || pw=
+          [ -n "$pw" ] || { echo "FAIL  IN-4: read the password of $KAFKA_USER from Secret $src" >&2; exit 1; }
+          line=$(printf '%s\n' "$pw" | kubectl --context k3d-svp -n svp-data exec -i deploy/svp-ops -c kafka -- \
+            sh -c "$ops" sh "$KAFKA_USER" "$run" "$KAFKA_OP") ||
+            { pw=; echo "FAIL  IN-4: run the Kafka check as $KAFKA_USER in Deployment svp-ops" >&2; exit 1; }
           pw=
           echo "$line" >&2
           set -- $line
           [ "${1:-}" = "$KAFKA_OP" ] || { echo "FAIL  IN-4: no answer for $KAFKA_OP" >&2; exit 1; }
-          rc=${2#rc=} code=${3#code=} at=${4#at=}
-          if [ "$rc" != 0 ]; then
+          rc=${2#rc=} code=${3#code=} written=${4#written=}
+          if [ "$code" != none ]; then
             echo "$code"
-          elif [ "${KAFKA_OP%%:*}" = produce ] && [ "$at" = - ]; then
+          elif [ "$rc" != 0 ]; then
+            echo "rc $rc"
+          elif [ "${KAFKA_OP%%:*}" = produce ] && { [ "$written" = - ] || [ "$written" -lt 1 ]; }; then
             echo "ok but no record written"
           else
             echo ok
@@ -331,47 +383,27 @@ spec:
           (trim_space($stdout)): unchanged
       continueOnError: true
 
-  # The Admin API from inside the broker container, without credentials: 401 or 403, but /public_metrics (the
-  # Collector's scrape) 200.
-  - name: "IN-4/FF-6: Admin API /v1/node_config without credentials: 401 or 403"
+  # The Collector's user: DESCRIBE on the topics and groups, nothing else.
+  - name: "IN-4/FF-6: svp-otelcol may describe group media-worker"
     bindings:
-    - {name: adminPath, value: /v1/node_config}
-    - {name: allowed, value: ["401", "403"]}
-    try: &admin
-    - script:
-        env:
-        - {name: CALLER_KUBECONFIG, value: (env('KUBECONFIG'))}
-        - {name: ADMIN_PATH, value: ($adminPath)}
-        content: |
-          set -eu
-          export KUBECONFIG="$CALLER_KUBECONFIG"
-          kubectl --context k3d-svp -n svp-data exec redpanda-0 -c redpanda -- curl -s -o /dev/null --max-time 5 -w '%{http_code}' \
-            "http://redpanda-0.redpanda.svp-data.svc.cluster.local.:9644$ADMIN_PATH" || true
-        check:
-          ($error): ~
-          (contains($allowed, trim_space($stdout))): true
-      continueOnError: true
-  - name: "IN-4/FF-6: Admin API /v1/cluster_config without credentials: 401 or 403"
+    - {name: kafkaUser, value: svp-otelcol}
+    - {name: kafkaOp, value: group:media-worker}
+    - {name: want, value: ok}
+    try: *kafka
+  - name: "IN-4/FF-6: svp-otelcol may not produce to video.lifecycle.v1.dlq (acks 1, not idempotent): TOPIC_AUTHORIZATION_FAILED"
     bindings:
-    - {name: adminPath, value: /v1/cluster_config}
-    - {name: allowed, value: ["401", "403"]}
-    try: *admin
-  - name: "IN-4/FF-6: Admin API /v1/security/users without credentials: 401 or 403"
+    - {name: kafkaUser, value: svp-otelcol}
+    - {name: kafkaOp, value: produce1:video.lifecycle.v1.dlq}
+    - {name: want, value: TOPIC_AUTHORIZATION_FAILED}
+    try: *kafka
+
+  - name: "IN-4/FF-6: svp-feed-service with a wrong password: SASL_AUTHENTICATION_FAILED"
     bindings:
-    - {name: adminPath, value: /v1/security/users}
-    - {name: allowed, value: ["401", "403"]}
-    try: *admin
-  - name: "IN-4/FF-6: Admin API /v1/brokers without credentials: 401 or 403"
-    bindings:
-    - {name: adminPath, value: /v1/brokers}
-    - {name: allowed, value: ["401", "403"]}
-    try: *admin
-  - name: "IN-4/FF-6: Admin API /public_metrics without credentials: 200 (the Collector's scrape)"
-    bindings:
-    - {name: adminPath, value: /public_metrics}
-    - {name: allowed, value: ["200"]}
-    try: *admin
-  - name: "IN-4/FF-6: control: rpk with the broker's own login (svp-admin) reads admin_api_require_auth through the Admin API: true"
+    - {name: kafkaUser, value: svp-feed-service}
+    - {name: kafkaOp, value: badlogin:-}
+    - {name: want, value: SASL_AUTHENTICATION_FAILED}
+    try: *kafka
+  - name: "IN-4/FF-6: control: svp-admin (svp-kafka's own login) lists the ACLs of svp-feed-service: READ on group feed-service"
     try:
     - script:
         env:
@@ -379,8 +411,12 @@ spec:
         content: |
           set -eu
           export KUBECONFIG="$CALLER_KUBECONFIG"
-          kubectl --context k3d-svp -n svp-data exec redpanda-0 -c redpanda -- rpk cluster config get admin_api_require_auth
+          kubectl --context k3d-svp -n svp-data exec deploy/svp-ops -c kafka -- \
+            /opt/svp/bin/svp-kafka acls --list --principal User:svp-feed-service |
+            awk '/resourceType=GROUP, name=feed-service,/ { g = 1; next } /^Current ACLs/ { g = 0 }
+              g && /principal=User:svp-feed-service,/ && /operation=READ,/ && /permissionType=ALLOW/ { found = 1 }
+              END { print (found ? "READ on group feed-service" : "no READ on group feed-service") }'
         check:
           ($error): ~
-          (trim_space($stdout)): "true"
+          (trim_space($stdout)): READ on group feed-service
       continueOnError: true

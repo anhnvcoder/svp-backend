@@ -1,0 +1,72 @@
+#!/bin/sh
+# svp-kafka TOOL [ARGS...]: runs kafka-TOOL.sh of image apache/kafka against KAFKA_BROKERS, logged in with
+# SCRAM-SHA-512 over TLS, e.g. `svp-kafka topics --list`, `svp-kafka consumer-groups --describe --all-groups`. The only
+# way scripts, drills, runbooks and session commands reach Kafka, run where it is installed as /opt/svp/bin/svp-kafka:
+# container kafka of compose, container kafka of Deployment svp-ops of chart svp-data.
+
+# Logs in as svp-admin with SVP_KAFKA_ADMIN_PASSWORD. SVP_AS_USER=<user> logs in as that user instead (a check of what
+# an ordinary user may do): its password is the first line of stdin, and the rest of stdin goes to the tool.
+# SVP_CA_FILE, when set, is the PEM file of the CA the broker's certificate chains to (the local CA); unset, the JVM's
+# own trust store is used (Amazon's public CA of MSK).
+
+# The password is never on a command line or printed: it goes into a client properties file of mode 600 under $TMPDIR
+# (printf is a shell builtin), removed when the tool ends. POSIX sh: runs on the image's busybox sh.
+# Design notes: docs/explanation/deployment.md.
+set -eu
+
+fail() {
+  echo "svp-kafka: $1" >&2
+  exit 2
+}
+
+[ $# -ge 1 ] || fail "usage: svp-kafka TOOL [ARGS...] (TOOL is kafka-TOOL.sh without kafka- and .sh: topics, acls, configs, consumer-groups, console-producer, ...)"
+tool=$1
+shift
+case $tool in
+  '' | *[!a-z-]*) fail "TOOL is a tool name of lowercase letters and -, without kafka- and .sh (got '$tool')" ;;
+esac
+[ -n "${KAFKA_BROKERS:-}" ] || fail "KAFKA_BROKERS is not set"
+
+if [ -n "${SVP_AS_USER:-}" ]; then
+  user=$SVP_AS_USER
+  password=
+  IFS= read -r password || true
+  [ -n "$password" ] || fail "SVP_AS_USER=$user: the first line of stdin must be the password of $user"
+else
+  user=svp-admin
+  password=${SVP_KAFKA_ADMIN_PASSWORD:-}
+  [ -n "$password" ] || fail "SVP_KAFKA_ADMIN_PASSWORD is not set"
+fi
+case $user in
+  svp-*[!a-z-]* | svp-) fail "SVP_AS_USER is a Kafka user svp-<name> of lowercase letters and - (got '$user')" ;;
+  svp-*) ;;
+  *) fail "SVP_AS_USER is a Kafka user svp-<name> of lowercase letters and - (got '$user')" ;;
+esac
+case $password in
+  *[!A-Za-z0-9]*) fail "the password of $user holds a character other than a letter or digit" ;;
+esac
+
+umask 077
+props=$(mktemp "${TMPDIR:-/tmp}/svp-kafka.XXXXXX")
+trap 'rm -f "$props"' EXIT
+trap 'exit 130' INT TERM
+{
+  echo "security.protocol=SASL_SSL"
+  echo "sasl.mechanism=SCRAM-SHA-512"
+  printf 'sasl.jaas.config=org.apache.kafka.common.security.scram.ScramLoginModule required username="%s" password="%s";\n' \
+    "$user" "$password"
+  if [ -n "${SVP_CA_FILE:-}" ]; then
+    echo "ssl.truststore.type=PEM"
+    echo "ssl.truststore.location=$SVP_CA_FILE"
+  fi
+} >"$props"
+unset password
+
+# The console clients name their client properties file differently from every other tool.
+case $tool in
+  console-producer) flag=--producer.config ;;
+  console-consumer) flag=--consumer.config ;;
+  *) flag=--command-config ;;
+esac
+PATH=/opt/kafka/bin:$PATH
+"kafka-$tool.sh" --bootstrap-server "$KAFKA_BROKERS" "$flag" "$props" "$@"

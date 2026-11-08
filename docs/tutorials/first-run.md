@@ -9,7 +9,8 @@ một request qua gateway, các service, Postgres, Kafka và media-worker.
 
 Cần sẵn trên máy, version nằm ở nơi ghim chứ không chép lại đây:
 
-- Docker, Go, Postgres và Redis chạy trên máy (không nằm trong compose), `psql`, `redis-cli`, `curl`, `jq`, `openssl`, `ffmpeg`:
+- Docker, Go, Postgres chạy trên máy (không nằm trong compose), `psql`, `curl`, `jq`, `openssl`, `ffmpeg`; Kafka và Valkey là container của stack,
+  không cần cài:
   mục "Chạy thử nhanh" của [`README.md`](../../README.md); Go theo `go.mod`, image theo `Makefile`.
 - Bản clone [`svp-gitops`](https://github.com/anhnvcoder/svp-gitops) cạnh repo này, trong thư mục `../gitops` (cũng ở
   mục đó của `README.md`): `make up` đọc digest của web client từ đó.
@@ -32,7 +33,9 @@ Từ đây mọi lệnh chạy ở gốc repo. Bạn sẽ thấy `Makefile`, `RE
 make env
 ```
 
-Bạn sẽ thấy một dòng `wrote .env (mode 600)`. Lệnh sinh secret ngẫu nhiên vào `.env` và không bao giờ in giá trị của chúng.
+Bạn sẽ thấy một dòng `wrote .env (mode 600)`. Lệnh sinh secret ngẫu nhiên vào `.env` (gồm mật khẩu của các user Kafka và Valkey) và không bao giờ in
+giá trị của chúng. Nó cũng sinh một lần, vào `.local/ca/`, CA local và chứng chỉ server mà Kafka (SASL_SSL, cổng 9096) và Valkey (TLS, cổng 6379) dùng, để
+các service nói chuyện với chúng bằng TLS và tài khoản riêng, y như với MSK và ElastiCache trên cloud.
 
 ## 3. Dựng stack cùng Grafana
 
@@ -41,12 +44,12 @@ make up OBS=lgtm
 ```
 
 `OBS=lgtm` thêm bộ quan sát (Collector, Grafana cùng Tempo, Loki, Prometheus, Alertmanager, GlitchTip). Lệnh tạo role và database
-trên Postgres native, build image, rồi dựng các container và chờ chúng khoẻ.
+trên Postgres native, ghi file ACL của Valkey từ `.env`, build image, rồi dựng các container và chờ chúng khoẻ.
 
 Bạn sẽ thấy từng dòng `bootstrap: database svp_… and roles … ok`, rồi danh sách container. Lệnh đã xong khi nó trả về dấu nhắc
 và mọi container dài hạn (`gateway`, `user-service`, `video-service`, `media-worker`, `engagement-service`, `feed-service`,
 `web`, `lgtm`, `otelcol`, `glitchtip`…) ở trạng thái `Healthy`, các job một lần (`…-migrate-…`, `s3-init`,
-`redpanda-init`, `glitchtip-init`) ở trạng thái `Exited`.
+`tls-init`, `kafka-init`, `glitchtip-init`) ở trạng thái `Exited`; `kafka` và `valkey` ở `Healthy`.
 
 Kiểm lại bằng:
 
@@ -94,7 +97,7 @@ bảng dưới. Số mili giây trên máy bạn sẽ khác, nhưng hình dạng
 | Span (service) | Cho biết gì |
 | --- | --- |
 | `POST /videos/{video_id}/complete` (gateway) | Span gốc: request HTTP của client tới gateway, từ lúc nhận tới lúc trả `202`. Ngắn, vì gateway không chờ transcode. |
-| `evalsha` (gateway) | Gateway hỏi Redis xem request có vượt rate limit không; thuộc tính `db.system=redis`. |
+| `evalsha` (gateway) | Gateway hỏi Valkey xem request có vượt rate limit không; thuộc tính `db.system=redis`. |
 | `svp.video.v1.VideoService/CompleteUpload` (gateway, rồi video-service) | Cùng một lời gọi gRPC nhìn từ hai phía: span client của gateway chứa span server của video-service. |
 | `SELECT`, `S3.HeadObject` (video-service) | Đọc dòng video trong Postgres `svp_video`, rồi hỏi object store xem file đã tải lên thật chưa. Thuộc tính `db.query.text` cho thấy câu SQL. |
 | `BEGIN`, `UPDATE`, `INSERT`, `COMMIT` (video-service) | Một transaction: đổi video sang `PROCESSING` và ghi event vào bảng `outbox` cùng lúc. Chưa có gì gửi lên Kafka: event nằm trong cùng transaction với dữ liệu (outbox, [ADR-0003](../adr/0003-async-events-outbox.md)). |

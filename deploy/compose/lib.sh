@@ -8,7 +8,7 @@
 # curl read them from the environment or from files in $work); every work file is private (umask 077); every request has
 # a --max-time.
 
-# LOCAL LAB ONLY: sourcing it deletes the gateway's per-IP register rate limit keys in Redis (reset_register_limit
+# LOCAL LAB ONLY: sourcing it deletes the gateway's per-IP register rate limit keys in Valkey (reset_register_limit
 # below), so that smoke and drill runs within one hour do not use up the register burst. Never point these scripts at a
 # shared or production stack.
 # Design notes: docs/reference/k8s.md.
@@ -29,35 +29,45 @@ fail() {
   exit 1
 }
 
-# reset_register_limit: LOCAL LAB ONLY. Every request reaches the gateway from one Docker bridge address, so runs
-# within an hour use up the per-IP register burst of 20. Deletes the register buckets (svp:gw:rl:register:*) in the
-# gateway's Redis db 10 on 127.0.0.1:6379 with SCAN + DEL, no other key; the limit itself is not raised. SVP_STACK=k3d:
-# the same in the cluster's Valkey (context k3d-svp only); eks: svp-stg or svp-prd only, never a shared cluster.
-reset_register_limit() {
-  local key n=0 cli where
+# The checkout this file is in: its compose file and .env, whichever directory the script that sources it runs from
+# (the web client's e2e scripts run from svp-frontend).
+lib_backend=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
+
+# valkey_cli ARGS...: runs /opt/svp/bin/svp-valkey ARGS, logged in as svp-ops, where the stack of SVP_STACK keeps it:
+# compose (the default), container valkey of this checkout's stack; k3d, container valkey of Deployment svp-ops in
+# cluster svp (context k3d-svp only); eks, the same in svp-stg or svp-prd (SVP_KUBE_CONTEXT), never a shared cluster.
+# With SVP_AS_USER set it logs in as that user instead, its password the first line of stdin.
+valkey_cli() {
+  local as=()
+  [[ -z ${SVP_AS_USER:-} ]] || as=(env "SVP_AS_USER=$SVP_AS_USER")
   case ${SVP_STACK:-compose} in
     compose)
-      command -v redis-cli >/dev/null || fail "redis-cli not found (brew install redis)"
-      cli=(redis-cli -h 127.0.0.1 -p 6379 -n 10)
-      where="Redis db 10"
+      env -u DOCKER_DEFAULT_PLATFORM docker compose --env-file "$lib_backend/.env" \
+        -f "$lib_backend/deploy/compose/compose.yaml" --profile core exec -T valkey ${as[@]+"${as[@]}"} /opt/svp/bin/svp-valkey "$@"
       ;;
-    k3d)
-      cli=(kubectl --context k3d-svp -n svp-data exec deploy/valkey -c valkey -- valkey-cli -n 10)
-      where="Valkey db 10 of cluster svp"
-      ;;
+    k3d) kubectl --context k3d-svp -n svp-data exec -i deploy/svp-ops -c valkey -- ${as[@]+"${as[@]}"} /opt/svp/bin/svp-valkey "$@" ;;
     eks)
       [[ ${SVP_KUBE_CONTEXT:-} =~ ^svp-(stg|prd)$ ]] ||
         fail "SVP_STACK=eks needs SVP_KUBE_CONTEXT svp-stg or svp-prd, the alias of an EKS cluster of the project (got '${SVP_KUBE_CONTEXT:-}')"
-      cli=(kubectl --context "$SVP_KUBE_CONTEXT" -n svp-data exec deploy/valkey -c valkey -- valkey-cli -n 10)
-      where="Valkey db 10 of cluster $SVP_KUBE_CONTEXT"
+      kubectl --context "$SVP_KUBE_CONTEXT" -n svp-data exec -i deploy/svp-ops -c valkey -- ${as[@]+"${as[@]}"} /opt/svp/bin/svp-valkey "$@"
       ;;
     *) fail "SVP_STACK must be compose, k3d or eks (got ${SVP_STACK})" ;;
   esac
-  "${cli[@]}" --scan --pattern 'svp:gw:rl:register:*' >"$work/register-keys" ||
+}
+
+# reset_register_limit: LOCAL LAB ONLY. Every request reaches the gateway from one Docker bridge address, so runs
+# within an hour use up the per-IP register burst of 20. Deletes the register buckets (svp:gw:rl:register:*) in the
+# gateway's Valkey db 10 with SCAN + DEL, no other key (svp-ops may delete no other key there); the limit itself is not
+# raised. valkey-cli exits 0 on an error reply, so an answer that is not a key or the count fails here.
+reset_register_limit() {
+  local key n=0 out where="Valkey db 10 (${SVP_STACK:-compose})"
+  valkey_cli -n 10 --scan --pattern 'svp:gw:rl:register:*' </dev/null >"$work/register-keys" ||
     fail "scan the register rate limit keys in $where"
   while IFS= read -r key; do
     [[ -n $key ]] || continue
-    "${cli[@]}" DEL "$key" >/dev/null || fail "delete a register rate limit key in $where"
+    [[ $key == svp:gw:rl:register:* ]] || fail "scan the register rate limit keys in $where (answer: ${key:0:80})"
+    out=$(valkey_cli -n 10 DEL "$key" </dev/null) || fail "delete a register rate limit key in $where"
+    [[ $out =~ ^[01]$ ]] || fail "delete a register rate limit key in $where (answer: ${out:0:80})"
     n=$((n + 1))
   done <"$work/register-keys"
   ok "register rate limit reset for this lab run ($n keys deleted in $where)"

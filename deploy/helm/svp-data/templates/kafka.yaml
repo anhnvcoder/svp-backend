@@ -1,0 +1,243 @@
+{{- /*
+Kafka. With kafka.mode cluster, one Apache Kafka broker (KRaft: broker and controller in one process), the stand-in for
+Amazon MSK: SASL_SSL with SCRAM-SHA-512 on 9096, ACLs, no auto-created topics. It runs deploy/kafka/broker.sh with
+deploy/kafka/server.properties, the files compose's kafka runs, so both brokers are configured alike.
+*/}}
+
+{{- /*
+broker.sh formats the volume on the first start, with the SCRAM credential of svp-admin and kafka.clusterId, and leaves
+a formatted volume as it is: topics, users and ACLs outlive a restart of the pod. Job kafka-init makes the rest.
+*/}}
+
+{{- /* Design notes: docs/explanation/deployment.md. */}}
+{{- $kafkaExternal := include "svp-data.kafkaExternal" . }}
+{{- if not $kafkaExternal }}
+{{- $broker := dict }}
+{{- range $f := list "broker.sh" "server.properties" "log4j2.yaml" }}
+{{- $content := $.Files.Get (printf "files/%s" $f) }}
+{{- if not $content }}
+{{- fail (printf "files/%s is missing: a symlink to deploy/kafka/%s, the file compose's broker runs" $f $f) }}
+{{- end }}
+{{- $_ := set $broker $f $content }}
+{{- end }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: kafka-broker
+  namespace: {{ .Release.Namespace }}
+data:
+  {{- range $name, $content := $broker }}
+  {{ $name }}: |-
+    {{- $content | nindent 4 }}
+  {{- end }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: kafka
+  namespace: {{ .Release.Namespace }}
+spec:
+  selector:
+    app.kubernetes.io/name: kafka
+  ports:
+    - name: kafka
+      port: 9096
+      targetPort: kafka
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: kafka
+  namespace: {{ .Release.Namespace }}
+  annotations:
+    # The broker reads its certificate only at start; a new local CA would otherwise leave the old one served.
+    secret.reloader.stakater.com/reload: kafka-tls
+spec:
+  replicas: 1
+  # Service kafka is the address the broker advertises (the server certificate names it, not kafka-0.kafka).
+  serviceName: kafka
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: kafka
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: kafka
+      annotations:
+        # A new broker configuration restarts the broker.
+        checksum/config: {{ toJson $broker | sha256sum }}
+    spec:
+      automountServiceAccountToken: false
+      # Service links would put KAFKA_PORT, KAFKA_SERVICE_HOST... of Service kafka into the environment, the prefix
+      # Kafka's own scripts read as settings.
+      enableServiceLinks: false
+      securityContext:
+        # The image's appuser; fsGroup lets it read the key of Secret kafka-tls (mode 0440).
+        {{- include "svp-data.podSecurityContext" (dict "uid" 1000 "gid" 1000 "fsGroup" true) | nindent 8 }}
+      containers:
+        - name: kafka
+          image: {{ .Values.kafka.image }}
+          command: ["bash", "/opt/svp/kafka/broker.sh"]
+          env:
+            - name: SVP_KAFKA_ADVERTISED
+              value: {{ include "svp-data.kafkaService" . }}
+            - name: SVP_KAFKA_CLUSTER_ID
+              value: {{ .Values.kafka.clusterId | quote }}
+            - name: SVP_KAFKA_HEAP
+              value: {{ .Values.kafka.heap | quote }}
+            - name: SVP_KAFKA_ADMIN_PASSWORD
+              valueFrom:
+                secretKeyRef: {name: kafka-admin, key: SVP_KAFKA_ADMIN_PASSWORD}
+          ports:
+            - name: kafka
+              containerPort: 9096
+          # TCP probes on the client listener: an exec of a Kafka tool would start a JVM every period. Job kafka-init
+          # then proves that svp-admin logs in. The JVM and the first start's format take a while: startup allows 120 s.
+          startupProbe:
+            tcpSocket:
+              port: kafka
+            periodSeconds: 2
+            failureThreshold: 60
+          readinessProbe:
+            tcpSocket:
+              port: kafka
+            periodSeconds: 10
+          livenessProbe:
+            tcpSocket:
+              port: kafka
+            periodSeconds: 10
+            failureThreshold: 3
+          resources:
+            {{- toYaml .Values.kafka.resources | nindent 12 }}
+          securityContext:
+            {{- include "svp-data.containerSecurityContext" . | nindent 12 }}
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/kafka/data
+            - name: config
+              mountPath: /opt/svp/kafka
+              readOnly: true
+            # kafka.pem: the key and certificate chain of the local CA's server certificate.
+            - name: tls
+              mountPath: /etc/svp-tls
+              readOnly: true
+            # broker.sh writes the broker's configuration here; the compression libraries unpack native code here.
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: config
+          configMap:
+            name: kafka-broker
+        - name: tls
+          secret:
+            secretName: kafka-tls
+            defaultMode: 0440
+        - name: tmp
+          emptyDir:
+            sizeLimit: 64Mi
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: [ReadWriteOnce]
+        resources:
+          requests:
+            storage: {{ .Values.kafka.storage }}
+---
+{{- end }}
+{{- /*
+Topics, Kafka users and ACLs, made by one Job as svp-admin with deploy/kafka/kafka-init.sh, the script compose's
+kafka-init runs, through /opt/svp/bin/svp-kafka. With kafka.mode external the broker keeps its users itself
+(Terraform associates one secret per user with MSK), so the script makes only the topics and ACLs.
+*/}}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: kafka-init
+  namespace: {{ .Release.Namespace }}
+data:
+  kafka-init.sh: |-
+    {{- .Files.Get "files/kafka-init.sh" | nindent 4 }}
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: kafka-init
+  namespace: {{ .Release.Namespace }}
+  annotations:
+    {{- include "svp-data.initJobAnnotations" . | nindent 4 }}
+spec:
+  backoffLimit: 0
+  # The script retries svp-admin's login for ten minutes (MSK takes up to that long to apply a new SCRAM secret), then
+  # runs about forty Kafka commands of a JVM each.
+  activeDeadlineSeconds: 900
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: svp-data-init
+        app.kubernetes.io/component: kafka-init
+    spec:
+      restartPolicy: Never
+      automountServiceAccountToken: false
+      enableServiceLinks: false
+      securityContext:
+        # The image's appuser; fsGroup lets it read the files of the Secrets mounted with mode 0440.
+        {{- include "svp-data.podSecurityContext" (dict "uid" 1000 "gid" 1000 "fsGroup" true) | nindent 8 }}
+      containers:
+        - name: kafka-init
+          image: {{ .Values.kafka.image }}
+          command: ["bash", "/init/kafka-init.sh"]
+          env:
+            - name: KAFKA_BROKERS
+              value: {{ .Values.kafka.brokers | quote }}
+            - name: SVP_KAFKA_ADMIN_PASSWORD
+              valueFrom:
+                secretKeyRef: {name: kafka-admin, key: SVP_KAFKA_ADMIN_PASSWORD}
+            - name: SVP_KAFKA_CREATE_USERS
+              value: {{ ternary "false" "true" (eq $kafkaExternal "true") | quote }}
+            {{- if not $kafkaExternal }}
+            - name: SVP_CA_FILE
+              value: /etc/svp-ca/ca.crt
+            {{- end }}
+          {{- if not $kafkaExternal }}
+          envFrom:
+            # SVP_KAFKA_<USER>_PASSWORD of each user the script creates.
+            - secretRef:
+                name: kafka-users
+          {{- end }}
+          resources:
+            {{- toYaml .Values.initJobs.resources | nindent 12 }}
+          securityContext:
+            {{- include "svp-data.containerSecurityContext" . | nindent 12 }}
+          volumeMounts:
+            - name: init
+              mountPath: /init
+              readOnly: true
+            - name: bin
+              mountPath: /opt/svp/bin
+              readOnly: true
+            {{- if not $kafkaExternal }}
+            - name: ca
+              mountPath: /etc/svp-ca
+              readOnly: true
+            {{- end }}
+            # svp-kafka's client properties file, and the JVM's own files.
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: init
+          configMap:
+            name: kafka-init
+        - name: bin
+          configMap:
+            name: svp-ops-bin
+            defaultMode: 0555
+        {{- if not $kafkaExternal }}
+        - name: ca
+          secret:
+            secretName: local-ca
+            defaultMode: 0440
+        {{- end }}
+        - name: tmp
+          emptyDir:
+            sizeLimit: 16Mi

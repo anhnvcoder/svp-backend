@@ -52,7 +52,7 @@ Quy ước chung (ngôn ngữ, tài liệu timeless, ADR, comment, Git, repo pub
 **Mỗi service một database riêng; không service nào đọc database của service khác.** Cần dữ liệu của service khác thì gọi API của
 nó hoặc dựng bản sao từ event.
 
-| Service | Postgres `127.0.0.1:5432` | Redis `127.0.0.1:6379` |
+| Service | Postgres `127.0.0.1:5432` | Valkey (TLS, user riêng; db) |
 | --- | --- | --- |
 | `gateway` | — | db 10 |
 | `user-service` | `svp_user` | db 11 |
@@ -62,20 +62,30 @@ nó hoặc dựng bản sao từ event.
 | `media-worker` | — | — |
 | `web` | — | db 9 |
 | GlitchTip (profile `obs`, tracker lỗi) | `svp_glitchtip` | — |
-| test (`make test`) | `svp_<...>_test` | db 15 |
+| test (`make test`) | `svp_<...>_test` | Redis native `127.0.0.1:6379` db 15 |
 
-- **Redis db 0, db 5 và db 7 đang chứa dữ liệu của dự án khác:** không dùng, không `FLUSHDB` ở đó. Không `FLUSHDB`/`FLUSHALL` ở bất kỳ
-  db nào, kể cả db 15 của test. Lệnh luôn ghi rõ port (`psql -h 127.0.0.1 -p 5432`, `redis-cli -p 6379 -n 14`).
+- **Valkey, không Redis native, là nơi gateway, feed-service và web giữ khoá** ([ADR-0053](docs/adr/0053-msk-elasticache-valkey.md)): compose
+  có container `valkey` riêng (TLS cổng 6379 không publish, CA local của `make env`, `default` tắt), user `svp-gateway` (db 10, khoá
+  `svp:gw:*`), `svp-feed-service` (db 14, `svp:feed:*`), `svp-web` (db 9, `svp:web:*`) và `svp-ops` của CLI vận hành (dưới); k3d cùng phần
+  mềm (Deployment `valkey`) trong `svp-data`; stg, prd là ElastiCache for Valkey với cùng access string. db 11–13 là số giữ chỗ cho các service
+  chưa dùng Valkey. Redis native `127.0.0.1:6379` chỉ còn hai việc: `make test` (db 15) và `make dev` của web (Next trên host, db 9, không TLS).
+- **Redis native db 0, db 5 và db 7 đang chứa dữ liệu của dự án khác:** không dùng, không `FLUSHDB` ở đó. Không `FLUSHDB`/`FLUSHALL` ở bất kỳ
+  db nào, kể cả db 15 của test. Lệnh vào Redis native luôn ghi rõ port (`redis-cli -p 6379 -n 15`), lệnh vào Postgres native
+  `psql -h 127.0.0.1 -p 5432`.
 - Trong cluster k3d cùng tên database (cả `svp_glitchtip`) nằm trên Postgres `svp-pg` của CloudNativePG (`svp-pg-rw.svp-data:5432`),
   gateway, feed-service và web dùng db 10, db 14 và db 9 (session) của Valkey `valkey.svp-data:6379`; Postgres và Redis native không
   bị đụng.
+- **CLI vận hành là đường duy nhất script, drill, runbook chạm Valkey và Kafka của stack** (không `redis-cli` hay công cụ Kafka trên host, không pod
+  tạm): `/opt/svp/bin/svp-valkey` (đăng nhập `svp-ops`) và `/opt/svp/bin/svp-kafka` (`svp-admin`) ở `deploy/ops/`, chạy trong container
+  `valkey`, `kafka` của compose hay Deployment `svp-ops` của chart `svp-data` (k3d, EKS); `SVP_AS_USER=<user>` đăng nhập user thường để kiểm
+  quyền, mật khẩu là dòng đầu của stdin. ACL của `svp-ops` chỉ cho `DEL` đúng hai tiền tố ở dòng dưới.
 - **Xoá khoá chỉ ở lab local** (LOCAL LAB ONLY, không trỏ script vào stack dùng chung): smoke, e2e, diễn tập, tải, DAST, game day
   chỉ được xoá khoá rate limit đăng ký `svp:gw:rl:register:*` ở db 10 (`SCAN` + `DEL`, không `FLUSHDB`) và cache khám phá
-  `svp:feed:explore:*` ở db 14; ngoài hai tiền tố đó script chỉ đọc Redis. Trên cluster là db 10 của Valkey (qua `kubectl exec`).
+  `svp:feed:explore:*` ở db 14, qua CLI vận hành (user `svp-ops`) ở compose, k3d và EKS; ngoài hai tiền tố đó script chỉ đọc Valkey.
 - Script diễn tập chỉ `SELECT` trên `svp_video`, `svp_engagement`, `svp_feed` và luôn bật lại mọi service khi kết thúc.
 - Ba biến `SVP_GATEWAY_REDIS_URL`, `SVP_UPLOAD_ABANDON_AFTER`, `SVP_UPLOAD_SWEEP_INTERVAL` **chỉ dùng cho diễn tập**, không đặt trong
   `.env` (hạn dọn upload dưới 15 phút ngắn hơn hạn form upload).
-- Test chỉ dùng database `svp_<...>_test` và Redis db 15 với tiền tố khoá ngẫu nhiên (helper `internal/pgtest`, `internal/redistest`
+- Test chỉ dùng database `svp_<...>_test` và Redis native db 15 với tiền tố khoá ngẫu nhiên (helper `internal/pgtest`, `internal/redistest`
   từ chối thứ khác): [`docs/reference/testing.md`](docs/reference/testing.md).
 
 ## Docker, compose, Kubernetes
