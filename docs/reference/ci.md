@@ -19,7 +19,7 @@ Loại tài liệu (Diátaxis): **reference**, tra cứu khi cần một lệnh 
   (mục "Script CI cho cây của nguồn khác" dưới đây) ở `HEAD` với workflow `local`; lệnh ghi qua API của GitHub (dispatch) chỉ
   được in ra. CI trên GitLab là bài lab của `svp-labs`:
   - `.github/workflows/ci.yml` (PR, push `main`, dispatch): `check` (`make check-go TESTFLAGS=-count=1`, Postgres và
-    Redis là service container trên `127.0.0.1`, ffmpeg), `generate` (`make generate-check`), `buf` (`buf breaking` so với
+    Redis native là service container trên `127.0.0.1`, ffmpeg), `generate` (`make generate-check`), `buf` (`buf breaking` so với
     merge-base của PR, `main` trước push, hay merge-base với `origin/main` khi dispatch), `api-contract` (luật version của hợp đồng
     REST, [ADR-0033](../adr/0033-svp-web-repo.md) §1: `make api-contract-check BASE=<base>` với base tính như job `buf`, rồi
     `deploy/ci/contract-test.sh`), `config`
@@ -32,7 +32,7 @@ Loại tài liệu (Diátaxis): **reference**, tra cứu khi cần một lệnh 
     (guard của hai job promote, danh sách bản phát hành của rescan),
     `deploy/ci/verify-collect-test.sh`, test các bước của `verify.yml` (`deploy/ci/verify-steps/steps-test.sh`, `supplychain-test.sh`,
     `admission-metrics-test.sh`, `objstore-test.sh`), `deploy/k8s/drills/run-test.sh` (cùng `new-values.sh` của diễn tập `reloader`), `deploy/k8s/rotate-test.sh`, `make chainsaw-lint`,
-    `deploy/k8s/drills/gitops/gitops-test.sh`, `make slo-check`, `make otelcol-validate`, `make env`
+    `deploy/k8s/drills/gitops/gitops-test.sh`, `deploy/helm/svp-data/files/kafka-init-test.sh` và `deploy/ops/ops-test.sh` (script init Kafka và hai wrapper CLI vận hành với công cụ giả, không broker), `make slo-check`, `make otelcol-validate`, `make env`
     rồi `make compose-config`, `deploy/observability/glitchtip/dotenv-test.sh`,
     `make helm-check`, `deploy/ci/sources-test.sh`, `deploy/ci/gitops-check-test.sh "$SVP_GITOPS_DIR"`, `make k6-check`,
     `make cloud-check`),
@@ -46,9 +46,10 @@ Loại tài liệu (Diátaxis): **reference**, tra cứu khi cần một lệnh 
     nào PR không đụng vùng của nó thì skip, `ci-ok` nhận các skip đó; job khác `skipped` thì đỏ; job `web` cũ ở CI của
     `svp-frontend` từ khi web tách repo). Job `stack` (ADR-0020 §15; **chỉ báo, ngoài `ci-ok`**, không chặn merge; xem lại
     khi 20 lượt liên tiếp xanh, không lượt đỏ do môi trường, thì đưa vào `ci-ok`): `ubuntu-24.04`, tối đa 45 phút,
-    `contents: read`, không secret; Postgres, Redis là service container publish trên `127.0.0.1` và IP bridge `172.17.0.1`
-    (`make ci-bridge-check` dừng job khi gateway của network `bridge` khác địa chỉ đó; chỉ cho CI), gói apt
-    `postgresql-client redis-tools ffmpeg jq`, rồi `make gitops-clone`, `make web-clone` (commit của bản web stg; `SVP_GITOPS_DIR`,
+    `contents: read`, không secret; Postgres là service container publish trên `127.0.0.1` và IP bridge `172.17.0.1`
+    (`make ci-bridge-check` dừng job khi gateway của network `bridge` khác địa chỉ đó; chỉ cho CI; Kafka và Valkey là container của stack compose,
+    không publish cổng), gói apt
+    `postgresql-client ffmpeg jq`, rồi `make gitops-clone`, `make web-clone` (commit của bản web stg; `SVP_GITOPS_DIR`,
     `SVP_WEB_DIR` ở `env` của job), Node theo `.nvmrc` và pnpm theo `packageManager` của bản clone, `make install` và Playwright Chromium,
     WebKit trong bản clone, `make env`, `make up` (sáu service build từ PR, web là bản phát hành stg theo digest), `make smoke`,
     `make web-e2e` (e2e của `svp-frontend` ở commit của web stg), `make load-ci`, `make web-lighthouse` (đỏ không làm job đỏ), `make dast` (cuối cùng,
@@ -224,7 +225,7 @@ Loại tài liệu (Diátaxis): **reference**, tra cứu khi cần một lệnh 
     drill-k8s-reloader" của job `gitops` và `dev-k3d` (trước bước dựng: `deploy/k8s/drills/reloader/new-values.sh` sinh giá trị mới vào
     file 600 ở `$RUNNER_TEMP/verify-reloader`, mask từng giá trị lúc sinh, diễn tập đọc qua `SVP_DRILL_NEW_VALUES`), `verify-collect.sh`
     (artifact `verify-<kịch bản>`, giữ 30 ngày: chỉ kết quả máy đọc theo danh sách cho phép: `results.tsv`, `scenario`, `df-before.txt`, dòng kết
-    luận của `drill-obs-threats`, số đo admission, `.k8s/drills/{*.xml,*-skips.tsv,*.json,traffic-*.log}` gồm report JUnit của diễn tập Chainsaw và `<diễn tập>-skips.tsv` (mỗi
+    luận của `drill-obs-threats`, số đo admission, `k8s-state.json` khi `make k8s-up` đỏ, `.k8s/drills/{*.xml,*-skips.tsv,*.json,traffic-*.log}` gồm report JUnit của diễn tập Chainsaw và `<diễn tập>-skips.tsv` (mỗi
     dòng một ca SKIP kèm lý do, dòng cuối `total`: report JUnit tính bước SKIP là xanh nên file này mới cho biết ca nào bị bỏ; quét bí mật như file
     khác); output của các bước khác không bao giờ lên; quét theo giá trị bí mật đã biết và theo mẫu (JWT, Bearer, `Set-Cookie`, khoá riêng, cookie phiên), file
     nghi bị bỏ kèm `::warning::`, `files.txt` liệt kê file giữ và bỏ). `deploy/ci/verify-collect-test.sh` chạy trên máy và ở job `config` (giá
@@ -415,7 +416,7 @@ Các script này chạy trong job của `verify.yml` (kịch bản, bước và 
 
 - **`verify-host.sh compose-obs|gitops`** kiểm và chuẩn bị máy (runner `ubuntu-24.04`, hay VM Linux thuê thay nó) trước mọi target `make`. Thiếu gì thì
   fail kèm số liệu, để một lượt sẽ chết sau hàng giờ vì thiếu đĩa hay thiếu tên dừng ngay ở đây. Chỉ chạy trên Linux (`df` của GNU). Ghi tên kịch bản vào
-  `$SVP_VERIFY_OUT/scenario` cho `verify-collect.sh`. Bốn việc:
+  `$SVP_VERIFY_OUT/scenario` cho `verify-collect.sh`. Ba việc:
   1. Đĩa: chỗ trống của filesystem chứa thư mục dữ liệu Docker phải bằng ít nhất phần kịch bản cần thêm (mức theo kịch bản ở đầu script: bản đo lần chạy
      đầu của `compose-obs` nhân 1,25; với `gitops` là image phát hành, image của khoảng 40 container bên thứ ba trong containerd store của hai node
      và volume) cộng 15% dung lượng cộng 2 GiB. Mức 15% giữ kubelet dưới ngưỡng dọn image mặc định (85%). Thiếu thì xoá các bộ công cụ của image runner
@@ -425,8 +426,6 @@ Các script này chạy trong job của `verify.yml` (kịch bản, bước và 
      `127.0.0.1:8443`, nên một tên còn phân giải ra `::1` gây kết nối bị từ chối hay lỗi); rồi `getent ahosts` của từng tên phải ra `127.0.0.1` và
      không gì khác.
   3. Chỉ k3d: `kubectl` của máy lệch tối đa một minor so với k3s của cluster (`K3S_IMAGE_TAG` của `Makefile`), theo chính sách version skew của kubectl.
-  4. Chỉ k3d: in `vm.min_free_kbytes`. Seastar trừ giá trị này khỏi giới hạn cgroup của broker trước khi kiểm `--memory`, và `base/redpanda.yaml` của
-     `svp-gitops` chừa chỗ cho nó (66 MiB trên runner x86_64, 44 MiB trong VM của Docker Desktop).
 - **`verify-mask.sh env|cluster`** mask giá trị bí mật của một lượt trong log job và giữ chúng ở thư mục riêng cho `verify-collect.sh` dò artifact. Repo public
   nên log cũng public, đỏ hay không: mask là lớp thứ hai, sau luật không script nào in bí mật.
   - `env`: giá trị của `.env` có tên kết thúc bằng `PASSWORD`, `SECRET`, `SECRET_KEY`, `TOKEN`, `_KEY` hay `_KEYS`, và `SENTRY_DSN`, đọc theo luật của
@@ -454,14 +453,28 @@ Các script này chạy trong job của `verify.yml` (kịch bản, bước và 
     nhiều mảnh ngắn; mask các mảnh đó vô hại, còn dạng đã lưu (base64 thuần) vẫn được mask nguyên. Điểm cắt là các code point mà `[[:cntrl:]]` của `jq` khớp (U+0000–001F,
     U+007F–009F) và U+FFFD, mỗi cái đổi thành newline rồi tách, thời gian tỉ lệ với giá trị: `splits()` của `jq` với regex chạy trong thời gian tăng theo bình phương, hàng phút với một giá trị
     nhị phân 200 KiB.
+- **`verify-k8s-state.sh`** ghi trạng thái cluster `k3d-svp` vào `$SVP_VERIFY_OUT/k8s-state.json` khi `make k8s-up` của job `dev-k3d` đỏ: log của bước
+  dựng ở lại runner, nên artifact chỉ nhận phần máy đọc này. Bước "Mask what the build step added" gọi nó sau `verify-mask.sh cluster` (outcome của
+  `k8s-up` qua `env:`), trong cùng hạn 3 phút, nên ngân sách `timeout-minutes` của job không đổi. Chỉ lấy trường trạng thái, không spec hay
+  termination message, và log trong đúng một trường hợp (xem "Log của container crash" dưới): pod (namespace, tên, phase, điều kiện chưa đạt; mỗi container và init container: `ready`, `restartCount`, lý do waiting,
+  lý do và exit code của lần kết thúc hiện tại và trước đó), Job (số đang chạy, xong, lỗi; điều kiện), event `Warning` (reason, số lần, lần cuối, đối tượng,
+  message với mọi giá trị của `env.values`, `cluster.values` thay bằng `***`), release Helm (namespace, tên, revision, trạng thái, chart, lần cập nhật).
+  `kubectl`, `helm` chỉ với context `k3d-svp`, mỗi lần đọc của `kubectl` hạn 10 giây; đọc không được thì thoát 1, không ghi file, bước vẫn xanh.
+  `verify-collect.sh` dò file lại như mọi file đọc từ cluster.
+  - **Log của container crash** (trường `logs`): chẩn đoán một broker hay operator crash cần log của nó, mà log của bước dựng ở lại runner.
+    Chỉ container (kể cả init container) đang `CrashLoopBackOff` hay có lần chạy trước thoát khác 0, ở namespace của `log_tail_namespaces`
+    (`deploy/k8s/lib.sh`, script đọc dòng đó chứ không `source`), trừ pod Postgres của CloudNativePG và GlitchTip như `unready_report`:
+    `kubectl logs --previous --tail=40` của lần chạy trước, cắt lại còn 40 dòng cuối. Che hai lớp trên mỗi dòng: mọi giá trị của `env.values`,
+    `cluster.values` thành `***`, rồi mẫu `(password|secret|token|credential)[^ ]*[=:] *\S+` (không phân biệt hoa thường) thành `***`.
+    Log không đọc được thì container đó bị bỏ, không làm bước đỏ thêm; `verify-collect.sh` vẫn dò file như trên.
 - **`verify-collect.sh`** dựng artifact công khai của một lượt: chép file của danh sách cho phép vào `$SVP_VERIFY_ARTIFACT` (mặc định `verify-artifact` trong `$RUNNER_TEMP`, `/tmp` trên máy), mỗi file
   chỉ sau khi dò, rồi in vào log job bản tóm tắt chỉ lấy từ các bản chép. Ai cũng đọc được artifact và log của repo public, nên nó đóng khi nghi ngờ: file không chắc thì bỏ, kèm cảnh báo
   (annotation trên GitHub) nêu file và luật, không bao giờ nêu đoạn khớp.
   - Danh sách cho phép là kết quả máy đọc, không bao giờ output của một bước (có thể trích log của service hay container bên thứ ba, mà artifact không được giữ; nó ở lại runner). Từ kết quả của lượt
     (`$SVP_VERIFY_OUT`, mặc định `verify` trong `$RUNNER_TEMP`, không bao giờ tải cả thư mục): file ghi ngay trên runner là `results.tsv` (bảng bước, `steps.sh`), `scenario`,
     `df-before.txt` (`verify-host.sh`); file đọc từ stack hay cluster là `logs/drill-obs-threats.log`, trong đó chỉ dòng kết luận (`ok`, `PASS`, `FAIL`, `SKIP`, `WARN` và dòng đóng
-    "drill-obs-threats: all checks passed"; không dòng log JSON hay trích access log) vào artifact, dưới tên `logs/drill-obs-threats.verdicts.log`, và `logs/gitops-admission-metrics.log`
-    (các dòng tóm tắt của `admission-metrics.sh`). Mọi file khác ở đó (output của mọi bước khác) được liệt kê trong `files.txt` là `not-allowed`.
+    "drill-obs-threats: all checks passed"; không dòng log JSON hay trích access log) vào artifact, dưới tên `logs/drill-obs-threats.verdicts.log`, `logs/gitops-admission-metrics.log`
+    (các dòng tóm tắt của `admission-metrics.sh`) và `k8s-state.json` (`verify-k8s-state.sh`). Mọi file khác ở đó (output của mọi bước khác) được liệt kê trong `files.txt` là `not-allowed`.
   - Từ checkout (đều đọc từ stack hay cluster): `.k8s/drills/*.xml` (report JUnit của mỗi diễn tập Chainsaw), `*-skips.tsv` (danh sách ca SKIP và lý do: report JUnit tính SKIP là qua),
     `*.json` và `traffic-*.log` (mỗi dòng một thời điểm, user, route, status, độ trễ). Mọi thứ khác dưới chỗ đó được liệt kê `not-allowed`: log của mỗi diễn tập Chainsaw và mọi log service không bao giờ
     vào; file ẩn bị bỏ bằng luật riêng kèm cảnh báo. Phần còn lại của checkout (`.env`, kubeconfig, `.k8s/ca.*`, `.k8s/helm/`) không được nhìn tới.

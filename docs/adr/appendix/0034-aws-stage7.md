@@ -368,7 +368,7 @@ infra/                          repo svp-infra
   | `vpcId` | VPC: LBC (không đọc IMDS) |
   | `vpcCidr` | CIDR VPC: `TRUSTED_PROXY_CIDRS` của gateway, `nodeSubnet` của `svp-cluster` và `svp-observability`, health check NLB |
   | `serviceCidr` | Dải Service của EKS: `kubeAPIServiceIP` (địa chỉ `.1`) |
-  | `dbCidrs` | Subnet của RDS (list): egress 5432 của service có database, Job bootstrap, GlitchTip |
+  | `dbCidrs` | Subnet database của VPC, nơi RDS, MSK, ElastiCache nằm (list; output `database_subnet_cidrs` của module `network`, [0054](../0054-data-subnet-tier.md)): egress 5432 của service có database, Job bootstrap, GlitchTip; cũng là subnet của MSK, ElastiCache: egress 9096 của service có Kafka, Job `kafka-init`, `svp-ops`, Collector, KEDA và 6379 của gateway, feed-service, web, `svp-ops` ([0053](../0053-msk-elasticache-valkey.md)) |
   | `domain` | Tên web stg; API là `api.<domain>`: host của route, `APP_ORIGIN`, origin CORS của bucket |
   | `hostedZoneId` | Zone Route 53 của lab: ExternalDNS, issuer ACME |
   | `acmeEmail` | Email tài khoản ACME |
@@ -378,6 +378,8 @@ infra/                          repo svp-infra
   | `mediaDomain` | Tên `*.cloudfront.net` của distribution: `MEDIA_ORIGIN` của web, `MEDIA_PUBLIC_BASE_URL` của gateway |
   | `s3Cidrs` | Các dải IPv4 AWS công bố cho S3 của region (list; output Terraform từ `data "aws_ip_ranges"`, đọc lại mỗi lần `apply`): egress 443 tới S3 (`externalPeers.s3`) của video-service, media-worker |
   | `externalSecretsRoles` | Map namespace → ARN role IAM của SecretStore namespace đó (`svp`, `svp-data`, `svp-obs`, `keda`, `argocd`; output `roles` của module `external-secrets`): role của store `aws` trong `svp-cluster`; thêm bởi [0048](../0048-prd-aws.md) |
+  | `kafkaBrokers` | Chuỗi `host:9096,host:9096,…` (một mục mỗi broker, dấu phẩy, không khoảng trắng; output `bootstrap_brokers` của module `msk`): địa chỉ broker của mọi client Kafka trên eks (`KAFKA_BROKERS` của service, Job `kafka-init`, `svp-ops`; Collector, KEDA); thêm bởi [0053](../0053-msk-elasticache-valkey.md) |
+  | `valkeyHost` | Tên host không cổng của ElastiCache (output `primary_endpoint_address` của module `elasticache`): host của `REDIS_URL` của gateway, feed-service, web (placeholder `${valkey}` của template ExternalSecret trong `svp-cluster`), `VALKEY_HOST` của `svp-ops`; thêm bởi [0053](../0053-msk-elasticache-valkey.md) |
 
   **Ai ghi:** output `cluster_values` (một map) của `aws/envs/<env>`; script buổi ghi nó ra file rồi `make eks-gitops-up
   CLUSTER_VALUES=<file>` đặt thành `helm.valuesObject.cluster` của root. **Ai đọc:** mẫu `platforms/eks/*.values.tpl` của `svp-gitops`;
@@ -709,7 +711,7 @@ Các dòng dưới đây nguyên văn từ ADR, rút ra để ADR không vượt
   | `vpcId` | VPC: LBC (không đọc IMDS) |
   | `vpcCidr` | CIDR VPC: `TRUSTED_PROXY_CIDRS` của gateway, `nodeSubnet` của `svp-cluster` và `svp-observability`, health check NLB |
   | `serviceCidr` | Dải Service của EKS: `kubeAPIServiceIP` (địa chỉ `.1`) |
-  | `dbCidrs` | Subnet của RDS (list): egress 5432 của service có database, Job bootstrap, GlitchTip |
+  | `dbCidrs` | Subnet database của VPC, nơi RDS, MSK, ElastiCache nằm (list; output `database_subnet_cidrs` của module `network`, [0054](../0054-data-subnet-tier.md)): egress 5432 của service có database, Job bootstrap, GlitchTip; cũng là subnet của MSK, ElastiCache: egress 9096 của service có Kafka, Job `kafka-init`, `svp-ops`, Collector, KEDA và 6379 của gateway, feed-service, web, `svp-ops` ([0053](../0053-msk-elasticache-valkey.md)) |
   | `domain` | Tên web stg; API là `api.<domain>`: host của route, `APP_ORIGIN`, origin CORS của bucket |
   | `hostedZoneId` | Zone Route 53 của lab: ExternalDNS, issuer ACME |
   | `acmeEmail` | Email tài khoản ACME |
@@ -719,3 +721,9 @@ Các dòng dưới đây nguyên văn từ ADR, rút ra để ADR không vượt
   | `mediaDomain` | Tên `*.cloudfront.net` của distribution: `MEDIA_ORIGIN` của web, `MEDIA_PUBLIC_BASE_URL` của gateway |
   | `s3Cidrs` | Các dải IPv4 AWS công bố cho S3 của region (list; output Terraform từ `data "aws_ip_ranges"`, đọc lại mỗi lần `apply`): egress 443 tới S3 (`externalPeers.s3`) của video-service, media-worker |
   | `externalSecretsRoles` | Map namespace → ARN role IAM của SecretStore namespace đó (`svp`, `svp-data`, `svp-obs`, `keda`, `argocd`; output `roles` của module `external-secrets`): role của store `aws` trong `svp-cluster`; thêm bởi [0048](../0048-prd-aws.md) |
+  | `kafkaBrokers` | Chuỗi `host:9096,host:9096,…` (một mục mỗi broker, dấu phẩy, không khoảng trắng; output `bootstrap_brokers` của module `msk`): địa chỉ broker của mọi client Kafka trên eks (`KAFKA_BROKERS` của service, Job `kafka-init`, `svp-ops`; Collector, KEDA); thêm bởi [0053](../0053-msk-elasticache-valkey.md) |
+  | `valkeyHost` | Tên host không cổng của ElastiCache (output `primary_endpoint_address` của module `elasticache`): host của `REDIS_URL` của gateway, feed-service, web (placeholder `${valkey}` của template ExternalSecret trong `svp-cluster`), `VALKEY_HOST` của `svp-ops`; thêm bởi [0053](../0053-msk-elasticache-valkey.md) |
+
+### 9. Dữ liệu
+
+- **RDS**, tiếp sau "không superuser [N36]": `deploy/postgres/bootstrap.sql` chạy được dưới quyền đó, Job `pg-bootstrap` nối `PGSSLMODE=require`.

@@ -82,19 +82,20 @@ Bộ quan sát (Grafana LGTM, GlitchTip) tự host bên trong hệ thống; trê
 | --- | --- |
 | Sáu service theo ranh giới nghiệp vụ, mỗi service một database | [ADR-0001](adr/0001-service-boundaries-and-data-ownership.md) |
 | REST/JSON ở biên (gateway), gRPC bên trong, contract quản lý bằng `buf`, ID là UUIDv7 | [ADR-0002](adr/0002-sync-rest-edge-grpc-internal.md), [ADR-0006](adr/0006-contract-ids-and-event-envelope.md) |
-| Event qua Redpanda, transactional outbox, at-least-once + consumer idempotent + DLQ; lượt xem gom theo lô, offset trong Postgres | [ADR-0003](adr/0003-async-events-outbox.md), [ADR-0009](adr/0009-engagement-feed-stage2b.md), [ADR-0045](adr/0045-bounded-batch-retry.md) |
+| Event qua Kafka, transactional outbox, at-least-once + consumer idempotent + DLQ; lượt xem gom theo lô, offset trong Postgres | [ADR-0003](adr/0003-async-events-outbox.md), [ADR-0009](adr/0009-engagement-feed-stage2b.md), [ADR-0045](adr/0045-bounded-batch-retry.md) |
 | Upload thẳng lên object storage bằng presigned POST, transcode bất đồng bộ ra HLS, output bất biến theo version | [ADR-0004](adr/0004-direct-upload-and-hls.md), [ADR-0029](adr/0029-immutable-media-versions.md) |
 | Feed dựng sẵn khi ghi (fan-out on write), Redis chỉ cache trang đầu feed khám phá | [ADR-0005](adr/0005-feed-fan-out-on-write.md), [ADR-0010](adr/0010-redis-ratelimit-cache-resilience-stage2c.md) |
 | Rate limit GCRA bằng Redis, retry và circuit breaker cho lời gọi gRPC ở gateway | [ADR-0010](adr/0010-redis-ratelimit-cache-resilience-stage2c.md) |
 | JWT ký ở user-service, kiểm ở gateway và ở mỗi service; refresh token xoay; session BFF ở Redis | [ADR-0016](adr/0016-web-client.md), [ADR-0042](adr/0042-caller-identity-grpc.md), [ADR-0046](adr/0046-web-session-lifetime.md) |
 | Web client Next.js ở repo riêng, hợp đồng REST có version | [ADR-0016](adr/0016-web-client.md), [ADR-0033](adr/0033-svp-web-repo.md) |
 | OpenTelemetry qua Collector tới Grafana LGTM, GlitchTip cho lỗi, SLO bằng Sloth | [ADR-0011](adr/0011-observability-stage3.md), [ADR-0012](adr/0012-elastic-vs-grafana-stage3.md) |
-| Cùng chart chạy trên k3d và EKS, Envoy Gateway, dữ liệu trong cluster (trên AWS: RDS, S3 managed) | [ADR-0014](adr/0014-kubernetes-local-stage4.md), [ADR-0034](adr/0034-aws-stage7.md) |
+| Cùng chart chạy trên k3d và EKS, Envoy Gateway, dữ liệu trong cluster (trên AWS: RDS, S3, MSK, ElastiCache managed) | [ADR-0014](adr/0014-kubernetes-local-stage4.md), [ADR-0034](adr/0034-aws-stage7.md) |
+| Kafka và Valkey managed ở stg, prd (Amazon MSK, ElastiCache for Valkey, ở subnet database không route ra Internet); compose, k3d chạy cùng phần mềm, cùng xác thực, TLS, cổng; mỗi client một user ACL | [ADR-0053](adr/0053-msk-elasticache-valkey.md), [ADR-0054](adr/0054-data-subnet-tier.md) |
 | Build một lần, ký keyless, Kyverno chỉ nhận image đã ký; mọi env chạy cùng digest qua `svp-gitops` và Argo CD; secret từ kho ngoài git bằng External Secrets Operator | [ADR-0015](adr/0015-cicd-devsecops-stage5.md), [ADR-0024](adr/0024-multi-environment.md), [ADR-0025](adr/0025-gitops-config-repo.md), [ADR-0026](adr/0026-secrets-gitops.md), [ADR-0040](adr/0040-sigstore-bundle-actions-attest.md) |
 
 ## 5. Khối
 
-Mức container của C4. Nét liền là gọi đồng bộ, nét đứt là event qua Redpanda.
+Mức container của C4. Nét liền là gọi đồng bộ, nét đứt là event qua Kafka.
 
 ```mermaid
 flowchart LR
@@ -107,10 +108,10 @@ flowchart LR
         mw["<b>media-worker</b><br/>[Go + ffmpeg]<br/>Transcode HLS"]
         es["<b>engagement-service</b><br/>[Go, gRPC; Postgres svp_engagement]<br/>Like, view, bộ đếm"]
         fs["<b>feed-service</b><br/>[Go, gRPC; Postgres svp_feed]<br/>Read model feed"]
-        bus[["<b>Redpanda</b><br/>[Kafka API]"]]
+        bus[["<b>Kafka</b><br/>[Apache Kafka; MSK trên cloud]<br/>SCRAM-SHA-512 trên TLS, 9096"]]
         obj[("<b>Object storage</b><br/>[RustFS / S3]<br/>bucket uploads, media")]
         cdn["<b>CDN</b><br/>[CloudFront]<br/>chỉ có trên cloud"]
-        redis[("<b>Redis</b>")]
+        redis[("<b>Valkey</b><br/>[ElastiCache trên cloud]<br/>TLS, 6379, user ACL theo db")]
     end
 
     browser -->|"HTML, /api/*, cookie svp_sid;<br/>POST /monitoring, /rum"| web
@@ -169,7 +170,7 @@ sequenceDiagram
     participant GW as gateway
     participant VS as video-service
     participant S3 as Object storage
-    participant RP as Redpanda
+    participant RP as Kafka
     participant MW as media-worker
     participant FS as feed-service
 
@@ -226,7 +227,7 @@ danh sách video theo tác giả và trang một video ghép cùng cách. Chốn
 
 ### 6.3 Ghi lượt xem
 
-`POST /videos/{id}/views`: engagement-service phát `view.recorded` lên Redpanda (`acks=all`) rồi trả 202, không chạm database.
+`POST /videos/{id}/views`: engagement-service phát `view.recorded` lên Kafka (`acks=all`) rồi trả 202, không chạm database.
 Consumer của nó gom lô tối đa 5.000 record hoặc 1 s, cộng dồn theo `video_id`, ghi cả lô bằng một câu `INSERT ... ON CONFLICT DO
 UPDATE` vào `view_counts`. Bảng `consumer_offsets` giữ offset từng partition, cập nhật trong cùng transaction với bộ đếm, nên lô giao
 lại chỉ cộng phần chưa cộng ([ADR-0009](adr/0009-engagement-feed-stage2b.md)). Lỗi tạm thời thử lại trong ngân sách 5 phút rồi
@@ -245,7 +246,7 @@ trình lại token đã dùng thì cả họ bị thu hồi ([ADR-0016](adr/0016
 sequenceDiagram
     participant B as Trình duyệt
     participant W as web (BFF)
-    participant R as Redis db 9
+    participant R as Valkey db 9
     participant G as gateway
     participant U as user-service
     B->>W: POST form đăng nhập (Server Action, kiểm CSRF)
@@ -268,9 +269,28 @@ Refresh không rõ kết quả thì BFF giữ session và không thử lại tro
 
 | Nơi | Dùng để | Dữ liệu | Chi tiết |
 | --- | --- | --- | --- |
-| Compose trên máy | Đường dev chính, smoke, diễn tập | Postgres, Redis native của máy; Redpanda, RustFS trong compose | [Compose](explanation/deployment.md#compose) |
-| Cluster k3d | Cùng chart như cloud: Envoy Gateway, NetworkPolicy, canary, Kyverno, đường GitOps | CloudNativePG, Valkey, Redpanda, RustFS trong cluster | [k3d](explanation/deployment.md#kubernetes-cục-bộ-k3d) |
-| EKS trên AWS | stg và prd, dựng bằng Terraform của `svp-infra` | RDS PostgreSQL, S3 + CloudFront; Redpanda, Valkey trong cluster | [AWS](explanation/deployment.md#aws) |
+| Compose trên máy | Đường dev chính, smoke, diễn tập | Postgres native của máy; Kafka, Valkey, RustFS trong compose | [Compose](explanation/deployment.md#compose) |
+| Cluster k3d | Cùng chart như cloud: Envoy Gateway, NetworkPolicy, canary, Kyverno, đường GitOps | CloudNativePG, Kafka, Valkey, RustFS trong cluster | [k3d](explanation/deployment.md#kubernetes-cục-bộ-k3d) |
+| EKS trên AWS | stg và prd, dựng bằng Terraform của `svp-infra` | RDS PostgreSQL, Amazon MSK, ElastiCache for Valkey ở subnet database; S3 + CloudFront | [AWS](explanation/deployment.md#aws) |
+
+**Kafka và Valkey ở mọi nơi** ([ADR-0053](adr/0053-msk-elasticache-valkey.md)): stg, prd dùng dịch vụ managed, compose và k3d chạy cùng
+phần mềm và cùng đường code của client; chỗ local khác chỉ là dữ liệu cấu hình, không nhánh `if` theo môi trường.
+
+| | Compose | k3d | stg, prd (EKS) |
+| --- | --- | --- | --- |
+| Kafka | Service `kafka` (image `apache/kafka`, một tiến trình KRaft), `kafka:9096` | StatefulSet `kafka` của chart `svp-data` (`kafka.mode: cluster`), `kafka.svp-data.svc.cluster.local:9096` | Amazon MSK provisioned, broker ở subnet database, số broker bằng số AZ (stg 2, prd 3); chart `svp-data` ở `kafka.mode: external`, địa chỉ `cluster.kafkaBrokers` |
+| Valkey | Container `valkey`, `valkey:6379`, không publish cổng | Deployment `valkey` của `svp-data`, `valkey.svp-data.svc.cluster.local:6379` | ElastiCache for Valkey, cluster mode tắt (stg 1 node, prd primary + replica khác AZ), `cluster.valkeyHost` |
+| Topic, user, ACL | Container `kafka-init` (cả user: broker giữ credential) | Job `kafka-init` (cả user) | Job `kafka-init` (topic, ACL); user là secret `AmazonMSK_*` do Terraform gắn vào cluster |
+| CA của TLS | CA local của `make env` | CA local, nạp thành Secret | CA công khai của Amazon trong root hệ thống |
+
+- Client Kafka nói SASL_SSL, SCRAM-SHA-512, cổng 9096 ở mọi nơi; mỗi service một user, ACL literal chỉ cho topic và group của nó.
+  Replication theo broker: local 1, stg 2 (min ISR 1), prd 3 (min ISR 2).
+- Client Valkey dùng `rediss://<user>:<mật khẩu>@<host>:6379/<db>`; mỗi client một user ACL chỉ được db và tiền tố khoá của mình
+  (gateway db 10 `svp:gw:*`, feed-service db 14 `svp:feed:*`, web db 9 `svp:web:*`), user `default` tắt.
+- Script, drill, runbook chạm Kafka và Valkey chỉ qua **CLI vận hành** `/opt/svp/bin/svp-kafka`, `/opt/svp/bin/svp-valkey`: trong container
+  `kafka`, `valkey` của compose, trong Deployment `svp-ops` (namespace `svp-data`) ở k3d và EKS.
+- Trên AWS, RDS, MSK và ElastiCache nằm ở subnet database, route table không có `0.0.0.0/0`; egress 5432, 9096, 6379 của pod chỉ tới dải
+  của subnet đó (`cluster.dbCidrs`, [ADR-0054](adr/0054-data-subnet-tier.md)).
 
 Image đi từ CI tới cluster qua `svp-gitops` và Argo CD ([`explanation/delivery.md`](explanation/delivery.md)). Sơ đồ AWS sinh từ
 spec của `svp-infra`: [stg](https://github.com/anhnvcoder/svp-infra/blob/main/docs/diagrams/svp-aws-stg.png),
@@ -295,7 +315,7 @@ Danh sách ADR, trạng thái và tóm tắt một dòng: [`adr/README.md`](adr/
 
 Danh sách đầy đủ kèm lý do chấp nhận và điều kiện xem lại: [mục 6 của `threat-model.md`](threat-model.md#6-rủi-ro-chấp-nhận).
 
-- **Chưa đo trên cloud:** k6 1.000 req/s, chaos trên EKS, diễn tập phục hồi RDS, hạn 50 ms của Redis
+- **Chưa đo trên cloud:** k6 1.000 req/s, chaos trên EKS, diễn tập phục hồi RDS, hạn 50 ms của Valkey
   ([`explanation/reliability.md`](explanation/reliability.md#chưa-đo-trên-cloud)); NFR độ trễ chưa có số đo ở tải mục tiêu.
 - **Không có mTLS giữa gateway và service gRPC:** token chuyển tiếp đi plaintext trong cluster, NetworkPolicy là lớp chặn duy nhất;
   Istio ambient là phương án tuỳ chọn, chưa dựng (IN-2, IN-3, [mục 4.5](threat-model.md#45-mức-tin-cậy-giữa-các-service)).
@@ -307,5 +327,5 @@ Danh sách đầy đủ kèm lý do chấp nhận và điều kiện xem lại: 
 
 ## 11. Câu hỏi mở
 
-- **Vì sao lệnh GET cache khám phá thỉnh thoảng quá hạn 50 ms trên Redis local**, và hạn đó có giữ được trên cloud không: chưa
+- **Vì sao lệnh GET cache khám phá thỉnh thoảng quá hạn 50 ms trên Valkey local**, và hạn đó có giữ được trên cloud không: chưa
   kết luận; dấu hiệu và cách đọc ở [`runbooks/explore-cache-redis-timeout.md`](runbooks/explore-cache-redis-timeout.md).

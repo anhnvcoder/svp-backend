@@ -74,19 +74,87 @@ and on external while CloudNativePG in the cluster still archives its WAL into s
 {{- end }}
 
 {{- /*
-RPK_ADMIN_HOSTS of the init Job: the Admin API of every broker of release redpanda (redpanda.replicas), comma
-separated; fails on a topic replication factor that is even or above the number of brokers, which rpk would refuse.
+"true" when Kafka is outside the cluster (kafka.mode external), "" when the broker runs here; fails on any other mode,
+on kafka.brokers not of the form host:9096[,host:9096...], and on external without brokers of its own (still the
+Service of the in-cluster broker) or without the CIDRs, or with a CIDR of every address.
 */}}
-{{- define "svp-data.redpandaAdminHosts" -}}
-{{- $rp := .Values.redpanda }}
-{{- $n := int $rp.replicas }}
-{{- $rf := int $rp.topicReplicas }}
-{{- if or (lt $rf 1) (eq (mod $rf 2) 0) (gt $rf $n) }}
-{{- fail (printf "redpanda.topicReplicas is %d: odd, from 1 to redpanda.replicas (%d)" $rf $n) }}
+{{- define "svp-data.kafkaExternal" -}}
+{{- $k := .Values.kafka }}
+{{- if not (has $k.mode (list "cluster" "external")) }}
+{{- fail (printf "kafka.mode is %q: cluster (one Kafka broker in the cluster) or external (a managed Kafka)" (toString $k.mode)) }}
 {{- end }}
-{{- $hosts := list }}
-{{- range until $n }}
-{{- $hosts = append $hosts (printf "redpanda-%d.redpanda.%s.svc.cluster.local:9644" . $.Release.Namespace) }}
+{{- if not (regexMatch "^[A-Za-z0-9.-]+:9096(,[A-Za-z0-9.-]+:9096)*$" (toString $k.brokers)) }}
+{{- fail (printf "kafka.brokers is %q: host:9096 for each broker, comma separated, no spaces" (toString $k.brokers)) }}
 {{- end }}
-{{- join "," $hosts }}
+{{- if eq $k.mode "external" }}
+{{- if eq $k.brokers (include "svp-data.kafkaService" .) }}
+{{- fail "kafka.mode external needs kafka.brokers, the bootstrap brokers of the managed Kafka: it still names the Service of the in-cluster broker" }}
+{{- end }}
+{{- include "svp-data.externalCidrs" (dict "name" "kafka" "cidrs" $k.external.cidrs "port" 9096) }}
+{{- print "true" }}
+{{- end }}
+{{- end }}
+
+{{- /*
+"true" when Valkey is outside the cluster (valkey.mode external), "" when it runs here; fails on any other mode, on an
+empty valkey.host, and on external that still names the in-cluster Service, has no CIDRs or a CIDR of every address.
+*/}}
+{{- define "svp-data.valkeyExternal" -}}
+{{- $v := .Values.valkey }}
+{{- if not (has $v.mode (list "cluster" "external")) }}
+{{- fail (printf "valkey.mode is %q: cluster (Valkey in the cluster) or external (a managed Valkey)" (toString $v.mode)) }}
+{{- end }}
+{{- if not (regexMatch "^[A-Za-z0-9.-]+$" (toString $v.host)) }}
+{{- fail (printf "valkey.host is %q: the host name of Valkey, without a port" (toString $v.host)) }}
+{{- end }}
+{{- if eq $v.mode "external" }}
+{{- if eq $v.host (include "svp-data.valkeyService" .) }}
+{{- fail "valkey.mode external needs valkey.host, the primary endpoint of the managed Valkey: it still names the Service of the in-cluster Valkey" }}
+{{- end }}
+{{- include "svp-data.externalCidrs" (dict "name" "valkey" "cidrs" $v.external.cidrs "port" 6379) }}
+{{- print "true" }}
+{{- end }}
+{{- end }}
+
+{{- /*
+Fails unless the CIDRs of a managed server (dict: name, cidrs, port) are set and none is every address: the clients
+here reach that server's own subnets, never the internet.
+*/}}
+{{- define "svp-data.externalCidrs" -}}
+{{- if not .cidrs }}
+{{- fail (printf "%s.mode external needs %s.external.cidrs, the CIDRs of the managed %s's addresses" .name .name .name) }}
+{{- end }}
+{{- range .cidrs }}
+{{- if has . (list "0.0.0.0/0" "::/0") }}
+{{- fail (printf "%s.external.cidrs holds %s, every address: list the subnets of the managed %s" $.name . $.name) }}
+{{- end }}
+{{- end }}
+{{- end }}
+
+{{- /*
+The names the in-cluster broker and Valkey are reached at: their Services, in the long form the server certificate of
+the local CA holds. The broker advertises exactly this address to its clients.
+*/}}
+{{- define "svp-data.kafkaService" -}}
+{{- printf "kafka.%s.svc.cluster.local:9096" .Release.Namespace }}
+{{- end }}
+{{- define "svp-data.valkeyService" -}}
+{{- printf "valkey.%s.svc.cluster.local" .Release.Namespace }}
+{{- end }}
+
+{{- /*
+The egress peers of a Kafka or Valkey client here (dict: name kafka|valkey, external, cidrs): the server's pods in this
+namespace, or the CIDRs of the managed server.
+*/}}
+{{- define "svp-data.serverPeers" -}}
+{{- if .external }}
+{{- range .cidrs }}
+- ipBlock:
+    cidr: {{ . }}
+{{- end }}
+{{- else }}
+- podSelector:
+    matchLabels:
+      app.kubernetes.io/name: {{ .name }}
+{{- end }}
 {{- end }}

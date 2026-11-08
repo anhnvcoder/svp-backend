@@ -30,6 +30,8 @@ Design notes: docs/explanation/deployment.md.
 {{- end }}
 {{- $pgExternal := include "svp-data.postgresExternal" . }}
 {{- $s3External := include "svp-data.s3External" . }}
+{{- $kafkaExternal := include "svp-data.kafkaExternal" . }}
+{{- $valkeyExternal := include "svp-data.valkeyExternal" . }}
 {{- if not $pgExternal }}
 # Postgres: the database of each service (its pods and its migrate Job), GlitchTip's (its pod and its init Job), the
 # bootstrap Job; the operator reads each instance's status on 8000; Prometheus scrapes the instance's exporter on 9187
@@ -103,7 +105,8 @@ spec:
           port: 9000
 ---
 {{- end }}
-# Valkey: rate limits of the gateway, the explore cache of feed-service, the web client's sessions.
+{{- if not $valkeyExternal }}
+# Valkey: rate limits of the gateway, the explore cache of feed-service, the web client's sessions, and svp-ops.
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
@@ -117,23 +120,26 @@ spec:
   ingress:
     - from:
         {{- include "svp-data.svpPods" .Values.clients.valkey | nindent 8 }}
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: svp-ops
       ports:
         - protocol: TCP
           port: 6379
 ---
-# Redpanda: the Kafka API for the five services with Kafka, KEDA's lag reader and the init Job; the Admin API for the
-# init Job and the Collector, which scrapes /public_metrics. The schema registry (8081, unauthenticated) and the HTTP
-# proxy (8082) are open to no one.
+{{- end }}
+{{- if not $kafkaExternal }}
+# Kafka's client listener: the five services with Kafka, KEDA's lag reader, the Collector's kafkametrics receiver, the
+# init Job and svp-ops. The broker's controller and inter-broker listeners are bound to localhost of its own pod.
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
-  name: redpanda
+  name: kafka
   namespace: {{ .Release.Namespace }}
 spec:
   podSelector:
     matchLabels:
-      app.kubernetes.io/name: redpanda
-      app.kubernetes.io/instance: redpanda
+      app.kubernetes.io/name: kafka
   policyTypes: [Ingress]
   ingress:
     - from:
@@ -144,12 +150,6 @@ spec:
           podSelector:
             matchLabels:
               app: keda-operator
-        {{- include "svp-data.initJob" "redpanda-init" | nindent 8 }}
-      ports:
-        - protocol: TCP
-          port: 9092
-    - from:
-        {{- include "svp-data.initJob" "redpanda-init" | nindent 8 }}
         - namespaceSelector:
             matchLabels:
               kubernetes.io/metadata.name: svp-obs
@@ -157,10 +157,15 @@ spec:
             matchLabels:
               app.kubernetes.io/name: opentelemetry-collector
               app.kubernetes.io/instance: otel-collector
+        {{- include "svp-data.initJob" "kafka-init" | nindent 8 }}
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: svp-ops
       ports:
         - protocol: TCP
-          port: 9644
+          port: 9096
 ---
+{{- end }}
 {{- if not $s3External }}
 # The object store s3: video-service and media-worker with their own users, Envoy for presigned uploads and playback
 # from the host, the init Job, and the pods of Postgres svp-pg (instance and recovery Job) for its backups, as user
@@ -249,22 +254,41 @@ spec:
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
-  name: redpanda-init
+  name: kafka-init
   namespace: {{ .Release.Namespace }}
 spec:
   podSelector:
     matchLabels:
       app.kubernetes.io/name: svp-data-init
-      app.kubernetes.io/component: redpanda-init
+      app.kubernetes.io/component: kafka-init
   policyTypes: [Egress]
   egress:
     - to:
-        - podSelector:
-            matchLabels:
-              app.kubernetes.io/name: redpanda
-              app.kubernetes.io/instance: redpanda
+        {{- include "svp-data.serverPeers" (dict "name" "kafka" "external" $kafkaExternal "cidrs" .Values.kafka.external.cidrs) | trim | nindent 8 }}
       ports:
         - protocol: TCP
-          port: 9092
+          port: 9096
+---
+# svp-ops: reached by no pod (kubectl exec goes through the kubelet, not the pod network), reaches Kafka and Valkey.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: svp-ops
+  namespace: {{ .Release.Namespace }}
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: svp-ops
+  policyTypes: [Ingress, Egress]
+  ingress: []
+  egress:
+    - to:
+        {{- include "svp-data.serverPeers" (dict "name" "kafka" "external" $kafkaExternal "cidrs" .Values.kafka.external.cidrs) | trim | nindent 8 }}
+      ports:
         - protocol: TCP
-          port: 9644
+          port: 9096
+    - to:
+        {{- include "svp-data.serverPeers" (dict "name" "valkey" "external" $valkeyExternal "cidrs" .Values.valkey.external.cidrs) | trim | nindent 8 }}
+      ports:
+        - protocol: TCP
+          port: 6379

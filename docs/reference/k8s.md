@@ -12,17 +12,19 @@ Loại tài liệu (Diátaxis): **reference**, tra cứu khi cần một lệnh 
   (`api.svp.localhost`, `s3.svp.localhost` với chứng chỉ wildcard; web ở `svp.localhost`, listener `https-apex` với chứng
   chỉ riêng; đều phân giải về loopback), registry 5111. Postgres (CloudNativePG; backup cơ sở và WAL lưu
   liên tục qua plugin Barman Cloud, component `plugin-barman-cloud` ở `cnpg-system`, vào bucket `pg-backups` của object store
-  trong cluster bằng user riêng `svp-pg-backup`, [ADR-0020](../adr/0020-reliability-stage6.md) §5), Valkey,
-  Redpanda (SASL + ACL), object store (RustFS, StatefulSet `s3`, `s3.svp-data:9000`, Job `s3-init`) nằm trong cluster: target của cluster k3d không đụng Postgres/Redis native. File sinh ra nằm ở
-  `.k8s/` (gitignore). Biến chỉ đặt ở cluster: service có Kafka đăng nhập SASL SCRAM bằng `KAFKA_SASL_USERNAME`,
-  `KAFKA_SASL_PASSWORD` (đặt cả hai hay không biến nào; compose không đặt, broker không xác thực); gateway tin một hop
+  trong cluster bằng user riêng `svp-pg-backup`, [ADR-0020](../adr/0020-reliability-stage6.md) §5), Kafka (StatefulSet `kafka`,
+  image `apache/kafka`, `kafka.svp-data.svc.cluster.local:9096` SASL_SSL SCRAM-SHA-512, ACL; Job `kafka-init` tạo topic, user, ACL), Valkey
+  (Deployment `valkey`, TLS cổng 6379, user ACL theo db và tiền tố khoá), Deployment `svp-ops` (CLI vận hành, dưới), object store (RustFS, StatefulSet `s3`, `s3.svp-data:9000`, Job `s3-init`) nằm trong cluster: target của cluster k3d không đụng Postgres/Redis native. File sinh ra nằm ở
+  `.k8s/` (gitignore). CA local cho client là Secret `local-ca` (file `ca.crt`) mount ở `/etc/svp-ca` (Go `SSL_CERT_DIR`, Node
+  `NODE_EXTRA_CA_CERTS`, KEDA tham số `ca`, Collector `tls.ca_file`); service có Kafka đăng nhập SASL SCRAM-SHA-512 trên TLS bằng
+  `KAFKA_SASL_USERNAME`, `KAFKA_SASL_PASSWORD` (đặt cả hai hay không biến nào): cả hai cùng có ở compose. Biến chỉ đặt ở cluster: gateway tin một hop
   `X-Forwarded-For` từ dải pod của Envoy qua `TRUSTED_PROXY_HOPS=1`, `TRUSTED_PROXY_CIDRS=10.42.0.0/16` (compose: không
   đặt, 0 hop; giá trị không hợp lệ thì gateway không khởi động); gateway `TRUST_TRACE_CONTEXT=true` (nhận
   `traceparent`/`tracestate` của request đến; `false` hay rỗng là mặc định, giá trị khác thì không khởi động) vì Envoy bỏ
   `traceparent`, `tracestate`, `baggage`, `sentry-trace` của client trên mọi route và chỉ Envoy, web vào được gateway
   (WEB-24). Web ([ADR-0019](../adr/0019-web-k3d-supply-chain-observability.md)):
   `GATEWAY_URL=http://gateway:8080`,
-  `REDIS_URL=redis://valkey.svp-data:6379/9`, `APP_ORIGIN=https://svp.localhost:8443`, `MEDIA_ORIGIN`, `UPLOAD_ORIGIN`
+  `REDIS_URL=rediss://svp-web:<mật khẩu>@valkey.svp-data.svc.cluster.local:6379/9` (Secret `svp/web-env`), `APP_ORIGIN=https://svp.localhost:8443`, `MEDIA_ORIGIN`, `UPLOAD_ORIGIN`
   `https://s3.svp.localhost:8443` (object store chỉ nhận CORS từ `https://svp.localhost:8443`, theo bucket như compose), `SENTRY_ENVIRONMENT=k3d`,
   `SENTRY_DSN` từ Secret `svp/sentry`, `NEXT_SERVER_ACTIONS_ENCRYPTION_KEY` từ Secret `svp/web-env`; `SVP_BUILD_ID` là build arg
   chép thành `ENV` của image (12 hex của commit ở CI, `dev-` + hash nội dung context ở đường dev, rỗng ở compose), dùng làm
@@ -123,11 +125,12 @@ Loại tài liệu (Diátaxis): **reference**, tra cứu khi cần một lệnh 
   [ADR-0042](../adr/0042-caller-identity-grpc.md)), khoá ký chỉ ở `user-service-env`; ExternalSecret của đường GitOps dựng cùng
   key từ nguồn `jwt-verify`; `svp-data/pg-backup-s3` là đăng nhập của user `svp-pg-backup` của object store, chỉ sidecar của
   plugin Barman Cloud trong pod Postgres đọc). Mỗi lần là **trọn một lượt xoay credential** (`deploy/k8s/rotate.sh`,
-  [ADR-0050](../adr/0050-bash-to-standard-tools.md) mục 5), đủ ba bước dù giá trị nào đổi: (1) máy chủ: mật khẩu superuser Redpanda đổi
-  thì đặt vào broker đang chạy trước (`redpanda_admin` của `deploy/k8s/lib.sh`, dùng chung với `make eks-secrets`; cần `redpanda-0`
-  chạy; Admin API không trả lời hay không nhận mật khẩu nào thì dừng, không đổi Secret nào), apply Secret của `svp-data`, rồi chờ mọi
-  pod của StatefulSet `s3` và `redpanda` chạy với giá trị của `.env` và Ready (Reloader restart chúng; so trong container qua stdin,
-  300 s mỗi replica, hết hạn thì FAIL nêu StatefulSet); (2) Job init của `svp-data` đặt mật khẩu mới (đường dev: helmfile, chỉ release
+  [ADR-0050](../adr/0050-bash-to-standard-tools.md) mục 5), đủ ba bước dù giá trị nào đổi: (1) máy chủ: mật khẩu `svp-admin` của Kafka đổi
+  thì đặt vào broker đang chạy trước (`kafka_admin` của `deploy/k8s/lib.sh`, qua `svp-kafka` của Deployment `svp-ops`; cần `kafka-0` và
+  `svp-ops` chạy; không mật khẩu nào đăng nhập được thì dừng, không đổi Secret nào), apply Secret của `svp-data` (cả CA local, aclfile của
+  Valkey), rồi chờ mọi pod của StatefulSet `s3` chạy với giá trị của `.env` và Ready, và Valkey nhận mật khẩu `.env` của từng user (Valkey
+  chỉ đọc aclfile lúc khởi động; Reloader restart; so trong container qua `svp-valkey` với `SVP_AS_USER`, mật khẩu qua stdin, 300 s,
+  hết hạn thì FAIL nêu Deployment `valkey`). Kafka không cần restart: user nằm trong broker; (2) Job init của `svp-data` đặt mật khẩu mới trong Postgres, object store và Kafka (đường dev: helmfile, chỉ release
   `svp-data`; cluster GitOps: một operation sync của Application `argocd/svp-data`, chờ `Succeeded`), lỗi thì dừng, Secret của client
   không đổi; release hay Application chưa có (lần dựng) thì bỏ bước này; (3) client: Secret của `svp`, `svp-obs`, `keda`; Reloader
   restart workload có Secret đổi, script không chờ, in lệnh `kubectl --context k3d-svp get pods -A -w` để theo dõi. Cùng `.env` thì
@@ -137,11 +140,12 @@ Loại tài liệu (Diátaxis): **reference**, tra cứu khi cần một lệnh 
   canary lúc Secret của nó đổi thì để Reloader và Argo Rollouts xử lý như mọi restart. **Hai chế độ, chọn theo namespace `svp-secrets`:**
   cluster dev (không có namespace đó) nhận chính các Secret như trên; cluster GitOps dựng từ revision mà overlay stg bật
   `externalSecrets` của chart `svp-cluster` (có `svp-secrets`) chỉ nhận **nguồn**: mỗi entry của
-  `deploy/helm/svp-cluster/files/external-secrets.yaml` một Secret ở `svp-secrets` (10 entry từ `.env`, key đặt tên như `.env`;
-  entry thứ 11 `glitchtip-runtime` tạo rỗng khi chưa có và không bao giờ bị đổi ở đây; entry `argocd-notifications` chỉ khi chart
+  `deploy/helm/svp-cluster/files/external-secrets.yaml` một Secret ở `svp-secrets` (13 entry từ `.env` và CA local, key đặt tên như `.env`:
+  `pg-superuser`, `pg-roles`, `s3-root`, `s3-users`, `kafka-admin`, `kafka-users`, `valkey-users`, `local-ca`, `local-tls`, `jwt-signing`,
+  `jwt-verify`, `web`, `obs`; entry thứ 14 `glitchtip-runtime` tạo rỗng khi chưa có và không bao giờ bị đổi ở đây; entry `argocd-notifications` chỉ khi chart
   bật `externalSecrets.argocdNotifications`, xem [`eks.md`](eks.md)), rồi khi ExternalSecret đã có thì dựng lại từ nguồn mới
   (`force-sync`, chờ `status.syncedResourceVersion` đổi và `Ready`; `es_force_sync` của `deploy/k8s/lib.sh`), các ExternalSecret của
-  `svp-data` ở bước (1), các cái còn lại ở bước (3). External Secrets Operator ([ADR-0026](../adr/0026-secrets-gitops.md)) dựng 28 Secret từ đó (k3d); cluster GitOps
+  `svp-data` ở bước (1), các cái còn lại ở bước (3). External Secrets Operator ([ADR-0026](../adr/0026-secrets-gitops.md)) dựng 36 Secret từ đó (k3d); cluster GitOps
   từ revision không có External Secrets thì nhận Secret như đường dev. `k8s-glitchtip-init` ghi DSN vào Secret
   `svp/sentry`, token API chỉ đọc vào `svp-obs/glitchtip-api` và token tải source map vào `svp-obs/glitchtip-sourcemaps`
   (không vào `.env`, không in; cluster có `svp-secrets`: ghi vào nguồn `svp-secrets/glitchtip-runtime` rồi `force-sync` ba
@@ -216,14 +220,15 @@ Loại tài liệu (Diátaxis): **reference**, tra cứu khi cần một lệnh 
   kẹt bootstrap trước khi có wave). Component `external-secrets` của `components.json`
   (External Secrets Operator 2.14.0, namespace `external-secrets`, wave 0, values `base/external-secrets.yaml`: chỉ
   controller, không webhook, không cert-controller) có `gitopsOnly: true`, nên chỉ đường này cài, `make k8s-up` bỏ qua; chart
-  `svp-cluster` với overlay stg render SecretStore `svp-store` (provider `kubernetes`, ServiceAccount `svp-secrets-reader` chỉ
-  `get` theo tên đúng các entry namespace đó đọc), 28 ExternalSecret (`refreshPolicy: OnChange`, mọi cái có `target.template`),
+  `svp-cluster` với overlay k3d của `svp-gitops` render SecretStore `svp-store` (provider `kubernetes`, ServiceAccount `svp-secrets-reader` chỉ
+  `get` theo tên đúng các entry namespace đó đọc), mỗi entry của `files/external-secrets.yaml` một ExternalSecret (đếm bằng `helm template` của chart với
+  `platforms/k3d/svp-cluster.yaml`, `--show-only templates/external-secrets.yaml`, rồi `grep -c '^kind: ExternalSecret$'`; `refreshPolicy: OnChange`, mọi cái có `target.template`),
   namespace và NetworkPolicy của `svp-secrets`, ValidatingAdmissionPolicy `svp-external-secrets-writes` (controller chỉ ghi Secret
   ở bốn namespace đích, không bao giờ Secret token; ở `argocd` chỉ Secret Opaque `argocd-notifications-secret`, khi chart bật
   `externalSecrets.argocdNotifications`) và `svp-store-serviceaccount-pods`, `-tokens` (ở mọi namespace không pod nào
   chạy dưới `svp-secrets-reader`, không Secret nào giữ token của nó; controller lấy token bằng TokenRequest); overlay prd render
   store `aws` (Secrets Manager `svp/prd/<entry>`, role mỗi namespace, giá trị giữ chỗ tới khi có cluster EKS; controller thêm egress
-  TCP 80 chỉ tới agent EKS Pod Identity `169.254.170.23/32`). Đã kiểm trên cluster: lượt `gitops` 40857855305 (28 ExternalSecret
+  TCP 80 chỉ tới agent EKS Pod Identity `169.254.170.23/32`). Số đo cũ trên cluster, khi chart render 28 ExternalSecret: lượt `gitops` 40857855305 (28 ExternalSecret
   `Ready`) và 40954609229 (đọc `svp-gitops`, 26/26 Application Synced/Healthy, 28/28 ExternalSecret `Ready`).
   Đo thời gian từ merge tới pod Ready (`measure-gitops`) nay là bài lab `drills/` của `svp-labs`
   ([ADR-0039](../adr/0039-mainpath-drills-scan-gate-sourcemaps.md) §1).
@@ -265,8 +270,8 @@ Loại tài liệu (Diátaxis): **reference**, tra cứu khi cần một lệnh 
   `external-secrets.io`; mục `SEC-6-reader`, cùng điều kiện: dry run ở `svp-data` (namespace có `svp-secrets-reader`), pod chạy dưới
   ServiceAccount đó và Secret token của nó bị `svp-store-serviceaccount-pods`, `-tokens` từ chối đúng message, đối chứng cùng pod với
   `default` và Secret token của `default` được nhận; trên cluster không có External Secrets Operator hai test nhãn
-  `requires=external-secrets` bị bỏ, mỗi test một dòng `skip`). `run.sh` đọc trước các giá trị Secret mà test dùng (6 user Kafka, admin
-  Grafana, 3 user object store; vào file quyền 600, xoá khi thoát, không bao giờ trên dòng lệnh; dưới 10 giá trị thì đỏ trước Chainsaw), dòng
+  `requires=external-secrets` bị bỏ, mỗi test một dòng `skip`). `run.sh` đọc trước các giá trị Secret mà test dùng (7 user Kafka, `svp-feed-service` của Valkey, admin
+  Grafana, 3 user object store; vào file quyền 600, xoá khi thoát, không bao giờ trên dòng lệnh; dưới 12 giá trị thì đỏ trước Chainsaw), dòng
   output chứa một giá trị không in ra terminal, rồi dò log và report: dòng nào chứa giá trị là đỏ, chỉ in số dòng. **LOCAL LAB ONLY:** cả hai target xoá khoá `svp:gw:rl:register:*` ở
   Valkey db 10 của cluster (qua `kubectl exec`). Các diễn tập đo một lần (KEDA và RAM, PDB, canary của gateway và của web, backup và PITR,
   `measure-canary`, `measure-gitops`, `drill-k8s-web-obs`) là bài lab `drills/` của `svp-labs`
@@ -314,7 +319,7 @@ Loại tài liệu (Diátaxis): **reference**, tra cứu khi cần một lệnh 
 - `make drill-k8s-gitops`: các kiểm của cluster GitOps (`make k8s-gitops-up`), mỗi kiểm một test ở `deploy/k8s/drills/gitops/`; log và
   report JUnit `.k8s/drills/gitops-<UTC>.log`, `.xml`.
 - `make drill-k8s-reloader`: xoay credential thật trên cluster dev hay GitOps (test `deploy/k8s/drills/reloader/rotate/`, cần
-  `make k8s-smoke` chạy trước trên cùng cluster). Ghi giá trị mới vào `.env` (mật khẩu root object store, superuser Redpanda, role app
+  `make k8s-smoke` chạy trước trên cùng cluster). Ghi giá trị mới vào `.env` (mật khẩu root object store, `svp-admin` của Kafka, role app
   Postgres của `video-service` và GlitchTip, user Kafka của `feed-service` và KEDA, admin Grafana, thêm một khoá verify của
   `tools/jwtkey` sau các khoá của `JWT_VERIFY_KEYS`, khoá Server Action của web), chạy `make k8s-secrets` một lần, rồi kiểm: Secret của
   mỗi giá trị có version mới; mỗi workload đọc Secret đổi (bảng "Secret → workload" ở `reloader.sh` của test) chỉ còn pod mới, Ready
@@ -400,15 +405,16 @@ Phần này ghi vì sao các hàm và script ở `deploy/k8s/` làm như vậy; 
     `SVP_ARGOCD_NOTIFY_APP_ID`, `SVP_ARGOCD_NOTIFY_INSTALLATION_ID` và `SVP_ARGOCD_NOTIFY_PRIVATE_KEY_B64`, và kiểm chúng; khi lỗi, message
     nêu AGAIN, lệnh chạy lại khi `.env` đã sửa (`make env` không tạo được khoá của GitHub App nên không ghi biến nào trong số đó). Id là số
     nguyên; khoá riêng là base64 chuẩn của file PEM trên một dòng, mà ExternalSecret giải mã. Các phép kiểm đọc giá trị mà không in.
-  - `redpanda_admin`: Redpanda, khác object store, giữ superuser `svp-admin` cùng mật khẩu trong dữ liệu của chính nó: nó tạo từ Secret
-    `redpanda-bootstrap` một lần, khi cluster lập, và không bao giờ đọc Secret đó nữa. Mọi container đăng nhập bằng `svp-admin` (rpk của
-    broker, sidecar giữ superuser đồng bộ, Job `redpanda-init`) lấy mật khẩu từ Secret đó khi khởi động. Mật khẩu đổi chỉ áp vào Secret (hay
-    nguồn của nó) sẽ khoá tất cả chúng ngay khi chúng khởi động lại, với mật khẩu mà Redpanda biết đã mất khỏi mọi nơi. Hàm làm Redpanda
-    nhận `SVP_KAFKA_ADMIN_PASSWORD` (đọc từ `.env`) cho `svp-admin` trước khi Secret hay nguồn của nó được ghi: bước đầu của một lần đổi
-    secret, trên cluster lab (`secrets.sh`) lẫn EKS (`aws-secrets.sh`). Trong container broker, nó đăng nhập bằng mật khẩu đó; khi lỗi thì
-    bằng mật khẩu của Secret `redpanda-bootstrap`, rồi bằng mật khẩu mà container đã khởi động với, và đặt mật khẩu mới. Nó dừng script,
-    trước khi ghi gì, khi mật khẩu đổi mà không broker nào chạy để nhận; message nêu `$again`, lệnh chạy lại script. Mật khẩu vào container
-    qua stdin; mật khẩu mới nằm trên dòng lệnh của rpk chỉ bên trong container đó, như trong Job `redpanda-init`.
+  - `kafka_admin`: Kafka giữ credential SCRAM của `svp-admin` trong metadata của chính broker: `broker.sh` ghi nó một lần, lúc format volume
+    rỗng từ Secret `kafka-admin`, và không bao giờ đọc Secret đó nữa. Mọi thứ đăng nhập `svp-admin` (Job `kafka-init`, CLI vận hành của
+    `svp-ops`) lấy mật khẩu từ Secret khi khởi động, nên mật khẩu đổi chỉ ở Secret (hay nguồn của nó) sẽ khoá tất cả ngay khi chúng
+    khởi động lại. Hàm đặt mật khẩu `.env` (`SVP_KAFKA_ADMIN_PASSWORD`) cho `svp-admin` vào broker trước khi Secret hay nguồn của nó được ghi:
+    bước đầu của một lần đổi secret trên cluster lab (`secrets.sh`). Nó chạy `svp-kafka` của Deployment `svp-ops` (container `kafka`): đăng
+    nhập bằng mật khẩu `.env`; khi lỗi thì bằng mật khẩu của Secret `kafka-admin`, rồi bằng mật khẩu mà `svp-ops` đang chạy, rồi đặt mật khẩu
+    mới bằng `kafka-configs` và chờ đăng nhập được với nó (broker áp credential qua metadata log, chậm một nhịp). Chưa có volume `data-kafka-0`
+    thì bỏ qua (broker sẽ format với Secret vừa ghi). Nó dừng script, trước khi ghi gì, khi mật khẩu đổi mà `kafka-0` hay `svp-ops` không chạy
+    để nhận; message nêu `$again`, lệnh chạy lại script. Mật khẩu vào container qua stdin; mật khẩu mới nằm trong file mode 600 của container
+    đó (không trên dòng lệnh). Trên EKS không có hàm này: `svp-admin` là secret `AmazonMSK_*` do Terraform sinh và gắn vào MSK (`eks.md`).
 - **Root Application `argocd_root_app REPO_URL REVISION ENV CHART_REPO_URL`** in `svp-root` của đường GitOps dạng JSON cho `kc apply -f -`.
   Root của cluster EKS là cùng Application đó, do bootstrap của repo hạ tầng (một ApplicationSet trên Secret của cluster) tạo, ở
   `refs/heads/main`. Nó dựng bằng jq từ các giá trị `--arg`, nên revision và môi trường luôn là chuỗi JSON: một nhánh tên `2026`, `true`
@@ -427,8 +433,8 @@ Phần này ghi vì sao các hàm và script ở `deploy/k8s/` làm như vậy; 
     (`ServerSideApply=true`), cho thứ mà server-side diff là đúng.
 - **Báo cáo khi release không sẵn sàng.** `log_tail_namespaces` là các namespace mà log container được `unready_report` in, và là các namespace
   duy nhất mà dòng log được `deploy/ci/verify-collect.sh` giữ trong artifact công khai (và log job) của một lượt kiểm chứng: server của bên
-  thứ ba, operator và controller, mà log nói về lần khởi động, cấu hình và peer của chúng (kiểm tra khởi động của Redpanda và lỗi bộ nhớ
-  làm nó dừng, lỗi reconcile của một operator). Bỏ ra: `svp` (service của project, log có thể giữ dữ liệu người dùng),
+  thứ ba, operator và controller, mà log nói về lần khởi động, cấu hình và peer của chúng (lỗi bộ nhớ của broker làm nó dừng, lỗi reconcile của
+  một operator). Bỏ ra: `svp` (service của project, log có thể giữ dữ liệu người dùng),
   `envoy-gateway-system` (access log của Envoy proxy giữ path và query string của request, gồm chữ ký của upload presigned), `kube-system`
   và `argocd`. Trong số này, `unready_report` còn bỏ GlitchTip (access log giữ khoá công khai của DSN, lỗi của nó giữ event đã nhận) và
   mọi pod Postgres của CloudNativePG (một dòng lỗi trích câu lệnh đã lỗi, gồm giá trị).
@@ -577,15 +583,15 @@ Phần này ghi vì sao các hàm và script ở `deploy/k8s/` làm như vậy; 
 - **Secret của service ở `svp`:** một cái mỗi service, mỗi cái chỉ có cái mà pod của service đó dùng, nên một pod bị chiếm không lộ hơn
   credential của chính nó. `<service>-env` vào container của service làm biến môi trường; `<service>-migrate-env` giữ role migrator, chỉ
   cho Job `migrate`. Khoá ký JWT chỉ ở `user-service-env` (threat model JWT-10); gateway và bốn service gRPC nhận khoá công khai, mà xác
-  minh access token do gateway chuyển tiếp nhưng không ký được cái nào ([ADR-0042](../adr/0042-caller-identity-grpc.md)). `web-env` chỉ giữ
-  khoá Server Action của web client, đặt lúc chạy để khoá đang dùng không bao giờ nằm trong image công khai: các thiết lập khác của nó
-  không bí mật (`base/services/web.yaml` của `svp-gitops`), DSN của nó đến từ Secret `sentry`, và Valkey, nơi nó giữ session, không có mật
-  khẩu. Secret phải tồn tại trong mọi trường hợp: chart `svp-service` đọc `<release>-env` bằng `envFrom`, không `optional`.
+  minh access token do gateway chuyển tiếp nhưng không ký được cái nào ([ADR-0042](../adr/0042-caller-identity-grpc.md)). `web-env` giữ
+  khoá Server Action của web client, đặt lúc chạy để khoá đang dùng không bao giờ nằm trong image công khai, và `REDIS_URL` của user Valkey
+  `svp-web` (db 9, nơi nó giữ session; `gateway-env`, `feed-service-env` cũng mang `REDIS_URL` của user của chúng): các thiết lập khác của nó
+  không bí mật (`base/services/web.yaml` của `svp-gitops`), DSN của nó đến từ Secret `sentry`. Secret phải tồn tại trong mọi trường hợp: chart `svp-service` đọc `<release>-env` bằng `envFrom`, không `optional`.
 - **Mật khẩu của object store và Postgres.** Object store (RustFS) lấy mật khẩu root từ môi trường lúc khởi động, trong biến mà chart `svp-data`
   ánh xạ Secret `s3-root` tới; nó giữ bucket, user, policy, rule CORS và object khi khởi động với mật khẩu khác, và mật khẩu cũ không đăng
-  nhập được nữa (đã kiểm trên image ghim). Redpanda đã lấy mật khẩu của `.env` (`redpanda_admin`); `rpk` của broker và sidecar vẫn đăng
-  nhập bằng cái mà chúng khởi động với. Reloader restart cả hai khi Secret của chúng đổi; Job init đăng nhập bằng mật khẩu mới, nên chúng
-  chờ điều đó. Postgres không cần restart: CloudNativePG tự đặt mật khẩu superuser đã đổi (Secret `pg-superuser` mang nhãn
+  nhập được nữa (đã kiểm trên image ghim). Valkey chỉ đọc aclfile (Secret `valkey-acl`) lúc khởi động; Kafka đã lấy mật khẩu `svp-admin` của `.env`
+  (`kafka_admin`) và không cần restart. Reloader restart object store và Valkey khi Secret của chúng đổi; Job init và client đăng nhập bằng mật
+  khẩu mới, nên chúng chờ điều đó. Postgres không cần restart: CloudNativePG tự đặt mật khẩu superuser đã đổi (Secret `pg-superuser` mang nhãn
   `cnpg.io/reload`).
 - **`glitchtip-init.sh`.** Ba Secret mà nó ghi là giá trị của riêng GlitchTip, do Job init (`bootstrap.py`) của nó tạo: chúng không bao giờ
   vào `.env`, một file hay terminal; chúng được đọc bên trong pod GlitchTip qua ORM của nó và trở lại trên stdout vào một biến shell mà
@@ -636,9 +642,10 @@ Phần này ghi vì sao các hàm và script ở `deploy/k8s/` làm như vậy; 
   value: service/kps-prometheus}, {name: forwardPort, value: "19090"}, {name: forwardRemotePort, value: "9090"}, {name: forwardReadyPath,
   value: /-/ready}]}}`.
 - **Giá trị mới của diễn tập Reloader** (`reloader/new-values.sh FILE`, FILE chưa được tồn tại, mode 600; mỗi dòng `NAME=value`). Mỗi giá trị có
-  dạng mà `make env` cho biến của nó (`deploy/compose/compose.mk`): `SVP_S3_ROOT_PASSWORD` 20 byte ngẫu nhiên hex; `SVP_KAFKA_ADMIN_PASSWORD`,
-  `SVP_VIDEO_APP_DB_PASSWORD`, `SVP_KAFKA_FEED_SERVICE_PASSWORD`, `SVP_KAFKA_KEDA_PASSWORD`, `SVP_GLITCHTIP_APP_DB_PASSWORD`,
-  `SVP_GRAFANA_ADMIN_PASSWORD` 24 byte ngẫu nhiên hex; `NEXT_SERVER_ACTIONS_ENCRYPTION_KEY` base64 chuẩn của 32 byte ngẫu nhiên;
+  dạng mà `make env` cho biến của nó (`deploy/compose/compose.mk`): `SVP_S3_ROOT_PASSWORD` 20 byte ngẫu nhiên hex; `SVP_VIDEO_APP_DB_PASSWORD`,
+  `SVP_GLITCHTIP_APP_DB_PASSWORD`, `SVP_GRAFANA_ADMIN_PASSWORD` 24 byte ngẫu nhiên hex; `SVP_KAFKA_ADMIN_PASSWORD`,
+  `SVP_KAFKA_FEED_SERVICE_PASSWORD`, `SVP_KAFKA_KEDA_PASSWORD` 16 byte ngẫu nhiên hex (32 chữ và số, như Terraform sinh trên EKS);
+  `NEXT_SERVER_ACTIONS_ENCRYPTION_KEY` base64 chuẩn của 32 byte ngẫu nhiên;
   `JWT_VERIFY_KEY_NEW` là `<kid>:<khoá công khai>` của một cặp khoá mới của `tools/jwtkey`, mà diễn tập thêm vào `JWT_VERIFY_KEYS` sau các
   khoá có sẵn (khoá ký giữ nguyên); `JWT_DRILL_SIGNING_KEY` là khoá riêng (seed) của cặp đó, mà diễn tập ký một token, không bao giờ vào
   `.env`. Trên GitHub Actions (`GITHUB_ACTIONS=true`) mỗi giá trị và base64 của nó bị mask ngay khi được tạo (dòng `::add-mask::` trên
@@ -658,15 +665,25 @@ Phần này ghi vì sao các hàm và script ở `deploy/k8s/` làm như vậy; 
   Alertmanager, mà nó đọc từ file. Viết từ bảng, không từ annotation của workload, để workload không opt in sẽ fail.
 - **Đặt lại giới hạn đăng ký của smoke** (`reset_register_limit` của `deploy/compose/lib.sh`). **LOCAL LAB ONLY.** Mọi request của các script
   smoke tới gateway từ một địa chỉ bridge Docker, và mọi script đăng ký user mới, nên các lượt chạy trong một giờ dùng hết burst đăng ký
-  20 mỗi IP. Hàm xoá các bucket đăng ký (`svp:gw:rl:register:*`) ở db 10 Redis của gateway ở `127.0.0.1:6379` bằng `SCAN` + `DEL`, và không
-  khoá nào khác; bản thân giới hạn không được nâng. Với `SVP_STACK=k3d` (`make k8s-smoke`), gateway chạy trong cluster k3d `svp` cục bộ, sau
-  Envoy, và đếm trong db 10 Valkey của cluster: cùng `SCAN` + `DEL` các khoá đó chạy ở đó qua `kubectl exec` (chỉ context `k3d-svp`), vì
-  Valkey không có địa chỉ trên host; `deploy/compose/smoke.sh` chạy cùng các bước với base `https://api.svp.localhost:8443` và
-  `CURL_CA_BUNDLE=.k8s/ca.crt` để `curl` tin CA của cluster cho API lẫn storage. Với `SVP_STACK=eks` (`make eks-smoke`, `eks-seed`,
-  `eks-rl-reset`) cùng việc chạy trong Valkey của cluster EKS mà `SVP_KUBE_CONTEXT` nêu, `svp-stg` hay `svp-prd` và không gì khác: một
-  cluster lab của project này, không bao giờ cái dùng chung; `make eks-smoke` dùng base `https://api.<domain>` với chứng chỉ công khai
-  (không `CURL_CA_BUNDLE`). Load balancer của EKS giữ địa chỉ của client, nên các lượt chạy từ một máy cũng chung một địa chỉ ở đó, và pod
-  của một bài load test có thể nhận địa chỉ của các lượt trước.
+  20 mỗi IP. Hàm xoá các bucket đăng ký (`svp:gw:rl:register:*`) ở db 10 Valkey của gateway bằng `SCAN` + `DEL`, và không khoá nào khác
+  (user `svp-ops` không xoá được khoá khác ở db 10); bản thân giới hạn không được nâng. Nó chạy qua CLI vận hành (`valkey_cli` của cùng file,
+  `/opt/svp/bin/svp-valkey`), nơi `SVP_STACK` chọn: `compose` (mặc định), container `valkey` của stack compose; `k3d` (`make k8s-smoke`),
+  container `valkey` của Deployment `svp-ops` trong cluster `svp`, context `k3d-svp` và không gì khác, vì gateway chạy trong cluster, sau
+  Envoy, và đếm trong db 10 Valkey của cluster (Valkey không có địa chỉ trên host); `deploy/compose/smoke.sh` chạy cùng các bước với base
+  `https://api.svp.localhost:8443` và `CURL_CA_BUNDLE=.k8s/ca.crt` để `curl` tin CA của cluster cho API lẫn storage. Với `SVP_STACK=eks`
+  (`make eks-smoke`, `eks-seed`, `eks-rl-reset`) cùng việc chạy trong container `valkey` của Deployment `svp-ops` ở cluster EKS mà
+  `SVP_KUBE_CONTEXT` nêu, `svp-stg` hay `svp-prd` và không gì khác: một cluster lab của project này, không bao giờ cái dùng chung; Valkey ở đó
+  là ElastiCache, `svp-ops` nối tới nó bằng TLS với CA công khai của Amazon. `make eks-smoke` dùng base `https://api.<domain>` với chứng chỉ
+  công khai (không `CURL_CA_BUNDLE`). Load balancer của EKS giữ địa chỉ của client, nên các lượt chạy từ một máy cũng chung một địa chỉ ở đó,
+  và pod của một bài load test có thể nhận địa chỉ của các lượt trước. `SVP_AS_USER=<user>` làm `valkey_cli` đăng nhập user đó (mật khẩu là dòng
+  đầu của stdin) để thử quyền của nó.
+- **CLI vận hành trên cluster** (Deployment `svp-ops` của chart `svp-data`, namespace `svp-data`, một replica): hai container `kafka` (image
+  `apache/kafka`) và `valkey` chạy `sleep infinity`, wrapper ở `/opt/svp/bin` (ConfigMap `svp-ops-bin`); lệnh
+  `kubectl --context <ctx> -n svp-data exec deploy/svp-ops -c kafka -- /opt/svp/bin/svp-kafka …` và `-c valkey -- /opt/svp/bin/svp-valkey …`; k3d và
+  EKS khác nhau chỉ ở context và giá trị biến (`KAFKA_BROKERS`, `VALKEY_HOST`). Secret `svp-ops` giữ `SVP_KAFKA_ADMIN_PASSWORD` và
+  `SVP_VALKEY_OPS_PASSWORD`. Pod chạy PSA restricted, không token ServiceAccount, không Service, egress chỉ tới Kafka 9096 và Valkey 6379.
+  Đăng nhập user thường (`SVP_AS_USER`): mật khẩu lấy từ Secret của chính client đó (`svp/<service>-env` khoá `KAFKA_SASL_PASSWORD` hay phần mật
+  khẩu của `REDIS_URL`, `keda/keda-kafka`, `svp-obs/otelcol-kafka`) và đưa qua stdin của `kubectl exec -i`, không trên dòng lệnh.
 
 ## Manifest cho cluster đo thật
 

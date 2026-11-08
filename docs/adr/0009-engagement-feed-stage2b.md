@@ -190,3 +190,5 @@ Phụ lục: [`appendix/0009-engagement-feed-stage2b.md`](appendix/0009-engageme
 
 - §9: [0018](0018-web-profiles-public-video-upload.md): ghép thêm tác giả song song với số đếm.
 - §4: [0045](0045-bounded-batch-retry.md): retry lượt xem: ngân sách 5 phút rồi DLQ thay thử lại không giới hạn.
+- §7: [0053](0053-msk-elasticache-valkey.md): phát lại bằng `svp-kafka` (Apache Kafka) của CLI vận hành, không `rpk group seek`.
+- §11: [0053](0053-msk-elasticache-valkey.md): topic tạo bằng script init của Apache Kafka (`deploy/kafka/`), không `deploy/redpanda/create-topics.sh`.

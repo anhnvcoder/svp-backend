@@ -14,16 +14,25 @@ receivers:
     protocols:
       grpc:
         endpoint: 0.0.0.0:4317
-  # Consumer group lag and broker metrics; enable_consumer_group_metrics is set by redpanda-init
-  # (deploy/redpanda/create-topics.sh).
-  prometheus:
-    config:
-      scrape_configs:
-        - job_name: redpanda
-          scrape_interval: 15s
-          metrics_path: /public_metrics
-          static_configs:
-            - targets: ["redpanda:9644"]
+  # Consumer group lag and the broker count, read from Kafka as user svp-otelcol, whose ACL only describes the
+  # topics and groups. Its client is made at the first scrape, not at start, so an unreachable broker fails only
+  # this receiver's scrapes. An empty ca_file means the system roots (the managed brokers' CA). The alias labels
+  # every series, which has no service.name.
+  kafka_metrics:
+    brokers: ${env:SVP_OTELCOL_KAFKA_BROKERS}
+    cluster_alias: svp
+    scrapers: [brokers, consumers]
+    collection_interval: 15s
+    tls:
+      ca_file: ${env:SVP_OTELCOL_KAFKA_CA_FILE}
+    auth:
+      sasl:
+        mechanism: SCRAM-SHA-512
+        username: svp-otelcol
+        password: ${env:SVP_KAFKA_OTELCOL_PASSWORD}
+    resource_attributes:
+      kafka.cluster.alias:
+        enabled: true
 
 processors:
   # 192 MiB soft limit in a 256 MiB container: refuses data instead of being OOM-killed.
@@ -98,7 +107,7 @@ service:
       processors: [memory_limiter, attributes/scrub, resource/scrub, batch]
       exporters: [otlp_grpc/lgtm]
     metrics:
-      receivers: [otlp, prometheus]
+      receivers: [otlp, kafka_metrics]
       processors: [memory_limiter, attributes/scrub, resource/scrub, batch]
       exporters: [otlp_grpc/lgtm]
     logs:

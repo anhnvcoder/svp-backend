@@ -161,6 +161,13 @@ externalSecrets:
   # Host and port of Postgres in the connection strings the ExternalSecrets build (written ${postgres} in
   # files/external-secrets.yaml): svp-pg of chart svp-data.
   postgres: svp-pg-rw.svp-data:5432
+  # Host and port of Valkey in the REDIS_URL the ExternalSecrets build (written ${valkey} there): Service valkey of
+  # chart svp-data, the name its server certificate holds; on EKS the primary endpoint of ElastiCache.
+  valkey: valkey.svp-data.svc.cluster.local:6379
+  # The Secrets only a Kafka broker and a Valkey of the cluster need (chart svp-data, kafka.mode and valkey.mode
+  # cluster): the users the init Job creates, the ACL file, the local CA's server certificate, and its CA certificate
+  # for the clients. false where both are managed services (Amazon MSK, ElastiCache).
+  localKafkaValkey: true
   # Secret argocd/argocd-notifications-secret of Argo CD Notifications (commit statuses on svp-gitops, Telegram), from
   # source entry argocd-notifications; on only where the platform turns Argo CD's notifications on (a cluster that runs
   # for a whole session, not one of the runner). Its store in argocd needs a role in aws.roles with store aws.

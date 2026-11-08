@@ -118,8 +118,6 @@ spec:
               } >>"$work/web8.curl"
             done
             rl1_t_start=$(valkey_now)
-            # As RL-1: the logins start a second after the test's last exec in the Valkey container.
-            sleep 1
             rl1_pods_before=$(gateway_pods) || rl1_pods_before=
             curl -sS --parallel --parallel-max "$web8_parallel" -K "$work/web8.curl" >"$work/web8.wo" || true
             rl1_t_end=$(valkey_now)

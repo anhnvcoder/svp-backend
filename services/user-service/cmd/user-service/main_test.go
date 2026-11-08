@@ -23,7 +23,7 @@ func TestServeKafkaBrokersMissingOrMalformedNamesTheVariable(t *testing.T) {
 	t.Setenv("JWT_SIGNING_KEY", base64.StdEncoding.EncodeToString(make([]byte, 32)))
 	// The broker list is checked before the database is opened, so this URL is never dialled.
 	t.Setenv("DATABASE_URL", "postgres://unused@127.0.0.1:1/unused")
-	for _, brokers := range []string{"", " , ", "redpanda:notaport"} {
+	for _, brokers := range []string{"", " , ", "kafka:notaport"} {
 		t.Setenv("KAFKA_BROKERS", brokers)
 		err := serve(t.Context(), slog.New(slog.DiscardHandler))
 		if err == nil || !strings.Contains(err.Error(), "KAFKA_BROKERS") {
@@ -49,7 +49,7 @@ func TestServeReportsAFailureBeforeTheErrorTrackerStops(t *testing.T) {
 	t.Setenv("JWT_VERIFY_KEYS", calleridtest.VerifyKeys())
 	t.Setenv("JWT_SIGNING_KID", "test")
 	t.Setenv("JWT_SIGNING_KEY", base64.StdEncoding.EncodeToString(make([]byte, 32)))
-	t.Setenv("KAFKA_BROKERS", "redpanda:9092")
+	t.Setenv("KAFKA_BROKERS", "kafka:9096")
 	// pgpool rejects this URL once the tracker has started. Every later failure, a malformed
 	// LISTEN_ADDR included, returns through the same deferred call.
 	t.Setenv("DATABASE_URL", "postgres://%zz")
@@ -75,7 +75,7 @@ func TestServeRequiresVerifyKeys(t *testing.T) {
 	t.Setenv("DATABASE_URL", "postgres://unused@127.0.0.1:1/unused")
 	t.Setenv("JWT_SIGNING_KID", "test")
 	t.Setenv("JWT_SIGNING_KEY", base64.StdEncoding.EncodeToString(make([]byte, 32)))
-	t.Setenv("KAFKA_BROKERS", "redpanda:9092")
+	t.Setenv("KAFKA_BROKERS", "kafka:9096")
 	for _, keys := range []string{"", "k1:not-base64"} {
 		t.Setenv("JWT_VERIFY_KEYS", keys)
 		err := serve(t.Context(), slog.New(slog.DiscardHandler))

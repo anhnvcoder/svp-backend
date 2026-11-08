@@ -23,6 +23,8 @@ Mục lục theo [Diátaxis](https://diataxis.fr): mỗi tài liệu thuộc m�
 ## Explanation: hiểu vì sao
 
 - [`architecture.md`](architecture.md): thiết kế hiện tại theo arc42 và C4: mục tiêu, ràng buộc, khối, runtime, triển khai, rủi ro.
+- [`explanation/capabilities.md`](explanation/capabilities.md): năng lực kỹ thuật của hệ thống qua bốn repo, chuẩn ngành mỗi
+  năng lực theo và nơi hiện thực.
 - [`explanation/capacity.md`](explanation/capacity.md): ước lượng quy mô: tải, dữ liệu, băng thông và thiết kế rút ra từ đó.
 - [`explanation/deployment.md`](explanation/deployment.md): compose, k3d và EKS: mỗi nơi gồm gì, vì sao khác nhau.
 - [`explanation/delivery.md`](explanation/delivery.md): CI/CD, chuỗi cung ứng, ba repo và hợp đồng API.

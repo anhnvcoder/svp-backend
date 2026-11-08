@@ -95,6 +95,7 @@
       "$ref": "#/definitions/stringMap"
     },
     "errorTracking": {"type": "boolean"},
+    "localCA": {"type": "string"},
     "scratch": {
       "type": "object",
       "additionalProperties": {

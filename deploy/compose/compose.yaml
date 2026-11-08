@@ -1,6 +1,7 @@
 # Core stack: gateway, user-service, video-service, engagement-service, feed-service and their one-shot migrations,
-# Redpanda, the object store `s3` (RustFS) with their init containers, and the web client `web`. Run it through
-# `make up` / `make down` (deploy/compose/compose.mk), which pass --env-file .env.
+# Kafka and Valkey with their one-shot tls-init and kafka-init, the object store `s3` (RustFS) with its init container,
+# and the web client `web`. Run it through `make up` / `make down` (deploy/compose/compose.mk), which pass --env-file
+# .env.
 
 # Profiles: `core` is the application. `obs` (`make up OBS=lgtm`) adds otelcol, lgtm, alertmanager and glitchtip
 # with its one-shot glitchtip-init; no core service depends on an obs service. Every Go service sends OTLP to
@@ -10,25 +11,33 @@
 # `obs-elastic` (`make up OBS=elastic`) is the Elastic stack, kept only to compare with LGTM, instead of `obs`, never
 # with it.
 
-# Postgres and Redis are the native ones on the host (127.0.0.1:5432, 127.0.0.1:6379), reached as host.docker.internal;
-# each service has its own Redis db, so no service reads another one's keys. Published ports are on the host's loopback
-# only. gRPC ports stay inside the compose network (threat model IN-2); so do the Collector (4317) and LGTM's Prometheus
-# (9090), Tempo (3200), Loki (3100) and Pyroscope (4040), reached from the host through Grafana's datasource proxy.
+# Postgres is the native one on the host (127.0.0.1:5432), reached as host.docker.internal. Kafka and Valkey run the
+# software of Amazon MSK and ElastiCache for Valkey and are reached the way stg and prd reach those: Kafka with
+# SASL/SCRAM-SHA-512 over TLS on kafka:9096, Valkey over TLS on valkey:6379, each client with a user of its own whose
+# ACLs allow only its topics and groups, or its Redis db and key prefix.
+
+# Their certificate is signed by the local CA of `make env` (.local/ca/), which the clients trust from
+# /etc/svp-ca/ca.crt. Neither publishes a port: scripts on the host reach them only through the wrappers of deploy/ops/
+# run inside their containers.
+
+# Published ports are on the host's loopback only. gRPC ports stay inside the compose network (threat model IN-2); so do
+# the Collector (4317) and LGTM's Prometheus (9090), Tempo (3200), Loki (3100) and Pyroscope (4040), reached from the
+# host through Grafana's datasource proxy.
 
 # Networks: `default` holds everything but media-worker and web; `worker` (internal, no route out) holds media-worker,
-# Redpanda, the object store and the Collector only, so the worker that runs ffmpeg on uploaded files reaches neither
+# Kafka, the object store and the Collector only, so the worker that runs ffmpeg on uploaded files reaches neither
 # the gateway, the gRPC services, Postgres, LGTM nor the internet (threat model FF-4, FF-5). The Collector only
 # receives telemetry there; it proxies nothing for the worker.
 
-# `web` holds web, the gateway and, with `obs`, GlitchTip and the Collector only: code run in the Next server
-# (CVE-2025-55182) reaches the gateway's HTTP API, the error tracker and the Collector and nothing else in the stack:
-# not the gRPC services, which check the caller's access token but not which container calls them, nor Redpanda (no
-# authentication in compose) or the object store by their compose names.
+# `web` holds web, the gateway, Valkey and, with `obs`, GlitchTip and the Collector only: code run in the Next server
+# (CVE-2025-55182) reaches the gateway's HTTP API, Valkey (where its user may touch only db 9 and svp:web:*), the error
+# tracker and the Collector and nothing else in the stack: not the gRPC services, which check the caller's access token
+# but not which container calls them, nor Kafka or the object store by their compose names.
 
-# `web` is not internal, because web reaches its Redis db on the host through host.docker.internal; that same name opens
-# every port of the host's loopback to it (Redpanda's host listener 19092 without authentication, the object store's
-# 9000, the other Redis dbs, Postgres with its trust rule, and with `obs` Grafana, Alertmanager, GlitchTip). Accepted
-# for the compose lab, where Redis is the host's (threat model WEB-13); the k3d release closes it with NetworkPolicy.
+# `web` is not internal: Docker publishes no port of a container attached to internal networks only. web gets no
+# host.docker.internal entry, but Docker Desktop resolves that name in every container, which opens the host's loopback
+# ports to it (the object store's 9000, Postgres with its trust rule, with `obs` Grafana, Alertmanager, GlitchTip).
+# Accepted for the compose lab (threat model WEB-13); the k3d release closes it with NetworkPolicy.
 
 # Design notes: docs/reference/compose.md.
 name: svp
@@ -43,8 +52,8 @@ x-healthcheck: &healthcheck
   start_interval: 1s
 
 x-host-services: &host-services
-  # Reaches Postgres and Redis on the host. Docker Desktop provides host.docker.internal; this
-  # line makes it work on Linux too.
+  # Reaches Postgres on the host. Docker Desktop provides host.docker.internal; this line makes it
+  # work on Linux too.
   extra_hosts: ["host.docker.internal:host-gateway"]
 
 # Telemetry settings of every Go service and of web.
@@ -64,9 +73,25 @@ x-telemetry-app-env: &telemetry-app-env
   SENTRY_DSN: ${SENTRY_DSN:-}
   SENTRY_ENVIRONMENT: ${SENTRY_ENVIRONMENT:-local}
 
-x-redpanda-image: &redpanda-image redpandadata/redpanda:v26.2.6@sha256:8b1076e0d61bfceb66594dc01536427ce0b529f8ead35fdab9763ab6085891ce
+# Kafka 4.1, the line of MSK's Standard brokers, and the Valkey of chart svp-data.
+x-kafka-image: &kafka-image apache/kafka:4.1.2@sha256:5cc2a2fd93fa2687b44015eee04fb2c3edd9e526bd64bf8bec5ff1e268772e0e
+x-valkey-image: &valkey-image docker.io/valkey/valkey:9.1.3-alpine@sha256:bf09d58e96d6b4524a15396b65b242bbe18beebbcc15a04d8ee75ddac62fae0b
 x-s3-image: &s3-image rustfs/rustfs:1.0.4@sha256:ed9210d6411d77ffceb70d94b964a3cb7d225983368bc25bebe01e995293dcc2
 x-glitchtip-image: &glitchtip-image glitchtip/glitchtip:6.2.6@sha256:a3d8eb1b36c1e1603d55ab32711ea3dd8115874742a781a57391a62a16e0dff6
+
+# The local CA's certificate (public), for every client of Kafka and Valkey: Go reads the files of SSL_CERT_DIR beside
+# the system roots, Node NODE_EXTRA_CA_CERTS, the Kafka tools and valkey-cli SVP_CA_FILE. `make env` writes it; a
+# missing file stops compose instead of becoming an empty directory.
+x-ca-volume: &ca-volume
+  type: bind
+  source: ../../.local/ca/ca.crt
+  target: /etc/svp-ca/ca.crt
+  read_only: true
+  bind:
+    create_host_path: false
+
+# The wrappers of deploy/ops/ (svp-kafka, svp-valkey), at /opt/svp/bin of the kafka and valkey containers.
+x-ops-volume: &ops-volume ../ops:/opt/svp/bin:ro
 
 # Settings shared by `glitchtip` and `glitchtip-init`. Database svp_glitchtip on the native Postgres: the app role for
 # requests and tasks, the migrator role (MAINTENANCE_*) for migrations, the cache table and partitions. VALKEY_URL is
@@ -95,51 +120,183 @@ x-glitchtip-env: &glitchtip-env
   DATABASE_POOL_MAX_SIZE: "4"
 
 services:
-  redpanda:
+  # Puts the server certificate and key of the local CA, and Valkey's ACL file, into volume svp-tls, owned by the user
+  # of the server that reads each, key and ACL file mode 0400: the files of .local/ are the host user's and mode 600, so
+  # bind-mounted they would be unreadable to those users on Linux (Docker Desktop on macOS would show them to anyone).
+  # Root only for chown; no network, only the capabilities that reading and chown need.
+
+  # The uid:gid come from the images: apache/kafka runs as appuser 1000:1000 (docker/jvm/Dockerfile of Apache Kafka),
+  # valkey/valkey as valkey 999:1000 (the user its Alpine Dockerfile adds); `docker image inspect` and `id` agree.
+  tls-init:
     profiles: [core]
-    image: *redpanda-image
+    image: *valkey-image
+    user: "0"
+    entrypoint: ["/bin/sh", "-c"]
     command:
-      - redpanda
-      - start
-      - --smp=1
-      - --memory=1G
-      - --overprovisioned
-      - --node-id=0
-      - --check=false
-      # Two listeners: containers use redpanda:9092, the host (tests, rpk) uses 127.0.0.1:19092.
-      - --kafka-addr=internal://0.0.0.0:9092,external://0.0.0.0:19092
-      - --advertise-kafka-addr=internal://redpanda:9092,external://127.0.0.1:19092
+      - |
+        set -eu
+        umask 077
+        cat /in/ca/server.key /in/ca/server.crt >/tmp/kafka.pem
+        install -o 1000 -g 1000 -m 0400 /tmp/kafka.pem /out/kafka.pem
+        install -o 999 -g 1000 -m 0444 /in/ca/server.crt /out/valkey.crt
+        install -o 999 -g 1000 -m 0400 /in/ca/server.key /out/valkey.key
+        install -o 999 -g 1000 -m 0400 /in/valkey/users.acl /out/valkey-users.acl
+        echo "tls-init: kafka.pem, valkey.crt, valkey.key and valkey-users.acl in place"
+    volumes:
+      - type: bind
+        source: ../../.local/ca
+        target: /in/ca
+        read_only: true
+        bind:
+          create_host_path: false
+      # Written by `make up` (deploy/valkey/aclfile.sh) from the passwords in .env.
+      - type: bind
+        source: ../../.local/valkey
+        target: /in/valkey
+        read_only: true
+        bind:
+          create_host_path: false
+      - svp-tls:/out
+    network_mode: none
+    read_only: true
+    tmpfs:
+      - /tmp:size=1m
+    cap_drop: [ALL]
+    cap_add: [CHOWN, DAC_OVERRIDE, FOWNER]
+    restart: "no"
+
+  # The one Kafka broker (KRaft), started by deploy/kafka/broker.sh with deploy/kafka/server.properties: SASL_SSL with
+  # SCRAM-SHA-512 on kafka:9096 for clients, ACLs on, no auto-create; svp-admin is made when the storage is first
+  # formatted, every other user by kafka-init. No port published: on the host, scripts run
+  # `docker compose exec kafka /opt/svp/bin/svp-kafka ...`, which logs in as svp-admin with the variables below.
+  kafka:
+    profiles: [core]
+    image: *kafka-image
+    entrypoint: ["/opt/svp/kafka/broker.sh"]
+    environment:
+      SVP_KAFKA_ADVERTISED: kafka:9096
+      # Used only when the volume kafka-data is formatted; any base64 UUID (kafka-storage.sh random-uuid).
+      SVP_KAFKA_CLUSTER_ID: XNgX61z_SZ-bElfllYNeIg
+      SVP_KAFKA_ADMIN_PASSWORD: ${SVP_KAFKA_ADMIN_PASSWORD:?run make env}
+      # The broker's heap; with the JVM's other memory and a tool run by svp-kafka (its own 256 MiB heap) it stays
+      # within mem_limit on the 16 GB machine.
+      SVP_KAFKA_HEAP: 512m
+      # For /opt/svp/bin/svp-kafka.
+      KAFKA_BROKERS: kafka:9096
+      SVP_CA_FILE: /etc/svp-ca/ca.crt
     mem_limit: 1536m
     cpus: 1
     networks: [default, worker]
     volumes:
-      - redpanda-data:/var/lib/redpanda/data
-      # Sets auto_create_topics_enabled=false when the cluster first forms.
-      - ../redpanda/bootstrap.yaml:/etc/redpanda/.bootstrap.yaml:ro
-    ports:
-      - "127.0.0.1:19092:19092"
+      - kafka-data:/var/lib/kafka/data
+      - ../kafka:/opt/svp/kafka:ro
+      - *ops-volume
+      - svp-tls:/etc/svp-tls:ro
+      - *ca-volume
+    # broker.sh writes its configuration under /tmp, and the broker and tools log to stdout only. exec, since Docker
+    # mounts a tmpfs noexec by default: the compression libraries (snappy, zstd) unpack their native code into /tmp
+    # and load it from there, and without it the broker cannot append a snappy batch.
+    read_only: true
+    tmpfs:
+      - /tmp:size=64m,exec
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
     healthcheck:
-      test: ["CMD-SHELL", "rpk cluster health | grep -Eq 'Healthy:[[:space:]]+true'"]
+      # The client listener accepts connections; kafka-init then proves that svp-admin logs in.
+      test: ["CMD", "bash", "-c", "exec 3<>/dev/tcp/127.0.0.1/9096"]
       interval: 10s
       timeout: 5s
       retries: 5
-      start_period: 30s
+      start_period: 60s
       start_interval: 1s
+    restart: unless-stopped
+    depends_on:
+      tls-init:
+        condition: service_completed_successfully
 
-  redpanda-init:
+  # Topics, users and ACLs (deploy/kafka/kafka-init.sh, the same script as Job kafka-init of chart svp-data), as
+  # svp-admin through /opt/svp/bin/svp-kafka. Every service with Kafka starts after it succeeds.
+  kafka-init:
     profiles: [core]
-    image: *redpanda-image
-    entrypoint: ["/bin/bash", "/init/create-topics.sh"]
+    image: *kafka-image
+    entrypoint: ["/bin/bash", "/opt/svp/kafka/kafka-init.sh"]
     environment:
-      RPK_BROKERS: redpanda:9092
-      # `rpk cluster config set` goes to the Admin API, which is not on localhost here.
-      RPK_ADMIN_HOSTS: redpanda:9644
+      KAFKA_BROKERS: kafka:9096
+      SVP_CA_FILE: /etc/svp-ca/ca.crt
+      SVP_KAFKA_ADMIN_PASSWORD: ${SVP_KAFKA_ADMIN_PASSWORD:?run make env}
+      # This broker keeps its users, so the script creates them.
+      SVP_KAFKA_CREATE_USERS: "true"
+      # The broker is healthy before this starts, so a login that keeps failing is a wrong password, not a slow broker.
+      SVP_KAFKA_LOGIN_WAIT_SECONDS: "60"
+      SVP_KAFKA_USER_SERVICE_PASSWORD: ${SVP_KAFKA_USER_SERVICE_PASSWORD:?run make env}
+      SVP_KAFKA_VIDEO_SERVICE_PASSWORD: ${SVP_KAFKA_VIDEO_SERVICE_PASSWORD:?run make env}
+      SVP_KAFKA_ENGAGEMENT_SERVICE_PASSWORD: ${SVP_KAFKA_ENGAGEMENT_SERVICE_PASSWORD:?run make env}
+      SVP_KAFKA_FEED_SERVICE_PASSWORD: ${SVP_KAFKA_FEED_SERVICE_PASSWORD:?run make env}
+      SVP_KAFKA_MEDIA_WORKER_PASSWORD: ${SVP_KAFKA_MEDIA_WORKER_PASSWORD:?run make env}
+      SVP_KAFKA_KEDA_PASSWORD: ${SVP_KAFKA_KEDA_PASSWORD:?run make env}
+      SVP_KAFKA_OTELCOL_PASSWORD: ${SVP_KAFKA_OTELCOL_PASSWORD:?run make env}
     volumes:
-      - ../redpanda:/init:ro
+      - ../kafka:/opt/svp/kafka:ro
+      - *ops-volume
+      - *ca-volume
+    read_only: true
+    tmpfs:
+      - /tmp:size=64m
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
     restart: "no"
     depends_on:
-      redpanda:
+      kafka:
         condition: service_healthy
+
+  # Valkey in place of the host's Redis: TLS on valkey:6379 (no plain port), one ACL user per client with the access
+  # strings ElastiCache gets too (deploy/valkey/aclfile.sh), user default off. Rate limits, a cache and sessions, none
+  # worth keeping: no persistence, and noeviction, so a full Valkey fails writes instead of dropping keys. No port
+  # published: scripts on the host run `docker compose exec valkey /opt/svp/bin/svp-valkey ...` (logs in as svp-ops).
+  valkey:
+    profiles: [core]
+    image: *valkey-image
+    # The image's user valkey: the entry point neither chowns nor switches user.
+    user: "999:1000"
+    command: ["valkey-server", "--port", "0", "--tls-port", "6379",
+              "--tls-cert-file", "/etc/svp-tls/valkey.crt", "--tls-key-file", "/etc/svp-tls/valkey.key",
+              "--tls-auth-clients", "no", "--aclfile", "/etc/svp-tls/valkey-users.acl",
+              "--save", "", "--appendonly", "no", "--maxmemory", "64mb", "--maxmemory-policy", "noeviction"]
+    environment:
+      # For /opt/svp/bin/svp-valkey.
+      VALKEY_HOST: valkey
+      SVP_CA_FILE: /etc/svp-ca/ca.crt
+      SVP_VALKEY_OPS_PASSWORD: ${SVP_VALKEY_OPS_PASSWORD:?run make env}
+      # Not read in the container. Valkey reads its ACL file only when it starts: with every password in its config,
+      # compose recreates valkey when one changes in .env, so `make up` loads the file tls-init has just put in place.
+      SVP_VALKEY_GATEWAY_PASSWORD: ${SVP_VALKEY_GATEWAY_PASSWORD:?run make env}
+      SVP_VALKEY_FEED_SERVICE_PASSWORD: ${SVP_VALKEY_FEED_SERVICE_PASSWORD:?run make env}
+      SVP_VALKEY_WEB_PASSWORD: ${SVP_VALKEY_WEB_PASSWORD:?run make env}
+    mem_limit: 128m
+    # `default` for the gateway and feed-service, `web` for the web client's sessions.
+    networks: [default, web]
+    volumes:
+      - svp-tls:/etc/svp-tls:ro
+      - *ops-volume
+      - *ca-volume
+    # The working directory /data stays empty with persistence off.
+    read_only: true
+    tmpfs:
+      - /data:size=1m
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    healthcheck:
+      # svp-ops answers PONG only over TLS with its password: the certificate, the ACL file and the port all work.
+      test: ["CMD-SHELL", "[ \"$$(/opt/svp/bin/svp-valkey PING)\" = PONG ]"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+      start_interval: 1s
+    restart: unless-stopped
+    depends_on:
+      tls-init:
+        condition: service_completed_successfully
 
   # The local object store: RustFS, an S3 API on one disk, with buckets, users, policies and CORS
   # rules made by s3-init.
@@ -265,15 +422,19 @@ services:
       JWT_VERIFY_KEYS: ${JWT_VERIFY_KEYS:?run make env}
       # Follow events go out through the outbox: the follow and its event commit together, so a
       # follow is not lost when Kafka is down.
-      KAFKA_BROKERS: redpanda:9092
+      KAFKA_BROKERS: kafka:9096
+      KAFKA_SASL_USERNAME: svp-user-service
+      KAFKA_SASL_PASSWORD: ${SVP_KAFKA_USER_SERVICE_PASSWORD:?run make env}
+      # The local CA of Kafka's and Valkey's certificate, read beside the system roots.
+      SSL_CERT_DIR: /etc/svp-ca
+    volumes:
+      - *ca-volume
     healthcheck: *healthcheck
     restart: unless-stopped
     depends_on:
       user-migrate:
         condition: service_completed_successfully
-      redpanda:
-        condition: service_healthy
-      redpanda-init:
+      kafka-init:
         condition: service_completed_successfully
 
   video-service:
@@ -287,7 +448,11 @@ services:
       DATABASE_URL: postgres://svp_video_app:${SVP_VIDEO_APP_DB_PASSWORD:?run make env}@host.docker.internal:5432/svp_video?sslmode=disable
       # Public keys only: it verifies the caller's access token the gateway forwards, it cannot sign one.
       JWT_VERIFY_KEYS: ${JWT_VERIFY_KEYS:?run make env}
-      KAFKA_BROKERS: redpanda:9092
+      KAFKA_BROKERS: kafka:9096
+      KAFKA_SASL_USERNAME: svp-video-service
+      KAFKA_SASL_PASSWORD: ${SVP_KAFKA_VIDEO_SERVICE_PASSWORD:?run make env}
+      # The local CA of Kafka's and Valkey's certificate, read beside the system roots.
+      SSL_CERT_DIR: /etc/svp-ca
       # Service-to-store calls use the compose name; upload URLs handed to clients use the host
       # address.
       S3_ENDPOINT: http://s3:9000
@@ -298,15 +463,15 @@ services:
       # upload-cleanup drill sets SVP_UPLOAD_* short; a value under the 15 minutes of an upload form is for drills only.
       UPLOAD_ABANDON_AFTER: ${SVP_UPLOAD_ABANDON_AFTER:-1h}
       UPLOAD_SWEEP_INTERVAL: ${SVP_UPLOAD_SWEEP_INTERVAL:-5m}
+    volumes:
+      - *ca-volume
     healthcheck: *healthcheck
     # The process exits when it cannot start a Kafka consumer and expects to be started again.
     restart: unless-stopped
     depends_on:
       video-migrate:
         condition: service_completed_successfully
-      redpanda:
-        condition: service_healthy
-      redpanda-init:
+      kafka-init:
         condition: service_completed_successfully
       s3-init:
         condition: service_completed_successfully
@@ -324,7 +489,13 @@ services:
       JWT_VERIFY_KEYS: ${JWT_VERIFY_KEYS:?run make env}
       # Produces to and consumes engagement.views.v1: a view only produces an event on the request,
       # and the counts are written in batches, so no request waits on a counter row.
-      KAFKA_BROKERS: redpanda:9092
+      KAFKA_BROKERS: kafka:9096
+      KAFKA_SASL_USERNAME: svp-engagement-service
+      KAFKA_SASL_PASSWORD: ${SVP_KAFKA_ENGAGEMENT_SERVICE_PASSWORD:?run make env}
+      # The local CA of Kafka's and Valkey's certificate, read beside the system roots.
+      SSL_CERT_DIR: /etc/svp-ca
+    volumes:
+      - *ca-volume
     mem_limit: 256m
     healthcheck: *healthcheck
     # The process exits when it cannot start a Kafka consumer and expects to be started again.
@@ -332,9 +503,7 @@ services:
     depends_on:
       engagement-migrate:
         condition: service_completed_successfully
-      redpanda:
-        condition: service_healthy
-      redpanda-init:
+      kafka-init:
         condition: service_completed_successfully
 
   feed-service:
@@ -350,10 +519,16 @@ services:
       JWT_VERIFY_KEYS: ${JWT_VERIFY_KEYS:?run make env}
       # Consumes user.follows.v1 and video.lifecycle.v1: the timeline is built on write, so a follow
       # backfills the followee's last 30 days and a ready video fans out to its followers.
-      KAFKA_BROKERS: redpanda:9092
-      # Explore feed cache: explore has no freshness target, so its first page is cached in Redis for
-      # 5 s and the database is read once per burst.
-      REDIS_URL: redis://host.docker.internal:6379/14
+      KAFKA_BROKERS: kafka:9096
+      KAFKA_SASL_USERNAME: svp-feed-service
+      KAFKA_SASL_PASSWORD: ${SVP_KAFKA_FEED_SERVICE_PASSWORD:?run make env}
+      # The local CA of Kafka's and Valkey's certificate, read beside the system roots.
+      SSL_CERT_DIR: /etc/svp-ca
+      # Explore feed cache: explore has no freshness target, so its first page is cached in Valkey for
+      # 5 s and the database is read once per burst. Its user may use db 14 and svp:feed:* only.
+      REDIS_URL: rediss://svp-feed-service:${SVP_VALKEY_FEED_SERVICE_PASSWORD:?run make env}@valkey:6379/14
+    volumes:
+      - *ca-volume
     mem_limit: 256m
     healthcheck: *healthcheck
     # The process exits when it cannot start a Kafka consumer and expects to be started again.
@@ -361,13 +536,12 @@ services:
     depends_on:
       feed-migrate:
         condition: service_completed_successfully
-      redpanda:
-        condition: service_healthy
-      redpanda-init:
+      kafka-init:
         condition: service_completed_successfully
+      valkey:
+        condition: service_healthy
 
   gateway:
-    <<: *host-services
     profiles: [core]
     image: ${SVP_GATEWAY_IMAGE:-svp/gateway:dev}
     pull_policy: never
@@ -381,15 +555,20 @@ services:
       # Public keys only: the gateway verifies tokens, it cannot sign them.
       JWT_VERIFY_KEYS: ${JWT_VERIFY_KEYS:?run make env}
       MEDIA_PUBLIC_BASE_URL: http://127.0.0.1:9000/media
-      # Rate limits are counted in Redis so all gateway instances share one count; if Redis is down
-      # the gateway falls back to in-memory counters. SVP_GATEWAY_REDIS_URL
-      # exists only for the Redis-down drill, which points it at an unresolvable .invalid host.
-      REDIS_URL: ${SVP_GATEWAY_REDIS_URL:-redis://host.docker.internal:6379/10}
+      # Rate limits are counted in Valkey so all gateway instances share one count; if Valkey is down
+      # the gateway falls back to in-memory counters. Its user may use db 10 and svp:gw:* only.
+      # SVP_GATEWAY_REDIS_URL exists only for the Redis-down drill, which points it at an
+      # unresolvable .invalid host.
+      REDIS_URL: ${SVP_GATEWAY_REDIS_URL:-rediss://svp-gateway:${SVP_VALKEY_GATEWAY_PASSWORD:?run make env}@valkey:6379/10}
+      # The local CA of Valkey's certificate, read beside the system roots.
+      SSL_CERT_DIR: /etc/svp-ca
       # The gateway's HTTP spans continue the trace of an incoming traceparent, so a page's trace
       # runs from web through the gateway to the services. web writes only the context of its own
       # spans and never passes on one it received; a process on this machine can still choose the
       # trace id of its own request to 127.0.0.1:8080, accepted for the lab (threat model WEB-24).
       TRUST_TRACE_CONTEXT: "true"
+    volumes:
+      - *ca-volume
     ports:
       - "127.0.0.1:8080:8080"
     # `web` only for the web client's BFF calls.
@@ -407,13 +586,14 @@ services:
       # down, so the gateway must start without it too.
       engagement-service:
         condition: service_started
+      valkey:
+        condition: service_healthy
 
   # Web client: Next's standalone server, the browser's only origin, with the BFF that holds the sessions and calls the
   # gateway. Open it at http://localhost:3001, the APP_ORIGIN that login redirects and the cookie's form go by.
   # http://127.0.0.1:3001 logs in too, but plays and uploads no video: the CORS rules of the store's buckets allow only
   # the localhost origins.
   web:
-    <<: *host-services
     profiles: [core]
     # `make up` sets the four SVP_WEB_* variables: a release it has pulled already (WEB_FROM=stg, the default, or
     # image), which compose neither pulls nor builds, or built from the web client's source (WEB_FROM=clone: web_dir of
@@ -432,8 +612,10 @@ services:
       <<: *telemetry-env
       # The only host the BFF calls.
       GATEWAY_URL: http://gateway:8080
-      # Sessions and refresh locks in Redis db 9 of the host, the web client's own db.
-      REDIS_URL: redis://host.docker.internal:6379/9
+      # Sessions and refresh locks in Valkey db 9, the web client's own db: its user may use db 9 and
+      # svp:web:* only. Node trusts the local CA of Valkey's certificate beside its own roots.
+      REDIS_URL: rediss://svp-web:${SVP_VALKEY_WEB_PASSWORD:?run make env}@valkey:6379/9
+      NODE_EXTRA_CA_CERTS: /etc/svp-ca/ca.crt
       # What the browser uses: the CSRF check, the cookie's form (no Secure on plain http) and
       # the post-login redirect check compare against it.
       APP_ORIGIN: http://localhost:3001
@@ -452,10 +634,11 @@ services:
       # writes; read at run time, never baked into the image. Empty falls back to the key the build put in the image,
       # which works with one replica and actions that close over nothing.
       NEXT_SERVER_ACTIONS_ENCRYPTION_KEY: ${NEXT_SERVER_ACTIONS_ENCRYPTION_KEY:-}
+    volumes:
+      - *ca-volume
     ports:
       - "127.0.0.1:3001:3001"
-    # Only the network it shares with the gateway and, with `obs`, GlitchTip and the Collector; Redis
-    # is on the host.
+    # Only the network it shares with the gateway, Valkey and, with `obs`, GlitchTip and the Collector.
     networks: [web]
     # The same lockdown as media-worker, although the distroless image has no shell or package
     # manager to take away: read-only root (the server writes no file: every route is rendered per
@@ -478,6 +661,8 @@ services:
     depends_on:
       gateway:
         condition: service_healthy
+      valkey:
+        condition: service_healthy
 
   media-worker:
     profiles: [core]
@@ -485,7 +670,11 @@ services:
     pull_policy: never
     environment:
       <<: *telemetry-env
-      KAFKA_BROKERS: redpanda:9092
+      KAFKA_BROKERS: kafka:9096
+      KAFKA_SASL_USERNAME: svp-media-worker
+      KAFKA_SASL_PASSWORD: ${SVP_KAFKA_MEDIA_WORKER_PASSWORD:?run make env}
+      # The local CA of Kafka's and Valkey's certificate, read beside the system roots.
+      SSL_CERT_DIR: /etc/svp-ca
       S3_ENDPOINT: http://s3:9000
       S3_ACCESS_KEY_ID: svp-media-worker
       S3_SECRET_ACCESS_KEY: ${SVP_MEDIA_WORKER_S3_SECRET_KEY:?run make env}
@@ -507,16 +696,15 @@ services:
     volumes:
       # Job scratch space on disk: a job needs up to ~1 GB, too much for a RAM-backed tmpfs.
       - media-worker-work:/work
+      - *ca-volume
     tmpfs:
       - /tmp:size=16m,noexec,nosuid,nodev
     networks: [worker]
-    # Exits when its consumer fails (a commit or DLQ produce while Redpanda restarts) and relies on
+    # Exits when its consumer fails (a commit or DLQ produce while Kafka restarts) and relies on
     # being started again; the uncommitted record is delivered again.
     restart: unless-stopped
     depends_on:
-      redpanda:
-        condition: service_healthy
-      redpanda-init:
+      kafka-init:
         condition: service_completed_successfully
       s3-init:
         condition: service_completed_successfully
@@ -525,8 +713,14 @@ services:
     profiles: [obs]
     image: otel/opentelemetry-collector-contrib:0.164.0@sha256:340c9ca6a36617084c6661bdc4f0fe92b7cda5a805d61673ec8db375fddc522b
     command: ["--config=/etc/otelcol/config.yaml"]
+    # The kafkametrics receiver reads consumer group lag as svp-otelcol (SASL/SCRAM-SHA-512 over TLS).
+    environment:
+      SVP_KAFKA_OTELCOL_PASSWORD: ${SVP_KAFKA_OTELCOL_PASSWORD:?run make env}
+      SVP_OTELCOL_KAFKA_BROKERS: kafka:9096
+      SVP_OTELCOL_KAFKA_CA_FILE: /etc/svp-ca/ca.crt
     volumes:
       - ../observability/otelcol/config.yaml:/etc/otelcol/config.yaml:ro
+      - *ca-volume
     # The memory_limiter processor keeps the heap at 192 MiB of this, so a burst of telemetry makes
     # the Collector refuse data rather than run out of memory.
     mem_limit: 256m
@@ -742,9 +936,15 @@ services:
     profiles: [obs-elastic]
     image: otel/opentelemetry-collector-contrib:0.164.0@sha256:340c9ca6a36617084c6661bdc4f0fe92b7cda5a805d61673ec8db375fddc522b
     command: ["--config=/etc/otelcol/config.yaml", "--config=/etc/otelcol/elastic.yaml"]
+    # The kafkametrics receiver reads consumer group lag as svp-otelcol (SASL/SCRAM-SHA-512 over TLS).
+    environment:
+      SVP_KAFKA_OTELCOL_PASSWORD: ${SVP_KAFKA_OTELCOL_PASSWORD:?run make env}
+      SVP_OTELCOL_KAFKA_BROKERS: kafka:9096
+      SVP_OTELCOL_KAFKA_CA_FILE: /etc/svp-ca/ca.crt
     volumes:
       - ../observability/otelcol/config.yaml:/etc/otelcol/config.yaml:ro
       - ../observability/elastic/otelcol-config.yaml:/etc/otelcol/elastic.yaml:ro
+      - *ca-volume
     mem_limit: 256m
     networks:
       default:
@@ -762,7 +962,11 @@ networks:
   web:
 
 volumes:
-  redpanda-data:
+  # The broker's log directory: topics, offsets, and the metadata log with users and ACLs. Created owned by appuser
+  # from the image's /var/lib/kafka/data.
+  kafka-data:
+  # Server certificates, keys and Valkey's ACL file, written by tls-init.
+  svp-tls:
   # The image's /data is owned by its uid 10001, so the new volume is writable by it.
   s3-data:
   # Created owned by 65532:65532 from the image's /work, so the worker can write to it.

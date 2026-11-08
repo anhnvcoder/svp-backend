@@ -22,21 +22,23 @@ receivers:
     protocols:
       grpc:
         endpoint: 0.0.0.0:4317
-  # Consumer group lag and broker metrics, as in compose. /public_metrics of Redpanda's Admin API needs no login even
-  # though the Admin API requires one, so this Collector holds no Redpanda credential. enable_consumer_group_metrics is
-  # set by the redpanda-init Job of chart svp-data (deploy/redpanda/create-topics.sh).
-
-  # Every broker is scraped, each exporting its own metrics: found through the SRV records of port admin of headless
-  # Service redpanda, so instance is the broker's own name.
-  prometheus:
-    config:
-      scrape_configs:
-        - job_name: redpanda
-          scrape_interval: 15s
-          metrics_path: /public_metrics
-          dns_sd_configs:
-            - names: ["_admin._tcp.redpanda.svp-data.svc.cluster.local"]
-              type: SRV
+  # As in compose: consumer group lag and the broker count, read as user svp-otelcol. The three variables come from the
+  # Collector's environment: brokers and CA file as values, the password from Secret otelcol-kafka.
+  kafka_metrics:
+    brokers: ${env:SVP_OTELCOL_KAFKA_BROKERS}
+    cluster_alias: svp
+    scrapers: [brokers, consumers]
+    collection_interval: 15s
+    tls:
+      ca_file: ${env:SVP_OTELCOL_KAFKA_CA_FILE}
+    auth:
+      sasl:
+        mechanism: SCRAM-SHA-512
+        username: svp-otelcol
+        password: ${env:SVP_KAFKA_OTELCOL_PASSWORD}
+    resource_attributes:
+      kafka.cluster.alias:
+        enabled: true
 
 processors:
   # In a 256 MiB container (the chart's resources.limits.memory): refuses data from 144 MiB of heap (the soft limit,
@@ -152,7 +154,7 @@ service:
       processors: [memory_limiter, attributes/scrub, resource/scrub, batch]
       exporters: [otlp_grpc/tempo]
     metrics:
-      receivers: [otlp, prometheus]
+      receivers: [otlp, kafka_metrics]
       processors: [memory_limiter, attributes/scrub, resource/scrub, batch]
       exporters: [otlp_http/prometheus]
     logs:

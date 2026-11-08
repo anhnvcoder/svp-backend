@@ -56,7 +56,7 @@ kubectl --context k3d-svp -n svp annotate scaledobject media-worker autoscaling.
   Chờ tới khi lag của group `media-worker` về 0 (`TOTAL-LAG` 0), **rồi mới** bỏ ghim để KEDA scale lại theo lag:
 
 ```sh
-kubectl --context k3d-svp -n svp-data exec redpanda-0 -c redpanda -- rpk group describe media-worker | grep -E 'MEMBERS|TOTAL-LAG'
+kubectl --context k3d-svp -n svp-data exec deploy/svp-ops -c kafka -- /opt/svp/bin/svp-kafka consumer-groups --describe --group media-worker | awk '$1 == "media-worker" { lag += $6 } END { print "TOTAL-LAG", lag + 0 }'
 ```
 
 ```sh

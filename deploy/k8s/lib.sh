@@ -343,59 +343,72 @@ check_notify_key() {
     fail "SVP_ARGOCD_NOTIFY_PRIVATE_KEY_B64 in .env is not the standard base64 of a PEM private key on one line (base64 < key.pem | tr -d '\\n'); no Secret was changed"
 }
 
-# redpanda_admin: makes Redpanda take SVP_KAFKA_ADMIN_PASSWORD (.env) for svp-admin before any Secret is written.
-# Redpanda reads Secret redpanda-bootstrap only when the cluster forms: a new password in the Secret alone locks out
-# every container that logs in as svp-admin. Stops, writing nothing, when the password changes and no broker runs.
-# Passwords reach the container on stdin; the new one is on rpk's command line inside that container only.
-redpanda_admin() {
-  local current ready err rc=0
-  # No data volume yet: the cluster that forms takes svp-admin from the Secret written now.
-  kc -n svp-data get pvc datadir-redpanda-0 >/dev/null 2>&1 || return 0
-  current=$(kc -n svp-data get secret redpanda-bootstrap -o jsonpath='{.data.password}' 2>/dev/null | base64 -d) ||
+# kafka_admin: sets svp-admin's SCRAM credential in broker kafka-0 to SVP_KAFKA_ADMIN_PASSWORD (.env) before any Secret
+# is written: the broker reads Secret kafka-admin only to format an empty volume. Logs in with the previous password via
+# svp-kafka of Deployment svp-ops; stops, writing nothing, when the password changes and either does not run. Passwords
+# reach the container on stdin and kafka-configs in a file of mode 600 there, never a command line or the output.
+kafka_admin() {
+  local current ready ops err rc=0
+  # No data volume yet: the broker formats it with svp-admin from the Secret written now.
+  kc -n svp-data get pvc data-kafka-0 >/dev/null 2>&1 || return 0
+  current=$(kc -n svp-data get secret kafka-admin -o jsonpath='{.data.SVP_KAFKA_ADMIN_PASSWORD}' 2>/dev/null | base64 -d) ||
     current=
-  # The broker container is ready once the Admin API reports it ready (its startup probe); the sidecar's readiness
-  # needs svp-admin's login, so it is not waited for.
-  ready=$(kc -n svp-data get pod redpanda-0 \
-    -o jsonpath='{.status.containerStatuses[?(@.name=="redpanda")].ready}' 2>/dev/null) || true
-  if [ "$ready" != true ]; then
-    # Nothing changes for Redpanda when the Secret already holds this password. A missing Secret is written all the
+  ready=$(kc -n svp-data get pod kafka-0 \
+    -o jsonpath='{.status.containerStatuses[?(@.name=="kafka")].ready}' 2>/dev/null) || true
+  ops=$(kc -n svp-data get deployment svp-ops --ignore-not-found -o jsonpath='{.status.availableReplicas}' 2>/dev/null) ||
+    true
+  if [ "$ready" != true ] || [ "${ops:-0}" -lt 1 ]; then
+    # Nothing changes for the broker when the Secret already holds this password. A missing Secret is written all the
     # same: without it the broker cannot start at all.
     if [ -z "$current" ] || [ "$current" = "$SVP_KAFKA_ADMIN_PASSWORD" ]; then return 0; fi
-    fail "SVP_KAFKA_ADMIN_PASSWORD in .env differs from Secret redpanda-bootstrap and broker redpanda-0 is not running to take it; no Secret was changed. Wait until it runs (scaled to 0: kubectl --context $kube_context -n svp-data scale statefulset redpanda --replicas=1) and run $again again, or put the previous value back in .env"
+    fail "SVP_KAFKA_ADMIN_PASSWORD in .env differs from Secret svp-data/kafka-admin, and broker kafka-0 or Deployment svp-ops is not running to take it; no Secret was changed. Wait until both run (kubectl --context $kube_context -n svp-data get pods) and run $again again, or put the previous value back in .env"
   fi
-  # Exit 10 inside the container means "set", 3 "no password logs in", 4 "the update failed", 5 "the Admin API gave
-  # no answer on the password" (refused, timed out, anything but a rejected login); rpk's error, which holds no
-  # password, comes back on stderr.
+  # Exit 10 inside the container means "set", 3 "no password logs in", 4 "the change failed", 5 "the broker gave no
+  # answer on the password" (anything but a rejected login); the tools' error, the new password masked, comes back on
+  # stderr. The candidates for the previous password: Secret kafka-admin, then the one svp-ops runs with.
   err=$(printf '%s\n%s\n' "$SVP_KAFKA_ADMIN_PASSWORD" "$current" |
-    kc -n svp-data exec -i redpanda-0 -c redpanda -- bash -c '
+    kc -n svp-data exec -i deploy/svp-ops -c kafka -- sh -c '
       IFS= read -r new; IFS= read -r secret
-      # The Admin API answers a superuser only. A wrong password is the HTTP 401 rpk reports as "Unauthorized"; any
-      # other failure says nothing about the password, so it stops here: trying the next password could not tell
-      # more, and only exit 3 may suggest starting over with new data.
+      umask 077
+      f=$(mktemp "${TMPDIR:-/tmp}/svp-admin.XXXXXX")
+      trap "rm -f \"\$f\"" EXIT
+      say() { printf "%s\n" "$1" | P=$new awk "{ gsub(ENVIRON[\"P\"], \"<password>\"); print }" >&2; }
+      # A wrong password is a SaslAuthenticationException; any other failure says nothing about the password, so it
+      # stops here: trying the next password could not tell more, and only exit 3 may suggest new data.
       login() {
-        out=$(RPK_PASS=$1 rpk security user list 2>&1) && return 0
-        case $out in *Unauthorized*) return 1 ;; esac
-        printf "%s\n" "$out" >&2
+        out=$(printf "%s\n" "$1" | SVP_AS_USER=svp-admin /opt/svp/bin/svp-kafka broker-api-versions 2>&1) && return 0
+        case $out in *SaslAuthenticationException*) return 1 ;; esac
+        say "$out"
         exit 5
       }
       login "$new" && exit 0
-      for old in "$secret" "$RPK_PASS"; do
+      for old in "$secret" "${SVP_KAFKA_ADMIN_PASSWORD:-}"; do
         if [ -n "$old" ] && login "$old"; then
-          out=$(RPK_PASS=$old rpk security user update svp-admin --new-password "$new" --mechanism SCRAM-SHA-256 2>&1) &&
+          # In a file the value has no [ ] around it, as deploy/kafka/kafka-init.sh writes it.
+          printf "SCRAM-SHA-512=password=%s\n" "$new" >"$f"
+          if ! out=$(printf "%s\n" "$old" | SVP_AS_USER=svp-admin /opt/svp/bin/svp-kafka configs --alter \
+            --entity-type users --entity-name svp-admin --add-config-file "$f" 2>&1); then
+            say "$out"
+            exit 4
+          fi
+          # The broker applies a new credential through its metadata log, a moment after the change returns.
+          for i in 1 2 3 4 5; do
             login "$new" && exit 10
-          printf "%s\n" "$out" >&2
+            sleep 2
+          done
+          say "svp-admin does not log in with the new password 10 s after the change"
           exit 4
         fi
       done
-      printf "%s\n" "$out" >&2
+      say "$out"
       exit 3' 2>&1) || rc=$?
   case $rc in
     0) ;;
-    10) ok "password of svp-admin set in Redpanda from .env (logged in with the previous one)" ;;
-    3) fail "Redpanda takes none of these passwords for svp-admin: the one in .env, the one of Secret redpanda-bootstrap, the one redpanda-0 started with; no Secret was changed. Put the previous one back in .env, or start over with new data ($(if cloud_context; then echo "a new cluster $kube_context"; else echo "make k8s-down && make k8s-up"; fi)). rpk: $err" ;;
-    4) fail "set svp-admin's password in Redpanda from .env; no Secret was changed. rpk: $err" ;;
-    5) fail "Redpanda's Admin API in redpanda-0 did not answer whether svp-admin's password is right (not a rejected password); no Secret was changed. Run $again again once the broker answers. rpk: $err" ;;
-    *) fail "log in to Redpanda as svp-admin inside redpanda-0: $err" ;;
+    10) ok "password of svp-admin set in Kafka from .env (logged in with the previous one)" ;;
+    3) fail "Kafka takes none of these passwords for svp-admin: the one in .env, the one of Secret svp-data/kafka-admin, the one svp-ops runs with; no Secret was changed. Put the previous one back in .env, or start over with new data (make k8s-down && make k8s-up). Kafka: $err" ;;
+    4) fail "set svp-admin's password in Kafka from .env; no Secret was changed. Kafka: $err" ;;
+    5) fail "broker kafka-0 did not answer whether svp-admin's password is right (not a rejected password); no Secret was changed. Run $again again once the broker answers. Kafka: $err" ;;
+    *) fail "log in to Kafka as svp-admin through Deployment svp-data/svp-ops: $err" ;;
   esac
 }
 

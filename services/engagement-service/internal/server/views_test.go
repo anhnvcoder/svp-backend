@@ -472,7 +472,8 @@ func eventually(t *testing.T, what string, cond func() bool) {
 }
 
 // rewindGroup commits offset 0 for every partition of TopicViews in ViewsGroup, as
-// `rpk group seek --to start` does, from a client of its own: kafkax hides the consumer's.
+// `svp-kafka consumer-groups --reset-offsets --to-earliest` does, from a client of its own:
+// kafkax hides the consumer's.
 func rewindGroup(t *testing.T, brokers string) {
 	t.Helper()
 	cl, err := kafkax.NewClient(brokers, "test-rewind",
@@ -670,7 +671,7 @@ func TestPostgresErrorRetriesTheBatch(t *testing.T) {
 func TestViewsConsumerConfigBoundsEachAttempt(t *testing.T) {
 	t.Parallel()
 	s, _ := newServerWithoutDB(nil)
-	if cfg := s.ViewsConsumerConfig("127.0.0.1:19092"); cfg.HandlerTimeout != 30*time.Second {
+	if cfg := s.ViewsConsumerConfig("kafka:9096"); cfg.HandlerTimeout != 30*time.Second {
 		t.Errorf("HandlerTimeout = %s, want 30s", cfg.HandlerTimeout)
 	}
 }
@@ -679,7 +680,7 @@ func TestViewsConsumerConfigBoundsEachAttempt(t *testing.T) {
 func TestViewsConsumerConfigBoundsRetries(t *testing.T) {
 	t.Parallel()
 	s, _ := newServerWithoutDB(nil)
-	if cfg := s.ViewsConsumerConfig("127.0.0.1:19092"); cfg.RetryBudget != 5*time.Minute {
+	if cfg := s.ViewsConsumerConfig("kafka:9096"); cfg.RetryBudget != 5*time.Minute {
 		t.Errorf("RetryBudget = %s, want 5m", cfg.RetryBudget)
 	}
 }

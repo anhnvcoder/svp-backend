@@ -146,7 +146,7 @@ Thân lỗi theo RFC 9457 (`Content-Type: application/problem+json`):
   (`FAILED_PRECONDITION`) là 409 ([ADR-0043](../adr/0043-idempotency-key.md)).
 - Circuit breaker của service đích đang mở ([đọc feed](../architecture.md#62-đọc-feed)): gateway không gọi mạng mà trả ngay
   `UNAVAILABLE`, tức 503 với `code` `UNAVAILABLE`, `detail` rỗng, như mọi 5xx. Service báo phụ thuộc của nó chết (`UNAVAILABLE`
-  kèm reason `DEPENDENCY_UNAVAILABLE`, ví dụ `RecordView` khi Redpanda chết, `CompleteUpload` khi object store chết) cũng là 503
+  kèm reason `DEPENDENCY_UNAVAILABLE`, ví dụ `RecordView` khi Kafka chết, `CompleteUpload` khi object store chết) cũng là 503
   không lộ reason. Like/Unlike khi Postgres chậm quá hạn ghi 1 s phía server hay không tới được cũng trả lỗi đó, kèm trailer
   `grpc-retry-pushback-ms: -1` nên gateway không thử lại ([ADR-0031](../adr/0031-chaos-findings-feed-engagement-tempo.md) §2).
 - Lỗi từ engagement-service khi ghép feed **không** đi qua bảng này: gateway nuốt lỗi và trả feed không kèm số đếm
@@ -208,17 +208,17 @@ Rate limit, cache, timeout/retry/circuit breaker và job dọn upload chốt ở
 [ADR-0010](../adr/0010-redis-ratelimit-cache-resilience-stage2c.md); ngưỡng của từng lớp ở
 `services/gateway/internal/ratelimit/ratelimit.go`:
 
-- mọi route trừ `/healthz`, `/readyz` có rate limit GCRA bằng một Lua script trong Redis db 10 (mục 2): `register` theo
+- mọi route trừ `/healthz`, `/readyz` có rate limit GCRA bằng một Lua script trong Valkey db 10 (mục 2): `register` theo
   IP 60/giờ, burst 20; `login-ip` theo IP 60/phút, burst 30, và `login-email` theo cặp (IP, email) 10/giờ, burst 5 (khoá chứa
   SHA-256 của email, không có email thô); `refresh` theo IP cho `/auth/refresh`, `/auth/logout` 60/phút, burst 30; `upload`
   (`POST /videos`) 30/giờ, burst 10; `write` 120/phút, burst 60; `read` 600/phút, burst 200, ba lớp sau theo `user_id`. Mọi lần
   gọi đều được đếm. IP là địa chỉ kết nối; `X-Forwarded-For` chỉ được đọc trên kết nối từ proxy tin cậy, theo
   `TRUSTED_PROXY_HOPS` và `TRUSTED_PROXY_CIDRS` (compose 0 hop, k3d 1 hop từ Envoy; RL-1,
   [ADR-0014](../adr/0014-kubernetes-local-stage4.md) §9);
-- Redis lỗi hay quá 50 ms thì `register`, `login-ip`, `login-email`, `refresh`, `upload` **đóng mềm** (bộ đếm trong bộ nhớ của
+- Valkey lỗi hay quá 50 ms thì `register`, `login-ip`, `login-email`, `refresh`, `upload` **đóng mềm** (bộ đếm trong bộ nhớ của
   từng instance, ngưỡng bằng nửa), `write` và `read` **mở**; gateway log WARN `rate limit store unavailable, using fallback` tối
   đa một dòng mỗi 10 s (RL-2);
-- lớp `public` theo IP cho `GET /public/videos/{video_id}`: 120/phút, burst 60, Redis lỗi thì đóng mềm 60/phút, burst 30
+- lớp `public` theo IP cho `GET /public/videos/{video_id}`: 120/phút, burst 60, Valkey lỗi thì đóng mềm 60/phút, burst 30
   ([ADR-0018](../adr/0018-web-profiles-public-video-upload.md) §6); ở compose mọi khách xem qua web chung một bucket IP;
 - lượt xem thứ hai của cùng cặp (`user_id`, `video_id`) trong 60 s vẫn nhận 202 nhưng không được đếm (RL-3, khoá
   `SET NX PX 60000`); chuyển tiếp `RecordView` lỗi thì xoá khoá đó để lần thử lại được đếm;

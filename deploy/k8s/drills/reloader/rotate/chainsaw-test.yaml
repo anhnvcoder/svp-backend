@@ -178,7 +178,7 @@ spec:
 
   - name: reloader-rotate-kafka-admin
     try:
-    - description: "reloader (SVP_KAFKA_ADMIN_PASSWORD): rpk as svp-admin with the new password: ok"
+    - description: "reloader (SVP_KAFKA_ADMIN_PASSWORD): a Kafka login as svp-admin with the new password: ok"
       continueOnError: true
       script:
         shell: bash
@@ -186,11 +186,11 @@ spec:
         content: |
           set -euo pipefail
           . ./reloader.sh
-          rpk_login svp-admin new SVP_KAFKA_ADMIN_PASSWORD
+          kafka_login svp-admin new SVP_KAFKA_ADMIN_PASSWORD
         check:
           ($error): ~
           (trim_space($stdout)): ok
-    - description: "reloader (SVP_KAFKA_ADMIN_PASSWORD): rpk as svp-admin with the old password: SASL_AUTHENTICATION_FAILED"
+    - description: "reloader (SVP_KAFKA_ADMIN_PASSWORD): a Kafka login as svp-admin with the old password: SASL_AUTHENTICATION_FAILED"
       continueOnError: true
       script:
         shell: bash
@@ -198,7 +198,7 @@ spec:
         content: |
           set -euo pipefail
           . ./reloader.sh
-          rpk_login svp-admin old SVP_KAFKA_ADMIN_PASSWORD
+          kafka_login svp-admin old SVP_KAFKA_ADMIN_PASSWORD
         check:
           ($error): ~
           (trim_space($stdout)): SASL_AUTHENTICATION_FAILED
@@ -284,7 +284,7 @@ spec:
         check:
           ($error): ~
           (trim_space($stdout)): ok
-    - description: "reloader (SVP_KAFKA_FEED_SERVICE_PASSWORD): rpk as svp-feed-service with the new password: ok"
+    - description: "reloader (SVP_KAFKA_FEED_SERVICE_PASSWORD): a Kafka login as svp-feed-service with the new password: ok"
       continueOnError: true
       script:
         shell: bash
@@ -292,11 +292,11 @@ spec:
         content: |
           set -euo pipefail
           . ./reloader.sh
-          rpk_login svp-feed-service new SVP_KAFKA_FEED_SERVICE_PASSWORD
+          kafka_login svp-feed-service new SVP_KAFKA_FEED_SERVICE_PASSWORD
         check:
           ($error): ~
           (trim_space($stdout)): ok
-    - description: "reloader (SVP_KAFKA_FEED_SERVICE_PASSWORD): rpk as svp-feed-service with the old password: SASL_AUTHENTICATION_FAILED"
+    - description: "reloader (SVP_KAFKA_FEED_SERVICE_PASSWORD): a Kafka login as svp-feed-service with the old password: SASL_AUTHENTICATION_FAILED"
       continueOnError: true
       script:
         shell: bash
@@ -304,7 +304,7 @@ spec:
         content: |
           set -euo pipefail
           . ./reloader.sh
-          rpk_login svp-feed-service old SVP_KAFKA_FEED_SERVICE_PASSWORD
+          kafka_login svp-feed-service old SVP_KAFKA_FEED_SERVICE_PASSWORD
         check:
           ($error): ~
           (trim_space($stdout)): SASL_AUTHENTICATION_FAILED
@@ -344,7 +344,7 @@ spec:
         check:
           ($error): ~
           (trim_space($stdout)): ok
-    - description: "reloader (SVP_KAFKA_KEDA_PASSWORD): rpk as svp-keda with the new password: ok"
+    - description: "reloader (SVP_KAFKA_KEDA_PASSWORD): a Kafka login as svp-keda with the new password: ok"
       continueOnError: true
       script:
         shell: bash
@@ -352,11 +352,11 @@ spec:
         content: |
           set -euo pipefail
           . ./reloader.sh
-          rpk_login svp-keda new SVP_KAFKA_KEDA_PASSWORD
+          kafka_login svp-keda new SVP_KAFKA_KEDA_PASSWORD
         check:
           ($error): ~
           (trim_space($stdout)): ok
-    - description: "reloader (SVP_KAFKA_KEDA_PASSWORD): rpk as svp-keda with the old password: SASL_AUTHENTICATION_FAILED"
+    - description: "reloader (SVP_KAFKA_KEDA_PASSWORD): a Kafka login as svp-keda with the old password: SASL_AUTHENTICATION_FAILED"
       continueOnError: true
       script:
         shell: bash
@@ -364,7 +364,7 @@ spec:
         content: |
           set -euo pipefail
           . ./reloader.sh
-          rpk_login svp-keda old SVP_KAFKA_KEDA_PASSWORD
+          kafka_login svp-keda old SVP_KAFKA_KEDA_PASSWORD
         check:
           ($error): ~
           (trim_space($stdout)): SASL_AUTHENTICATION_FAILED

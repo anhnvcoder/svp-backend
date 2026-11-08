@@ -32,8 +32,9 @@ login_email_interval_ms=360000
 rl1_fallback_series='svp_ratelimit_decisions_total{job="gateway",class=~"login-ip|login-email",store="fallback"}'
 prom_port=19090
 
-# valkey ARGS...: valkey-cli on the gateway's db 10 inside the Valkey pod (it has no address on the host); only reads.
-valkey() { kc -n svp-data exec deploy/valkey -c valkey -- valkey-cli -n 10 "$@"; }
+# valkey ARGS...: svp-valkey of the operations CLI (Deployment svp-ops, logged in as svp-ops) on the gateway's db 10;
+# only reads.
+valkey() { kc -n svp-data exec deploy/svp-ops -c valkey -- /opt/svp/bin/svp-valkey -n 10 "$@"; }
 
 # valkey_now: the seconds of Valkey's clock, which is the clock of every pod of the cluster (one Docker VM), the
 # gateway's and Prometheus' included.

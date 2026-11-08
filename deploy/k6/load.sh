@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # The load test of deploy/k6/main.js against the running compose stack (`make up`), run by `make load-local` (profile
 # local) and `make load-ci` (profile ci, the CI job `stack`).
-# LOCAL LAB ONLY: deletes the gateway's per-IP register rate limit keys (svp:gw:rl:register:*) in Redis db 10 on
-# 127.0.0.1:6379, since the pool registers from the one address of the k6 container. Never point it at a shared stack.
+# LOCAL LAB ONLY: deletes the gateway's per-IP register rate limit keys (svp:gw:rl:register:*) in Valkey db 10 of the
+# stack (through svp-valkey), since the pool registers from the one address of the k6 container. Never point it at a
+# shared stack.
 
 # Usage: K6_IMAGE=<image> deploy/k6/load.sh local|ci  (SVP_K6_HOLD=<n>s|m overrides how long the full rate holds)
 # Exit status: 0 when every threshold passed, 1 otherwise (k6's own status is printed).

@@ -50,12 +50,14 @@ case $args in
   "get namespace "*) grep -qx "${args#get namespace }" "$s/namespaces" ;;
   "apply "* | "create -f -") { echo "---"; cat; echo; } >>"$s/applied.yaml" ;;
   "get pvc "* | "get secret glitchtip-runtime") exit 1 ;;
-  # A cluster before Argo CD (deploy/k8s/gitops.sh): no StatefulSet, no CRD of External Secrets or Argo CD yet.
-  "get statefulsets -o name" | "get statefulset "*" --ignore-not-found -o jsonpath={.spec.replicas}") ;;
+  # A cluster before Argo CD (deploy/k8s/gitops.sh): no workload, no CRD of External Secrets or Argo CD yet.
+  "get statefulsets,deployments -o name" | "get statefulset "*" --ignore-not-found -o jsonpath={.spec.replicas}") ;;
+  "get deployment "*" --ignore-not-found -o name") ;;
   "get crd "*" --ignore-not-found -o name") ;;
   "get pod "*) ;;
-  "exec deploy/valkey -c valkey -- valkey-cli -n 10 --scan --pattern svp:gw:rl:register:*") printf 'svp:gw:rl:register:a\nsvp:gw:rl:register:b\n' ;;
-  "exec deploy/valkey -c valkey -- valkey-cli -n 10 DEL "*) echo 1 ;;
+  # The operations CLI of svp-data: svp-valkey of Deployment svp-ops, logged in as svp-ops.
+  "exec -i deploy/svp-ops -c valkey -- /opt/svp/bin/svp-valkey -n 10 --scan --pattern svp:gw:rl:register:*") printf 'svp:gw:rl:register:a\nsvp:gw:rl:register:b\n' ;;
+  "exec -i deploy/svp-ops -c valkey -- /opt/svp/bin/svp-valkey -n 10 DEL svp:gw:rl:register:"[ab]) echo 1 ;;
   *) echo "fake kubectl: unexpected call: $args" >&2; exit 3 ;;
 esac
 EOF
@@ -92,8 +94,8 @@ names=(SVP_PG_SUPERUSER_PASSWORD
   SVP_S3_ROOT_PASSWORD SVP_VIDEO_S3_SECRET_KEY SVP_MEDIA_WORKER_S3_SECRET_KEY SVP_PG_BACKUP_S3_SECRET_KEY
   SVP_KAFKA_ADMIN_PASSWORD SVP_KAFKA_KEDA_PASSWORD SVP_KAFKA_USER_SERVICE_PASSWORD SVP_KAFKA_VIDEO_SERVICE_PASSWORD
   SVP_KAFKA_ENGAGEMENT_SERVICE_PASSWORD SVP_KAFKA_FEED_SERVICE_PASSWORD SVP_KAFKA_MEDIA_WORKER_PASSWORD
-  JWT_SIGNING_KID JWT_SIGNING_KEY JWT_VERIFY_KEYS SVP_GRAFANA_ADMIN_PASSWORD GLITCHTIP_SECRET_KEY
-  GLITCHTIP_ADMIN_PASSWORD)
+  SVP_KAFKA_OTELCOL_PASSWORD JWT_SIGNING_KID JWT_SIGNING_KEY JWT_VERIFY_KEYS SVP_GRAFANA_ADMIN_PASSWORD
+  GLITCHTIP_SECRET_KEY GLITCHTIP_ADMIN_PASSWORD)
 : >"$work/secrets"
 fake=$work/code
 mkdir -p "$fake"
@@ -102,6 +104,12 @@ mkdir -p "$fake"
     v="fake-$(openssl rand -hex 12)"
     echo "$v" >>"$work/secrets"
     echo "$n=$v"
+  done
+  # Valkey's ACL file takes letters and digits only, as make env writes them.
+  for n in GATEWAY FEED_SERVICE WEB OPS; do
+    v="fake$(openssl rand -hex 12)"
+    echo "$v" >>"$work/secrets"
+    echo "SVP_VALKEY_${n}_PASSWORD=$v"
   done
   echo "GLITCHTIP_ADMIN_EMAIL=admin@svp.local"
   v=$(openssl rand -base64 32)
@@ -131,8 +139,10 @@ source_value() {
     n == name && $1 == key ":" { gsub(/"/, "", $2); print $2 }' "$FAKE_STATE/applied.yaml" | tail -n 1 | base64 -d
 }
 
-# --- the throwaway checkout: deploy/ of this one.
+# --- the throwaway checkout: deploy/ of this one, and a fake local CA of make env.
 cp -R "$repo/deploy" "$fake/deploy"
+mkdir -p "$fake/.local/ca"
+for f in ca.crt server.crt server.key; do printf 'fake %s\n' "$f" >"$fake/.local/ca/$f"; done
 
 # no_cluster_call NAME: kubectl was not run, nor helm but for templates, nor k3d, docker or aws.
 no_cluster_call() {
@@ -242,7 +252,7 @@ secrets_run() {
 }
 new_state svp-data svp svp-obs svp-secrets
 secrets_run "$work/k3d.out" SVP_RDS_MASTER_PASSWORD="$rds_password"
-if [ "$rc" = 0 ] && grep -qx 'ok    source Secrets of svp-secrets applied from .env: pg-superuser, pg-roles, s3-root, s3-users, kafka-admin, kafka-users, jwt-signing, jwt-verify, web, obs' "$work/k3d.out" &&
+if [ "$rc" = 0 ] && grep -qx 'ok    source Secrets of svp-secrets applied from .env: pg-superuser, pg-roles, s3-root, s3-users, kafka-admin, kafka-users, valkey-users, local-ca, local-tls, jwt-signing, jwt-verify, web, obs' "$work/k3d.out" &&
   [ "$(source_value pg-superuser SVP_PG_SUPERUSER_PASSWORD)" = "$env_pg_password" ] &&
   [ -z "$(grep -v '^--context k3d-svp ' "$FAKE_STATE/kubectl.log")" ]; then
   ok "secrets.sh on k3d-svp as before: pg-superuser from .env (SVP_RDS_MASTER_PASSWORD ignored), the store's sources, context k3d-svp"
@@ -261,9 +271,10 @@ rl_run() {
 }
 new_state
 rl_run "$work/out" SVP_STACK=eks SVP_KUBE_CONTEXT=svp-stg
-if [ "$rc" = 0 ] && grep -q '2 keys deleted in Valkey db 10 of cluster svp-stg' "$work/out" &&
-  [ "$(grep -c '^--context svp-stg -n svp-data exec deploy/valkey' "$FAKE_STATE/kubectl.log")" = 3 ]; then
-  ok "compose/lib.sh SVP_STACK=eks: SCAN and DEL in the Valkey of context svp-stg"
+if [ "$rc" = 0 ] && grep -q '2 keys deleted in Valkey db 10 (eks)' "$work/out" &&
+  [ "$(grep -c '^--context svp-stg -n svp-data exec -i deploy/svp-ops -c valkey -- /opt/svp/bin/svp-valkey -n 10 ' "$FAKE_STATE/kubectl.log")" = 3 ] &&
+  [ "$(grep -c '' "$FAKE_STATE/kubectl.log")" = 3 ]; then
+  ok "compose/lib.sh SVP_STACK=eks: SCAN and DEL through svp-valkey of Deployment svp-ops (logged in as svp-ops) in context svp-stg, nothing else"
 else
   fail "compose/lib.sh SVP_STACK=eks: exit $rc, kubectl '$(cat "$FAKE_STATE/kubectl.log")': $(cat "$work/out")"
 fi
@@ -275,8 +286,9 @@ for bad in k3d-svp '' svp-dev arn:aws:eks:ap-southeast-1:000000000000:cluster/sv
 done
 new_state
 rl_run "$work/out" SVP_STACK=k3d SVP_KUBE_CONTEXT=svp-stg
-if [ "$rc" = 0 ] && [ -z "$(grep -v '^--context k3d-svp ' "$FAKE_STATE/kubectl.log")" ]; then
-  ok "compose/lib.sh SVP_STACK=k3d: still context k3d-svp"
+if [ "$rc" = 0 ] && [ -z "$(grep -v '^--context k3d-svp -n svp-data exec -i deploy/svp-ops -c valkey -- /opt/svp/bin/svp-valkey -n 10 ' "$FAKE_STATE/kubectl.log")" ] &&
+  [ -s "$FAKE_STATE/kubectl.log" ]; then
+  ok "compose/lib.sh SVP_STACK=k3d: still context k3d-svp, through svp-valkey of Deployment svp-ops"
 else
   fail "compose/lib.sh SVP_STACK=k3d: kubectl '$(cat "$FAKE_STATE/kubectl.log")'"
 fi

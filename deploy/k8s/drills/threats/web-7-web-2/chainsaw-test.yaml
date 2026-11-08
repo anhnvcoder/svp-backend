@@ -25,7 +25,7 @@
 
 # LOCAL LAB ONLY: the test deletes the register rate limit keys svp:gw:rl:register:* in the cluster's Valkey db 10 (SCAN
 # + DEL) before it registers its drill user; otherwise it reads Valkey only (GET of the drill user's own session in db
-# 9).
+# 9, as svp-ops, and as svp-feed-service, whose ACL must refuse it: Valkey's users keep each service to its own db).
 # Design notes: docs/threat-model.md.
 apiVersion: chainsaw.kyverno.io/v1alpha1
 kind: Test
@@ -66,15 +66,15 @@ spec:
           umask 077
           keys=$(mktemp)
           trap 'rm -f "$keys"' EXIT
-          kubectl --context k3d-svp -n svp-data exec deploy/valkey -c valkey -- \
-            valkey-cli -n 10 --scan --pattern 'svp:gw:rl:register:*' >"$keys"
+          kubectl --context k3d-svp -n svp-data exec deploy/svp-ops -c valkey -- \
+            /opt/svp/bin/svp-valkey -n 10 --scan --pattern 'svp:gw:rl:register:*' >"$keys"
           n=0
           while IFS= read -r key; do
             [ -n "$key" ] || continue
-            kubectl --context k3d-svp -n svp-data exec deploy/valkey -c valkey -- valkey-cli -n 10 DEL "$key" >/dev/null
+            kubectl --context k3d-svp -n svp-data exec deploy/svp-ops -c valkey -- /opt/svp/bin/svp-valkey -n 10 DEL "$key" >/dev/null
             n=$((n + 1))
           done <"$keys"
-          echo "register rate limit reset ($n keys deleted in Valkey db 10 of cluster svp)"
+          echo "register rate limit reset ($n keys deleted in Valkey db 10 of cluster svp, through svp-ops)"
         check:
           ($error): ~
     - description: "WEB-7: setup: the test's private work directory .k8s/drills/web-7-web-2 (one left by a killed run is removed first)"
@@ -502,6 +502,20 @@ spec:
         check:
           ($error): ~
           (trim_space($stdout)): session read
+    - description: "WEB-7: Valkey's ACL: svp-feed-service (its password of Secret svp/feed-service-env) may not read the drill user's web session in db 9: NOPERM"
+      continueOnError: true
+      script:
+        shell: bash
+        env:
+        - *kubeconfig
+        content: |
+          set -euo pipefail
+          . ./web.sh
+          work_ready
+          web_session_as svp-feed-service
+        check:
+          ($error): ~
+          (trim_space($stdout)): NOPERM
     - description: "WEB-7: the HTML of / holds no string shaped like a JWT"
       continueOnError: true
       script:

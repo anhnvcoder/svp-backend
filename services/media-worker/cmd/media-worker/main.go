@@ -10,7 +10,7 @@
 // objstore.Config.ReadAccessEnv reads them, S3_REGION (default us-east-1), S3_UPLOADS_BUCKET
 // (default uploads), S3_MEDIA_BUCKET (default media) and WORK_DIR (default /work). The OTEL_*
 // variables send traces, metrics and logs to the Collector; the worker has no profiler and no
-// error tracker, since its network reaches only Redpanda, the object store and the Collector, and
+// error tracker, since its network reaches only Kafka, the object store and the Collector, and
 // ffmpeg runs as a child process the profiler would not see.
 package main
 

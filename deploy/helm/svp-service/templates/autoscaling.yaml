@@ -20,7 +20,7 @@ creates. Its scaler logs in through ClusterTriggerAuthentication keda-kafka (use
 
 {{- /*
 The KEDA operator reads Secrets of namespace keda only, so the login is no TriggerAuthentication beside the
-ScaledObject. The operator's namespace denies no egress; Redpanda's ingress policy in svp-data opens 9092 to it.
+ScaledObject. The operator's namespace denies no egress; the ingress policy of the broker in svp-data opens 9096 to it.
 */}}
 
 {{- /* Design notes: docs/explanation/deployment.md. */}}

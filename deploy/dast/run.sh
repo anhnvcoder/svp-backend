@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # DAST of the gateway against services/gateway/openapi.yaml with Schemathesis, on the running compose stack, run by
-# `make dast` and the CI job `stack`. LOCAL LAB ONLY: deletes the gateway's register rate limit keys in Redis db 10
+# `make dast` and the CI job `stack`. LOCAL LAB ONLY: deletes the gateway's register rate limit keys in Valkey db 10
 # before and after the run; never point it at a shared stack. Schemathesis output goes to .dast/<time>/ (mode 700),
 # never to the terminal: a failed check prints response bodies that hold tokens.
 

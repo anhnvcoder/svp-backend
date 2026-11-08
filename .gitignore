@@ -13,6 +13,9 @@
 *.tfstate
 *.tfstate.*
 
+# Local CA, server certificate and key of Kafka and Valkey (make env), Valkey's ACL file (make up)
+.local/
+
 # Local Kubernetes output: the cluster CA exported for curl, Helm cache and config of the k8s scripts
 .k8s/
 

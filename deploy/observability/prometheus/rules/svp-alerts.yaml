@@ -12,28 +12,28 @@
 groups:
   - name: svp-alerts
     rules:
-      # Consumer group lag scraped from Redpanda by the obs Collector. Lag > 0 catches even one stuck
-      # record; the duration says the backlog lasts. media-worker holds a record for a whole transcode
+      # Consumer group lag per partition, read from Kafka by the Collector's kafka_metrics receiver. Lag > 0 catches
+      # even one stuck record; the duration says the backlog lasts. media-worker holds a record for a whole transcode
       # (up to 15 minutes per attempt), so its group gets 20 minutes.
       - alert: KafkaConsumerLagHigh
         expr: >-
-          max by (redpanda_group) (redpanda_kafka_consumer_group_lag_max{redpanda_group=~"video-service|feed-service|engagement-service"}) > 0
+          max by (group) (kafka_consumer_group_lag_ratio{kafka_cluster_alias="svp",group=~"video-service|feed-service|engagement-service"}) > 0
         for: 2m
         labels:
           severity: page
         annotations:
-          summary: "Kafka consumer group {{ $labels.redpanda_group }} has had lag for 2 minutes"
+          summary: "Kafka consumer group {{ $labels.group }} has had lag for 2 minutes"
           runbook_url: "https://github.com/anhnvcoder/svp-backend/blob/main/docs/runbooks/kafka-consumer-lag-high.md"
       - alert: KafkaConsumerLagHigh
         expr: >-
-          max by (redpanda_group) (redpanda_kafka_consumer_group_lag_max{redpanda_group="media-worker"}) > 0
+          max by (group) (kafka_consumer_group_lag_ratio{kafka_cluster_alias="svp",group="media-worker"}) > 0
         for: 20m
         labels:
           severity: page
           # Same as the series label; tells this rule from the one above (promtool lint).
-          redpanda_group: media-worker
+          group: media-worker
         annotations:
-          summary: "Kafka consumer group {{ $labels.redpanda_group }} has had lag for 20 minutes"
+          summary: "Kafka consumer group {{ $labels.group }} has had lag for 20 minutes"
           runbook_url: "https://github.com/anhnvcoder/svp-backend/blob/main/docs/runbooks/kafka-consumer-lag-high.md"
 
       # Rate limiting runs on the in-memory fallback store when a Redis command fails or exceeds its 50 ms limit. One

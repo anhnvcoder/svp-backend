@@ -31,9 +31,11 @@ umask 077
 (set -C && : >"$out") 2>/dev/null || fail "$out exists or cannot be created; the new values go to a new file"
 
 put SVP_S3_ROOT_PASSWORD "$(openssl rand -hex 20)"
-for name in SVP_KAFKA_ADMIN_PASSWORD SVP_VIDEO_APP_DB_PASSWORD SVP_KAFKA_FEED_SERVICE_PASSWORD SVP_KAFKA_KEDA_PASSWORD \
-  SVP_GLITCHTIP_APP_DB_PASSWORD SVP_GRAFANA_ADMIN_PASSWORD; do
+for name in SVP_VIDEO_APP_DB_PASSWORD SVP_GLITCHTIP_APP_DB_PASSWORD SVP_GRAFANA_ADMIN_PASSWORD; do
   put "$name" "$(openssl rand -hex 24)"
+done
+for name in SVP_KAFKA_ADMIN_PASSWORD SVP_KAFKA_FEED_SERVICE_PASSWORD SVP_KAFKA_KEDA_PASSWORD; do
+  put "$name" "$(openssl rand -hex 16)"
 done
 put NEXT_SERVER_ACTIONS_ENCRYPTION_KEY "$(openssl rand -base64 32)"
 

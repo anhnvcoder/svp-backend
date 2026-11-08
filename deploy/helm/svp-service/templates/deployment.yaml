@@ -4,8 +4,9 @@ secret ones from Secret <service>-env (deploy/k8s/secrets.sh, from .env).
 */}}
 
 {{- /*
-A process reads its environment only at start, so the workload names its Secrets in secret.reloader.stakater.com/reload:
-Reloader restarts it when one changes or sentry is created; an unread Secret never does.
+A process reads its environment and its trusted roots (the local CA) only at start, so the workload names its Secrets
+in secret.reloader.stakater.com/reload: Reloader restarts it when one changes or sentry is created; an unread Secret
+never does.
 */}}
 
 {{- /*
@@ -32,7 +33,7 @@ metadata:
   labels:
     {{- include "svp-service.labels" . | nindent 4 }}
   annotations:
-    secret.reloader.stakater.com/reload: {{ .Release.Name }}-env{{ if .Values.errorTracking }},sentry{{ end }}
+    secret.reloader.stakater.com/reload: {{ .Release.Name }}-env{{ if .Values.errorTracking }},sentry{{ end }}{{ with .Values.localCA }},{{ . }}{{ end }}
     {{- if .Values.canary }}
     reloader.stakater.com/rollout-strategy: restart
     {{- end }}
@@ -88,6 +89,12 @@ spec:
             - name: SENTRY_DSN
               valueFrom:
                 secretKeyRef: {name: sentry, key: SENTRY_DSN, optional: true}
+            {{- end }}
+            {{- if .Values.localCA }}
+            - name: SSL_CERT_DIR
+              value: /etc/svp-ca
+            - name: NODE_EXTRA_CA_CERTS
+              value: /etc/svp-ca/ca.crt
             {{- end }}
           envFrom:
             - secretRef:
@@ -155,21 +162,32 @@ spec:
             {{- toYaml $resources | nindent 12 }}
           securityContext:
             {{- include "svp-service.containerSecurityContext" . | nindent 12 }}
-          {{- with .Values.scratch }}
+          {{- if or .Values.scratch .Values.localCA }}
           volumeMounts:
-            {{- range $name, $dir := . }}
+            {{- range $name, $dir := .Values.scratch }}
             - name: {{ $name }}
               mountPath: {{ $dir.mountPath }}
             {{- end }}
+            {{- if .Values.localCA }}
+            - name: local-ca
+              mountPath: /etc/svp-ca
+              readOnly: true
+            {{- end }}
           {{- end }}
-      {{- with .Values.scratch }}
+      {{- if or .Values.scratch .Values.localCA }}
       volumes:
-        {{- range $name, $dir := . }}
+        {{- range $name, $dir := .Values.scratch }}
         - name: {{ $name }}
           emptyDir:
             {{- with $dir.medium }}
             medium: {{ . }}
             {{- end }}
             sizeLimit: {{ $dir.sizeLimit }}
+        {{- end }}
+        {{- if .Values.localCA }}
+        - name: local-ca
+          secret:
+            secretName: {{ .Values.localCA }}
+            defaultMode: 0440
         {{- end }}
       {{- end }}

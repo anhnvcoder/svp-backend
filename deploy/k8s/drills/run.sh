@@ -27,10 +27,10 @@
 # holds a Secret value of threats is replaced by a line saying so. A drill with no test, or whose report holds another
 # number of tests than its folder (less those left out), fails.
 
-# threats reads the Secret values its tests use first (the 6 Kafka users of svp-data/kafka-users, the Grafana admin of
-# svp-obs/grafana-admin, the 3 object store users of svp-data/pg-backup-s3 and svp-data/s3-users), into a file of mode
-# 600 that is removed on exit and never named a value on a command line: fewer than 10 values fail the drill before
-# chainsaw. reloader puts in that file the old and the new value of each variable it changes and GlitchTip's API token.
+# threats reads the Secret values its tests use first (7 Kafka users of svp-data/kafka-users, svp-feed-service's Valkey
+# password in svp/feed-service-env, the Grafana admin, 3 object store users of svp-data/pg-backup-s3 and s3-users) into
+# a file of mode 600, removed on exit, no value on a command line: fewer than 12 fail the drill before chainsaw.
+# reloader puts in that file the old and the new value of each variable it changes and GlitchTip's API token.
 
 # The terminal gets every line of the output but those that hold one of the values, and once chainsaw has ended the log
 # and the report are searched for them: a line holding one fails the drill, which prints how many, never the value.
@@ -93,15 +93,17 @@ threats)
   secrets=$work/secrets
   {
     kc -n svp-data get secret kafka-users -o json | jq -r '.data[] | @base64d'
+    kc -n svp get secret feed-service-env -o json |
+      jq -r '.data.REDIS_URL | @base64d | capture("^rediss://svp-feed-service:(?<pw>[A-Za-z0-9]+)@").pw'
     kc -n svp-obs get secret grafana-admin -o json | jq -r '.data["admin-password"] | @base64d'
     kc -n svp-data get secret pg-backup-s3 -o json | jq -r '.data.ACCESS_SECRET_KEY | @base64d'
     kc -n svp-data get secret s3-users -o json |
       jq -r '.data.SVP_VIDEO_S3_SECRET_KEY, .data.SVP_MEDIA_WORKER_S3_SECRET_KEY | @base64d'
   } 2>/dev/null | grep -v '^$' >"$secrets" || true
   n=$(grep -c . "$secrets" || true)
-  ((n >= 10)) ||
-    fail "SECRETS: read the 10 Secret values the drill uses (6 Kafka users, Grafana admin, 3 object store users) to search its output (got $n)"
-  searched="the drill read (6 Kafka users, Grafana admin, 3 object store users)"
+  ((n >= 12)) ||
+    fail "SECRETS: read the 12 Secret values the drill uses (7 Kafka users, Valkey's svp-feed-service, Grafana admin, 3 object store users) to search its output (got $n)"
+  searched="the drill read (7 Kafka users, Valkey's svp-feed-service, Grafana admin, 3 object store users)"
   ;;
 reloader)
   [ -s .k8s/ca.crt ] || fail "drill-k8s-reloader: .k8s/ca.crt missing; run make k8s-up (or make k8s-ca)"

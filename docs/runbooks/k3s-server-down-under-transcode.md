@@ -69,7 +69,7 @@ kubectl --context k3d-svp get --raw /readyz
 kubectl --context k3d-svp get nodes
 make k8s-status                    # mọi pod Running/Ready, không CrashLoopBackOff
 make k8s-smoke                     # luồng đầu-cuối (LOCAL LAB ONLY)
-kubectl --context k3d-svp -n svp-data exec redpanda-0 -c redpanda -- rpk group describe media-worker | grep -E 'MEMBERS|TOTAL-LAG'
+kubectl --context k3d-svp -n svp-data exec deploy/svp-ops -c kafka -- /opt/svp/bin/svp-kafka consumer-groups --describe --group media-worker | awk '$1 == "media-worker" { lag += $6 } END { print "TOTAL-LAG", lag + 0 }'
 ```
 
 Video đang transcode lúc server chết được làm lại (record chưa commit) và tới `READY` đúng một lần (tính chất của pipeline,

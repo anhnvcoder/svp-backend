@@ -8,11 +8,17 @@ Loại tài liệu (Diátaxis): **reference**, tra cứu khi cần một lệnh 
   từng service và của user thử `svp-objstore-probe` (`SVP_S3_PROBE_SECRET_KEY`, chỉ compose và `make test-stack`) ngẫu nhiên,
   khoá JWT mới, khoá Server Action của web `NEXT_SERVER_ACTIONS_ENCRYPTION_KEY` (base64 của 32 byte); thêm
   `GLITCHTIP_SECRET_KEY`, `GLITCHTIP_ADMIN_PASSWORD`, mật khẩu hai role `svp_glitchtip_*` và
-  `GLITCHTIP_ADMIN_EMAIL=admin@svp.local`; cho cluster k3d, compose bỏ qua: `SVP_PG_SUPERUSER_PASSWORD`,
-  `SVP_KAFKA_ADMIN_PASSWORD`, `SVP_KAFKA_KEDA_PASSWORD`, `SVP_KAFKA_<SERVICE>_PASSWORD` cho 5 service có Kafka,
+  `GLITCHTIP_ADMIN_EMAIL=admin@svp.local`; mật khẩu Kafka và Valkey cho compose và cluster k3d (chỉ chữ và số, 32 ký tự,
+  [ADR-0053](../adr/0053-msk-elasticache-valkey.md) §12): `SVP_KAFKA_ADMIN_PASSWORD` (user `svp-admin` của script init Kafka và của
+  `svp-kafka`), `SVP_KAFKA_<SERVICE>_PASSWORD` cho 5 service có Kafka (`USER_SERVICE`, `VIDEO_SERVICE`, `ENGAGEMENT_SERVICE`,
+  `FEED_SERVICE`, `MEDIA_WORKER`), `SVP_KAFKA_OTELCOL_PASSWORD` (Collector), `SVP_KAFKA_KEDA_PASSWORD` (chỉ k3d),
+  `SVP_VALKEY_GATEWAY_PASSWORD`, `SVP_VALKEY_FEED_SERVICE_PASSWORD`, `SVP_VALKEY_WEB_PASSWORD`, `SVP_VALKEY_OPS_PASSWORD` (user
+  `svp-ops` của `svp-valkey`); cho cluster k3d, compose bỏ qua: `SVP_PG_SUPERUSER_PASSWORD`,
   `SVP_GRAFANA_ADMIN_PASSWORD`, `SVP_PG_BACKUP_S3_SECRET_KEY` (user `svp-pg-backup` của backup Postgres; 20 byte hex
   như secret key S3 khác: 40 ký tự là độ dài secret key của AWS)). `.env` có
-  sẵn thì chỉ bổ sung biến còn thiếu hoặc đang rỗng, không đổi giá trị đã đặt.
+  sẵn thì chỉ bổ sung biến còn thiếu hoặc đang rỗng, không đổi giá trị đã đặt. Cùng lệnh sinh một lần **CA local** vào
+  `.local/ca/` (gitignore, không ghi đè; khoá mode 600): `ca.crt`, `ca.key` và cert server cho Kafka, Valkey ký bởi CA đó.
+  Trên EKS các mật khẩu Kafka, Valkey không lấy từ `.env`: Terraform của `svp-infra` sinh và ghi vào Secrets Manager.
 - Người học tự đặt, `make env` không sinh (không tạo được khoá của GitHub App), chỉ cho cluster EKS có Argo CD Notifications
   ([`eks.md`](eks.md), [ADR-0032](../adr/0032-argocd-deploy-status.md)): `SVP_ARGOCD_NOTIFY_APP_ID`, `SVP_ARGOCD_NOTIFY_INSTALLATION_ID`
   (số của App `svp-argocd-notifier` và bản cài của nó trên `svp-gitops`), `SVP_ARGOCD_NOTIFY_PRIVATE_KEY_B64` (khoá riêng của App,
@@ -33,6 +39,36 @@ Loại tài liệu (Diátaxis): **reference**, tra cứu khi cần một lệnh 
   trong đúng một cặp nháy `"..."`/`'...'` bao ngoài, bỏ nháy khi đọc (`KEY=""` là rỗng). Dòng có `$`/`${`, khoảng trắng
   đầu dòng hay `export`, khoá lặp, giá trị nhiều dòng, CRLF, byte NUL → dừng, nêu `FILE:dòng:` và tên biến, không in giá
   trị, không ghi gì.
+
+## Kafka, Valkey và CA local
+
+Mọi môi trường dùng cùng giao thức và cùng code của client; khác nhau chỉ ở giá trị biến
+([ADR-0053](../adr/0053-msk-elasticache-valkey.md) §4, §10, §11).
+
+- **`KAFKA_BROKERS`** (user, video, engagement, feed-service, media-worker): danh sách `host:port` cách dấu phẩy của listener SASL_SSL
+  cổng 9096: compose `kafka:9096`, k3d `kafka.svp-data.svc.cluster.local:9096`, EKS giá trị `cluster.kafkaBrokers` (bootstrap SCRAM của
+  MSK). Không cổng Kafka nào publish ra host.
+- **`KAFKA_SASL_USERNAME`, `KAFKA_SASL_PASSWORD`** (`internal/kafkax`, đọc ở mọi client của process, cả producer dead-letter trong
+  consumer): đều đặt thì client nối TLS (tối thiểu 1.2, root của hệ thống, kiểm tên cert theo host của broker) và đăng nhập
+  SCRAM-SHA-512; cả hai trống thì plaintext không SASL, chỉ broker trong bộ nhớ của test nhận; chỉ một biến thì service không khởi
+  động, lỗi nêu tên biến thiếu, không in giá trị. Không có biến bật, tắt TLS. Giá trị: user `svp-<service>` và mật khẩu
+  `SVP_KAFKA_<SERVICE>_PASSWORD` (compose từ `.env`, cluster từ Secret `svp/<service>-env`). Broker từ chối mật khẩu hay bắt tay TLS
+  (cert sai tên, CA lạ, broker không TLS) thì client log WARN/ERROR `kafka client: …` có địa chỉ broker và lỗi, không có mật khẩu.
+- **`REDIS_URL`** (gateway db 10, feed-service db 14, web db 9): `rediss://<user>:<password>@<host>:6379/<db>` với user `svp-gateway`,
+  `svp-feed-service`, `svp-web`; host compose `valkey`, k3d `valkey.svp-data.svc.cluster.local`, EKS `cluster.valkeyHost`. `rediss://` bật
+  TLS kiểm tên theo host; lỗi đọc URL không chứa URL. `make test` (db 15) và `make dev` của web (db 9) vẫn dùng Redis native, không TLS,
+  không user ([`testing.md`](testing.md)).
+- **`SSL_CERT_DIR=/etc/svp-ca`** (container Go) và **`NODE_EXTRA_CA_CERTS=/etc/svp-ca/ca.crt`** (web): chỉ local (compose, k3d), cho
+  client tin **CA local** cạnh root của hệ thống; `ca.crt` mount chỉ đọc. Trên EKS không đặt: cert của MSK, ElastiCache nối về CA công
+  khai của Amazon. Go trên macOS bỏ qua `SSL_CERT_DIR`, nên biến này chỉ có tác dụng trong container Linux.
+- **Collector** (receiver `kafkametrics`, user `svp-otelcol`): `SVP_KAFKA_OTELCOL_PASSWORD` (compose từ `.env`, cluster từ Secret
+  `svp-obs/otelcol-kafka` khoá `password`), `SVP_OTELCOL_KAFKA_BROKERS` (địa chỉ như `KAFKA_BROKERS`), `SVP_OTELCOL_KAFKA_CA_FILE`
+  (`/etc/svp-ca/ca.crt` ở local, rỗng trên EKS).
+- **CLI vận hành** (`/opt/svp/bin/svp-kafka`, `/opt/svp/bin/svp-valkey` từ `deploy/ops/`, chạy trong container `kafka`, `valkey` của
+  compose và Deployment `svp-data/svp-ops` của cluster): `svp-kafka` đọc `KAFKA_BROKERS` và `SVP_KAFKA_ADMIN_PASSWORD` (user
+  `svp-admin`), `svp-valkey` đọc `VALKEY_HOST` và `SVP_VALKEY_OPS_PASSWORD` (user `svp-ops`, chuyển cho `valkey-cli` qua
+  `REDISCLI_AUTH`); cả hai đọc `SVP_CA_FILE` (CA để tin, chỉ local). `SVP_AS_USER=<user>` đăng nhập user khác, mật khẩu là dòng đầu
+  của stdin, phần còn lại chuyển nguyên cho công cụ. Mật khẩu chỉ ở biến của container hay stdin, không trên dòng lệnh.
 
 ## Biến và hành vi khởi động của service
 

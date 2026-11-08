@@ -1,13 +1,16 @@
 # KafkaConsumerLagHigh
 
 - Severity: `page`. Rule: `deploy/observability/prometheus/rules/svp-alerts.yaml`, hai biến thể cùng tên, nhãn
-  `redpanda_group` cho biết group.
-- Chuẩn bị biến `PROM`, `AM`, hàm `dc`: [README](README.md#chuẩn-bị-trong-terminal).
+  `group` cho biết group.
+- Chuẩn bị biến `PROM`, `AM`, hàm `dc`: [README](README.md#chuẩn-bị-trong-terminal). Lệnh Kafka đi qua `svp-kafka` (Kafka CLI
+  của image `apache/kafka`, đăng nhập `svp-admin`, [ADR-0053](../adr/0053-msk-elasticache-valkey.md) §13): compose trong container
+  `kafka`, k3d và EKS trong Deployment `svp-ops` của namespace `svp-data`.
 
 ## Ý nghĩa và tác động tới người dùng
 
-Consumer group có lag > 0 (ít nhất một record chưa commit) kéo dài: số lấy từ Redpanda (`redpanda_kafka_consumer_group_lag_max`,
-Collector scrape broker). Lag > 0 bắt cả một record kẹt mãi, không chờ backlog hàng trăm
+Consumer group có lag > 0 (ít nhất một record chưa commit) kéo dài: số lấy từ broker (`kafka_consumer_group_lag_ratio`, lag
+từng partition mà receiver `kafka_metrics` của Collector đọc mỗi 15 s bằng user `svp-otelcol`; tên Prometheus có hậu tố `_ratio` vì
+receiver ghi đơn vị `1`). Lag > 0 bắt cả một record kẹt mãi, không chờ backlog hàng trăm
 ([ADR-0011](../adr/0011-observability-stage3.md) §8).
 
 | Biến thể | Group | `for` | Đọc topic | Người dùng thấy khi kẹt |
@@ -17,28 +20,32 @@ Collector scrape broker). Lag > 0 bắt cả một record kẹt mãi, không ch�
 | 1 | `engagement-service` | 2 m | `engagement.views.v1` | Lượt xem không tăng trong `stats` |
 | 2 | `media-worker` | 20 m | `video.lifecycle.v1` | Video không được transcode; 20 phút vì một lần transcode hợp lệ giữ record tới 15 phút |
 
-Nếu broker chết hay Collector không scrape được, metric mất và cảnh báo **không** cháy (hay tự hết): không có cảnh báo lag
-không có nghĩa là pipeline chạy.
+Nếu broker chết hay Collector không đọc được broker (mật khẩu, CA, NetworkPolicy), metric mất và cảnh báo **không** cháy (hay tự
+hết): không có cảnh báo lag không có nghĩa là pipeline chạy. Collector đọc được broker khi
+`time() - timestamp(kafka_brokers{kafka_cluster_alias="svp"})` dưới 120 s; partition mà group chưa commit lần nào không có lag.
 
 ## Kiểm tra nhanh (5 phút)
 
-Compose (`<group>` là nhãn `redpanda_group` của cảnh báo):
+Compose (`<group>` là nhãn `group` của cảnh báo):
 
 ```sh
-curl -sG "$AM/api/v2/alerts" --data-urlencode 'filter=alertname="KafkaConsumerLagHigh"' | jq -c '.[] | [.labels.redpanda_group, .status.state, .startsAt]'
-# MEMBERS 0: consumer không chạy; TOTAL-LAG; từng partition CURRENT-OFFSET so với LOG-END-OFFSET
-dc exec -T redpanda rpk group describe feed-service
+curl -sG "$AM/api/v2/alerts" --data-urlencode 'filter=alertname="KafkaConsumerLagHigh"' | jq -c '.[] | [.labels.group, .status.state, .startsAt]'
+# STATE, #MEMBERS: 0 là consumer không chạy
+dc exec -T kafka /opt/svp/bin/svp-kafka consumer-groups --describe --group feed-service --state
+# từng partition: CURRENT-OFFSET so với LOG-END-OFFSET, cột LAG
+dc exec -T kafka /opt/svp/bin/svp-kafka consumer-groups --describe --group feed-service
 make ps
 # lỗi tạm đang thử lại, record vào DLQ, lỗi fetch
 make logs SVC=feed-service | grep -E 'kafka handler failed, retrying|dead-letter|kafka fetch error'
 # lag theo group và topic
-curl -sG "$PROM/api/v1/query" --data-urlencode 'query=max by (redpanda_group) (redpanda_kafka_consumer_group_lag_max)' | jq -c '.data.result[] | [.metric.redpanda_group, .value[1]]'
+curl -sG "$PROM/api/v1/query" --data-urlencode 'query=max by (group, topic) (kafka_consumer_group_lag_sum_ratio)' | jq -c '.data.result[] | [.metric.group, .metric.topic, .value[1]]'
 ```
 
-k3d:
+k3d (EKS: cùng lệnh với context của cluster EKS, người học chạy):
 
 ```sh
-kubectl --context k3d-svp -n svp-data exec redpanda-0 -c redpanda -- rpk group describe feed-service
+kubectl --context k3d-svp -n svp-data exec deploy/svp-ops -c kafka -- /opt/svp/bin/svp-kafka consumer-groups --describe --group feed-service --state
+kubectl --context k3d-svp -n svp-data exec deploy/svp-ops -c kafka -- /opt/svp/bin/svp-kafka consumer-groups --describe --group feed-service
 kubectl --context k3d-svp -n svp get pods -l app.kubernetes.io/name=feed-service
 kubectl --context k3d-svp -n svp logs -l app.kubernetes.io/name=feed-service --since=30m --tail=2000 | grep -E 'kafka handler failed, retrying|dead-letter|kafka fetch error'
 # media-worker: KEDA scale theo lag, tối đa 2 replica (ADR-0017)
@@ -51,7 +58,7 @@ READY / FAILED p50 / p95", "Transcode duration p50 / p95".
 
 ## Nguyên nhân thường gặp
 
-1. **Consumer không chạy**: `MEMBERS` 0, container dừng hay pod CrashLoopBackOff.
+1. **Consumer không chạy**: `#MEMBERS` 0, container dừng hay pod CrashLoopBackOff.
 2. **Handler lỗi tạm và đang thử lại**: log `kafka handler failed, retrying` lặp với cùng offset; thường do phụ thuộc chết
    (Postgres của service, object store `s3` với media-worker và video-service). Hết số lần thử thì record vào DLQ
    ([kafka-dlq-records.md](kafka-dlq-records.md)) và lag tự hết.
@@ -68,20 +75,21 @@ READY / FAILED p50 / p95", "Transcode duration p50 / p95".
 - media-worker chậm vì burst: chờ, hàng đợi được rút theo thứ tự; trên máy 16 GB **không** nâng `maxReplicaCount` quá 2 (k3s
   server chết khi 3 worker cùng transcode, [k3s-server-down-under-transcode.md](k3s-server-down-under-transcode.md)). Cắm
   sạc, tắt Low Power Mode.
-- **Không** `rpk group seek` để bỏ qua record: mất event (video không bao giờ `READY`, follow không vào feed). Bỏ qua record là
+- **Không** `consumer-groups --reset-offsets` để bỏ qua record: mất event (video không bao giờ `READY`, follow không vào feed). Bỏ qua record là
   quyết định leo thang.
 
 ## Khôi phục và xác nhận
 
 ```sh
-dc exec -T redpanda rpk group describe feed-service | grep -E 'MEMBERS|TOTAL-LAG'                                             # compose
-kubectl --context k3d-svp -n svp-data exec redpanda-0 -c redpanda -- rpk group describe feed-service | grep -E 'MEMBERS|TOTAL-LAG'   # k3d
-curl -sG "$AM/api/v2/alerts" --data-urlencode 'filter=alertname="KafkaConsumerLagHigh"' | jq -c '.[] | [.labels.redpanda_group, .status.state]'
+# compose; k3d: thay `dc exec -T kafka` bằng `kubectl --context k3d-svp -n svp-data exec deploy/svp-ops -c kafka --`
+dc exec -T kafka /opt/svp/bin/svp-kafka consumer-groups --describe --group feed-service --state
+dc exec -T kafka /opt/svp/bin/svp-kafka consumer-groups --describe --group feed-service | awk '$1 == "feed-service" { lag += $6 } END { print "TOTAL-LAG", lag + 0 }'
+curl -sG "$AM/api/v2/alerts" --data-urlencode 'filter=alertname="KafkaConsumerLagHigh"' | jq -c '.[] | [.labels.group, .status.state]'
 make smoke          # compose: upload tới READY, feed, view (LOCAL LAB ONLY)
 make k8s-smoke      # k3d
 ```
 
-`TOTAL-LAG` 0 và `MEMBERS` ≥ 1; cảnh báo hết ở lần đánh giá kế khi lag về 0. Với video-service và media-worker, mọi video kẹt
+`TOTAL-LAG` 0 và `#MEMBERS` ≥ 1; cảnh báo hết ở lần đánh giá kế khi lag về 0. Với video-service và media-worker, mọi video kẹt
 phải tới `READY` hay `FAILED` (`make smoke` chứng minh luồng mới chạy; video cũ kiểm theo id trong log).
 
 ## Leo thang
@@ -89,7 +97,7 @@ phải tới `READY` hay `FAILED` (`make smoke` chứng minh luồng mới chạ
 - Lag tăng mãi khi consumer chạy và log không có lỗi: nghi handler treo; lấy trace của span `process <topic>` trong Tempo
   (dashboard `svp-red`, "Recent gateway traces" hay Explore → Tempo), mở postmortem.
 - Một record lỗi vĩnh viễn mà không vào DLQ (thử lại mãi với cùng offset): lỗi phân loại lỗi tạm/vĩnh viễn trong handler;
-  sửa code. Bỏ qua record bằng `rpk group seek` chỉ khi đã ghi lại offset và chấp nhận mất event đó, ghi vào postmortem.
+  sửa code. Bỏ qua record bằng `consumer-groups --reset-offsets` chỉ khi đã ghi lại offset và chấp nhận mất event đó, ghi vào postmortem.
 - media-worker lag trên k3d kèm API server chậm hay node NotReady: chuyển sang
   [k3s-server-down-under-transcode.md](k3s-server-down-under-transcode.md).
 

@@ -210,7 +210,7 @@ type runner interface {
 }
 
 // runConsumer runs consumers made by newConsumer, one after the other, until ctx is canceled.
-// A consumer stops on an error when a batch cannot be settled, as when Redpanda restarts during
+// A consumer stops on an error when a batch cannot be settled, as when Kafka restarts during
 // a commit; the batch stays uncommitted, so the next consumer gets it again and the offsets in
 // consumer_offsets skip what was already counted. Replacing the consumer here keeps the gRPC API
 // serving meanwhile. It returns an error only when newConsumer fails.

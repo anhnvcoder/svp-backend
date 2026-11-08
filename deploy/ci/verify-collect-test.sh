@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Tests verify-collect.sh, verify-mask.sh, deploy/k8s/lib.sh reports, and gitops.sh follow with fake fixtures.
+# Tests verify-collect.sh, verify-mask.sh, verify-k8s-state.sh, deploy/k8s/lib.sh reports, gitops.sh follow with fakes.
 # Fake secrets are generated at run time so no repository file holds one; fake kubectl isolates the run.
 # Runs on macOS and Linux: no network, Docker, or cluster needed.
 # Usage, from anywhere: deploy/ci/verify-collect-test.sh
@@ -93,7 +93,7 @@ b64v() {
 # Includes identifier keys alongside secrets to verify they remain unmasked and searchable.
 jq -n --argjson backup "$(b64v ACCESS_KEY_ID=svp-pg-backup "ACCESS_SECRET_KEY=$cluster_secret" "username=$role_name")" \
   --argjson s3root "$(b64v S3_ROOT_USER=svp-admin "S3_ROOT_PASSWORD=$cluster_secret")" \
-  --argjson keda "$(b64v sasl=scram_sha256 tls=disable username=svp-keda "password=$kafka_secret")" \
+  --argjson keda "$(b64v sasl=scram_sha512 tls=enable username=svp-keda "password=$kafka_secret")" \
   --arg multi "$(b64 "route:
   receiver: telegram
   $line_secret
@@ -114,7 +114,7 @@ jq -n --argjson admin "$(b64v GLITCHTIP_ADMIN_EMAIL=admin@svp.local "GLITCHTIP_A
     {type: "Opaque", metadata: {name: "glitchtip-admin"}, data: $admin},
     {type: "Opaque", metadata: {name: "grafana-admin"}, data: $grafana},
     {type: "Opaque", metadata: {name: "operator-config"}, data: {"config.gz": $binary}}]}' >"$work/kube/svp-obs.json"
-identifiers="svp-pg-backup svp-admin scram_sha256 svp-keda svp-feed-service svp-user-service admin@svp.local
+identifiers="svp-pg-backup svp-admin scram_sha512 svp-keda svp-feed-service svp-user-service admin@svp.local
 admin-of-grafana kid-of-the-signing-key"
 export FAKE_KUBECTL_DIR=$work/kube
 
@@ -123,10 +123,10 @@ unready_pods() {
   jq -n "{items: $1}" >"$work/kube/pods-$2.json"
 }
 unready_pods '[
-  {metadata: {name: "redpanda-0", labels: {"app.kubernetes.io/name": "redpanda"}},
-   spec: {containers: [{name: "redpanda", terminationMessagePolicy: "FallbackToLogsOnError"}, {name: "sidecar"}]},
+  {metadata: {name: "kafka-0", labels: {"app.kubernetes.io/name": "kafka"}},
+   spec: {containers: [{name: "kafka", terminationMessagePolicy: "FallbackToLogsOnError"}, {name: "sidecar"}]},
    status: {phase: "Running", containerStatuses: [
-     {name: "redpanda", ready: false, restartCount: 2, state: {waiting: {reason: "CrashLoopBackOff"}},
+     {name: "kafka", ready: false, restartCount: 2, state: {waiting: {reason: "CrashLoopBackOff"}},
       lastState: {terminated: {reason: "Error", exitCode: 1, message: "INFRA-MESSAGE-MARKER"}}},
      {name: "sidecar", ready: true, restartCount: 0, state: {running: {}}}]}},
   {metadata: {name: "svp-pg-1", labels: {"cnpg.io/cluster": "svp-pg"}},
@@ -134,7 +134,7 @@ unready_pods '[
    status: {phase: "Running", containerStatuses: [
      {name: "postgres", ready: false, restartCount: 1, state: {running: {}},
       lastState: {terminated: {reason: "Error", exitCode: 1, message: "PG-MESSAGE-MARKER"}}}]}},
-  {metadata: {name: "redpanda-init-x"}, spec: {containers: [{name: "init"}]},
+  {metadata: {name: "kafka-init-x"}, spec: {containers: [{name: "init"}]},
    status: {phase: "Succeeded", containerStatuses: [
      {name: "init", ready: false, restartCount: 0, state: {terminated: {reason: "Completed", exitCode: 0}}}]}}]' \
   svp-data
@@ -154,10 +154,10 @@ unready_pods '[
      {name: "media-worker", ready: false, restartCount: 1, state: {running: {}},
       lastState: {terminated: {reason: "Error", exitCode: 1, message: "APP-FALLBACK-MARKER"}}}]}}]' svp
 mkdir -p "$work/kube/logs"
-printf '%s\n' "Could not initialize seastar: std::runtime_error (insufficient physical memory: needed 1073741824" \
-  "" INFRA-TAIL-MARKER >"$work/kube/logs/svp-data.redpanda-0.redpanda"
-echo INFRA-PREVIOUS-MARKER >"$work/kube/logs/svp-data.redpanda-0.redpanda.previous"
-echo SIDECAR-MARKER >"$work/kube/logs/svp-data.redpanda-0.sidecar"
+printf '%s\n' "ERROR Exiting Kafka due to fatal exception during startup. (kafka.Kafka$)" \
+  "" INFRA-TAIL-MARKER >"$work/kube/logs/svp-data.kafka-0.kafka"
+echo INFRA-PREVIOUS-MARKER >"$work/kube/logs/svp-data.kafka-0.kafka.previous"
+echo SIDECAR-MARKER >"$work/kube/logs/svp-data.kafka-0.sidecar"
 echo 'ERROR: duplicate key, STATEMENT: INSERT ... PG-LOG-MARKER' >"$work/kube/logs/svp-data.svp-pg-1.postgres"
 echo 'GET /api/1/envelope/?sentry_key=GLITCHTIP-MARKER' >"$work/kube/logs/svp-obs.glitchtip-abc.glitchtip"
 for f in svp.gateway-abc.gateway svp.gateway-abc.gateway.previous svp.media-worker-abc.media-worker \
@@ -173,7 +173,7 @@ unready=$work/unready.txt
 ) 2>"$unready" >/dev/null
 has_line() { if grep -qxF -- "$2" "$unready"; then ok "unready: $1"; else fail "unready: $1"; fi; }
 has_line "an infrastructure container's state, how it ended and its message" \
-  "pod svp-data/redpanda-0, container redpanda: waiting CrashLoopBackOff, 2 restart(s); attempt before: terminated Error (exit 1): INFRA-MESSAGE-MARKER"
+  "pod svp-data/kafka-0, container kafka: waiting CrashLoopBackOff, 2 restart(s); attempt before: terminated Error (exit 1): INFRA-MESSAGE-MARKER"
 has_line "its log, each line marked with its namespace" "    [svp-data] INFRA-TAIL-MARKER"
 has_line "an empty line of its log marked too" "    [svp-data] "
 has_line "the log of its attempt before" "    [svp-data] INFRA-PREVIOUS-MARKER"
@@ -185,7 +185,7 @@ has_line "GlitchTip's state" "pod svp-obs/glitchtip-abc, container glitchtip: wa
 has_line "Postgres' state, without its message" \
   "pod svp-data/svp-pg-1, container postgres: running, 1 restart(s); attempt before: terminated Error (exit 1)"
 for m in APP-LOG-MARKER APP-FALLBACK-MARKER GLITCHTIP-MARKER PG-LOG-MARKER PG-MESSAGE-MARKER SIDECAR-MARKER \
-  redpanda-init-x; do
+  kafka-init-x; do
   if grep -qF -- "$m" "$unready"; then fail "unready: no $m in its output"; else ok "unready: no $m in its output"; fi
 done
 if grep -E ' logs (gateway|media-worker|glitchtip|svp-pg)-' "$work/kube/calls" | grep -q .; then
@@ -464,7 +464,7 @@ printf '%s\t%s\t%s\n' k8s-gitops-up failure '' k8s-smoke failure '' drill-k8s-gi
   cat "$timeout_report"
   echo "    [svp] APP-FORGED-MARKER"
   echo "    [envoy-gateway-system] ENVOY-MARKER"
-  echo "FAIL  install redpanda"
+  echo "FAIL  install kafka"
 } >"$out/logs/k8s-gitops-up.log"
 {
   echo "ok    step 1"
@@ -780,6 +780,116 @@ expect rebuilt .k8s/drills/rebuilt-1.json secret-value
 no_leak rebuilt
 rm -rf "$work/kube" "$d/rebuilt-1.json"
 mv "$work/kube.orig" "$work/kube"
+
+# The state of a cluster whose build failed: status fields only, and no kept value in an event message.
+ks=$work/kube-state
+so=$work/out-state
+mkdir -p "$ks" "$so" && echo dev-k3d >"$so/scenario"
+cat >"$work/bin/helm" <<'EOF'
+#!/usr/bin/env bash
+echo "helm $*" >>"$FAKE_KUBECTL_DIR/calls"
+[ "${FAKE_KUBECTL_FAIL:-}" = 1 ] && { echo "Kubernetes cluster unreachable" >&2; exit 1; }
+[ "$*" = "--kube-context k3d-svp list -A -o json" ] || exit 2
+cat "$FAKE_KUBECTL_DIR/releases.json"
+EOF
+chmod 755 "$work/bin/helm"
+jq -n --arg s "$cluster_secret" '{items: [
+  {metadata: {namespace: "svp-data", name: "kafka-0"},
+   spec: {containers: [{name: "kafka", env: [{name: "X", value: "SPEC-MARKER"}]}]},
+   status: {phase: "Running", conditions: [{type: "PodScheduled", status: "True"},
+     {type: "Ready", status: "False", reason: "ContainersNotReady", message: "COND-MESSAGE-MARKER"}],
+     containerStatuses: [{name: "kafka", ready: false, restartCount: 4, state: {waiting: {reason: "CrashLoopBackOff",
+       message: "WAIT-MESSAGE-MARKER"}}, lastState: {terminated: {reason: "Error", exitCode: 1, message: $s}}}]}},
+  {metadata: {namespace: "svp-data", name: "svp-ops-abc"}, status: {phase: "Pending",
+     conditions: [{type: "PodScheduled", status: "False", reason: "Unschedulable"}],
+     initContainerStatuses: [{name: "wait", ready: false, restartCount: 0, state: {running: {}}}]}},
+  {metadata: {namespace: "svp", name: "web-0"}, status: {phase: "Running",
+     containerStatuses: [{name: "web", ready: false, restartCount: 3, state: {waiting: {reason: "CrashLoopBackOff"}},
+       lastState: {terminated: {reason: "Error", exitCode: 2}}}]}},
+  {metadata: {namespace: "svp-data", name: "kafka-init-x"}, status: {phase: "Running",
+     containerStatuses: [{name: "init", ready: true, restartCount: 1, state: {running: {}},
+       lastState: {terminated: {reason: "Completed", exitCode: 0}}}]}}]}' \
+  >"$ks/cluster.pods.json"
+# The log of the attempt before: 45 lines, so only the last 40 may reach the artifact; the first five hold a marker.
+mkdir -p "$ks/logs"
+{
+  for i in 1 2 3 4 5; do echo "EARLY-LINE-MARKER $i"; done
+  echo "ERROR sasl login: password=hunter2 rejected"
+  echo "ERROR sasl login with $kafka_secret failed, retry with $kafka_secret"
+  echo "config SECRET_KEY: abc123 token=xyz Credential=foo"
+  echo "plain line stays"
+  for i in $(seq 1 36); do echo "filler $i"; done
+} >"$ks/logs/svp-data.kafka-0.kafka.previous"
+echo "WEB-LOG-MARKER" >"$ks/logs/svp.web-0.web.previous"
+jq -n '{items: [{metadata: {namespace: "svp-data", name: "kafka-init"}, status: {failed: 2, conditions: [
+  {type: "Failed", status: "True", reason: "BackoffLimitExceeded", message: "JOB-MESSAGE-MARKER"}]}}]}' \
+  >"$ks/cluster.jobs.json"
+jq -n --arg m "Readiness probe failed: AUTH $kafka_secret refused, again $kafka_secret" '{items: [
+  {metadata: {namespace: "svp-data", name: "kafka-0.1"}, type: "Warning", reason: "Unhealthy", count: 7,
+   lastTimestamp: "2026-11-08T14:20:00Z", involvedObject: {kind: "Pod", namespace: "svp-data", name: "kafka-0"},
+   message: $m}]}' >"$ks/cluster.events.json"
+echo '[{"name": "svp-data", "namespace": "svp-data", "revision": "1", "status": "failed", "chart": "svp-data-0.1.0",
+  "app_version": "", "updated": "2026-11-08 14:13:00 +0000 UTC"}]' >"$ks/releases.json"
+: >"$ks/calls"
+# state NAME OUT [VAR=VALUE...]: runs verify-k8s-state.sh into OUT against the fixture of $ks.
+state() {
+  local name=$1 o=$2
+  shift 2
+  env "${job[@]}" PATH="$work/bin:$PATH" FAKE_KUBECTL_DIR="$ks" SVP_VERIFY_OUT="$o" SVP_VERIFY_SECRETS="$work/secrets-k3d" \
+    "$@" "$here/verify-k8s-state.sh" >"$work/$name.log" 2>&1
+}
+if state state "$so"; then ok "state: exit 0"; else fail "state: exit 0"; fi
+st=$so/k8s-state.json
+same "state: a container's readiness, restarts, waiting reason and how its attempt before ended" \
+  '{"name":"kafka","ready":false,"restartCount":4,"waiting":"CrashLoopBackOff","terminated":null,"lastTerminated":{"reason":"Error","exitCode":1}}' \
+  "$(jq -c '.pods[0].containers[0]' "$st" 2>/dev/null)"
+same "state: only the unmet conditions of a pod, type and reason" '[{"type":"Ready","reason":"ContainersNotReady"}]' \
+  "$(jq -c '.pods[0].unmetConditions' "$st" 2>/dev/null)"
+same "state: a pending pod and its init containers" 'Pending Unschedulable wait' \
+  "$(jq -r '.pods[1] | "\(.phase) \(.unmetConditions[0].reason) \(.initContainers[0].name)"' "$st" 2>/dev/null)"
+same "state: a Job's failures and conditions, without their message" \
+  '{"failed":2,"conditions":[{"type":"Failed","status":"True","reason":"BackoffLimitExceeded"}]}' \
+  "$(jq -c '.jobs[0] | {failed, conditions}' "$st" 2>/dev/null)"
+same "state: a Warning event, each kept value of its message replaced" \
+  '{"namespace":"svp-data","reason":"Unhealthy","count":7,"lastTimestamp":"2026-11-08T14:20:00Z","object":{"kind":"Pod","namespace":"svp-data","name":"kafka-0"},"message":"Readiness probe failed: AUTH *** refused, again ***"}' \
+  "$(jq -c '.warnings[0]' "$st" 2>/dev/null)"
+same "state: a Helm release and its status" 'svp-data svp-data failed 1' \
+  "$(jq -r '.releases[0] | "\(.namespace) \(.name) \(.status) \(.revision)"' "$st" 2>/dev/null)"
+for m in SPEC-MARKER COND-MESSAGE-MARKER WAIT-MESSAGE-MARKER JOB-MESSAGE-MARKER; do
+  if grep -qF -- "$m" "$st"; then fail "state: no $m"; else ok "state: no $m"; fi
+done
+if [ "$(grep -c -e '^--context k3d-svp get ' -e '^helm --kube-context k3d-svp ' "$ks/calls")" = 4 ] &&
+  [ "$(wc -l <"$ks/calls" | tr -d ' ')" = 5 ] && ! grep -qi secret "$ks/calls"; then
+  ok "state: four reads and one log, each on context k3d-svp, no Secret"
+else
+  fail "state: four reads and one log, each on context k3d-svp, no Secret"
+fi
+same "state: the log is read from the attempt before, of the one container that crashed in a log namespace" \
+  '--context k3d-svp -n svp-data logs kafka-0 -c kafka --previous --tail=40 --request-timeout=10s' \
+  "$(grep ' logs ' "$ks/calls")"
+same "state: the last 40 lines of the log, no earlier one" '40 0' \
+  "$(jq -r '.logs[0].lines | "\(length) \(map(select(startswith("EARLY-LINE-MARKER"))) | length)"' "$st" 2>/dev/null)"
+same "state: the log of a container in namespace svp is not taken" '1 svp-data/kafka-0/kafka' \
+  "$(jq -r '"\(.logs | length) \(.logs[0] | "\(.namespace)/\(.pod)/\(.container)")"' "$st" 2>/dev/null)"
+same "state: a known value in a log line becomes ***, once per occurrence" \
+  'ERROR sasl login with *** failed, retry with ***' "$(jq -r '.logs[0].lines[] | select(startswith("ERROR sasl login with"))' "$st" 2>/dev/null)"
+same "state: password=, secret, token, credential pairs of a log line become ***" \
+  'ERROR sasl login: *** rejected | config *** *** *** | plain line stays' \
+  "$(jq -r '.logs[0].lines | [.[] | select(startswith("ERROR sasl login:") or startswith("***") or startswith("config")
+    or . == "plain line stays")] | join(" | ")' "$st" 2>/dev/null)"
+collect_out=$so collect state "$work/secrets-k3d"
+expect state "\$SVP_VERIFY_OUT/k8s-state.json" kept
+no_leak state
+if state state-dead "$work/out-state-dead" FAKE_KUBECTL_FAIL=1; then
+  fail "state: a cluster that does not answer fails the step"
+else
+  ok "state: a cluster that does not answer fails the step"
+fi
+if [ -e "$work/out-state-dead/k8s-state.json" ]; then
+  fail "state: no file from a cluster that does not answer"
+else
+  ok "state: no file from a cluster that does not answer"
+fi
 
 echo compose-obs >"$out/scenario"
 printf '%s\n' '--- PASS: TestIntegrationPresignedPost (0.20s)' \

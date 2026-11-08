@@ -37,8 +37,9 @@ pdb: {}
 # replicas on two nodes, losing one node leaves one replica serving. Soft, so a one-node cluster still schedules them.
 spreadAcrossNodes: false
 # -- KEDA ScaledObject on the consumer lag of a Kafka group, logged in through ClusterTriggerAuthentication keda-kafka
-# (chart svp-data; Redpanda user svp-keda): {minReplicas, maxReplicas, kafka: {topic, consumerGroup, lagThreshold}}.
-# The broker is env.KAFKA_BROKERS, the one the service consumes from.
+# (chart svp-data; Kafka user svp-keda): {minReplicas, maxReplicas, kafka: {topic, consumerGroup, lagThreshold}}.
+# The broker is env.KAFKA_BROKERS, the one the service consumes from (kafka.svp-data.svc.cluster.local:9096 on k3d,
+# the brokers of Amazon MSK on EKS).
 keda: {}
 
 # -- Run the service as an Argo Rollouts Rollout with an analysed canary instead of a Deployment: Service
@@ -79,6 +80,12 @@ env:
 # DSN is there (the workload names Secret sentry in its reload annotation). media-worker reports no errors, as in
 # compose.
 errorTracking: false
+
+# -- Secret of the release's namespace whose ca.crt is the local CA that the server certificates of a Kafka and a Valkey
+# in the cluster chain to (chart svp-data), mounted at /etc/svp-ca: SSL_CERT_DIR=/etc/svp-ca adds it to the system's
+# roots for Go, NODE_EXTRA_CA_CERTS=/etc/svp-ca/ca.crt for Node. Empty where Kafka and Valkey are managed services
+# whose certificates chain to a public CA (EKS): the system's roots alone.
+localCA: local-ca
 
 # -- Writable directories of a container whose root filesystem is read-only: name -> {mountPath, sizeLimit, medium}.
 scratch: {}
@@ -138,6 +145,11 @@ peers:
     namespace: svp-data
     labels: {app.kubernetes.io/name: valkey}
     ports: [6379]
+  kafka:
+    namespace: svp-data
+    labels: {app.kubernetes.io/name: kafka}
+    ports: [9096]
+  # The broker before kafka, which no chart runs any more; kept while releases' values files still name it.
   redpanda:
     namespace: svp-data
     labels: {app.kubernetes.io/name: redpanda, app.kubernetes.io/instance: redpanda}
@@ -160,9 +172,10 @@ peers:
     ports: [8000]
 
 # -- Peers that are not pods of the cluster where the cluster uses a managed service instead (EKS: Postgres on Amazon RDS,
-# objects on Amazon S3), by address: name of a peer above -> list of {cidr, ports}, each one rule of the egress of
-# every release whose egressTo names that peer, and of the migrate Job for postgres. Such an entry takes the place of
-# the peer's pods. Empty: every peer is the pods above. On EKS, postgres is the database subnets' CIDRs on 5432; s3 is
+# Kafka on Amazon MSK, Valkey on Amazon ElastiCache, objects on Amazon S3), by address: name of a peer above -> list of
+# {cidr, ports}, each one rule of the egress of every release whose egressTo names that peer, and of the migrate Job
+# for postgres. Such an entry takes the place of the peer's pods. Empty: every peer is the pods above. On EKS, postgres,
+# kafka and valkey are the database subnets' CIDRs on 5432, 9096 and 6379; s3 is
 # TCP 443 to each IPv4 range AWS publishes for S3 in the cluster's region (they change over time, so the list is read
 # when the cluster's Terraform is applied), never 0.0.0.0/0:
 # media-worker runs ffmpeg on uploaded files, and a worker taken over by a crafted file must not reach any other host.

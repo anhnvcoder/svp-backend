@@ -1,0 +1,50 @@
+#!/bin/sh
+# svp-valkey [ARGS...]: runs valkey-cli over TLS against VALKEY_HOST:6379 with ARGS, e.g. `svp-valkey -n 10 --scan
+# --pattern 'svp:gw:rl:register:*'`. The only way scripts, drills, runbooks and session commands reach Valkey, run
+# where it is installed as /opt/svp/bin/svp-valkey: container valkey of compose, container valkey of Deployment svp-ops
+# of chart svp-data.
+
+# Logs in as svp-ops with SVP_VALKEY_OPS_PASSWORD: read commands on svp:* keys of db 9, 10 and 14, and DEL only on the
+# two key prefixes AGENTS.md lets lab scripts delete. SVP_AS_USER=<user> logs in as that user instead (a check of what
+# a client may do): its password is the first line of stdin, and the rest of stdin goes to valkey-cli.
+
+# SVP_CA_FILE, when set, is the PEM file of the CA the server's certificate chains to (the local CA); unset, the
+# system's trust store is used (Amazon's public CA of ElastiCache).
+
+# The password reaches valkey-cli in REDISCLI_AUTH, never on a command line, and is never printed. POSIX sh: runs on the
+# Alpine image's busybox sh, which has no bash.
+# Design notes: docs/explanation/deployment.md.
+set -eu
+
+fail() {
+  echo "svp-valkey: $1" >&2
+  exit 2
+}
+
+[ -n "${VALKEY_HOST:-}" ] || fail "VALKEY_HOST is not set"
+if [ -n "${SVP_AS_USER:-}" ]; then
+  user=$SVP_AS_USER
+  password=
+  IFS= read -r password || true
+  [ -n "$password" ] || fail "SVP_AS_USER=$user: the first line of stdin must be the password of $user"
+else
+  user=svp-ops
+  password=${SVP_VALKEY_OPS_PASSWORD:-}
+  [ -n "$password" ] || fail "SVP_VALKEY_OPS_PASSWORD is not set"
+fi
+case $user in
+  svp-*[!a-z-]* | svp-) fail "SVP_AS_USER is a Valkey user svp-<name> of lowercase letters and - (got '$user')" ;;
+  svp-*) ;;
+  *) fail "SVP_AS_USER is a Valkey user svp-<name> of lowercase letters and - (got '$user')" ;;
+esac
+case $password in
+  *[!A-Za-z0-9]*) fail "the password of $user holds a character other than a letter or digit" ;;
+esac
+
+if [ -n "${SVP_CA_FILE:-}" ]; then
+  set -- --cacert "$SVP_CA_FILE" "$@"
+fi
+REDISCLI_AUTH=$password
+export REDISCLI_AUTH
+unset password
+exec valkey-cli --tls --user "$user" -h "$VALKEY_HOST" -p 6379 "$@"

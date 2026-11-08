@@ -142,11 +142,11 @@ spec:
     - {name: target, value: s3.svp-data.svc.cluster.local:9000}
     - {name: want, value: dns open}
     try: *reach
-  - name: "FF-5: from media-worker redpanda.svp-data:9092 open"
+  - name: "FF-5: from media-worker kafka.svp-data:9096 open"
     bindings:
     - {name: fromNamespace, value: svp}
     - {name: from, value: deploy/media-worker}
-    - {name: target, value: redpanda.svp-data.svc.cluster.local:9092}
+    - {name: target, value: kafka.svp-data.svc.cluster.local:9096}
     - {name: want, value: dns open}
     try: *reach
   - name: "FF-5: from media-worker otel-collector.svp-obs:4317 open"
@@ -182,15 +182,15 @@ spec:
           umask 077
           keys=$(mktemp)
           trap 'rm -f "$keys"' EXIT
-          kubectl --context k3d-svp -n svp-data exec deploy/valkey -c valkey -- \
-            valkey-cli -n 10 --scan --pattern 'svp:gw:rl:register:*' >"$keys"
+          kubectl --context k3d-svp -n svp-data exec deploy/svp-ops -c valkey -- \
+            /opt/svp/bin/svp-valkey -n 10 --scan --pattern 'svp:gw:rl:register:*' >"$keys"
           n=0
           while IFS= read -r key; do
             [ -n "$key" ] || continue
-            kubectl --context k3d-svp -n svp-data exec deploy/valkey -c valkey -- valkey-cli -n 10 DEL "$key" >/dev/null
+            kubectl --context k3d-svp -n svp-data exec deploy/svp-ops -c valkey -- /opt/svp/bin/svp-valkey -n 10 DEL "$key" >/dev/null
             n=$((n + 1))
           done <"$keys"
-          echo "register rate limit reset ($n keys deleted in Valkey db 10 of cluster svp)"
+          echo "register rate limit reset ($n keys deleted in Valkey db 10 of cluster svp, through svp-ops)"
         check:
           ($error): ~
   # The drill user is registered and logged in here; its access token stays in a private temporary file, never printed.
@@ -272,8 +272,8 @@ spec:
           status=$(curl -sS --max-time 5 -o /dev/null -w '%{http_code}' -X POST -H 'Content-Type: application/json' \
             --data-binary "@$work/login.json" https://api.svp.localhost:8443/auth/login || true)
           hash=$(printf '%s' "$email" | tr 'A-Z' 'a-z' | shasum -a 256 | cut -c1-32)
-          keys=$(kubectl --context k3d-svp -n svp-data exec deploy/valkey -c valkey -- \
-            valkey-cli -n 10 --scan --pattern "svp:gw:rl:login-email:*:$hash" | wc -l | tr -d ' ')
+          keys=$(kubectl --context k3d-svp -n svp-data exec deploy/svp-ops -c valkey -- \
+            /opt/svp/bin/svp-valkey -n 10 --scan --pattern "svp:gw:rl:login-email:*:$hash" | wc -l | tr -d ' ')
           echo "status $status, keys $keys"
         check:
           ($error): ~

@@ -1,6 +1,6 @@
 # WEB-13 of the threat model (docs/threat-model.md): the web pods reach only the gateway, Valkey, the Collector and
 # GlitchTip, and only Envoy reaches them. From each web pod (kubectl exec of the image's node, a name resolved first, so
-# a closed port with a name that resolves is the policy) the internet, Postgres, Redpanda, the object store, the four
+# a closed port with a name that resolves is the policy) the internet, Postgres, Kafka, the object store, the four
 # gRPC services, Pyroscope and the API server are closed; the gateway, Valkey, the Collector and GlitchTip are open.
 
 # A pod probe of namespace svp-probe cannot open web:3001; control: Envoy reaches it (/healthz 200).
@@ -96,14 +96,9 @@ spec:
     - {name: target, value: svp-pg-rw.svp-data.svc.cluster.local:5432}
     - {name: want, value: dns closed}
     try: *webReach
-  - name: "WEB-13: from each web pod redpanda.svp-data:9092 closed"
+  - name: "WEB-13: from each web pod kafka.svp-data:9096 closed"
     bindings:
-    - {name: target, value: redpanda.svp-data.svc.cluster.local:9092}
-    - {name: want, value: dns closed}
-    try: *webReach
-  - name: "WEB-13: from each web pod redpanda-0.redpanda.svp-data:9644 closed"
-    bindings:
-    - {name: target, value: redpanda-0.redpanda.svp-data.svc.cluster.local:9644}
+    - {name: target, value: kafka.svp-data.svc.cluster.local:9096}
     - {name: want, value: dns closed}
     try: *webReach
   - name: "WEB-13: from each web pod s3.svp-data:9000 closed"

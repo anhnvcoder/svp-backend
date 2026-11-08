@@ -23,11 +23,12 @@ RUN --mount=type=cache,target=/go/pkg/mod \
     --mount=type=cache,target=/root/.cache/go-build \
     CGO_ENABLED=0 go build -trimpath -o /app ./services/media-worker/cmd/media-worker
 
-# Runtime stage: the tag keeps the 3.24 branch; the ffmpeg package is not pinned, since Alpine
-# drops old builds from its repository once a fix lands, so a rebuild takes the branch's patches. The base itself is
-# pinned by digest; Renovate proposes the next 3.24 build.
+# Runtime stage: the tag keeps the 3.24 branch; the ffmpeg package is not pinned, since Alpine drops old builds from
+# its repository once a fix lands. apk add leaves installed packages as they are, so apk upgrade first gives the base
+# packages (zlib, ...) the branch's patches too, before the digest Renovate proposes catches up.
 FROM alpine:3.24.3@sha256:be2656061b536c1883c4034790e21d0a09c5aaaf51968b89368a3c0371ea2c9a
-RUN apk add --no-cache ffmpeg \
+RUN apk upgrade --no-cache \
+    && apk add --no-cache ffmpeg \
     && install -d -o 65532 -g 65532 -m 0750 /work
 COPY --from=build /app /app
 USER 65532:65532

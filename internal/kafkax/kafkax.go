@@ -1,12 +1,14 @@
-// Package kafkax builds the franz-go clients every service uses, produces records carrying the
-// request's traceparent, and runs group consumers with manual commits, in-process retries and a
-// dead-letter topic. A record is committed only after its handler returns, and one that keeps
-// failing goes to the dead-letter topic instead of blocking its partition, so none is lost or
-// stuck.
+// Package kafkax builds the franz-go clients every service uses, over TLS with SCRAM-SHA-512
+// when the environment carries credentials, produces records carrying the request's traceparent,
+// and runs group consumers with manual commits, in-process retries and a dead-letter topic. A
+// record is committed only after its handler returns, and one that keeps failing goes to the
+// dead-letter topic instead of blocking its partition, so none is lost or stuck.
 package kafkax
 
 import (
 	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -24,7 +26,7 @@ import (
 )
 
 // The SASL credentials every client of the process authenticates with. Both unset or empty: no
-// SASL, as on the compose stack, whose broker has no authentication.
+// SASL and no TLS, which only the in-memory brokers of the tests accept.
 const (
 	saslUsernameVar = "KAFKA_SASL_USERNAME"
 	saslPasswordVar = "KAFKA_SASL_PASSWORD" //nolint:gosec // the name of the variable, not a credential
@@ -44,13 +46,14 @@ const metadataMinAge = time.Second
 // producer is idempotent with acks=all, the franz-go defaults. opts are added after those, so a
 // caller's option overrides a default set here.
 //
-// With KAFKA_SASL_USERNAME and KAFKA_SASL_PASSWORD set, the client authenticates with
-// SCRAM-SHA-256; with only one of them set, NewClient fails. The variables are read here rather
-// than in each main so that every client of a service, the dead-letter producer inside a
-// consumer included, authenticates the same way: a client built without them would be refused
-// by a broker with ACLs. SCRAM does not send the password, only a proof of it, but the
-// connection itself is plain TCP: encrypting traffic inside the cluster is a later step than
-// authenticating it, and the local setups do without it.
+// With KAFKA_SASL_USERNAME and KAFKA_SASL_PASSWORD set, the client connects over TLS and
+// authenticates with SCRAM-SHA-512, the SASL_SSL listener of Amazon MSK and of the local brokers;
+// with only one of them set, NewClient fails. TLS trusts the system roots and checks the broker's
+// certificate against the host of its address: MSK's certificates chain to a public Amazon CA,
+// and a local setup adds its own CA as data (SSL_CERT_DIR), not through code. The variables are
+// read here rather than in each main so that every client of a service, the dead-letter producer
+// inside a consumer included, connects and authenticates the same way: a client built without
+// them would be refused by a broker that requires SASL_SSL.
 //
 // The client's warnings and errors, a refused password included, go to the default slog logger.
 // NewClient does not connect; the first request does.
@@ -78,8 +81,14 @@ func NewClient(brokers, clientID string, opts ...kgo.Opt) (*kgo.Client, error) {
 	return cl, nil
 }
 
-// saslOpts returns the SCRAM-SHA-256 option for the credentials in the environment, or none when
-// neither variable is set. The error names the missing variable and never carries a value.
+// testRootCAs, when set, replaces the system roots of the TLS connection. Only the tests of this
+// package set it, to the CA of their in-memory broker: Go on macOS ignores SSL_CERT_FILE and
+// SSL_CERT_DIR, so the environment cannot add a CA there.
+var testRootCAs *x509.CertPool
+
+// saslOpts returns the TLS and SCRAM-SHA-512 options for the credentials in the environment, or
+// none when neither variable is set. The error names the missing variable and never carries a
+// value.
 func saslOpts() ([]kgo.Opt, error) {
 	user, pass := envcfg.String(saslUsernameVar, ""), envcfg.String(saslPasswordVar, "")
 	switch {
@@ -90,16 +99,20 @@ func saslOpts() ([]kgo.Opt, error) {
 	case pass == "":
 		return nil, fmt.Errorf("%s is set but %s is not; set both for SASL or neither", saslUsernameVar, saslPasswordVar)
 	}
-	return []kgo.Opt{kgo.SASL(scram.Auth{User: user, Pass: pass}.AsSha256Mechanism())}, nil
+	// franz-go clones the config for each dial and sets ServerName to the broker's host.
+	return []kgo.Opt{
+		kgo.DialTLSConfig(&tls.Config{MinVersion: tls.VersionTLS12, RootCAs: testRootCAs}),
+		kgo.SASL(scram.Auth{User: user, Pass: pass}.AsSha512Mechanism()),
+	}, nil
 }
 
 // slogLogger passes the warnings and errors of a franz-go client to the process's default slog
 // logger. franz-go logs nothing without a logger, so a broker refusing the SASL credentials or
-// not reachable at all showed only as produce deadline errors and consumer lag. Info and debug
-// stay off: they log every request and every rebalance step. The lines carry the broker, its
-// address, group or topic and the error, none of them a credential (SCRAM sends a proof, not the
-// password). An ERROR also reaches the error tracker of a service that runs one, as an unlisted
-// error without its text.
+// the TLS handshake, or not reachable at all, showed only as produce deadline errors and consumer
+// lag. Info and debug stay off: they log every request and every rebalance step. The lines carry
+// the broker, its address, group or topic and the error, none of them a credential (SCRAM sends a
+// proof, not the password). An ERROR also reaches the error tracker of a service that runs one,
+// as an unlisted error without its text.
 type slogLogger struct{}
 
 func (slogLogger) Level() kgo.LogLevel { return kgo.LogLevelWarn }

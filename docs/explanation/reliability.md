@@ -142,7 +142,8 @@ Kết luận từ các lượt đo, còn áp dụng (số đo và lượt chạy
 - RAM đỉnh của đường dev và RAM nghỉ của đường GitOps (7 510 MiB ở 60 s, phần chênh phần lớn là Argo CD) vượt ngân sách của laptop.
 - Canary web promote và abort đúng với hai bản build thật; ngưỡng p99 canary của web 250 ms.
 - k6 thu nhỏ đạt tới 2 pod (110 req/s); mức 4 pod chạm trần CPU của runner.
-- Chaos Mesh: tắt Redpanda 5 phút và kill pod gateway giữ SLO. Hai phát hiện (feed-service một replica mất pod thì feed 5xx;
+- Chaos Mesh: tắt broker Kafka trong cluster 5 phút (đo trên broker trước khi đổi sang `apache/kafka`,
+  [ADR-0053](../adr/0053-msk-elasticache-valkey.md)) và kill pod gateway giữ SLO. Hai phát hiện (feed-service một replica mất pod thì feed 5xx;
   engagement-service chậm 200 ms thì like hết hạn) và Tempo OOM sửa theo
   [ADR-0031](../adr/0031-chaos-findings-feed-engagement-tempo.md), kiểm lại đạt.
 - Velero đích RustFS phục hồi giữ offset (RTO 58 s).
@@ -154,5 +155,6 @@ Kết luận từ các lượt đo, còn áp dụng (số đo và lượt chạy
 Vì sao: [ADR-0020](../adr/0020-reliability-stage6.md), [ADR-0034](../adr/0034-aws-stage7.md).
 
 Cần dịch vụ cloud nên chạy ở cluster AWS ([`deployment.md`](deployment.md#aws)): k6 1 000 req/s, Chaos Mesh trên EKS, diễn tập
-phục hồi RDS, Velero với S3 và snapshot EBS, hạn 50 ms của Redis trên cloud. Job k6 của phần này kiểm schema bằng
+phục hồi RDS, Velero với S3 và snapshot EBS, hạn 50 ms của Valkey trên ElastiCache, khởi động lại một broker MSK khi đang ghi
+không mất event và failover ElastiCache không làm service lỗi quá timeout của nó (buổi prd, ADR-0053 mục Xác nhận). Job k6 của phần này kiểm schema bằng
 `make cloud-check` (manifest Chaos Mesh, Velero lấy từ bài lab khi cần).

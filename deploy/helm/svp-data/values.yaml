@@ -1,6 +1,6 @@
 # Data tier in namespace svp-data. Wave 4 of argocd/apps/components.json of svp-gitops: after the CloudNativePG operator
-# and KEDA (wave 2, whose CRDs its Cluster and ClusterTriggerAuthentication need), Redpanda and the Barman Cloud plugin
-# (wave 3, whose CRD its ObjectStore needs). Every Secret it reads is written by deploy/k8s/secrets.sh; none is in git.
+# and KEDA (wave 2, whose CRDs its Cluster and ClusterTriggerAuthentication need) and the Barman Cloud plugin (wave 3,
+# whose CRD its ObjectStore needs). Every Secret it reads is written by deploy/k8s/secrets.sh; none is in git.
 # Design notes: docs/explanation/deployment.md.
 
 postgres:
@@ -42,6 +42,18 @@ postgres:
     targetTime: ""
 
 valkey:
+  # cluster: Valkey in this namespace (Deployment valkey), TLS on valkey.<namespace>.svc.cluster.local:6379 with the
+  # server certificate of the local CA and one ACL user per client (Secrets valkey-tls, valkey-acl). external: a managed
+  # Valkey outside the cluster (Amazon ElastiCache), which Terraform makes with the same users: no Valkey here.
+  mode: cluster
+  # The host clients reach Valkey at, without the port: the Service of this chart, or the managed Valkey's primary
+  # endpoint with mode external. svp-ops's valkey-cli logs in there.
+  host: valkey.svp-data.svc.cluster.local
+  external:
+    # The CIDRs the managed Valkey's addresses are in (the database subnets), the only addresses svp-ops may reach on
+    # 6379 with mode external.
+    cidrs: []
+  # The same image as compose's valkey; also the valkey-cli of svp-ops.
   image: docker.io/valkey/valkey:9.1.3-alpine@sha256:bf09d58e96d6b4524a15396b65b242bbe18beebbcc15a04d8ee75ddac62fae0b
   # CPU limit one core, not 200m: the CFS quota is enforced per 100 ms period, and at 200m Valkey was throttled 4-14
   # periods a minute while idle. A throttled period stalls it for longer than the gateway's 50 ms rate-limit store
@@ -50,6 +62,49 @@ valkey:
   resources:
     requests: {cpu: 20m, memory: 16Mi}
     limits: {cpu: "1", memory: 128Mi}
+
+kafka:
+  # cluster: one Apache Kafka broker in this namespace (StatefulSet kafka, KRaft), SASL_SSL with SCRAM-SHA-512 on
+  # kafka.<namespace>.svc.cluster.local:9096 like Amazon MSK, its users created by Job kafka-init. external: a managed
+  # Kafka outside the cluster (Amazon MSK), which keeps its users itself (Terraform associates one secret per user):
+  # no broker here, and Job kafka-init only makes the topics and ACLs there.
+  mode: cluster
+  # Bootstrap brokers of every client here (Job kafka-init, svp-ops): host:9096 per broker, comma separated. The
+  # Service of this chart, or the managed Kafka's SCRAM bootstrap brokers with mode external.
+  brokers: kafka.svp-data.svc.cluster.local:9096
+  external:
+    # The CIDRs the managed brokers' addresses are in (the database subnets), the only addresses Job kafka-init and
+    # svp-ops may reach on 9096 with mode external.
+    cidrs: []
+  # The broker, its init Job and svp-ops's Kafka CLI: the same image as compose's kafka, pinned by the digest of its
+  # multi-arch index.
+  image: docker.io/apache/kafka:4.1.2@sha256:5cc2a2fd93fa2687b44015eee04fb2c3edd9e526bd64bf8bec5ff1e268772e0e
+  # The KRaft cluster id the broker's storage is formatted with on its first start (a base64 UUID, kafka-storage.sh
+  # random-uuid). Read only while the volume is empty: changing it later changes nothing on a formatted volume.
+  clusterId: wy5m0_Z5QE-AcsMIn91BaA
+  # The broker's JVM heap; the rest of the memory limit is the JVM's own (metaspace, threads, direct buffers).
+  heap: 512m
+  storage: 2Gi
+  resources:
+    requests: {cpu: 100m, memory: 768Mi}
+    limits: {cpu: "1", memory: 1280Mi}
+  # Job kafka-init: about forty Kafka CLI commands of one JVM each, and a JVM's start is CPU bound. Under the 500m of
+  # the other init Jobs the script runs about as long as Helm's timeout; one core makes it a few times faster.
+  initResources:
+    requests: {cpu: 50m, memory: 64Mi}
+    limits: {cpu: "1", memory: 512Mi}
+
+# Deployment svp-ops: the one place in the cluster where scripts, drills and runbooks run the Kafka CLI and valkey-cli
+# (kubectl exec deploy/svp-ops -c kafka -- /opt/svp/bin/svp-kafka ..., -c valkey -- /opt/svp/bin/svp-valkey ...), as
+# svp-admin and svp-ops. Both containers only sleep until then; a Kafka CLI run is one JVM of a 256 MiB heap.
+svpOps:
+  resources:
+    kafka:
+      requests: {cpu: 10m, memory: 32Mi}
+      limits: {cpu: 500m, memory: 512Mi}
+    valkey:
+      requests: {cpu: 5m, memory: 8Mi}
+      limits: {cpu: 200m, memory: 64Mi}
 
 s3:
   # cluster: the object store s3 below, with its init Job and route. external: a managed object store outside the
@@ -70,19 +125,9 @@ s3:
   # this one. Commas without spaces.
   corsAllowedOrigins: https://svp.localhost:8443
 
-redpanda:
-  # The broker image, for rpk in the init Job.
-  image: docker.io/redpandadata/redpanda:v26.2.6@sha256:8b1076e0d61bfceb66594dc01536427ce0b529f8ead35fdab9763ab6085891ce
-  brokers: redpanda.svp-data.svc.cluster.local:9092
-  # Brokers of release redpanda, the statefulset.replicas its values set: the init Job gets the Admin API of each one
-  # (redpanda-<n>.redpanda), so it still runs while one is down.
-  replicas: 1
-  # Replication factor of every topic the init Job creates (deploy/redpanda/create-topics.sh): odd (each partition is
-  # a Raft group) and at most replicas. Existing topics keep theirs.
-  topicReplicas: 1
-
-# The init Jobs (Postgres bootstrap, the object store s3, Redpanda). waitSeconds bounds how long each waits for its
-# server after an install or upgrade before it fails.
+# The init Jobs (Postgres bootstrap, the object store s3, Kafka). waitSeconds bounds how long the first two wait for
+# their server after an install or upgrade before they fail; kafka-init.sh retries its login for ten minutes itself.
+# resources: of the first two; Job kafka-init has kafka.initResources.
 initJobs:
   waitSeconds: 300
   resources:

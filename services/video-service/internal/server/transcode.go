@@ -28,7 +28,7 @@ import (
 	"github.com/anhnvcoder/svp-backend/services/video-service/internal/store"
 )
 
-// Topic and consumer group of the transcode results. The topic must be one redpanda-init creates,
+// Topic and consumer group of the transcode results. The topic must be one kafka-init creates,
 // since the broker does not create topics on first use.
 const (
 	TopicMediaTranscodes = "media.transcodes.v1"

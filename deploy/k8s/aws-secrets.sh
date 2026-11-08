@@ -3,6 +3,9 @@
 # of EKS cluster svp-<env> from (SVP_KUBE_CONTEXT svp-stg or svp-prd; make eks-secrets). Run after the apply of root
 # aws/envs/<env> and before that of aws/gitops/<env>, and again whenever .env changes.
 
+# The entries of the Kafka and Valkey users (kafka-admin, kafka-users, valkey-users) are Terraform's: it makes their
+# passwords with those of Amazon MSK and ElastiCache in one apply, so this script only checks that they exist.
+
 # Every value and the account are read and checked before anything is written. pg-superuser takes
 # SVP_RDS_MASTER_PASSWORD of the environment, never .env, kept in this shell alone. Each entry is one put-secret-value
 # with its JSON in a file of a folder of mode 700, removed on exit: no value is on a command line, stdout or stderr.
@@ -35,13 +38,14 @@ unset SVP_RDS_MASTER_PASSWORD
 aws_setup
 trap 'rm -rf "$aws_dir"' EXIT
 
-# --- the entries and their keys, from the ExternalSecrets of chart svp-cluster as rendered for EKS. The set does not
-# depend on the store, so the render takes store kubernetes, whose entries are named without a prefix and which needs
-# no IAM role. Each YAML document of the render becomes one line of JSON read by Helm itself (fromYaml): no YAML tool
-# of its own.
+# --- the entries and their keys, from the ExternalSecrets of chart svp-cluster as rendered for EKS (Kafka and Valkey
+# managed: localKafkaValkey off). The set does not depend on the store, so the render takes store kubernetes, whose
+# entries are named without a prefix and which needs no IAM role. Each YAML document of the render becomes one line of
+# JSON read by Helm itself (fromYaml): no YAML tool of its own.
 chart=$repo_root/deploy/helm/svp-cluster
 helm template svp-cluster "$chart" --show-only templates/external-secrets.yaml \
   --set externalSecrets.enabled=true --set externalSecrets.argocdNotifications=true --set s3.mode=external \
+  --set externalSecrets.localKafkaValkey=false \
   >"$aws_dir/render.yaml" || fail "render the ExternalSecrets of chart svp-cluster for EKS"
 mkdir -p "$aws_dir/yj/templates" "$aws_dir/yj/in" && cp "$aws_dir/render.yaml" "$aws_dir/yj/in/doc" &&
   printf 'apiVersion: v2\nname: yj\nversion: 0.1.0\n' >"$aws_dir/yj/Chart.yaml" &&
@@ -54,6 +58,10 @@ entries=$(helm template yj "$aws_dir/yj" | sed -n 's/^# json //p' | jq -sc '
   | group_by(.entry) | map({key: .[0].entry, value: (map(.key) | unique)}) | from_entries') &&
   [ "$(jq length <<<"$entries")" -gt 0 ] || fail "read the entries of the ExternalSecrets of chart svp-cluster"
 names=$(jq -r 'keys[]' <<<"$entries")
+# The entries Terraform writes (above): read by the cluster, never written here, their keys not taken from .env.
+terraform_entries=(kafka-admin kafka-users valkey-users)
+entries_written=$(jq -c --args 'with_entries(select(.key | IN($ARGS.positional[]) | not))' \
+  "${terraform_entries[@]}" <<<"$entries") || fail "leave out the entries of the infrastructure repository"
 
 # --- the values, every one read and checked before anything is written.
 optional=(SVP_ALERT_TELEGRAM_BOT_TOKEN SVP_ALERT_TELEGRAM_CHAT_ID)
@@ -63,7 +71,7 @@ not_dotenv=(SVP_PG_SUPERUSER_PASSWORD SENTRY_DSN SENTRY_AUTH_TOKEN SENTRY_SOURCE
 required=()
 while IFS= read -r key; do
   case " ${optional[*]} ${not_dotenv[*]} " in *" $key "*) ;; *) required+=("$key") ;; esac
-done < <(jq -r '[.[][]] | unique[]' <<<"$entries")
+done < <(jq -r '[.[][]] | unique[]' <<<"$entries_written")
 dotenv_read "$env_file" "${required[@]}"
 [ -z "$dotenv_missing" ] || fail ".env lacks or has empty:$dotenv_missing; run make env, then this again; nothing was written"
 dotenv_read "$env_file" "${optional[@]}"
@@ -85,24 +93,23 @@ if jq -e 'has("glitchtip-runtime")' <<<"$entries" >/dev/null; then
     fail "read the versions of entry ${aws_prefix}glitchtip-runtime"
 fi
 
-# --- the servers. On a running environment Reloader must run, StatefulSet redpanda must name its Secrets for it,
-# and Redpanda takes a changed password of its superuser first.
+# --- on a running environment Reloader must run before anything is written: it restarts the workloads whose Secret
+# changes, and this script then has the init Jobs and the clients follow in the order of deploy/k8s/rotate.sh.
 if [ -n "$running" ]; then
   kc get --raw /readyz >/dev/null 2>&1 ||
-    fail "cluster $kube_context is not reachable (svp-prd: open the tunnel of output api_tunnel_command of the infrastructure repository); its entries have values already, and a changed password of Redpanda's superuser must reach the broker before them; nothing was written"
+    fail "cluster $kube_context is not reachable (svp-prd: open the tunnel of output api_tunnel_command of the infrastructure repository); its entries have values already, and a change of credentials must reach its workloads in order; nothing was written"
   rotate_guard argocd "Argo CD installs them with component reloader and the charts of svp-gitops: sync Application svp-apps to a revision that has them"
-  redpanda_admin
 fi
 
 written=
-for name in $names; do
+for name in $(jq -r 'keys[]' <<<"$entries_written"); do
   [ "$name" != glitchtip-runtime ] || continue
   for key in $(jq -r --arg n "$name" '.[$n][]' <<<"$entries"); do
     printf '%s\n%s\n' "$key" "${!key}"
   done | aws_put_entry "$name"
   written="$written $name"
 done
-ok "entries of $aws_prefix written:$written (pg-superuser from SVP_RDS_MASTER_PASSWORD, the others from .env)"
+ok "entries of $aws_prefix written:$written (pg-superuser from SVP_RDS_MASTER_PASSWORD, the others from .env); ${terraform_entries[*]} left to the infrastructure repository"
 if jq -e 'has("glitchtip-runtime")' <<<"$entries" >/dev/null; then
   if [ -z "$running" ]; then
     jq -r '.["glitchtip-runtime"][] | ., ""' <<<"$entries" | aws_put_entry glitchtip-runtime
@@ -112,16 +119,11 @@ if jq -e 'has("glitchtip-runtime")' <<<"$entries" >/dev/null; then
   fi
 fi
 
-# Brokers started before redpanda_admin changed the superuser's password keep logging in with the previous one
-# (RPK_PASS, from Secret redpanda-bootstrap): the sidecar's readiness probe gets 401 and the broker turns NotReady.
-# Reloader restarts them one at a time, so a cluster of three keeps a majority; the sync of svp-data waits for that
-# (rotate_barrier), as redpanda-init logs in with the new password.
 if [ -z "$running" ]; then
   echo "skip  ExternalSecrets: a new environment; Argo CD creates them (chart svp-cluster), each built from the entries then"
   exit 0
 fi
 rotate_es_sync server
-rotate_barrier redpanda redpanda RPK_PASS "$SVP_KAFKA_ADMIN_PASSWORD"
 rotate_init_argocd
 rotate_es_sync clients
 rotate_clients_note

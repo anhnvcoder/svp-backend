@@ -206,7 +206,7 @@ Trigger: `pull_request`, `push` vào `main`, `workflow_dispatch`. Không trigger
 | Job | Làm gì | Chạy khi | Skip khi, vì sao | Chặn merge |
 | --- | --- | --- | --- | --- |
 | `changes` | Danh sách file của PR qua API (`pull-requests: read`, không checkout), ra năm output `code`, `proto`, `api`, `workflows`, `stack` cho các job dưới; tài liệu là `.md` (trừ `deploy/helm/*/README.md` do helm-docs sinh), `docs/`, `LICENSE`; PR đổi `Makefile`, file `*.mk` hay `ci.yml` thì mọi output là `true`; file đổi tên xét cả tên cũ; API liệt kê thiếu file (tối đa 3.000) thì mọi output là `true` | Mọi lượt (`push`, `workflow_dispatch`: mọi output `true`) | Không bao giờ | Có (qua `ci-ok`) |
-| `check` | `make check-go` (gofmt, vet, golangci-lint, actionlint, buf lint, `make vulncheck`, Go test với Postgres, Redis là service container). `make vulncheck`: govulncheck bằng Go của directive `go` trong `go.mod`, gate `tools/vulngate` đỏ khi code gọi tới một lỗ hổng không có ngoại lệ hợp lệ trong `.govulncheck-ignore.json`, hay khi image Go của `deploy/docker/` build bằng bản Go khác bản đã quét; lỗ hổng chỉ ở mức module, package là một dòng `INFO`; cần mạng tới `vuln.go.dev` | PR có file ngoài tài liệu, `push`, `workflow_dispatch` | PR chỉ tài liệu (job `changes`): `ci-ok` nhận `skipped` | Có (`ci-ok`) |
+| `check` | `make check-go` (gofmt, vet, golangci-lint, actionlint, buf lint, `make vulncheck`, Go test với Postgres, Redis native là service container). `make vulncheck`: govulncheck bằng Go của directive `go` trong `go.mod`, gate `tools/vulngate` đỏ khi code gọi tới một lỗ hổng không có ngoại lệ hợp lệ trong `.govulncheck-ignore.json`, hay khi image Go của `deploy/docker/` build bằng bản Go khác bản đã quét; lỗ hổng chỉ ở mức module, package là một dòng `INFO`; cần mạng tới `vuln.go.dev` | PR có file ngoài tài liệu, `push`, `workflow_dispatch` | PR chỉ tài liệu (job `changes`): `ci-ok` nhận `skipped` | Có (`ci-ok`) |
 | `generate` | `make generate-check`: code sinh đã commit khớp | PR có file ngoài tài liệu, `push`, `workflow_dispatch` | PR chỉ tài liệu (job `changes`): `ci-ok` nhận `skipped` | Có |
 | `buf` | `buf breaking` so với base | PR đổi `proto/` hay file của buf, `push`, `workflow_dispatch` | PR không đổi vùng đó (job `changes`): `ci-ok` nhận `skipped` | Có |
 | `api-contract` | `make api-contract-check BASE=<base>` (base như `buf`): file `services/gateway/openapi.yaml` đổi thì `info.version` phải tăng đúng mức theo oasdiff (`OASDIFF_IMAGE`, không mạng), rồi `deploy/ci/contract-test.sh` (luật version với oasdiff thật, phát hành với registry và cosign giả) | PR đổi `services/gateway/openapi.yaml` hay script kiểm nó, `push`, `workflow_dispatch` | PR không đổi vùng đó (job `changes`): `ci-ok` nhận `skipped`; push tạo nhánh mới hay base không có spec thì một dòng summary và xanh | Có |
@@ -385,22 +385,23 @@ và không còn ở workflow: bản đo một lần của `dev-k3d`, `web-canary
 - **`check`: bản Go và service container.** Bản Go là bản của image builder trong các Dockerfile và của máy dev; cache module và cache build,
   khoá theo `go.sum`. Test transcode của `media-worker` bị skip khi thiếu `ffmpeg` và `ffprobe`, mà runner không có; ffmpeg của Ubuntu
   cũ hơn bản trong image nên test chỉ dùng cờ lâu đời. Postgres service container cùng major với Postgres của máy dev và của cluster, superuser
-  `postgres`/`postgres` là mặc định của `SVP_TEST_POSTGRES_URL` trong `Makefile`; test tự tạo các database `svp_*_test` từ đó. Redis cùng dòng
-  với Redis của máy dev; test dùng db 15 (mặc định của `SVP_TEST_REDIS_URL`).
+  `postgres`/`postgres` là mặc định của `SVP_TEST_POSTGRES_URL` trong `Makefile`; test tự tạo các database `svp_*_test` từ đó. Redis native cùng dòng
+  với Redis của máy dev; test dùng db 15 (mặc định của `SVP_TEST_REDIS_URL`); stack `make up` không dùng nó.
 - **Job `stack`: cách chạy và vì sao.** Dựng cả stack `make up` trên runner như trên máy dev rồi chạy `make smoke`, e2e của web, k6 profile `ci` (chỉ ngưỡng
   lỗi: runner dùng chung không nói gì về độ trễ), Lighthouse và Schemathesis theo hợp đồng OpenAPI của gateway. Sáu service build từ code của
   PR; web là bản phát hành mà stg chạy (mặc định của `make up`, ghi ở `main` của `svp-gitops`, kéo ẩn danh từ GHCR), và e2e, Lighthouse
   là code của `svp-frontend` ở đúng commit của bản phát hành đó (`make web-clone`), nên thay đổi backend làm hỏng web hiện ở đây. Job build và chạy code của PR
   như các job khác, với `contents: read` và không secret: `make env` ghi `.env` gồm secret ngẫu nhiên mới, chỉ sống trên runner tới hết job,
   không in, không tải lên. Các thao tác đặt lại "LOCAL LAB ONLY" của smoke, e2e, k6, Lighthouse, DAST (xoá khoá rate limit đăng ký của gateway ở
-  Redis db 10) chỉ chạm Redis service container của lượt này. Job chạy khoảng 15 đến 25 phút (sáu lần build image, kéo bản web phát hành, seed e2e
+  Valkey db 10, qua CLI vận hành trong container `valkey`) chỉ chạm Valkey của stack compose lượt này. Job chạy khoảng 15 đến 25 phút (sáu lần build image, kéo bản web phát hành, seed e2e
   (video READY), hai trình duyệt); `timeout-minutes: 45` chừa chỗ cho runner chậm và dừng một bước treo xa trước mặc định 6 giờ của
   GitHub.
-- **Job `stack`: môi trường của runner.** Postgres và Redis của job là service container publish trên đúng hai địa chỉ: container compose gọi chúng là
+- **Job `stack`: môi trường của runner.** Postgres của job là service container publish trên đúng hai địa chỉ: container compose gọi chúng là
   `host.docker.internal`, mà `host-gateway` của compose ánh xạ tới gateway của bridge mặc định của Docker (`docker0`, `172.17.0.1`), còn `psql` của
-  `deploy/postgres/bootstrap.sh` và `redis-cli` của script chạy ngay trên runner nên cần loopback; không publish trên mọi interface. Service
+  `deploy/postgres/bootstrap.sh` chạy ngay trên runner nên cần loopback; không publish trên mọi interface. Kafka và Valkey là container của
+  stack compose (`tls-init`, `kafka`, `kafka-init`, `valkey`), không publish cổng; khi một bước lỗi, bước "Container state" in log của chúng. Service
   compose đăng nhập Postgres bằng mật khẩu role do `make up` bootstrap (image đòi mật khẩu ở mọi kết nối TCP). Gói apt từ kho Ubuntu (không action bên thứ ba)
-  cho script chạy trên runner: `psql` của bootstrap Postgres (`bootstrap.sql` cần bản 15 trở lên vì `\getenv`), `redis-cli` để đặt lại rate limit,
+  cho script chạy trên runner: `psql` của bootstrap Postgres (`bootstrap.sql` cần bản 15 trở lên vì `\getenv`),
   `ffmpeg` cho video thử của smoke, seed e2e và Lighthouse, `jq` ở mọi nơi; `curl`, `openssl` có sẵn trong image runner. Node theo major của
   `.nvmrc` và pnpm theo `packageManager` của bản clone, như CI và Dockerfile của `svp-frontend`: Node 25 trở lên không còn Corepack, và repo
   không cho action bên thứ ba (`pnpm/action-setup`); không cache vì cache pnpm của `setup-node` cần pnpm trên `PATH` trước khi Node có
@@ -480,7 +481,9 @@ Trang một lượt chạy (Actions → chọn lượt) có đồ thị job, dan
   - `results.tsv`: mỗi bước một dòng, outcome của bước (`success`, `failure`, kể cả bước quá `timeout-minutes`, `cancelled`, `skipped`) và
     ghi chú của bước skip (`not in targets`, `build step failed`, `not run`);
   - `files.txt`: file nào được giữ, file nào bị bỏ và theo luật nào; rồi report JUnit của diễn tập Chainsaw (`k8s-drills/<diễn tập>-<UTC>.xml`),
-    dòng kết luận của `drill-obs-threats` (`logs/drill-obs-threats.verdicts.log`) và số đo admission (`logs/gitops-admission-metrics.log`).
+    dòng kết luận của `drill-obs-threats` (`logs/drill-obs-threats.verdicts.log`), số đo admission (`logs/gitops-admission-metrics.log`)
+    và, khi bước `make k8s-up` của `dev-k3d` đỏ, trạng thái cluster `k8s-state.json` của `deploy/ci/verify-k8s-state.sh` (pod và container,
+    Job, event `Warning` đã mask, release Helm, và 40 dòng cuối log lần chạy trước của container crash ở namespace hạ tầng, đã che; không spec hay giá trị Secret).
     Output của các bước khác không lên artifact (có thể trích log service hay container bên thứ ba): bước đỏ thì đọc report JUnit, hay
     chạy lại đúng lệnh `make` của bước đó trên máy.
 - **Chạy lại:** "Re-run failed jobs" tạo một lần chạy mới (attempt) của cùng lượt; mỗi attempt có log và artifact riêng.

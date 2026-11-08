@@ -1,7 +1,6 @@
 #!/usr/bin/env bash
 # verify-host.sh compose-obs|gitops: validates runner environment before verification make targets; Linux only (GNU df).
 # Disk: free >= need (16 GiB compose-obs, 30 gitops) + 15% to stay under kubelet's 85% image GC threshold + 2 GiB.
-# Memory: logs vm.min_free_kbytes which Seastar takes off broker cgroup limit; redpanda.yaml leaves room for it.
 # Design notes: docs/reference/ci.md.
 set -euo pipefail
 
@@ -71,5 +70,3 @@ client_minor=$(kubectl --context k3d-svp version --client -o json | jq -r '.clie
 skew=$((client_minor - k3s_minor))
 [ "${skew#-}" -le 1 ] || fail "kubectl 1.$client_minor is more than one minor version from k3s 1.$k3s_minor"
 echo "kubectl: 1.$client_minor for k3s 1.$k3s_minor (within one minor version)"
-
-echo "memory: vm.min_free_kbytes $(cat /proc/sys/vm/min_free_kbytes) kB (Seastar takes it off the Redpanda broker's limit)"

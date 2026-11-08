@@ -15,7 +15,7 @@ import (
 
 func setRequired(t *testing.T) {
 	t.Helper()
-	t.Setenv("KAFKA_BROKERS", "redpanda:9092")
+	t.Setenv("KAFKA_BROKERS", "kafka:9096")
 	t.Setenv("S3_ENDPOINT", "http://s3:9000")
 	t.Setenv("S3_ACCESS_KEY_ID", "svp-media-worker")
 	t.Setenv("S3_SECRET_ACCESS_KEY", "test-secret-value")
@@ -32,7 +32,7 @@ func TestLoadConfigDefaults(t *testing.T) {
 		t.Fatal(err)
 	}
 	s := cfg.store
-	if cfg.brokers != "redpanda:9092" || s.Endpoint != "http://s3:9000" || s.AccessKeyID != "svp-media-worker" ||
+	if cfg.brokers != "kafka:9096" || s.Endpoint != "http://s3:9000" || s.AccessKeyID != "svp-media-worker" ||
 		s.SecretAccessKey != "test-secret-value" {
 		t.Errorf("required values not read: %+v", cfg)
 	}
@@ -135,7 +135,7 @@ func TestRunRejectsOtherCommands(t *testing.T) {
 func TestServeMalformedKafkaBrokersNamesTheVariable(t *testing.T) {
 	setRequired(t)
 	t.Setenv("WORK_DIR", t.TempDir())
-	for _, brokers := range []string{" , ", "redpanda:notaport"} {
+	for _, brokers := range []string{" , ", "kafka:notaport"} {
 		t.Setenv("KAFKA_BROKERS", brokers)
 		err := serve(t.Context(), slog.New(slog.DiscardHandler))
 		if err == nil || !strings.Contains(err.Error(), "KAFKA_BROKERS") {
@@ -194,7 +194,7 @@ func TestServeLogsFailureBeforeClosingTelemetry(t *testing.T) {
 		t.Setenv(name, "")
 	}
 	// Checked after telemetry is set up.
-	t.Setenv("KAFKA_BROKERS", "redpanda:notaport")
+	t.Setenv("KAFKA_BROKERS", "kafka:notaport")
 	probe := &failureProbe{}
 	err := serve(t.Context(), slog.New(probe))
 	if err == nil || !strings.Contains(err.Error(), "KAFKA_BROKERS") {

@@ -13,6 +13,9 @@ externalSecrets:
   enabled: true
   store: kubernetes
   postgres: svp-stg-pg.rds.example:5432
+  valkey: master.svp-stg.cache.example:6379
+  # Kafka is Amazon MSK and Valkey Amazon ElastiCache: no broker users, ACL file or local CA in the cluster.
+  localKafkaValkey: false
 
 # The VPC's CIDR, the first address of the cluster's service range, and the port of EKS's API server.
 nodeSubnet: 10.0.0.0/16

@@ -83,11 +83,10 @@ func open(ctx context.Context, databaseURL string, window time.Duration, opts ..
 	if err != nil {
 		return nil, err
 	}
-	// pgxpool connects lazily and warms up (pool_min_conns) in the background, ignoring the
-	// deadline of the context it is created with; Close then waits for those dials, up to
-	// connect_timeout. So the startup check is one connection of its own, closed at once, made
-	// before the pool exists: a failed check has no pool to close, and the warm-up only dials a
-	// server that has just answered.
+	// pgxpool connects lazily and warms up (pool_min_conns) in the background, ignoring the deadline of the context
+	// it is created with; Close then waits for those dials, up to connect_timeout. So the startup check is one
+	// connection of its own, closed at once, made before the pool exists: a failed check has no pool to close, and
+	// the warm-up only dials a server that has just answered.
 	startCtx, cancel := context.WithTimeout(ctx, window)
 	defer cancel()
 	connCfg := cfg.ConnConfig.Copy()

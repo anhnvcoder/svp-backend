@@ -28,13 +28,13 @@ import (
 
 func TestServeRequiresItsVariables(t *testing.T) {
 	for _, tc := range []struct{ databaseURL, brokers, redisURL, want string }{
-		{"", "redpanda:9092", "", "DATABASE_URL"},
+		{"", "kafka:9096", "", "DATABASE_URL"},
 		{"postgres://unused@127.0.0.1:1/unused", "", "", "KAFKA_BROKERS"},
 		// The broker list and the Redis URL are checked before the database is opened, so this
 		// URL is never dialled.
 		{"postgres://unused@127.0.0.1:1/unused", " , ", "", "KAFKA_BROKERS"},
-		{"postgres://unused@127.0.0.1:1/unused", "redpanda:notaport", "", "KAFKA_BROKERS"},
-		{"postgres://unused@127.0.0.1:1/unused", "redpanda:9092", "not a url", "REDIS_URL"},
+		{"postgres://unused@127.0.0.1:1/unused", "kafka:notaport", "", "KAFKA_BROKERS"},
+		{"postgres://unused@127.0.0.1:1/unused", "kafka:9096", "not a url", "REDIS_URL"},
 	} {
 		t.Setenv("DATABASE_URL", tc.databaseURL)
 		t.Setenv("KAFKA_BROKERS", tc.brokers)
@@ -62,7 +62,7 @@ func TestServeReportsAFailureBeforeTheErrorTrackerStops(t *testing.T) {
 	t.Setenv("SENTRY_DSN", "http://public@"+tracker.Listener.Addr().String()+"/1")
 	t.Setenv("OTEL_SDK_DISABLED", "true")
 	t.Setenv("JWT_VERIFY_KEYS", calleridtest.VerifyKeys())
-	t.Setenv("KAFKA_BROKERS", "redpanda:9092")
+	t.Setenv("KAFKA_BROKERS", "kafka:9096")
 	t.Setenv("REDIS_URL", "")
 	// pgpool rejects this URL once the tracker has started. Every later failure, a malformed
 	// LISTEN_ADDR included, returns through the same deferred call.
@@ -340,7 +340,7 @@ func TestRunPruneReportsBatchesOfATimedOutRun(t *testing.T) {
 // JWT_VERIFY_KEYS is required: without the public keys no caller's token can be verified.
 func TestServeRequiresVerifyKeys(t *testing.T) {
 	t.Setenv("DATABASE_URL", "postgres://unused@127.0.0.1:1/unused")
-	t.Setenv("KAFKA_BROKERS", "redpanda:9092")
+	t.Setenv("KAFKA_BROKERS", "kafka:9096")
 	t.Setenv("REDIS_URL", "")
 	for _, keys := range []string{"", "k1:not-base64"} {
 		t.Setenv("JWT_VERIFY_KEYS", keys)

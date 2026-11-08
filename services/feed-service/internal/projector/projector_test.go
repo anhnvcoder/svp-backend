@@ -187,7 +187,7 @@ func addFollowers(t *testing.T, author string, n int) {
 
 func TestConsumerConfigRetriesWithoutLimit(t *testing.T) {
 	t.Parallel()
-	cfg := New(nil, slog.New(slog.DiscardHandler)).ConsumerConfig("127.0.0.1:19092")
+	cfg := New(nil, slog.New(slog.DiscardHandler)).ConsumerConfig("kafka:9096")
 	if cfg.Group != "feed-service" || !slices.Equal(cfg.Topics, []string{"user.follows.v1", "video.lifecycle.v1"}) {
 		t.Errorf("group %q topics %q, want feed-service on user.follows.v1 and video.lifecycle.v1", cfg.Group, cfg.Topics)
 	}
@@ -200,7 +200,7 @@ func TestConsumerConfigRetriesWithoutLimit(t *testing.T) {
 // 200k followers, about a second, and short enough that a stuck lock does not hold the consumer.
 func TestConsumerConfigBoundsEachAttempt(t *testing.T) {
 	t.Parallel()
-	cfg := New(nil, slog.New(slog.DiscardHandler)).ConsumerConfig("127.0.0.1:19092")
+	cfg := New(nil, slog.New(slog.DiscardHandler)).ConsumerConfig("kafka:9096")
 	if cfg.HandlerTimeout != 30*time.Second {
 		t.Errorf("HandlerTimeout = %s, want 30s", cfg.HandlerTimeout)
 	}
@@ -255,7 +255,7 @@ func TestAttemptWaitingOnAuthorLockEndsAtDeadline(t *testing.T) {
 // partition does not move while an old event is still being retried.
 func TestConsumerConfigBlocksRebalance(t *testing.T) {
 	t.Parallel()
-	cfg := New(nil, slog.New(slog.DiscardHandler)).ConsumerConfig("127.0.0.1:19092")
+	cfg := New(nil, slog.New(slog.DiscardHandler)).ConsumerConfig("kafka:9096")
 	if !cfg.BlockRebalance || cfg.RebalanceTimeout < time.Minute || cfg.MaxPollRecords <= 0 {
 		t.Errorf("BlockRebalance %v, RebalanceTimeout %s, MaxPollRecords %d; want blocking, at least a minute, a bounded poll",
 			cfg.BlockRebalance, cfg.RebalanceTimeout, cfg.MaxPollRecords)
@@ -391,7 +391,8 @@ func TestVideoReadyThenUnfollowRemovesRows(t *testing.T) {
 	}
 }
 
-// Replaying a pair's whole history (as `rpk group seek` does) ends where the first pass ended.
+// Replaying a pair's whole history (as `svp-kafka consumer-groups --reset-offsets` does) ends where
+// the first pass ended.
 func TestReplayFollowUnfollowFollow(t *testing.T) {
 	needDB(t)
 	p := newProjector()

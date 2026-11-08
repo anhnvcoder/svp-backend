@@ -35,8 +35,8 @@ make logs SVC=web
 # web gọi gateway: gateway khoẻ không, có cảnh báo khác cùng lúc không
 curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1:8080/readyz
 curl -s "$AM/api/v2/alerts" | jq -c '.[] | [.labels.alertname, .labels.severity, .status.state]'
-# phiên web nằm ở Redis native db 9
-redis-cli -h 127.0.0.1 -p 6379 -n 9 ping
+# phiên web nằm ở Valkey db 9 (svp-valkey: valkey-cli --tls, đăng nhập svp-ops, ADR-0053 §13)
+dc exec -T valkey /opt/svp/bin/svp-valkey -n 9 PING
 ```
 
 k3d (web ở `https://svp.localhost:8443`, CA `.k8s/ca.crt`, thiếu thì `make k8s-ca`):
@@ -46,7 +46,7 @@ curl -s --cacert .k8s/ca.crt -o /dev/null -w '%{http_code}\n' https://svp.localh
 kubectl --context k3d-svp -n svp get pods -l app.kubernetes.io/name=web -o wide
 kubectl --context k3d-svp -n svp get rollout web
 kubectl --context k3d-svp -n svp logs -l app.kubernetes.io/name=web --since=15m --tail=1000
-kubectl --context k3d-svp -n svp-data exec deploy/valkey -c valkey -- valkey-cli -n 9 ping
+kubectl --context k3d-svp -n svp-data exec deploy/svp-ops -c valkey -- /opt/svp/bin/svp-valkey -n 9 PING
 ```
 
 Lỗi server của web tới GlitchTip (`http://127.0.0.1:8000`, k3d: `make k8s-ui-glitchtip`) với frame đã map nếu đã tải source map;
@@ -57,7 +57,8 @@ trace của web và gateway ở Tempo. Dashboard `svp-slo`; `svp-web` cho trải
 1. **Gateway hay service phía sau lỗi**: BFF của web gọi gateway; gateway 5xx hay không tới được làm trang và Server Action
    lỗi. Dấu hiệu: cảnh báo SLO hay `CircuitBreakerOpen` khác cùng cháy, `/readyz` của gateway không 200.
 2. **Container/pod web chết, restart lặp hay hết RAM**: `make ps` / `get pods` thấy restart, log có lỗi khởi động.
-3. **Redis của phiên lỗi** (compose: db 9 Redis native; k3d: Valkey db 9): đọc hay ghi phiên thất bại.
+3. **Valkey của phiên lỗi** (db 9, user `svp-web`): đọc hay ghi phiên thất bại; `PING` của `svp-ops` vẫn `PONG` mà log web có
+   `WRONGPASS`, `NOPERM` hay lỗi TLS thì là mật khẩu hay CA của `svp-web`, không phải Valkey.
 4. **Khoá Server Action lệch giữa các replica** (k3d, 2 replica) hay đổi giữa chừng: Server Action giải mã thất bại. Khoá là
    `NEXT_SERVER_ACTIONS_ENCRYPTION_KEY` (compose từ `.env`, k3d Secret `svp/web-env`).
 5. **Bản phát hành web mới lỗi**: bắt đầu ngay sau deploy; trên k3d Rollout `web` có canary.

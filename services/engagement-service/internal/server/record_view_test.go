@@ -43,8 +43,8 @@ func recordSpans(t *testing.T) *tracetest.SpanRecorder {
 }
 
 // newCluster starts an in-memory Kafka cluster holding TopicViews with 3 partitions and its
-// dead-letter topic with 1, as deploy/redpanda/create-topics.sh creates them, and returns it with
-// its broker list.
+// dead-letter topic with 1, as the Kafka init script in deploy/kafka/ creates them, and returns
+// it with its broker list.
 func newCluster(t *testing.T) (*kfake.Cluster, string) {
 	t.Helper()
 	c, err := kfake.NewCluster(kfake.NumBrokers(1), kfake.SeedTopics(3, TopicViews),

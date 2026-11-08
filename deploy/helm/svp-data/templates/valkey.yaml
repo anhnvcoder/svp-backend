@@ -1,6 +1,12 @@
 {{- /*
-Valkey in place of the host's Redis, at valkey.svp-data:6379 with the same db numbers and key prefixes: gateway db 10
-(svp:gw:), feed-service db 14 (svp:feed:), the web client db 9 (svp:web:, its sessions and refresh locks).
+Valkey with valkey.mode cluster, the stand-in for Amazon ElastiCache for Valkey: TLS only, on
+valkey.svp-data.svc.cluster.local:6379, with the local CA's server certificate (Secret valkey-tls), the same db numbers
+and key prefixes everywhere: gateway db 10 (svp:gw:), feed-service db 14 (svp:feed:), the web client db 9 (svp:web:).
+*/}}
+
+{{- /*
+One ACL user per client (Secret valkey-acl, the aclfile of compose's valkey), whose access string allows only its own
+db, key prefix and commands, and svp-ops for the operations CLI; user default is off. A client reads no other's keys.
 */}}
 
 {{- /*
@@ -8,33 +14,16 @@ Rate limits, a cache and sessions, none worth persisting: a restart loses every 
 when full, writes fail (the gateway falls back to its in-process counter, a login fails), no key is dropped silently.
 */}}
 
-{{- /*
-No password: db numbers are no boundary between clients (accepted locally).
-*/}}
-
-{{- /*
-The NetworkPolicy lets only the gateway, feed-service and the web client reach it, and each can read and write every
-session, which holds the user's access and refresh tokens.
-*/}}
-
-{{- /*
-Accepted on a one-user lab machine: a taken gateway pod can already act as any user through gRPC, and a taken
-feed-service pod, which reaches neither the gateway nor the internet, could only copy tokens into a session of its own.
-*/}}
-
-{{- /*
-Revisit on the cloud (Valkey with AUTH, per-client ACLs and TLS, or an instance of its own for sessions), or sooner if
-feed-service gets a new way out.
-*/}}
-
-{{- /*
-Design notes: docs/explanation/deployment.md.
-*/}}
+{{- /* Design notes: docs/explanation/deployment.md. */}}
+{{- if not (include "svp-data.valkeyExternal" .) }}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: valkey
   namespace: {{ .Release.Namespace }}
+  annotations:
+    # Valkey reads its aclfile and its certificate only at start.
+    secret.reloader.stakater.com/reload: valkey-acl,valkey-tls
 spec:
   replicas: 1
   selector:
@@ -50,13 +39,15 @@ spec:
         # A user and group above 10000, not the image's valkey (999:1000): ids that low may belong to an account of the
         # node. Valkey needs no account of its own (the image's entrypoint changes user only when started as root), and
         # the one directory it writes, /data, is an emptyDir, writable by any user and empty at every start, so the ids
-        # can change in place with nothing to keep.
-        {{- include "svp-data.podSecurityContext" (dict "uid" 10999 "gid" 10999) | nindent 8 }}
+        # can change in place with nothing to keep. fsGroup lets it read the Secrets mounted with mode 0440.
+        {{- include "svp-data.podSecurityContext" (dict "uid" 10999 "gid" 10999 "fsGroup" true) | nindent 8 }}
       containers:
         - name: valkey
           image: {{ .Values.valkey.image }}
-          args: ["valkey-server", "--save", "", "--appendonly", "no", "--maxmemory", "64mb",
-                 "--maxmemory-policy", "noeviction"]
+          args: ["valkey-server", "--port", "0", "--tls-port", "6379",
+                 "--tls-cert-file", "/etc/svp-tls/valkey.crt", "--tls-key-file", "/etc/svp-tls/valkey.key",
+                 "--tls-auth-clients", "no", "--aclfile", "/etc/svp-valkey/users.acl",
+                 "--save", "", "--appendonly", "no", "--maxmemory", "64mb", "--maxmemory-policy", "noeviction"]
           ports:
             - name: valkey
               containerPort: 6379
@@ -80,10 +71,24 @@ spec:
             # The image's working directory; nothing is saved there with persistence off, but it must be writable.
             - name: data
               mountPath: /data
+            - name: tls
+              mountPath: /etc/svp-tls
+              readOnly: true
+            - name: acl
+              mountPath: /etc/svp-valkey
+              readOnly: true
       volumes:
         - name: data
           emptyDir:
             sizeLimit: 16Mi
+        - name: tls
+          secret:
+            secretName: valkey-tls
+            defaultMode: 0440
+        - name: acl
+          secret:
+            secretName: valkey-acl
+            defaultMode: 0440
 ---
 apiVersion: v1
 kind: Service
@@ -97,3 +102,4 @@ spec:
     - name: valkey
       port: 6379
       targetPort: valkey
+{{- end }}
