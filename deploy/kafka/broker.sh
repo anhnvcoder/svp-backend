@@ -26,8 +26,11 @@ export PATH=/opt/kafka/bin:$PATH
 export LOG_DIR=/tmp/kafka-logs
 config=/tmp/server.properties
 umask 077
+# The blank echo ends the file's last line: a ConfigMap may hold it without its final newline, and the next line would
+# be glued to the last property.
 {
   cat "$here/server.properties"
+  echo
   echo "advertised.listeners=SASL_SSL://$SVP_KAFKA_ADVERTISED,INTERNAL://localhost:9092"
 } >"$config"
 
