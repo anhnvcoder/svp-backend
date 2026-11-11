@@ -59,7 +59,7 @@
         "minAvailable": {"description": "A count or a percentage, as in a PodDisruptionBudget.", "type": ["integer", "string"]}
       }
     },
-    "spreadAcrossNodes": {"type": "boolean"},
+    "spreadAcrossNodes": {"description": "Spread the replicas over the zones, then over the nodes.", "type": "boolean"},
     "keda": {
       "type": "object",
       "additionalProperties": false,

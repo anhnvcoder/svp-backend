@@ -89,7 +89,7 @@ Tuổi của vòng quay về dưới một chu kỳ, cảnh báo hết ở lần
 
 - `outbox-relay` đứng quá 15 phút dù Kafka và Postgres khoẻ: không có goroutine dump để xem (pprof không publish, OPS-1),
   nên ghi lại thời điểm và log, restart, mở postmortem; Pyroscope (`make up OBS=lgtm`) có profile CPU của lúc đó.
-- Postgres native (compose) là chung với dự án khác: không restart, báo chủ máy.
+- Postgres của compose là container `postgres`: trạng thái ở `make ps`, log ở `make logs SVC=postgres`.
 - `upload-sweep` lỗi vì quyền của object store: kiểm policy của user `svp-video-service` (`deploy/s3/video-service-policy.json`,
   job `s3-init` đặt lại mỗi lần `make up` hay `make k8s-up`); đổi
   policy là thay đổi cấu hình qua PR.

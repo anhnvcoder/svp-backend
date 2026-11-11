@@ -2,7 +2,7 @@
 
 - Severity: `page`. Rule: nhóm `postgres-backup` của `deploy/observability/prometheus/rules/svp-alerts.yaml`.
 - Chỉ có ở cluster k3d (Postgres `svp-pg` của CloudNativePG, backup bằng plugin Barman Cloud,
-  [ADR-0020](../adr/0020-reliability-stage6.md) §5). Compose dùng Postgres native, không backup, không có series này.
+  [ADR-0020](../adr/0020-reliability-stage6.md) §5). Compose có container `postgres` riêng, không backup, không có series này.
 - Chuẩn bị biến `PROM`, `AM` (phần k3d): [README](README.md#chuẩn-bị-trong-terminal).
 
 ## Ý nghĩa và tác động tới người dùng

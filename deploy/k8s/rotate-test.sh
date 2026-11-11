@@ -233,6 +233,10 @@ printf -- '-----BEGIN CERTIFICATE-----\nfakeserver%s\n-----END CERTIFICATE-----\
 key_body="fakekey$(openssl rand -hex 16)"
 echo "$key_body" >>"$work/secrets"
 printf -- '-----BEGIN PRIVATE KEY-----\n%s\n-----END PRIVATE KEY-----\n' "$key_body" >"$fake/.local/ca/server.key"
+printf -- '-----BEGIN CERTIFICATE-----\nfakepg%s\n-----END CERTIFICATE-----\n' "$(openssl rand -hex 8)" >"$fake/.local/ca/postgres.crt"
+pg_key_body="fakepgkey$(openssl rand -hex 16)"
+echo "$pg_key_body" >>"$work/secrets"
+printf -- '-----BEGIN PRIVATE KEY-----\n%s\n-----END PRIVATE KEY-----\n' "$pg_key_body" >"$fake/.local/ca/postgres.key"
 
 # leaks FILE...: the secrets (or their base64) the FILEs hold, one line each; nothing when none.
 leaks() {
@@ -372,6 +376,7 @@ svp-data/valkey-acl=users.acl
 svp-data/kafka-tls=kafka.pem
 svp-data/valkey-tls=valkey.crt valkey.key
 svp-data/local-ca=ca.crt
+svp-data/pg-tls=tls.crt tls.key
 svp/local-ca=ca.crt
 svp-obs/otelcol-kafka=password
 svp-obs/local-ca=ca.crt
@@ -390,6 +395,21 @@ done
 [ "$(applied_value svp-data/kafka-tls kafka.pem)" = "$(cat "$fake/.local/ca/server.key" "$fake/.local/ca/server.crt")" ] ||
   problems="$problems; kafka.pem"
 [ "$(applied_value svp-data/valkey-tls valkey.key)" = "$(cat "$fake/.local/ca/server.key")" ] || problems="$problems; valkey.key"
+{ [ "$(applied_value svp-data/pg-tls tls.crt)" = "$(cat "$fake/.local/ca/postgres.crt")" ] &&
+  [ "$(applied_value svp-data/pg-tls tls.key)" = "$(cat "$fake/.local/ca/postgres.key")" ]; } || problems="$problems; pg-tls"
+awk '/^---/ { n = "" } $1 == "name:" { name = $2 } $1 == "namespace:" { n = $2 "/" name }
+  n == "svp-data/pg-tls" && $1 == "type:" { t = $2 } n == "svp-data/pg-tls" && $1 == "cnpg.io/reload:" { l = $2 }
+  END { exit !(t == "kubernetes.io/tls" && l == "\"true\"") }' "$FAKE_STATE/applied.yaml" ||
+  problems="$problems; pg-tls is not of type kubernetes.io/tls labelled cnpg.io/reload"
+# Every connection string verify-full against the CA each client mounts, at the name svp-pg's certificate holds.
+while read -r id key user var db; do
+  [ "$(applied_value "$id" "$key")" = "postgres://$user:$(env_of "$var")@svp-pg-rw.svp-data:5432/$db?sslmode=verify-full&sslrootcert=/etc/svp-ca/ca.crt" ] ||
+    problems="$problems; $key of $id"
+done <<'URLS'
+svp/user-service-env DATABASE_URL svp_user_app SVP_USER_APP_DB_PASSWORD svp_user
+svp/feed-service-migrate-env DATABASE_URL svp_feed_migrator SVP_FEED_MIGRATOR_DB_PASSWORD svp_feed
+svp-obs/glitchtip-env MAINTENANCE_DATABASE_URL svp_glitchtip_migrator SVP_GLITCHTIP_MIGRATOR_DB_PASSWORD svp_glitchtip
+URLS
 for ns in svp-data svp svp-obs keda; do
   [ "$(applied_value "$ns/local-ca" ca.crt)" = "$(cat "$fake/.local/ca/ca.crt")" ] || problems="$problems; $ns/local-ca"
 done
@@ -404,10 +424,10 @@ feed-service svp-feed-service FEED_SERVICE 14
 web svp-web WEB 9
 EOF
 data_secrets=$(sed -n 's|^applied svp-data/||p' "$FAKE_STATE/calls" | LC_ALL=C sort -u | paste -sd ' ' -)
-[ "$data_secrets" = "kafka-admin kafka-tls kafka-users local-ca pg-backup-s3 pg-roles pg-superuser s3-root s3-users svp-ops valkey-acl valkey-tls" ] ||
+[ "$data_secrets" = "kafka-admin kafka-tls kafka-users local-ca pg-backup-s3 pg-roles pg-superuser pg-tls s3-root s3-users svp-ops valkey-acl valkey-tls" ] ||
   problems="$problems; svp-data gets $data_secrets"
 if [ -z "$problems" ] && [ -z "$(ls -A "$FAKE_STATE/tmp")" ]; then
-  ok "secrets.sh, dev path: the Secrets of Kafka, Valkey and the local CA with the names and keys of the ExternalSecrets, the values of .env and .local/ca/ (the ACL file as deploy/valkey/aclfile.sh writes it, REDIS_URL rediss:// per user), exactly these Secrets in svp-data, nothing left in TMPDIR"
+  ok "secrets.sh, dev path: the Secrets of Kafka, Valkey, Postgres's server certificate (pg-tls, kubernetes.io/tls, cnpg.io/reload) and the local CA with the names and keys of the ExternalSecrets, the values of .env and .local/ca/ (the ACL file as deploy/valkey/aclfile.sh writes it, REDIS_URL rediss:// per user, DATABASE_URL verify-full against /etc/svp-ca/ca.crt), exactly these Secrets in svp-data, nothing left in TMPDIR"
 else
   fail "secrets.sh, dev path, the Secrets of Kafka and Valkey:${problems#;}"
 fi
@@ -527,8 +547,9 @@ source_keys="$(applied_keys svp-secrets/kafka-users)|$(applied_keys svp-secrets/
 if [ "$rc" = 0 ] && [ "$annotated" = "svp-data/pg-superuser svp-data/s3-root svp-obs/grafana-admin svp/user-service-env" ] &&
   before "$admin" "$(line '^applied svp-secrets/')" && before "$sources" "$last_server" && before "$last_server" "$valkey" &&
   before "$valkey" "$patch" && before "$patch" "$synced" && before "$synced" "$first_client" &&
-  [ "$source_keys" = "SVP_KAFKA_KEDA_PASSWORD SVP_KAFKA_USER_SERVICE_PASSWORD SVP_KAFKA_VIDEO_SERVICE_PASSWORD SVP_KAFKA_ENGAGEMENT_SERVICE_PASSWORD SVP_KAFKA_FEED_SERVICE_PASSWORD SVP_KAFKA_MEDIA_WORKER_PASSWORD SVP_KAFKA_OTELCOL_PASSWORD|SVP_VALKEY_GATEWAY_PASSWORD SVP_VALKEY_FEED_SERVICE_PASSWORD SVP_VALKEY_WEB_PASSWORD SVP_VALKEY_OPS_PASSWORD|ca.crt|server.crt server.key" ] &&
+  [ "$source_keys" = "SVP_KAFKA_KEDA_PASSWORD SVP_KAFKA_USER_SERVICE_PASSWORD SVP_KAFKA_VIDEO_SERVICE_PASSWORD SVP_KAFKA_ENGAGEMENT_SERVICE_PASSWORD SVP_KAFKA_FEED_SERVICE_PASSWORD SVP_KAFKA_MEDIA_WORKER_PASSWORD SVP_KAFKA_OTELCOL_PASSWORD|SVP_VALKEY_GATEWAY_PASSWORD SVP_VALKEY_FEED_SERVICE_PASSWORD SVP_VALKEY_WEB_PASSWORD SVP_VALKEY_OPS_PASSWORD|ca.crt|server.crt server.key postgres.crt postgres.key" ] &&
   [ "$(applied_value svp-secrets/local-tls server.key)" = "$(cat "$fake/.local/ca/server.key")" ] &&
+  [ "$(applied_value svp-secrets/local-tls postgres.key)" = "$(cat "$fake/.local/ca/postgres.key")" ] &&
   grep -q '"operation":{"initiatedBy":{"username":"svp-rotate-' "$FAKE_STATE/calls" &&
   ! grep -qE '^applied (svp|svp-obs|svp-data|keda)/' "$FAKE_STATE/calls" && ! grep -q '^helmfile ' "$FAKE_STATE/calls" &&
   grep -q '^ok    init Jobs of svp-data done (sync of Application svp-data Succeeded)' "$work/gitops.out"; then

@@ -4,7 +4,7 @@ Loại tài liệu (Diátaxis): **reference**, tra cứu khi cần một lệnh 
 
 ## Stack compose
 
-- `make up` / `make smoke` / `make down`: dựng stack compose profile `core` (bootstrap Postgres, `tls-init` (cert và khoá của CA local vào volume `svp-tls`), Kafka `kafka` + `kafka-init` (topic, user, ACL),
+- `make up` / `make smoke` / `make down`: dựng stack compose profile `core` (`tls-init` (cert và khoá của CA local vào volume `svp-tls`), Postgres `postgres` và bootstrap role, database trong nó, Kafka `kafka` + `kafka-init` (topic, user, ACL),
   Valkey `valkey`, object store `s3` (RustFS, [ADR-0022](../adr/0022-local-object-store-minio-replacement.md)) + job `s3-init` tạo
   bucket, user, policy, CORS, migrate, gateway, user-service, video-service, media-worker, engagement-service,
   feed-service, web client `web`), chạy luồng đầu-cuối qua gateway ở `127.0.0.1:8080` (gồm refresh token, dùng lại token
@@ -20,15 +20,15 @@ Loại tài liệu (Diátaxis): **reference**, tra cứu khi cần một lệnh 
   `http://localhost:3002`, theo bucket (`s3-init` đặt `PutBucketCors`: `uploads` chỉ `POST`, `media` chỉ `GET`, `HEAD`; danh
   sách toàn cục `RUSTFS_CORS_ALLOWED_ORIGINS` rỗng nên bucket khác không có header CORS; WEB-10): mở web bằng
   `127.0.0.1:3001` thì đăng nhập được nhưng không phát và không tải video lên được. Cổng publish chỉ trên `127.0.0.1`: 8080 gateway, 3001 web (mở
-  bằng `http://localhost:3001`), 9000 object store (API S3; console tắt, không cổng 9001); Kafka và Valkey không publish cổng nào. Xem object bằng
+  bằng `http://localhost:3001`), 9000 object store (API S3; console tắt, không cổng 9001); Postgres, Kafka và Valkey không publish cổng nào. Xem object bằng
   `curl --aws-sigv4` chạy trong container `s3`, không mở cổng nào thêm. `make ps` và `make logs SVC=<tên>` để xem. Trước khi chạy, `make smoke` và `make drill-obs-threats`
   xoá khoá rate limit đăng ký theo IP `svp:gw:rl:register:*` ở db 10 của Valkey (`SCAN` + `DEL`, không `FLUSHDB`) qua CLI vận hành
   `svp-valkey` chạy trong container `valkey` (user `svp-ops`; không cần `redis-cli` trên máy), vì mọi request đi ra từ một IP bridge của Docker và
   vài lần chạy trong một giờ sẽ cạn burst 20. Việc xoá này **chỉ dùng ở lab local**, không trỏ script vào stack dùng
   chung. Smoke luôn đòi master có version và kiểm đủ `Cache-Control` (mọi bản phát hành ghi key có version từ
   [ADR-0029](../adr/0029-immutable-media-versions.md); biến chuyển tiếp `SVP_SMOKE_LEGACY_MEDIA` đã bỏ, [ADR-0037](../adr/0037-mainpath-standard-tools.md) §4).
-- Postgres là bản native trên host (`127.0.0.1:5432`), service gọi qua `host.docker.internal`. Kafka và Valkey là container của stack
-  (**Kafka và Valkey** dưới); mỗi client có user và db hay khoá riêng nên không service nào đọc khoá của service khác. Redis native
+- Postgres, Kafka và Valkey là container của stack (**Postgres**, **Kafka và Valkey** dưới); mỗi client có role, user và database, db
+  hay khoá riêng nên không service nào đọc dữ liệu của service khác. Postgres native `127.0.0.1:5432` không thuộc stack: chỉ `make test` dùng nó. Redis native
   `127.0.0.1:6379` không thuộc stack: chỉ `make test` (db 15) và `make dev` của web dùng nó. Không service lõi nào phụ thuộc service
   của `obs`. Cổng publish chỉ trên loopback của host: gateway, web client (3001), API S3 của object store (9000) và, khi có `obs`,
   Grafana (3000), Alertmanager (9093), GlitchTip (8000). Cổng gRPC nằm trong mạng compose
@@ -43,15 +43,29 @@ Loại tài liệu (Diátaxis): **reference**, tra cứu khi cần một lệnh 
   [ADR-0042](../adr/0042-caller-identity-grpc.md), nên code trong web cầm token của một phiên sẽ gọi chúng như user đó, vượt
   rate limit và kiểm đầu vào của gateway; threat model IN-2), không tới được Kafka hay object store theo
   tên compose; Valkey thì tới được, nhưng user `svp-web` của nó chỉ chạm db 9 và `svp:web:*`. Mạng `web` không internal vì Docker không
-  publish cổng của container chỉ gắn vào mạng internal; web không có mục `host.docker.internal`, nhưng Docker Desktop phân giải tên đó ở
-  mọi container, nên code chạy trong web vẫn tới được cổng loopback của host (cổng 9000 của object store, Postgres với luật trust và,
-  khi có `obs`, Grafana, Alertmanager, GlitchTip). Chấp nhận ở lab compose (threat model WEB-13); bản k3d đóng bằng NetworkPolicy.
+  publish cổng của container chỉ gắn vào mạng internal. Docker Desktop phân giải `host.docker.internal` ở mọi container, nên code chạy
+  trong web vẫn tới được cổng loopback của host (cổng 9000 của object store, khi có `obs` Grafana, Alertmanager, GlitchTip, và mọi thứ
+  khác nghe ở đó). Chấp nhận ở lab compose (threat model WEB-13); bản k3d đóng bằng NetworkPolicy.
 - Web client mở bằng `http://localhost:3001`, là `APP_ORIGIN` mà redirect sau đăng nhập và form của cookie dựa theo.
   `http://127.0.0.1:3001` cũng đăng nhập được, với cookie phiên riêng (trình duyệt gửi `Sec-Fetch-Site: same-origin` ở đó, kiểm CSRF
   chấp nhận trước khi so `Origin`), nhưng không phát và không tải video lên được vì CORS của bucket chỉ cho origin `localhost`.
+- **Postgres** ([ADR-0057](../adr/0057-postgres17-verify-full.md) §3): container `postgres`, image PostgreSQL 17 ghim digest (`x-postgres-image`
+  của `compose.yaml`), cùng major với RDS; chạy bằng user `postgres` (uid 999) của image, root chỉ đọc, dữ liệu ở volume `postgres-data`, không
+  publish cổng. TLS bằng cert `postgres.crt` của CA local (`tls-init` chép vào `svp-tls`); `deploy/postgres/pg_hba.conf` từ chối mọi kết nối mạng
+  không TLS (như `rds.force_ssl` của RDS), kết nối TLS đăng nhập bằng mật khẩu SCRAM, socket Unix trong container chỉ cho user hệ điều hành
+  cùng tên (`peer`). Service, migrate và GlitchTip nối `postgres:5432` với `sslmode=verify-full&sslrootcert=/etc/svp-ca/ca.crt` (mount `ca.crt`),
+  kiểm cả CA lẫn tên trong cert; migrate và `glitchtip-init` chờ `postgres` khoẻ (healthcheck `pg_isready` qua TLS verify-full tới tên `postgres`).
+  - `make db-bootstrap` (`make up`, `make glitchtip-init` gọi nó): bật `postgres` (cùng `tls-init`) nếu chưa chạy và chờ khoẻ, rồi chạy
+    `deploy/postgres/bootstrap.sql` cho từng database bằng `docker compose … exec -T postgres psql` dưới user `postgres` qua socket; máy không cần
+    `psql`. Mật khẩu role đọc từ `.env` theo luật của `dotenv.sh`, tới psql qua biến môi trường mà dòng lệnh chỉ nêu tên (`-e NAME`), không bao giờ
+    ở dòng lệnh hay output. Mật khẩu superuser `SVP_COMPOSE_PG_SUPERUSER_PASSWORD` (do `make env` sinh) chỉ được đặt khi image khởi tạo volume rỗng.
+  - Script trên máy chạm Postgres compose chỉ bằng `docker compose … exec -T postgres psql …` qua Makefile (tiền tố
+    `env -u DOCKER_DEFAULT_PLATFORM`), không `psql -h 127.0.0.1 -p 5432`: cổng đó là Postgres native của máy.
+  - Stack bắt đầu rỗng: dữ liệu dev ở Postgres native không chuyển sang, `make up` tạo role, database và schema mới trong container. Database
+    `svp_*` cũ ở Postgres native còn nguyên; không script nào xoá hay sửa chúng.
 - **Kafka và Valkey** ([ADR-0053](../adr/0053-msk-elasticache-valkey.md)): chạy cùng phần mềm, cổng và xác thực với MSK và ElastiCache for Valkey.
   - `tls-init` (một lần, uid 0) chép cert, khoá của CA local và aclfile của Valkey từ `.local/` (CA do `make env` sinh, aclfile do `make up` ghi từ mật khẩu của `.env`) vào volume
-    `svp-tls` với owner là uid của image server, khoá mode 0400; `kafka`, `valkey` mount volume đó chỉ đọc và chờ `tls-init` xong.
+    `svp-tls` với owner là uid của image server, khoá mode 0400; `postgres`, `kafka`, `valkey` mount volume đó chỉ đọc và chờ `tls-init` xong.
     Client chỉ cần `ca.crt` (công khai) tại `/etc/svp-ca/ca.crt`: service Go đặt `SSL_CERT_DIR=/etc/svp-ca`, web `NODE_EXTRA_CA_CERTS`, công cụ
     Kafka và `valkey-cli` đặt `SVP_CA_FILE`. Chạy được cả trên Docker Desktop macOS và runner Linux. `make env` sinh CA một lần, không ghi
     đè; thiếu thì `make up` dừng và bảo chạy `make env`.
@@ -111,7 +125,7 @@ Loại tài liệu (Diátaxis): **reference**, tra cứu khi cần một lệnh 
 - `make glitchtip-init`: migrate và khởi tạo GlitchTip (admin, organization và project `svp`, API token chỉ đọc, token tải
   source map `svp-sourcemaps` scope `project:releases`), thêm `SENTRY_DSN`, `SENTRY_AUTH_TOKEN`, `SENTRY_ORG`,
   `SENTRY_PROJECT`, `SENTRY_API_URL`, `SENTRY_SOURCEMAPS_TOKEN` vào `.env` khi còn thiếu hay rỗng;
-  idempotent, không đổi giá trị đã đặt. `make up OBS=lgtm` tự gọi nó. Database `svp_glitchtip` trên Postgres native, hai
+  idempotent, không đổi giá trị đã đặt. `make up OBS=lgtm` tự gọi nó. Database `svp_glitchtip` trên Postgres compose, hai
   role `svp_glitchtip_migrator`, `svp_glitchtip_app` do bootstrap Postgres của `make up` tạo. Job `glitchtip-init` trong compose chạy
   cùng việc đó (migrate `svp_glitchtip`, rồi tạo admin, organization, team, project `svp` và token API của diễn tập) và chỉ in số
   đếm; `glitchtip` chỉ khởi động sau khi nó thành công. `make glitchtip-init` chạy nó thêm một lần, gắn thư mục output để lấy DSN và
@@ -129,9 +143,9 @@ Loại tài liệu (Diátaxis): **reference**, tra cứu khi cần một lệnh 
   user thử) lấy từ `.env`; endpoint,
   access key, `SVP_TEST_POSTGRES_URL` và `SVP_TEST_REDIS_URL` cố định trong `deploy/compose/compose.mk` và
   `Makefile`. Thu hẹp bằng `PKGS=` như `make test`, `TESTFLAGS` thêm cờ.
-- `make clean-data`: gỡ stack (mọi profile) và xoá volume của nó (topic, user và ACL của Kafka, bucket của object store `s3-data`, thư mục
-  tạm của media-worker, dữ liệu LGTM, silence của Alertmanager, chỉ mục Elasticsearch); Postgres native (cả `svp_glitchtip`)
-  không bị đụng; volume của project mà compose không còn khai được giữ và in ra. Chỉ chạy khi cần làm lại dữ liệu từ đầu.
+- `make clean-data`: gỡ stack (mọi profile) và xoá volume của nó (database và role của Postgres compose, topic, user và ACL của Kafka, bucket
+  của object store `s3-data`, thư mục tạm của media-worker, dữ liệu LGTM, silence của Alertmanager, chỉ mục Elasticsearch); Postgres native
+  của máy không bị đụng; volume của project mà compose không còn khai được giữ và in ra. Chỉ chạy khi cần làm lại dữ liệu từ đầu.
 - Diễn tập compose đo một lần (`drill-kill-worker`, `drill-duplicates`, `drill-duplicates-feed`, `drill-engagement-down`,
   `drill-rate-limit`, `drill-upload-cleanup`, `drill-alert-to-sentry`, `measure-ready`, `measure-freshness`, `measure-explore-cache`,
   game day) không còn ở repo này: bản đóng băng cùng [`tools/fakefollows/`](https://github.com/anhnvcoder/svp-labs/tree/main/drills/svp-backend/tools/fakefollows/) và cách chạy lại ở commit ghim là bài lab

@@ -52,10 +52,10 @@ Hệ thống chia ba repo ([ADR-0033](docs/adr/0033-svp-web-repo.md), [ADR-0025]
 Cần sẵn trên máy:
 
 - Docker, và Go theo version ghim trong `go.mod`.
-- Postgres chạy trên máy, không nằm trong compose: `127.0.0.1:5432`. Redis native `127.0.0.1:6379` chỉ cho `make test` (db 15) và `make dev`
-  của web (db 9); Kafka và Valkey của stack là container của compose. Database và db Valkey riêng của từng service ở [`AGENTS.md`](AGENTS.md).
-- Công cụ dòng lệnh: `psql` (`make up` tạo role và database trên Postgres native), `curl`, `jq`,
-  `openssl` (`make env` sinh mật khẩu và CA local), `ffmpeg` (`make smoke` sinh video thử và gọi API).
+- Postgres native trên máy (`127.0.0.1:5432`) và Redis native `127.0.0.1:6379` chỉ cho `make test` (Redis db 15) và `make dev` của web
+  (Redis db 9). Postgres, Kafka và Valkey của stack là container của compose. Database và db Valkey riêng của từng service ở
+  [`AGENTS.md`](AGENTS.md).
+- Công cụ dòng lệnh: `curl`, `jq`, `openssl` (`make env` sinh mật khẩu và CA local), `ffmpeg` (`make smoke` sinh video thử và gọi API).
 - Bản clone `svp-gitops` ở `../gitops` (hay `SVP_GITOPS_DIR`): `make up` đọc từ đó digest của web client, kéo ẩn danh từ GHCR; đường
   dev của cluster (`make k8s-up`, `make helm-check`) cũng đọc `base/` ở đó.
 - Bản clone `svp-frontend` ở `../frontend` (hay `SVP_WEB_DIR`) chỉ khi cần mã web: `make up WEB_FROM=clone`, `make web-e2e`, Lighthouse.
@@ -71,8 +71,8 @@ Chạy thử từng bước, kèm đọc một trace: [`docs/tutorials/first-run
 
 ```sh
 make help        # liệt kê mọi target
-make env         # tạo .env (mode 600) với secret ngẫu nhiên và CA local của Kafka, Valkey (.local/ca/); không bao giờ in giá trị
-make up          # tạo role/database trên Postgres native rồi dựng stack compose: Kafka (SASL_SSL 9096), Valkey (TLS), object storage, các service, web
+make env         # tạo .env (mode 600) với secret ngẫu nhiên, CA local và cert của Postgres, Kafka, Valkey (.local/ca/); không bao giờ in giá trị
+make up          # dựng Postgres (TLS) và tạo role/database trong nó, rồi Kafka (SASL_SSL 9096), Valkey (TLS), object storage, các service, web
 make smoke       # luồng đầu-cuối qua gateway: đăng ký, upload tới READY, phát HLS, feed, like, follow
 ```
 
@@ -84,9 +84,11 @@ Object store là service `s3` (compose và k3d): một endpoint tương thích S
 code gọi nó qua `internal/objstore`. Kiểm tra (`make check`, `make vulncheck`, `make fuzz`, `make dast`, `make grype`) và mọi lệnh khác
 ở [`docs/reference/`](docs/reference/).
 
-Kafka (`apache/kafka`, SCRAM-SHA-512 trên TLS) và Valkey (TLS, user theo db và tiền tố khoá) chạy cùng phần mềm, cổng và xác thực với MSK và
-ElastiCache của stg, prd ([ADR-0053](docs/adr/0053-msk-elasticache-valkey.md)). Script chạm chúng đi qua CLI vận hành `deploy/ops/`
-(`svp-kafka`, `svp-valkey`), chạy trong container của chúng; mô tả ở [`reference/compose.md`](docs/reference/compose.md).
+PostgreSQL 17 (TLS, client kiểm cert server bằng `sslmode=verify-full`), Kafka (`apache/kafka`, SCRAM-SHA-512 trên TLS) và Valkey (TLS, user
+theo db và tiền tố khoá) chạy cùng phần mềm, major và xác thực với RDS, MSK và ElastiCache của stg, prd
+([ADR-0057](docs/adr/0057-postgres17-verify-full.md), [ADR-0053](docs/adr/0053-msk-elasticache-valkey.md)). Script chạm Kafka, Valkey đi qua CLI
+vận hành `deploy/ops/` (`svp-kafka`, `svp-valkey`), chạm Postgres qua `docker compose … exec postgres psql` của Makefile, đều chạy trong
+container; mô tả ở [`reference/compose.md`](docs/reference/compose.md).
 
 ## Chạy ở đâu
 

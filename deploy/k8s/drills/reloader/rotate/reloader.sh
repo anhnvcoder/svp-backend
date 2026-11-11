@@ -435,9 +435,10 @@ kafka_login() {
     esac'
 }
 
-# psql_login ROLE DATABASE old|new VARIABLE: SELECT 1 as ROLE on DATABASE over TCP to 127.0.0.1 inside the primary of
+# psql_login ROLE DATABASE old|new VARIABLE: SELECT 1 as ROLE on DATABASE over TCP to localhost inside the primary of
 # Postgres svp-pg with the old or new value of VARIABLE (on stdin, read into PGPASSWORD); prints ok,
-# password-authentication-failed or other.
+# password-authentication-failed or other. verify-full like every client: localhost is a name of the server's
+# certificate, and the instance manager writes the CA of Secret local-ca to server-ca.crt.
 psql_login() {
   local primary
   primary=$(kc -n svp-data get clusters.postgresql.cnpg.io svp-pg -o jsonpath='{.status.currentPrimary}') &&
@@ -448,7 +449,7 @@ psql_login() {
   } | kc -n svp-data exec -i "$primary" -c postgres -- sh -c '
     IFS= read -r PGPASSWORD
     export PGPASSWORD
-    out=$(psql -X -w -A -t "host=127.0.0.1 port=5432 user=$1 dbname=$2 sslmode=require connect_timeout=5" -c "select 1" 2>&1)
+    out=$(psql -X -w -A -t "host=localhost port=5432 user=$1 dbname=$2 sslmode=verify-full sslrootcert=/controller/certificates/server-ca.crt connect_timeout=5" -c "select 1" 2>&1)
     case $out in
       1) echo ok ;;
       *"password authentication failed"*) echo password-authentication-failed ;;

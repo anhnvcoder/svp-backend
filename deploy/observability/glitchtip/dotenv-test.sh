@@ -2,7 +2,8 @@
 # Tests for the strict env file rule of dotenv.sh: the rule itself, then its users, init.sh (with a fake COMPOSE that
 # writes a test DSN and token where the job would), and `make env`, `make db-bootstrap` (deploy/postgres/bootstrap.sh),
 # `make test-stack` and the profile check of `make up` (the root Makefile run in a temporary directory that links to
-# the repository, with fake psql, go and docker commands that log hashes, never values).
+# the repository, with fake go and docker commands that log hashes, never values, and a fake psql that logs that the
+# host ran it).
 
 # Every env file is a fixture in a temporary directory; the repository's .env is never read. Nothing reaches Postgres
 # or the Docker daemon; when the docker CLI is installed, `make compose-hash` (compose parses the file, prints a hash
@@ -304,6 +305,31 @@ else
   fail "make env: empty after generation:${empty:- none}, or a second run changed .env"
 fi
 
+# A clone made before compose had its own Postgres: .local/ca/ holds the CA and the certificate of Kafka and Valkey but
+# no postgres.crt, and .env has no SVP_COMPOSE_PG_SUPERUSER_PASSWORD. make env adds those only; every other file of
+# .local/ca/ and every other line of .env stay as they were.
+ca=$m/.local/ca
+ca_hashes() { (cd "$ca" && shasum -a 256 ca.crt ca.key server.crt server.key); }
+rm -f "$ca/postgres.crt" "$ca/postgres.key"
+grep -v '^SVP_COMPOSE_PG_SUPERUSER_PASSWORD=' "$m/fresh" > "$m/.env"
+cp -p "$m/.env" "$m/.env.before"
+ca_hashes > "$work/ca.before"
+if ! run_make_env; then
+  fail "make env on a clone without the Postgres certificate: exited non-zero"
+elif ! ca_hashes | cmp -s - "$work/ca.before"; then
+  fail "make env on a clone without the Postgres certificate: changed the CA or the Kafka and Valkey certificate"
+elif ! openssl verify -CAfile "$ca/ca.crt" "$ca/postgres.crt" > /dev/null 2>&1 || [[ $(mode "$ca/postgres.key") != 600 ]] ||
+  ! openssl x509 -in "$ca/postgres.crt" -noout -text | grep -q 'DNS:postgres, DNS:svp-pg-rw,' ||
+  ! grep -q 'wrote new server certificates .*: postgres$' "$m/out"; then
+  fail "make env on a clone without the Postgres certificate: no valid postgres.crt for postgres, svp-pg-rw, key mode 600"
+elif [[ -z $(dotenv_value "$m/.env" SVP_COMPOSE_PG_SUPERUSER_PASSWORD) ]] ||
+  ! grep -q "added to .env (mode 600): SVP_COMPOSE_PG_SUPERUSER_PASSWORD$" "$m/out" ||
+  ! diff <(grep -v '^SVP_COMPOSE_PG_SUPERUSER_PASSWORD=' "$m/.env") "$m/.env.before" > /dev/null; then
+  fail "make env on a clone without the Postgres certificate: SVP_COMPOSE_PG_SUPERUSER_PASSWORD not added, or another line changed"
+else
+  ok "make env on a clone without the Postgres certificate: adds it and the superuser password, keeps every other file and line"
+fi
+
 # make_env_fills <variable> <its line>: with that one line in place of the variable's line, make
 # env gives the variable a new value in the same place, keeps every other line, mode 600.
 make_env_fills() {
@@ -386,13 +412,8 @@ fake=$work/fakebin
 mkdir "$fake"
 cat > "$fake/psql" <<'EOF'
 #!/usr/bin/env bash
-# Stands in for psql in bootstrap.sh: logs the database and the hashes of the two role passwords.
-while [ $# -gt 0 ]; do
-  case $1 in -v) case $2 in db=*) db=${2#db=} ;; esac ;; esac
-  shift
-done
-h() { printf '%s' "$1" | shasum -a 256 | cut -d ' ' -f 1; }
-echo "psql $db $(h "$SVP_MIGRATOR_PASSWORD") $(h "$SVP_APP_PASSWORD")" >> "$FAKE_LOG"
+# psql runs inside the Postgres container, never on the host: any call is logged and breaks the expected log.
+echo "psql on the host" >> "$FAKE_LOG"
 EOF
 cat > "$fake/go" <<'EOF'
 #!/usr/bin/env bash
@@ -404,8 +425,10 @@ echo "go $(h "$SVP_TEST_S3_VIDEO_SECRET_KEY") $(h "$SVP_TEST_S3_WORKER_SECRET_KE
 EOF
 cat > "$fake/docker" <<'EOF'
 #!/usr/bin/env bash
-# Stands in for docker in make up: `compose ... ps -q <services>` prints an id when one of them is
-# in FAKE_RUNNING, `compose ... run` is the fake glitchtip-init job, anything else is logged.
+# Stands in for docker in make up and make db-bootstrap: `compose ... ps -q <services>` prints an id when one of them is
+# in FAKE_RUNNING, `compose ... run` is the fake glitchtip-init job, `compose ... exec ... postgres psql` logs the
+# database and the hashes of the two role passwords it gets from the environment (marked when the command line does not
+# pass them by name only, or holds one), anything else is logged.
 args=" $* "
 case $args in
   *" ps -q "*)
@@ -413,6 +436,16 @@ case $args in
       case " $FAKE_RUNNING " in *" $s "*) echo fakeid && exit 0 ;; esac
     done ;;
   *" run "*) exec "$FAKE_COMPOSE" "$@" ;;
+  *" exec -T "*" postgres psql "*)
+    db=
+    while [ $# -gt 0 ]; do
+      case $1 in -v) case $2 in db=*) db=${2#db=} ;; esac ;; esac
+      shift
+    done
+    case $args in *" -e SVP_MIGRATOR_PASSWORD -e SVP_APP_PASSWORD postgres "*) ;; *) db="$db(not by name)" ;; esac
+    case $args in *"$SVP_MIGRATOR_PASSWORD"* | *"$SVP_APP_PASSWORD"*) db="$db(value on the command line)" ;; esac
+    h() { printf '%s' "$1" | shasum -a 256 | cut -d ' ' -f 1; }
+    echo "psql $db $(h "$SVP_MIGRATOR_PASSWORD") $(h "$SVP_APP_PASSWORD")" >> "$FAKE_LOG" ;;
   *) echo "docker $*" >> "$FAKE_LOG" ;;
 esac
 EOF
@@ -440,16 +473,19 @@ else
   fail "make env: changed a fixture whose values are all set in quotes"
 fi
 
+# make db-bootstrap starts the compose Postgres, then runs psql in it once per database: the first
+# line of the log is that start, the rest is psql in the container.
 want=
 for svc in user video engagement feed glitchtip; do
   upper=$(printf '%s' "$svc" | tr '[:lower:]' '[:upper:]')
   want="${want}psql svp_$svc $(h "$(dotenv_value "$m/fresh" "SVP_${upper}_MIGRATOR_DB_PASSWORD")")"
   want="$want $(h "$(dotenv_value "$m/fresh" "SVP_${upper}_APP_DB_PASSWORD")")"$'\n'
 done
-if run_fake db-bootstrap && [[ $(cat "$m/fake.log")$'\n' == "$want" ]]; then
-  ok "make db-bootstrap: quoted passwords reach psql without their quotes"
+if run_fake db-bootstrap && [[ $(head -n 1 "$m/fake.log") == "docker compose "*" up -d --wait postgres" &&
+  $(tail -n +2 "$m/fake.log")$'\n' == "$want" ]]; then
+  ok "make db-bootstrap: starts Postgres, quoted passwords reach psql in the container by name, without their quotes"
 else
-  fail "make db-bootstrap: a quoted password reached psql other than unquoted"
+  fail "make db-bootstrap: did not start Postgres first, ran psql on the host, or a password reached psql other than by name and unquoted"
 fi
 want_go="go $(h "$(dotenv_value "$m/fresh" SVP_VIDEO_S3_SECRET_KEY)") $(h "$(dotenv_value "$m/fresh" SVP_MEDIA_WORKER_S3_SECRET_KEY)")"
 want_go="$want_go $(h "$(dotenv_value "$m/fresh" SVP_S3_PROBE_SECRET_KEY)")"
@@ -492,7 +528,7 @@ else
 fi
 
 # bootstrap_refuses <variable> <description> <sed script>: make db-bootstrap exits non-zero, names
-# the variable, prints no value and never runs psql.
+# the variable, prints no value and never starts Postgres or runs psql.
 bootstrap_refuses() {
   local name=$1 what=$2
   sed "$3" "$m/quoted" > "$m/.env"
@@ -501,9 +537,9 @@ bootstrap_refuses() {
   elif ! grep -q "$name" "$m/out" || grep -q -e s3cr3t -e "$(dotenv_value "$m/fresh" SVP_USER_APP_DB_PASSWORD)" "$m/out"; then
     fail "make db-bootstrap: $what: the error does not name $name, or shows a value"
   elif [[ -s $m/fake.log ]]; then
-    fail "make db-bootstrap: $what: psql ran"
+    fail "make db-bootstrap: $what: docker or psql ran"
   else
-    ok "make db-bootstrap: $what: stops naming $name before psql"
+    ok "make db-bootstrap: $what: stops naming $name before docker"
   fi
 }
 bootstrap_refuses SVP_GLITCHTIP_APP_DB_PASSWORD "a CRLF line of the last password" \

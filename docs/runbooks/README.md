@@ -4,7 +4,8 @@ Runbook là trang người trực mở đầu tiên khi có cảnh báo hay sự
 trong 5 phút đầu, làm gì để giảm thiểu rồi khôi phục, khi nào dừng tự xử lý. Runbook không giải thích lại thiết kế: lý do nằm
 ở ADR, runbook dẫn tới đó.
 
-Ở dự án này người trực là người học, chạy trên một máy (stack compose hay cluster k3d `svp`). Mỗi cảnh báo `severity=page`
+Ở dự án này người trực là người học, chạy trên một máy (stack compose hay cluster k3d `svp`) hay ở cluster và dịch vụ managed
+của AWS (stg, prd). Mỗi cảnh báo `severity=page`
 có đúng một runbook, link nằm trong annotation `runbook_url` của rule nên thông báo Telegram và giao diện Alertmanager dẫn
 thẳng tới đây. Sự cố đã gặp mà chưa có cảnh báo riêng, và quy trình vận hành làm tay, cũng có runbook theo cùng mẫu.
 
@@ -19,7 +20,7 @@ Mỗi runbook có đủ các mục sau, theo đúng thứ tự (mục nào khôn
 3. **Nguyên nhân thường gặp**: theo thứ tự hay gặp, mỗi cái có dấu hiệu nhận ra trong kết quả của bước 2.
 4. **Giảm thiểu**: bước làm ngay để người dùng bớt bị ảnh hưởng, kể cả khi chưa biết nguyên nhân gốc.
 5. **Khôi phục và xác nhận**: đưa hệ thống về bình thường và bằng chứng đã về (truy vấn, cảnh báo resolve, `make smoke`).
-6. **Leo thang**: khi nào dừng xử lý tại chỗ, bước nặng hơn là gì, ai cần biết (dự án khác dùng chung Postgres native),
+6. **Leo thang**: khi nào dừng xử lý tại chỗ, bước nặng hơn là gì, ai cần biết,
    khi nào mở postmortem ([mẫu](../postmortems/README.md)).
 7. **Liên kết**: dashboard, ADR, diễn tập tái hiện được sự cố (`make drill-…`, `make measure-…`); không có diễn tập thì ghi
    rõ.
@@ -76,6 +77,26 @@ vòng nền, pipeline video, rate limit, breaker), `svp-use` (Go runtime, pool P
 Log: Grafana → Explore → Loki, `{service_name="<service>"} |= "<chuỗi>"`; hoặc `make logs SVC=<service>` (compose, 200 dòng
 cuối) và `kubectl --context k3d-svp -n svp logs -l app.kubernetes.io/name=<service> --since=15m --tail=2000` (k3d).
 
+## Alarm của dịch vụ managed (RDS, MSK, ElastiCache)
+
+Alarm của dịch vụ managed là CloudWatch alarm gửi SNS tới email, sống khi cluster chết ([ADR-0058](../adr/0058-managed-data-operations.md) §1);
+`alarm_description` của alarm `page` mang link tới runbook. Tên alarm là `svp-<env>-<alarm>`, runbook mang tên `<alarm>`. Các runbook này
+thay mục "compose và k3d" của bước 2 bằng lệnh AWS chỉ đọc: người học chạy, vì mọi lệnh chạm AWS do người học chạy. Dán một lần cho mỗi
+terminal (`ENV` là `stg` hay `prd`):
+
+```sh
+ENV=stg
+N=svp-$ENV
+awsx() { AWS_PROFILE=anhnv-$ENV aws --region ap-southeast-1 "$@"; }
+awsx sts get-caller-identity   # đúng account của $ENV trước mọi lệnh ghi
+```
+
+Lệnh trong mục Giảm thiểu mà ghi (`modify-db-instance`, `update-broker-storage`, đổi cấu hình topic, đổi tfvars rồi `apply`) là bước
+người học quyết: runbook ghi rõ cái giá, và Terraform vẫn là nguồn sự thật, nên chỉnh tay xong thì sửa tfvars cho khớp trước lần
+`apply` sau. Lệnh vào Kafka và Valkey của EKS đi qua Deployment `svp-ops` của namespace `svp-data` (context của cluster `$ENV`).
+Cách cắt cảnh báo thử tới email: `awsx cloudwatch set-alarm-state --alarm-name <tên> --state-value ALARM --state-reason test` (ghi,
+chỉ ở buổi stg kiểm).
+
 ## Quy tắc cho lệnh trong runbook
 
 - Docker và compose qua `make` (`make ps`, `make logs SVC=…`, `make up OBS=lgtm`); lệnh tay luôn có tiền tố
@@ -87,7 +108,9 @@ cuối) và `kubectl --context k3d-svp -n svp logs -l app.kubernetes.io/name=<se
   `kubectl --context k3d-svp -n svp-data exec deploy/svp-ops -c kafka -- /opt/svp/bin/svp-kafka …` và `… -c valkey --
   /opt/svp/bin/svp-valkey -n <db> …`. Gateway db 10, feed-service db 14, web db 9. `svp-ops` chỉ đọc khoá `svp:*` và xoá đúng hai tiền
   tố mà `AGENTS.md` cho phép (`svp:gw:rl:register:*` ở db 10, `svp:feed:explore:*` ở db 14); không `FLUSHDB`/`FLUSHALL`.
-- Postgres native ghi rõ cổng `-h 127.0.0.1 -p 5432`; nó **dùng chung với dự án khác**: không restart.
+- Postgres của compose chỉ qua container `postgres`: `dc exec -T postgres psql -U postgres -d <database> -X -c '…'` (user
+  `postgres` qua socket Unix trong container, không `psql` trên host, không cổng publish). Postgres native `-h 127.0.0.1 -p 5432`
+  chỉ còn `make test` dùng; nó **dùng chung với dự án khác**: không restart.
 - Không in giá trị secret: không `cat .env`, không `env` trong container, không `kubectl get secret -o yaml`. Cần đổi secret
   thì sửa `.env` bằng trình soạn thảo rồi chạy target của Makefile.
 - Lệnh chạm GitHub để ghi (dispatch workflow, mở PR, merge) và mọi lệnh chạm AWS/GCP do người học chạy; runbook ghi rõ
@@ -99,7 +122,8 @@ cuối) và `kubectl --context k3d-svp -n svp logs -l app.kubernetes.io/name=<se
 
 ## Mục lục
 
-Cảnh báo `severity=page` (rule viết tay ở `svp-alerts.yaml`, SLO ở `svp-slos.yaml`):
+Cảnh báo `severity=page` (rule viết tay ở `svp-alerts.yaml`, SLO ở `svp-slos.yaml`, alarm managed ở CloudWatch theo
+[ADR-0058](../adr/0058-managed-data-operations.md) §2; alarm `ticket` của dịch vụ managed không có runbook riêng):
 
 | Alert | Runbook | Nguồn rule |
 | --- | --- | --- |
@@ -115,6 +139,12 @@ Cảnh báo `severity=page` (rule viết tay ở `svp-alerts.yaml`, SLO ở `svp
 | `WebAvailabilityBudgetBurn` | [web-availability-budget-burn.md](web-availability-budget-burn.md) | SLO `web-availability` |
 | `PostgresWALArchivingFailing` | [postgres-wal-archiving-failing.md](postgres-wal-archiving-failing.md) | `svp-alerts.yaml`, nhóm `postgres-backup` (chỉ k3d) |
 | `ArgoCDApplicationDegraded` | [argocd-application-degraded.md](argocd-application-degraded.md) | `svp-alerts.yaml`, nhóm `argocd` (chỉ cluster GitOps) |
+| `rds-storage-low` | [rds-storage-low.md](rds-storage-low.md) | ADR-0058 §2, module `rds` (chỉ AWS) |
+| `rds-txid-wraparound` | [rds-txid-wraparound.md](rds-txid-wraparound.md) | ADR-0058 §2, module `rds` (chỉ AWS) |
+| `msk-disk-high` | [msk-disk-high.md](msk-disk-high.md) | ADR-0058 §2, module `msk` (chỉ AWS) |
+| `msk-offline-partitions` | [msk-offline-partitions.md](msk-offline-partitions.md) | ADR-0058 §2, module `msk` (chỉ AWS) |
+| `msk-under-min-isr` | [msk-under-min-isr.md](msk-under-min-isr.md) | ADR-0058 §2, module `msk` (chỉ AWS) |
+| `valkey-memory-high` | [valkey-memory-high.md](valkey-memory-high.md) | ADR-0058 §2, module `elasticache` (chỉ AWS) |
 
 Cảnh báo `ticket` (cùng tên với page của SLO, cửa sổ 1 d/2 h và 3 d/6 h, chỉ hiện ở Alertmanager) dùng chung runbook của
 SLO đó; `WebINPBudgetBurn` chỉ có ticket và không có runbook riêng (dashboard `svp-web`, [ADR-0020](../adr/0020-reliability-stage6.md) §3).

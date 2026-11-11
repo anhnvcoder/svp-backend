@@ -32,7 +32,7 @@ liệt kê target):
   của stg, prd còn dùng. `deploy/ci/contract-test.sh`: test của cả `check` (oasdiff thật) và `publish` (registry, cosign giả).
 - `make check` = `make check-go`. `make check-go`: `gofmt`, `go vet`, `golangci-lint run` (gồm gosec),
   `actionlint` (mọi file của `.github/workflows/`), `buf lint` + `buf build`, `make vulncheck` (govulncheck, dưới đây),
-  `go test -race ./...` (có integration test trên Postgres native `127.0.0.1:5432` qua
+  `go test -race ./...` (có integration test trên Postgres native `127.0.0.1:5432`, không phải container `postgres` của compose, qua
   `SVP_TEST_POSTGRES_URL` và Redis native db 15 qua `SVP_TEST_REDIS_URL`, mặc định `redis://127.0.0.1:6379/15` trong
   `Makefile`). Thu hẹp bằng `make test PKGS=./services/user-service/...`; `TESTFLAGS` thêm cờ cho `go test` của
   `make test`, `make cover`, `make check` (`make test TESTFLAGS=-count=1` chạy lại không dùng cache, như CI), `LINTFLAGS`

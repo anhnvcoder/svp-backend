@@ -102,9 +102,10 @@ kafka:
 # Postgres svp-pg in svp-data, the only peer outside svp-obs that GlitchTip and its init Job call; Prometheus scrapes its
 # instance's exporter on metricsPort (PodMonitor svp-pg), the port CloudNativePG names metrics.
 postgres:
-  # cluster: CloudNativePG runs svp-pg in namespace, its pods chosen by labels. external: a managed Postgres outside the
-  # cluster (Amazon RDS; postgres.mode of chart svp-data, which keeps the host svp-pg-rw.svp-data): GlitchTip reaches it
-  # at the addresses of external.cidrs on port, and nothing scrapes it (no PodMonitor, no egress to metricsPort).
+  # cluster: CloudNativePG runs svp-pg in namespace, its pods chosen by labels; GlitchTip trusts the local CA (Secret
+  # local-ca). external: a managed Postgres outside the cluster (Amazon RDS, postgres.mode of chart svp-data): GlitchTip
+  # reaches it at the addresses of external.cidrs on port, trusts the RDS bundle (Secret rds-ca of chart svp-cluster),
+  # and nothing scrapes it (no PodMonitor, no egress to metricsPort). The host is in Secret glitchtip-env.
   mode: cluster
   external:
     cidrs: []

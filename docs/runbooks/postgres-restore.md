@@ -1,6 +1,6 @@
 # Phục hồi Postgres `svp-pg` từ backup (k3d)
 
-- Quy trình làm tay, không có cảnh báo riêng. Chỉ cho cluster k3d **đường dev** (`make k8s-up`); compose dùng Postgres native,
+- Quy trình làm tay, không có cảnh báo riêng. Chỉ cho cluster k3d **đường dev** (`make k8s-up`); compose có container `postgres` riêng,
   không có backup ở đây. Cluster GitOps (có Application `svp-root`, bước 4 dưới) không dùng được quy trình này: Argo CD sửa
   Cluster về git và `make k8s-up` bị từ chối; xem Leo thang.
 - Cùng các bước với diễn tập `drill-k8s-backup` ([ADR-0020](../adr/0020-reliability-stage6.md) §5), nay ở bài lab `drills/` của `svp-labs` ([ADR-0039](../adr/0039-mainpath-drills-scan-gate-sourcemaps.md) §1); quy trình tay này là bản còn lại trong repo.

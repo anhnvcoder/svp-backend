@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
-# local-ca.sh DIR: the local CA of compose and the k3d cluster, and the one server certificate it signs, which the
-# local Kafka and Valkey present; run by `make env` with DIR .local/ca. Writes ca.crt and server.crt (mode 644: public,
-# mounted into the clients) and ca.key and server.key (mode 600). EC P-256 keys in PKCS#8, which openssl, Java's PEM
-# key store, Go and Node all read.
+# local-ca.sh DIR: the local CA of compose and the k3d cluster, and the two server certificates it signs: server.crt,
+# which the local Kafka and Valkey present, and postgres.crt, which the local Postgres presents; run by `make env` with
+# DIR .local/ca. Writes the certificates (mode 644: public, mounted into the clients) and their keys (mode 600). EC
+# P-256 keys in PKCS#8, which openssl, Java's PEM key store, Go, Node and Postgres all read.
 
-# Run again, it changes nothing that is valid. A missing or expired CA makes a new CA and a new server certificate (a
+# Run again, it changes nothing that is valid. A missing or expired CA makes a new CA and both server certificates (a
 # certificate signed by another CA would not verify). A missing server certificate or key, or one that no longer
-# verifies against the CA (expired), makes a new server certificate signed by the CA there.
+# verifies against the CA (expired), makes that one certificate again, signed by the CA there; the other files stay.
 # Design notes: docs/explanation/deployment.md.
 set -euo pipefail
 
@@ -16,14 +16,22 @@ mkdir -p "$dir"
 work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
 
-# The names clients use: the compose service, and the k3d Service in namespace svp-data in all its forms.
-san=
-for host in kafka valkey; do
-  for suffix in "" .svp-data .svp-data.svc .svp-data.svc.cluster.local; do
-    san="$san${san:+,}DNS:$host$suffix"
+# sans HOST...: the subjectAltName of the names clients use for those hosts: the compose service, and the k3d Service in
+# namespace svp-data in all its forms (Postgres is `postgres` in compose and Service svp-pg-rw of CloudNativePG in the
+# cluster, so `postgres` gets no cluster forms), then localhost.
+sans() {
+  local san='' host suffix
+  for host in "$@"; do
+    if [[ $host == postgres ]]; then
+      san="$san${san:+,}DNS:$host"
+      continue
+    fi
+    for suffix in "" .svp-data .svp-data.svc .svp-data.svc.cluster.local; do
+      san="$san${san:+,}DNS:$host$suffix"
+    done
   done
-done
-san="$san,DNS:localhost"
+  printf '%s,DNS:localhost' "$san"
+}
 
 cat >"$work/openssl.cnf" <<EOF
 [req]
@@ -39,7 +47,14 @@ subjectKeyIdentifier = hash
 basicConstraints = critical, CA:FALSE
 keyUsage = critical, digitalSignature
 extendedKeyUsage = serverAuth
-subjectAltName = $san
+subjectAltName = $(sans kafka valkey)
+subjectKeyIdentifier = hash
+authorityKeyIdentifier = keyid
+[postgres]
+basicConstraints = critical, CA:FALSE
+keyUsage = critical, digitalSignature
+extendedKeyUsage = serverAuth
+subjectAltName = $(sans postgres svp-pg-rw)
 subjectKeyIdentifier = hash
 authorityKeyIdentifier = keyid
 EOF
@@ -54,25 +69,34 @@ new_ca() {
   install -m 644 "$work/ca.crt" "$dir/ca.crt"
 }
 
-new_server() {
-  new_key "$work/server.key"
-  openssl req -new -sha256 -key "$work/server.key" -subj "/CN=svp local server" -config "$work/openssl.cnf" \
-    -out "$work/server.csr"
-  openssl x509 -req -sha256 -days 825 -in "$work/server.csr" -CA "$dir/ca.crt" -CAkey "$dir/ca.key" \
-    -set_serial "0x$(openssl rand -hex 16)" -extfile "$work/openssl.cnf" -extensions server -out "$work/server.crt" 2>/dev/null
-  install -m 600 "$work/server.key" "$dir/server.key"
-  install -m 644 "$work/server.crt" "$dir/server.crt"
+# new_cert NAME: NAME.key and NAME.crt in DIR, signed by the CA there, with the extensions of section NAME above.
+new_cert() {
+  new_key "$work/$1.key"
+  openssl req -new -sha256 -key "$work/$1.key" -subj "/CN=svp local $1" -config "$work/openssl.cnf" \
+    -out "$work/$1.csr"
+  openssl x509 -req -sha256 -days 825 -in "$work/$1.csr" -CA "$dir/ca.crt" -CAkey "$dir/ca.key" \
+    -set_serial "0x$(openssl rand -hex 16)" -extfile "$work/openssl.cnf" -extensions "$1" -out "$work/$1.crt" 2>/dev/null
+  install -m 600 "$work/$1.key" "$dir/$1.key"
+  install -m 644 "$work/$1.crt" "$dir/$1.crt"
 }
 
+certs=(server postgres)
 if [[ ! -s $dir/ca.crt || ! -s $dir/ca.key ]] || ! openssl x509 -checkend 0 -noout -in "$dir/ca.crt" >/dev/null; then
-  rm -f "$dir/server.crt" "$dir/server.key"
   new_ca
-  new_server
-  echo "wrote a new local CA and server certificate to $dir"
-elif [[ ! -s $dir/server.crt || ! -s $dir/server.key ]] ||
-  ! openssl verify -CAfile "$dir/ca.crt" "$dir/server.crt" >/dev/null 2>&1; then
-  new_server
-  echo "wrote a new server certificate to $dir, signed by the local CA there"
+  for name in "${certs[@]}"; do new_cert "$name"; done
+  echo "wrote a new local CA and the server certificates ${certs[*]} to $dir"
+  exit 0
+fi
+written=
+for name in "${certs[@]}"; do
+  if [[ ! -s $dir/$name.crt || ! -s $dir/$name.key ]] ||
+    ! openssl verify -CAfile "$dir/ca.crt" "$dir/$name.crt" >/dev/null 2>&1; then
+    new_cert "$name"
+    written="$written $name"
+  fi
+done
+if [[ -n $written ]]; then
+  echo "wrote new server certificates to $dir, signed by the local CA there:$written"
 else
-  echo "$dir already has a valid local CA and server certificate; left unchanged"
+  echo "$dir already has a valid local CA and server certificates; left unchanged"
 fi

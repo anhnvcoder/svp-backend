@@ -165,6 +165,11 @@ templatePatch: |
 - Module `gitops-bridge` tự viết theo mẫu thay vì dùng module cộng đồng `terraform-helm-gitops-bridge` (bản phát hành cuối v0.0.2, 2023-12-16 [N13]):
   module chỉ tính giá trị nên test được bằng `mock_provider`, root giữ resource.
 
+### 7. Ghim revision của prd
+
+- Vì sao hai tầng: generator của ApplicationSet chỉ đưa nội dung một file thành tham số, nên chart ở R sẽ đọc `envs/<env>/` cũ một lần promote; hai tầng
+  giữ mọi luật render trong Helm, kiểm được bằng `helm template` (phụ lục, "Nguyên mẫu hai tầng").
+
 ### 9. Gỡ và kết thúc buổi
 
 - `teardown.tfvars` chỉ chứa bảo vệ cần nhấc để xoá, mỗi dòng một comment lý do; một dòng ngoài hai dòng của ADR chỉ khi `destroy` không chạy được thiếu nó.

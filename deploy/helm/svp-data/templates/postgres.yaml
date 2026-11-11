@@ -1,6 +1,6 @@
 {{- /*
 Postgres for every service, run by the CloudNativePG operator: one instance, several databases, each service with its
-own migrator and app roles. Clients reach it at svp-pg-rw.svp-data:5432 with sslmode=require.
+own migrator and app roles. Clients reach it at svp-pg-rw.svp-data:5432 with sslmode=verify-full against the local CA.
 */}}
 
 {{- /*
@@ -9,24 +9,11 @@ The operator's pg_hba allows only peer logins on the pod's own socket, certifica
 */}}
 
 {{- /*
-With postgres.mode external (a managed Postgres such as RDS) there is no Cluster: svp-pg-rw is an ExternalName, so
-clients keep the same host. Its DNS answer is a CNAME to postgres.external.host.
+With postgres.mode external (a managed Postgres such as RDS) there is no Cluster and no Service here: verify-full checks
+the name a client dials, so every client dials the managed server's own name, the one its certificate holds.
 */}}
-
-{{- /*
-sslmode=require encrypts the connection without checking the server's name, which here is not the name the clients
-dial: the managed server's certificate is not verified against the CA that issued it.
-*/}}
-{{- if include "svp-data.postgresExternal" . }}
-apiVersion: v1
-kind: Service
-metadata:
-  name: svp-pg-rw
-  namespace: {{ .Release.Namespace }}
-spec:
-  type: ExternalName
-  externalName: {{ .Values.postgres.external.host | quote }}
-{{- else }}
+{{- $external := include "svp-data.postgresExternal" . }}
+{{- if not $external }}
 apiVersion: postgresql.cnpg.io/v1
 kind: Cluster
 metadata:
@@ -40,6 +27,11 @@ spec:
   enableSuperuserAccess: true
   superuserSecret:
     name: pg-superuser
+  # The server certificate of the local CA (Secret pg-tls, for svp-pg-rw in every form), which clients verify with
+  # the CA of Secret local-ca. pg-tls is labelled cnpg.io/reload: the operator follows changes only to such Secrets.
+  certificates:
+    serverTLSSecret: pg-tls
+    serverCASecret: local-ca
   storage:
     size: {{ .Values.postgres.storage }}
   resources:
@@ -117,8 +109,8 @@ spec:
       restartPolicy: Never
       automountServiceAccountToken: false
       securityContext:
-        # The image's postgres user.
-        {{- include "svp-data.podSecurityContext" (dict "uid" 26 "gid" 102) | nindent 8 }}
+        # The image's postgres user; fsGroup lets it read the CA of the Secret below (mode 0440).
+        {{- include "svp-data.podSecurityContext" (dict "uid" 26 "gid" 102 "fsGroup" true) | nindent 8 }}
       containers:
         - name: pg-bootstrap
           image: {{ .Values.postgres.image }}
@@ -126,19 +118,21 @@ spec:
           env:
             - name: SVP_WAIT_SECONDS
               value: {{ .Values.initJobs.waitSeconds | quote }}
-            {{- if include "svp-data.postgresExternal" . }}
+            {{- if $external }}
             # No CloudNativePG: pg-bootstrap.sh skips the grants to the operator's roles.
             - name: SVP_PG_MODE
               value: external
             {{- end }}
             - name: PGHOST
-              value: svp-pg-rw
+              value: {{ if $external }}{{ .Values.postgres.external.host | quote }}{{ else }}svp-pg-rw{{ end }}
             - name: PGPORT
               value: "5432"
             - name: PGDATABASE
               value: postgres
             - name: PGSSLMODE
-              value: require
+              value: verify-full
+            - name: PGSSLROOTCERT
+              value: /etc/svp-ca/ca.crt
             - name: PGCONNECT_TIMEOUT
               value: "5"
             - name: PGUSER
@@ -159,7 +153,16 @@ spec:
             - name: init
               mountPath: /init
               readOnly: true
+            - name: ca
+              mountPath: /etc/svp-ca
+              readOnly: true
       volumes:
         - name: init
           configMap:
             name: pg-bootstrap
+        # The CA the server's certificate chains to: the local CA for svp-pg, the RDS bundle of chart svp-cluster for a
+        # managed Postgres.
+        - name: ca
+          secret:
+            secretName: {{ if $external }}rds-ca{{ else }}local-ca{{ end }}
+            defaultMode: 0440

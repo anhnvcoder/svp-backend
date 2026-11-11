@@ -227,6 +227,15 @@ Mục 7 cũ ("Đề xuất xem lại") nguyên văn; việc còn mở chuyển v
   chỉnh ADR-0053 §2, §7. Đáng xem lại: (1) các ca `drill-k8s-threats` đổi theo broker mới (`in-4-ff-6`, `in-2-in-4`, `web-7-web-2`, `web-13`)
   chạy lần đầu trên kịch bản `gitops` sau khi bốn PR merge; (2) `allow.everyone.if.no.acl.found=true` chỉ an toàn khi ACL wildcard của
   `svp-admin` còn (mục 6); (3) `pods/exec` của operator CloudNativePG ở `svp-data` nay với tới mật khẩu `svp-admin` (IN-10).
+- **HA nền tảng, TLS Postgres, ma trận stg/prd (2026-11-11):** bề mặt mới là controller Karpenter và IAM, SQS, EventBridge của nó, bastion
+  SSM ở cả hai env, Secret `rds-ca`, CloudWatch alarm gửi SNS tới email. Thu hẹp được: API EKS của stg chỉ còn endpoint private qua tunnel SSM
+  như prd (AWS-3, bỏ dòng chấp nhận ở mục 6); mọi client Postgres kiểm cert server bằng `verify-full`, chặn bên đứng giữa trong VPC hay trong
+  cluster mà `require` để lọt (AWS-5, IN-9); compose có Postgres riêng có TLS, SCRAM thay Postgres native `trust` (IN-9); endpoint policy S3
+  ở stg như prd (FF-5, bỏ dòng chấp nhận); Kyverno ba replica có PDB trên EKS (SC-1, SC-7). [ADR-0055](../adr/0055-environment-matrix.md) thay
+  ADR-0048 §3; [ADR-0056](../adr/0056-eks-platform-ha.md), [ADR-0057](../adr/0057-postgres17-verify-full.md),
+  [ADR-0058](../adr/0058-managed-data-operations.md) chỉnh ADR-0034. Đáng xem lại: (1) buổi stg kiểm `verify-full` tới RDS, tunnel SSM và
+  đường interruption của Karpenter; (2) role controller Karpenter tạo được instance và instance profile trong account, giới hạn bởi policy của
+  submodule và `limits` của NodePool; (3) Postgres native vẫn `trust` cho loopback, tới được từ container compose (WEB-13).
 - **Đề xuất (không bắt buộc), giai đoạn 2:** thêm `etag` (hoặc checksum) của file gốc vào `VideoUploaded`, lấy từ lần `HEAD`
   ở `CompleteUpload`; worker tải file với điều kiện `If-Match` theo giá trị đó. Đóng được UP-2 (file bị thay giữa lúc kiểm và
   lúc đọc). Đây là thêm field nên không phá contract (quy tắc versioning ở

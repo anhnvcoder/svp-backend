@@ -1,0 +1,16 @@
+{{- /* Secret rds-ca in each namespace with a client of an RDS Postgres: the services and their migrate Jobs (svp),
+GlitchTip (svp-obs), the pg-bootstrap Job (svp-data). This chart's wave comes before theirs, so the Secret exists
+before their first pod. The bundle is public, so it lives in git, not in a secret store. */}}
+{{- if .Values.rdsCA.bundle }}
+{{- range $ns := list "svp" "svp-obs" "svp-data" }}
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: rds-ca
+  namespace: {{ $ns }}
+type: Opaque
+data:
+  ca.crt: {{ $.Values.rdsCA.bundle | b64enc }}
+{{- end }}
+{{- end }}

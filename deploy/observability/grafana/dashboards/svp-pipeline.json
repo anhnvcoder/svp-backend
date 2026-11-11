@@ -816,7 +816,7 @@
         "type": "tempo",
         "uid": "tempo"
       },
-      "description": "Built by Tempo from spans (traces_service_graph_*); host.docker.internal is the native Postgres.",
+      "description": "Built by Tempo from spans (traces_service_graph_*); on compose the container postgres is the Postgres node.",
       "targets": [
         {
           "datasource": {

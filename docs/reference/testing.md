@@ -8,6 +8,10 @@ Loại tài liệu (Diátaxis): **reference**, tra cứu khi cần một lệnh 
   `svp_feed_projector_test`; gói dùng chung như `internal/dbmigrate` và test lượt xem của engagement-service
   `svp_engagement_views_<x>_test`: mỗi test một database), tạo từ `SVP_TEST_POSTGRES_URL`; helper ở `internal/pgtest` từ
   chối tên không khớp `^svp_[a-z0-9_]+_test$`, nên test không chạm được database thật của service.
+- `SVP_TEST_POSTGRES_URL` mặc định trỏ Postgres native của máy (`127.0.0.1:5432`, không TLS; `Makefile`), không phải container
+  `postgres` của compose (container đó không publish cổng). Job `check` của CI chạy cùng URL trên service container Postgres 17, cùng
+  major với compose, k3d và RDS; Postgres native của máy có thể là major cũ hơn, nên lỗi chỉ có ở 17 lộ ra ở CI
+  ([ADR-0057](../adr/0057-postgres17-verify-full.md) §1, §4).
 - Test gateway gọi service qua `bufconn` (gRPC trong bộ nhớ), không mở cổng.
 - Fuzz test (`FuzzXxx` trong `fuzz_test.go` của gói) kiểm tính chất bằng oracle độc lập với hàm (regexp, bảng `unicode`,
   `ed25519.Verify`, `proto.Marshal`), không chỉ "không panic"; tất định, không dựa trạng thái toàn cục. `TestMain` nào dựng

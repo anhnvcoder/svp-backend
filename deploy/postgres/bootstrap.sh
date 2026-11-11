@@ -1,17 +1,18 @@
 #!/usr/bin/env bash
 # Creates or updates the Postgres roles and databases of the services and of the GlitchTip error tracker (svp_glitchtip)
-# on the local Postgres (127.0.0.1:5432) as the superuser, by running bootstrap.sql once per database. Idempotent. Reads
+# on the Postgres container of compose as the superuser, by running bootstrap.sql once per database. Idempotent. Reads
 # only the role passwords from the env file, with the strict rule of deploy/observability/glitchtip/dotenv.sh (the one
-# compose agrees with), never prints them, and reads all of them before it changes anything.
+# compose agrees with), never prints them, and reads all of them before it starts Postgres or changes anything.
 
-# Usage: deploy/postgres/bootstrap.sh <env-file>
+# psql runs inside the container (`$COMPOSE exec`), as its OS user postgres over the Unix socket (deploy/postgres/
+# pg_hba.conf), so the host needs no psql. The passwords reach it as environment variables named on the command line
+# without their values.
+# Usage: COMPOSE='<docker compose command>' deploy/postgres/bootstrap.sh <env-file>
 set -euo pipefail
 
 env_file=${1:?usage: bootstrap.sh <env-file>}
-sql="$(dirname "$0")/bootstrap.sql"
+: "${COMPOSE:?COMPOSE must hold the docker compose command}"
 . "$(dirname "$0")/../observability/glitchtip/dotenv.sh"
-# Superuser password of the native dev Postgres on the machine; ignored while pg_hba trusts loopback.
-export PGPASSWORD=${PGPASSWORD:-postgres}
 
 # value prints NAME's value in the env file and fails when the file breaks the rule or NAME is
 # missing or empty.
@@ -34,11 +35,15 @@ for svc in "${services[@]}"; do
   app_passwords+=("$(value "SVP_${upper}_APP_DB_PASSWORD")")
 done
 
+# Starts the container (and tls-init before it) when it is not running, and waits until it is healthy.
+$COMPOSE up -d --wait postgres
+
 for i in "${!services[@]}"; do
   svc=${services[$i]}
   SVP_MIGRATOR_PASSWORD=${migrator_passwords[$i]} SVP_APP_PASSWORD=${app_passwords[$i]} \
-    psql -h 127.0.0.1 -p 5432 -U postgres -d postgres -X -q \
+    $COMPOSE exec -T -e SVP_MIGRATOR_PASSWORD -e SVP_APP_PASSWORD postgres \
+    psql -U postgres -d postgres -X -q \
     -v db="svp_${svc}" -v migrator="svp_${svc}_migrator" -v app="svp_${svc}_app" \
-    -f "$sql"
+    -f /opt/svp/postgres/bootstrap.sql
   echo "bootstrap: database svp_${svc} and roles svp_${svc}_migrator, svp_${svc}_app ok"
 done

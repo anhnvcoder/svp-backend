@@ -33,8 +33,9 @@ hpa: {}
 # or no autoscaler at all (neither hpa nor keda) and replicas >= 2. With one replica a budget either blocks every node
 # drain for good (minAvailable: 1) or allows everything (0), so a single-replica service has none.
 pdb: {}
-# -- Spread the replicas over the nodes (topologySpreadConstraints on kubernetes.io/hostname, ScheduleAnyway): with two
-# replicas on two nodes, losing one node leaves one replica serving. Soft, so a one-node cluster still schedules them.
+# -- Spread the replicas over the zones, then over the nodes (topologySpreadConstraints on topology.kubernetes.io/zone,
+# then kubernetes.io/hostname, both ScheduleAnyway): with two replicas, losing one zone or one node leaves one serving.
+# Soft, so a cluster with one zone or one node still schedules them; k3d's nodes have no zone label.
 spreadAcrossNodes: false
 # -- KEDA ScaledObject on the consumer lag of a Kafka group, logged in through ClusterTriggerAuthentication keda-kafka
 # (chart svp-data; Kafka user svp-keda): {minReplicas, maxReplicas, kafka: {topic, consumerGroup, lagThreshold}}.
@@ -81,10 +82,12 @@ env:
 # compose.
 errorTracking: false
 
-# -- Secret of the release's namespace whose ca.crt is the local CA that the server certificates of a Kafka and a Valkey
-# in the cluster chain to (chart svp-data), mounted at /etc/svp-ca: SSL_CERT_DIR=/etc/svp-ca adds it to the system's
-# roots for Go, NODE_EXTRA_CA_CERTS=/etc/svp-ca/ca.crt for Node. Empty where Kafka and Valkey are managed services
-# whose certificates chain to a public CA (EKS): the system's roots alone.
+# -- Secret of the release's namespace whose ca.crt is the CA the pods trust beyond the system's roots, mounted at
+# /etc/svp-ca in the pods and the migrate Job: the local CA that Kafka, Valkey and Postgres of the cluster chain to
+# (local-ca, chart svp-data), or on EKS the CA bundle of RDS (rds-ca, chart svp-cluster) for a service with a database.
+# DATABASE_URL names it (sslrootcert=/etc/svp-ca/ca.crt); SSL_CERT_DIR=/etc/svp-ca adds it to the system's roots for
+# Go, NODE_EXTRA_CA_CERTS=/etc/svp-ca/ca.crt for Node. Empty: the system's roots alone (a service without a database
+# on EKS, whose Kafka and Valkey chain to a public CA).
 localCA: local-ca
 
 # -- Writable directories of a container whose root filesystem is read-only: name -> {mountPath, sizeLimit, medium}.

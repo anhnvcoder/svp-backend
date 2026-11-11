@@ -4,7 +4,8 @@ Loại tài liệu (Diátaxis): **reference**, tra cứu khi cần một lệnh 
 
 ## `.env`
 
-- `make env`: sinh `.env` local (mode 600, mật khẩu DB, mật khẩu root của object store `SVP_S3_ROOT_PASSWORD`, secret key S3 của
+- `make env`: sinh `.env` local (mode 600, mật khẩu DB (mật khẩu superuser của Postgres compose
+  `SVP_COMPOSE_PG_SUPERUSER_PASSWORD`, chỉ đặt khi container khởi tạo volume rỗng, và mật khẩu role của bootstrap), mật khẩu root của object store `SVP_S3_ROOT_PASSWORD`, secret key S3 của
   từng service và của user thử `svp-objstore-probe` (`SVP_S3_PROBE_SECRET_KEY`, chỉ compose và `make test-stack`) ngẫu nhiên,
   khoá JWT mới, khoá Server Action của web `NEXT_SERVER_ACTIONS_ENCRYPTION_KEY` (base64 của 32 byte); thêm
   `GLITCHTIP_SECRET_KEY`, `GLITCHTIP_ADMIN_PASSWORD`, mật khẩu hai role `svp_glitchtip_*` và
@@ -17,7 +18,9 @@ Loại tài liệu (Diátaxis): **reference**, tra cứu khi cần một lệnh 
   `SVP_GRAFANA_ADMIN_PASSWORD`, `SVP_PG_BACKUP_S3_SECRET_KEY` (user `svp-pg-backup` của backup Postgres; 20 byte hex
   như secret key S3 khác: 40 ký tự là độ dài secret key của AWS)). `.env` có
   sẵn thì chỉ bổ sung biến còn thiếu hoặc đang rỗng, không đổi giá trị đã đặt. Cùng lệnh sinh một lần **CA local** vào
-  `.local/ca/` (gitignore, không ghi đè; khoá mode 600): `ca.crt`, `ca.key` và cert server cho Kafka, Valkey ký bởi CA đó.
+  `.local/ca/` (gitignore, không ghi đè; khoá mode 600): `ca.crt`, `ca.key` và hai cert server ký bởi CA đó: `server.crt` cho Kafka,
+  Valkey, `postgres.crt` cho Postgres (tên `postgres` của compose và Service `svp-pg-rw` của k3d với mọi dạng, cùng `localhost`). Clone
+  đã có CA thì chỉ cert, khoá còn thiếu hay hết hạn được sinh lại; CA mất hay hết hạn thì sinh lại CA và cả hai cert.
   Trên EKS các mật khẩu Kafka, Valkey không lấy từ `.env`: Terraform của `svp-infra` sinh và ghi vào Secrets Manager.
 - Người học tự đặt, `make env` không sinh (không tạo được khoá của GitHub App), chỉ cho cluster EKS có Argo CD Notifications
   ([`eks.md`](eks.md), [ADR-0032](../adr/0032-argocd-deploy-status.md)): `SVP_ARGOCD_NOTIFY_APP_ID`, `SVP_ARGOCD_NOTIFY_INSTALLATION_ID`
@@ -40,10 +43,16 @@ Loại tài liệu (Diátaxis): **reference**, tra cứu khi cần một lệnh 
   đầu dòng hay `export`, khoá lặp, giá trị nhiều dòng, CRLF, byte NUL → dừng, nêu `FILE:dòng:` và tên biến, không in giá
   trị, không ghi gì.
 
-## Kafka, Valkey và CA local
+## Postgres, Kafka, Valkey và CA local
 
 Mọi môi trường dùng cùng giao thức và cùng code của client; khác nhau chỉ ở giá trị biến
-([ADR-0053](../adr/0053-msk-elasticache-valkey.md) §4, §10, §11).
+([ADR-0053](../adr/0053-msk-elasticache-valkey.md) §4, §10, §11, [ADR-0057](../adr/0057-postgres17-verify-full.md) §2).
+
+- **`DATABASE_URL`** (bốn service có Postgres và Job migrate của chúng; GlitchTip cả `MAINTENANCE_DATABASE_URL`):
+  `postgres://<role>:<mật khẩu>@<host>:5432/<database>?sslmode=verify-full&sslrootcert=/etc/svp-ca/ca.crt`. Client kiểm cert server theo CA
+  của file đó và theo đúng host đã gọi, nên host là tên mà cert mang: compose `postgres`, k3d `svp-pg-rw.svp-data`, EKS địa chỉ RDS
+  `cluster.rdsAddress`. File là CA local ở compose, k3d và bundle CA của RDS (Secret `rds-ca`) trên EKS. `make test` không đọc biến này:
+  nó dùng `SVP_TEST_POSTGRES_URL` tới Postgres native không TLS ([`testing.md`](testing.md)).
 
 - **`KAFKA_BROKERS`** (user, video, engagement, feed-service, media-worker): danh sách `host:port` cách dấu phẩy của listener SASL_SSL
   cổng 9096: compose `kafka:9096`, k3d `kafka.svp-data.svc.cluster.local:9096`, EKS giá trị `cluster.kafkaBrokers` (bootstrap SCRAM của

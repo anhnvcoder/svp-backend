@@ -54,6 +54,17 @@ mode, or on external without the CIDRs.
   ports:
     - {protocol: TCP, port: {{ .Values.postgres.port }}}
 {{- end }}
+{{- /*
+The volume of the CA that Postgres's certificate chains to, for sslrootcert=/etc/svp-ca/ca.crt of DATABASE_URL: the
+local CA (Secret local-ca) for svp-pg, the RDS bundle (Secret rds-ca of chart svp-cluster) for a managed Postgres.
+*/}}
+{{- define "svp-observability.postgresCAVolume" -}}
+- name: ca
+  secret:
+    secretName: {{ if include "svp-observability.postgresExternal" . }}rds-ca{{ else }}local-ca{{ end }}
+    # A public certificate: readable by GlitchTip's user without an fsGroup.
+    defaultMode: 0444
+{{- end }}
 {{- define "svp-observability.glitchtipInitHook" -}}
 helm.sh/hook: pre-install,pre-upgrade
 helm.sh/hook-weight: "-10"
@@ -160,6 +171,9 @@ spec:
               readOnly: true
             - name: tmp
               mountPath: /tmp
+            - name: ca
+              mountPath: /etc/svp-ca
+              readOnly: true
       volumes:
         - name: init
           configMap:
@@ -167,6 +181,7 @@ spec:
         - name: tmp
           emptyDir:
             sizeLimit: 64Mi
+        {{- include "svp-observability.postgresCAVolume" . | nindent 8 }}
 ---
 apiVersion: v1
 kind: ServiceAccount
@@ -184,7 +199,7 @@ metadata:
   labels:
     {{- toYaml .Values.pods.glitchtip | nindent 4 }}
   annotations:
-    secret.reloader.stakater.com/reload: glitchtip-env
+    secret.reloader.stakater.com/reload: glitchtip-env,{{ if include "svp-observability.postgresExternal" . }}rds-ca{{ else }}local-ca{{ end }}
 spec:
   replicas: 1
   # The old pod goes before the new one starts: two GlitchTip pods at once would need another 512 MiB on a machine
@@ -257,6 +272,9 @@ spec:
               mountPath: /tmp
             - name: uploads
               mountPath: /code/uploads
+            - name: ca
+              mountPath: /etc/svp-ca
+              readOnly: true
       volumes:
         - name: tmp
           emptyDir:
@@ -264,6 +282,7 @@ spec:
         - name: uploads
           emptyDir:
             sizeLimit: 64Mi
+        {{- include "svp-observability.postgresCAVolume" . | nindent 8 }}
 ---
 apiVersion: v1
 kind: Service

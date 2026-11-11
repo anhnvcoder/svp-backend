@@ -22,7 +22,7 @@ service nào mở `/metrics` hay pprof.
 - **Profile `obs`** (`make up OBS=lgtm`) thêm `lgtm` (Grafana `127.0.0.1:3000` cùng Prometheus giữ 30 ngày, Loki, Tempo,
   Pyroscope; 5 service đẩy profile tới `lgtm:4040`, media-worker không), `alertmanager` (`127.0.0.1:9093`, gửi `severity=page` tới
   Telegram khi `.env` có bot) và `glitchtip` (`127.0.0.1:8000`, tracker lỗi qua giao thức Sentry, database `svp_glitchtip` trên
-  Postgres native). Không có profile `obs`, DNS `otelcol` không tồn tại: SDK bỏ export, service vẫn chạy.
+  container `postgres` của compose, nối `sslmode=verify-full`). Không có profile `obs`, DNS `otelcol` không tồn tại: SDK bỏ export, service vẫn chạy.
 - **RAM** (`docker stats`, giới hạn ở [`deploy/compose/compose.yaml`](../../deploy/compose/compose.yaml)): `otelcol` 64–255 MiB lúc
   nghỉ (trung vị 246 và 255,3 ở hai lượt đo), `lgtm` 730–750 MiB lúc nghỉ, 1 203 MiB sau smoke và 1 245 MiB sau mọi diễn tập,
   `alertmanager` 17–42 MiB, `glitchtip` 185–232 MiB; cả `core` + `obs` 1,71–2,61 GiB (2,60 GiB sau một smoke, 2,22 GiB nghỉ và
@@ -275,3 +275,30 @@ giá trị của user; `runbook_url` trỏ tới runbook cùng tên cảnh báo 
   về bản phát hành, cảnh báo SLO nói về người dùng. Một Application đang bị xoá (`operation="delete"`: bị bỏ khỏi `components.json`,
   finalizer của nó xoá những gì nó đã deploy) mất tài nguyên có chủ đích và không bao giờ page; việc xoá bị treo giữ một tài nguyên ở
   "Pending deletion" (Progressing), tức ticket.
+
+## Alarm của dịch vụ managed
+
+Vì sao: [ADR-0058](../adr/0058-managed-data-operations.md).
+
+Trên AWS, RDS, MSK và ElastiCache có CloudWatch alarm riêng, ngoài Prometheus và Alertmanager của cluster: cảnh báo về đĩa, bộ nhớ, partition
+của dịch vụ dữ liệu phải tới người vận hành cả khi cluster EKS chết, chính lúc cần nhất. Alarm nằm trong module Terraform của dịch vụ đó
+(`svp-infra`), tên `svp-<env>-<alarm>`, tag `Severity=page|ticket`; bảng alarm, ngưỡng và nguồn của từng ngưỡng ở ADR-0058 §2, §3.
+
+```mermaid
+flowchart LR
+    rds[("RDS")] -->|"metric 60 s"| cw["CloudWatch alarm<br/>svp-env-alarm"]
+    msk[["MSK"]] -->|"metric 60 s,<br/>MAX các broker"| cw
+    ec[("ElastiCache")] -->|"metric 60 s,<br/>MAX các node"| cw
+    cw -->|"ALARM, OK"| sns[["SNS svp-env-alarms<br/>mã hoá bằng CMK"]]
+    sns --> mail["Email người vận hành"]
+    mail -.->|"alarm page: URL runbook<br/>trong mô tả"| rb["docs/runbooks/alarm.md"]
+```
+
+- Mọi alarm gửi cả trạng thái `ALARM` và `OK` tới topic SNS `svp-<env>-alarms`; topic mã hoá bằng KMS key của module `alarms`, key policy cho
+  CloudWatch dùng key với điều kiện account. Email nhận là `alarm_email` của root env, không commit; SNS chỉ gửi sau khi người nhận mở link
+  xác nhận.
+- Alarm `page` mang URL runbook cùng tên trong mô tả, như `runbook_url` của rule Prometheus: runbook ở
+  [`runbooks/`](../runbooks/README.md#alarm-của-dịch-vụ-managed-rds-msk-elasticache). Alarm `ticket` không có runbook riêng.
+- Hai kênh là cái giá: cảnh báo của service và SLO ở Alertmanager (Telegram), cảnh báo của dịch vụ dữ liệu ở email. Metric của RDS, MSK,
+  ElastiCache không vào Grafana; Database Insights, enhanced monitoring, log export của RDS, broker log MSK và slow-log Valkey đọc ở
+  CloudWatch.

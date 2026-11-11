@@ -1,7 +1,7 @@
 # Core stack: gateway, user-service, video-service, engagement-service, feed-service and their one-shot migrations,
-# Kafka and Valkey with their one-shot tls-init and kafka-init, the object store `s3` (RustFS) with its init container,
-# and the web client `web`. Run it through `make up` / `make down` (deploy/compose/compose.mk), which pass --env-file
-# .env.
+# Postgres, Kafka and Valkey with their one-shot tls-init and kafka-init, the object store `s3` (RustFS) with its init
+# container, and the web client `web`. Run it through `make up` / `make down` (deploy/compose/compose.mk), which pass
+# --env-file .env.
 
 # Profiles: `core` is the application. `obs` (`make up OBS=lgtm`) adds otelcol, lgtm, alertmanager and glitchtip
 # with its one-shot glitchtip-init; no core service depends on an obs service. Every Go service sends OTLP to
@@ -11,14 +11,15 @@
 # `obs-elastic` (`make up OBS=elastic`) is the Elastic stack, kept only to compare with LGTM, instead of `obs`, never
 # with it.
 
-# Postgres is the native one on the host (127.0.0.1:5432), reached as host.docker.internal. Kafka and Valkey run the
-# software of Amazon MSK and ElastiCache for Valkey and are reached the way stg and prd reach those: Kafka with
-# SASL/SCRAM-SHA-512 over TLS on kafka:9096, Valkey over TLS on valkey:6379, each client with a user of its own whose
-# ACLs allow only its topics and groups, or its Redis db and key prefix.
+# Postgres, Kafka and Valkey run the software of Amazon RDS for PostgreSQL, MSK and ElastiCache for Valkey and are
+# reached the way stg and prd reach those: Postgres over TLS on postgres:5432 with a role per service and job, Kafka
+# with SASL/SCRAM-SHA-512 over TLS on kafka:9096, Valkey over TLS on valkey:6379, each client with a user of its own
+# whose ACLs allow only its topics and groups, or its Redis db and key prefix.
 
-# Their certificate is signed by the local CA of `make env` (.local/ca/), which the clients trust from
-# /etc/svp-ca/ca.crt. Neither publishes a port: scripts on the host reach them only through the wrappers of deploy/ops/
-# run inside their containers.
+# Their certificates are signed by the local CA of `make env` (.local/ca/), which the clients trust from
+# /etc/svp-ca/ca.crt; Postgres clients verify the server's name too (sslmode=verify-full). None publishes a port:
+# scripts on the host reach them only through `docker compose exec` (psql, the wrappers of deploy/ops/) inside their
+# containers.
 
 # Published ports are on the host's loopback only. gRPC ports stay inside the compose network (threat model IN-2); so do
 # the Collector (4317) and LGTM's Prometheus (9090), Tempo (3200), Loki (3100) and Pyroscope (4040), reached from the
@@ -34,9 +35,9 @@
 # tracker and the Collector and nothing else in the stack: not the gRPC services, which check the caller's access token
 # but not which container calls them, nor Kafka or the object store by their compose names.
 
-# `web` is not internal: Docker publishes no port of a container attached to internal networks only. web gets no
-# host.docker.internal entry, but Docker Desktop resolves that name in every container, which opens the host's loopback
-# ports to it (the object store's 9000, Postgres with its trust rule, with `obs` Grafana, Alertmanager, GlitchTip).
+# `web` is not internal: Docker publishes no port of a container attached to internal networks only. Docker Desktop
+# resolves host.docker.internal in every container, which opens the host's loopback ports to web (the object store's
+# 9000, with `obs` Grafana, Alertmanager, GlitchTip, and whatever else listens there).
 # Accepted for the compose lab (threat model WEB-13); the k3d release closes it with NetworkPolicy.
 
 # Design notes: docs/reference/compose.md.
@@ -50,11 +51,6 @@ x-healthcheck: &healthcheck
   retries: 3
   start_period: 20s
   start_interval: 1s
-
-x-host-services: &host-services
-  # Reaches Postgres on the host. Docker Desktop provides host.docker.internal; this line makes it
-  # work on Linux too.
-  extra_hosts: ["host.docker.internal:host-gateway"]
 
 # Telemetry settings of every Go service and of web.
 # Only `make up OBS=off` sets SVP_OTEL_SDK_DISABLED, SVP_PYROSCOPE_SERVER_ADDRESS (empty) and an
@@ -73,15 +69,17 @@ x-telemetry-app-env: &telemetry-app-env
   SENTRY_DSN: ${SENTRY_DSN:-}
   SENTRY_ENVIRONMENT: ${SENTRY_ENVIRONMENT:-local}
 
-# Kafka 4.1, the line of MSK's Standard brokers, and the Valkey of chart svp-data.
+# Postgres 17 at the x.y of the RDS instances, Kafka 4.1, the line of MSK's Standard brokers, and the Valkey of chart
+# svp-data.
+x-postgres-image: &postgres-image docker.io/library/postgres:17.11-trixie@sha256:ff87138949ad9a46f32ff23bd6852b52ce024a13dffe9b4087be98292cdd3b4f
 x-kafka-image: &kafka-image apache/kafka:4.1.2@sha256:5cc2a2fd93fa2687b44015eee04fb2c3edd9e526bd64bf8bec5ff1e268772e0e
 x-valkey-image: &valkey-image docker.io/valkey/valkey:9.1.3-alpine@sha256:bf09d58e96d6b4524a15396b65b242bbe18beebbcc15a04d8ee75ddac62fae0b
 x-s3-image: &s3-image rustfs/rustfs:1.0.4@sha256:ed9210d6411d77ffceb70d94b964a3cb7d225983368bc25bebe01e995293dcc2
 x-glitchtip-image: &glitchtip-image glitchtip/glitchtip:6.2.6@sha256:a3d8eb1b36c1e1603d55ab32711ea3dd8115874742a781a57391a62a16e0dff6
 
-# The local CA's certificate (public), for every client of Kafka and Valkey: Go reads the files of SSL_CERT_DIR beside
-# the system roots, Node NODE_EXTRA_CA_CERTS, the Kafka tools and valkey-cli SVP_CA_FILE. `make env` writes it; a
-# missing file stops compose instead of becoming an empty directory.
+# The local CA's certificate (public), for every client of Postgres, Kafka and Valkey: libpq, pgx and psycopg read it as
+# sslrootcert, Go reads the files of SSL_CERT_DIR beside the system roots, Node NODE_EXTRA_CA_CERTS, the Kafka tools and
+# valkey-cli SVP_CA_FILE. `make env` writes it; a missing file stops compose instead of becoming an empty directory.
 x-ca-volume: &ca-volume
   type: bind
   source: ../../.local/ca/ca.crt
@@ -93,14 +91,14 @@ x-ca-volume: &ca-volume
 # The wrappers of deploy/ops/ (svp-kafka, svp-valkey), at /opt/svp/bin of the kafka and valkey containers.
 x-ops-volume: &ops-volume ../ops:/opt/svp/bin:ro
 
-# Settings shared by `glitchtip` and `glitchtip-init`. Database svp_glitchtip on the native Postgres: the app role for
+# Settings shared by `glitchtip` and `glitchtip-init`. Database svp_glitchtip on Postgres: the app role for
 # requests and tasks, the migrator role (MAINTENANCE_*) for migrations, the cache table and partitions. VALKEY_URL is
 # empty on purpose: queue, cache and sessions live in Postgres; left out, it would default to redis://redis:6379/0. Only
 # error tracking is on, with no self-registration, no SMTP and no SENTRY_DSN, so GlitchTip does not report on itself.
 x-glitchtip-env: &glitchtip-env
   SECRET_KEY: ${GLITCHTIP_SECRET_KEY:?run make env}
-  DATABASE_URL: postgres://svp_glitchtip_app:${SVP_GLITCHTIP_APP_DB_PASSWORD:?run make env}@host.docker.internal:5432/svp_glitchtip?sslmode=disable
-  MAINTENANCE_DATABASE_URL: postgres://svp_glitchtip_migrator:${SVP_GLITCHTIP_MIGRATOR_DB_PASSWORD:?run make env}@host.docker.internal:5432/svp_glitchtip?sslmode=disable
+  DATABASE_URL: postgres://svp_glitchtip_app:${SVP_GLITCHTIP_APP_DB_PASSWORD:?run make env}@postgres:5432/svp_glitchtip?sslmode=verify-full&sslrootcert=/etc/svp-ca/ca.crt
+  MAINTENANCE_DATABASE_URL: postgres://svp_glitchtip_migrator:${SVP_GLITCHTIP_MIGRATOR_DB_PASSWORD:?run make env}@postgres:5432/svp_glitchtip?sslmode=verify-full&sslrootcert=/etc/svp-ca/ca.crt
   VALKEY_URL: ""
   # DSNs it hands out name the host's loopback address; `make glitchtip-init` rewrites the one the
   # Go services get to glitchtip:8000. The service name, the host and the healthcheck's localhost
@@ -120,13 +118,14 @@ x-glitchtip-env: &glitchtip-env
   DATABASE_POOL_MAX_SIZE: "4"
 
 services:
-  # Puts the server certificate and key of the local CA, and Valkey's ACL file, into volume svp-tls, owned by the user
+  # Puts the server certificates and keys of the local CA, and Valkey's ACL file, into volume svp-tls, owned by the user
   # of the server that reads each, key and ACL file mode 0400: the files of .local/ are the host user's and mode 600, so
   # bind-mounted they would be unreadable to those users on Linux (Docker Desktop on macOS would show them to anyone).
   # Root only for chown; no network, only the capabilities that reading and chown need.
 
   # The uid:gid come from the images: apache/kafka runs as appuser 1000:1000 (docker/jvm/Dockerfile of Apache Kafka),
-  # valkey/valkey as valkey 999:1000 (the user its Alpine Dockerfile adds); `docker image inspect` and `id` agree.
+  # valkey/valkey as valkey 999:1000 (the user its Alpine Dockerfile adds), postgres as postgres 999:999 (17/trixie/
+  # Dockerfile of docker-library/postgres); `docker image inspect` and `id` agree.
   tls-init:
     profiles: [core]
     image: *valkey-image
@@ -141,7 +140,9 @@ services:
         install -o 999 -g 1000 -m 0444 /in/ca/server.crt /out/valkey.crt
         install -o 999 -g 1000 -m 0400 /in/ca/server.key /out/valkey.key
         install -o 999 -g 1000 -m 0400 /in/valkey/users.acl /out/valkey-users.acl
-        echo "tls-init: kafka.pem, valkey.crt, valkey.key and valkey-users.acl in place"
+        install -o 999 -g 999 -m 0444 /in/ca/postgres.crt /out/postgres.crt
+        install -o 999 -g 999 -m 0400 /in/ca/postgres.key /out/postgres.key
+        echo "tls-init: kafka.pem, valkey.crt, valkey.key, valkey-users.acl, postgres.crt and postgres.key in place"
     volumes:
       - type: bind
         source: ../../.local/ca
@@ -164,6 +165,51 @@ services:
     cap_drop: [ALL]
     cap_add: [CHOWN, DAC_OVERRIDE, FOWNER]
     restart: "no"
+
+  # Postgres in place of the host's: TLS with the local CA's certificate postgres.crt, and pg_hba.conf refuses every
+  # connection over the network without TLS, as rds.force_ssl does on RDS. `make db-bootstrap` (deploy/postgres/
+  # bootstrap.sh) creates the roles and databases through `docker compose exec`. No port published: 127.0.0.1:5432 on
+  # the host is the machine's own Postgres, which only `make test` uses.
+  postgres:
+    profiles: [core]
+    image: *postgres-image
+    # The image's user postgres: the entry point neither chowns nor switches user, and `docker compose exec` runs psql
+    # as that OS user, whom pg_hba.conf lets in over the Unix socket as the database user postgres.
+    user: "999:999"
+    command: ["postgres", "-c", "ssl=on",
+              "-c", "ssl_cert_file=/etc/svp-tls/postgres.crt", "-c", "ssl_key_file=/etc/svp-tls/postgres.key",
+              "-c", "hba_file=/opt/svp/postgres/pg_hba.conf"]
+    environment:
+      # The superuser's password, set only when the entry point initializes an empty volume postgres-data.
+      POSTGRES_PASSWORD: ${SVP_COMPOSE_PG_SUPERUSER_PASSWORD:?run make env}
+    mem_limit: 512m
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - svp-tls:/etc/svp-tls:ro
+      # pg_hba.conf, and bootstrap.sql for make db-bootstrap.
+      - ../postgres:/opt/svp/postgres:ro
+      - *ca-volume
+    # Postgres writes only to its data directory, its Unix socket directory and temporary files.
+    read_only: true
+    tmpfs:
+      - /var/run/postgresql:size=1m
+      - /tmp:size=16m
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    healthcheck:
+      # Over TLS to the service name, as the clients connect: the certificate, its name and the TCP listener all work.
+      # The entry point's temporary server while it initializes the volume listens on the socket only.
+      test: ["CMD", "pg_isready", "-q", "-d",
+             "host=postgres dbname=postgres user=postgres sslmode=verify-full sslrootcert=/etc/svp-ca/ca.crt"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 60s
+      start_interval: 1s
+    restart: unless-stopped
+    depends_on:
+      tls-init:
+        condition: service_completed_successfully
 
   # The one Kafka broker (KRaft), started by deploy/kafka/broker.sh with deploy/kafka/server.properties: SASL_SSL with
   # SCRAM-SHA-512 on kafka:9096 for clients, ACLs on, no auto-create; svp-admin is made when the storage is first
@@ -362,7 +408,6 @@ services:
         condition: service_healthy
 
   user-migrate:
-    <<: *host-services
     profiles: [core]
     image: ${SVP_USER_SERVICE_IMAGE:-svp/user-service:dev}
     # The image of user-service: built by `make up`, or a release `make up IMAGES=stg` has
@@ -370,41 +415,57 @@ services:
     pull_policy: never
     command: ["migrate"]
     environment:
-      DATABASE_URL: postgres://svp_user_migrator:${SVP_USER_MIGRATOR_DB_PASSWORD:?run make env}@host.docker.internal:5432/svp_user?sslmode=disable
+      DATABASE_URL: postgres://svp_user_migrator:${SVP_USER_MIGRATOR_DB_PASSWORD:?run make env}@postgres:5432/svp_user?sslmode=verify-full&sslrootcert=/etc/svp-ca/ca.crt
+    volumes:
+      - *ca-volume
     restart: "no"
+    depends_on:
+      postgres:
+        condition: service_healthy
 
   video-migrate:
-    <<: *host-services
     profiles: [core]
     image: ${SVP_VIDEO_SERVICE_IMAGE:-svp/video-service:dev}
     pull_policy: never
     command: ["migrate"]
     environment:
-      DATABASE_URL: postgres://svp_video_migrator:${SVP_VIDEO_MIGRATOR_DB_PASSWORD:?run make env}@host.docker.internal:5432/svp_video?sslmode=disable
+      DATABASE_URL: postgres://svp_video_migrator:${SVP_VIDEO_MIGRATOR_DB_PASSWORD:?run make env}@postgres:5432/svp_video?sslmode=verify-full&sslrootcert=/etc/svp-ca/ca.crt
+    volumes:
+      - *ca-volume
     restart: "no"
+    depends_on:
+      postgres:
+        condition: service_healthy
 
   engagement-migrate:
-    <<: *host-services
     profiles: [core]
     image: ${SVP_ENGAGEMENT_SERVICE_IMAGE:-svp/engagement-service:dev}
     pull_policy: never
     command: ["migrate"]
     environment:
-      DATABASE_URL: postgres://svp_engagement_migrator:${SVP_ENGAGEMENT_MIGRATOR_DB_PASSWORD:?run make env}@host.docker.internal:5432/svp_engagement?sslmode=disable
+      DATABASE_URL: postgres://svp_engagement_migrator:${SVP_ENGAGEMENT_MIGRATOR_DB_PASSWORD:?run make env}@postgres:5432/svp_engagement?sslmode=verify-full&sslrootcert=/etc/svp-ca/ca.crt
+    volumes:
+      - *ca-volume
     restart: "no"
+    depends_on:
+      postgres:
+        condition: service_healthy
 
   feed-migrate:
-    <<: *host-services
     profiles: [core]
     image: ${SVP_FEED_SERVICE_IMAGE:-svp/feed-service:dev}
     pull_policy: never
     command: ["migrate"]
     environment:
-      DATABASE_URL: postgres://svp_feed_migrator:${SVP_FEED_MIGRATOR_DB_PASSWORD:?run make env}@host.docker.internal:5432/svp_feed?sslmode=disable
+      DATABASE_URL: postgres://svp_feed_migrator:${SVP_FEED_MIGRATOR_DB_PASSWORD:?run make env}@postgres:5432/svp_feed?sslmode=verify-full&sslrootcert=/etc/svp-ca/ca.crt
+    volumes:
+      - *ca-volume
     restart: "no"
+    depends_on:
+      postgres:
+        condition: service_healthy
 
   user-service:
-    <<: *host-services
     profiles: [core]
     # `make up` sets SVP_<SERVICE>_IMAGE of the six backend services and has their images ready before compose starts:
     # built from the working tree by docker buildx bake (deploy/docker-bake.json, tag svp/<service>:dev), or with
@@ -414,7 +475,7 @@ services:
     environment:
       <<: *telemetry-app-env
       LISTEN_ADDR: ":9101"
-      DATABASE_URL: postgres://svp_user_app:${SVP_USER_APP_DB_PASSWORD:?run make env}@host.docker.internal:5432/svp_user?sslmode=disable
+      DATABASE_URL: postgres://svp_user_app:${SVP_USER_APP_DB_PASSWORD:?run make env}@postgres:5432/svp_user?sslmode=verify-full&sslrootcert=/etc/svp-ca/ca.crt
       # Only user-service holds the signing key (threat model JWT-10).
       JWT_SIGNING_KID: ${JWT_SIGNING_KID:?run make env}
       JWT_SIGNING_KEY: ${JWT_SIGNING_KEY:?run make env}
@@ -438,14 +499,13 @@ services:
         condition: service_completed_successfully
 
   video-service:
-    <<: *host-services
     profiles: [core]
     image: ${SVP_VIDEO_SERVICE_IMAGE:-svp/video-service:dev}
     pull_policy: never
     environment:
       <<: *telemetry-app-env
       LISTEN_ADDR: ":9102"
-      DATABASE_URL: postgres://svp_video_app:${SVP_VIDEO_APP_DB_PASSWORD:?run make env}@host.docker.internal:5432/svp_video?sslmode=disable
+      DATABASE_URL: postgres://svp_video_app:${SVP_VIDEO_APP_DB_PASSWORD:?run make env}@postgres:5432/svp_video?sslmode=verify-full&sslrootcert=/etc/svp-ca/ca.crt
       # Public keys only: it verifies the caller's access token the gateway forwards, it cannot sign one.
       JWT_VERIFY_KEYS: ${JWT_VERIFY_KEYS:?run make env}
       KAFKA_BROKERS: kafka:9096
@@ -477,14 +537,13 @@ services:
         condition: service_completed_successfully
 
   engagement-service:
-    <<: *host-services
     profiles: [core]
     image: ${SVP_ENGAGEMENT_SERVICE_IMAGE:-svp/engagement-service:dev}
     pull_policy: never
     environment:
       <<: *telemetry-app-env
       LISTEN_ADDR: ":9103"
-      DATABASE_URL: postgres://svp_engagement_app:${SVP_ENGAGEMENT_APP_DB_PASSWORD:?run make env}@host.docker.internal:5432/svp_engagement?sslmode=disable
+      DATABASE_URL: postgres://svp_engagement_app:${SVP_ENGAGEMENT_APP_DB_PASSWORD:?run make env}@postgres:5432/svp_engagement?sslmode=verify-full&sslrootcert=/etc/svp-ca/ca.crt
       # Public keys only: it verifies the caller's access token the gateway forwards, it cannot sign one.
       JWT_VERIFY_KEYS: ${JWT_VERIFY_KEYS:?run make env}
       # Produces to and consumes engagement.views.v1: a view only produces an event on the request,
@@ -507,14 +566,13 @@ services:
         condition: service_completed_successfully
 
   feed-service:
-    <<: *host-services
     profiles: [core]
     image: ${SVP_FEED_SERVICE_IMAGE:-svp/feed-service:dev}
     pull_policy: never
     environment:
       <<: *telemetry-app-env
       LISTEN_ADDR: ":9104"
-      DATABASE_URL: postgres://svp_feed_app:${SVP_FEED_APP_DB_PASSWORD:?run make env}@host.docker.internal:5432/svp_feed?sslmode=disable
+      DATABASE_URL: postgres://svp_feed_app:${SVP_FEED_APP_DB_PASSWORD:?run make env}@postgres:5432/svp_feed?sslmode=verify-full&sslrootcert=/etc/svp-ca/ca.crt
       # Public keys only: it verifies the caller's access token the gateway forwards, it cannot sign one.
       JWT_VERIFY_KEYS: ${JWT_VERIFY_KEYS:?run make env}
       # Consumes user.follows.v1 and video.lifecycle.v1: the timeline is built on write, so a follow
@@ -810,7 +868,6 @@ services:
   # output directory mounted to collect the DSN and token for .env. migrate and createcachetable go through the
   # migrator role: the app role cannot create tables.
   glitchtip-init:
-    <<: *host-services
     profiles: [obs]
     image: *glitchtip-image
     entrypoint: ["/bin/sh", "-c"]
@@ -827,14 +884,17 @@ services:
       GLITCHTIP_ADMIN_PASSWORD: ${GLITCHTIP_ADMIN_PASSWORD:?run make env}
     volumes:
       - ../observability/glitchtip/bootstrap.py:/init/bootstrap.py:ro
+      - *ca-volume
     mem_limit: 512m
     restart: "no"
+    depends_on:
+      postgres:
+        condition: service_healthy
 
   # GlitchTip web and task worker in one process, with no Valkey: one container to run instead of several, within the
   # RAM budget. Its init commands are skipped: glitchtip-init ran them. On `default` for the Go services and on `web`
   # for the web client, which joins no other network; media-worker, on `worker`, reports no errors.
   glitchtip:
-    <<: *host-services
     profiles: [obs]
     image: *glitchtip-image
     environment:
@@ -842,6 +902,8 @@ services:
       GLITCHTIP_EMBED_WORKER: "true"
       SKIP_INIT: "true"
       GRANIAN_WORKERS: "1"
+    volumes:
+      - *ca-volume
     ports:
       - "127.0.0.1:8000:8000"
     networks: [default, web]
@@ -962,6 +1024,8 @@ networks:
   web:
 
 volumes:
+  # Postgres' data directory; created owned by postgres from the image's /var/lib/postgresql/data.
+  postgres-data:
   # The broker's log directory: topics, offsets, and the metadata log with users and ACLs. Created owned by appuser
   # from the image's /var/lib/kafka/data.
   kafka-data:

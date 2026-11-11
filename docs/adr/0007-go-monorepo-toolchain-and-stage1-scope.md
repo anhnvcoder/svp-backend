@@ -147,3 +147,4 @@ Phụ lục: [`appendix/0007-go-monorepo-toolchain-and-stage1-scope.md`](appendi
 ### Chỉnh bởi
 
 - §1: [0030](0030-devsecops-supplement.md): directive `go 1.27` thành bản có số patch `go 1.27.3`, là bản Go mà govulncheck quét và mọi image Go build.
+- §6: [0057](0057-postgres17-verify-full.md): compose có container `postgres` (PostgreSQL 17, TLS, không publish cổng) thay Postgres native qua `host.docker.internal`; `make db-bootstrap` chạy trong container.

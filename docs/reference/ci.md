@@ -18,8 +18,8 @@ Loại tài liệu (Diátaxis): **reference**, tra cứu khi cần một lệnh 
   trên máy (không có biến nào) thì output và tóm tắt in ra stdout, không mask, file tạm ở `/tmp`, lượt là của repo của `code_root`
   (mục "Script CI cho cây của nguồn khác" dưới đây) ở `HEAD` với workflow `local`; lệnh ghi qua API của GitHub (dispatch) chỉ
   được in ra. CI trên GitLab là bài lab của `svp-labs`:
-  - `.github/workflows/ci.yml` (PR, push `main`, dispatch): `check` (`make check-go TESTFLAGS=-count=1`, Postgres và
-    Redis native là service container trên `127.0.0.1`, ffmpeg), `generate` (`make generate-check`), `buf` (`buf breaking` so với
+  - `.github/workflows/ci.yml` (PR, push `main`, dispatch): `check` (`make check-go TESTFLAGS=-count=1`, Postgres 17 và
+    Redis là service container trên `127.0.0.1` thay cho Postgres, Redis native của máy, ffmpeg), `generate` (`make generate-check`), `buf` (`buf breaking` so với
     merge-base của PR, `main` trước push, hay merge-base với `origin/main` khi dispatch), `api-contract` (luật version của hợp đồng
     REST, [ADR-0033](../adr/0033-svp-web-repo.md) §1: `make api-contract-check BASE=<base>` với base tính như job `buf`, rồi
     `deploy/ci/contract-test.sh`), `config`
@@ -46,14 +46,12 @@ Loại tài liệu (Diátaxis): **reference**, tra cứu khi cần một lệnh 
     nào PR không đụng vùng của nó thì skip, `ci-ok` nhận các skip đó; job khác `skipped` thì đỏ; job `web` cũ ở CI của
     `svp-frontend` từ khi web tách repo). Job `stack` (ADR-0020 §15; **chỉ báo, ngoài `ci-ok`**, không chặn merge; xem lại
     khi 20 lượt liên tiếp xanh, không lượt đỏ do môi trường, thì đưa vào `ci-ok`): `ubuntu-24.04`, tối đa 45 phút,
-    `contents: read`, không secret; Postgres là service container publish trên `127.0.0.1` và IP bridge `172.17.0.1`
-    (`make ci-bridge-check` dừng job khi gateway của network `bridge` khác địa chỉ đó; chỉ cho CI; Kafka và Valkey là container của stack compose,
-    không publish cổng), gói apt
-    `postgresql-client ffmpeg jq`, rồi `make gitops-clone`, `make web-clone` (commit của bản web stg; `SVP_GITOPS_DIR`,
+    `contents: read`, không secret, không service container: Postgres, Kafka và Valkey là container của stack compose, không publish
+    cổng, `make up` bootstrap Postgres bằng `psql` trong container của nó; gói apt `ffmpeg jq`, rồi `make gitops-clone`, `make web-clone` (commit của bản web stg; `SVP_GITOPS_DIR`,
     `SVP_WEB_DIR` ở `env` của job), Node theo `.nvmrc` và pnpm theo `packageManager` của bản clone, `make install` và Playwright Chromium,
     WebKit trong bản clone, `make env`, `make up` (sáu service build từ PR, web là bản phát hành stg theo digest), `make smoke`,
     `make web-e2e` (e2e của `svp-frontend` ở commit của web stg), `make load-ci`, `make web-lighthouse` (đỏ không làm job đỏ), `make dast` (cuối cùng,
-    hạn bước 15 phút, đỏ không làm job đỏ), `make ps` khi lỗi, `make down` luôn chạy; artifact chỉ `k6-summary`
+    hạn bước 15 phút, đỏ không làm job đỏ), `make ps` và log của `tls-init`, `postgres`, `kafka`, `kafka-init`, `valkey` khi lỗi, `make down` luôn chạy; artifact chỉ `k6-summary`
     (`summary.json` đã grep bí mật), `lighthouse` (báo cáo đã lọc cookie) và `dast` (chỉ `report.json`, `summary.json`, dò bí
     mật lại trước khi chép; tệp nghi bị bỏ kèm `::warning::`). Trước `make web-lighthouse` job bỏ hạn chế AppArmor `kernel.apparmor_restrict_unprivileged_userns` của runner
     (Chrome của Playwright cần user namespace cho sandbox). Đã kiểm ngày 2026-10-24 (lượt PR
@@ -175,7 +173,7 @@ Loại tài liệu (Diátaxis): **reference**, tra cứu khi cần một lệnh 
     những gì máy 16 GB không chạy nổi, bằng đúng target `make` như trên máy. Trigger: `workflow_dispatch` (chỉ người có quyền ghi; ref
     `main` hay `feat/stage6b-*`, ref khác dừng ở bước đầu) và lịch hằng tuần trên `main` (00:37 UTC thứ Bảy, 07:37 giờ Việt Nam; cả hai kịch bản
     song song, mọi bước). Ba kịch bản, mỗi kịch bản một job (`dev-k3d` chỉ dispatch); lượt lịch đầu sau khi thu gọn: **kiểm sau push**.
-    - `compose-obs` (job `compose`, hạn 155 phút): `make up OBS=lgtm`, `make smoke`, `make drill-obs-threats`, rồi `test-stack-objstore`
+    - `compose-obs` (job `compose`, hạn 155 phút; không service container, Postgres là container của stack): `make up OBS=lgtm`, `make smoke`, `make drill-obs-threats`, rồi `test-stack-objstore`
       (`deploy/ci/verify-steps/objstore.sh`: `make test-stack PKGS=./internal/objstore/...`, một ca SKIP là đỏ, gồm ba test của output bất
       biến): nơi duy nhất test `internal/objstore` chạy thật thay vì SKIP.
     - `gitops` (job `gitops`, hạn 250 phút): `make k8s-gitops-up` (vai stg; `make gitops-clone` trước; `GITOPS_REV` là SHA của `origin/main` trong
