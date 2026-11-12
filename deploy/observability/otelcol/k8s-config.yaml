@@ -1,21 +1,10 @@
-# Collector of the local Kubernetes cluster svp: release otel-collector in namespace svp-obs, Service
-# otel-collector.svp-obs:4317. Chart svp-observability puts this file in ConfigMap otel-collector-config (key relay)
-# through a symlink, so the file is the config itself, with no Helm templating.
+# Collector of a Kubernetes cluster: release otel-collector in namespace svp-obs, Service otel-collector.svp-obs:4317.
+# The part every platform shares: the receivers and scrubbing processors of config.yaml of the compose `obs` profile.
+# Where the data goes is in one destination file per platform (k8s-k3d.yaml, k8s-eks.yaml): chart svp-observability
+# deep-merges the chosen one over this file into ConfigMap otel-collector-config (key relay), with no Helm templating.
 
-# Same receivers, scrubbing processors and self-telemetry as config.yaml of the compose `obs` profile; only the
-# destinations differ: in the cluster each backend is its own Deployment, so each signal goes straight to its backend's
-# OTLP endpoint (Prometheus and Loki over OTLP/HTTP, Tempo over OTLP/gRPC), and metric names and labels come out as in
-# compose, so the dashboards and rules run unchanged.
-
-# Keep this file in step with config.yaml; `make otelcol-validate` checks both. Only the exporter queues differ on
-# purpose: capped in bytes here, where three exporters share one memory_limiter (comment above exporters).
-# Design notes: docs/explanation/observability.md.
-
-extensions:
-  # The chart's liveness and readiness probes call :13133 on the pod's address (from the node, which
-  # no NetworkPolicy blocks); no policy opens it to any pod.
-  health_check:
-    endpoint: 0.0.0.0:13133
+# Keep receivers and processors in step with config.yaml; `make otelcol-validate` checks this file with each
+# destination file, loaded together as the chart merges them. Design notes: docs/explanation/observability.md.
 
 receivers:
   otlp:
@@ -76,88 +65,5 @@ processors:
   batch:
     timeout: 1s
     send_batch_size: 1024
-
-# Bounded in-memory queue on every exporter (no disk queue): when a backend is down or slow, its telemetry is dropped
-# once its queue is full or a batch has been retried for a minute. A full queue drops what the batch processor hands it
-# rather than blocking, so the other exporters keep sending; but every queued batch, retried ones included, stays on the
-# heap that the one memory_limiter measures, and a queue past the soft limit would make it refuse all three signals.
-
-# So each queue is capped in bytes of serialized data (sizer: bytes; counted in requests, as compose's 256, a queue
-# holds 256 batches of any size): 4 MiB each, many batches of 1024 items, and the three together, decoded on the heap at
-# a few times their serialized size, stay well under the 144 MiB soft limit. The services' SDKs drop on export errors.
-exporters:
-  otlp_http/prometheus:
-    # Prometheus' OTLP receiver (enableOTLPReceiver of kube-prometheus-stack); the exporter appends
-    # /v1/metrics.
-    endpoint: http://kps-prometheus.svp-obs:9090/api/v1/otlp
-    tls:
-      insecure: true
-    sending_queue:
-      enabled: true
-      sizer: bytes
-      queue_size: 4194304
-    retry_on_failure:
-      enabled: true
-      initial_interval: 1s
-      max_interval: 10s
-      max_elapsed_time: 60s
-  otlp_http/loki:
-    # Loki's native OTLP endpoint; the exporter appends /v1/logs.
-    endpoint: http://loki.svp-obs:3100/otlp
-    tls:
-      insecure: true
-    sending_queue:
-      enabled: true
-      sizer: bytes
-      queue_size: 4194304
-    retry_on_failure:
-      enabled: true
-      initial_interval: 1s
-      max_interval: 10s
-      max_elapsed_time: 60s
-  otlp_grpc/tempo:
-    endpoint: tempo.svp-obs:4317
-    tls:
-      insecure: true
-    sending_queue:
-      enabled: true
-      sizer: bytes
-      queue_size: 4194304
-    retry_on_failure:
-      enabled: true
-      initial_interval: 1s
-      max_interval: 10s
-      max_elapsed_time: 60s
-
-service:
-  extensions: [health_check]
-  # The Collector's own metrics (queue size and capacity, refused, failed and dropped data), pushed by OTLP every 15 s
-  # like the services' metrics, straight to Prometheus rather than through this Collector's own pipeline, so they still
-  # arrive while that pipeline refuses data. A reader replaces the default Prometheus endpoint on :8888, which nothing
-  # scrapes. service.name is the one of compose's obs Collector, which the USE dashboard selects.
-  telemetry:
-    resource:
-      service.name: otelcol
-    metrics:
-      level: normal
-      readers:
-        - periodic:
-            interval: 15000
-            exporter:
-              otlp:
-                protocol: http/protobuf
-                endpoint: http://kps-prometheus.svp-obs:9090/api/v1/otlp/v1/metrics
-                insecure: true
-  pipelines:
-    traces:
-      receivers: [otlp]
-      processors: [memory_limiter, attributes/scrub, resource/scrub, batch]
-      exporters: [otlp_grpc/tempo]
-    metrics:
-      receivers: [otlp, kafka_metrics]
-      processors: [memory_limiter, attributes/scrub, resource/scrub, batch]
-      exporters: [otlp_http/prometheus]
-    logs:
-      receivers: [otlp]
-      processors: [memory_limiter, attributes/scrub, resource/scrub, batch]
-      exporters: [otlp_http/loki]
+    # Caps a batch, not only triggers it: the remote write queue counts batches, so its memory bound needs this.
+    send_batch_max_size: 1024

@@ -116,3 +116,4 @@ Phụ lục: [`appendix/0032-argocd-deploy-status.md`](appendix/0032-argocd-depl
 ### Chỉnh bởi
 
 - Kết quả quyết định, đợt 2: [0048](0048-prd-aws.md): trên EKS nhãn `svp.io/notify: root` và người nhận Telegram của root do ApplicationSet `svp-bootstrap` đặt (chat id từ annotation của cluster Secret mà Terraform ghi), không qua `gitops.sh`.
+- Kết quả quyết định, đợt 1: [0063](0063-managed-observability.md): trên `eks` Prometheus agent scrape PodMonitor của controller rồi gửi tới AMP, hai cảnh báo chạy ở ruler của AMP và Alertmanager của AMP gửi SNS (email) thay Alertmanager trong cluster.

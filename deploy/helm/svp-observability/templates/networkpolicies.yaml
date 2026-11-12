@@ -49,6 +49,8 @@ podSelector:
   ports:
     - {protocol: TCP, port: {{ .Values.kafka.port }}}
 {{- end }}
+{{- /* The three backends are collector.backends; a platform whose Collector sends to AWS's services lists none, and
+policy allow-aws-apis-collector opens their endpoints instead. */}}
 # The Collector: OTLP from the seven releases of svp (services.otlp), out to the three backends, and the Kafka brokers,
 # where its kafka_metrics receiver reads consumer group lag as user svp-otelcol.
 apiVersion: networking.k8s.io/v1
@@ -64,19 +66,19 @@ spec:
         {{- include "svp-observability.services" .Values.services.otlp | nindent 8 }}
       ports:
         - {protocol: TCP, port: 4317}
-  egress:
-    - to:
+    {{- if .Values.collector.podMonitor }}
+    - from:
         {{- include "svp-observability.peer" (dict "root" . "name" "prometheus") | nindent 8 }}
       ports:
-        - {protocol: TCP, port: 9090}
+        - {protocol: TCP, port: {{ .Values.collector.metricsPort }}}
+    {{- end }}
+  egress:
+    {{- range .Values.collector.backends }}
     - to:
-        {{- include "svp-observability.peer" (dict "root" . "name" "loki") | nindent 8 }}
+        {{- include "svp-observability.peer" (dict "root" $ "name" .pod) | nindent 8 }}
       ports:
-        - {protocol: TCP, port: 3100}
-    - to:
-        {{- include "svp-observability.peer" (dict "root" . "name" "tempo") | nindent 8 }}
-      ports:
-        - {protocol: TCP, port: 4317}
+        - {protocol: TCP, port: {{ .port }}}
+    {{- end }}
     {{- include "svp-observability.kafkaPeer" . | nindent 4 }}
 ---
 # Prometheus: OTLP from the Collector, remote write from Tempo's metrics-generator, queries from Grafana and from the
@@ -153,6 +155,12 @@ spec:
               {{- toYaml .Values.argocd.labels | nindent 14 }}
       ports:
         - {protocol: TCP, port: {{ .Values.argocd.metricsPort }}}
+    {{- if .Values.collector.podMonitor }}
+    - to:
+        {{- include "svp-observability.peer" (dict "root" . "name" "collector") | nindent 8 }}
+      ports:
+        - {protocol: TCP, port: {{ .Values.collector.metricsPort }}}
+    {{- end }}
 ---
 # Alertmanager: alerts from Prometheus, which also scrapes it and its config reloader (8080); Grafana's datasource.
 # Its one call out, to Telegram, is policy allow-alertmanager-telegram below.
@@ -342,3 +350,73 @@ spec:
         - {protocol: TCP, port: 8000}
   egress:
     {{- include "svp-observability.postgresPeer" . | nindent 4 }}
+{{- if eq (toString .Values.rules.target) "amp" }}
+---
+# ACK's controller for Amazon Managed Service for Prometheus: it serves no pod (nothing scrapes it, no webhook). Its
+# calls to the API of the workspace's rules and Alertmanager are policy allow-aws-apis-ack.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: ack
+  namespace: {{ .Release.Namespace }}
+spec:
+  {{- include "svp-observability.selector" (dict "root" . "name" "ack") | nindent 2 }}
+  policyTypes: [Ingress, Egress]
+  ingress: []
+  egress: []
+{{- end }}
+{{- if eq (toString .Values.dashboards.target) "grafana-operator" }}
+---
+# Grafana Operator: it serves no pod (nothing scrapes it, no webhook). Out: the API of Amazon Managed Grafana, which no
+# interface endpoint serves, so TCP 443 to every public IPv4 address through the NAT, as allow-alertmanager-telegram.
+# The price: a compromised operator can reach any public address on 443.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: grafana-operator
+  namespace: {{ .Release.Namespace }}
+spec:
+  {{- include "svp-observability.selector" (dict "root" . "name" "grafanaOperator") | nindent 2 }}
+  policyTypes: [Ingress, Egress]
+  ingress: []
+  egress:
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            except: [10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 169.254.0.0/16, 100.64.0.0/10]
+      ports:
+        - {protocol: TCP, port: 443}
+{{- end }}
+{{- if .Values.awsEndpointCidrs }}
+{{- /* The pods that call AWS APIs reach them where the interface endpoints' private DNS puts their names, inside the
+VPC, and get their credentials from the EKS Pod Identity Agent on the node: the Collector and Prometheus write to
+the workspace (and the Collector to CloudWatch Logs and X-Ray), ACK's controller manages its rules. */}}
+{{- $callers := list "collector" "prometheus" }}
+{{- if eq (toString .Values.rules.target) "amp" }}
+{{- $callers = append $callers "ack" }}
+{{- end }}
+{{- range $callers }}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-aws-apis-{{ . }}
+  namespace: {{ $.Release.Namespace }}
+spec:
+  {{- include "svp-observability.selector" (dict "root" $ "name" .) | nindent 2 }}
+  policyTypes: [Egress]
+  egress:
+    - to:
+        {{- range $.Values.awsEndpointCidrs }}
+        - ipBlock:
+            cidr: {{ . }}
+        {{- end }}
+      ports:
+        - {protocol: TCP, port: 443}
+    - to:
+        - ipBlock:
+            cidr: 169.254.170.23/32
+      ports:
+        - {protocol: TCP, port: 80}
+{{- end }}
+{{- end }}

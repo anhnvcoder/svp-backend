@@ -86,6 +86,15 @@
         "errorRatio": {"type": "number"}
       }
     },
+    "canaryPrometheus": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["address", "sigv4Region"],
+      "properties": {
+        "address": {"description": "http(s) URL with no trailing slash.", "type": "string", "pattern": "^https?://[^\\s/]+(/\\S*[^\\s/])?$"},
+        "sigv4Region": {"description": "Empty, or an AWS region.", "type": "string", "pattern": "^([a-z]{2}(-[a-z]+)+-[0-9]+)?$"}
+      }
+    },
     "podAnnotations": {"$ref": "#/definitions/stringMap"},
     "migrate": {"type": "boolean"},
     "resources": {"$ref": "#/definitions/resources"},

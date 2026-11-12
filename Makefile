@@ -189,19 +189,30 @@ slo: ## Generate the SLO recording and burn-rate alert rules from deploy/observa
 # files at the paths compose mounts them.
 # renovate: datasource=docker depName=otel/opentelemetry-collector-contrib
 OTELCOL_IMAGE := otel/opentelemetry-collector-contrib:0.164.0@sha256:340c9ca6a36617084c6661bdc4f0fe92b7cda5a805d61673ec8db375fddc522b
-# The config reads the Kafka scraper's broker, password and CA from the environment, with no default (a default would
-# hide a missing setting); validate needs placeholders only, since it reaches no broker.
+# The config reads the Kafka scraper's broker, password and CA, and on EKS the region, workspace and log group, from the
+# environment, with no default (a default would hide a missing setting); validate needs placeholders only, since it
+# reaches nothing.
 OTELCOL := env -u DOCKER_DEFAULT_PLATFORM docker run --rm --network none \
 	-e SVP_KAFKA_OTELCOL_PASSWORD=validate -e SVP_OTELCOL_KAFKA_BROKERS=kafka:9096 -e SVP_OTELCOL_KAFKA_CA_FILE= \
+	-e SVP_OTELCOL_REGION=ap-southeast-1 -e SVP_OTELCOL_LOG_GROUP=/svp/validate/otel \
+	-e SVP_OTELCOL_AMP_ENDPOINT=https://aps-workspaces.ap-southeast-1.amazonaws.com/workspaces/ws-validate/ \
 	-v $(CURDIR)/deploy/observability/otelcol/config.yaml:/etc/otelcol/config.yaml:ro \
 	-v $(CURDIR)/deploy/observability/elastic/otelcol-config.yaml:/etc/otelcol/elastic.yaml:ro \
 	-v $(CURDIR)/deploy/observability/otelcol/k8s-config.yaml:/etc/otelcol/k8s.yaml:ro \
+	-v $(CURDIR)/deploy/observability/otelcol/k8s-k3d.yaml:/etc/otelcol/k8s-k3d.yaml:ro \
+	-v $(CURDIR)/deploy/observability/otelcol/k8s-eks.yaml:/etc/otelcol/k8s-eks.yaml:ro \
 	$(OTELCOL_IMAGE)
+# A SigV4 extension fetches credentials when it is checked, which needs a network or credentials. For validate only,
+# each reads a web identity from a file instead (any file, a made-up role), which fetches nothing until a request.
+OTELCOL_WEB_IDENTITY := {assume_role: {arn: validate, web_identity_token_file: /etc/otelcol/k8s-eks.yaml}}
+OTELCOL_SIGV4_OFFLINE := yaml:extensions: {sigv4auth/aps: $(OTELCOL_WEB_IDENTITY), \
+	sigv4auth/logs: $(OTELCOL_WEB_IDENTITY), sigv4auth/xray: $(OTELCOL_WEB_IDENTITY)}
 
-otelcol-validate: ## Validate the Collector configs with the pinned Collector: obs, obs-elastic (the obs file with the Elastic file merged over it) and the cluster's (k8s-config.yaml)
+otelcol-validate: ## Validate the Collector configs with the pinned Collector: obs, obs-elastic (the obs file with the Elastic file merged over it) and the cluster's (k8s-config.yaml with each platform's destination file merged over it)
 	$(OTELCOL) validate --config=/etc/otelcol/config.yaml
 	$(OTELCOL) validate --config=/etc/otelcol/config.yaml --config=/etc/otelcol/elastic.yaml
-	$(OTELCOL) validate --config=/etc/otelcol/k8s.yaml
+	$(OTELCOL) validate --config=/etc/otelcol/k8s.yaml --config=/etc/otelcol/k8s-k3d.yaml
+	$(OTELCOL) validate --config=/etc/otelcol/k8s.yaml --config=/etc/otelcol/k8s-eks.yaml --config='$(OTELCOL_SIGV4_OFFLINE)'
 
 fmt-check: ## Fail and list the files that gofmt would change (generated code excluded)
 	@out=$$(find . -name '*.go' -not -path './gen/*' -not -path './.roster/*' -print0 \

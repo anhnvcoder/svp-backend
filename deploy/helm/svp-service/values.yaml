@@ -52,6 +52,13 @@ canary: false
 # p99 in ms the canary must stay under; errorRatio, the share of 5xx among its responses that are not 4xx it must stay
 # under. Required with canary set; the release's values file says why its numbers.
 canaryLimits: {}
+# -- Prometheus the canary's analysis queries. address: its HTTP API, no trailing slash (Argo Rollouts appends
+# /api/v1/query); on EKS the query endpoint of the env's Amazon Managed Service for Prometheus workspace. sigv4Region:
+# empty sends queries unsigned; set, the controller signs them with SigV4 in that region with its own credentials (EKS
+# Pod Identity), which Argo Rollouts does only for an address on aps-workspaces.
+canaryPrometheus:
+  address: http://kps-prometheus.svp-obs:9090
+  sigv4Region: ""
 
 # -- Annotations of the pod template. A changed value makes a new revision without a new image: the canary drill of the
 # lab changes one to run a canary of the code already running.

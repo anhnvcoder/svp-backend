@@ -1,0 +1,81 @@
+{{- /* MutatingPolicy svp-registry-mirror: rewrites the image prefix of each container of a new pod by the first rule of
+registryMirror.rules, longest from first, so that nodes pull from a mirror (on eks the ECR registry of the account:
+pull-through cache for third-party upstreams, release repositories for the project's images). No rule: no policy. */}}
+{{- $rules := .Values.registryMirror.rules }}
+{{- if not (kindIs "slice" $rules) }}
+{{- fail "registryMirror.rules must be a list of {from, to}" }}
+{{- end }}
+{{- if $rules }}
+{{- $froms := list }}
+{{- $literals := list }}
+{{- range $r := $rules }}
+{{- if not (kindIs "map" $r) }}
+{{- fail (printf "registryMirror.rules: %v is not a {from, to} map" $r) }}
+{{- end }}
+{{- range $key := list "from" "to" }}
+{{- $v := get $r $key }}
+{{- if not (and (kindIs "string" $v) (regexMatch "^[a-z0-9.:_-]+(/[a-z0-9._-]+)*/$" $v)) }}
+{{- fail (printf "registryMirror.rules: %s %v must be a registry host and path ending in /, nothing a CEL string cannot hold" $key $v) }}
+{{- end }}
+{{- end }}
+{{- if has $r.from $froms }}
+{{- fail (printf "registryMirror.rules: two rules rewrite %s" $r.from) }}
+{{- end }}
+{{- $froms = append $froms $r.from }}
+{{- $literals = append $literals (printf "{'from': '%s', 'to': '%s'}" $r.from $r.to) }}
+{{- end }}
+apiVersion: policies.kyverno.io/v1
+kind: MutatingPolicy
+metadata:
+  name: svp-registry-mirror
+spec:
+  # Kyverno down: pods are created with their images unchanged and pull from the upstream registry. Namespace svp still
+  # admits only the images svp-images verifies, whose webhook fails closed.
+  failurePolicy: Ignore
+  # Pods only, never their controllers: a Deployment rewritten in the cluster would differ from git for Argo CD.
+  autogen:
+    podControllers:
+      controllers: []
+  matchConstraints:
+    # Kyverno's own pods pull from upstream, so a mirror out of reach cannot keep Kyverno from starting. Kyverno also
+    # leaves kube-system out of every webhook it registers (namespaceSelector of its ConfigMap).
+    namespaceSelector:
+      matchExpressions:
+        - key: kubernetes.io/metadata.name
+          operator: NotIn
+          values: [kyverno]
+    # CREATE only: an image set later on a running pod, or a container kubectl debug adds, is pulled as written.
+    resourceRules:
+      - apiGroups: [""]
+        apiVersions: [v1]
+        operations: [CREATE]
+        resources: [pods]
+  variables:
+    - name: rules
+      expression: >-
+        [{{ join ", " $literals }}]
+    # Each image of the pod with the JSON pointer of its field.
+    - name: refs
+      expression: >-
+        {{- range $field := list "containers" "initContainers" "ephemeralContainers" }}
+        {{ if ne $field "containers" }}+ {{ end }}lists.range(size(object.spec.?{{ $field }}.orValue([]))).map(i, {'path': '/spec/{{ $field }}/' + string(i) + '/image',
+          'image': string(object.spec.{{ $field }}[i].image)})
+        {{- end }}
+    # Docker's reading of a name: the first part is a host when it has a dot or a colon or is localhost, else the name
+    # is on Docker Hub (docker.io/, with library/ before a name of one part). An image no rule matches stays as written.
+    - name: mirrored
+      expression: >-
+        variables.refs.map(ref, cel.bind(first, ref.image.split('/')[0],
+          cel.bind(hosted, ref.image.contains('/') && (first.contains('.') || first.contains(':') || first == 'localhost'),
+          cel.bind(host, !hosted || first in ['index.docker.io', 'registry-1.docker.io'] ? 'docker.io' : first,
+          cel.bind(path, hosted ? ref.image.substring(size(first) + 1) : ref.image,
+          cel.bind(name, host + '/' + (host == 'docker.io' && !path.contains('/') ? 'library/' + path : path),
+          cel.bind(hits, variables.rules.filter(r, name.startsWith(r.from)),
+          {'path': ref.path, 'from': ref.image, 'to': size(hits) == 0 ? ref.image :
+            cel.bind(r, hits.filter(r, hits.all(o, size(o.from) <= size(r.from)))[0], r.to + name.substring(size(r.from)))})))))))
+  mutations:
+    - patchType: JSONPatch
+      jsonPatch:
+        expression: >-
+          variables.mirrored.filter(m, m.to != m.from).map(m, JSONPatch{op: 'replace', path: m.path, value: m.to})
+{{- end }}

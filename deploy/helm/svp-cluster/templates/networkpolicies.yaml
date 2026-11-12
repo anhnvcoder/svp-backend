@@ -78,8 +78,8 @@ spec:
 {{- end }}
 {{- /* Kyverno's admission controller. In: the API server's webhook calls, from nodeSubnet and the VXLAN addresses
 (kyverno.vxlanAddresses), no pod; on EKS nodeSubnet is the VPC's CIDR, so every pod of the VPC is let in on the
-webhook port too (accepted: the project's namespaces deny egress by default). Out: TCP 443 to public addresses
-only, for the registries and Sigstore's TUF repository; every private range is left out (kyverno.privateRanges). */}}
+webhook port too (accepted: the project's namespaces deny egress by default). Out: TCP 443 to public addresses, for
+the registries and Sigstore's TUF repository; no private range (kyverno.privateRanges) but awsEndpointCidrs. */}}
 ---
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
@@ -159,6 +159,60 @@ spec:
   podSelector:
     matchLabels:
       app.kubernetes.io/name: external-secrets
+  policyTypes: [Egress]
+  egress:
+    - to:
+        - ipBlock:
+            cidr: 169.254.170.23/32
+      ports:
+        - protocol: TCP
+          port: 80
+{{- end }}
+{{- if .Values.awsEndpointCidrs }}
+{{- /* The callers of AWS APIs reach them where the interface endpoints' private DNS puts their names, in addresses
+privateRanges leaves out of allow-public-https. The pods there do not let in what their own policies do not name. */}}
+{{- $callers := list (dict "namespace" .Values.kyverno.namespace
+  "labels" (dict "app.kubernetes.io/instance" "kyverno" "app.kubernetes.io/component" "admission-controller")) }}
+{{- if and $es.enabled (eq $es.store "aws") }}
+{{- $callers = append $callers (dict "namespace" $es.controller.namespace
+  "labels" (dict "app.kubernetes.io/name" "external-secrets")) }}
+{{- end }}
+{{- range $callers }}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-aws-endpoints
+  namespace: {{ .namespace }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- toYaml .labels | nindent 6 }}
+  policyTypes: [Egress]
+  egress:
+    - to:
+        {{- range $.Values.awsEndpointCidrs }}
+        - ipBlock:
+            cidr: {{ . }}
+        {{- end }}
+      ports:
+        - protocol: TCP
+          port: 443
+{{- end }}
+---
+# Kyverno's admission controller reads images and their signatures from ECR with the credentials of its EKS Pod
+# Identity, from the agent on the node, as External Secrets' controller does (allow-pod-identity-agent of its
+# namespace).
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-pod-identity-agent
+  namespace: {{ .Values.kyverno.namespace }}
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/instance: kyverno
+      app.kubernetes.io/component: admission-controller
   policyTypes: [Egress]
   egress:
     - to:

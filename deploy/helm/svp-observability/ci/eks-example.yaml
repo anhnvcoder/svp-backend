@@ -1,6 +1,6 @@
-# Example values of an EKS cluster whose Postgres is Amazon RDS and whose Kafka is Amazon MSK, to render and check the
-# external modes (helm template -f this file). Placeholders only: the real CIDRs (the database subnets) come from the
-# cluster's Terraform outputs.
+# Example values of an EKS cluster whose Postgres is Amazon RDS, whose Kafka is Amazon MSK and whose telemetry, rules
+# and dashboards go to AWS's managed services, to render and check those modes (helm template -f this file).
+# Placeholders only: the real CIDRs, workspace, topic and Grafana come from the cluster's Terraform outputs.
 postgres:
   mode: external
   external:
@@ -9,3 +9,26 @@ kafka:
   mode: external
   external:
     cidrs: [10.0.48.0/24, 10.0.49.0/24]
+
+# Prometheus runs in agent mode: the operator's pods of a PrometheusAgent.
+pods:
+  prometheus: {app.kubernetes.io/name: prometheus-agent, app.kubernetes.io/instance: kps-prometheus}
+collector:
+  destinations: eks
+  backends: []
+  podMonitor: true
+rules:
+  target: amp
+  amp:
+    workspaceId: ws-00000000-0000-0000-0000-000000000000
+    alarmTopicArn: arn:aws:sns:ap-southeast-1:000000000000:svp-stg-alarms
+    region: ap-southeast-1
+dashboards:
+  target: grafana-operator
+  grafana:
+    url: https://g-0000000000.grafana-workspace.ap-southeast-1.amazonaws.com
+    ampEndpoint: https://aps-workspaces.ap-southeast-1.amazonaws.com/workspaces/ws-00000000-0000-0000-0000-000000000000/
+    region: ap-southeast-1
+# The VPC's CIDR, where the interface endpoints are.
+awsEndpointCidrs:
+  - 10.0.0.0/16

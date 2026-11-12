@@ -33,6 +33,15 @@ deploy/ci/sources-test.sh puts each rule through a broken table. */}}
 {{- fail "files/sources.json must be a JSON object whose key sources lists at least one release source" }}
 {{- end }}
 {{- $sources := $table.sources }}
+{{- $release := .Values.releaseRegistry }}
+{{- if not (and (kindIs "string" $release) (regexMatch "^[a-z0-9.:_-]+(/[a-z0-9._-]+)*$" $release)) }}
+{{- fail (printf "releaseRegistry must be a registry host with an optional path, no trailing /, not %v" $release) }}
+{{- end }}
+{{- if not (kindIs "map" .Values.registryCredentials) }}
+{{- fail "registryCredentials must be a map: spec.credentials of the ImageValidatingPolicy" }}
+{{- end }}
+{{- /* Each source as the policy matches it: its imagePrefix with releaseRegistry for its host and owner. */}}
+{{- $rewritten := list }}
 {{- $names := list }}
 {{- $promoters := list }}
 {{- $perService := dict }}
@@ -71,6 +80,7 @@ still pin an older commit whose table has such sources, which the scripts read a
 {{- if not (regexMatch "^[a-z0-9.:_/-]+/$" $s.imagePrefix) }}
 {{- fail (printf "files/sources.json: imagePrefix of source %s must end in /: it is the repository prefix of its images" $s.name) }}
 {{- end }}
+{{- $rewritten = append $rewritten (merge (dict "imagePrefix" (regexReplaceAll "^[^/]+/[^/]+/" $s.imagePrefix (printf "%s/" $release))) $s) }}
 {{- if has $s.name $names }}
 {{- fail (printf "files/sources.json: two sources are named %s" $s.name) }}
 {{- end }}
@@ -97,6 +107,7 @@ still pin an older commit whose table has such sources, which the scripts read a
 {{- $_ := set $perService $svc $count }}
 {{- end }}
 {{- end }}
+{{- $sources = $rewritten }}
 {{- range $a := $sources }}
 {{- range $b := $sources }}
 {{- if and (ne $a.name $b.name) (hasPrefix $a.imagePrefix $b.imagePrefix) }}
@@ -182,6 +193,10 @@ spec:
     mutateDigest: false
     verifyDigest: true
     required: true
+  {{- with .Values.registryCredentials }}
+  credentials:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
   # One attestor per release source, named after it: the keyless identity of its repository's workflow on main.
   attestors:
     {{- range $sources }}

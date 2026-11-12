@@ -269,6 +269,17 @@ revision_of() {
 code_of() {
   if [ -n "$worktree" ]; then echo "$repo_root"; else echo "$tmp/code/$(revision_of "$1")"; fi
 }
+# collector_config_sha256 REV: the sha256 of the Collector's config files at REV, the shared one then each platform's
+# destination file, concatenated; a file REV does not hold adds nothing (a commit from before the destination files
+# gives the checksum of k8s-config.yaml alone, as it was then).
+collector_config_sha256() {
+  local f
+  for f in k8s-config k8s-k3d k8s-eks; do
+    if git -C "$repo_root" cat-file -e "$1:deploy/observability/otelcol/$f.yaml" 2>/dev/null; then
+      git -C "$repo_root" show "$1:deploy/observability/otelcol/$f.yaml"
+    fi
+  done | shasum -a 256 | cut -d' ' -f1
+}
 # label_of ENV: how messages name the charts of ENV.
 label_of() {
   if [ -n "$worktree" ]; then echo "the working tree"; else revision_of "$1" | cut -c1-12; fi
@@ -346,7 +357,7 @@ for env in $envs; do
   fi
   charts=$(jq -c --arg e "$env" --arg r "$rev" \
     --arg psv "$(git -C "$repo_root" show "$rev:deploy/helm/svp-cluster/values.yaml" | sed -n 's/^podSecurityVersion: *//p')" \
-    --arg sha "$(git -C "$repo_root" show "$rev:deploy/observability/otelcol/k8s-config.yaml" | shasum -a 256 | cut -d' ' -f1)" \
+    --arg sha "$(collector_config_sha256 "$rev")" \
     '. + {($e): {revision: $r, podSecurityVersion: $psv, collectorConfigSha256: $sha}}' <<<"$charts")
 done
 

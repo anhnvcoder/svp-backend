@@ -34,3 +34,15 @@ imageVerification:
 # on a drill label, case f with a shorter age): the policy's name, and the pods it applies to within the namespace.
 name: svp-images
 objectSelector: {}
+
+# Policy svp-registry-mirror: image prefixes each pod's images are rewritten from and to at creation ({from, to}, both
+# ending in /; the longest matching from wins, Docker Hub names read as docker.io/<namespace>/<name> first), in every
+# namespace but kyverno. Empty renders no policy.
+registryMirror:
+  rules: []
+# Host and owner that replace those of each imagePrefix of files/sources.json in svp-images: the registry the release
+# images run from once svp-registry-mirror has rewritten them. Signatures and attestations are read there.
+releaseRegistry: ghcr.io/anhnvcoder
+# spec.credentials of svp-images, how Kyverno logs in to releaseRegistry (e.g. {providers: [amazon]} for ECR); empty
+# reads it anonymously.
+registryCredentials: {}

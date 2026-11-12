@@ -9,13 +9,24 @@ s3:
 storageClass:
   enabled: true
 
+# Entries svp/stg/<entry> of AWS Secrets Manager, each namespace's store with an IAM role of its own.
 externalSecrets:
   enabled: true
-  store: kubernetes
+  store: aws
+  prefix: svp/stg/
+  aws:
+    region: ap-southeast-1
+    roles:
+      svp: arn:aws:iam::000000000000:role/svp-stg-external-secrets-svp
+      svp-data: arn:aws:iam::000000000000:role/svp-stg-external-secrets-svp-data
+      svp-obs: arn:aws:iam::000000000000:role/svp-stg-external-secrets-svp-obs
+      keda: arn:aws:iam::000000000000:role/svp-stg-external-secrets-keda
+      argocd: arn:aws:iam::000000000000:role/svp-stg-external-secrets-argocd
   postgres: svp-stg-pg.rds.example:5432
   valkey: master.svp-stg.cache.example:6379
   # Kafka is Amazon MSK and Valkey Amazon ElastiCache: no broker users, ACL file or local CA in the cluster.
   localKafkaValkey: false
+  grafanaOperator: true
 
 # The VPC's CIDR, the first address of the cluster's service range, and the port of EKS's API server.
 nodeSubnet: 10.0.0.0/16
@@ -25,6 +36,9 @@ kubeAPIPort: 443
 # VPC too: templates/networkpolicies.yaml says why that is accepted); no VXLAN on EKS.
 kyverno:
   vxlanAddresses: []
+# The interface endpoints' addresses, in the VPC.
+awsEndpointCidrs:
+  - 10.0.0.0/16
 
 wildcardHost: "*.stg.aws.svp.example"
 apexHost: stg.aws.svp.example

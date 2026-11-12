@@ -17,12 +17,24 @@ webhook, which would check them again, is off.
 It would be the one webhook in a namespace that denies all traffic by default, so the API server's calls to it would
 need a NetworkPolicy of their own.
 */}}
+{{- $target := toString .Values.rules.target }}
+{{- if not (has $target (list "prometheus" "amp")) }}
+{{- fail (printf "rules.target is %q: prometheus (PrometheusRules) or amp (Amazon Managed Service for Prometheus)" $target) }}
+{{- end }}
+{{- if eq $target "amp" }}
+{{- range $key := list "workspaceId" "alarmTopicArn" "region" }}
+{{- if not (index $.Values.rules.amp $key) }}
+{{- fail (printf "rules.target amp needs rules.amp.%s" $key) }}
+{{- end }}
+{{- end }}
+{{- end }}
 {{- range $name := list "slo-generated" "svp-alerts" }}
 {{- $path := printf "files/rules/%s.yaml" $name }}
 {{- $rules := $.Files.Get $path | fromYaml }}
 {{- if or (hasKey $rules "Error") (not $rules.groups) }}
 {{- fail (printf "%s is missing, not YAML or has no groups: the symlink into deploy/observability/prometheus/rules/ is broken?" $path) }}
 {{- end }}
+{{- if eq $target "prometheus" }}
 ---
 apiVersion: monitoring.coreos.com/v1
 kind: PrometheusRule
@@ -32,4 +44,62 @@ metadata:
 spec:
   groups:
     {{- toYaml $rules.groups | nindent 4 }}
+{{- else }}
+{{- /* The rules assume the 15 s evaluation of the cluster's Prometheus (comment atop svp-alerts.yaml); a workspace's
+ruler runs a group at its own interval, 30 s by default, so every group names 15 s. */}}
+{{- range $rules.groups }}
+{{- $_ := set . "interval" "15s" }}
+{{- end }}
+---
+apiVersion: prometheusservice.services.k8s.aws/v1alpha1
+kind: RuleGroupsNamespace
+metadata:
+  name: {{ $name }}
+  namespace: {{ $.Release.Namespace }}
+  annotations:
+    {{- include "svp-observability.ackAnnotations" $ | nindent 4 }}
+spec:
+  name: {{ $name }}
+  workspaceID: {{ $.Values.rules.amp.workspaceId | quote }}
+  configuration: |
+    {{- dict "groups" $rules.groups | toYaml | nindent 4 }}
+{{- end }}
+{{- end }}
+{{- if eq $target "amp" }}
+---
+{{- /* The workspace's Alertmanager: every alert of the rules above, page or ticket, to the SNS topic the alarms of the
+managed services use. Subject and message are Alertmanager templates, kept out of Helm's by the raw strings. */}}
+apiVersion: prometheusservice.services.k8s.aws/v1alpha1
+kind: AlertManagerDefinition
+metadata:
+  name: svp-alerts
+  namespace: {{ .Release.Namespace }}
+  annotations:
+    {{- include "svp-observability.ackAnnotations" . | nindent 4 }}
+spec:
+  workspaceID: {{ .Values.rules.amp.workspaceId | quote }}
+  configuration: |
+    alertmanager_config: |
+      route:
+        receiver: sns
+        group_by: [alertname, severity]
+        routes:
+          - receiver: sns
+            matchers: ['severity="page"']
+            repeat_interval: 4h
+          - receiver: sns
+            matchers: ['severity="ticket"']
+            repeat_interval: 24h
+      receivers:
+        - name: sns
+          sns_configs:
+            - topic_arn: {{ .Values.rules.amp.alarmTopicArn }}
+              sigv4:
+                region: {{ .Values.rules.amp.region }}
+              subject: {{`'[{{ .CommonLabels.severity }}] {{ .CommonLabels.alertname }}'`}}
+              message: |
+                {{`{{ range .Alerts }}{{ .Status }}: {{ .Labels.alertname }} ({{ .Labels.severity }})`}}
+                {{`{{ .Annotations.summary }}`}}
+                {{`Runbook: {{ .Annotations.runbook_url }}`}}
+                {{`{{ end }}`}}
 {{- end }}

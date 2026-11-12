@@ -726,9 +726,16 @@ Các dòng dưới đây nguyên văn từ ADR, rút ra để ADR không vượt
   | `kafkaBrokers` | Chuỗi `host:9096,host:9096,…` (một mục mỗi broker, dấu phẩy, không khoảng trắng; output `bootstrap_brokers` của module `msk`): địa chỉ broker của mọi client Kafka trên eks (`KAFKA_BROKERS` của service, Job `kafka-init`, `svp-ops`; Collector, KEDA); thêm bởi [0053](../0053-msk-elasticache-valkey.md) |
   | `valkeyHost` | Tên host không cổng của ElastiCache (output `primary_endpoint_address` của module `elasticache`): host của `REDIS_URL` của gateway, feed-service, web (placeholder `${valkey}` của template ExternalSecret trong `svp-cluster`), `VALKEY_HOST` của `svp-ops`; thêm bởi [0053](../0053-msk-elasticache-valkey.md) |
 
+- **Ai ghi:** output `cluster_values` của `aws/envs/<env>`, qua `make eks-gitops-up CLUSTER_VALUES=<file>` thành `helm.valuesObject.cluster` của root. **Ai đọc:**
+  mẫu `platforms/eks/*.values.tpl`; check render bằng `deploy/ci/cluster-values.example.yaml`, file trong git đặt `cluster` thì đỏ. Thêm khoá thì sửa cả bốn nơi: output Terraform, mẫu của `svp-gitops`, fixture, bảng này.
+
 ### 9. Dữ liệu
 
 - **RDS**, tiếp sau "không superuser [N36]": `deploy/postgres/bootstrap.sql` chạy được dưới quyền đó, Job `pg-bootstrap` nối `PGSSLMODE=require`.
+
+- **S3:** bucket `uploads`, `media` tên `<tiền tố>-uploads-<hậu tố ngẫu nhiên>`, chặn public, `BucketOwnerEnforced`, SSE-S3, CORS theo bucket như local, lifecycle
+  `uploads` theo quyết định 2026-10-18 cộng huỷ multipart dở sau 1 ngày; stg `force_destroy`; policy IAM dịch đúng `deploy/s3/*-policy.json`; `If-None-Match: *` [N33],
+  CRC32 full-object [N34]. **CloudFront:** OAC, viewer HTTPS, cache theo `Cache-Control`, `PriceClass_200` [N10]; URL HLS `https://<mediaDomain>/` + khoá object.
 
 ### 12. Chi phí 7a (Singapore)
 

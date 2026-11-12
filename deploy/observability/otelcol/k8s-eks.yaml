@@ -1,0 +1,146 @@
+# Destinations of the Collector on EKS, merged over k8s-config.yaml (the receivers and processors): metrics to Amazon
+# Managed Service for Prometheus by remote write, logs to CloudWatch Logs and spans to X-Ray over their OTLP endpoints,
+# each request signed with SigV4 by the credentials of the pod's EKS Pod Identity. The values of the cluster come from
+# the environment (SVP_OTELCOL_*), set by the values of release otel-collector on that platform.
+
+# Design notes: docs/explanation/observability.md.
+
+extensions:
+  # The chart's liveness and readiness probes call :13133 on the pod's address (from the node, which
+  # no NetworkPolicy blocks); no policy opens it to any pod.
+  health_check:
+    endpoint: 0.0.0.0:13133
+  # The service is set: the extension cannot tell it from the host of an interface endpoint's own DNS name.
+  sigv4auth/aps:
+    region: ${env:SVP_OTELCOL_REGION}
+    service: aps
+  sigv4auth/logs:
+    region: ${env:SVP_OTELCOL_REGION}
+    service: logs
+  sigv4auth/xray:
+    region: ${env:SVP_OTELCOL_REGION}
+    service: xray
+
+# The service graph the panels of svp-pipeline.json read (traces_service_graph_*), which Tempo's metrics-generator
+# makes on k3d: same names and labels (client, server, connection_type), and Tempo's attributes for virtual nodes.
+# It pairs the client and server spans of an edge in memory, so the Collector runs as one replica.
+connectors:
+  service_graph:
+    virtual_node_peer_attributes: [peer.service, db.name, db.system, db.system.name]
+    database_name_attributes: [db.namespace, db.name, db.system, db.system.name]
+
+# Queues and retries as in k8s-k3d.yaml: bounded in memory, dropped after a minute of retries. The remote write
+# exporter has no byte sizer (its remote_write_queue counts batches): 16 batches of at most 1024 items stay within
+# about what one 4 MiB queue of the others holds.
+exporters:
+  # Names and labels as the OTLP receiver of Prometheus on k3d gives them (the same translator): suffixes, the 27
+  # resource attributes of promoteResourceAttributes as labels (same list, same order), no scope labels.
+  prometheus_remote_write/amp:
+    endpoint: ${env:SVP_OTELCOL_AMP_ENDPOINT}api/v1/remote_write
+    auth:
+      authenticator: sigv4auth/aps
+    translation_strategy: UnderscoreEscapingWithSuffixes
+    disable_scope_info: true
+    resource_constant_labels:
+      included:
+        - service.instance.id
+        - service.name
+        - service.namespace
+        - service.version
+        - cloud.availability_zone
+        - cloud.region
+        - container.name
+        - deployment.environment
+        - deployment.environment.name
+        - k8s.cluster.name
+        - k8s.container.name
+        - k8s.cronjob.name
+        - k8s.daemonset.name
+        - k8s.deployment.name
+        - k8s.job.name
+        - k8s.namespace.name
+        - k8s.node.name
+        - k8s.pod.name
+        - k8s.replicaset.name
+        - k8s.statefulset.name
+        - host.name
+        - postgresql.database.name
+        - postgresql.schema.name
+        - postgresql.table.name
+        - postgresql.index.name
+        - database
+        - kafka.cluster.alias
+    remote_write_queue:
+      enabled: true
+      queue_size: 16
+    retry_on_failure:
+      enabled: true
+      initial_interval: 1s
+      max_interval: 10s
+      max_elapsed_time: 60s
+  # The log group and stream exist already (the endpoint writes into them, it creates neither).
+  otlp_http/logs:
+    logs_endpoint: https://logs.${env:SVP_OTELCOL_REGION}.amazonaws.com/v1/logs
+    headers:
+      x-aws-log-group: ${env:SVP_OTELCOL_LOG_GROUP}
+      x-aws-log-stream: otel-collector
+    compression: gzip
+    auth:
+      authenticator: sigv4auth/logs
+    sending_queue:
+      enabled: true
+      sizer: bytes
+      queue_size: 4194304
+    retry_on_failure:
+      enabled: true
+      initial_interval: 1s
+      max_interval: 10s
+      max_elapsed_time: 60s
+  otlp_http/xray:
+    traces_endpoint: https://xray.${env:SVP_OTELCOL_REGION}.amazonaws.com/v1/traces
+    auth:
+      authenticator: sigv4auth/xray
+    sending_queue:
+      enabled: true
+      sizer: bytes
+      queue_size: 4194304
+    retry_on_failure:
+      enabled: true
+      initial_interval: 1s
+      max_interval: 10s
+      max_elapsed_time: 60s
+
+service:
+  extensions: [health_check, sigv4auth/aps, sigv4auth/logs, sigv4auth/xray]
+  # The Collector's own metrics, as on k3d but scraped: its telemetry cannot sign requests and the workspace takes no
+  # OTLP, so the Prometheus agent scrapes :8888 (PodMonitor otel-collector of chart svp-observability). Suffixes,
+  # units, service_name and service_instance_id kept: the names the USE dashboard reads. They still arrive while the
+  # pipelines refuse data.
+  telemetry:
+    resource:
+      service.name: otelcol
+    metrics:
+      level: normal
+      readers:
+        - pull:
+            exporter:
+              prometheus:
+                host: 0.0.0.0
+                port: 8888
+                without_type_suffix: false
+                without_units: false
+                with_resource_constant_labels:
+                  included: [service.name, service.instance.id]
+  pipelines:
+    traces:
+      receivers: [otlp]
+      processors: [memory_limiter, attributes/scrub, resource/scrub, batch]
+      exporters: [otlp_http/xray, service_graph]
+    metrics:
+      receivers: [otlp, kafka_metrics, service_graph]
+      processors: [memory_limiter, attributes/scrub, resource/scrub, batch]
+      exporters: [prometheus_remote_write/amp]
+    logs:
+      receivers: [otlp]
+      processors: [memory_limiter, attributes/scrub, resource/scrub, batch]
+      exporters: [otlp_http/logs]

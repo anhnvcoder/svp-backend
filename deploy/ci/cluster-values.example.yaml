@@ -25,6 +25,17 @@ s3Cidrs:
 # Bootstrap brokers of Amazon MSK (host:9096 per broker, comma separated) and the primary endpoint of ElastiCache.
 kafkaBrokers: b-1.svp-stg.kafka.example:9096,b-2.svp-stg.kafka.example:9096
 valkeyHost: master.svp-stg.cache.example
+# Host of the env's private ECR registry, from the root env output of the registry module.
+ecrRegistry: 000000000000.dkr.ecr.ap-southeast-1.amazonaws.com
+# Workspace of Amazon Managed Service for Prometheus; its endpoint is the base of remote write and query.
+ampWorkspaceId: ws-00000000-0000-0000-0000-000000000000
+ampEndpoint: https://aps-workspaces.ap-southeast-1.amazonaws.com/workspaces/ws-00000000-0000-0000-0000-000000000000/
+# Log group of the application telemetry, from the root env output of the observability module.
+logGroup: /svp/stg/otel
+# Grafana managed workspace URL without a trailing slash, from the root env output of the observability module.
+grafanaUrl: https://g-0000000000.grafana-workspace.ap-southeast-1.amazonaws.com
+# SNS topic that the alarms module of the root env publishes to.
+alarmTopicArn: arn:aws:sns:ap-southeast-1:000000000000:svp-stg-alarms
 # Required map: IAM roles assumed by SecretStore of each namespace (svp, svp-data, svp-obs, keda, argocd).
 externalSecretsRoles:
   svp: arn:aws:iam::111111111111:role/svp-stg-external-secrets-svp

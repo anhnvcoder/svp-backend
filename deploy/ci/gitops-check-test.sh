@@ -853,6 +853,47 @@ else
   fail "values-check: an image file naming the repository of another service (exit $rc, want 1, '$want', no release verified):"$'\n'"$(sed 's/^/      /' <<<"$out")"
 fi
 
+# --- collectorConfigSha256: the Collector's files concatenated (k8s-config.yaml, k8s-k3d.yaml, k8s-eks.yaml), a file a
+# revision does not hold adding nothing. k3 holds k8s-config.yaml alone, k4 adds the two destination files, k5 changes
+# k8s-eks.yaml alone; origin/main moves to k5 for these cases, then back to k3.
+otelcol=$code/deploy/observability/otelcol
+printf 'exporters: {}\n' >"$otelcol/k8s-k3d.yaml"
+printf 'exporters: {}\n' >"$otelcol/k8s-eks.yaml"
+cg add -A && cg commit -q -m "the destination files"
+k4=$(cg rev-parse HEAD)
+printf 'exporters:\n  debug: {}\n' >"$otelcol/k8s-eks.yaml"
+cg commit -q -am "the EKS destination alone"
+k5=$(cg rev-parse HEAD)
+cg update-ref refs/remotes/origin/main "$k5"
+# sha_tree REV SHA: sources_tree with stg at REV (the releases of the new sources) and collectorConfigSha256 SHA.
+sha_tree() {
+  local t
+  t=$(sources_tree "$1" ghcr.io/anhnvcoder/svp-backend/ ghcr.io/anhnvcoder/svp-frontend/web)
+  sed -i.bak "s/^collectorConfigSha256:.*/collectorConfigSha256: $2/" "$t/envs/stg/charts.yaml" && rm "$t/envs/stg/charts.yaml.bak"
+  echo "$t"
+}
+sha_at() { (for f in "$@"; do cg show "$f"; done) | shasum -a 256 | cut -d' ' -f1; }
+alone=$(sha_at "$k3:deploy/observability/otelcol/k8s-config.yaml")
+sha4=$(sha_at "$k4:deploy/observability/otelcol/k8s-config.yaml" "$k4:deploy/observability/otelcol/k8s-k3d.yaml" \
+  "$k4:deploy/observability/otelcol/k8s-eks.yaml")
+sha5=$(sha_at "$k5:deploy/observability/otelcol/k8s-config.yaml" "$k5:deploy/observability/otelcol/k8s-k3d.yaml" \
+  "$k5:deploy/observability/otelcol/k8s-eks.yaml")
+charts_ok="podSecurityVersion and collectorConfigSha256 as that commit gives them"
+tree_check "collectorConfigSha256: a revision without the destination files, the sha256 of k8s-config.yaml alone" 0 \
+  "ok    envs/stg/charts.yaml: charts of ${k3:0:12} on origin/main, $charts_ok" "$(sha_tree "$k3" "$alone")"
+tree_check "collectorConfigSha256: the three files concatenated" 0 \
+  "ok    envs/stg/charts.yaml: charts of ${k5:0:12} on origin/main, $charts_ok" "$(sha_tree "$k5" "$sha5")"
+if [ "$sha4" != "$sha5" ]; then
+  ok "collectorConfigSha256: a change of k8s-eks.yaml alone changes the value"
+else
+  fail "collectorConfigSha256: a change of k8s-eks.yaml alone left the value $sha4"
+fi
+tree_check "collectorConfigSha256: the value of the files before k8s-eks.yaml changed is refused" 1 \
+  "envs/stg/charts.yaml: collectorConfigSha256 is '$sha4', deploy/observability/otelcol/k8s-config.yaml, k8s-k3d.yaml and k8s-eks.yaml at ${k5:0:12}, concatenated, have sha256 $sha5" \
+  "$(sha_tree "$k5" "$sha4")"
+cg update-ref refs/remotes/origin/main "$k3"
+cg checkout -q "$k3"
+
 # --- the author of a pull request (gitops-check.sh --tree DIR BASE, as a machine runs it: env -i, no CI job variables).
 # The tree becomes a git repository whose first commit a0 pins k3 in both environments; each case commits one change
 # on top of a0. The author is SVP_CHANGE_REQUEST_AUTHOR, or pull_request.user.login and sender.login of an event file.

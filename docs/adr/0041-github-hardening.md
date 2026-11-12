@@ -168,3 +168,4 @@ công cụ lint bảo mật workflow tính đến 2026-11-01).
 ### Chỉnh bởi
 
 - (h): [0047](0047-pr-title-required-condition.md): điều kiện để pr-title thành bắt buộc
+- (d), (f): [0062](0062-ecr-registry-ci-oidc.md): environment `ecr-rescan` ở `svp-backend`, `svp-frontend` (chỉ nhánh `main`, không người duyệt) cho job rescan nhận role OIDC rescan; `aws-actions/configure-aws-credentials` vào danh sách action của hai repo; secret repo `SVP_AWS_STG_ACCOUNT_ID`, `SVP_AWS_PRD_ACCOUNT_ID` do người học đặt.

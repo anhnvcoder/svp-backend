@@ -110,7 +110,7 @@ consecutiveErrorLimit: 2
 {{- $limits := .ctx.Values.canaryLimits }}
 {{- $ratio := required (printf "canaryLimits.errorRatio is empty for release %s" .ctx.Release.Name) $limits.errorRatio }}
 {{- $p99 := required (printf "canaryLimits.p99Ms is empty for release %s" .ctx.Release.Name) $limits.p99Ms }}
-{{- $prom := "http://kps-prometheus.svp-obs:9090" }}
+{{- $prom := .ctx.Values.canaryPrometheus }}
 # 5xx among the canary's responses that are not 4xx.
 - name: canary-5xx-ratio
   {{- include "svp-service.canaryCadence" .gate | nindent 2 }}
@@ -118,7 +118,12 @@ consecutiveErrorLimit: 2
   failureCondition: result[0] >= {{ $ratio }}
   provider:
     prometheus:
-      address: {{ $prom }}
+      address: {{ $prom.address }}
+      {{- with $prom.sigv4Region }}
+      authentication:
+        sigv4:
+          region: {{ . }}
+      {{- end }}
       timeout: 10
       query: |
         (
@@ -134,7 +139,12 @@ consecutiveErrorLimit: 2
   failureCondition: result[0] >= {{ $p99 }}
   provider:
     prometheus:
-      address: {{ $prom }}
+      address: {{ $prom.address }}
+      {{- with $prom.sigv4Region }}
+      authentication:
+        sigv4:
+          region: {{ . }}
+      {{- end }}
       timeout: 10
       query: |
         histogram_quantile(0.99, sum by (le) (rate(envoy_cluster_upstream_rq_time_bucket{envoy_cluster_name="{{ $c }}"}[1m])))

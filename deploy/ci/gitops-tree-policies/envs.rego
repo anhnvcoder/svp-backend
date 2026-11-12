@@ -101,7 +101,7 @@ deny contains msg if {
 
 derived := {
 	"podSecurityVersion": "deploy/helm/svp-cluster/values.yaml at %s pins '%s'",
-	"collectorConfigSha256": "deploy/observability/otelcol/k8s-config.yaml at %s has sha256 %s",
+	"collectorConfigSha256": "deploy/observability/otelcol/k8s-config.yaml, k8s-k3d.yaml and k8s-eks.yaml at %s, concatenated, have sha256 %s",
 }
 
 deny contains msg if {
