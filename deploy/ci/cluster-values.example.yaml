@@ -10,6 +10,11 @@ dbCidrs:
   - 10.0.48.0/24
   - 10.0.49.0/24
 domain: stg.svp.example
+# Target group of the internal ALB in front of Envoy, and the CIDRs of its edge subnets.
+edgeTargetGroupArn: arn:aws:elasticloadbalancing:ap-southeast-1:000000000000:targetgroup/svp-stg-envoy/0000000000000000
+edgeCidrs:
+  - 10.0.240.0/23
+  - 10.0.242.0/23
 hostedZoneId: Z00000000000000000000
 acmeEmail: acme@svp.example
 rdsAddress: svp-stg.000000000000.ap-southeast-1.rds.amazonaws.com

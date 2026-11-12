@@ -729,3 +729,8 @@ Các dòng dưới đây nguyên văn từ ADR, rút ra để ADR không vượt
 ### 9. Dữ liệu
 
 - **RDS**, tiếp sau "không superuser [N36]": `deploy/postgres/bootstrap.sql` chạy được dưới quyền đó, Job `pg-bootstrap` nối `PGSSLMODE=require`.
+
+### 12. Chi phí 7a (Singapore)
+
+Giá đọc 2026-10-31 [N1]–[N11], mỗi giờ: EKS $0,100; 3 node `m7g.large` $0,119 Spot ($0,306 on-demand); NAT $0,059 + $0,059/GB; IPv4 $0,015; NLB ~$0,031; RDS $0,055;
+EBS $0,016. **Tổng ~$0,40/giờ Spot, ~$0,58 on-demand; buổi 4 giờ ~$2,2–2,4 Spot, ~$3,0–3,1 on-demand, trần $5**; cố định ~$0,50/tháng; bảng có nguồn: phụ lục.

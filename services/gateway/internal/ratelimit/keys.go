@@ -12,9 +12,10 @@ import (
 
 // ClientIP is the id of the client's address for the IP classes: the address that from, the
 // one ClientAddr the whole gateway asks, finds for r. Its zero value takes the connection's
-// address (r.RemoteAddr) and ignores X-Forwarded-For, X-Real-IP, Forwarded and every other
-// header the client sets, since a client could put any address in them. An IPv6 address counts
-// as its /64, which a subscriber usually holds whole.
+// address (r.RemoteAddr) and ignores X-Forwarded-For, X-Real-IP, Forwarded, CloudFront-Viewer-Address
+// and every other header the client sets, since a client could put any address in them; a
+// configured ClientAddr reads X-Forwarded-For or one named header, and only on connections from a
+// trusted proxy. An IPv6 address counts as its /64, which a subscriber usually holds whole.
 func ClientIP(r *http.Request, from httpx.ClientAddr) string {
 	host := from.Of(r)
 	addr, err := netip.ParseAddr(host)

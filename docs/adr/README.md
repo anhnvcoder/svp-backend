@@ -150,6 +150,7 @@ Phụ lục: [`appendix/NNNN-<slug>.md`](appendix/NNNN-<slug>.md) (chỉ khi có
 | [0058](0058-managed-data-operations.md) | RDS, MSK, ElastiCache có CloudWatch alarm gửi SNS mã hoá CMK tới email, ngưỡng theo khuyến nghị của AWS; MSK tự tăng dung lượng broker; ElastiCache chờ cửa sổ bảo trì ở prd và gửi slow-log tới CloudWatch Logs | Chấp nhận |
 | [0059](0059-org-structure-guardrails.md) | AWS Organizations theo AWS SRA: account Log Archive và Security Tooling ở OU `Security`, `svp-prd`, `svp-stg` ở `Workloads/Prod`, `Workloads/NonProd`; baseline mỗi account áp từ management qua `OrganizationAccountAccessRole`; SCP, RCP data perimeter, declarative policy EC2, tag policy gắn root; root tập trung; permission set chỉ đọc; NACL không mở 22/3389 | Chấp nhận |
 | [0060](0060-org-detection-logging.md) | Phát hiện liên tục toàn org do `svp-security` quản (GuardDuty, Security Hub CSPM cấu hình tập trung với FSBP và CIS v5.0.0, Config ghi liên tục, Access Analyzer); trail, Config, flow log, log WAF, finding về account Log Archive; sự kiện bảo mật và finding nghiêm trọng qua EventBridge tới SNS email; Cost Anomaly Detection và tag phân bổ chi phí trong code | Chấp nhận |
+| [0061](0061-edge-cloudfront-waf-acm.md) | Edge của stg, prd: CloudFront có WAF trước web, API, media; web, API qua VPC origin tới ALB internal ở tầng subnet edge riêng, cert ACM thay Let's Encrypt, DNS edge do Terraform; gateway lấy IP client từ `CloudFront-Viewer-Address`; chỉ media của stg giữ gói Free; CAA hai zone, DNSSEC và query log zone prd | Chấp nhận |
 
 ## Chuẩn áp dụng
 

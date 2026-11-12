@@ -488,8 +488,9 @@ func TestTrustTraceContext(t *testing.T) {
 }
 
 func TestTrustedProxies(t *testing.T) {
+	const viewer = "CloudFront-Viewer-Address"
 	for _, tc := range []struct {
-		name, hops, cidrs string
+		name, hops, cidrs, header string
 		// wantErr names the variables the error must name; empty when the setting is valid.
 		wantErr []string
 		// remote, xff and want check the ClientAddr of a valid setting.
@@ -517,10 +518,21 @@ func TestTrustedProxies(t *testing.T) {
 		{name: "hops without ranges", hops: "1", wantErr: []string{"TRUSTED_PROXY_HOPS", "TRUSTED_PROXY_CIDRS"}},
 		{name: "ranges with hops zero", hops: "0", cidrs: "10.42.0.0/16", wantErr: []string{"TRUSTED_PROXY_HOPS", "TRUSTED_PROXY_CIDRS"}},
 		{name: "ranges with hops unset", cidrs: "10.42.0.0/16", wantErr: []string{"TRUSTED_PROXY_HOPS", "TRUSTED_PROXY_CIDRS"}},
+		{name: "header from the vpc range", cidrs: "10.0.0.0/16", header: viewer, remote: "10.0.3.7:5000", want: "192.0.2.77"},
+		{name: "header with hops zero", hops: "0", cidrs: "10.0.0.0/16", header: viewer, remote: "10.0.3.7:5000", want: "192.0.2.77"},
+		{name: "header in another case", cidrs: "10.0.0.0/16", header: "cloudfront-viewer-address", remote: "10.0.3.7:5000", want: "192.0.2.77"},
+		{name: "header, ipv4-mapped range", cidrs: "::ffff:10.0.0.0/112", header: viewer, remote: "10.0.3.7:5000", want: "192.0.2.77"},
+		{name: "header, connection outside the range", cidrs: "10.0.0.0/16", header: viewer, remote: "192.0.2.1:5000", want: "192.0.2.1"},
+		{name: "header without ranges", header: viewer, wantErr: []string{"TRUSTED_CLIENT_ADDRESS_HEADER", "TRUSTED_PROXY_CIDRS"}},
+		{name: "header with hops", hops: "1", cidrs: "10.0.0.0/16", header: viewer, wantErr: []string{"TRUSTED_CLIENT_ADDRESS_HEADER", "TRUSTED_PROXY_HOPS"}},
+		{name: "header with hops and no ranges", hops: "2", header: viewer, wantErr: []string{"TRUSTED_CLIENT_ADDRESS_HEADER"}},
+		{name: "header with hops not a number", hops: "abc", cidrs: "10.0.0.0/16", header: viewer, wantErr: []string{"TRUSTED_PROXY_HOPS"}},
+		{name: "header with a range that does not parse", cidrs: "10.0.0.0/33", header: viewer, wantErr: []string{"TRUSTED_PROXY_CIDRS"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Setenv("TRUSTED_PROXY_HOPS", tc.hops)
 			t.Setenv("TRUSTED_PROXY_CIDRS", tc.cidrs)
+			t.Setenv("TRUSTED_CLIENT_ADDRESS_HEADER", tc.header)
 			clientAddr, err := trustedProxies()
 			if len(tc.wantErr) > 0 {
 				if err == nil {
@@ -532,7 +544,7 @@ func TestTrustedProxies(t *testing.T) {
 					}
 				}
 				// A one-character value such as 0 or 1 is too short to tell apart from the text.
-				for _, value := range []string{tc.hops, tc.cidrs} {
+				for _, value := range []string{tc.hops, tc.cidrs, tc.header} {
 					if len(value) > 1 && strings.Contains(err.Error(), value) {
 						t.Errorf("error %q carries the value %q", err, value)
 					}
@@ -545,6 +557,7 @@ func TestTrustedProxies(t *testing.T) {
 			r := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/x", nil)
 			r.RemoteAddr = tc.remote
 			r.Header.Set("X-Forwarded-For", "203.0.113.7, 198.51.100.9")
+			r.Header.Set(viewer, "192.0.2.77:443")
 			if got := clientAddr.Of(r); got != tc.want {
 				t.Errorf("client address = %q, want %q", got, tc.want)
 			}

@@ -114,3 +114,9 @@ gỡ baseline stg. Gỡ prd: gỡ stg trước (zone prd chứa uỷ quyền c�
 - [N5] <https://github.com/kubernetes-sigs/external-dns/blob/v0.23.0/docs/flags.md>
 - [N6] <https://docs.aws.amazon.com/Route53/latest/DeveloperGuide/hosted-zones-migrating.html>
 - [N7] <https://docs.aws.amazon.com/Route53/latest/DeveloperGuide/migrate-dns-domain-in-use.html>
+
+## Thông tin thêm
+
+### Chỉnh bởi
+
+- §2, Hệ quả: [0061](0061-edge-cloudfront-waf-acm.md): không còn gì trong cluster ghi zone (ExternalDNS bỏ, cert-manager không còn DNS-01); bản ghi edge do Terraform của root env; đỉnh zone hai env có CAA cho CA của Amazon; zone prd ký DNSSEC (KSK bằng key KMS `us-east-1`, `DS` ở DNS cha) và ghi query log.

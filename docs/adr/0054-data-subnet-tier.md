@@ -80,3 +80,9 @@ một mỗi AZ ở prd) và bộ test giữ cờ route.
   `aws_route.database_nat_gateway`, `aws_route.database_internet_gateway`)
 - [N3] RDS trong VPC, subnet group cần subnet ở ít nhất hai AZ: <https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/USER_VPC.Scenarios.html>
 - [N4] MSK provisioned, mỗi subnet một AZ khác nhau: <https://docs.aws.amazon.com/msk/latest/developerguide/msk-create-cluster.html>
+
+## Thông tin thêm
+
+### Chỉnh bởi
+
+- Kết quả quyết định: [0061](0061-edge-cloudfront-waf-acm.md): bốn tầng: thêm tầng subnet edge (ALB internal của CloudFront VPC origin; không node, không pod) ở nửa sau khối 7; tầng public chỉ còn NAT, không tag `kubernetes.io/role/elb`, không nhận TCP 443 từ Internet.

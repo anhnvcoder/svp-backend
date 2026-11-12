@@ -20,8 +20,9 @@ import (
 	"github.com/anhnvcoder/svp-backend/internal/authtoken"
 )
 
-// FuzzClientAddr reads hops as two numbers: hops%3 is the proxies trusted, (hops/3)%3 the number
-// of X-Forwarded-For headers, taken from xff1 and xff2 in that order.
+// FuzzClientAddr reads hops as three numbers: hops%3 is the proxies trusted, (hops/3)%3 the number
+// of headers, taken from xff1 and xff2 in that order, and (hops/9)%2 the mode: 0 reads
+// X-Forwarded-For, 1 reads CloudFront-Viewer-Address (the header mode, where hops%3 plays no part).
 func FuzzClientAddr(f *testing.F) {
 	for _, s := range []struct {
 		remote, xff1, xff2 string
@@ -40,22 +41,43 @@ func FuzzClientAddr(f *testing.F) {
 		{"10.43.0.7:5000", "198.51.100.9", "", 1 + 3},
 		{"10.42.0.7", "198.51.100.9", "", 1 + 3},
 		{"pipe", "198.51.100.9", "", 1 + 3},
+		{"10.42.0.7:5000", "198.51.100.9:46532", "", 9 + 3},
+		{"10.42.0.7:5000", "2001:db8::9:60776", "", 9 + 3},
+		{"10.42.0.7:5000", "[2001:db8::9]:60776", "", 9 + 3},
+		{"10.42.0.7:5000", "::ffff:198.51.100.9:80", "", 9 + 3},
+		{"10.42.0.7:5000", "fe80::1%eth0:443", "", 9 + 3},
+		{"10.42.0.7:5000", "198.51.100.9", "", 9 + 3},
+		{"10.42.0.7:5000", "198.51.100.9:", "", 9 + 3},
+		{"10.42.0.7:5000", " 198.51.100.9:443 ", "", 9 + 3},
+		{"10.42.0.7:5000", "203.0.113.7:1, 198.51.100.9:443", "", 9 + 3},
+		{"10.42.0.7:5000", "203.0.113.7:1", "198.51.100.9:443", 9 + 6},
+		{"10.42.0.7:5000", "", "", 9},
+		{"192.0.2.1:5000", "198.51.100.9:443", "", 9 + 3},
 	} {
 		f.Add(s.remote, s.xff1, s.xff2, s.hops)
 	}
 	trusted := netip.MustParsePrefix("10.42.0.0/16")
 	f.Fuzz(func(t *testing.T, remoteAddr, xff1, xff2 string, hops uint8) {
+		headerMode := hops/9%2 == 1
+		name := "X-Forwarded-For"
 		c := NewClientAddr(int(hops%3), []netip.Prefix{trusted})
+		if headerMode {
+			name = "CloudFront-Viewer-Address"
+			c = NewClientAddrFromHeader(name, []netip.Prefix{trusted})
+		}
 		headers := []string{xff1, xff2}[:hops/3%3]
-		request := func(values ...string) *http.Request {
+		request := func(xff []string, values ...string) *http.Request {
 			r := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/x", nil)
 			r.RemoteAddr = remoteAddr
 			for _, v := range values {
+				r.Header.Add(name, v)
+			}
+			for _, v := range xff {
 				r.Header.Add("X-Forwarded-For", v)
 			}
 			return r
 		}
-		got := c.Of(request(headers...))
+		got := c.Of(request(nil, headers...))
 
 		host, _, err := net.SplitHostPort(remoteAddr)
 		if err != nil {
@@ -63,7 +85,7 @@ func FuzzClientAddr(f *testing.F) {
 		}
 		conn, err := netip.ParseAddr(host)
 		fromProxy := err == nil && trusted.Contains(conn.Unmap())
-		if (hops%3 == 0 || !fromProxy) && got != host {
+		if ((!headerMode && hops%3 == 0) || !fromProxy) && got != host {
 			t.Fatalf("Of = %q, want the connection's host %q (hops %d, trusted connection %v)", got, host, hops%3, fromProxy)
 		}
 		if got != host {
@@ -72,12 +94,24 @@ func FuzzClientAddr(f *testing.F) {
 				t.Fatalf("Of = %q, not an IP address in canonical form: %v", got, err)
 			}
 		}
+		if headerMode {
+			// Only the one value the proxy wrote names the client; a second value, in another
+			// header or after a comma, means someone else wrote one too.
+			if got != host && (len(headers) != 1 || strings.Contains(headers[0], ",")) {
+				t.Fatalf("Of = %q from %d %s headers %q, want the connection's host", got, len(headers), name, headers)
+			}
+			// X-Forwarded-For is never read in header mode, whatever it holds.
+			if again := c.Of(request([]string{xff2, xff1}, headers...)); again != got {
+				t.Fatalf("Of = %q, and %q with X-Forwarded-For %q, %q", got, again, xff2, xff1)
+			}
+			return
+		}
 		// What a client writes arrives before every element a trusted proxy appends, so a
 		// header put in front of the list never changes the answer once the list is long enough.
 		if fromProxy && hops%3 > 0 && len(headers) > 0 &&
 			len(strings.Split(strings.Join(headers, ","), ",")) >= int(hops%3) {
 			forged := xff2 + "," + xff1
-			if again := c.Of(request(append([]string{forged}, headers...)...)); again != got {
+			if again := c.Of(request(nil, append([]string{forged}, headers...)...)); again != got {
 				t.Fatalf("Of = %q, and %q with X-Forwarded-For %q in front", got, again, forged)
 			}
 		}

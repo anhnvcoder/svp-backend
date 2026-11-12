@@ -52,8 +52,7 @@ Chọn các phương án in đậm; `<env>` là `stg` hay `prd`, `<miền>` là 
   [N12]); chặn xoá log chọn theo CIS AWS Foundations, ghi ở README của `aws/org`. Log Archive account để sau.
 - Mỗi account một profile SSO và một biến account: `anhnv-sso` + `SVP_AWS_MGMT_ACCOUNT_ID`, `anhnv-stg` + `SVP_AWS_STG_ACCOUNT_ID`, `anhnv-prd` +
   `SVP_AWS_PRD_ACCOUNT_ID` (`SVP_AWS_ACCOUNT_ID` bỏ); mỗi root `allowed_account_ids = [var.account_id]`; mọi lệnh `aws` viết sẵn ghi `--region`.
-- Stg chuyển sang `svp-stg` không migrate state (stg không còn tài nguyên chạy). Key cũ `aws/stg/terraform.tfstate` trong bucket management: người học
-  chứng minh nó không còn resource rồi xoá mọi version của nó (`aws s3api list-object-versions`, `delete-objects`, profile management).
+- Chuyển stg sang `svp-stg` và xoá key state cũ của management: [phụ lục](appendix/0048-prd-aws.md#chi-tiết-rút-khỏi-adr).
 
 ### 2. State, DNS, budget mỗi account
 
@@ -198,3 +197,4 @@ Phụ lục: [`appendix/0048-prd-aws.md`](appendix/0048-prd-aws.md) (phương á
 - "Ngoài phạm vi" của Hệ quả: [0056](0056-eks-platform-ha.md): Karpenter nay trong phạm vi: node workload do Karpenter tự quản cấp, managed node group `system` on-demand cho controller nền tảng.
 - §1, "Ngoài phạm vi" của Hệ quả: [0059](0059-org-structure-guardrails.md): account Log Archive `svp-log-archive` và Security Tooling `svp-security` ở OU `Security`; `svp-prd`, `svp-stg` ở OU con `Prod`, `NonProd` của `Workloads`; ba SCP chuyển lên root cùng `svp-protect-baseline`, `svp-deny-iam-users`, OU `Prod` thêm `svp-prod-guardrails`; RCP data perimeter, declarative policy EC2, tag policy; `SvpAdmin` phiên 1 giờ, thêm `SvpReadOnly`, `SvpLogReader`; root tập trung.
 - §1, "Xem lại khi" của Hệ quả: [0060](0060-org-detection-logging.md): trail `svp-audit` ghi vào bucket `svp-cloudtrail-…` của `svp-log-archive` với key ở đó, thêm data event S3 của `uploads` và lệnh ghi vào `media` ở prd; bucket, key trail cũ giữ tới hết Object Lock; GuardDuty, Security Hub CSPM, Config, Access Analyzer toàn org do `svp-security` quản.
+- §4, §6: [0061](0061-edge-cloudfront-waf-acm.md): mỗi env ba web ACL (web, api, media) thêm IP reputation, ATP ở api, Bot Control ở web; `pre-destroy.sh` không còn chờ NLB và bản ghi DNS của ExternalDNS (ALB, target group, bản ghi edge do Terraform).

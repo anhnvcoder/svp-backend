@@ -361,18 +361,22 @@ func parseMediaBaseURL(s string) (string, error) {
 	return strings.TrimRight(s, "/"), nil
 }
 
-// trustedProxies reads TRUSTED_PROXY_HOPS and TRUSTED_PROXY_CIDRS into the ClientAddr that finds
-// each request's client address (see httpx.ClientAddr). HOPS is the number of proxies of ours in
-// front of the gateway, CIDRS the comma-separated ranges they connect from; X-Forwarded-For is
-// read only on connections from those ranges, and only its HOPS-th element from the right.
+// trustedProxies reads TRUSTED_PROXY_HOPS, TRUSTED_PROXY_CIDRS and TRUSTED_CLIENT_ADDRESS_HEADER
+// into the ClientAddr that finds each request's client address (see httpx.ClientAddr). HOPS is the
+// number of proxies of ours in front of the gateway, CIDRS the comma-separated ranges they connect
+// from; X-Forwarded-For is read only on connections from those ranges, and only its HOPS-th
+// element from the right. HEADER names a header the edge overwrites with the client's <ip>:<port>
+// (CloudFront-Viewer-Address): when set, it is read instead of X-Forwarded-For, on connections
+// from CIDRS only, so it needs CIDRS and HOPS 0 (a hop count it would never use hides a mix-up).
 //
 // HOPS defaults to 0, the connection's address: with no proxy in front (compose) every
 // X-Forwarded-For comes from the client, so trusting one hop there would let a client pick its
 // rate-limit bucket on every request. A wrong count fails silently at run time (one bucket for
 // everyone, or spoofed IPs), so every setting that cannot be right stops the
 // gateway instead: HOPS not a whole number >= 0, a range that does not parse, HOPS > 0 with no
-// range (no proxy would ever be trusted), or ranges with HOPS 0 (ranges that do nothing hide a
-// missing HOPS). The errors name the variable and never carry its value.
+// range (no proxy would ever be trusted), ranges with HOPS 0 and no HEADER (ranges that do
+// nothing hide a missing HOPS), or HEADER with no range or with HOPS above 0. The errors name the
+// variable and never carry its value.
 func trustedProxies() (httpx.ClientAddr, error) {
 	hops, err := strconv.Atoi(envcfg.String("TRUSTED_PROXY_HOPS", "0"))
 	if err != nil || hops < 0 {
@@ -397,6 +401,15 @@ func trustedProxies() (httpx.ClientAddr, error) {
 			}
 			trusted = append(trusted, p.Masked())
 		}
+	}
+	if header := envcfg.String("TRUSTED_CLIENT_ADDRESS_HEADER", ""); header != "" {
+		switch {
+		case len(trusted) == 0:
+			return httpx.ClientAddr{}, errors.New("TRUSTED_CLIENT_ADDRESS_HEADER is set but TRUSTED_PROXY_CIDRS is not set")
+		case hops != 0:
+			return httpx.ClientAddr{}, errors.New("TRUSTED_CLIENT_ADDRESS_HEADER is set but TRUSTED_PROXY_HOPS is not 0")
+		}
+		return httpx.NewClientAddrFromHeader(header, trusted), nil
 	}
 	switch {
 	case hops > 0 && len(trusted) == 0:

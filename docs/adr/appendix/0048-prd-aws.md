@@ -32,6 +32,8 @@ và nguồn. Mọi nguồn đọc ngày 2026-11-05.
   `SVP_AWS_STG_ACCOUNT_ID`; prd `anhnv-prd` + `SVP_AWS_PRD_ACCOUNT_ID`. `SVP_AWS_ACCOUNT_ID` bỏ hẳn; `TF_VAR_account_id` không nằm trong `.envrc`
   mà đặt ngay trong lệnh từ biến của account đó. Mọi lệnh `aws` viết sẵn ghi `--region`: `ap-southeast-1` cho dịch vụ theo region và STS, `us-east-1`
   cho Organizations, `<sso_region>` cho `sso-admin`, `identitystore`. Script buổi lấy profile và biến từ bảng theo env ở `infra/aws/scripts/lib.sh`.
+- Stg chuyển sang `svp-stg` không migrate state (stg không còn tài nguyên chạy). Key cũ `aws/stg/terraform.tfstate` trong bucket management: người học
+  chứng minh nó không còn resource rồi xoá mọi version của nó (`aws s3api list-object-versions`, `delete-objects`, profile management).
 
 ### 2. State, DNS, budget mỗi account
 

@@ -97,6 +97,9 @@ người học quyết: runbook ghi rõ cái giá, và Terraform vẫn là ngu�
 Cách cắt cảnh báo thử tới email: `awsx cloudwatch set-alarm-state --alarm-name <tên> --state-value ALARM --state-reason test` (ghi,
 chỉ ở buổi stg kiểm).
 
+Alarm DNSSEC của zone prd (Route 53) nằm ở `us-east-1`, dùng profile chỉ đọc `anhnv-prd-ro` và tên zone thay cho `awsx`; mỗi runbook của nó
+có khối chuẩn bị riêng.
+
 ## Quy tắc cho lệnh trong runbook
 
 - Docker và compose qua `make` (`make ps`, `make logs SVC=…`, `make up OBS=lgtm`); lệnh tay luôn có tiền tố
@@ -123,8 +126,8 @@ chỉ ở buổi stg kiểm).
 ## Mục lục
 
 Cảnh báo `severity=page` (rule viết tay ở `svp-alerts.yaml`, SLO ở `svp-slos.yaml`, alarm managed ở CloudWatch theo
-[ADR-0058](../adr/0058-managed-data-operations.md) §2, email bảo mật của org qua EventBridge và SNS; alarm `ticket` của dịch vụ managed không có
-runbook riêng):
+[ADR-0058](../adr/0058-managed-data-operations.md) §2 và alarm DNSSEC của zone prd theo [ADR-0061](../adr/0061-edge-cloudfront-waf-acm.md) §11,
+email bảo mật của org qua EventBridge và SNS; alarm `ticket` của dịch vụ managed không có runbook riêng):
 
 | Alert | Runbook | Nguồn rule |
 | --- | --- | --- |
@@ -146,6 +149,8 @@ runbook riêng):
 | `msk-offline-partitions` | [msk-offline-partitions.md](msk-offline-partitions.md) | ADR-0058 §2, module `msk` (chỉ AWS) |
 | `msk-under-min-isr` | [msk-under-min-isr.md](msk-under-min-isr.md) | ADR-0058 §2, module `msk` (chỉ AWS) |
 | `valkey-memory-high` | [valkey-memory-high.md](valkey-memory-high.md) | ADR-0058 §2, module `elasticache` (chỉ AWS) |
+| `dnssec-internal-failure` | [dnssec-internal-failure.md](dnssec-internal-failure.md) | ADR-0061 §11, module `account-baseline` (chỉ zone prd, `us-east-1`) |
+| `dnssec-ksk-action-needed` | [dnssec-ksk-action-needed.md](dnssec-ksk-action-needed.md) | ADR-0061 §11, module `account-baseline` (chỉ zone prd, `us-east-1`) |
 | Email `svp-security` (sự kiện bảo mật, finding HIGH, CRITICAL) | [security-alert.md](security-alert.md) | [ADR-0060](../adr/0060-org-detection-logging.md) §10, rule `svp-security-*` của root `aws/security`, module `security-baseline` (chỉ AWS, mọi account của org) |
 
 Cảnh báo `ticket` (cùng tên với page của SLO, cửa sổ 1 d/2 h và 3 d/6 h, chỉ hiện ở Alertmanager) dùng chung runbook của

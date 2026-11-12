@@ -1,7 +1,7 @@
 # Example values of an EKS cluster, to render and check what only such a cluster turns on (helm template -f this file):
 # Postgres on Amazon RDS, objects on Amazon S3 (no CloudNativePG, no in-cluster object store, StorageClass gp3), Let's
-# Encrypt through Route 53, an NLB in front of Envoy. Placeholders only: the real CIDRs, zone, names and email come from
-# the cluster's Terraform outputs and the learner's own variables, never from git, and .example never resolves.
+# Encrypt through Route 53, an internal ALB in front of Envoy. Placeholders only: real CIDRs, ARNs, zone, names, email
+# come from the cluster's Terraform outputs and the learner's own variables, never from git; .example never resolves.
 cloudnativePG:
   enabled: false
 s3:
@@ -37,18 +37,37 @@ tls:
     hostedZoneId: Z0000000000000EXAMPLE
     region: ap-southeast-1
 
+# The ALB sends no SNI to its targets, so one listener with no hostname serves both names behind it.
+listeners:
+  - name: https
+    certificate: svp-edge
+    secretName: svp-edge-tls
+    dnsNames:
+      - stg.aws.svp.example
+      - api.stg.aws.svp.example
+
 envoy:
   service:
-    annotations:
-      service.beta.kubernetes.io/aws-load-balancer-type: external
-      service.beta.kubernetes.io/aws-load-balancer-scheme: internet-facing
-      service.beta.kubernetes.io/aws-load-balancer-nlb-target-type: ip
-      service.beta.kubernetes.io/aws-load-balancer-target-group-attributes: preserve_client_ip.enabled=true
-      # Envoy's readiness endpoint instead of a TCP connect to 10443: /ready fails as soon as Envoy starts draining,
-      # so the NLB stops sending new connections to a pod that is shutting down.
-      service.beta.kubernetes.io/aws-load-balancer-healthcheck-protocol: HTTP
-      service.beta.kubernetes.io/aws-load-balancer-healthcheck-port: "19003"
-      service.beta.kubernetes.io/aws-load-balancer-healthcheck-path: /ready
+    type: ClusterIP
+    name: svp-envoy
+  # The ALB's target group of type ip; the ALB sits in the edge subnets of edgeCidrs below.
+  targetGroupArn: arn:aws:elasticloadbalancing:ap-southeast-1:000000000000:targetgroup/svp-stg-envoy/0000000000000000
   networkPolicy:
     enabled: true
-    healthCheckCIDR: 10.0.0.0/16
+    # The ALB in two zones' edge subnets, and the k6 Job of namespace svp-load that measures inside the cluster.
+    httpsFrom:
+      - ipBlock:
+          cidr: 10.0.240.0/23
+      - ipBlock:
+          cidr: 10.0.242.0/23
+      - namespaceSelector:
+          matchLabels:
+            kubernetes.io/metadata.name: svp-load
+    # The target group's health check: Envoy's /ready, from the ALB only.
+    healthCheck:
+      port: 19003
+      from:
+        - ipBlock:
+            cidr: 10.0.240.0/23
+        - ipBlock:
+            cidr: 10.0.242.0/23
