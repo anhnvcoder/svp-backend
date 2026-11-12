@@ -121,7 +121,7 @@ jobs:
       # Go matches Dockerfiles' builder image and dev machines. Caches modules and build cache, keyed on go.sum.
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          go-version: 1.27.3
+          go-version: 1.27.4
           cache-dependency-path: go.sum
       - id: tools
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
@@ -176,7 +176,7 @@ jobs:
           persist-credentials: false
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          go-version: 1.27.3
+          go-version: 1.27.4
           cache-dependency-path: go.sum
       - id: tools
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
@@ -202,7 +202,7 @@ jobs:
           fetch-depth: 0
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          go-version: 1.27.3
+          go-version: 1.27.4
           cache-dependency-path: go.sum
       - id: tools
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
@@ -314,7 +314,7 @@ jobs:
       - run: deploy/ci/ghcr-digest-test.sh
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          go-version: 1.27.3
+          go-version: 1.27.4
           cache-dependency-path: go.sum
       - id: tools
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
@@ -374,7 +374,7 @@ jobs:
           fetch-depth: 0
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          go-version: 1.27.3
+          go-version: 1.27.4
           cache-dependency-path: go.sum
       - id: tools
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
@@ -511,7 +511,7 @@ jobs:
       # Needed for go run ./tools/jwtkey (generating JWT keys in make env) and GOPATH.
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          go-version: 1.27.3
+          go-version: 1.27.4
           cache-dependency-path: go.sum
       # Script tools from Ubuntu archive (no third-party action): ffmpeg, jq.
       - name: Install the tools of the scripts
