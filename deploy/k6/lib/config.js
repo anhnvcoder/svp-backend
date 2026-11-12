@@ -98,9 +98,9 @@ if (podsEnv !== "" && !(/^[1-9][0-9]*$/.test(podsEnv) && Number(podsEnv) <= base
   throw new Error(`SVP_K6_PODS must be a whole number from 1 to ${base.pods} (got "${podsEnv}")`);
 }
 const pods = podsEnv === "" ? base.pods : Number(podsEnv);
-const forwardedFor = env("SVP_K6_FORWARDED_FOR");
-if (forwardedFor !== "" && !/^[0-9a-f.:]+$/i.test(forwardedFor)) {
-  throw new Error(`SVP_K6_FORWARDED_FOR must be an IP address (got "${forwardedFor}")`);
+const viewerIP = env("SVP_K6_VIEWER_IP");
+if (viewerIP !== "" && !/^[0-9a-f.:]+$/i.test(viewerIP)) {
+  throw new Error(`SVP_K6_VIEWER_IP must be an IP address (got "${viewerIP}")`);
 }
 
 function gcd(a, b) {
@@ -138,10 +138,10 @@ export function targets() {
   return t;
 }
 
-// The address each request claims in X-Forwarded-For, or "" for none. Set only in the cloud Job when the cluster trusts
-// two hops (a load balancer before Envoy): the Job then calls Envoy directly and plays the load balancer's part, writing
-// its own pod IP and no other (threat model RL-7).
-export const forwardedForIP = forwardedFor;
+// The CloudFront-Viewer-Address each request carries, or "" for none. Set only in the cloud Job, which calls Envoy
+// past CloudFront and so writes what CloudFront would: its own pod IP, as <ip>:<port> or [<ipv6>]:<port>.
+const viewerHost = viewerIP.includes(":") ? `[${viewerIP}]` : viewerIP;
+export const viewerAddress = viewerIP === "" ? "" : `${viewerHost}:0`;
 
 // Iterations an arrival-rate executor may run at once, sized per pod and multiplied by `pods`: about 300 ms of work per
 // request in flight before it starts more VUs, and room for latency to grow to 2 s before it drops iterations. k6 gives

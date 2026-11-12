@@ -1,39 +1,9 @@
 {{- /* TLS of the entry point from a local CA run by cert-manager: a self-signed issuer signs the CA, the CA issuer
 signs the certificate of each listener (templates/_helpers.tpl). Clients trust the CA alone (`make k8s-ca`; a load
-balancer in front checks no target's certificate), nothing goes into the machine's trust store. With tls.issuer acme,
-Let's Encrypt signs them instead, by DNS-01 (the one challenge for a wildcard) with cert-manager's credentials. */}}
+balancer in front checks no target's certificate), nothing goes into the machine's trust store. */}}
 {{- $tls := .Values.tls }}
 {{- $issuer := "svp-ca" }}
-{{- if eq $tls.issuer "acme" }}
-{{- $issuer = "svp-acme" }}
-{{- $servers := dict "production" "https://acme-v02.api.letsencrypt.org/directory" "staging" "https://acme-staging-v02.api.letsencrypt.org/directory" }}
-{{- if not (hasKey $servers $tls.acme.server) }}
-{{- fail (printf "tls.acme.server: %q is neither production nor staging" $tls.acme.server) }}
-{{- end }}
-{{- range $key := list "email" "hostedZoneId" "region" }}
-{{- if not (index $tls.acme $key) }}
-{{- fail (printf "tls.acme.%s: required with tls.issuer acme" $key) }}
-{{- end }}
-{{- end }}
-# The ACME account's key lives in cert-manager's namespace (the cluster resource namespace), made on first use.
-apiVersion: cert-manager.io/v1
-kind: ClusterIssuer
-metadata:
-  name: svp-acme
-spec:
-  acme:
-    server: {{ index $servers $tls.acme.server }}
-    email: {{ $tls.acme.email | quote }}
-    privateKeySecretRef:
-      name: svp-acme-account
-    solvers:
-      - dns01:
-          # No credentials here: cert-manager's controller has them from EKS Pod Identity, for a role that may change
-          # records of this zone only.
-          route53:
-            region: {{ $tls.acme.region | quote }}
-            hostedZoneID: {{ $tls.acme.hostedZoneId | quote }}
-{{- else if eq $tls.issuer "selfSigned" }}
+{{- if eq $tls.issuer "selfSigned" }}
 apiVersion: cert-manager.io/v1
 kind: ClusterIssuer
 metadata:
@@ -68,7 +38,7 @@ spec:
   ca:
     secretName: svp-local-ca
 {{- else }}
-{{- fail (printf "tls.issuer: %q is neither selfSigned nor acme" $tls.issuer) }}
+{{- fail (printf "tls.issuer: %q is not supported, the only value is selfSigned" $tls.issuer) }}
 {{- end }}
 {{- range include "svp-cluster.listeners" . | fromYamlArray }}
 ---

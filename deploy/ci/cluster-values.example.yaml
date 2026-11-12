@@ -15,8 +15,6 @@ edgeTargetGroupArn: arn:aws:elasticloadbalancing:ap-southeast-1:000000000000:tar
 edgeCidrs:
   - 10.0.240.0/23
   - 10.0.242.0/23
-hostedZoneId: Z00000000000000000000
-acmeEmail: acme@svp.example
 rdsAddress: svp-stg.000000000000.ap-southeast-1.rds.amazonaws.com
 uploadsBucket: svp-stg-uploads-000000000000-ap-southeast-1
 mediaBucket: svp-stg-media-000000000000-ap-southeast-1

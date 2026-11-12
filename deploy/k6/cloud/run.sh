@@ -4,18 +4,19 @@
 # jq. A k3d-* context (the 16 GB laptop) is refused before any kubectl call.
 # Design notes: docs/reference/compose.md.
 
-# Usage: deploy/k6/cloud/run.sh --context <ctx> --domain <domain> [--forwarded-for] [--ca-file <file>] [--pods <n>] [--ramp <duration>] [--hold <duration>] start|logs|delete
+# Usage: deploy/k6/cloud/run.sh --context <ctx> --domain <d> [--pods <n>] [--ramp <t>] [--hold <t>] start|logs|delete
 #   --domain         the web's public host (the API is api.<domain>), as Envoy's listeners and certificates name them
-#   --forwarded-for  only when the cluster trusts 2 hops of X-Forwarded-For: each pod then writes its own IP there
-#   --ca-file, --pods, --ramp, --hold  as in render.sh
+#   --pods, --ramp, --hold  as in render.sh
 
-# start: renders (render.sh) and applies namespace svp-load, the scripts' ConfigMap and Job svp-k6; refuses while that
-# Job exists. logs: after the Job ends, each pod's summary into .k6/cloud-<time>/pod-<i>.json and a table; exits 1 on
-# a missing pod or summary, or a summary that looks like it holds a token, cookie or password (deleted).
-# delete: deletes namespace svp-load (the Job, its pods and their logs).
+# start: renders (render.sh, --ca-file the CA of Secret svp-edge/svp-edge-tls) and applies namespace svp-load, the
+# scripts' ConfigMap and Job svp-k6; refuses while that Job exists. logs: after the Job ends, each pod's summary into
+# .k6/cloud-<time>/pod-<i>.json and a table; exits 1 on a missing pod or summary, or a summary that looks like it holds
+# a token, cookie or password (deleted). delete: deletes namespace svp-load (the Job, its pods and their logs).
 
 # Before start: the stack runs on the cloud cluster with at least 30 READY videos (fewer and most views stop at the
-# gateway's one-per-minute rule, RL-3), nothing else loads it, and the gateway's trusted hops are decided (RL-1).
+# gateway's one-per-minute rule, RL-3), nothing else loads it, the gateway takes the client's address from
+# CloudFront-Viewer-Address (RL-1, RL-7) and Envoy's NetworkPolicy admits namespace svp-load, as the eks platform sets.
+
 # Pass: in every pod, every threshold passed and dropped_iterations 0; server-side p95/p99 read from Prometheus over
 # the hold window are recorded with the pods' numbers as the run's result.
 set -euo pipefail
@@ -32,13 +33,11 @@ usage() {
   exit 2
 }
 
-ctx= domain= render_args=() cmd= ca_file=
+ctx='' domain='' render_args=() cmd=''
 while [ $# -gt 0 ]; do
   case $1 in
     --context) [ $# -ge 2 ] || usage; ctx=$2; shift 2 ;;
     --domain) [ $# -ge 2 ] || usage; domain=$2; shift 2 ;;
-    --forwarded-for) render_args+=(--forwarded-for); shift ;;
-    --ca-file) [ $# -ge 2 ] || usage; ca_file=$2; shift 2 ;;
     --pods | --ramp | --hold) [ $# -ge 2 ] || usage; render_args+=("$1" "$2"); shift 2 ;;
     start | logs | delete) cmd=$1; shift ;;
     *) usage ;;
@@ -50,7 +49,6 @@ done
 case $ctx in
   k3d-*) die "context $ctx is a local k3d cluster; this load test runs on the cloud cluster only" ;;
 esac
-[ -z "$ca_file" ] || render_args+=(--ca-file "$ca_file")
 command -v jq >/dev/null || die "jq not found"
 kubectl config get-contexts -o name | grep -qxF -- "$ctx" || die "no context $ctx in the kubeconfig"
 kc() { kubectl --context "$ctx" "$@"; }
@@ -64,7 +62,16 @@ case $cmd in
     envoy_ip=$(kc -n envoy-gateway-system get service -l gateway.envoyproxy.io/owning-gateway-name=svp \
       -o jsonpath='{.items[*].spec.clusterIP}')
     [[ $envoy_ip =~ ^[0-9a-f.:]+$ ]] || die "not exactly one Service of Gateway svp in envoy-gateway-system (got '$envoy_ip')"
-    bash "$here/render.sh" --domain "$domain" --envoy-ip "$envoy_ip" ${render_args[@]+"${render_args[@]}"} |
+    # Envoy's certificate comes from the cluster's internal CA. Only key ca.crt is read: the Secret also holds Envoy's
+    # private key, which never leaves the cluster.
+    ca_b64=$(kc -n svp-edge get secret svp-edge-tls -o jsonpath='{.data.ca\.crt}') ||
+      die "cannot read Secret svp-edge/svp-edge-tls, Envoy's certificate (has cert-manager issued it?)"
+    [ -n "$ca_b64" ] || die "Secret svp-edge/svp-edge-tls has no key ca.crt (not issued by the internal CA?)"
+    ca_file=$(mktemp) || die "create a temporary file"
+    trap 'rm -f "$ca_file"' EXIT
+    base64 --decode <<<"$ca_b64" >"$ca_file" || die "key ca.crt of Secret svp-edge/svp-edge-tls is not base64"
+    bash "$here/render.sh" --domain "$domain" --envoy-ip "$envoy_ip" --ca-file "$ca_file" \
+      ${render_args[@]+"${render_args[@]}"} |
       kc apply -f -
     echo "ok    Job svp-load/svp-k6 started (Envoy $envoy_ip, https://api.$domain and https://$domain)"
     echo "watch: kubectl --context $ctx -n svp-load get pods -w"

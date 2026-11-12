@@ -1,7 +1,7 @@
 # Example values of an EKS cluster, to render and check what only such a cluster turns on (helm template -f this file):
-# Postgres on Amazon RDS, objects on Amazon S3 (no CloudNativePG, no in-cluster object store, StorageClass gp3), Let's
-# Encrypt through Route 53, an internal ALB in front of Envoy. Placeholders only: real CIDRs, ARNs, zone, names, email
-# come from the cluster's Terraform outputs and the learner's own variables, never from git; .example never resolves.
+# Postgres on Amazon RDS, objects on Amazon S3 (no CloudNativePG, no in-cluster object store, StorageClass gp3), an
+# internal ALB in front of Envoy. Placeholders only: real CIDRs, ARNs, names come from the cluster's Terraform outputs
+# and the learner's own variables, never from git; .example never resolves.
 cloudnativePG:
   enabled: false
 s3:
@@ -28,14 +28,6 @@ kyverno:
 
 wildcardHost: "*.stg.aws.svp.example"
 apexHost: stg.aws.svp.example
-
-tls:
-  issuer: acme
-  acme:
-    server: staging
-    email: lab@svp.example
-    hostedZoneId: Z0000000000000EXAMPLE
-    region: ap-southeast-1
 
 # The ALB sends no SNI to its targets, so one listener with no hostname serves both names behind it.
 listeners:

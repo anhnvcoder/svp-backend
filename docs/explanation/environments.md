@@ -12,6 +12,7 @@ Trang không chép số. Giá trị nằm ở:
 | gitops root | `aws/gitops/<env>/<env>.tfvars` của `svp-infra` |
 | module `<tên>` | [`aws/modules/<tên>/`](https://github.com/anhnvcoder/svp-infra/tree/main/aws/modules) của `svp-infra`: giá trị chung hai env |
 | root `aws/<tên>` | [`aws/<tên>/`](https://github.com/anhnvcoder/svp-infra/tree/main/aws) của `svp-infra`: root cấp org (`org`, `log-archive`, `baseline`), sống giữa các buổi, chung hai env |
+| root `aws/accounts/<env>` | [`aws/accounts/<env>/main.tf`](https://github.com/anhnvcoder/svp-infra/tree/main/aws/accounts) của `svp-infra`: baseline của account env (zone, budget), sống giữa các buổi |
 | `envs/<env>/`, `platforms/eks/`, `base/` | thư mục cùng tên của [`svp-gitops`](https://github.com/anhnvcoder/svp-gitops); `platforms/eks/` dùng chung hai env |
 
 ## Ba nhóm
@@ -35,7 +36,7 @@ trong cùng thay đổi (ADR-0055 §1).
 | --- | --- | --- | --- | --- | --- | --- |
 | Số AZ | `az_count` (`<env>.tfvars`) | được giảm | stg ít AZ hơn, vẫn đa AZ | Hai AZ đủ thấy hành vi theo zone (EBS gắn zone, trải pod, MSK cần ít nhất hai AZ); AZ thứ ba chỉ thêm dự phòng | — | [REL10], [MSKBP] |
 | NAT gateway | `single_nat_gateway` (`<env>.tfvars`) | giảm có điều kiện | stg một NAT, prd mỗi AZ một | NAT tính theo giờ mỗi cái | Egress của mọi AZ khi AZ của NAT mất → không kiểm ở stg; prd có NAT mỗi AZ | [NAT] |
-| Ba tầng subnet | module `network` | phải giống | như nhau | Subnet database không có route ra Internet ở cả hai env ([ADR-0054](../adr/0054-data-subnet-tier.md)) | — | [EKSSUB] |
+| Bốn tầng subnet: public (chỉ NAT), private, database, edge | module `network` | phải giống | như nhau | Subnet database không có route ra Internet ([ADR-0054](../adr/0054-data-subnet-tier.md)); subnet edge chỉ có ALB, không pod ([ADR-0061](../adr/0061-edge-cloudfront-waf-acm.md) §3) | — | [EKSSUB] |
 | VPC flow log và đích của nó | module `network` (`flow_log_bucket_arn` do root suy từ id account log) | phải giống | cả hai ghi vào bucket `svp-flowlogs-…` của `svp-log-archive`, cùng định dạng ([ADR-0060](../adr/0060-org-detection-logging.md) §9) | Log nằm ngoài tầm admin của env và còn sau khi env bị gỡ; đường ghi chéo account chạy ở stg trước | — | [FL], [SRA] |
 | Retention flow log | root `aws/log-archive` (lifecycle theo tiền tố account) | được giảm | stg ngắn hơn ([ADR-0060](../adr/0060-org-detection-logging.md) §7) | Log của stg chỉ phủ một buổi vài giờ | — | [COST] |
 | NACL không mở 22, 3389 từ Internet | module `network` | phải giống | như nhau ([ADR-0059](../adr/0059-org-structure-guardrails.md) §10) | Cùng luật mạng; Security Hub đánh giá control EC2.21 trên cả hai | — | [CIS] |
@@ -128,13 +129,34 @@ trong cùng thay đổi (ADR-0055 §1).
 | Slow-log tới CloudWatch Logs | module `elasticache` | phải giống | như nhau | Cùng log để đọc lệnh chậm | — | [ECLOG] |
 | Retention slow-log | `valkey_slow_log_retention_days` (`<env>.tfvars`) | được giảm | stg ngắn hơn | Log group bị xoá cùng env | — | [COST] |
 
-## Media: S3, CloudFront, WAF
+## Edge: CloudFront, WAF, DNS
+
+Đường vào và lý do: [`edge.md`](edge.md); quyết định ở [ADR-0061](../adr/0061-edge-cloudfront-waf-acm.md) §14.
 
 | Thành phần | Giá trị ở | Nhóm | stg so với prd | Lý do | Mất gì → kiểm bù | Nguồn |
 | --- | --- | --- | --- | --- | --- | --- |
-| Chặn truy cập công khai, chỉ TLS, OAC, web ACL WAF, gói CloudFront | module `media`, module `waf` | phải giống | như nhau ([ADR-0052](../adr/0052-cloudfront-flat-rate-free.md)) | Cùng edge, cùng luật WAF | — | [S3SEC] |
+| Ba distribution (web, api, media), cert ACM mỗi tên, TLS policy viewer | module `edge`, module `media` | phải giống | như nhau | Cùng đường vào, cùng TLS | — | [CFVPC], [CFTLS] |
+| VPC origin, ALB internal, target group của Envoy, TLS policy ALB | module `edge` | phải giống | như nhau | Chỉ CloudFront tới được Envoy ở cả hai env | — | [CFVPC] |
+| Deletion protection của ALB | `edge_alb_deletion_protection` (`<env>.tfvars`; prd nhấc ở `teardown.tfvars`) | được giảm | stg tắt | Bảo vệ xoá | — | [ELBDEL] |
+| Response headers policy của web, api | module `edge` | phải giống | như nhau | Cùng header bảo mật ở mọi env | — | [CFHDR] |
+| Ba web ACL (rate-based, IP reputation, Core rule set, Known bad inputs; ATP ở api, Bot Control ở web) | `waf.tf` của root env, module `waf` | phải giống | như nhau | Luật WAF chặn nhầm thì stg gặp trước prd | — | [WAFMR] |
 | Log WAF (che `authorization`, `cookie`) | module `waf` (`log_bucket_arn` do root suy từ id account log) | phải giống | cả hai ghi vào bucket `aws-waf-logs-svp-…` của `svp-log-archive` ([ADR-0060](../adr/0060-org-detection-logging.md) §9) | Cùng log request ở edge, cùng che header | — | [WAFLOG] |
 | Retention log WAF | root `aws/log-archive` (lifecycle theo tiền tố account) | được giảm | stg ngắn hơn ([ADR-0060](../adr/0060-org-detection-logging.md) §7) | Log của stg chỉ phủ một buổi vài giờ | — | [COST] |
+| Log chuẩn v2 của web, api tới bucket log CloudFront | module `edge` (ARN destination do root suy), root `aws/log-archive` | phải giống | như nhau | Đường log chéo account chạy ở stg trước | — | [CFLOG] |
+| Retention log CloudFront | root `aws/log-archive` (lifecycle theo tiền tố account) | được giảm | stg ngắn hơn | Log của stg chỉ phủ một buổi vài giờ | — | [COST] |
+| Gói CloudFront của media | `media_flat_rate_free` (`<env>.tfvars`) | được giảm | stg gói flat-rate Free: không log chuẩn, CORS `Managed-SimpleCORS`; prd pay-as-you-go với log chuẩn và policy `svp-prd-media` | Gói Free không tính phí theo request; web, api của stg vẫn chạy log chuẩn và policy tự viết như prd | — | [CFPLAN] |
+| Envoy sau ALB (Service ClusterIP, `TargetGroupBinding`, cert CA nội bộ, nguồn NetworkPolicy) | `platforms/eks/svp-cluster.yaml`, `svp-cluster.values.tpl` | phải giống | như nhau | Cùng chuỗi chặng mà IP client dựa vào | — | [EKSNET] |
+| IP client từ `CloudFront-Viewer-Address` | `platforms/eks/gateway.values.tpl` | phải giống | như nhau | Rate limit theo IP thật ở cả hai env | — | [CFHDRS] |
+| Bản ghi alias và validation ACM | module `edge`, module `media` | phải giống | như nhau; tên theo zone của env | Bản ghi trong state, không controller nào trong cluster ghi zone | — | [ACMDNS] |
+| CAA ở đỉnh zone | module `account-baseline` | phải giống | như nhau | Chỉ CA của Amazon phát hành cert cho tên của env | — | [ACMCAA] |
+| DNSSEC và hai alarm của nó | `dnssec_enabled` (root `aws/accounts/<env>`) | được giảm | chỉ prd | Zone prd giữ tên của mọi env (stg là zone con của nó); ký thêm khoá KMS, alarm page và đường gỡ nhiều bước ([ADR-0061](../adr/0061-edge-cloudfront-waf-acm.md) §11) | — | [R53SEC] |
+| Query log Route 53 | `query_log_enabled` (root `aws/accounts/<env>`) | được giảm | chỉ prd | Truy vấn tên stg không cần giữ | — | [R53QL] |
+
+## Media: S3
+
+| Thành phần | Giá trị ở | Nhóm | stg so với prd | Lý do | Mất gì → kiểm bù | Nguồn |
+| --- | --- | --- | --- | --- | --- | --- |
+| Chặn truy cập công khai, chỉ TLS, OAC | module `media` | phải giống | như nhau | Chỉ distribution media đọc bucket | — | [S3SEC] |
 | Malware Protection for S3 trên `uploads` | module `media` (`malware-protection.tf`) | phải giống | như nhau ([ADR-0060](../adr/0060-org-detection-logging.md) §6) | Cùng plan, cùng role, cùng tag kết quả trên object | — | [GDMS3] |
 | Data event S3 của trail org | trail `svp-audit` (root `aws/org`) | giảm có điều kiện | chỉ `uploads` (đọc, ghi) và `media` (ghi) của prd | Data event tính theo event; stg không có dữ liệu người dùng thật | Truy vết đọc, ghi object ở stg → không có ở stg; buổi prd kiểm data event có trong bucket trail | [CTDATA] |
 | Xoá bucket còn object | `media_force_destroy` (`<env>.tfvars`; prd nhấc ở `teardown.tfvars`) | được giảm | stg xoá được ngay | Bảo vệ xoá | — | [S3SEC] |
@@ -209,3 +231,15 @@ trong cùng thay đổi (ADR-0055 §1).
 | [WAFLOG] | AWS WAF logging: <https://docs.aws.amazon.com/waf/latest/developerguide/logging.html> |
 | [GDMS3] | GuardDuty Malware Protection for S3: <https://docs.aws.amazon.com/guardduty/latest/ug/gdu-malware-protection-s3.html> |
 | [CTDATA] | CloudTrail data events: <https://docs.aws.amazon.com/awscloudtrail/latest/userguide/logging-data-events-with-cloudtrail.html> |
+| [CFVPC] | CloudFront, Restrict access with VPC origins: <https://docs.aws.amazon.com/AmazonCloudFront/latest/DeveloperGuide/private-content-vpc-origins.html> |
+| [CFTLS] | CloudFront, supported protocols and ciphers between viewers and CloudFront: <https://docs.aws.amazon.com/AmazonCloudFront/latest/DeveloperGuide/secure-connections-supported-viewer-protocols-ciphers.html> |
+| [CFHDR] | CloudFront, response headers policies: <https://docs.aws.amazon.com/AmazonCloudFront/latest/DeveloperGuide/adding-response-headers.html> |
+| [CFHDRS] | CloudFront, Add CloudFront request headers: <https://docs.aws.amazon.com/AmazonCloudFront/latest/DeveloperGuide/adding-cloudfront-headers.html> |
+| [CFLOG] | CloudFront, standard logging (v2): <https://docs.aws.amazon.com/AmazonCloudFront/latest/DeveloperGuide/standard-logging.html> |
+| [CFPLAN] | CloudFront, flat-rate pricing plans: <https://docs.aws.amazon.com/AmazonCloudFront/latest/DeveloperGuide/flat-rate-pricing-plan.html> |
+| [ELBDEL] | ALB, deletion protection: <https://docs.aws.amazon.com/elasticloadbalancing/latest/application/edit-load-balancer-attributes.html> |
+| [WAFMR] | AWS WAF, AWS Managed Rules: <https://docs.aws.amazon.com/waf/latest/developerguide/aws-managed-rule-groups-baseline.html> |
+| [ACMDNS] | ACM, DNS validation: <https://docs.aws.amazon.com/acm/latest/userguide/dns-validation.html> |
+| [ACMCAA] | ACM, CAA records: <https://docs.aws.amazon.com/acm/latest/userguide/setup-caa.html> |
+| [R53SEC] | Route 53, DNSSEC signing: <https://docs.aws.amazon.com/Route53/latest/DeveloperGuide/dns-configuring-dnssec.html> |
+| [R53QL] | Route 53, public DNS query logging: <https://docs.aws.amazon.com/Route53/latest/DeveloperGuide/query-logs.html> |

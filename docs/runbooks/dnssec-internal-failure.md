@@ -25,7 +25,7 @@ aws/scripts/check-account.sh prd   # in account và ARN của anhnv-prd; account
 ## Ý nghĩa và tác động tới người dùng
 
 Metric `DNSSECInternalFailure` (namespace `AWS/Route53`, dimension `HostedZoneId`) bằng 1 khi có bất kỳ đối tượng DNSSEC nào của zone ở trạng
-thái `INTERNAL_FAILURE`: trạng thái ký của zone, hay KSK `svp-prd-ksk`; alarm kêu khi tổng trong một chu kỳ từ 1 trở lên (chu kỳ, ngưỡng ở
+thái `INTERNAL_FAILURE`: trạng thái ký của zone, hay KSK `svp_prd_ksk`; alarm kêu khi tổng trong một chu kỳ từ 1 trở lên (chu kỳ, ngưỡng ở
 `dnssec.tf`). Route 53 đặt trạng thái này khi một thao tác DNSSEC của nó không hoàn thành; tài liệu không liệt kê nguyên nhân.
 
 Tác động:
@@ -143,7 +143,7 @@ thái mong muốn của zone (lệnh ghi, kiểm account trước), rồi đọc
 
 ```sh
 # Zone ký (bình thường): KSK INTERNAL_FAILURE thì bật lại KSK; trạng thái ký INTERNAL_FAILURE thì bật lại ký
-AWS_PROFILE=anhnv-prd aws route53 activate-key-signing-key --hosted-zone-id "$ZONE" --name svp-prd-ksk --region us-east-1
+AWS_PROFILE=anhnv-prd aws route53 activate-key-signing-key --hosted-zone-id "$ZONE" --name svp_prd_ksk --region us-east-1
 AWS_PROFILE=anhnv-prd aws route53 enable-hosted-zone-dnssec --hosted-zone-id "$ZONE" --region us-east-1
 # Chỉ khi đang đi đường lui và cha đã không còn DS của aws (bước 2 của đường lui sạch): tắt ký lại
 AWS_PROFILE=anhnv-prd aws route53 disable-hosted-zone-dnssec --hosted-zone-id "$ZONE" --region us-east-1

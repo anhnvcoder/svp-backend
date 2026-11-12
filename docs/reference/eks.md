@@ -21,6 +21,14 @@ Loại tài liệu (Diátaxis): **reference**, tra cứu khi cần một lệnh 
     vẫn kiểm cert theo host của endpoint (`--tls-server-name`). Cổng local theo env (`api_tunnel_port` của `<env>.tfvars`: stg `6444`, prd
     `6443`), nên một lệnh nhầm context không tới cluster kia; root `aws/gitops/<env>` đi cùng tunnel (`api_server_url` của
     `aws/gitops/<env>/<env>.tfvars`). Mọi target `eks-*` và lệnh `kubectl` vào EKS cần tunnel đang mở.
+  - **Đường vào** ([ADR-0061](../adr/0061-edge-cloudfront-waf-acm.md) §4, giải thích ở [`edge.md`](../explanation/edge.md)): CloudFront, VPC
+    origin, ALB internal và target group `svp-<env>-envoy` do root `aws/envs/<env>` tạo; cluster chỉ gắn Envoy vào target group đó. Values eks
+    của chart `svp-cluster` (`platforms/eks/svp-cluster.yaml`, `svp-cluster.values.tpl`): Service `svp-envoy` kiểu `ClusterIP`,
+    `TargetGroupBinding` `svp-envoy` (`envoy.targetGroupArn` từ khoá `cluster.edgeTargetGroupArn`), một listener `https` không hostname với Secret
+    `svp-edge-tls` do issuer CA nội bộ `svp-ca` ký cho `<domain>` và `api.<domain>`, NetworkPolicy `envoy` nhận 10443 từ `cluster.edgeCidrs`
+    (subnet edge) và namespace `svp-load`, 19003 chỉ từ `cluster.edgeCidrs`. AWS Load Balancer Controller không tạo load balancer nào, chỉ ghi
+    địa chỉ pod Envoy vào target group. Không gì trong cluster ghi Route 53 hay xin cert công khai. Gateway lấy IP client từ
+    `CloudFront-Viewer-Address` (`platforms/eks/gateway.values.tpl`, [`contracts.md`](contracts.md)).
   - **Postgres là Amazon RDS** ([ADR-0057](../adr/0057-postgres17-verify-full.md) §2): chart `svp-data` ở `postgres.mode: external`, không
     CloudNativePG; mọi client (bốn service, Job `migrate`, GlitchTip, Job `pg-bootstrap`) nối thẳng địa chỉ RDS `cluster.rdsAddress` (cert
     RDS mang tên đó) với `sslmode=verify-full&sslrootcert=/etc/svp-ca/ca.crt`: `platforms/eks/svp-cluster.values.tpl` đặt
@@ -80,8 +88,8 @@ Loại tài liệu (Diátaxis): **reference**, tra cứu khi cần một lệnh 
   - `AWS_PROFILE=anhnv-<env> make eks-glitchtip-init CONTEXT=svp-<env>`: như `k8s-glitchtip-init`, đọc DSN và token trong pod GlitchTip,
     ghi vào entry `svp/<env>/glitchtip-runtime` rồi `force-sync` ba ExternalSecret `svp/sentry`, `svp-obs/glitchtip-api`,
     `svp-obs/glitchtip-sourcemaps` và restart service khởi động khi chưa có DSN hiện tại; idempotent.
-  - `make eks-smoke CONTEXT=… DOMAIN=<domain>`: `deploy/compose/smoke.sh https://api.<domain>` với `SVP_STACK=eks`, chứng chỉ công
-    khai (bỏ `CURL_CA_BUNDLE`).
+  - `make eks-smoke CONTEXT=… DOMAIN=<domain>`: `deploy/compose/smoke.sh https://api.<domain>` với `SVP_STACK=eks`, qua CloudFront với cert
+    ACM công khai (bỏ `CURL_CA_BUNDLE`).
   - `make eks-seed CONTEXT=… DOMAIN=<domain>`: `deploy/k8s/eks-seed.sh`, 4 user × 8 video ngắn qua API công khai, chờ mọi video
     `READY`, `GET /feed/explore` phải có ≥ 30 (dữ liệu cho k6 profile `cloud`).
   - `make eks-rl-reset CONTEXT=…`: chỉ xoá khoá rate limit đăng ký như trên, chạy trước mỗi bậc k6 (pod sau có thể nhận lại IP của
@@ -91,7 +99,8 @@ Loại tài liệu (Diátaxis): **reference**, tra cứu khi cần một lệnh 
     đặt); `S3_PATH_STYLE` `true` (mặc định, store local) hay `false` (virtual-hosted, cho S3); giá trị khác thì service không khởi động.
   - Lớp nền tảng của `svp-gitops`: root hai tầng, `svp-root` (chart `argocd/root`) render Application `svp-apps` (chart
     `argocd/apps`), nhận `platform` (`k3d` hay `eks`) và trên EKS `cluster` (hợp đồng khoá ở `deploy/ci/cluster-values.example.yaml`,
-    trên EKS lấy từ annotation của cluster Secret mà root `aws/gitops/<env>` tạo; hai khoá của MSK, ElastiCache: `kafkaBrokers`, chuỗi
+    trên EKS lấy từ annotation của cluster Secret mà root `aws/gitops/<env>` tạo; hai khoá của edge: `edgeTargetGroupArn` (output
+    `target_group_arn` của module `edge`) và `edgeCidrs` (danh sách CIDR của subnet edge); hai khoá của MSK, ElastiCache: `kafkaBrokers`, chuỗi
     `host:9096,host:9096,…` là output `bootstrap_brokers` của module `msk`, và `valkeyHost`, host không cổng là `primary_endpoint_address` của module
     `elasticache`, mà `platforms/eks/*.values.tpl` đọc để đặt `KAFKA_BROKERS`, host của Valkey trong `REDIS_URL`, `kafka.brokers` và `valkey.host`
     của `svp-data`, `SVP_OTELCOL_KAFKA_BROKERS` của Collector); values đọc theo thứ tự `base/` <
