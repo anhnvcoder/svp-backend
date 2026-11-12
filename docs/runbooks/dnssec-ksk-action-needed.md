@@ -25,7 +25,7 @@ aws/scripts/check-account.sh prd   # in account và ARN của anhnv-prd; account
 ## Ý nghĩa và tác động tới người dùng
 
 Metric `DNSSECKeySigningKeysNeedingAction` (namespace `AWS/Route53`, dimension `HostedZoneId`) là số KSK của zone ở trạng thái `ACTION_NEEDED`;
-alarm kêu khi tổng trong một chu kỳ từ 1 trở lên (chu kỳ, ngưỡng ở `dnssec.tf`). Zone prd có đúng một KSK, `svp-prd-ksk`, nên alarm kêu nghĩa
+alarm kêu khi tổng trong một chu kỳ từ 1 trở lên (chu kỳ, ngưỡng ở `dnssec.tf`). Zone prd có đúng một KSK, `svp_prd_ksk`, nên alarm kêu nghĩa
 là KSK duy nhất không dùng được. Route 53 đặt KSK vào `ACTION_NEEDED` khi mất quyền dùng key KMS của nó: key bị tắt, bị lên lịch xoá hay đã xoá,
 key policy đổi.
 
@@ -153,7 +153,7 @@ Sửa key theo nguyên nhân (lệnh ghi, kiểm account trước), rồi bật 
 Bật lại KSK khi key đã `Enabled` và policy đúng (bỏ qua nếu apply của nguyên nhân 3 đã làm):
 
 ```sh
-AWS_PROFILE=anhnv-prd aws route53 activate-key-signing-key --hosted-zone-id "$ZONE" --name svp-prd-ksk --region us-east-1
+AWS_PROFILE=anhnv-prd aws route53 activate-key-signing-key --hosted-zone-id "$ZONE" --name svp_prd_ksk --region us-east-1
 ro route53 get-change --id <ChangeInfo.Id của lệnh trên>   # Status: INSYNC
 ```
 

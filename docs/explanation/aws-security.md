@@ -4,7 +4,8 @@ Trang này giải thích lớp bảo mật nằm trên mọi account AWS của l
 dịch vụ nào phát hiện bất thường, log đi về đâu và một sự kiện bảo mật tới người học bằng đường nào. Quyết định và lý do ở
 [ADR-0059](../adr/0059-org-structure-guardrails.md) (cấu trúc, guardrail, quyền) và [ADR-0060](../adr/0060-org-detection-logging.md) (phát hiện,
 log, cảnh báo); statement đủ của mọi policy, event pattern, retention và bảng giá ở phụ lục của hai ADR. Bảo mật trong một env (pod, bucket, mạng,
-dịch vụ dữ liệu) ở [`threat-model.md`](../threat-model.md#411-biên-aws); stg so với prd ở [`environments.md`](environments.md).
+dịch vụ dữ liệu) ở [`threat-model.md`](../threat-model.md#411-biên-aws); đường vào công khai ở [`edge.md`](edge.md); stg so với prd ở
+[`environments.md`](environments.md).
 
 Code ở repo [`svp-infra`](https://github.com/anhnvcoder/svp-infra): root `aws/org`, `aws/log-archive`, `aws/security`, `aws/baseline`,
 `aws/bootstrap` và module `aws/modules/org-policies`, `aws/modules/security-baseline`. Mọi lệnh chạm account do người học chạy.
@@ -38,7 +39,7 @@ management, nên management là đường sửa khi một guardrail chặn nhầ
 | --- | --- | --- | --- |
 | `svp-deny-leave-organization` | SCP | root | Account không tự rời org |
 | `svp-protect-cloudtrail` | SCP | root | Không dừng, xoá, sửa trail org |
-| `svp-deny-other-regions` | SCP | root | Chỉ region nhà và `us-east-1` (dịch vụ toàn cục, WAF của CloudFront) |
+| `svp-deny-other-regions` | SCP | root | Chỉ region nhà và `us-east-1` (dịch vụ toàn cục; WAF, cert ACM, log của CloudFront; khoá DNSSEC) |
 | `svp-protect-baseline` | SCP | root | Không đổi baseline bảo mật của account, trừ **vai trò triển khai baseline** |
 | `svp-deny-iam-users` | SCP | root | Không tạo IAM user, access key, mật khẩu console |
 | `svp-prod-guardrails` | SCP | OU `Prod` | Không chạy EC2 Spot qua `RunInstances` ở prd |
@@ -70,7 +71,7 @@ Người học vào account bằng Identity Center, không IAM user. Mỗi permi
 | --- | --- | --- | --- |
 | `SvpAdmin` | `svp-stg`, `svp-prd` | `AdministratorAccess`, phiên ngắn | `apply`, script buổi |
 | `SvpReadOnly` | `svp-stg`, `svp-prd`, `svp-security` | `ViewOnlyAccess` + `SecurityAudit`, thêm đọc CloudWatch Logs | Đọc cấu hình, trạng thái, finding; không đọc object S3, giá trị secret, dữ liệu bảng; không ghi trạng thái finding |
-| `SvpLogReader` | `svp-log-archive` | `ViewOnlyAccess`, đọc object và giải mã bucket log | Đọc log trail, Config, flow log, GuardDuty, WAF |
+| `SvpLogReader` | `svp-log-archive` | `ViewOnlyAccess`, đọc object và giải mã bucket log | Đọc log trail, Config, flow log, GuardDuty, WAF, CloudFront |
 
 Đọc hằng ngày đi qua permission set chỉ đọc, nên một phiên điều tra không vô tình sửa gì; quyền ghi chỉ mở khi cần, và chỉ ở stg, prd.
 
@@ -116,6 +117,24 @@ Root `aws/security` cấu hình các dịch vụ từ account `svp-security`, de
 Phần không được giám sát và lý do (bastion không có agent runtime, volume mã hoá bằng `alias/svp-ebs` không được quét malware, management ngoài
 hai region, kể cả phiên `AssumeRoot` mở ở đó) ở phần Hệ quả của ADR-0060.
 
+## Lớp edge
+
+Mỗi env đón request công khai ở CloudFront, không ở load balancer nào trong VPC ([`edge.md`](edge.md),
+[ADR-0061](../adr/0061-edge-cloudfront-waf-acm.md)). Phần bảo mật của lớp này:
+
+- **WAF:** ba web ACL scope CLOUDFRONT mỗi env (`svp-<env>-web`, `-api`, `-media`), giống hệt ở stg và prd: luật rate-based theo IP, IP
+  reputation và các nhóm luật managed của AWS; ATP cho đăng nhập ở api, Bot Control chỉ gắn nhãn ở web. Log về bucket log WAF của Log Archive.
+- **Origin không công khai:** web, API qua VPC origin tới ALB internal ở subnet edge; security group của ALB chỉ nhận prefix list
+  origin-facing của CloudFront. Media đọc bucket qua OAC.
+- **TLS:** cert ACM ở CloudFront (`us-east-1`) và ALB (region nhà), TLS policy AWS khuyên; Envoy dùng CA nội bộ của cert-manager, nên không
+  khoá riêng của cert công khai nào nằm trong cluster.
+- **DNS:** CAA ở đỉnh zone của cả hai env chỉ cho CA của Amazon; zone prd ký DNSSEC (khoá KMS ở `us-east-1`, hai alarm page tới topic SNS
+  của module `alarms`) và có query log. Root `aws/accounts/<env>` giữ chúng, sống giữa các buổi.
+- **Log:** log chuẩn v2 của CloudFront và log WAF về Log Archive (mục sau); không access log ALB vì mọi request đã có ở hai log đó.
+
+Control Security Hub FSBP áp lên tài nguyên edge (`CloudFront.*`, `WAF.*`, `ACM.*`, `Route53.*`, `ELB.*`), đạt hay chấp nhận có lý do: phụ lục
+ADR-0061. Mối đe doạ của lớp này ở [threat model](../threat-model.md#413-edge).
+
 ## Luồng log
 
 Mọi log bảo mật về account `svp-log-archive`. Mỗi loại log một bucket, tên `<tiền tố>-<id account log>-<region>`
@@ -137,6 +156,7 @@ flowchart LR
     subgraph env["svp-stg, svp-prd, trong buổi"]
         vpc["VPC flow log<br/>module network"]
         waf["Web ACL của CloudFront<br/>module waf, us-east-1"]
+        cfd["Distribution CloudFront<br/>module edge, media, us-east-1"]
     end
     subgraph log["svp-log-archive"]
         subgraph home["ap-southeast-1, key alias/svp-log-archive"]
@@ -148,6 +168,8 @@ flowchart LR
         end
         subgraph use1["us-east-1, key alias/svp-log-archive"]
             bwaf[("aws-waf-logs-svp-#lt;log#gt;-us-east-1")]
+            dest["Delivery destination<br/>svp-cloudfront-env"]
+            bcf[("svp-cloudfront-#lt;log#gt;-us-east-1")]
         end
     end
     trail --> bct
@@ -156,12 +178,15 @@ flowchart LR
     gd -->|"xuất finding"| bgd
     vpc -->|"Parquet"| bfl
     waf -->|"che authorization, cookie"| bwaf
+    cfd -->|"log chuẩn v2, không cookie"| dest --> bcf
 ```
 
 - Trail `svp-audit` ở management ghi management event của mọi account. Data event S3 chỉ cho bucket người dùng của prd: `uploads` đọc và ghi,
   `media` chỉ ghi (đọc là lưu lượng người xem qua CloudFront). stg không có dữ liệu người dùng thật, nên không trả phí data event ở đó.
 - Bucket trail cũ ở management còn giữ log trước khi trail đổi đích, chỉ đọc tới khi Object Lock của nó hết hạn; README của `aws/org` ghi bước gỡ.
-- Flow log và log WAF chỉ có khi env sống, nhưng bucket sống giữa các buổi: log của buổi đã gỡ vẫn đọc được. Root env nhận id account log qua
+- Log chuẩn v2 của CloudFront đi chéo account: account env giữ delivery source và delivery, `svp-log-archive` giữ delivery destination mỗi env
+  và bucket ([ADR-0061](../adr/0061-edge-cloudfront-waf-acm.md) §8). Media của stg (gói CloudFront Free) không có log này.
+- Flow log, log WAF và log CloudFront chỉ có khi env sống, nhưng bucket sống giữa các buổi: log của buổi đã gỡ vẫn đọc được. Root env nhận id account log qua
   `TF_VAR_log_archive_account_id` (từ `SVP_AWS_LOG_ACCOUNT_ID`), nên buổi chỉ chạy được sau khi `aws/log-archive` đã áp.
 - Đọc log: profile `anhnv-log-ro`; lệnh mẫu ở runbook [`security-alert.md`](../runbooks/security-alert.md).
 
@@ -226,4 +251,6 @@ sequenceDiagram
 
 Bước 2 dùng `-target` vì tạo account gần như không đảo ngược (đóng account chờ 90 ngày): plan của bước này chỉ được thêm hai account và đổi OU
 của stg, prd. Bước 3 phải trước bước 4 vì trail và policy của bucket trỏ vào nhau: bucket cho đúng trail `svp-audit` ghi, trail chỉ đổi đích
-khi bucket đã có. Từ khi bước 1–3 đã áp, buổi stg, prd mới chạy được, vì root env ghi flow log và log WAF vào bucket của Log Archive.
+khi bucket đã có. Từ khi bước 1–3 đã áp, buổi stg, prd mới chạy được, vì root env ghi flow log, log WAF và log CloudFront vào Log Archive.
+Phần edge (bucket log CloudFront, CAA, DNSSEC) áp thêm theo runbook
+[`edge-setup.md`](https://github.com/anhnvcoder/svp-infra/blob/main/docs/runbooks/edge-setup.md) của `svp-infra`.

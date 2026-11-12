@@ -2,28 +2,7 @@
 listeners (templates/_helpers.tpl): by default https for *.svp.localhost and https-apex for svp.localhost. Each serves a
 certificate naming its own hostnames only: one for both would let a browser reuse a connection to svp.localhost for
 s3.svp.localhost (RFC 9113 9.1.1), where no route of the apex listener matches. No operations UI is ever routed. */}}
-{{- $annotations := .Values.envoy.service.annotations }}
 {{- $service := .Values.envoy.service }}
-{{- $lbc := "service.beta.kubernetes.io/aws-load-balancer-" }}
-{{- $nlb := "" }}
-{{- range $key, $_ := $annotations }}
-{{- if hasPrefix $lbc $key }}{{ $nlb = $key }}{{ end }}
-{{- end }}
-{{- if $nlb }}
-{{- if ne (index $annotations (print $lbc "type") | default "") "external" }}
-{{- fail (printf "envoy.service.annotations: %stype must be external with any annotation of AWS Load Balancer Controller (%s)" $lbc $nlb) }}
-{{- end }}
-{{- if ne (index $annotations (print $lbc "nlb-target-type") | default "") "ip" }}
-{{- fail (printf "envoy.service.annotations: %snlb-target-type must be ip: an instance target reaches Envoy through a node port, from the node's address instead of the client's" $lbc) }}
-{{- end }}
-{{- $attributes := list }}
-{{- range splitList "," (index $annotations (print $lbc "target-group-attributes") | default "") }}
-{{- $attributes = append $attributes (trim .) }}
-{{- end }}
-{{- if not (has "preserve_client_ip.enabled=true" $attributes) }}
-{{- fail (printf "envoy.service.annotations: %starget-group-attributes must hold preserve_client_ip.enabled=true: without it the NLB hands Envoy its own address instead of the client's" $lbc) }}
-{{- end }}
-{{- end }}
 # Settings of the Envoy proxy fleet of this class. externalTrafficPolicy Cluster instead of Envoy Gateway's default
 # Local: k3d's load balancer spreads connections over both nodes, and with Local the servicelb pod of the node without an
 # Envoy pod would have nowhere to send them. The client address is lost on the way anyway (k3d's load balancer and
@@ -45,10 +24,6 @@ spec:
         name: {{ . }}
         {{- end }}
         externalTrafficPolicy: {{ .Values.envoy.service.externalTrafficPolicy }}
-        {{- with $annotations }}
-        annotations:
-          {{- toYaml . | nindent 10 }}
-        {{- end }}
       # Two replicas at least, so losing a node or a zone never takes the only entry point with it; no
       # envoyDeployment.replicas beside it, the HPA alone owns the count. CPU is a share of the request below.
       envoyHpa:

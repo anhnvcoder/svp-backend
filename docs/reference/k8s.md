@@ -683,8 +683,9 @@ Phần này ghi vì sao các hàm và script ở `deploy/k8s/` làm như vậy; 
   (`make eks-smoke`, `eks-seed`, `eks-rl-reset`) cùng việc chạy trong container `valkey` của Deployment `svp-ops` ở cluster EKS mà
   `SVP_KUBE_CONTEXT` nêu, `svp-stg` hay `svp-prd` và không gì khác: một cluster lab của project này, không bao giờ cái dùng chung; Valkey ở đó
   là ElastiCache, `svp-ops` nối tới nó bằng TLS với CA công khai của Amazon. `make eks-smoke` dùng base `https://api.<domain>` với chứng chỉ
-  công khai (không `CURL_CA_BUNDLE`). Load balancer của EKS giữ địa chỉ của client, nên các lượt chạy từ một máy cũng chung một địa chỉ ở đó,
-  và pod của một bài load test có thể nhận địa chỉ của các lượt trước. `SVP_AS_USER=<user>` làm `valkey_cli` đăng nhập user đó (mật khẩu là dòng
+  công khai (không `CURL_CA_BUNDLE`). Trên EKS gateway lấy IP client từ `CloudFront-Viewer-Address`, nên các lượt chạy từ một máy cũng chung
+  một địa chỉ ở đó (IP công khai của máy), và pod của một bài load test, vốn đặt header đó là IP của chính nó, có thể nhận địa chỉ của các lượt
+  trước. `SVP_AS_USER=<user>` làm `valkey_cli` đăng nhập user đó (mật khẩu là dòng
   đầu của stdin) để thử quyền của nó.
 - **CLI vận hành trên cluster** (Deployment `svp-ops` của chart `svp-data`, namespace `svp-data`, một replica): hai container `kafka` (image
   `apache/kafka`) và `valkey` chạy `sleep infinity`, wrapper ở `/opt/svp/bin` (ConfigMap `svp-ops-bin`); lệnh

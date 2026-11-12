@@ -1,7 +1,7 @@
 import { check } from "k6";
 import http from "k6/http";
 import { Counter } from "k6/metrics";
-import { forwardedForIP } from "./config.js";
+import { viewerAddress } from "./config.js";
 
 // 4xx answers are the client's, so http_req_failed counts only 5xx and connection errors, as the SLOs count 5xx. A 429
 // is counted on its own instead: the script hitting a rate limit means its user pool is too small, not that the system
@@ -22,8 +22,8 @@ export function send(method, url, body, spec, params = {}) {
     tags.phase = params.phase;
   }
   const headers = { ...(params.headers || {}) };
-  if (forwardedForIP) {
-    headers["X-Forwarded-For"] = forwardedForIP;
+  if (viewerAddress) {
+    headers["CloudFront-Viewer-Address"] = viewerAddress;
   }
   const options = { headers, tags, timeout, redirects: 0, responseType: params.responseType || "none" };
   if (params.cookies) {

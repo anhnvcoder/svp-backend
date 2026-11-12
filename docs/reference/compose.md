@@ -183,7 +183,7 @@ Loại tài liệu (Diátaxis): **reference**, tra cứu khi cần một lệnh 
   (gateway), `SVP_WEB_URL` (địa chỉ k6 gọi tới web client) và `SVP_WEB_ORIGIN` (origin người dùng mở web, gửi làm `Host` và `Origin`);
   `SVP_K6_HOLD` và `SVP_K6_RAMP` (thời gian giữ tốc độ đầy đủ và thời gian tăng dần tới đó, mặc định theo profile; số nguyên kèm
   `s`, `m` hay `h`); `SVP_K6_RESULTS` (thư mục ghi `summary.json`; không đặt thì ra stdout); `SVP_K6_PODS` và
-  `SVP_K6_FORWARDED_FOR` (chỉ Job cloud).
+  `SVP_K6_VIEWER_IP` (chỉ Job cloud).
 - Mọi tốc độ trong `lib/config.js` tính theo phút, nên route dưới một request mỗi giây (`POST /videos`) không cần tốc độ lẻ. Tốc độ
   của profile `cloud` là tổng của cả Job: k6 chia chúng cho `pods` tiến trình bằng `--execution-segment`, còn mỗi pod đăng ký pool
   user riêng trong `setup()` (một pool cho mỗi địa chỉ nguồn). `SVP_K6_PODS` (chỉ profile `cloud`, 1 tới 20) chạy Job với ít pod hơn
@@ -211,39 +211,46 @@ Loại tài liệu (Diátaxis): **reference**, tra cứu khi cần một lệnh 
   `run.sh` áp output đó và `make cloud-check` kiểm nó (chạy `render.sh` không đối số). Image là `K6_IMAGE` đọc từ `Makefile` gốc: một nơi ghim k6
   cho `make load-local`, CI và Job này, Renovate chỉ cập nhật dòng đó.
 - Đối số của `deploy/k6/cloud/run.sh --context <ctx> --domain <domain> start|logs|delete` (`render.sh` nhận cùng các cờ, trừ
-  `--context`, và thêm `--envoy-ip`):
+  `--context`, và thêm `--envoy-ip`, `--ca-file`):
   - `--domain`: host công khai của web (API ở `api.<domain>`), như listener và certificate của Envoy đặt tên (mặc định của
     `render.sh` là `svp.invalid`, chỉ cho kiểm tĩnh). `--envoy-ip`: ClusterIP của Service Envoy, nơi tên công khai phân giải tới
     trong pod (mặc định `192.0.2.1`, địa chỉ tài liệu, chỉ cho kiểm tĩnh).
-  - `--forwarded-for`: chỉ khi cluster tin 2 hop `X-Forwarded-For` (load balancer trước Envoy); mỗi pod ghi IP của nó vào đó như
-    load balancer sẽ làm (threat model RL-7).
-  - `--ca-file`: file PEM của CA ký certificate Envoy, khi một CA riêng ký (Envoy sau load balancer giữ certificate công khai); pod
-    tin CA đó thêm vào root mà image có, không thay chúng. Chỉ nhận certificate, file chứa khoá riêng bị từ chối. Không có cờ thì
-    pod tin root của image.
+  - `--ca-file` (chỉ `render.sh`): file PEM của CA ký certificate Envoy; pod tin CA đó thêm vào root mà image có, không thay
+    chúng. Chỉ nhận certificate, file chứa khoá riêng bị từ chối. Không có cờ thì pod tin root của image (chỉ cho kiểm tĩnh).
+    `run.sh start` luôn truyền cờ này với CA nội bộ của cluster, người học không truyền gì.
   - `--pods`: 1 tới 20 pod (mặc định 20), mỗi pod giữ tải của một pod thiết kế nên tổng co theo số pod (`lib/config.js`,
     `SVP_K6_PODS`). `--ramp`, `--hold`: thời gian tăng và giữ, như `2m` (mặc định 10m mỗi cái); đặt một trong hai thì hạn của Job
     tính theo độ dài lượt chạy thay vì mặc định 3600 s.
-  - `start`: tìm ClusterIP của Service Envoy của Gateway `svp`, render manifest và áp chúng (namespace, ConfigMap, Job `svp-k6`);
-    từ chối khi đã có Job `svp-k6`. `logs`: sau khi Job kết thúc, dòng tóm tắt của từng pod vào `.k6/cloud-<time>/pod-<i>.json` và
-    một bảng của chúng; exit 1 khi số pod của Job khác số completion, một pod không in tóm tắt hay một tóm tắt có thứ giống token,
-    cookie hay mật khẩu (khi đó nó bị xoá). `delete`: xoá namespace `svp-load` (Job, pod và log của chúng).
+  - `start`: tìm ClusterIP của Service Envoy của Gateway `svp`, đọc đúng khoá `ca.crt` của Secret `svp-edge/svp-edge-tls`
+    (certificate của Envoy; jsonpath, không đọc khoá riêng cùng Secret) vào file tạm, xoá khi `run.sh` thoát, render manifest với
+    `--ca-file` file đó và áp chúng (namespace, ConfigMap, Job `svp-k6`); từ chối khi đã có Job `svp-k6`, và dừng với thông báo
+    khi không đọc được Secret hay Secret không có khoá `ca.crt`. `logs`: sau khi Job kết thúc, dòng tóm tắt của từng pod vào
+    `.k6/cloud-<time>/pod-<i>.json` và một bảng của chúng; exit 1 khi số pod của Job khác số completion, một pod không in tóm tắt
+    hay một tóm tắt có thứ giống token, cookie hay mật khẩu (khi đó nó bị xoá). `delete`: xoá namespace `svp-load` (Job, pod và log
+    của chúng).
 - Trước `start`: stack chạy trên cluster cloud với ít nhất 30 video `READY` (ít hơn thì hầu hết lượt xem dừng ở luật một-mỗi-phút
-  của gateway, RL-3), không gì khác đang tải nó, và số hop tin cậy của gateway đã quyết (RL-1). Theo dõi bằng
+  của gateway, RL-3), không gì khác đang tải nó, gateway lấy IP client từ `CloudFront-Viewer-Address` (RL-1, RL-7) và
+  NetworkPolicy của Envoy nhận namespace `svp-load` (cả hai do values nền tảng eks đặt). Theo dõi bằng
   `kubectl --context <ctx> -n svp-load get pods -w`, dashboard SLO của Grafana và 429 của gateway (`svp_rate_limited` trong tóm tắt
   của mỗi pod phải bằng 0). Đạt: ở mọi pod mọi threshold đạt và `dropped_iterations` bằng 0; p95, p99 phía server đọc từ
   Prometheus trong cửa sổ giữ được ghi cùng số của các pod làm kết quả lượt chạy. Dừng sớm bằng `run.sh --context <ctx> --domain
   <domain> delete`.
-- `deploy/k6/cloud/job.yaml.in` là mẫu mà `render.sh` điền (`@K6_IMAGE@`, `@DOMAIN@`, `@ENVOY_IP@`, `@FORWARDED_FOR@`,
-  `@SCRIPT_ITEMS@`, `@PODS@`, `@DEADLINE@`, `@RAMP@`, `@HOLD@`); nó không phải manifest đứng một mình (đuôi `.yaml.in`, `make
+- `deploy/k6/cloud/job.yaml.in` là mẫu mà `render.sh` điền (`@K6_IMAGE@`, `@DOMAIN@`, `@ENVOY_IP@`, `@SCRIPT_ITEMS@`,
+  `@PODS@`, `@DEADLINE@`, `@RAMP@`, `@HOLD@`); nó không phải manifest đứng một mình (đuôi `.yaml.in`, `make
   cloud-check` không đọc nó mà kiểm output của `render.sh`). Namespace `svp-load` nằm ngoài `svp` nên policy image của Kyverno không
   áp, và chạy dưới PSA restricted. 20 pod của một Job Indexed, mỗi pod chạy execution segment riêng của profile `cloud`: k6 chia tốc
   độ, mỗi pod đăng ký pool riêng từ IP pod của nó (không khoá rate limit nào bị xoá trên cloud). 20 là `pods` của profile `cloud`
   trong `lib/config.js`, nơi tính VU và pool theo pod; `setup()` từ chối lượt chạy với số segment khác. Ít pod hơn (`render.sh
   --pods`) giữ các dòng đánh dấu `@PODS@`: `SVP_K6_PODS` báo số pod cho script, tốc độ co theo nó, mỗi pod giữ tải của một pod thiết
   kế. Dòng `@RAMP@`, `@HOLD@` chỉ còn khi có `render.sh --ramp`, `--hold`. Pod gọi Service của Envoy trong cluster: `hostAliases`
-  trỏ tên công khai vào ClusterIP của nó, nên TLS kiểm certificate thật còn tải không đi qua load balancer công khai hay internet.
-- Dòng `@CA@` của `job.yaml.in` chỉ còn khi có `render.sh --ca-file`, cho Envoy mà một CA riêng ký (CA của cluster sau load balancer
-  giữ certificate công khai): chúng mount ConfigMap `svp-k6-ca` và trỏ `SSL_CERT_FILE` vào nó. k6 không có cờ cho CA; `crypto/x509`
+  trỏ tên công khai vào ClusterIP của nó, nên TLS kiểm certificate thật còn tải không đi qua CloudFront, WAF hay internet (tải
+  1 250 req/s từ vài IP NAT sẽ chạm luật rate-based của WAF và mọi giới hạn theo IP). Vì không qua CloudFront, mỗi request tự mang
+  `CloudFront-Viewer-Address: <IP pod>:0` (`[<IPv6>]:0` khi pod có IP IPv6) mà CloudFront lẽ ra đặt: biến `SVP_K6_VIEWER_IP` lấy
+  `status.podIP` qua downward API, `lib/http.js` đặt header ở mọi request, nên gateway đếm rate limit mỗi pod một bucket (threat
+  model RL-7). Trên eks, cổng HTTPS của Envoy chỉ nhận load balancer và namespace `svp-load` (NetworkPolicy `envoy`), nên tên namespace cố
+  định.
+- Dòng `@CA@` của `job.yaml.in` chỉ còn khi có `render.sh --ca-file` (`run.sh start` luôn có: certificate của Envoy do CA nội bộ
+  của cluster ký): chúng mount ConfigMap `svp-k6-ca` và trỏ `SSL_CERT_FILE` vào nó. k6 không có cờ cho CA; `crypto/x509`
   của Go, mà k6 dùng trên Linux, đọc file đó thay file bundle của image nhưng vẫn đọc mọi file certificate trong `/etc/ssl/certs` và
   `/etc/pki/tls/certs` (chỉ `SSL_CERT_DIR` mới thay các thư mục đó). Vì vậy CA riêng được tin thêm vào root mà image có ở các thư mục
   ấy, không thay chúng. TLS vẫn được kiểm, không bao giờ bị bỏ qua.

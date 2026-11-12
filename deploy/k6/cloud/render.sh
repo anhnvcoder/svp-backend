@@ -7,14 +7,13 @@
 # The image is K6_IMAGE as the root Makefile pins it, read from there: one place to pin k6 for make load-local, CI and
 # this Job, and Renovate updates that line only.
 
-# Usage: deploy/k6/cloud/render.sh [--domain <domain>] [--envoy-ip <ClusterIP>] [--forwarded-for] [--ca-file <file>] [--pods <n>] [--ramp <duration>] [--hold <duration>]
+# Usage: deploy/k6/cloud/render.sh [--domain <d>] [--envoy-ip <ip>] [--ca-file <f>] [--pods <n>] [--ramp/--hold <t>]
 #   --domain         the web's host; the API is api.<domain> (default svp.invalid, for the static check only)
 #   --envoy-ip       ClusterIP of Envoy's Service, which the public names resolve to inside the pods (default
 #                    192.0.2.1, a documentation address, for the static check only)
 
-#   --forwarded-for  each pod writes its own IP in X-Forwarded-For: only when the cluster trusts 2 hops (threat model RL-7)
-#   --ca-file        PEM file of the CA that signs Envoy's certificate, when a private CA does (lines marked @CA@ of
-#                    job.yaml.in); the pods trust it in addition to the roots the image holds
+#   --ca-file        PEM file of the CA that signs Envoy's certificate (lines marked @CA@ of job.yaml.in; run.sh passes
+#                    the cluster's internal CA); the pods trust it in addition to the roots the image holds
 #   --pods           1 to 20 pods run the load (default 20, the design), each with the load of one pod of the design
 
 #   --ramp, --hold   how long the rate ramps up and holds (a whole number of s, m or h, like 2m; default the profile's
@@ -46,13 +45,11 @@ seconds() {
   esac
 }
 
-domain=svp.invalid envoy_ip=192.0.2.1 forwarded_for= ca_file= pods=$design_pods ramp= hold=
+domain=svp.invalid envoy_ip=192.0.2.1 ca_file='' pods=$design_pods ramp='' hold=''
 while [ $# -gt 0 ]; do
   case $1 in
     --domain) [ $# -ge 2 ] || die "--domain needs a value"; domain=$2; shift 2 ;;
     --envoy-ip) [ $# -ge 2 ] || die "--envoy-ip needs a value"; envoy_ip=$2; shift 2 ;;
-    # Kubernetes expands $(SVP_K6_POD_IP), the variable set from status.podIP just before it in the Job.
-    --forwarded-for) forwarded_for='$(SVP_K6_POD_IP)'; shift ;;
     --ca-file) [ $# -ge 2 ] || die "--ca-file needs a value"; ca_file=$2; shift 2 ;;
     --pods) [ $# -ge 2 ] || die "--pods needs a value"; pods=$2; shift 2 ;;
     --ramp) [ $# -ge 2 ] || die "--ramp needs a value"; ramp=$2; shift 2 ;;
@@ -107,7 +104,7 @@ for m in CA:"$ca_file" PODS:"$fewer" RAMP:"$ramp" HOLD:"$hold"; do
   if [ -n "${m#*:}" ]; then marks+=(-e "s| # @${m%%:*}@\$||"); else marks+=(-e "/ # @${m%%:*}@\$/d"); fi
 done
 rendered=$(sed -e '1,/^apiVersion:/{/^#/d;}' "${marks[@]}" -e "s|@K6_IMAGE@|$image|g" -e "s|@DOMAIN@|$domain|g" \
-  -e "s|@ENVOY_IP@|$envoy_ip|g" -e "s|@FORWARDED_FOR@|$forwarded_for|g" \
+  -e "s|@ENVOY_IP@|$envoy_ip|g" \
   -e "s|@SCRIPT_ITEMS@|$items|g" -e "s|@PODS@|$pods|g" -e "s|@DEADLINE@|$deadline|g" \
   -e "s|@RAMP@|$ramp|g" -e "s|@HOLD@|$hold|g" "$here/job.yaml.in")
 namespace=${rendered%%$'\n'---$'\n'*}

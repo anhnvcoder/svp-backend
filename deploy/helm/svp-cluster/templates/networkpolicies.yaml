@@ -171,23 +171,11 @@ spec:
 {{- if .Values.envoy.networkPolicy.enabled }}
 {{- $np := .Values.envoy.networkPolicy }}
 {{- $healthCheckPort := $np.healthCheck.port | int }}
-{{- $healthCheckFrom := $np.healthCheck.from }}
-{{- if not $healthCheckPort }}
-{{- $annotation := "service.beta.kubernetes.io/aws-load-balancer-healthcheck-port" }}
-{{- $annotated := index .Values.envoy.service.annotations $annotation | default "traffic-port" }}
-{{- if ne $annotated "traffic-port" }}
-{{- if not $np.healthCheckCIDR }}
-{{- fail "envoy.networkPolicy.healthCheckCIDR: required when the NLB's health check has a port of its own" }}
-{{- end }}
-{{- $healthCheckPort = $annotated | int }}
-{{- $healthCheckFrom = list (dict "ipBlock" (dict "cidr" $np.healthCheckCIDR)) }}
-{{- end }}
-{{- end }}
 {{- /* A rule with no source lets every source in. */}}
 {{- if not $np.httpsFrom }}
 {{- fail "envoy.networkPolicy.httpsFrom: required, an empty list would let every address reach Envoy's HTTPS port" }}
 {{- end }}
-{{- if and $healthCheckPort (not $healthCheckFrom) }}
+{{- if and $healthCheckPort (not $np.healthCheck.from) }}
 {{- fail "envoy.networkPolicy.healthCheck.from: required with a port, an empty list would let every address in" }}
 {{- end }}
 ---
@@ -221,7 +209,7 @@ spec:
           port: 19001
     {{- if $healthCheckPort }}
     - from:
-        {{- toYaml $healthCheckFrom | nindent 8 }}
+        {{- toYaml $np.healthCheck.from | nindent 8 }}
       ports:
         - protocol: TCP
           port: {{ $healthCheckPort }}

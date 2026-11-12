@@ -1,5 +1,5 @@
 # Template of the k6 Job of the cloud cluster, filled in by render.sh. Not a manifest on its own (hence .yaml.in).
-# Namespace svp-load is outside svp, so Kyverno's image policy does not apply, and runs under PSA restricted.
+# Namespace svp-load: outside svp, so no Kyverno image policy, PSA restricted; Envoy's NetworkPolicy admits it by name.
 # Up to 20 pods (render.sh --pods) of one Indexed Job, each on its own segment of profile cloud: k6 splits the rates.
 # Design notes: docs/reference/compose.md.
 apiVersion: v1
@@ -79,13 +79,12 @@ spec:
               value: "@RAMP@" # @RAMP@
             - name: SVP_K6_HOLD # @HOLD@
               value: "@HOLD@" # @HOLD@
-            - name: SVP_K6_POD_IP
+            # The pod calls Envoy past CloudFront, so it writes the viewer address CloudFront would: its own IP, one
+            # rate limit bucket per pod (threat model RL-7).
+            - name: SVP_K6_VIEWER_IP
               valueFrom:
                 fieldRef:
                   fieldPath: status.podIP
-            # Empty, or this pod's IP when the cluster trusts two hops (render.sh --forwarded-for; threat model RL-7).
-            - name: SVP_K6_FORWARDED_FOR
-              value: "@FORWARDED_FOR@"
             - name: K6_NO_USAGE_REPORT
               value: "true"
             - name: K6_AUTO_EXTENSION_RESOLUTION

@@ -1,4 +1,4 @@
-import { profile, routes, targets, forwardedForIP } from "./config.js";
+import { profile, routes, targets } from "./config.js";
 
 // handleSummary: a chosen subset of the end-of-test data, never the whole of it. The object k6 passes in also holds
 // setup_data, the pool's tokens and session cookies, so it is never written as is; nor are --summary-export or --out
@@ -69,7 +69,6 @@ function conditions() {
     api_url: t.apiURL || null,
     web_url: t.webURL || null,
     web_origin: t.webOrigin || null,
-    forwarded_for: forwardedForIP !== "",
   };
 }
 

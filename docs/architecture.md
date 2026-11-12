@@ -307,10 +307,12 @@ node); tên khớp tài nguyên của `svp-infra` và chart.
 ```mermaid
 flowchart TB
     subgraph region["AWS ap-southeast-1, account của env"]
-        subgraph vpc["VPC svp-env: subnet public, private, database trên mỗi AZ"]
+        subgraph vpc["VPC svp-env: subnet public, private, database, edge trên mỗi AZ"]
             subgraph pub["Subnet public"]
-                nlb["NLB<br/>[AWS Load Balancer Controller]"]
                 nat["NAT gateway"]
+            end
+            subgraph edgenet["Subnet edge, không node, không pod"]
+                alb["ALB internal svp-env-edge<br/>[Terraform; target group svp-env-envoy]"]
             end
             subgraph priv["Subnet private"]
                 subgraph eks["EKS svp-env, API chỉ endpoint private"]
@@ -333,11 +335,12 @@ flowchart TB
             end
         end
         s3[("S3 uploads, media")]
-        cf["CloudFront + WAF"]
+        cfe["CloudFront svp-env-web, svp-env-api<br/>[web ACL, cert ACM; VPC origin]"]
+        cf["CloudFront svp-env-media<br/>[web ACL, OAC]"]
         q[["SQS + EventBridge<br/>interruption của Karpenter"]]
         alarm["CloudWatch alarm → SNS svp-env-alarms → email"]
     end
-    nlb --> envoy --> svc
+    cfe --> alb --> envoy --> svc
     svc --> rds
     svc --> msk
     svc --> vk
@@ -349,7 +352,8 @@ flowchart TB
     vk -.-> alarm
 ```
 
-Kyverno và controller nền tảng khác xếp ở node nào còn chỗ; chỉ những gì phải chạy trước khi Karpenter có node mới cần nhóm hệ thống. Luồng
+Request công khai vào qua CloudFront (mỗi tên một distribution có web ACL), VPC origin, ALB internal, rồi Envoy; vì sao và ai đặt được IP
+client mà gateway tin: [`explanation/edge.md`](explanation/edge.md). Kyverno và controller nền tảng khác xếp ở node nào còn chỗ; chỉ những gì phải chạy trước khi Karpenter có node mới cần nhóm hệ thống. Luồng
 co giãn node, chuỗi TLS tới Postgres: [`explanation/deployment.md`](explanation/deployment.md#karpenter-node-theo-pod-đang-chờ); failover
 của RDS, Valkey và hành vi của service: [`explanation/reliability.md`](explanation/reliability.md).
 
@@ -359,7 +363,7 @@ spec của `svp-infra`: [stg](https://github.com/anhnvcoder/svp-infra/blob/main/
 [luồng](https://github.com/anhnvcoder/svp-infra/blob/main/docs/diagrams/svp-aws-flows.png).
 
 Account của env nằm trong một org AWS theo AWS Security Reference Architecture: account `svp-log-archive` giữ mọi log bảo mật (trail org, Config,
-flow log, log WAF, finding GuardDuty), account `svp-security` chạy GuardDuty, Security Hub, Config, Access Analyzer cho mọi account và gửi sự
+flow log, log WAF, log CloudFront, finding GuardDuty), account `svp-security` chạy GuardDuty, Security Hub, Config, Access Analyzer cho mọi account và gửi sự
 kiện bảo mật tới email; SCP, RCP gắn ở root của org đặt trần cho mọi account thành viên (không áp lên management), declarative policy EC2 áp cả
 management ([ADR-0059](adr/0059-org-structure-guardrails.md), [ADR-0060](adr/0060-org-detection-logging.md)). Cấu trúc, quyền, luồng log và
 luồng cảnh báo: [`explanation/aws-security.md`](explanation/aws-security.md).

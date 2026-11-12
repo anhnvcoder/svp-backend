@@ -89,29 +89,18 @@ apexHost: svp.localhost
 # other charts attach to it by sectionName.
 listeners: []
 
-# Who signs the certificates of Gateway svp (templates/certificates.yaml). selfSigned: a local CA of cert-manager,
-# trusted by clients that load it (`make k8s-ca`). acme: Let's Encrypt, DNS-01 on the Route 53 hosted zone hostedZoneId
-# that holds wildcardHost and apexHost; no key is in a Secret (cert-manager's controller uses EKS Pod Identity). server:
-# staging spares production's limit on certificates for the same names (5 per 7 days); clients trust no staging one.
+# Who signs the certificates of Gateway svp (templates/certificates.yaml). selfSigned, the only value: a local CA of
+# cert-manager, trusted by clients that load it (`make k8s-ca`).
 tls:
   issuer: selfSigned
-  acme:
-    server: production
-    email: ""
-    hostedZoneId: ""
-    region: ""
 
 # The Service of the Envoy fleet (EnvoyProxy svp, templates/gateway.yaml) and, on a cluster that enforces
 # NetworkPolicy in envoy-gateway-system's pods (EKS), what may reach those pods.
 envoy:
   service:
-    # Cluster on k3d (templates/gateway.yaml says why). With an NLB of AWS Load Balancer Controller sending to pod
-    # addresses (target type ip), no packet goes through kube-proxy and this has no effect.
+    # Cluster on k3d (templates/gateway.yaml says why). With a load balancer sending to pod addresses (target type ip),
+    # no packet goes through kube-proxy and this has no effect.
     externalTrafficPolicy: Cluster
-    # Annotations of the Service, which on EKS make AWS Load Balancer Controller create the NLB: type external, target
-    # type ip, and target group attribute preserve_client_ip.enabled=true. The render fails with an NLB that would hand
-    # Envoy the load balancer's address instead of the client's: the gateway's rate limits and logs key on that address.
-    annotations: {}
     # Type of the Service: "" keeps Envoy Gateway's LoadBalancer. ClusterIP where a load balancer outside the cluster
     # sends to the Envoy pods' addresses through targetGroupArn below, and no load balancer is made for the Service.
     type: ""
@@ -132,12 +121,10 @@ envoy:
       - ipBlock:
           cidr: 0.0.0.0/0
     # The load balancer's health check on a port of its own (19003, Envoy's /ready) and its sources, as httpsFrom.
-    # port 0: the port of annotation service.beta.kubernetes.io/aws-load-balancer-healthcheck-port of the Service, if
-    # any, from healthCheckCIDR.
+    # port 0: no such rule.
     healthCheck:
       port: 0
       from: []
-    healthCheckCIDR: ""
 
 # NodePool default and EC2NodeClass default of Karpenter (templates/karpenter.yaml): on only on EKS, where component
 # karpenter (wave -1) brings their CRDs. Once it is on, every value below is required and the render fails without it.

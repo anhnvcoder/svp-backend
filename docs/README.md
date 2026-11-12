@@ -29,6 +29,8 @@ Mục lục theo [Diátaxis](https://diataxis.fr): mỗi tài liệu thuộc m�
 - [`explanation/deployment.md`](explanation/deployment.md): compose, k3d và EKS: mỗi nơi gồm gì, vì sao khác nhau.
 - [`explanation/environments.md`](explanation/environments.md): stg và prd: thành phần nào phải giống, được giảm hay giảm có
   điều kiện, vì sao, và khi giảm thì kiểm bù ở đâu.
+- [`explanation/edge.md`](explanation/edge.md): đường vào công khai trên AWS: CloudFront, WAF, ALB internal, Envoy; IP client, chứng chỉ, DNS
+  và log của edge.
 - [`explanation/aws-security.md`](explanation/aws-security.md): org AWS theo AWS SRA: account, guardrail, ai đổi được gì, phát hiện, luồng
   log và luồng cảnh báo bảo mật.
 - [`explanation/delivery.md`](explanation/delivery.md): CI/CD, chuỗi cung ứng, ba repo và hợp đồng API.

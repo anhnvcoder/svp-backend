@@ -232,29 +232,25 @@ chart cấu hình như vậy.
 
 ### `svp-cluster`
 
-- **TLS của cổng vào.** Issuer tự ký ký CA, issuer CA ký hai chứng chỉ mà Envoy phục vụ (wildcard và `svp-apex` chỉ cho `svp.localhost`).
-  Client chỉ tin CA (`make k8s-ca` ghi ra `.k8s/ca.crt`), không cài gì vào kho tin cậy của máy, và cert-manager gia hạn cả hai như trên
-  cluster cloud. Với `tls.issuer: acme` (cluster trên internet), Let's Encrypt ký cả hai qua ClusterIssuer `svp-acme`: cert-manager chứng
-  minh quyền với tên bằng bản ghi TXT trong hosted zone Route 53 (DNS-01, thử thách duy nhất phủ được wildcard) bằng credential AWS của
-  chính pod của nó (EKS Pod Identity, không key nào trong Secret); khi đó không tạo CA local. `server` là `production`, hay `staging` để thử
-  issuer mà không tốn hạn mức của production cho chứng chỉ cùng tên (5 mỗi 7 ngày); client không tin chứng chỉ staging. `email` là liên hệ
-  của tài khoản ACME, bắt buộc.
+- **TLS của cổng vào.** Issuer tự ký ký CA `svp-ca`, issuer CA ký các chứng chỉ mà Envoy phục vụ, mỗi listener của `listeners` một cái
+  (mặc định, k3d: wildcard và `svp-apex` chỉ cho `svp.localhost`). Client chỉ tin CA (`make k8s-ca` ghi ra `.k8s/ca.crt`), không cài gì vào kho
+  tin cậy của máy, và cert-manager gia hạn chúng. Đó là issuer duy nhất (`tls.issuer: selfSigned`) ở mọi nền tảng: trên EKS chứng chỉ công
+  khai là cert ACM của CloudFront và ALB, còn Envoy dùng cert của CA nội bộ vì ALB không kiểm cert target ([`edge.md`](edge.md)).
 - **Cổng vào.** `GatewayClass` `svp` và `Gateway` `svp` ở `svp-edge`, xuất ra máy ở `127.0.0.1:8443` qua load balancer của k3d, hai
   listener HTTPS cổng 443: `https` cho `*.svp.localhost` (API, storage) và `https-apex` cho `svp.localhost` (web), mà wildcard không phủ;
   mỗi cái phục vụ chứng chỉ chỉ nêu tên host của nó. Một chứng chỉ cho cả hai tên sẽ hợp lệ cho `s3.svp.localhost` trên kết nối mở tới
   `svp.localhost` (cùng địa chỉ), nên trình duyệt có thể gửi request HLS qua kết nối HTTP/2 đó (RFC 9113 mục 9.1.1), nơi Envoy chọn
   listener apex theo SNI và không route nào của nó khớp `s3`. Không route nào tới UI vận hành được gắn vào (OPS-2): UI đó vào qua
-  `kubectl port-forward` và đăng nhập riêng. Trên EKS, annotation của Service Envoy (`values: envoy.service`) làm AWS Load Balancer
-  Controller đặt một NLB trước nó, chỉ TCP: Envoy vẫn terminate TLS. NLB phải đưa cho Envoy địa chỉ riêng của client, một hop mà gateway
-  tin trong `X-Forwarded-For`, nên các check trong chart làm fail mọi annotation của controller đó sẽ đưa địa chỉ của NLB: target type
-  khác `ip` đi qua node port của kube-proxy (với `externalTrafficPolicy: Cluster` là địa chỉ của node), và với target type `ip` NLB chỉ
-  giữ địa chỉ client khi `preserve_client_ip.enabled=true`.
+  `kubectl port-forward` và đăng nhập riêng. Trên EKS Envoy đứng sau ALB internal mà CloudFront tới qua VPC origin ([`edge.md`](edge.md)):
+  values nền tảng đặt Service `svp-envoy` kiểu `ClusterIP` (`envoy.service`), `TargetGroupBinding` `svp-envoy` cho AWS Load Balancer
+  Controller ghi địa chỉ pod Envoy vào target group của ALB (`envoy.targetGroupArn`), và một listener `https` không hostname (`listeners`)
+  phục vụ cả `<domain>` lẫn `api.<domain>`, vì ALB không gửi SNI tới target.
 - **Envoy HA** ([ADR-0056](../adr/0056-eks-platform-ha.md) §4, §6). EnvoyProxy `svp` không đặt `replicas`: HPA `envoyHpa` giữ số pod
   proxy từ 2 lên tới mức trần theo CPU, PDB `envoyPDB` (`minAvailable: 1`) giữ một pod khi drain node, và pod trải theo zone rồi theo node
   (`ScheduleAnyway`: khi một zone hết chỗ pod vẫn chạy ở zone còn lại). Giống nhau ở mọi nền tảng, không value theo nền tảng; HPA đọc
   metrics-server (add-on ở EKS, có sẵn ở k3s). Mất một node hay một AZ không mất cổng vào.
 - **Namespace và Pod Security.** Namespace theo vai trò: `svp` (sáu service Go và web), `svp-data` (Postgres, Valkey, Kafka, object
-  store `s3`, `svp-ops`), `svp-obs` (observability, GlitchTip), `svp-edge` (Gateway và chứng chỉ wildcard). Pod Security Admission `enforce`
+  store `s3`, `svp-ops`), `svp-obs` (observability, GlitchTip), `svp-edge` (Gateway và chứng chỉ của Envoy). Pod Security Admission `enforce`
   `restricted`: pod phải chạy không phải root, bỏ mọi capability, dùng seccomp `RuntimeDefault` và cấm leo quyền; chart không đạt thì sửa ở
   values của nó, không nới namespace. `warn` và `audit` cùng mức để `kubectl` và audit log nêu tên cái `enforce` từ chối. Namespace nền
   tảng của `values.yaml` nhận cùng nhãn Pod Security và không gì khác. `install.sh` và `gitops.sh` render riêng template này (không
@@ -294,12 +290,13 @@ chart cấu hình như vậy.
     node ở địa chỉ link-local `169.254.170.23` cổng 80 (địa chỉ mà `AWS_CONTAINER_CREDENTIALS_FULL_URI` trỏ SDK tới). Policy ở trên loại
     mọi dải private, link-local gồm cả, nên policy này mở đúng địa chỉ và cổng đó, chỉ cho pod này. Agent cũng trả lời ở `[fd00:ec2::23]:80`;
     cluster IPv6 cần địa chỉ đó thay vào đây.
-  - **Pod Envoy của Gateway `svp`**, trên cluster mà Envoy quay ra internet: khi một policy chọn chúng, không gì khác tới được chúng, nên
-    pod của cluster không tới được các cổng khác của Envoy. Vào: 10443, cổng Envoy Gateway cấp cho 443 của listener trong pod (cổng dưới
-    1024 được cộng 10000 để Envoy bind không cần đặc quyền), từ mọi địa chỉ (NLB giữ địa chỉ riêng của từng client); cổng metrics từ
-    Prometheus ở `svp-obs` (phân tích canary đọc chúng); health check của NLB ở cổng riêng từ VPC, nơi các node NLB nằm (nếu check ở
-    `traffic-port` thì nó kiểm 10443, vốn đã mở). Probe của kubelet đến từ node, mà NetworkPolicy không chặn được. Ra: không hạn chế (Envoy
-    tới controller của nó và mọi backend).
+  - **Pod Envoy của Gateway `svp`**, khi `envoy.networkPolicy.enabled` (EKS): khi một policy chọn chúng, không gì khác tới được chúng, nên
+    pod của cluster không tới được Envoy. Vào: 10443, cổng Envoy Gateway cấp cho 443 của listener trong pod (cổng dưới 1024 được cộng 10000
+    để Envoy bind không cần đặc quyền), từ nguồn `httpsFrom` (EKS: dải subnet edge, nơi chỉ ALB có địa chỉ, và namespace `svp-load` của Job
+    k6); cổng metrics từ Prometheus ở `svp-obs` (phân tích canary đọc chúng); cổng health check `healthCheck.port` (EKS: 19003, `/ready` của
+    Envoy) từ nguồn `healthCheck.from` (EKS: dải subnet edge). Gateway tin `CloudFront-Viewer-Address` chỉ vì không gì ngoài ALB và Job k6 tới
+    được Envoy (threat model RL-1). Probe của kubelet đến từ node, mà NetworkPolicy không chặn được. Ra: không hạn chế (Envoy tới controller
+    của nó và mọi backend).
 - **RBAC của operator CloudNativePG** (ServiceAccount `cnpg-system/cloudnative-pg`, chart `cloudnative-pg` 0.29.1 ở wave 2) được render
   ở chart này vì `base/cloudnative-pg.yaml` của `svp-gitops` tắt RBAC của chính chart: chart bind rule theo namespace hoặc toàn cluster
   hoặc chỉ ở namespace release, mà Cluster duy nhất của project, `svp-pg`, ở `svp-data`. Rule là của chart (`templates/_helpers.tpl` của
@@ -535,7 +532,8 @@ chart cấu hình như vậy.
 Vì sao: [ADR-0034](../adr/0034-aws-stage7.md) (nền tảng, lý do và bảng đầy đủ), [ADR-0038](../adr/0038-s3-bucket-names.md),
 [ADR-0053](../adr/0053-msk-elasticache-valkey.md) (MSK, ElastiCache), [ADR-0054](../adr/0054-data-subnet-tier.md) (subnet database),
 [ADR-0056](../adr/0056-eks-platform-ha.md) (Karpenter, HA nền tảng), [ADR-0057](../adr/0057-postgres17-verify-full.md) (RDS, TLS),
-[ADR-0058](../adr/0058-managed-data-operations.md) (alarm, vận hành dịch vụ dữ liệu).
+[ADR-0058](../adr/0058-managed-data-operations.md) (alarm, vận hành dịch vụ dữ liệu), [ADR-0061](../adr/0061-edge-cloudfront-waf-acm.md) (edge:
+CloudFront, WAF, ALB internal, ACM, DNS; giải thích ở [`edge.md`](edge.md)).
 
 Hạ tầng ở repo `svp-infra` (cài đặt GitHub: [`runbooks/svp-infra-setup.md`](../runbooks/svp-infra-setup.md)). Thiết kế: một
 cluster stg ở `ap-southeast-1`, dựng và xoá trong mỗi buổi; prd là cluster thứ hai theo chuẩn production. Hai env chạy cùng dịch vụ, cấu
@@ -558,8 +556,9 @@ flowchart LR
     gh["GitHub, GHCR<br/>svp-gitops, chart, image đã ký"]
     mail["Email vận hành"]
     subgraph aws["AWS ap-southeast-1, account của env"]
-        r53["Route 53<br/>zone của env"]
-        cf["CloudFront<br/>*.cloudfront.net, OAC"]
+        r53["Route 53<br/>zone của env, bản ghi do Terraform"]
+        cfe["CloudFront svp-env-web, svp-env-api<br/>web ACL, cert ACM"]
+        cf["CloudFront svp-env-media<br/>media.domain, web ACL, OAC"]
         subgraph s3["S3"]
             up[("uploads<br/>riêng tư, CORS POST")]
             media[("media<br/>riêng tư, chỉ CloudFront đọc")]
@@ -569,7 +568,7 @@ flowchart LR
         cw["CloudWatch alarm<br/>RDS, MSK, ElastiCache"]
         sns[["SNS svp-env-alarms<br/>mã hoá CMK"]]
         subgraph vpc["VPC, stg 2 AZ, prd 3 AZ"]
-            nlb["NLB L4<br/>target ip, giữ IP client"]
+            alb["ALB internal svp-env-edge<br/>subnet edge, VPC origin"]
             nat["NAT gateway"]
             bastion["Bastion SSM<br/>subnet private"]
             api["API EKS<br/>endpoint private"]
@@ -582,7 +581,7 @@ flowchart LR
                 subgraph sys["nhóm node system, on-demand, mỗi AZ một node"]
                     karpc["Argo CD, Karpenter,<br/>add-on EKS"]
                 end
-                ctl["LBC, ExternalDNS, cert-manager,<br/>ESO, KEDA: node nào còn chỗ"]
+                ctl["LBC, cert-manager, ESO, KEDA:<br/>node nào còn chỗ"]
                 subgraph karp["node của Karpenter, NodePool default<br/>stg Spot, prd on-demand"]
                     envoy["Envoy Gateway<br/>HPA, PDB, trải zone"]
                     app["svp: web, gateway,<br/>4 service gRPC, media-worker"]
@@ -592,9 +591,10 @@ flowchart LR
             end
         end
     end
-    browser -->|"HTTPS web, api"| nlb
-    client -->|"HTTPS api"| nlb
-    nlb --> envoy
+    browser -->|"HTTPS web, api"| cfe
+    client -->|"HTTPS api"| cfe
+    cfe -->|"VPC origin"| alb
+    alb --> envoy
     envoy --> app
     app -->|"9096, SCRAM TLS"| msk
     app -->|"6379, TLS"| ec
@@ -608,8 +608,7 @@ flowchart LR
     browser -->|"POST presigned"| up
     browser -->|"GET HLS"| cf
     cf -->|"OAC"| media
-    ctl -->|"bản ghi, DNS-01"| r53
-    ctl -->|"tạo NLB"| nlb
+    ctl -->|"đăng ký pod Envoy vào target group"| alb
     ctl -->|"git, image qua NAT"| nat
     nat --> gh
     evb --> sqs
@@ -630,11 +629,11 @@ Alarm nằm ngoài cluster: khi cluster chết, alarm của RDS, MSK, ElastiCach
 | Cluster | k3d, 2 node | EKS: nhóm node hệ thống on-demand (mỗi AZ một node) cho add-on, Argo CD, Karpenter; node workload do Karpenter tạo theo pod đang chờ (cỡ, capacity type, trần: [ADR-0056](../adr/0056-eks-platform-ha.md) §2, §3) |
 | Postgres | PostgreSQL 17: container `postgres` (compose), CloudNativePG `svp-pg` (k3d); cert server của CA local | RDS for PostgreSQL 17, CMK riêng, tham số ghi log; client nối thẳng địa chỉ RDS, CA là bundle của RDS (Secret `rds-ca`); stg một AZ, prd Multi-AZ |
 | Object store | RustFS `s3` | S3 `uploads`, `media`; credential Pod Identity |
-| CDN | Không có | CloudFront trước `media` (OAC), gói flat-rate Free có web ACL WAF ([ADR-0052](../adr/0052-cloudfront-flat-rate-free.md)) |
+| CDN | Không có | CloudFront trước mọi tên, mỗi tên một distribution và một web ACL; `media.<domain>` đọc bucket `media` qua OAC ([`edge.md`](edge.md)) |
 | Kafka | `apache/kafka` một broker (container `kafka`, StatefulSet `kafka`), SCRAM-SHA-512 TLS 9096, CA local | Amazon MSK provisioned, một broker mỗi AZ, cùng giao thức, user là secret `AmazonMSK_*`; dung lượng broker tự tăng tới trần của env |
 | Valkey | Container `valkey`, Deployment `valkey`, TLS 6379, aclfile | ElastiCache for Valkey cluster mode tắt (stg một node; prd primary + replica khác AZ, Multi-AZ), cùng access string; slow-log tới CloudWatch Logs |
 | Subnet dữ liệu | Không có | RDS, MSK, ElastiCache ở subnet database (khối 6 của VPC, route table chỉ `local`); `cluster.dbCidrs` là dải của subnet đó |
-| Vào hệ thống | Loopback, Envoy với CA tự ký | NLB L4 giữ IP client, Envoy (HPA, PDB, trải zone) với chứng chỉ Let's Encrypt, DNS Route 53 do ExternalDNS ghi |
+| Vào hệ thống | Loopback, Envoy với CA tự ký | CloudFront với WAF và cert ACM, VPC origin tới ALB internal ở subnet edge, Envoy (HPA, PDB, trải zone) với cert CA nội bộ; IP client từ `CloudFront-Viewer-Address`; bản ghi Route 53 do Terraform ghi |
 | API Kubernetes | `127.0.0.1:6550` | Endpoint private, tunnel SSM qua bastion, cổng local theo env |
 | Admission (Kyverno) | Một replica | Ba replica, PDB, trải zone (`platforms/eks/kyverno.yaml`) |
 | NetworkPolicy | network policy controller của k3s | Network policy agent của VPC CNI |
@@ -650,14 +649,14 @@ Argo CD); `envs/stg` dùng chung cho k3d stg và EKS stg.
 
 **Luồng upload → `READY` → feed → phát trên AWS:**
 
-1. Web (trình duyệt → NLB → Envoy → `web` → `gateway`) gọi `POST /videos`; video-service ký form POST bằng credential tạm của Pod Identity
+1. Web (trình duyệt → CloudFront → ALB → Envoy → `web` → `gateway`) gọi `POST /videos`; video-service ký form POST bằng credential tạm của Pod Identity
    (role chỉ ghi `uploads/<video_id>`), URL là endpoint vùng của bucket (`https://<bucket uploads>.s3.ap-southeast-1.amazonaws.com`,
    virtual-hosted).
 2. Trình duyệt POST file thẳng lên S3 (CORS chỉ nhận origin web, hạn form 15 phút); `CompleteUpload`: video-service `HEAD` object qua S3
    gateway endpoint (không qua NAT), outbox phát `video.uploaded` vào MSK.
 3. media-worker (KEDA theo lag) tải file gốc từ `uploads`, chạy ffmpeg, ghi HLS bất biến vào bucket `media` (master chỉ tạo một lần bằng
    `If-None-Match: *`); `transcode.completed` → video-service chuyển `READY`, phát `video.ready` → feed-service fan-out vào timeline (RDS).
-4. Feed: gateway → feed-service (cache khám phá ở ElastiCache); URL HLS trong response là `https://<tên CloudFront>/` + khoá của object.
+4. Feed: gateway → feed-service (cache khám phá ở ElastiCache); URL HLS trong response là `https://media.<domain>/` + khoá của object.
 5. Phát: trình duyệt GET master, playlist, segment từ CloudFront (cache theo `Cache-Control: … immutable`); CloudFront đọc `media` bằng
    OAC, đọc thẳng bucket bị từ chối (threat model AWS-2).
 
