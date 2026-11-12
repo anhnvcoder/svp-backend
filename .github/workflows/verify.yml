@@ -86,7 +86,7 @@ jobs:
       # Needed for jwtkey generation in make env and go test -race in test-stack-objstore.
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          go-version: 1.27.3
+          go-version: 1.27.4
           cache-dependency-path: go.sum
       - run: make ci-bridge-check
       # CLI tools for Postgres bootstrap and smoke test video generation.
@@ -180,7 +180,7 @@ jobs:
         run: deploy/ci/verify-steps/steps.sh check
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          go-version: 1.27.3
+          go-version: 1.27.4
           cache-dependency-path: go.sum
       - id: tools
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
@@ -327,7 +327,7 @@ jobs:
           esac
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          go-version: 1.27.3
+          go-version: 1.27.4
           cache-dependency-path: go.sum
       - id: tools
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
