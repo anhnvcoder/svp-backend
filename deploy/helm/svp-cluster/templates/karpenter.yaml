@@ -1,0 +1,103 @@
+{{- /*
+NodePool default and EC2NodeClass default of Karpenter (karpenter.enabled; on EKS only, where component karpenter brings
+their CRDs): the nodes of every workload beside the system node group.
+*/}}
+
+{{- /*
+The names follow from the cluster's: Terraform makes node role <cluster>-karpenter-node and tags the private subnets
+and the node security group karpenter.sh/discovery=<cluster>, so no value names a role, a subnet or a group.
+*/}}
+{{- if .Values.karpenter.enabled }}
+{{- $k := .Values.karpenter }}
+{{- $cluster := required "karpenter.clusterName: the EKS cluster's name (svp-<env>), which Karpenter's role and discovery tags derive from" $k.clusterName }}
+{{- $alias := required "karpenter.amiAlias: the pinned AL2023 release of the nodes (al2023@v<date>), the system node group's" $k.amiAlias }}
+{{- if not $k.capacityTypes }}
+{{- fail "karpenter.capacityTypes: the capacity types of NodePool default (spot, on-demand)" }}
+{{- end }}
+{{- if not $k.limits }}
+{{- fail "karpenter.limits: the cpu and memory NodePool default may launch at most, the cost ceiling" }}
+{{- end }}
+{{- if not $k.disruptionBudgets }}
+{{- fail "karpenter.disruptionBudgets: how many of the nodes Karpenter may disrupt at once (spec.disruption.budgets)" }}
+{{- end }}
+{{- $grace := required "karpenter.terminationGracePeriod: how long a node may drain before Karpenter deletes it anyway" $k.terminationGracePeriod }}
+apiVersion: karpenter.k8s.aws/v1
+kind: EC2NodeClass
+metadata:
+  name: default
+spec:
+  role: {{ printf "%s-karpenter-node" $cluster }}
+  amiSelectorTerms:
+    - alias: {{ $alias | quote }}
+  subnetSelectorTerms:
+    - tags:
+        karpenter.sh/discovery: {{ $cluster | quote }}
+  securityGroupSelectorTerms:
+    - tags:
+        karpenter.sh/discovery: {{ $cluster | quote }}
+  # IMDSv2 only, hop limit 1: a pod's container is one hop further and never reaches the node role's credentials
+  # (pods get theirs from EKS Pod Identity).
+  metadataOptions:
+    httpEndpoint: enabled
+    httpProtocolIPv6: disabled
+    httpPutResponseHopLimit: 1
+    httpTokens: required
+  blockDeviceMappings:
+    - deviceName: /dev/xvda
+      ebs:
+        volumeSize: 30Gi
+        volumeType: gp3
+        encrypted: true
+        deleteOnTermination: true
+  # The VPC CNI's prefix delegation gives a node far more pod addresses than its network interfaces alone; 110 is
+  # Kubernetes' own ceiling for the sizes NodePool default allows.
+  kubelet:
+    maxPods: 110
+  # The sweep after a session finds what Karpenter launched by this tag.
+  tags:
+    Project: svp
+---
+apiVersion: karpenter.sh/v1
+kind: NodePool
+metadata:
+  name: default
+spec:
+  template:
+    spec:
+      nodeClassRef:
+        group: karpenter.k8s.aws
+        kind: EC2NodeClass
+        name: default
+      # Graviton as the system node group; several families and sizes so that Spot can pick from many pools.
+      requirements:
+        - key: kubernetes.io/arch
+          operator: In
+          values: ["arm64"]
+        - key: kubernetes.io/os
+          operator: In
+          values: ["linux"]
+        - key: karpenter.sh/capacity-type
+          operator: In
+          values: {{ toJson $k.capacityTypes }}
+        - key: karpenter.k8s.aws/instance-category
+          operator: In
+          values: ["c", "m", "r"]
+        - key: karpenter.k8s.aws/instance-generation
+          operator: Gt
+          values: ["6"]
+        - key: karpenter.k8s.aws/instance-size
+          operator: In
+          values: ["large", "xlarge", "2xlarge"]
+      expireAfter: 720h
+      # The ceiling on draining one node: past it Karpenter deletes the node even while a PodDisruptionBudget blocks
+      # eviction, so removing this NodePool before the cluster is destroyed always ends.
+      terminationGracePeriod: {{ $grace | quote }}
+  limits:
+    {{- toYaml $k.limits | nindent 4 }}
+  # Five minutes before consolidating, so nodes do not churn with every step of KEDA's scaling.
+  disruption:
+    consolidationPolicy: WhenEmptyOrUnderutilized
+    consolidateAfter: 5m
+    budgets:
+      {{- toYaml $k.disruptionBudgets | nindent 6 }}
+{{- end }}

@@ -27,6 +27,8 @@ Mục lục theo [Diátaxis](https://diataxis.fr): mỗi tài liệu thuộc m�
   năng lực theo và nơi hiện thực.
 - [`explanation/capacity.md`](explanation/capacity.md): ước lượng quy mô: tải, dữ liệu, băng thông và thiết kế rút ra từ đó.
 - [`explanation/deployment.md`](explanation/deployment.md): compose, k3d và EKS: mỗi nơi gồm gì, vì sao khác nhau.
+- [`explanation/environments.md`](explanation/environments.md): stg và prd: thành phần nào phải giống, được giảm hay giảm có
+  điều kiện, vì sao, và khi giảm thì kiểm bù ở đâu.
 - [`explanation/delivery.md`](explanation/delivery.md): CI/CD, chuỗi cung ứng, ba repo và hợp đồng API.
 - [`explanation/observability.md`](explanation/observability.md): trace, metric, log, lỗi và số đo trình duyệt đi từ đâu tới đâu.
 - [`explanation/reliability.md`](explanation/reliability.md): SLO, tải, backup, probe và vận hành.

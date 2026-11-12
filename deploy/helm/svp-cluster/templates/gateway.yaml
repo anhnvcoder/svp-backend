@@ -42,7 +42,35 @@ spec:
         annotations:
           {{- toYaml . | nindent 10 }}
         {{- end }}
+      # Two replicas at least, so losing a node or a zone never takes the only entry point with it; no
+      # envoyDeployment.replicas beside it, the HPA alone owns the count. CPU is a share of the request below.
+      envoyHpa:
+        minReplicas: 2
+        maxReplicas: 4
+        metrics:
+          - type: Resource
+            resource:
+              name: cpu
+              target:
+                type: Utilization
+                averageUtilization: 60
+      # A drain or a node replacement evicts one pod at a time while another one serves.
+      envoyPDB:
+        minAvailable: 1
       envoyDeployment:
+        pod:
+          # Zones first, then nodes. ScheduleAnyway: with a zone or a node short of room the pod still starts
+          # elsewhere instead of staying Pending; k3d's nodes have no zone label, so only the second applies there.
+          topologySpreadConstraints:
+            {{- range list "topology.kubernetes.io/zone" "kubernetes.io/hostname" }}
+            - maxSkew: 1
+              topologyKey: {{ . }}
+              whenUnsatisfiable: ScheduleAnyway
+              labelSelector:
+                matchLabels:
+                  gateway.envoyproxy.io/owning-gateway-name: svp
+                  gateway.envoyproxy.io/owning-gateway-namespace: svp-edge
+            {{- end }}
         container:
           resources:
             requests:

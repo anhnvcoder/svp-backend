@@ -81,8 +81,9 @@ flowchart LR
   bao giờ ghi lùi) vào `envs/stg/images/<svc>.yaml` cùng commit chart vào `envs/stg/charts.yaml`, mở hay cập nhật một PR cuộn và bật
   auto-merge; PR tự merge khi `gitops-ok` xanh; Argo CD poll thấy commit, sync, gateway đi
   [canary](deployment.md#kubernetes-cục-bộ-k3d). Rollback stg là PR revert trong `svp-gitops`.
-- **Admission** (ADR-0015 §8): Kyverno (admission controller 1 replica + reports controller; version ghim ở
-  `argocd/apps/components.json` của `svp-gitops`), một `ImageValidatingPolicy` `svp-images` cho Pod ở namespace `svp`, kiểm theo
+- **Admission** (ADR-0015 §8): Kyverno (admission controller + reports controller; version ghim ở `argocd/apps/components.json` của
+  `svp-gitops`; admission controller một replica ở k3d, ba replica có PDB và trải zone trên EKS, `platforms/eks/kyverno.yaml`,
+  [ADR-0056](../adr/0056-eks-platform-ha.md) §5), một `ImageValidatingPolicy` `svp-images` cho Pod ở namespace `svp`, kiểm theo
   thứ tự: prefix GHCR của repo và có digest (không gọi mạng), chữ ký đúng identity, attestation `vuln` đúng identity, đủ hai nền
   tảng, không CRITICAL, không quá 72 giờ; khi bật `requireProvenance` (overlay `envs/<env>/svp-policy.yaml` của `svp-gitops`, bật ở
   stg và prd) thêm provenance đúng identity, đúng `builder.id`, repository, ref, và `verify-release.sh` đối chiếu commit của nó với
@@ -163,7 +164,10 @@ flowchart LR
   phát hành 3 ngày; repo này tự merge khi `ci-ok`, `images-ok` xanh chỉ `digest`, `pinDigest` của base image và image của chart
   (cùng tag, digest mới) và `patch`, `digest` của image compose; còn lại (mọi cập nhật Go module, patch tag của base image và image
   chạy trong cluster, và mọi PR của `svp-gitops`) duyệt tay ([ADR-0041](../adr/0041-github-hardening.md) (i), thay một phần
-  [ADR-0035](../adr/0035-renovate-automerge.md)).
+  [ADR-0035](../adr/0035-renovate-automerge.md)). Nhóm `postgres` gom image Postgres của compose, job test của CI và CloudNativePG vào một PR
+  cho minor, patch, digest, không tự merge, để mọi nơi giữ cùng `x.y` ([ADR-0057](../adr/0057-postgres17-verify-full.md) §1). Add-on EKS và AMI
+  không đi qua Renovate (datasource cần credential AWS): nâng tay theo runbook nâng minor của `svp-infra`
+  ([ADR-0056](../adr/0056-eks-platform-ha.md) §8); chart và image Karpenter qua Renovate của `svp-gitops` như component khác.
 - **Chi phí:** repo public nên runner (cả arm64) và package GHCR public không tính tiền; ngân sách thời gian mỗi workflow dưới 10
   phút. Kyverno thêm 0,13–0,16 GiB RAM: cluster dev nghỉ 6,40 GiB, đỉnh 7,92 GiB khi media-worker scale lên (cách đo ADR-0014 §2).
 

@@ -47,8 +47,9 @@ WITH_IMAGES = IMAGES='$(IMAGES)' WEB_FROM='$(WEB_FROM)' WEB_IMAGE='$(WEB_IMAGE)'
 # (compose_up_images) or pulled releases. --build rebuilds the web client when WEB_FROM=clone builds it from its source;
 # a web release runs as pulled, and --build would build it under the name of the release. WEB_FROM unset is stg.
 UP_BUILD = $(if $(filter stg image,$(or $(WEB_FROM),stg)),,--build)
-# Roles whose passwords `make env` generates (deploy/postgres/bootstrap.sql).
-DB_PASSWORD_VARS := SVP_USER_MIGRATOR_DB_PASSWORD SVP_USER_APP_DB_PASSWORD SVP_VIDEO_MIGRATOR_DB_PASSWORD SVP_VIDEO_APP_DB_PASSWORD \
+# Postgres passwords `make env` generates: the superuser of the compose container, and the roles of
+# deploy/postgres/bootstrap.sql.
+DB_PASSWORD_VARS := SVP_COMPOSE_PG_SUPERUSER_PASSWORD SVP_USER_MIGRATOR_DB_PASSWORD SVP_USER_APP_DB_PASSWORD SVP_VIDEO_MIGRATOR_DB_PASSWORD SVP_VIDEO_APP_DB_PASSWORD \
 	SVP_ENGAGEMENT_MIGRATOR_DB_PASSWORD SVP_ENGAGEMENT_APP_DB_PASSWORD SVP_FEED_MIGRATOR_DB_PASSWORD SVP_FEED_APP_DB_PASSWORD \
 	SVP_GLITCHTIP_MIGRATOR_DB_PASSWORD SVP_GLITCHTIP_APP_DB_PASSWORD
 # Root password of the object store and the secret keys of its users (deploy/s3/init.sh): the two services and the probe
@@ -78,11 +79,11 @@ KAFKA_VALKEY_PASSWORD_VARS := SVP_KAFKA_ADMIN_PASSWORD SVP_KAFKA_KEDA_PASSWORD S
 # cluster gives it to the web pods in Secret svp/web-env (deploy/k8s/secrets.sh).
 WEB_KEY_VARS := NEXT_SERVER_ACTIONS_ENCRYPTION_KEY
 
-.PHONY: env env-required local-ca local-files obs-valid obs-exclusive k3d-exclusive ci-bridge-check db-bootstrap glitchtip-init up down clean-data ps logs compose-config compose-hash slo-check smoke test-stack drill-obs-threats
+.PHONY: env env-required local-ca local-files obs-valid obs-exclusive k3d-exclusive db-bootstrap glitchtip-init up down clean-data ps logs compose-config compose-hash slo-check smoke test-stack drill-obs-threats
 
 # .env is read with the strict rule of deploy/observability/glitchtip/dotenv.sh, the same as glitchtip-init: a line it
 # refuses stops make env, naming the variable, before anything is written.
-env: ## Create .env (mode 600) with random secrets and a new JWT key, or fill in the ones it lacks or has empty; never changes a set value. Also the local CA and the server certificate of Kafka and Valkey in .local/ca/, made once (deploy/compose/local-ca.sh)
+env: ## Create .env (mode 600) with random secrets and a new JWT key, or fill in the ones it lacks or has empty; never changes a set value. Also the local CA and the server certificates of Postgres, Kafka and Valkey in .local/ca/, each made once (deploy/compose/local-ca.sh)
 	@deploy/compose/local-ca.sh .local/ca
 	@set -e; umask 077; \
 	k8s_bytes() { case $$1 in *_S3_SECRET_KEY) echo 20 ;; *) echo 24 ;; esac; }; \
@@ -122,11 +123,11 @@ env: ## Create .env (mode 600) with random secrets and a new JWT key, or fill in
 env-required:
 	@test -f .env || { echo ".env not found; run 'make env' first" >&2; exit 1; }
 
-# The local CA of make env and the server certificate and key the Kafka and Valkey of compose and the k3d cluster
-# present, checked before make up or make k8s-up builds or creates anything.
+# The local CA of make env and the server certificates and keys the Postgres, Kafka and Valkey of compose and the k3d
+# cluster present, checked before make up or make k8s-up builds or creates anything.
 local-ca: env-required
-	@test -f .local/ca/ca.crt && test -f .local/ca/server.crt && test -f .local/ca/server.key || \
-	  { echo "the local CA is missing in .local/ca/; run 'make env'" >&2; exit 1; }
+	@for f in ca.crt server.crt server.key postgres.crt postgres.key; do test -f .local/ca/$$f || \
+	  { echo "the local CA or a server certificate is missing in .local/ca/ ($$f); run 'make env'" >&2; exit 1; }; done
 
 # The files of .local/ that tls-init reads: those of local-ca, and Valkey's ACL file, written again from .env on every
 # make up. Valkey reads it only when it starts: a password changed in .env also changes the environment of service
@@ -134,8 +135,9 @@ local-ca: env-required
 local-files: local-ca
 	@deploy/valkey/aclfile.sh .env .local/valkey/users.acl
 
-db-bootstrap: env-required ## Create or update the Postgres roles and databases (idempotent)
-	deploy/postgres/bootstrap.sh .env
+# Starts the Postgres container first (tls-init reads the files of local-files), so it runs beside no k3d cluster.
+db-bootstrap: k3d-exclusive env-required local-files ## Start the compose Postgres and create or update its roles and databases inside the container (idempotent)
+	COMPOSE='$(COMPOSE)' deploy/postgres/bootstrap.sh .env
 
 obs-valid:
 	@case '$(OBS)' in '' $(foreach v,$(OBS_VALUES),| $(v))) ;; \
@@ -153,17 +155,6 @@ k3d-exclusive:
 	  env -u DOCKER_DEFAULT_PLATFORM docker ps -q --filter name=^k3d-svp-registry$$); \
 	  if [ -n "$$running" ]; then echo "make up: the k3d cluster svp or its registry is running; run 'make k8s-down' first" >&2; exit 1; fi
 
-# The job stack of .github/workflows/ci.yml publishes its Postgres service container on 172.17.0.1, and the compose
-# services reach it as host.docker.internal, which host-gateway maps to the gateway of Docker's default bridge (unless
-# the daemon sets host-gateway-ip). If the two differ, every compose service fails to reach Postgres with a timeout far
-# from its cause.
-ci-bridge-check: ## CI only (job stack): fail unless the gateway of Docker's default bridge is 172.17.0.1, where that job publishes Postgres
-	@gateway=$$(env -u DOCKER_DEFAULT_PLATFORM docker network inspect bridge --format '{{range .IPAM.Config}}{{.Gateway}}{{end}}'); \
-	  if [ "$$gateway" != 172.17.0.1 ]; then \
-	    echo "::error::the default bridge's gateway is '$$gateway', not 172.17.0.1 where the services are published"; exit 1; \
-	  fi; \
-	  echo "Docker's default bridge has gateway 172.17.0.1"
-
 # The DSN and API token exist only once GlitchTip is initialized, and compose reads .env when it creates a container:
 # `make up OBS=lgtm` writes them to .env first, so even the first run starts the Go services with SENTRY_DSN set.
 GLITCHTIP_INIT = COMPOSE='$(COMPOSE_UP_lgtm)' deploy/observability/glitchtip/init.sh .env
@@ -171,7 +162,7 @@ GLITCHTIP_INIT = COMPOSE='$(COMPOSE_UP_lgtm)' deploy/observability/glitchtip/ini
 glitchtip-init: env-required db-bootstrap ## Migrate and bootstrap GlitchTip (admin, org/project svp, drill token, source map upload token), add SENTRY_* to .env; idempotent, never changes a set value
 	$(GLITCHTIP_INIT)
 
-up: k3d-exclusive env-required local-files obs-valid obs-exclusive db-bootstrap ## Bootstrap Postgres, build, migrate and start the core stack (web client at http://localhost:3001); OBS=lgtm adds Grafana LGTM (127.0.0.1:3000) and GlitchTip (127.0.0.1:8000), OBS=elastic adds Elasticsearch, Kibana (127.0.0.1:5601) and APM Server instead, OBS=off turns telemetry off (drills keep it off); IMAGES=stg runs the staging releases of the six backend services instead of building them; the web client runs its staging release, WEB_FROM=clone builds it from the clone of svp-frontend (../frontend, or SVP_WEB_DIR), WEB_FROM=image (WEB_IMAGE=<ghcr.io/...@sha256:...>) runs that release; refuses while a container of a profile not chosen runs (make down first)
+up: k3d-exclusive env-required local-files obs-valid obs-exclusive db-bootstrap ## Start Postgres and bootstrap its roles, build, migrate and start the core stack (web client at http://localhost:3001); OBS=lgtm adds Grafana LGTM (127.0.0.1:3000) and GlitchTip (127.0.0.1:8000), OBS=elastic adds Elasticsearch, Kibana (127.0.0.1:5601) and APM Server instead, OBS=off turns telemetry off (drills keep it off); IMAGES=stg runs the staging releases of the six backend services instead of building them; the web client runs its staging release, WEB_FROM=clone builds it from the clone of svp-frontend (../frontend, or SVP_WEB_DIR), WEB_FROM=image (WEB_IMAGE=<ghcr.io/...@sha256:...>) runs that release; refuses while a container of a profile not chosen runs (make down first)
 	$(if $(filter lgtm,$(OBS)),$(GLITCHTIP_INIT))
 	$(call WITH_IMAGES,compose_up_images) $(COMPOSE_UP_$(OBS)) up -d $(UP_BUILD) --wait
 
@@ -180,10 +171,10 @@ down: ## Stop and remove the containers of every profile and the network (no vol
 
 # down -v removes only the volumes the compose file declares. A volume of the project that it no longer declares stays
 # and is named as kept.
-clean-data: ## Stop every profile and delete the stack's volumes (Kafka topics, users and ACLs, object store buckets, media-worker scratch, LGTM data, Alertmanager silences, Elasticsearch indices); a volume no longer in the compose file is kept
+clean-data: ## Stop every profile and delete the stack's volumes (Postgres databases and roles, Kafka topics, users and ACLs, object store buckets, media-worker scratch, LGTM data, Alertmanager silences, Elasticsearch indices); a volume no longer in the compose file is kept
 	@declared=$$($(COMPOSE_ALL) config --volumes | sed 's/^/svp_/'); \
 	  existing=$$(env -u DOCKER_DEFAULT_PLATFORM docker volume ls -q --filter label=com.docker.compose.project=svp); \
-	  echo "Removing the svp stack and these volumes with all their data (Postgres on the host is not touched):"; \
+	  echo "Removing the svp stack and these volumes with all their data (the host's own Postgres is not touched):"; \
 	  kept=; for v in $$existing; do \
 	    if printf '%s\n' $$declared | grep -qx "$$v"; then echo "  $$v"; else kept="$$kept $$v"; fi; \
 	  done; \

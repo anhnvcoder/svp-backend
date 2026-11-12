@@ -140,8 +140,8 @@ Mốc cho postmortem: giờ breaker đóng chính xác nằm ở log của gatew
 ## Leo thang
 
 - Service đích không đứng được sau 2 lần restart hay sau 15 phút: đọc log tới lỗi đầu tiên, kiểm phụ thuộc của nó (Postgres
-  native `pg_isready -h 127.0.0.1 -p 5432`; k3d `kubectl --context k3d-svp -n svp-data get cluster svp-pg`). Postgres native
-  dùng chung với dự án khác: không restart nó, báo chủ máy.
+  compose `dc exec -T postgres pg_isready`; k3d `kubectl --context k3d-svp -n svp-data get cluster svp-pg`;
+  EKS: RDS, xem [rds-storage-low.md](rds-storage-low.md) cho cách đọc trạng thái).
 - Target là feed, video hay user và cảnh báo SLO availability cùng cháy: ghi mốc thời gian ngay (cho postmortem), sau sự cố
   mở postmortem.
 - Breaker mở mà service đích khoẻ, không lỗi (log không có `UNAVAILABLE`/`DEADLINE_EXCEEDED`): nghi ngưỡng breaker hay cách

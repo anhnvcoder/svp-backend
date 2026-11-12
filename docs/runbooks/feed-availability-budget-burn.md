@@ -61,7 +61,7 @@ Dashboard `svp-slo` cho ngân sách và burn rate theo cửa sổ.
   `kubectl --context k3d-svp -n svp rollout restart deployment/feed-service`.
 - Lỗi sau deploy: quay về bản trước (compose: checkout bản trước, `make up OBS=lgtm`; GitOps: PR revert commit promote). Canary
   của gateway đang chạy với lỗi thì Argo Rollouts tự abort theo phân tích; không promote tay.
-- Postgres: compose dùng Postgres native chung với dự án khác (không restart, báo chủ máy); k3d xem trạng thái Cluster `svp-pg`.
+- Postgres: compose xem `make ps` và `make logs SVC=postgres`; k3d xem trạng thái Cluster `svp-pg`; EKS xem trạng thái RDS ([rds-storage-low.md](rds-storage-low.md)).
 
 ## Khôi phục và xác nhận
 

@@ -78,7 +78,7 @@ Video đang transcode lúc server chết được làm lại (record chưa commi
 ## Leo thang
 
 - Container server không lên lại sau 15 phút, hay restart lặp: `make k8s-down && make k8s-up` (dựng lại cluster dev; volume
-  compose, Postgres native không bị đụng; dữ liệu trong cluster mất). Cluster GitOps: dựng lại bằng `make k8s-gitops-up`.
+  compose không bị đụng; dữ liệu trong cluster mất). Cluster GitOps: dựng lại bằng `make k8s-gitops-up`.
 - Lặp lại với 2 worker: tiêu chí (c) của ADR-0017 không đạt; theo ADR-0017 thì cắt tiếp, hay dời đo năng lực lên cluster cloud
   (node pool riêng cho media-worker, ADR-0020 §9). Mở postmortem.
 

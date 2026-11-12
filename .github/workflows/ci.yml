@@ -90,10 +90,10 @@ jobs:
     permissions:
       contents: read
     services:
-      # Major 15 like the dev machine's Postgres and the cluster's. postgres/postgres is the Makefile's default
-      # SVP_TEST_POSTGRES_URL; tests create their own svp_*_test databases from it.
+      # Postgres 17 like compose, the cluster's and RDS, ahead of the dev machine's own. postgres/postgres is the
+      # Makefile's default SVP_TEST_POSTGRES_URL; tests create their own svp_*_test databases from it.
       postgres:
-        image: docker.io/library/postgres:15.19-trixie@sha256:64b99032e218b66b1d1a6334995056e1aa57f50a0c522cc856e72dff0e4b0d63
+        image: docker.io/library/postgres:17.11-trixie@sha256:ff87138949ad9a46f32ff23bd6852b52ce024a13dffe9b4087be98292cdd3b4f
         env:
           POSTGRES_PASSWORD: postgres
         # The runner hands this string to docker create -p as it is, so the port is published on loopback only.
@@ -503,22 +503,7 @@ jobs:
     env:
       SVP_GITOPS_DIR: ${{ github.workspace }}/.gitops/svp-gitops
       SVP_WEB_DIR: ${{ github.workspace }}/.web/svp-frontend
-    services:
-      # Published on 127.0.0.1 (runner) and 172.17.0.1 (docker0 gateway for host.docker.internal), never on every
-      # interface; Postgres 15. Kafka and Valkey are containers of the compose stack.
-      # Compose services log in with role passwords bootstrapped by make up (TCP requires password).
-      postgres:
-        image: docker.io/library/postgres:15.19-trixie@sha256:64b99032e218b66b1d1a6334995056e1aa57f50a0c522cc856e72dff0e4b0d63
-        env:
-          POSTGRES_PASSWORD: postgres
-        ports:
-          - 127.0.0.1:5432:5432
-          - 172.17.0.1:5432:5432
-        options: >-
-          --health-cmd "pg_isready -U postgres"
-          --health-interval 5s
-          --health-timeout 5s
-          --health-retries 20
+    # Postgres, Kafka and Valkey are containers of the compose stack; make up bootstraps Postgres inside its container.
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -528,13 +513,11 @@ jobs:
         with:
           go-version: 1.27.4
           cache-dependency-path: go.sum
-      # Fails early if host-gateway differs from 172.17.0.1, preventing hard-to-diagnose connection timeouts.
-      - run: make ci-bridge-check
-      # Script tools from Ubuntu archive (no third-party action): psql (needs >= 15 for \getenv), ffmpeg, jq.
+      # Script tools from Ubuntu archive (no third-party action): ffmpeg, jq.
       - name: Install the tools of the scripts
         run: |
           sudo apt-get update -q
-          sudo apt-get install -y -q --no-install-recommends postgresql-client ffmpeg jq
+          sudo apt-get install -y -q --no-install-recommends ffmpeg jq
       # Both public repositories, over HTTPS without credentials: no token, no secret. svp-frontend at the commit of the web
       # release of staging (image.tag of envs/stg/images/web.yaml in that clone of svp-gitops).
       - run: make gitops-clone
@@ -586,7 +569,7 @@ jobs:
         if: failure()
         run: |
           make ps
-          make logs SVC='tls-init kafka kafka-init valkey'
+          make logs SVC='tls-init postgres kafka kafka-init valkey'
       # load.sh fails on secret leak but leaves files in place: re-checked here so summary.json uploads only if clean.
       # machine.json and other raw results stay on runner.
       - name: Pick the k6 summary

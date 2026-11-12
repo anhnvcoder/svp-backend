@@ -144,6 +144,10 @@ Phụ lục: [`appendix/NNNN-<slug>.md`](appendix/NNNN-<slug>.md) (chỉ khi có
 | [0052](0052-cloudfront-flat-rate-free.md) | CloudFront của media ở stg và prd chạy trên gói flat-rate Free ($0, không phí vượt), có web ACL WAF ở cả hai env; CORS của media bằng policy managed `Managed-SimpleCORS`, `PriceClass_All` cố định | Chấp nhận |
 | [0053](0053-msk-elasticache-valkey.md) | Kafka, Redis của stg và prd là Amazon MSK provisioned (Kafka 4.1 KRaft, SCRAM-SHA-512 trên TLS, ACL theo service) và ElastiCache for Valkey 9.1 (cluster mode tắt, TLS, user ACL theo db và tiền tố); compose, k3d chạy Apache Kafka KRaft (`apache/kafka`) và Valkey cùng cơ chế; luật chung managed/local cho mọi cloud | Chấp nhận |
 | [0054](0054-data-subnet-tier.md) | VPC của stg, prd có ba tầng subnet: public (NAT, NLB), private (node EKS), database (RDS, MSK, ElastiCache) ở khối 6 của dải VPC với route table riêng không `0.0.0.0/0`; `cluster.dbCidrs` là dải subnet database | Chấp nhận |
+| [0055](0055-environment-matrix.md) | stg chạy cùng dịch vụ, cấu hình, xác thực, mã hoá và giám sát với prd; stg chỉ giảm dự phòng, cỡ, số lượng, retention và bảo vệ xoá (nhóm phải giống, được giảm, giảm có điều kiện); mỗi khác biệt là dữ liệu ở `<env>.tfvars` và `envs/<env>/` của `svp-gitops`, có lý do | Chấp nhận |
+| [0056](0056-eks-platform-ha.md) | Node EKS do Karpenter tự quản cấp trên một nhóm node hệ thống on-demand; Envoy và Kyverno chạy HA, trải theo zone; log control plane đủ năm loại; add-on và AMI ghim version | Chấp nhận |
+| [0057](0057-postgres17-verify-full.md) | PostgreSQL 17 ở RDS, CloudNativePG, compose và CI; mọi client nối `sslmode=verify-full` với CA của nền tảng; compose có Postgres riêng; RDS lớp M ở prd với CMK, storage autoscaling và tham số ghi log; không proxy kết nối | Chấp nhận |
+| [0058](0058-managed-data-operations.md) | RDS, MSK, ElastiCache có CloudWatch alarm gửi SNS mã hoá CMK tới email, ngưỡng theo khuyến nghị của AWS; MSK tự tăng dung lượng broker; ElastiCache chờ cửa sổ bảo trì ở prd và gửi slow-log tới CloudWatch Logs | Chấp nhận |
 
 ## Chuẩn áp dụng
 

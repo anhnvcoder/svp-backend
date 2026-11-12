@@ -9,11 +9,17 @@ thành phần nào, nối với nhau ra sao và vì sao khác nhau. Lệnh chạ
 ## Compose
 
 Vì sao: [ADR-0008](../adr/0008-async-upload-pipeline-stage2a.md), [ADR-0022](../adr/0022-local-object-store-minio-replacement.md),
-[ADR-0053](../adr/0053-msk-elasticache-valkey.md).
+[ADR-0053](../adr/0053-msk-elasticache-valkey.md), [ADR-0057](../adr/0057-postgres17-verify-full.md).
 
-Postgres native trên máy (mỗi service một database, xem [`AGENTS.md`](../../AGENTS.md) mục "Database và Redis"), object store RustFS
-thay S3, không có CDN (client đọc thẳng store). Kafka, Valkey và object store chạy trong compose profile `core`. Giới hạn RAM, CPU của
-từng container ở [`deploy/compose/compose.yaml`](../../deploy/compose/compose.yaml).
+Object store RustFS thay S3, không có CDN (client đọc thẳng store). Postgres, Kafka, Valkey và object store chạy trong compose profile `core`.
+Giới hạn RAM, CPU của từng container ở [`deploy/compose/compose.yaml`](../../deploy/compose/compose.yaml).
+
+- **Postgres** (ADR-0057 §3; cùng major và cùng TLS với RDS của stg, prd): container `postgres`, PostgreSQL 17 ghim digest, mỗi service một
+  database và cặp role migrator/app (bảng ở [`AGENTS.md`](../../AGENTS.md) mục "Database và Redis"), dữ liệu ở volume riêng, không publish
+  cổng (`127.0.0.1:5432` của máy là Postgres native, chỉ cho `make test`). Server phục vụ cert `postgres.crt` do CA local của `make env` ký;
+  `deploy/postgres/pg_hba.conf` từ chối mọi kết nối mạng không TLS, như `rds.force_ssl` của RDS. Client nối `postgres:5432` với
+  `sslmode=verify-full`: kiểm CA lẫn tên trong cert ([chuỗi TLS tới Postgres](#tls-tới-postgres)). `make up` dựng container trước rồi chạy
+  bootstrap role, database bên trong nó (`docker compose … exec postgres psql`), nên máy không cần `psql`.
 
 - **Object store `s3`** (RustFS ghim version và digest, non-root, root fs chỉ đọc, console tắt;
   [ADR-0022](../adr/0022-local-object-store-minio-replacement.md)): `s3` là endpoint tương thích S3 API (không phải AWS S3), chạy
@@ -130,8 +136,9 @@ flowchart LR
   `tracestate`, `baggage`, `sentry-trace` của client. Object store chỉ nhận CORS từ `https://svp.localhost:8443`, theo bucket như
   compose. Gateway tin đúng một hop `X-Forwarded-For` từ dải pod `10.42.0.0/16` (threat model RL-1); mọi client trên máy đi ra
   cùng địa chỉ node nên rơi vào tối đa hai bucket rate limit (ADR-0014 §9).
-- **Dữ liệu trong cluster** (ADR-0014 §4, §5), không đụng Postgres/Redis native: Postgres `svp-pg` một instance do
-  CloudNativePG quản, cùng tên database `svp_<svc>` và cặp role migrator/app như compose, đăng nhập `scram-sha-256`;
+- **Dữ liệu trong cluster** (ADR-0014 §4, §5), không đụng Postgres/Redis native: Postgres `svp-pg` một instance PostgreSQL 17 do
+  CloudNativePG quản, cùng tên database `svp_<svc>` và cặp role migrator/app như compose, đăng nhập `scram-sha-256` trên TLS `verify-full`
+  tới `svp-pg-rw.svp-data` (cert server `postgres.crt` của CA local qua Secret `pg-tls`, [chuỗi TLS](#tls-tới-postgres));
   Valkey (Deployment `valkey`, `valkey.mode: cluster`) và Kafka (StatefulSet `kafka` một broker, Job `kafka-init`, `kafka.mode: cluster`)
   cùng image, cùng cấu hình, cùng user và ACL như compose ([ADR-0053](../adr/0053-msk-elasticache-valkey.md)): Valkey TLS ở
   `valkey.svp-data.svc.cluster.local:6379`, không persistence, gateway db 10, feed-service db 14, web db 9 (session), mỗi client một
@@ -150,7 +157,8 @@ flowchart LR
   ([ADR-0050](../adr/0050-bash-to-standard-tools.md) mục 5).
 - **Workload** (ADR-0014 §10): một chart chung `deploy/helm/svp-service` cho 6 service và web (probe, `requests`/`limits`,
   securityContext `restricted`, không token ServiceAccount); gateway 2 replica có PDB và HPA theo CPU, feed-service luôn 2
-  replica (HPA 2–2) có PDB, ưu tiên trải hai node ([ADR-0031](../adr/0031-chaos-findings-feed-engagement-tempo.md) §1), web 2
+  replica (HPA 2–2) có PDB, ưu tiên trải theo zone rồi theo node ([ADR-0031](../adr/0031-chaos-findings-feed-engagement-tempo.md) §1,
+  [ADR-0056](../adr/0056-eks-platform-ha.md) §6; node k3d không có nhãn zone nên chỉ trải node có tác dụng), web 2
   replica cố định có PDB, trải hai node, chờ 5 s trước khi tắt (server Next thoát ngay khi nhận SIGTERM), NetworkPolicy chỉ nhận
   từ Envoy và chỉ ra gateway, Valkey, Collector, GlitchTip (threat model WEB-13); media-worker 1–2 replica do KEDA scale theo lag
   của group `media-worker` (topic vẫn 3 partition; 3 worker cùng transcode làm Docker VM hết CPU và k3s server chết,
@@ -241,6 +249,10 @@ chart cấu hình như vậy.
   tin trong `X-Forwarded-For`, nên các check trong chart làm fail mọi annotation của controller đó sẽ đưa địa chỉ của NLB: target type
   khác `ip` đi qua node port của kube-proxy (với `externalTrafficPolicy: Cluster` là địa chỉ của node), và với target type `ip` NLB chỉ
   giữ địa chỉ client khi `preserve_client_ip.enabled=true`.
+- **Envoy HA** ([ADR-0056](../adr/0056-eks-platform-ha.md) §4, §6). EnvoyProxy `svp` không đặt `replicas`: HPA `envoyHpa` giữ số pod
+  proxy từ 2 lên tới mức trần theo CPU, PDB `envoyPDB` (`minAvailable: 1`) giữ một pod khi drain node, và pod trải theo zone rồi theo node
+  (`ScheduleAnyway`: khi một zone hết chỗ pod vẫn chạy ở zone còn lại). Giống nhau ở mọi nền tảng, không value theo nền tảng; HPA đọc
+  metrics-server (add-on ở EKS, có sẵn ở k3s). Mất một node hay một AZ không mất cổng vào.
 - **Namespace và Pod Security.** Namespace theo vai trò: `svp` (sáu service Go và web), `svp-data` (Postgres, Valkey, Kafka, object
   store `s3`, `svp-ops`), `svp-obs` (observability, GlitchTip), `svp-edge` (Gateway và chứng chỉ wildcard). Pod Security Admission `enforce`
   `restricted`: pod phải chạy không phải root, bỏ mọi capability, dùng seccomp `RuntimeDefault` và cấm leo quyền; chart không đạt thì sửa ở
@@ -360,6 +372,15 @@ chart cấu hình như vậy.
   ServiceAccount khác có thể mount). Policy trên pod phủ mọi workload: Deployment, Job hay StatefulSet chỉ khởi động qua pod mà controller
   của nó tạo, mà policy này từ chối (workload hiện `FailedCreate`); static pod không được nêu ServiceAccount. `serviceAccountName` của
   pod không đổi được sau khi tạo nên `CREATE` là đủ.
+- **NodePool và EC2NodeClass của Karpenter** (`templates/karpenter.yaml`, khi `karpenter.enabled`; chỉ nền tảng `eks`,
+  [ADR-0056](../adr/0056-eks-platform-ha.md) §2). Một NodePool `default` và một EC2NodeClass `default`: Graviton arm64, họ, thế hệ và cỡ
+  instance, IMDSv2 hop 1, đĩa gốc gp3 mã hoá, tag `Project=svp` ghim trong template (cùng ở hai env); role node, subnet và security group
+  suy từ `karpenter.clusterName` (role `<tên>-karpenter-node`, tag discovery `karpenter.sh/discovery`); AMI, capacity type, `limits`, ngân
+  sách disruption, `terminationGracePeriod` là value bắt buộc khi bật. Luồng co giãn ở [Karpenter](#karpenter-node-theo-pod-đang-chờ).
+- **Secret `rds-ca`** (`templates/rds-ca.yaml`, [ADR-0057](../adr/0057-postgres17-verify-full.md) §2): bundle CA của RDS cho region, từ value
+  `rdsCA.bundle`, thành Secret thường (cert công khai) khoá `ca.crt` ở `svp`, `svp-obs`, `svp-data`, ba namespace có client Postgres; không
+  render khi value rỗng (k3d). Cùng chart giữ chuỗi kết nối Postgres của mọi client (`files/external-secrets.yaml`, host từ
+  `externalSecrets.postgres`), đều `sslmode=verify-full&sslrootcert=/etc/svp-ca/ca.crt`.
 
 ### `svp-data`
 
@@ -368,10 +389,12 @@ chart cấu hình như vậy.
   của nó mà `ObjectStore` cần), trước observability và service. Mọi Secret nó đọc do `deploy/k8s/secrets.sh` ghi từ `.env` trước
   release này; không cái nào ở trong git.
 - **Hai chế độ Postgres.** `cluster`: Postgres `svp-pg` do CloudNativePG chạy trong namespace này, WAL và base backup vào object store
-  `s3` (`templates/postgres.yaml`, `backup.yaml`). `external`: Postgres managed ngoài cluster (Amazon RDS), tự giữ backup: không
-  `Cluster`, không backup, và Service `svp-pg-rw` thành `ExternalName` tới `external.host`, nên mọi chuỗi kết nối
-  (`svp-pg-rw.svp-data:5432`) giống nhau trên mọi nền tảng. Job `pg-bootstrap` vẫn tạo role và database ở đó, bằng login của Secret
-  `pg-superuser` (trên RDS là master user `postgres`).
+  `s3` (`templates/postgres.yaml`, `backup.yaml`); cert server từ Secret `pg-tls`, CA `local-ca`. `external`: Postgres managed ngoài cluster
+  (Amazon RDS), tự giữ backup: không `Cluster`, không backup, không Service nào trong namespace này. Client gọi đúng tên mà cert server mang,
+  vì `verify-full` kiểm cert theo host đã gọi: `svp-pg-rw.svp-data` ở `cluster`, địa chỉ RDS ở `external` (`externalSecrets.postgres` của
+  chart `svp-cluster`, [chuỗi TLS](#tls-tới-postgres)). Job `pg-bootstrap` tạo role và database ở đó, bằng login của Secret `pg-superuser`
+  (trên RDS là master user `postgres`), với `PGHOST` suy từ chế độ (`svp-pg-rw` hay `external.host`), `PGSSLMODE=verify-full` và CA mount
+  theo chế độ (`local-ca` hay `rds-ca`).
 - **Thế hệ archive.** Giá trị này là prefix của bucket mà `svp-pg` ghi WAL và base backup vào. Cluster phục hồi từ backup phải archive vào
   một prefix mới, trống (Job recovery từ chối archive đã có WAL, và hai thế hệ trong một prefix sẽ trộn backup của chúng), nên mỗi lần
   phục hồi ([`postgres-restore.md`](../runbooks/postgres-restore.md)) bắt đầu thế hệ tiếp theo, `svp-pg-<yymmddhhmmss>` (UTC), và
@@ -510,11 +533,14 @@ chart cấu hình như vậy.
 ## AWS
 
 Vì sao: [ADR-0034](../adr/0034-aws-stage7.md) (nền tảng, lý do và bảng đầy đủ), [ADR-0038](../adr/0038-s3-bucket-names.md),
-[ADR-0053](../adr/0053-msk-elasticache-valkey.md) (MSK, ElastiCache), [ADR-0054](../adr/0054-data-subnet-tier.md) (subnet database).
+[ADR-0053](../adr/0053-msk-elasticache-valkey.md) (MSK, ElastiCache), [ADR-0054](../adr/0054-data-subnet-tier.md) (subnet database),
+[ADR-0056](../adr/0056-eks-platform-ha.md) (Karpenter, HA nền tảng), [ADR-0057](../adr/0057-postgres17-verify-full.md) (RDS, TLS),
+[ADR-0058](../adr/0058-managed-data-operations.md) (alarm, vận hành dịch vụ dữ liệu).
 
 Hạ tầng ở repo `svp-infra` (cài đặt GitHub: [`runbooks/svp-infra-setup.md`](../runbooks/svp-infra-setup.md)). Thiết kế: một
-cluster stg ở `ap-southeast-1`, dựng và xoá trong mỗi buổi; prd là cluster thứ hai theo chuẩn production, chỉ khác stg ở biến.
-Trạng thái dựng và số đo của buổi AWS ở mục Kiểm chứng của ADR-0034.
+cluster stg ở `ap-southeast-1`, dựng và xoá trong mỗi buổi; prd là cluster thứ hai theo chuẩn production. Hai env chạy cùng dịch vụ, cấu
+hình, xác thực và giám sát; stg chỉ giảm dự phòng, cỡ, số lượng, retention và bảo vệ xoá. Từng khác biệt, nhóm và lý do của nó ở
+[`environments.md`](environments.md). Trạng thái dựng và số đo của buổi AWS ở mục Kiểm chứng của ADR-0034.
 
 Sơ đồ triển khai stg với icon AWS (đúng subnet của module Terraform; trang prd và trang luồng ở
 [`svp-aws.pdf`](https://github.com/anhnvcoder/svp-infra/blob/main/docs/diagrams/svp-aws.pdf)), sinh từ spec của repo `svp-infra` nên
@@ -522,34 +548,47 @@ Sơ đồ triển khai stg với icon AWS (đúng subnet của module Terraform;
 
 ![Sơ đồ AWS stg](https://raw.githubusercontent.com/anhnvcoder/svp-infra/main/docs/diagrams/svp-aws-stg.png)
 
-Sơ đồ khối bên dưới là cùng hệ thống ở mức thành phần:
+Sơ đồ khối bên dưới là cùng hệ thống ở mức thành phần, cho một env `svp-<env>`:
 
 ```mermaid
 flowchart LR
     browser["Trình duyệt"]
     client["Client ngoài<br/>curl, smoke"]
+    learner["Máy người học<br/>kubectl, Terraform"]
     gh["GitHub, GHCR<br/>svp-gitops, chart, image đã ký"]
-    subgraph aws["AWS ap-southeast-1, account svp-stg"]
-        r53["Route 53<br/>zone stg.aws.svp.example"]
+    mail["Email vận hành"]
+    subgraph aws["AWS ap-southeast-1, account của env"]
+        r53["Route 53<br/>zone của env"]
         cf["CloudFront<br/>*.cloudfront.net, OAC"]
         subgraph s3["S3"]
             up[("uploads<br/>riêng tư, CORS POST")]
             media[("media<br/>riêng tư, chỉ CloudFront đọc")]
         end
-        subgraph vpc["VPC, 2 AZ"]
+        evb["EventBridge<br/>sự kiện Spot, rebalance"]
+        sqs[["SQS svp-env-karpenter"]]
+        cw["CloudWatch alarm<br/>RDS, MSK, ElastiCache"]
+        sns[["SNS svp-env-alarms<br/>mã hoá CMK"]]
+        subgraph vpc["VPC, stg 2 AZ, prd 3 AZ"]
             nlb["NLB L4<br/>target ip, giữ IP client"]
             nat["NAT gateway"]
+            bastion["Bastion SSM<br/>subnet private"]
+            api["API EKS<br/>endpoint private"]
             subgraph dbnet["subnet database, không route ra Internet"]
-                rds[("RDS PostgreSQL 15")]
-                msk[["Amazon MSK<br/>2 broker, SCRAM-SHA-512 TLS 9096"]]
+                rds[("RDS PostgreSQL 17<br/>TLS, CMK")]
+                msk[["Amazon MSK<br/>SCRAM-SHA-512 TLS 9096"]]
                 ec[("ElastiCache for Valkey<br/>TLS 6379, user RBAC")]
             end
-            subgraph eks["EKS svp-stg, node Graviton Spot"]
-                envoy["Envoy Gateway<br/>TLS Let's Encrypt"]
-                app["svp: web, gateway,<br/>4 service gRPC, media-worker"]
-                data["svp-data: Job kafka-init, svp-ops"]
-                obs["svp-obs: Prometheus, Loki,<br/>Tempo, Pyroscope, GlitchTip"]
-                ctl["Argo CD, LBC, ExternalDNS,<br/>cert-manager, ESO, KEDA"]
+            subgraph eks["EKS svp-env"]
+                subgraph sys["nhóm node system, on-demand, mỗi AZ một node"]
+                    karpc["Argo CD, Karpenter,<br/>add-on EKS"]
+                end
+                ctl["LBC, ExternalDNS, cert-manager,<br/>ESO, KEDA: node nào còn chỗ"]
+                subgraph karp["node của Karpenter, NodePool default<br/>stg Spot, prd on-demand"]
+                    envoy["Envoy Gateway<br/>HPA, PDB, trải zone"]
+                    app["svp: web, gateway,<br/>4 service gRPC, media-worker"]
+                    data["svp-data: Job kafka-init, svp-ops"]
+                    obs["svp-obs: Prometheus, Loki,<br/>Tempo, Pyroscope, GlitchTip"]
+                end
             end
         end
     end
@@ -561,7 +600,7 @@ flowchart LR
     app -->|"6379, TLS"| ec
     data -->|"9096"| msk
     data -->|"6379"| ec
-    app -->|"5432, TLS"| rds
+    app -->|"5432, TLS verify-full"| rds
     obs -->|"svp_glitchtip"| rds
     obs -->|"lag: kafkametrics"| msk
     app -->|"Pod Identity,<br/>S3 gateway endpoint"| up
@@ -573,21 +612,35 @@ flowchart LR
     ctl -->|"tạo NLB"| nlb
     ctl -->|"git, image qua NAT"| nat
     nat --> gh
+    evb --> sqs
+    sqs -->|"interruption"| karpc
+    karpc -->|"tạo, xoá node"| karp
+    rds -.->|"metric"| cw
+    msk -.->|"metric"| cw
+    ec -.->|"metric"| cw
+    cw --> sns --> mail
+    learner -->|"tunnel SSM"| bastion --> api
 ```
 
-| Thành phần | Local (compose, k3d) | AWS stg |
+Alarm nằm ngoài cluster: khi cluster chết, alarm của RDS, MSK, ElastiCache vẫn tới email (ADR-0058; mỗi alarm `page` có runbook cùng tên ở
+[`runbooks/`](../runbooks/README.md)). Máy người học tới API chỉ qua tunnel SSM, cổng local theo env ([`reference/eks.md`](../reference/eks.md)).
+
+| Thành phần | Local (compose, k3d) | AWS stg, prd |
 | --- | --- | --- |
-| Cluster | k3d, 2 node | EKS, managed node group 3 × `m7g.large` Spot |
-| Postgres | Native (compose), CloudNativePG (k3d) | RDS PostgreSQL 15 single-AZ; Service `ExternalName` `svp-pg-rw` giữ chuỗi kết nối |
+| Cluster | k3d, 2 node | EKS: nhóm node hệ thống on-demand (mỗi AZ một node) cho add-on, Argo CD, Karpenter; node workload do Karpenter tạo theo pod đang chờ (cỡ, capacity type, trần: [ADR-0056](../adr/0056-eks-platform-ha.md) §2, §3) |
+| Postgres | PostgreSQL 17: container `postgres` (compose), CloudNativePG `svp-pg` (k3d); cert server của CA local | RDS for PostgreSQL 17, CMK riêng, tham số ghi log; client nối thẳng địa chỉ RDS, CA là bundle của RDS (Secret `rds-ca`); stg một AZ, prd Multi-AZ |
 | Object store | RustFS `s3` | S3 `uploads`, `media`; credential Pod Identity |
 | CDN | Không có | CloudFront trước `media` (OAC), gói flat-rate Free có web ACL WAF ([ADR-0052](../adr/0052-cloudfront-flat-rate-free.md)) |
-| Kafka | `apache/kafka` một broker (container `kafka`, StatefulSet `kafka`), SCRAM-SHA-512 TLS 9096, CA local | Amazon MSK provisioned (stg 2 × `kafka.t3.small`, RF 2, min ISR 1; prd 3 × `kafka.m7g.large`, RF 3, min ISR 2), cùng giao thức, user là secret `AmazonMSK_*` |
-| Valkey | Container `valkey`, Deployment `valkey`, TLS 6379, aclfile | ElastiCache for Valkey 9.1 cluster mode tắt (stg 1 × `cache.t4g.micro`; prd primary + replica `cache.m7g.large`, Multi-AZ), cùng access string |
+| Kafka | `apache/kafka` một broker (container `kafka`, StatefulSet `kafka`), SCRAM-SHA-512 TLS 9096, CA local | Amazon MSK provisioned, một broker mỗi AZ, cùng giao thức, user là secret `AmazonMSK_*`; dung lượng broker tự tăng tới trần của env |
+| Valkey | Container `valkey`, Deployment `valkey`, TLS 6379, aclfile | ElastiCache for Valkey cluster mode tắt (stg một node; prd primary + replica khác AZ, Multi-AZ), cùng access string; slow-log tới CloudWatch Logs |
 | Subnet dữ liệu | Không có | RDS, MSK, ElastiCache ở subnet database (khối 6 của VPC, route table chỉ `local`); `cluster.dbCidrs` là dải của subnet đó |
-| Vào hệ thống | Loopback, Envoy với CA tự ký | NLB L4 giữ IP client, Envoy với chứng chỉ Let's Encrypt, DNS Route 53 do ExternalDNS ghi |
+| Vào hệ thống | Loopback, Envoy với CA tự ký | NLB L4 giữ IP client, Envoy (HPA, PDB, trải zone) với chứng chỉ Let's Encrypt, DNS Route 53 do ExternalDNS ghi |
+| API Kubernetes | `127.0.0.1:6550` | Endpoint private, tunnel SSM qua bastion, cổng local theo env |
+| Admission (Kyverno) | Một replica | Ba replica, PDB, trải zone (`platforms/eks/kyverno.yaml`) |
 | NetworkPolicy | network policy controller của k3s | Network policy agent của VPC CNI |
 | StorageClass, metrics-server | `local-path`, metrics-server của k3s | `gp3` do chart `svp-cluster` tạo, addon `metrics-server` |
 | Secret | `.env` (compose), ESO provider `kubernetes` (k3d GitOps) | ESO provider `aws`: Secrets Manager + Pod Identity, giá trị từ `make eks-secrets`; mật khẩu Kafka, Valkey do Terraform sinh và ghi write-only (không vào plan, state) |
+| Cảnh báo | Alertmanager (profile `obs`, k3d) | Alertmanager trong cluster, cộng CloudWatch alarm của dịch vụ dữ liệu tới SNS và email |
 | Hạ tầng | `make up`, `make k8s-up`, `make k8s-gitops-up` | Terraform `aws/envs/<env>` của `svp-infra`, `make eks-secrets`, rồi Terraform `aws/gitops/<env>` (Argo CD và root) |
 
 Version của k3s và EKS ghim ở `K3S_IMAGE_TAG` của [`Makefile`](../../Makefile) và ở cấu hình Terraform của `svp-infra`. Bảng đủ (kể
@@ -607,3 +660,81 @@ Argo CD); `envs/stg` dùng chung cho k3d stg và EKS stg.
 4. Feed: gateway → feed-service (cache khám phá ở ElastiCache); URL HLS trong response là `https://<tên CloudFront>/` + khoá của object.
 5. Phát: trình duyệt GET master, playlist, segment từ CloudFront (cache theo `Cache-Control: … immutable`); CloudFront đọc `media` bằng
    OAC, đọc thẳng bucket bị từ chối (threat model AWS-2).
+
+### Karpenter: node theo pod đang chờ
+
+Controller Karpenter (component `karpenter`, hai replica ở `kube-system`, chạy trên nhóm node hệ thống) theo dõi pod không xếp được và chọn
+instance cho chúng trong tập mà NodePool `default` cho phép (ADR-0056 §1, §2). Nhóm node hệ thống có trước Karpenter, nên Argo CD và chính
+Karpenter luôn có chỗ chạy; không taint, nên workload chạy được trên nó khi Karpenter chưa có node.
+
+```mermaid
+flowchart LR
+    pend["Pod Pending<br/>không node nào đủ chỗ"] --> ctl["Karpenter<br/>gom pod, chọn instance"]
+    ctl --> nc["NodeClaim<br/>theo NodePool default"]
+    nc --> ec2["EC2 tạo instance<br/>Spot ở stg, on-demand ở prd"]
+    ec2 --> node["Node tham gia cluster<br/>role svp-env-karpenter-node"]
+    node --> run["Pod chạy"]
+    run -.->|"node rỗng hay thừa<br/>sau consolidateAfter"| cons["Consolidation<br/>drain theo ngân sách disruption"]
+    cons -.-> term["Xoá node"]
+```
+
+Consolidation gỡ node rỗng hay gộp pod sang node rẻ hơn, mỗi lượt không quá ngân sách disruption của NodePool; drain tôn trọng PDB tới
+`terminationGracePeriod`, quá hạn đó node bị xoá dù PDB còn chặn. Đổi AMI hay requirement làm node lệch (drift): Karpenter thay node theo cùng
+ngân sách.
+
+```mermaid
+sequenceDiagram
+    participant EC2 as EC2 (Spot)
+    participant EB as EventBridge
+    participant Q as SQS svp-env-karpenter
+    participant K as Karpenter
+    participant N as Node cũ
+    EC2->>EB: cảnh báo thu hồi (trước 2 phút)
+    EB->>Q: sự kiện
+    K->>Q: đọc sự kiện
+    K->>K: tạo NodeClaim thay thế
+    K->>N: taint, drain theo PDB
+    EC2->>N: thu hồi instance
+```
+
+Interruption chỉ xảy ra ở stg (Spot), nên stg kiểm luôn đường này cho prd ([`environments.md`](environments.md)). Cuối buổi,
+`pre-destroy.sh` của `svp-infra` xoá NodePool rồi EC2NodeClass khi controller còn chạy và chờ hết NodeClaim, để `terraform destroy` không
+gặp instance mà Terraform không biết (ADR-0056 §9).
+
+## TLS tới Postgres
+
+Vì sao: [ADR-0057](../adr/0057-postgres17-verify-full.md) §2. Mọi client Postgres (bốn service, Job `migrate`, GlitchTip, Job `pg-bootstrap`)
+nối với `sslmode=verify-full&sslrootcert=/etc/svp-ca/ca.crt` ở compose, k3d và EKS: client kiểm cert server nối về CA trong file đó và mang
+đúng tên host đã gọi. `require` chỉ mã hoá; một máy đứng giữa trong VPC hay trong cluster vẫn giả được server. Chuỗi kết nối giống nhau ở ba
+nơi, chỉ khác host và nội dung file CA.
+
+```mermaid
+flowchart LR
+    subgraph compose["compose"]
+        cca["CA local<br/>.local/ca/ca.crt"] -->|"ký"| ccert["postgres.crt<br/>SAN postgres"]
+        ccert --> cpg[("container postgres")]
+        cc["service, migrate, GlitchTip<br/>sslrootcert: ca.crt mount"] -->|"verify-full<br/>host postgres"| cpg
+    end
+    subgraph k3d["k3d"]
+        kca["Secret local-ca"] -->|"ký"| kcert["Secret pg-tls<br/>SAN svp-pg-rw.svp-data"]
+        kcert --> kpg[("CNPG svp-pg")]
+        kc["service, migrate, GlitchTip, pg-bootstrap<br/>CA từ Secret local-ca"] -->|"verify-full<br/>host svp-pg-rw.svp-data"| kpg
+    end
+    subgraph eks["EKS"]
+        rca["Root CA của RDS<br/>rds-ca-rsa2048-g1"] -->|"ký"| rcert["cert server của RDS<br/>tên là địa chỉ RDS"]
+        rcert --> rpg[("RDS")]
+        ec["service, migrate, GlitchTip, pg-bootstrap<br/>CA từ Secret rds-ca, bundle của region"] -->|"verify-full<br/>host cluster.rdsAddress"| rpg
+    end
+```
+
+- **compose:** `make env` sinh `postgres.crt` ký bởi CA local (một lần, file mới, không đè cert của Kafka, Valkey); `tls-init` chép vào
+  volume `svp-tls` cho container `postgres`; client mount `ca.crt` ở `/etc/svp-ca`.
+- **k3d:** cùng cert, vào cluster qua nguồn `local-tls` thành Secret `pg-tls` (`certificates.serverTLSSecret` của Cluster `svp-pg`); CA
+  là Secret `local-ca`, client mount qua value `localCA` của chart `svp-service`.
+- **EKS:** RDS đặt `ca_cert_identifier`; client gọi địa chỉ RDS (`externalSecrets.postgres` = `cluster.rdsAddress:5432`), vì cert RDS không
+  mang tên nào khác. Bundle CA công khai của region nằm ở value `rdsCA.bundle` (`platforms/eks/svp-cluster.yaml` của `svp-gitops`), chart
+  `svp-cluster` render thành Secret `rds-ca`; bốn service có Postgres đặt `localCA: rds-ca`. Bundle chỉ chứa root CA nên RDS xoay cert server
+  mà không cần đổi gì ở client. Đổi bundle là một PR vào `svp-gitops`.
+
+Cái giá: thêm một cert phải giữ ở local, Secret `rds-ca` phải theo bundle của AWS; `make test` vẫn nối Postgres native không TLS (helper
+`internal/pgtest`), nên đường TLS chỉ được kiểm ở stack compose, k3d và CI.

@@ -5,17 +5,18 @@
 
 postgres:
   # cluster: Postgres svp-pg run by CloudNativePG in this namespace, with its WAL and base backups in the object store
-  # s3. external: a managed Postgres outside the cluster (Amazon RDS), which keeps its own backups: no Cluster, no
-  # backup, and Service svp-pg-rw becomes an ExternalName for external.host, so every connection string is the same on
-  # every platform. The pg-bootstrap Job still makes the roles and databases there, as the login of Secret pg-superuser.
+  # s3, its server certificate signed by the local CA (Secrets pg-tls and local-ca). external: a managed Postgres
+  # outside the cluster (Amazon RDS), which keeps its own backups: no Cluster, no backup. The pg-bootstrap Job still
+  # makes the roles and databases there, as the login of Secret pg-superuser, with sslmode=verify-full against the CA
+  # of Secret local-ca (cluster) or rds-ca (external, the RDS bundle chart svp-cluster renders).
   mode: cluster
   external:
-    # DNS name of the managed Postgres (an RDS endpoint), and the CIDRs its addresses are in (the database subnets),
-    # the only addresses the pg-bootstrap Job may reach on 5432.
+    # DNS name of the managed Postgres (the RDS endpoint, the name its certificate holds), and the CIDRs its addresses
+    # are in (the database subnets), the only addresses the pg-bootstrap Job may reach on 5432.
     host: ""
     cidrs: []
-  # Major 15 like the host's Postgres the tests run on; minimal: no extension is needed.
-  image: ghcr.io/cloudnative-pg/postgresql:15.19-minimal-trixie@sha256:f6091200bc5e1926efea8babe8a511d091e9a253d8f33fe4e920d0e89a67b57e
+  # The major of RDS, compose and CI; minimal: no extension is needed.
+  image: ghcr.io/cloudnative-pg/postgresql:17.11-minimal-trixie@sha256:eb06deb9dab3706c9dc8dce4b24677f0b55a8887918cd26d2a3cc59b2c12c3ee
   storage: 2Gi
   resources:
     requests: {cpu: 100m, memory: 256Mi}

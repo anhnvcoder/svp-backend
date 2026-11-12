@@ -16,7 +16,11 @@ Loại tài liệu (Diátaxis): **reference**, tra cứu khi cần một lệnh 
   image `apache/kafka`, `kafka.svp-data.svc.cluster.local:9096` SASL_SSL SCRAM-SHA-512, ACL; Job `kafka-init` tạo topic, user, ACL), Valkey
   (Deployment `valkey`, TLS cổng 6379, user ACL theo db và tiền tố khoá), Deployment `svp-ops` (CLI vận hành, dưới), object store (RustFS, StatefulSet `s3`, `s3.svp-data:9000`, Job `s3-init`) nằm trong cluster: target của cluster k3d không đụng Postgres/Redis native. File sinh ra nằm ở
   `.k8s/` (gitignore). CA local cho client là Secret `local-ca` (file `ca.crt`) mount ở `/etc/svp-ca` (Go `SSL_CERT_DIR`, Node
-  `NODE_EXTRA_CA_CERTS`, KEDA tham số `ca`, Collector `tls.ca_file`); service có Kafka đăng nhập SASL SCRAM-SHA-512 trên TLS bằng
+  `NODE_EXTRA_CA_CERTS`, KEDA tham số `ca`, Collector `tls.ca_file`, Postgres `sslrootcert`). **TLS tới Postgres**
+  ([ADR-0057](../adr/0057-postgres17-verify-full.md) §2): Cluster `svp-pg` phục vụ cert `postgres.crt` của CA local (`make env` sinh, SAN gồm
+  `svp-pg-rw.svp-data`) qua Secret `pg-tls` (`kubernetes.io/tls`, nhãn `cnpg.io/reload`, dựng từ khoá `postgres.crt`, `postgres.key` của nguồn
+  `local-tls`) ở `certificates.serverTLSSecret`, CA ở `serverCASecret: local-ca`; mọi client (service, Job `migrate`, GlitchTip, Job
+  `pg-bootstrap`) nối `svp-pg-rw.svp-data:5432` với `sslmode=verify-full&sslrootcert=/etc/svp-ca/ca.crt`; service có Kafka đăng nhập SASL SCRAM-SHA-512 trên TLS bằng
   `KAFKA_SASL_USERNAME`, `KAFKA_SASL_PASSWORD` (đặt cả hai hay không biến nào): cả hai cùng có ở compose. Biến chỉ đặt ở cluster: gateway tin một hop
   `X-Forwarded-For` từ dải pod của Envoy qua `TRUSTED_PROXY_HOPS=1`, `TRUSTED_PROXY_CIDRS=10.42.0.0/16` (compose: không
   đặt, 0 hop; giá trị không hợp lệ thì gateway không khởi động); gateway `TRUST_TRACE_CONTEXT=true` (nhận
@@ -37,6 +41,10 @@ Loại tài liệu (Diátaxis): **reference**, tra cứu khi cần một lệnh 
   2 s × 30 lần); media-worker không có probe. Probe gRPC: startup và liveness hỏi health tổng `""` (không phụ thuộc database),
   readiness hỏi tên health `readiness` (`grpc.service: readiness`), NOT_SERVING khi ping Postgres của service lỗi 3 lần liên tiếp
   ([ADR-0044](../adr/0044-grpc-readiness.md)): database của một service không tới được thì pod của nó NotReady, không restart.
+- Nền tảng trên k3d so với EKS ([ADR-0056](../adr/0056-eks-platform-ha.md)): Envoy chạy như EKS (EnvoyProxy `svp` có HPA `envoyHpa` từ 2
+  replica, PDB `envoyPDB`, trải zone rồi trải node; node k3d không có nhãn `topology.kubernetes.io/zone` nên chỉ ràng buộc node có tác dụng);
+  Kyverno một replica của `base/kyverno.yaml` (ba replica chỉ ở `platforms/eks/kyverno.yaml`); không Karpenter (`karpenter.enabled` của chart
+  `svp-cluster` tắt, node là hai node của k3d).
 
 ## Kyverno và nguồn phát hành
 
@@ -140,12 +148,13 @@ Loại tài liệu (Diátaxis): **reference**, tra cứu khi cần một lệnh 
   canary lúc Secret của nó đổi thì để Reloader và Argo Rollouts xử lý như mọi restart. **Hai chế độ, chọn theo namespace `svp-secrets`:**
   cluster dev (không có namespace đó) nhận chính các Secret như trên; cluster GitOps dựng từ revision mà overlay stg bật
   `externalSecrets` của chart `svp-cluster` (có `svp-secrets`) chỉ nhận **nguồn**: mỗi entry của
-  `deploy/helm/svp-cluster/files/external-secrets.yaml` một Secret ở `svp-secrets` (13 entry từ `.env` và CA local, key đặt tên như `.env`:
+  `deploy/helm/svp-cluster/files/external-secrets.yaml` một Secret ở `svp-secrets` (13 entry từ `.env` và CA local, key đặt tên như `.env`
+  hay như file của `.local/ca/`, `local-tls` gồm cả `postgres.crt`, `postgres.key`:
   `pg-superuser`, `pg-roles`, `s3-root`, `s3-users`, `kafka-admin`, `kafka-users`, `valkey-users`, `local-ca`, `local-tls`, `jwt-signing`,
   `jwt-verify`, `web`, `obs`; entry thứ 14 `glitchtip-runtime` tạo rỗng khi chưa có và không bao giờ bị đổi ở đây; entry `argocd-notifications` chỉ khi chart
   bật `externalSecrets.argocdNotifications`, xem [`eks.md`](eks.md)), rồi khi ExternalSecret đã có thì dựng lại từ nguồn mới
   (`force-sync`, chờ `status.syncedResourceVersion` đổi và `Ready`; `es_force_sync` của `deploy/k8s/lib.sh`), các ExternalSecret của
-  `svp-data` ở bước (1), các cái còn lại ở bước (3). External Secrets Operator ([ADR-0026](../adr/0026-secrets-gitops.md)) dựng 36 Secret từ đó (k3d); cluster GitOps
+  `svp-data` ở bước (1), các cái còn lại ở bước (3). External Secrets Operator ([ADR-0026](../adr/0026-secrets-gitops.md)) dựng các Secret của chart từ nguồn đó (k3d, gồm `svp-data/pg-tls`); cluster GitOps
   từ revision không có External Secrets thì nhận Secret như đường dev. `k8s-glitchtip-init` ghi DSN vào Secret
   `svp/sentry`, token API chỉ đọc vào `svp-obs/glitchtip-api` và token tải source map vào `svp-obs/glitchtip-sourcemaps`
   (không vào `.env`, không in; cluster có `svp-secrets`: ghi vào nguồn `svp-secrets/glitchtip-runtime` rồi `force-sync` ba

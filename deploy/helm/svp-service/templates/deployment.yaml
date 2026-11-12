@@ -69,13 +69,16 @@ spec:
       securityContext:
         {{- include "svp-service.podSecurityContext" . | nindent 8 }}
       {{- if .Values.spreadAcrossNodes }}
+      # Zones first, then nodes; k3d's nodes have no zone label, so only the second applies there.
       topologySpreadConstraints:
+        {{- range list "topology.kubernetes.io/zone" "kubernetes.io/hostname" }}
         - maxSkew: 1
-          topologyKey: kubernetes.io/hostname
+          topologyKey: {{ . }}
           whenUnsatisfiable: ScheduleAnyway
           labelSelector:
             matchLabels:
-              {{- include "svp-service.selectorLabels" . | nindent 14 }}
+              {{- include "svp-service.selectorLabels" $ | nindent 14 }}
+        {{- end }}
       {{- end }}
       containers:
         - name: {{ .Release.Name }}

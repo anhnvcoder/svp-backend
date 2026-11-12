@@ -3,9 +3,10 @@
 # deploy/postgres/bootstrap.sql (the file compose uses, mounted at /init/bootstrap.sql) once per database as the
 # superuser. Run by the pg-bootstrap Job of chart svp-data after every install and upgrade; idempotent.
 
-# The connection comes from PGHOST, PGPORT, PGUSER, PGPASSWORD, PGSSLMODE and PGDATABASE; the role passwords from
-# SVP_<SERVICE>_{MIGRATOR,APP}_DB_PASSWORD. Every password stays in the environment, never on a command line, and none
-# is printed. SVP_PG_MODE=external: a managed Postgres (Amazon RDS, master user, not a superuser), not CloudNativePG's.
+# The connection comes from PGHOST, PGPORT, PGUSER, PGPASSWORD, PGSSLMODE, PGSSLROOTCERT and PGDATABASE; the role
+# passwords from SVP_<SERVICE>_{MIGRATOR,APP}_DB_PASSWORD. Every password stays in the environment, never on a command
+# line, and none is printed. SVP_PG_MODE=external: a managed Postgres (Amazon RDS, master user, not a superuser), not
+# CloudNativePG's.
 # Design notes: docs/explanation/deployment.md.
 set -euo pipefail
 

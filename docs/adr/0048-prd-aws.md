@@ -140,8 +140,6 @@ Chọn các phương án in đậm; `<env>` là `stg` hay `prd`, `<miền>` là 
   nguồn `svp-gitops` của một Application cùng một revision.
 - Rollback: lượt `promote-prd` với `stg_ref` cũ mở PR đặt lại `gitopsRevision` cùng image, chart của commit đó (Code Owner duyệt); R của `svp-apps` đổi,
   mọi component sync lại bản cũ.
-- Vì sao hai tầng: generator của ApplicationSet chỉ đưa nội dung một file thành tham số, nên chart ở R sẽ đọc `envs/<env>/` cũ một lần promote; hai tầng
-  giữ mọi luật render trong Helm, kiểm được bằng `helm template` (phụ lục, "Nguyên mẫu hai tầng").
 
 ### 8. Promote prd và bằng chứng stg
 
@@ -198,3 +196,5 @@ Phụ lục: [`appendix/0048-prd-aws.md`](appendix/0048-prd-aws.md) (phương á
 - §1, §2: [0051](0051-dns-prd-apex.md): zone gốc `aws.<miền>` ở account `svp-prd`, zone `stg.aws.<miền>` là zone con do zone prd uỷ quyền; management không còn hosted zone.
 - Phương án "Edge prd", §3, §4: [0052](0052-cloudfront-flat-rate-free.md): lý do loại "CloudFront flat-rate plan" (theo tháng, không theo buổi) không còn đúng vì gói Free giá $0 và huỷ ngay; distribution media của stg và prd trên gói Free, root stg cũng gọi module `waf` (cùng provider alias `us_east_1`), `web_acl_arn` của `media` bắt buộc.
 - §5, §10, "Ngoài phạm vi" của Hệ quả: [0053](0053-msk-elasticache-valkey.md): mật khẩu Kafka và Valkey của EKS do Terraform sinh và ghi write-only vào secret `AmazonMSK_*`, user ElastiCache và entry `kafka-admin`, `kafka-users`, `valkey-users` (mới), không còn bước (1) đặt mật khẩu vào broker và `make eks-secrets` không ghi ba entry đó; phần Kafka của C là MSK và ElastiCache, C của prd ~$11,0; Valkey/ElastiCache HA (Multi-AZ, automatic failover) nay trong phạm vi.
+- §3: [0055](0055-environment-matrix.md): danh sách khác biệt đóng và bảng biến stg/prd của phụ lục thay bằng ma trận ba nhóm (phải giống, được giảm, giảm có điều kiện) có lý do; bastion SSM ở cả hai root, root prd chỉ thêm `teardown.tfvars`; bảng đủ ở `docs/explanation/environments.md`.
+- "Ngoài phạm vi" của Hệ quả: [0056](0056-eks-platform-ha.md): Karpenter nay trong phạm vi: node workload do Karpenter tự quản cấp, managed node group `system` on-demand cho controller nền tảng.

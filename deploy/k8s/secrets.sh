@@ -40,15 +40,17 @@ check_next_key
 # Telegram is optional: the learner fills in both variables by hand, and without them alerts stay in the UI.
 dotenv_read "$env_file" SVP_ALERT_TELEGRAM_BOT_TOKEN SVP_ALERT_TELEGRAM_CHAT_ID
 
-# The local CA of make env (deploy/compose/local-ca.sh): its certificate for every client of Kafka and Valkey, the
-# server certificate and key that both servers present.
+# The local CA of make env (deploy/compose/local-ca.sh): its certificate for every client of Kafka, Valkey and
+# Postgres, the server certificate and key that Kafka and Valkey present, and those of Postgres svp-pg.
 ca_dir=$repo_root/.local/ca
-for f in ca.crt server.crt server.key; do
+for f in ca.crt server.crt server.key postgres.crt postgres.key; do
   [ -s "$ca_dir/$f" ] || fail "the local CA is missing in .local/ca/ ($f); run make env, then this again"
 done
 local_ca=$(<"$ca_dir/ca.crt")
 server_crt=$(<"$ca_dir/server.crt")
 server_key=$(<"$ca_dir/server.key")
+pg_crt=$(<"$ca_dir/postgres.crt")
+pg_key=$(<"$ca_dir/postgres.key")
 # Valkey's ACL file, written by the script compose uses, so both carry the same access strings; in a private folder
 # removed on exit, read into the Secret below.
 acl_dir=$(mktemp -d)
@@ -127,6 +129,10 @@ manifests() {
   secret svp-data kafka-tls Opaque kafka.pem="$server_key"$'\n'"$server_crt"$'\n'
   secret svp-data valkey-tls Opaque valkey.crt="$server_crt"$'\n' valkey.key="$server_key"$'\n'
   secret svp-data local-ca Opaque ca.crt="$local_ca"$'\n'
+  # The server certificate of svp-pg (certificates.serverTLSSecret of its Cluster), labelled like pg-superuser so
+  # that CloudNativePG follows its changes.
+  label='cnpg.io/reload: "true"' secret svp-data pg-tls kubernetes.io/tls \
+    tls.crt="$pg_crt"$'\n' tls.key="$pg_key"$'\n'
 }
 
 # redis_url USER PASSWORD DB: the REDIS_URL of Valkey user USER, TLS to Service valkey of svp-data, the name its server
@@ -134,9 +140,12 @@ manifests() {
 redis_url() { printf 'rediss://%s:%s@valkey.svp-data.svc.cluster.local:6379/%s' "$1" "$2" "$3"; }
 
 # pg_url SERVICE ROLE PASSWORD: the connection string of role svp_<SERVICE>_<ROLE> to database svp_<SERVICE> on
-# svp-pg. sslmode=require: the server's certificate is CloudNativePG's own, so the link is encrypted but the CA is not
-# checked. The passwords are hex, so nothing needs URL-encoding.
-pg_url() { printf 'postgres://svp_%s_%s:%s@svp-pg-rw.svp-data:5432/svp_%s?sslmode=require' "$1" "$2" "$3" "$1"; }
+# svp-pg, verify-full against the local CA that each client mounts at /etc/svp-ca (Secret local-ca), at a name its
+# server certificate holds. The passwords are hex, so nothing needs URL-encoding.
+pg_url() {
+  printf 'postgres://svp_%s_%s:%s@svp-pg-rw.svp-data:5432/svp_%s?sslmode=verify-full&sslrootcert=/etc/svp-ca/ca.crt' \
+    "$1" "$2" "$3" "$1"
+}
 
 # The services' Secrets in svp, each with only what that service's pods use, so one compromised pod exposes no more
 # than its own credentials; <service>-migrate-env is for the migrate Job only. The JWT signing key is in
@@ -289,10 +298,11 @@ source_manifests() {
     SVP_VALKEY_FEED_SERVICE_PASSWORD="$SVP_VALKEY_FEED_SERVICE_PASSWORD" \
     SVP_VALKEY_WEB_PASSWORD="$SVP_VALKEY_WEB_PASSWORD" \
     SVP_VALKEY_OPS_PASSWORD="$SVP_VALKEY_OPS_PASSWORD"
-  # The local CA in two entries: its certificate, which every namespace's store reads, and the server's key, which
+  # The local CA in two entries: its certificate, which every namespace's store reads, and the servers' keys, which
   # only the store of svp-data reads.
   secret "$source_ns" local-ca Opaque ca.crt="$local_ca"$'\n'
-  secret "$source_ns" local-tls Opaque server.crt="$server_crt"$'\n' server.key="$server_key"$'\n'
+  secret "$source_ns" local-tls Opaque server.crt="$server_crt"$'\n' server.key="$server_key"$'\n' \
+    postgres.crt="$pg_crt"$'\n' postgres.key="$pg_key"$'\n'
   secret "$source_ns" jwt-signing Opaque JWT_SIGNING_KID="$JWT_SIGNING_KID" JWT_SIGNING_KEY="$JWT_SIGNING_KEY"
   secret "$source_ns" jwt-verify Opaque JWT_VERIFY_KEYS="$JWT_VERIFY_KEYS"
   secret "$source_ns" web Opaque NEXT_SERVER_ACTIONS_ENCRYPTION_KEY="$NEXT_SERVER_ACTIONS_ENCRYPTION_KEY"
@@ -342,7 +352,7 @@ else
   # kubectl prints only the kind and name of each object it applied.
   manifests | kc apply --server-side --field-manager=svp-secrets --force-conflicts -f - >/dev/null ||
     fail "apply the Secrets of namespace svp-data"
-  ok "Secrets of svp-data applied from .env: pg-superuser, pg-roles, s3-root, s3-users, pg-backup-s3, kafka-admin, svp-ops, kafka-users, valkey-acl, kafka-tls, valkey-tls, local-ca"
+  ok "Secrets of svp-data applied from .env: pg-superuser, pg-roles, s3-root, s3-users, pg-backup-s3, kafka-admin, svp-ops, kafka-users, valkey-acl, kafka-tls, valkey-tls, local-ca, pg-tls"
 fi
 
 # The object store (RustFS) takes its root password from its environment at start, keeps its buckets, users and objects

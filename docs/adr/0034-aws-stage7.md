@@ -103,8 +103,6 @@ Một account sandbox, profile SSO; trước mọi lệnh ghi `aws sts get-calle
 
 ### 5. DNS, TLS, load balancer và `X-Forwarded-For`
 
-- **DNS:** zone `aws.<miền>` ở `aws/bootstrap`, giữ giữa các buổi; uỷ quyền `NS` là bước tay trước buổi đầu, mỗi buổi kiểm `dig NS aws.<miền> +short` ra đúng bốn
-  name server, sai thì không `apply`; ExternalDNS (`gateway-httproute`, `policy: sync`, chỉ zone lab) ghi bản ghi.
 - **TLS:** cert-manager, Let's Encrypt **production**, DNS-01 qua Route 53 bằng Pod Identity; 5 chứng chỉ cùng bộ tên mỗi 7 ngày (tối đa 5 buổi/tuần) [N30].
 - **Load balancer:** LBC tạo NLB `internet-facing` từ Service của Envoy, target `ip`, bật `preserve_client_ip.enabled=true` (mặc định tắt [N31]), listener chỉ TCP
   443; hairpin không chạy khi giữ IP client nên không pod nào gọi tên công khai của chính cluster (Job k6 phân giải về ClusterIP của Envoy).
@@ -198,3 +196,5 @@ Phụ lục: [`appendix/0034-aws-stage7.md`](appendix/0034-aws-stage7.md) (trạ
 - Câu 19, §9 "CloudFront": [0052](0052-cloudfront-flat-rate-free.md): distribution media của stg và prd trên gói flat-rate Free thay pay-as-you-go, có web ACL WAF ở cả hai env; `PriceClass_All` thay `PriceClass_200`; CORS của media bằng policy managed `Managed-SimpleCORS`.
 - Câu 11, §7, §8, §12: [0053](0053-msk-elasticache-valkey.md): Kafka, Redis của stg và prd là Amazon MSK provisioned và ElastiCache for Valkey (cluster mode tắt) thay Redpanda, Valkey trong cluster EKS; client nối SASL SCRAM-SHA-512 trên TLS, Valkey bằng user ACL; hợp đồng `cluster.*` thêm khoá `kafkaBrokers`, `valkeyHost`, `dbCidrs` thêm egress 9096, 6379 tới MSK, ElastiCache cùng subnet; buổi stg thêm ~$0,6 cho MSK, ElastiCache.
 - §7, §9 "RDS": [0054](0054-data-subnet-tier.md): VPC ba tầng; RDS, MSK, ElastiCache ở subnet database (route table không `0.0.0.0/0`) thay subnet private của node; `cluster.dbCidrs` là dải của subnet database.
+- Câu 7, §6, §8: [0056](0056-eks-platform-ha.md): node workload do Karpenter tự quản cấp (stg Spot, prd on-demand) thay managed node group cố định; managed node group `system` on-demand mỗi AZ một node cho controller nền tảng; add-on và AMI ghim version; Envoy, Kyverno HA và trải zone; log control plane đủ năm loại ở cả hai env.
+- Câu 17, §9 "RDS": [0057](0057-postgres17-verify-full.md): PostgreSQL 17 thay 15 ở RDS, CloudNativePG, compose và CI; client nối `verify-full` với bundle CA của RDS trên host RDS; prd lớp `db.m7g.large`; KMS key customer managed, storage autoscaling, tham số ghi log.

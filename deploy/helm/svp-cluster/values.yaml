@@ -114,6 +114,30 @@ envoy:
     enabled: false
     healthCheckCIDR: ""
 
+# NodePool default and EC2NodeClass default of Karpenter (templates/karpenter.yaml): on only on EKS, where component
+# karpenter (wave -1) brings their CRDs. Once it is on, every value below is required and the render fails without it.
+karpenter:
+  enabled: false
+  # The EKS cluster's name (svp-<env>): node role <clusterName>-karpenter-node and the discovery tag
+  # karpenter.sh/discovery of the private subnets and the node security group derive from it.
+  clusterName: ""
+  # The pinned AL2023 release of the nodes (al2023@v<date>), the same release as the system node group's.
+  amiAlias: ""
+  # Values of karpenter.sh/capacity-type the NodePool may launch: spot, on-demand.
+  capacityTypes: []
+  # The cpu and memory the NodePool may launch at most, in total: the cost ceiling.
+  limits: {}
+  # spec.disruption.budgets: how many of the nodes Karpenter may disrupt at once (consolidation, drift, expiry).
+  disruptionBudgets: []
+  # How long a node may drain before Karpenter deletes it even while a PodDisruptionBudget blocks an eviction.
+  terminationGracePeriod: ""
+
+# The CA bundle of Amazon RDS for the cluster's region (PEM, public), rendered as ca.crt of Secret rds-ca in svp,
+# svp-obs and svp-data (templates/rds-ca.yaml), where the clients of an RDS Postgres mount it at /etc/svp-ca for
+# sslmode=verify-full. Empty renders no Secret: Postgres in the cluster chains to the local CA of Secret local-ca.
+rdsCA:
+  bundle: ""
+
 # CloudNativePG (component cloudnative-pg, wave 2) runs Postgres svp-pg in svp-data: its RBAC and the certificate of its
 # webhook are made here (templates/cnpg-rbac.yaml, cnpg-webhook-certificate.yaml). false where Postgres is a managed one
 # outside the cluster (postgres.mode external of chart svp-data) and no operator is installed.
@@ -159,14 +183,16 @@ externalSecrets:
     namespace: external-secrets
     serviceAccount: external-secrets
   # Host and port of Postgres in the connection strings the ExternalSecrets build (written ${postgres} in
-  # files/external-secrets.yaml): svp-pg of chart svp-data.
+  # files/external-secrets.yaml), with sslmode=verify-full: the host must be a name the server's certificate holds.
+  # Service svp-pg-rw of chart svp-data here; on EKS the address of the RDS instance.
   postgres: svp-pg-rw.svp-data:5432
   # Host and port of Valkey in the REDIS_URL the ExternalSecrets build (written ${valkey} there): Service valkey of
   # chart svp-data, the name its server certificate holds; on EKS the primary endpoint of ElastiCache.
   valkey: valkey.svp-data.svc.cluster.local:6379
-  # The Secrets only a Kafka broker and a Valkey of the cluster need (chart svp-data, kafka.mode and valkey.mode
-  # cluster): the users the init Job creates, the ACL file, the local CA's server certificate, and its CA certificate
-  # for the clients. false where both are managed services (Amazon MSK, ElastiCache).
+  # The Secrets only a Kafka broker, a Valkey and a Postgres of the cluster need (chart svp-data, kafka.mode,
+  # valkey.mode and postgres.mode cluster): the users the init Job creates, the ACL file, the local CA's server
+  # certificates, and its CA certificate for the clients. false where they are managed services (Amazon MSK,
+  # ElastiCache, RDS).
   localKafkaValkey: true
   # Secret argocd/argocd-notifications-secret of Argo CD Notifications (commit statuses on svp-gitops, Telegram), from
   # source entry argocd-notifications; on only where the platform turns Argo CD's notifications on (a cluster that runs

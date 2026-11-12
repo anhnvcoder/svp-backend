@@ -107,4 +107,18 @@ spec:
             {{- toYaml .Values.migrateResources | nindent 12 }}
           securityContext:
             {{- include "svp-service.containerSecurityContext" . | nindent 12 }}
+          {{- if .Values.localCA }}
+          # The CA of sslrootcert in DATABASE_URL.
+          volumeMounts:
+            - name: local-ca
+              mountPath: /etc/svp-ca
+              readOnly: true
+          {{- end }}
+      {{- if .Values.localCA }}
+      volumes:
+        - name: local-ca
+          secret:
+            secretName: {{ .Values.localCA }}
+            defaultMode: 0440
+      {{- end }}
 {{- end }}

@@ -142,7 +142,7 @@ source_value() {
 # --- the throwaway checkout: deploy/ of this one, and a fake local CA of make env.
 cp -R "$repo/deploy" "$fake/deploy"
 mkdir -p "$fake/.local/ca"
-for f in ca.crt server.crt server.key; do printf 'fake %s\n' "$f" >"$fake/.local/ca/$f"; done
+for f in ca.crt server.crt server.key postgres.crt postgres.key; do printf 'fake %s\n' "$f" >"$fake/.local/ca/$f"; done
 
 # no_cluster_call NAME: kubectl was not run, nor helm but for templates, nor k3d, docker or aws.
 no_cluster_call() {

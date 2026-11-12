@@ -78,8 +78,8 @@ WAL. PodMonitor đưa `cnpg_*`, `barman_cloud_*` vào Prometheus; cảnh báo `P
   so với máy) `latest` 95,2 và 92,8 s, `pitr` 80,8 và 84,3 s.
 - **RPO:** lượt `latest` không dòng nào ghi trong phút cuối trở lại (RPO ≥ 60 s), vì Postgres chỉ lưu segment WAL đã đóng: RPO tới
   `archive_timeout` (5 phút) cộng thời gian lưu, cả khi tắt êm.
-- **Giới hạn:** backup cùng cluster, cùng ổ với dữ liệu, không mã hoá lúc nghỉ: chỉ đúng cho lab. Compose dùng Postgres native
-  chung nên không backup. Cloud dùng backup tự động và PITR của RDS ([chưa đo trên cloud](#chưa-đo-trên-cloud)). Plugin đọc được
+- **Giới hạn:** backup cùng cluster, cùng ổ với dữ liệu, không mã hoá lúc nghỉ: chỉ đúng cho lab. Postgres của compose là container
+  với volume trên máy, không backup. Cloud dùng backup tự động và PITR của RDS ([chưa đo trên cloud](#chưa-đo-trên-cloud)). Plugin đọc được
   mọi Secret của cluster dev (RBAC của chart) và quyền của operator ở `cnpg-system` bị thu hẹp để không leo sang plugin
   ([`threat-model.md`](../threat-model.md) BAK-1).
 
@@ -97,6 +97,45 @@ Vì sao: [ADR-0020](../adr/0020-reliability-stage6.md), [ADR-0044](../adr/0044-g
   khi database trả lời.
 - Liveness, startup, healthcheck của compose và `/readyz` của gateway giữ health tổng `""`, không phụ thuộc database: restart không
   chữa được database chết.
+
+## Failover của RDS và Valkey
+
+Vì sao: [ADR-0055](../adr/0055-environment-matrix.md) §4, [ADR-0057](../adr/0057-postgres17-verify-full.md) §7,
+[ADR-0010](../adr/0010-redis-ratelimit-cache-resilience-stage2c.md).
+
+Ở prd, RDS chạy Multi-AZ (một standby đồng bộ ở AZ khác) và ElastiCache có một replica ở AZ khác với failover tự động; stg giảm về một
+instance, một node, nên failover chỉ diễn tập được ở buổi prd ([`environments.md`](environments.md)). Cả hai đổi primary bằng cách trỏ lại
+tên DNS của endpoint; client không đổi cấu hình, chỉ cần nối lại.
+
+```mermaid
+sequenceDiagram
+    participant S as Service (pgxpool)
+    participant D as DNS endpoint RDS
+    participant P as Primary cũ (AZ a)
+    participant N as Standby (AZ b)
+    S->>P: truy vấn trên kết nối trong pool
+    P--xS: kết nối đứt (primary hỏng hay bị chuyển)
+    S->>S: pool bỏ kết nối hỏng, request đang chạy trả lỗi
+    S->>S: readiness: 3 lần ping lỗi liên tiếp → NOT_SERVING, pod rời Service
+    D->>D: RDS trỏ endpoint sang standby đã lên primary
+    S->>D: kết nối mới phân giải lại tên
+    S->>N: TLS verify-full (cert vẫn mang tên endpoint), xác thực
+    S->>S: ping qua → SERVING, pod vào lại Service
+```
+
+- **Postgres:** pool pgxpool dài hạn của mỗi service ([`internal/pgpool`](../../internal/pgpool/pgpool.go)) bỏ kết nối đứt và mở kết nối mới
+  khi cần; mỗi kết nối mới phân giải lại tên endpoint nên tới primary mới. Request đang chạy lúc failover trả lỗi, không thử lại ở tầng pool;
+  gateway trả lỗi theo [hợp đồng REST](../reference/contracts.md#rest-ở-gateway), event nằm trong outbox chờ gửi lại. Readiness kéo pod ra
+  khỏi Service trong lúc database không trả lời, không restart pod ([khởi động và probe](#khởi-động-và-probe)). Chuỗi `verify-full` vẫn
+  đúng sau failover: client gọi tên endpoint, cert của instance mới mang tên đó. Không có proxy kết nối giữ phiên qua failover (ADR-0057
+  §7 ghi khi nào xem lại).
+- **Valkey:** client của service ([`internal/redisx`](../../internal/redisx/redisx.go)) thử mỗi lệnh một lần với timeout ngắn rồi để đường
+  lui của chỗ gọi làm việc: rate limit của gateway chuyển sang bộ đếm trong bộ nhớ mỗi pod với mức thấp hơn ở lớp đóng mềm, để lớp mở đi qua
+  ([`rate-limit-fallback-active.md`](../runbooks/rate-limit-fallback-active.md)), feed khám phá đọc thẳng Postgres thay cache. Khi
+  ElastiCache đưa replica lên primary và trỏ lại primary endpoint, kết nối mới tới primary mới; service không restart, không NotReady vì
+  Valkey.
+- **Đo:** thời gian từ lúc đứt tới lúc readiness SERVING lại, số request lỗi trong khoảng đó, so với ngân sách lỗi của SLO; đo ở buổi prd
+  ([chưa đo trên cloud](#chưa-đo-trên-cloud)).
 
 ## Hạn ghi của Like và Unlike
 
@@ -156,5 +195,6 @@ Vì sao: [ADR-0020](../adr/0020-reliability-stage6.md), [ADR-0034](../adr/0034-a
 
 Cần dịch vụ cloud nên chạy ở cluster AWS ([`deployment.md`](deployment.md#aws)): k6 1 000 req/s, Chaos Mesh trên EKS, diễn tập
 phục hồi RDS, Velero với S3 và snapshot EBS, hạn 50 ms của Valkey trên ElastiCache, khởi động lại một broker MSK khi đang ghi
-không mất event và failover ElastiCache không làm service lỗi quá timeout của nó (buổi prd, ADR-0053 mục Xác nhận). Job k6 của phần này kiểm schema bằng
+không mất event và failover ElastiCache không làm service lỗi quá timeout của nó (buổi prd, ADR-0053 mục Xác nhận), failover RDS Multi-AZ
+và mất một broker MSK với RF, min ISR của prd (kiểm bù của ADR-0055 §4), drain một AZ khi Envoy và Kyverno vẫn trả lời (ADR-0056 mục Xác nhận). Job k6 của phần này kiểm schema bằng
 `make cloud-check` (manifest Chaos Mesh, Velero lấy từ bài lab khi cần).

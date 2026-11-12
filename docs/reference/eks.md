@@ -6,7 +6,7 @@ Loại tài liệu (Diátaxis): **reference**, tra cứu khi cần một lệnh 
 
 - Cluster EKS ([ADR-0034](../adr/0034-aws-stage7.md)), target `eks-*` ở `deploy/k8s/k8s.mk`: người học chạy (AI chỉ
   chạy test giả `deploy/k8s/eks-context-test.sh`, `deploy/k8s/aws-secrets-test.sh`), `CONTEXT=svp-stg|svp-prd` là alias của cluster
-  trong kubeconfig (`aws eks update-kubeconfig --alias`), script nhận qua `SVP_KUBE_CONTEXT` (`kc`/`hc` của `deploy/k8s/lib.sh`: không
+  trong kubeconfig (`aws eks update-kubeconfig --alias`, trong lệnh của output `kubeconfig_command`, mục API dưới), script nhận qua `SVP_KUBE_CONTEXT` (`kc`/`hc` của `deploy/k8s/lib.sh`: không
   đặt là `k3d-svp`, tên khác thì dừng trước mọi lệnh; chỉ `aws-secrets.sh`, `glitchtip-init.sh` được vào cluster cloud; `gitops.sh`,
   `secrets.sh` và hàm chỉ của k3d như registry, tạo cluster, CA, diễn tập từ chối `svp-*`); không qua `k8s-exclusive`. Argo CD và root
   của cluster EKS do root Terraform `aws/gitops/<env>` của `svp-infra` dựng (mẫu GitOps Bridge,
@@ -14,10 +14,34 @@ Loại tài liệu (Diátaxis): **reference**, tra cứu khi cần một lệnh 
   `eks-seed`, `eks-rl-reset` xoá khoá `svp:gw:rl:register:*` ở db 10 của ElastiCache của cluster đó, qua CLI vận hành (`svp-valkey` trong
   container `valkey` của Deployment `svp-ops`, user `svp-ops` mà ACL chỉ cho xoá đúng hai tiền tố của `AGENTS.md`), chỉ cho stg, prd của
   lab.
+  - **API của cluster** ([ADR-0055](../adr/0055-environment-matrix.md) §2, §5): endpoint công khai tắt ở cả stg và prd; máy người học tới
+    endpoint private qua tunnel SSM (module `ssm-bastion`, `ssm-bastion.tf` của root `aws/envs/<env>`: bastion ở subnet private, không inbound,
+    không khoá SSH). Hai output của root: `api_tunnel_command` mở tunnel `127.0.0.1:<api_tunnel_port>` tới cổng 443 của endpoint và chạy tới
+    khi dừng (cần Session Manager plugin của AWS CLI; một terminal riêng, `eval`), `kubeconfig_command` thêm context `svp-<env>` trỏ tunnel đó,
+    vẫn kiểm cert theo host của endpoint (`--tls-server-name`). Cổng local theo env (`api_tunnel_port` của `<env>.tfvars`: stg `6444`, prd
+    `6443`), nên một lệnh nhầm context không tới cluster kia; root `aws/gitops/<env>` đi cùng tunnel (`api_server_url` của
+    `aws/gitops/<env>/<env>.tfvars`). Mọi target `eks-*` và lệnh `kubectl` vào EKS cần tunnel đang mở.
+  - **Postgres là Amazon RDS** ([ADR-0057](../adr/0057-postgres17-verify-full.md) §2): chart `svp-data` ở `postgres.mode: external`, không
+    CloudNativePG; mọi client (bốn service, Job `migrate`, GlitchTip, Job `pg-bootstrap`) nối thẳng địa chỉ RDS `cluster.rdsAddress` (cert
+    RDS mang tên đó) với `sslmode=verify-full&sslrootcert=/etc/svp-ca/ca.crt`: `platforms/eks/svp-cluster.values.tpl` đặt
+    `externalSecrets.postgres` thành `<cluster.rdsAddress>:5432`, `pg-bootstrap` đọc `postgres.external.host`. File CA là bundle CA của RDS
+    cho `ap-southeast-1`, nằm ở value `rdsCA.bundle` của chart `svp-cluster` (`platforms/eks/svp-cluster.yaml`); chart render từ đó Secret
+    `rds-ca` (khoá `ca.crt`) ở `svp`, `svp-obs`, `svp-data`, không render khi value rỗng. Bốn service có Postgres đặt `localCA: rds-ca`
+    (`platforms/eks/<service>.yaml`), GlitchTip và `pg-bootstrap` chọn `rds-ca` theo `postgres.mode`.
+  - **Node** ([ADR-0056](../adr/0056-eks-platform-ha.md) §1–§3): nhóm node hệ thống `system` (managed node group on-demand của module `eks`,
+    mỗi AZ một node) chạy add-on, Argo CD và controller Karpenter; mọi node khác do Karpenter tạo theo pod đang chờ. Controller là component
+    `karpenter` của `argocd/apps/components.json` (chỉ nền tảng `eks`, namespace `kube-system`, values `base/karpenter.yaml` và
+    `platforms/eks/karpenter.values.tpl`). NodePool `default` và EC2NodeClass `default` do chart `svp-cluster` render khi
+    `karpenter.enabled` bật; các khoá còn lại bắt buộc khi bật (thiếu thì render dừng, nêu tên khoá): `clusterName` (từ `.values.tpl`, suy ra
+    tag discovery `karpenter.sh/discovery` và role node `<clusterName>-karpenter-node`), `amiAlias`, `capacityTypes`, `limits`,
+    `disruptionBudgets` (vào `spec.disruption.budgets`), `terminationGracePeriod`. `platforms/eks/svp-cluster.yaml` giữ giá trị mức prd;
+    `envs/stg/svp-cluster.yaml` chỉ ghi đè phần stg giảm (capacity type, `limits`, ngân sách disruption); prd không có overlay. Giá trị và
+    lý do: ADR-0056 §2, nhóm của từng khác biệt: [`environments.md`](../explanation/environments.md).
   - Kafka là Amazon MSK và Valkey là Amazon ElastiCache ([ADR-0053](../adr/0053-msk-elasticache-valkey.md)); cả hai do Terraform của `svp-infra`
     tạo (module `msk`, `elasticache`), không có broker hay Valkey chạy trong cluster. Client nói với chúng như với `kafka` và `valkey` của compose
     và k3d: SASL_SSL SCRAM-SHA-512 cổng 9096 và `rediss://` cổng 6379, chỉ khác địa chỉ (hợp đồng `cluster` bên dưới) và CA: cert của MSK, ElastiCache
-    nối về CA công khai của Amazon trong root hệ thống nên không đặt `SSL_CERT_DIR` hay CA nào. Mật khẩu của user Kafka, Valkey do Terraform sinh
+    nối về CA công khai của Amazon trong root hệ thống, không cần CA riêng; bốn service có Postgres mount `rds-ca` ở `/etc/svp-ca` và đặt
+    `SSL_CERT_DIR=/etc/svp-ca` để thêm CA của RDS vào root đó. Mật khẩu của user Kafka, Valkey do Terraform sinh
     và ghi một lần cho cả MSK/ElastiCache lẫn entry Secrets Manager `svp/<env>/kafka-admin`, `kafka-users`, `valkey-users`; `make eks-secrets`
     không ghi ba entry này, chỉ kiểm chúng tồn tại. Chart `svp-data` chạy ở `kafka.mode: external`, `valkey.mode: external`: Job `kafka-init`
     (PostSync) tạo topic và ACL trên MSK, Deployment `svp-ops` là CLI vận hành; NetworkPolicy của hai pod đó chỉ mở tới `cluster.dbCidrs` (subnet
@@ -78,7 +102,8 @@ Lệnh `terraform` và script buổi ở `svp-infra` (`aws/scripts/`); mỗi bư
 
 1. Apply root `aws/envs/<env>` (cluster, RDS, MSK, ElastiCache, vỏ entry Secrets Manager; mật khẩu Kafka, Valkey được sinh và ghi trong cùng apply).
 2. `AWS_PROFILE=anhnv-<env> make eks-secrets CONTEXT=svp-<env>`: nguồn có trước Argo CD.
-3. Chỉ prd: PR promote prd đã merge; mở tunnel tới API (output `api_tunnel_command`).
+3. Mở tunnel tới API (output `api_tunnel_command`, terminal riêng) và thêm context (output `kubeconfig_command`); chỉ prd: PR promote prd
+   đã merge trước bước này.
 4. Apply root `aws/gitops/<env>` (Argo CD, AppProject, cluster Secret, root).
 5. Chờ Application `svp-observability` Healthy:
    `kubectl --context svp-<env> -n argocd wait applications.argoproj.io/svp-observability --for=jsonpath='{.status.health.status}'=Healthy --timeout=30m`.
@@ -87,7 +112,7 @@ Lệnh `terraform` và script buổi ở `svp-infra` (`aws/scripts/`); mỗi bư
 
 ## Đổi secret của env đang chạy
 
-Sửa `.env` (hay `SVP_RDS_MASTER_PASSWORD`), rồi một lệnh; cluster phải tới được (prd: tunnel mở, không thì dừng trước mọi lệnh ghi):
+Sửa `.env` (hay `SVP_RDS_MASTER_PASSWORD`), rồi một lệnh; cluster phải tới được (tunnel mở, không thì dừng trước mọi lệnh ghi):
 
 ```sh
 AWS_PROFILE=anhnv-<env> make eks-secrets CONTEXT=svp-<env>

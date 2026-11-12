@@ -700,6 +700,8 @@ Các dòng dưới đây nguyên văn từ ADR, rút ra để ADR không vượt
 
 ### 5. DNS, TLS, load balancer và `X-Forwarded-For`
 
+- **DNS:** zone `aws.<miền>` ở `aws/bootstrap`, giữ giữa các buổi; uỷ quyền `NS` là bước tay trước buổi đầu, mỗi buổi kiểm `dig NS aws.<miền> +short` ra đúng bốn
+  name server, sai thì không `apply`; ExternalDNS (`gateway-httproute`, `policy: sync`, chỉ zone lab) ghi bản ghi.
 - **Endpoint API:** public giới hạn CIDR của người học (không `0.0.0.0/0`), private luôn bật [N23]; `kubeAPIPort` 443; `authentication_mode = API`.
 
 ### 7. Lớp nền tảng và hợp đồng giá trị theo cluster

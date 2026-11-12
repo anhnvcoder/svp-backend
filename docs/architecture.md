@@ -74,7 +74,8 @@ flowchart TB
     chat -->|"báo"| ops
 ```
 
-Bộ quan sát (Grafana LGTM, GlitchTip) tự host bên trong hệ thống; trên AWS có thêm RDS, S3, CloudFront ([mục 7](#7-triển-khai)).
+Bộ quan sát (Grafana LGTM, GlitchTip) tự host bên trong hệ thống; trên AWS có thêm RDS, MSK, ElastiCache, S3, CloudFront, và CloudWatch
+alarm của dịch vụ dữ liệu báo người vận hành qua email, độc lập với cluster ([mục 7](#7-triển-khai)).
 
 ## 4. Chiến lược giải pháp
 
@@ -91,6 +92,10 @@ Bộ quan sát (Grafana LGTM, GlitchTip) tự host bên trong hệ thống; trê
 | OpenTelemetry qua Collector tới Grafana LGTM, GlitchTip cho lỗi, SLO bằng Sloth | [ADR-0011](adr/0011-observability-stage3.md), [ADR-0012](adr/0012-elastic-vs-grafana-stage3.md) |
 | Cùng chart chạy trên k3d và EKS, Envoy Gateway, dữ liệu trong cluster (trên AWS: RDS, S3, MSK, ElastiCache managed) | [ADR-0014](adr/0014-kubernetes-local-stage4.md), [ADR-0034](adr/0034-aws-stage7.md) |
 | Kafka và Valkey managed ở stg, prd (Amazon MSK, ElastiCache for Valkey, ở subnet database không route ra Internet); compose, k3d chạy cùng phần mềm, cùng xác thực, TLS, cổng; mỗi client một user ACL | [ADR-0053](adr/0053-msk-elasticache-valkey.md), [ADR-0054](adr/0054-data-subnet-tier.md) |
+| PostgreSQL 17 ở RDS, CloudNativePG, compose; mọi client kiểm cert server bằng `sslmode=verify-full`; RDS lớp production ở prd, CMK riêng, tham số ghi log; không proxy kết nối | [ADR-0057](adr/0057-postgres17-verify-full.md) |
+| Node EKS do Karpenter tạo trên nhóm node hệ thống on-demand; Envoy, Kyverno chạy HA, trải theo zone; add-on và AMI ghim version | [ADR-0056](adr/0056-eks-platform-ha.md) |
+| stg chạy cùng dịch vụ, cấu hình, xác thực, giám sát với prd, chỉ giảm dự phòng, cỡ, số lượng, retention; mỗi khác biệt là dữ liệu có lý do | [ADR-0055](adr/0055-environment-matrix.md), [`explanation/environments.md`](explanation/environments.md) |
+| CloudWatch alarm cho RDS, MSK, ElastiCache gửi SNS tới email, sống độc lập với cluster | [ADR-0058](adr/0058-managed-data-operations.md) |
 | Build một lần, ký keyless, Kyverno chỉ nhận image đã ký; mọi env chạy cùng digest qua `svp-gitops` và Argo CD; secret từ kho ngoài git bằng External Secrets Operator | [ADR-0015](adr/0015-cicd-devsecops-stage5.md), [ADR-0024](adr/0024-multi-environment.md), [ADR-0025](adr/0025-gitops-config-repo.md), [ADR-0026](adr/0026-secrets-gitops.md), [ADR-0040](adr/0040-sigstore-bundle-actions-attest.md) |
 
 ## 5. Khối
@@ -269,19 +274,21 @@ Refresh không rõ kết quả thì BFF giữ session và không thử lại tro
 
 | Nơi | Dùng để | Dữ liệu | Chi tiết |
 | --- | --- | --- | --- |
-| Compose trên máy | Đường dev chính, smoke, diễn tập | Postgres native của máy; Kafka, Valkey, RustFS trong compose | [Compose](explanation/deployment.md#compose) |
+| Compose trên máy | Đường dev chính, smoke, diễn tập | Postgres, Kafka, Valkey, RustFS trong compose | [Compose](explanation/deployment.md#compose) |
 | Cluster k3d | Cùng chart như cloud: Envoy Gateway, NetworkPolicy, canary, Kyverno, đường GitOps | CloudNativePG, Kafka, Valkey, RustFS trong cluster | [k3d](explanation/deployment.md#kubernetes-cục-bộ-k3d) |
-| EKS trên AWS | stg và prd, dựng bằng Terraform của `svp-infra` | RDS PostgreSQL, Amazon MSK, ElastiCache for Valkey ở subnet database; S3 + CloudFront | [AWS](explanation/deployment.md#aws) |
+| EKS trên AWS | stg và prd, dựng bằng Terraform của `svp-infra`; khác biệt stg/prd ở [`explanation/environments.md`](explanation/environments.md) | RDS for PostgreSQL, Amazon MSK, ElastiCache for Valkey ở subnet database; S3 + CloudFront | [AWS](explanation/deployment.md#aws) |
 
-**Kafka và Valkey ở mọi nơi** ([ADR-0053](adr/0053-msk-elasticache-valkey.md)): stg, prd dùng dịch vụ managed, compose và k3d chạy cùng
-phần mềm và cùng đường code của client; chỗ local khác chỉ là dữ liệu cấu hình, không nhánh `if` theo môi trường.
+**Postgres, Kafka và Valkey ở mọi nơi** ([ADR-0053](adr/0053-msk-elasticache-valkey.md), [ADR-0057](adr/0057-postgres17-verify-full.md)):
+stg, prd dùng dịch vụ managed, compose và k3d chạy cùng phần mềm và cùng đường code của client; chỗ local khác chỉ là dữ liệu cấu hình, không
+nhánh `if` theo môi trường.
 
 | | Compose | k3d | stg, prd (EKS) |
 | --- | --- | --- | --- |
 | Kafka | Service `kafka` (image `apache/kafka`, một tiến trình KRaft), `kafka:9096` | StatefulSet `kafka` của chart `svp-data` (`kafka.mode: cluster`), `kafka.svp-data.svc.cluster.local:9096` | Amazon MSK provisioned, broker ở subnet database, số broker bằng số AZ (stg 2, prd 3); chart `svp-data` ở `kafka.mode: external`, địa chỉ `cluster.kafkaBrokers` |
 | Valkey | Container `valkey`, `valkey:6379`, không publish cổng | Deployment `valkey` của `svp-data`, `valkey.svp-data.svc.cluster.local:6379` | ElastiCache for Valkey, cluster mode tắt (stg 1 node, prd primary + replica khác AZ), `cluster.valkeyHost` |
 | Topic, user, ACL | Container `kafka-init` (cả user: broker giữ credential) | Job `kafka-init` (cả user) | Job `kafka-init` (topic, ACL); user là secret `AmazonMSK_*` do Terraform gắn vào cluster |
-| CA của TLS | CA local của `make env` | CA local, nạp thành Secret | CA công khai của Amazon trong root hệ thống |
+| CA của TLS Kafka, Valkey | CA local của `make env` | CA local, nạp thành Secret | CA công khai của Amazon trong root hệ thống |
+| Postgres (TLS `verify-full`) | Container `postgres`, `postgres:5432`, cert server của CA local | CNPG `svp-pg`, `svp-pg-rw.svp-data:5432`, cert server của CA local (Secret `pg-tls`) | RDS for PostgreSQL, địa chỉ RDS `cluster.rdsAddress`, CA là bundle của RDS (Secret `rds-ca`) |
 
 - Client Kafka nói SASL_SSL, SCRAM-SHA-512, cổng 9096 ở mọi nơi; mỗi service một user, ACL literal chỉ cho topic và group của nó.
   Replication theo broker: local 1, stg 2 (min ISR 1), prd 3 (min ISR 2).
@@ -291,6 +298,60 @@ phần mềm và cùng đường code của client; chỗ local khác chỉ là 
   `kafka`, `valkey` của compose, trong Deployment `svp-ops` (namespace `svp-data`) ở k3d và EKS.
 - Trên AWS, RDS, MSK và ElastiCache nằm ở subnet database, route table không có `0.0.0.0/0`; egress 5432, 9096, 6379 của pod chỉ tới dải
   của subnet đó (`cluster.dbCidrs`, [ADR-0054](adr/0054-data-subnet-tier.md)).
+
+### 7.1 Triển khai trên EKS
+
+Mức triển khai của C4 cho một env `svp-<env>` (stg và prd cùng hình, khác số AZ, cỡ và số lượng). Hộp lồng nhau là nơi chạy (deployment
+node); tên khớp tài nguyên của `svp-infra` và chart.
+
+```mermaid
+flowchart TB
+    subgraph region["AWS ap-southeast-1, account của env"]
+        subgraph vpc["VPC svp-env: subnet public, private, database trên mỗi AZ"]
+            subgraph pub["Subnet public"]
+                nlb["NLB<br/>[AWS Load Balancer Controller]"]
+                nat["NAT gateway"]
+            end
+            subgraph priv["Subnet private"]
+                subgraph eks["EKS svp-env, API chỉ endpoint private"]
+                    subgraph sysng["Managed node group system<br/>[on-demand, mỗi AZ một node]"]
+                        plat["Argo CD, Karpenter, add-on EKS"]
+                    end
+                    subgraph kn["Node của Karpenter, NodePool default<br/>[Graviton; stg Spot, prd on-demand]"]
+                        envoy["Envoy Gateway<br/>[HPA từ 2, PDB, trải zone]"]
+                        svc["web, gateway, 4 service gRPC,<br/>media-worker [svp-service]"]
+                        obsn["Observability, GlitchTip [svp-obs]"]
+                    end
+                    kyv["Kyverno<br/>[3 replica, PDB, trải zone]"]
+                end
+                bastion["Bastion SSM"]
+            end
+            subgraph dbs["Subnet database, không route ra Internet"]
+                rds[("RDS for PostgreSQL 17<br/>[stg một AZ, prd Multi-AZ; TLS verify-full]")]
+                msk[["Amazon MSK<br/>[một broker mỗi AZ, SCRAM TLS]"]]
+                vk[("ElastiCache for Valkey<br/>[stg 1 node, prd primary + replica]")]
+            end
+        end
+        s3[("S3 uploads, media")]
+        cf["CloudFront + WAF"]
+        q[["SQS + EventBridge<br/>interruption của Karpenter"]]
+        alarm["CloudWatch alarm → SNS svp-env-alarms → email"]
+    end
+    nlb --> envoy --> svc
+    svc --> rds
+    svc --> msk
+    svc --> vk
+    svc --> s3
+    cf --> s3
+    q --> plat
+    rds -.-> alarm
+    msk -.-> alarm
+    vk -.-> alarm
+```
+
+Kyverno và controller nền tảng khác xếp ở node nào còn chỗ; chỉ những gì phải chạy trước khi Karpenter có node mới cần nhóm hệ thống. Luồng
+co giãn node, chuỗi TLS tới Postgres: [`explanation/deployment.md`](explanation/deployment.md#karpenter-node-theo-pod-đang-chờ); failover
+của RDS, Valkey và hành vi của service: [`explanation/reliability.md`](explanation/reliability.md).
 
 Image đi từ CI tới cluster qua `svp-gitops` và Argo CD ([`explanation/delivery.md`](explanation/delivery.md)). Sơ đồ AWS sinh từ
 spec của `svp-infra`: [stg](https://github.com/anhnvcoder/svp-infra/blob/main/docs/diagrams/svp-aws-stg.png),
@@ -320,7 +381,8 @@ Danh sách đầy đủ kèm lý do chấp nhận và điều kiện xem lại: 
 - **Không có mTLS giữa gateway và service gRPC:** token chuyển tiếp đi plaintext trong cluster, NetworkPolicy là lớp chặn duy nhất;
   Istio ambient là phương án tuỳ chọn, chưa dựng (IN-2, IN-3, [mục 4.5](threat-model.md#45-mức-tin-cậy-giữa-các-service)).
 - **Độ tươi feed chưa thành SLO:** local quá ít event để burn rate có nghĩa; chỉ có histogram trên dashboard.
-- **Kyverno một replica:** nó chết thì webhook từ chối mọi pod `svp` mới tới khi nó lên lại (SC-1, SC-7).
+- **Kyverno một replica ở k3d:** nó chết thì webhook từ chối mọi pod `svp` mới tới khi nó lên lại (SC-1, SC-7); trên EKS ba replica có PDB
+  và trải zone ([ADR-0056](adr/0056-eks-platform-ha.md) §5).
 - **Lab local:** backup trên k3d cùng ổ với dữ liệu, không mã hoá lúc nghỉ (BAK-1); RustFS là dự án trẻ, nhiều advisory.
 - **Like, lượt xem cho `video_id` không tồn tại** làm `svp_engagement` phình dần: chặn cần bản sao video ở engagement-service (RL-6).
 - **Không có cổng tự động "bộ prd = bộ stg đã kiểm"** khi promote (GIT-4); build provenance đạt SLSA Build L2, không L3.

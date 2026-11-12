@@ -52,7 +52,7 @@ Quy ước chung (ngôn ngữ, tài liệu timeless, ADR, comment, Git, repo pub
 **Mỗi service một database riêng; không service nào đọc database của service khác.** Cần dữ liệu của service khác thì gọi API của
 nó hoặc dựng bản sao từ event.
 
-| Service | Postgres `127.0.0.1:5432` | Valkey (TLS, user riêng; db) |
+| Service | Postgres (TLS `verify-full`, role riêng) | Valkey (TLS, user riêng; db) |
 | --- | --- | --- |
 | `gateway` | — | db 10 |
 | `user-service` | `svp_user` | db 11 |
@@ -62,15 +62,19 @@ nó hoặc dựng bản sao từ event.
 | `media-worker` | — | — |
 | `web` | — | db 9 |
 | GlitchTip (profile `obs`, tracker lỗi) | `svp_glitchtip` | — |
-| test (`make test`) | `svp_<...>_test` | Redis native `127.0.0.1:6379` db 15 |
+| test (`make test`) | `svp_<...>_test` trên Postgres native `127.0.0.1:5432` | Redis native `127.0.0.1:6379` db 15 |
 
+- **Postgres của compose là container `postgres`, không Postgres native** ([ADR-0057](docs/adr/0057-postgres17-verify-full.md) §3): PostgreSQL
+  17, TLS bằng cert của CA local (`make env`), không publish cổng; `make up` (qua `make db-bootstrap`) tạo role và database của bảng trên trong
+  container. Script trên host chạm nó chỉ bằng `docker compose … exec postgres psql …` qua Makefile, không `psql` tới cổng của máy. stg, prd là
+  RDS for PostgreSQL 17; mọi client nối `sslmode=verify-full` với CA của nền tảng. Postgres native `127.0.0.1:5432` chỉ còn cho `make test`.
 - **Valkey, không Redis native, là nơi gateway, feed-service và web giữ khoá** ([ADR-0053](docs/adr/0053-msk-elasticache-valkey.md)): compose
   có container `valkey` riêng (TLS cổng 6379 không publish, CA local của `make env`, `default` tắt), user `svp-gateway` (db 10, khoá
   `svp:gw:*`), `svp-feed-service` (db 14, `svp:feed:*`), `svp-web` (db 9, `svp:web:*`) và `svp-ops` của CLI vận hành (dưới); k3d cùng phần
   mềm (Deployment `valkey`) trong `svp-data`; stg, prd là ElastiCache for Valkey với cùng access string. db 11–13 là số giữ chỗ cho các service
   chưa dùng Valkey. Redis native `127.0.0.1:6379` chỉ còn hai việc: `make test` (db 15) và `make dev` của web (Next trên host, db 9, không TLS).
 - **Redis native db 0, db 5 và db 7 đang chứa dữ liệu của dự án khác:** không dùng, không `FLUSHDB` ở đó. Không `FLUSHDB`/`FLUSHALL` ở bất kỳ
-  db nào, kể cả db 15 của test. Lệnh vào Redis native luôn ghi rõ port (`redis-cli -p 6379 -n 15`), lệnh vào Postgres native
+  db nào, kể cả db 15 của test. Lệnh vào Redis native luôn ghi rõ port (`redis-cli -p 6379 -n 15`), lệnh vào Postgres native của `make test`
   `psql -h 127.0.0.1 -p 5432`.
 - Trong cluster k3d cùng tên database (cả `svp_glitchtip`) nằm trên Postgres `svp-pg` của CloudNativePG (`svp-pg-rw.svp-data:5432`),
   gateway, feed-service và web dùng db 10, db 14 và db 9 (session) của Valkey `valkey.svp-data:6379`; Postgres và Redis native không

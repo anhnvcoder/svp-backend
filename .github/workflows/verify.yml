@@ -53,20 +53,7 @@ jobs:
     env:
       SVP_VERIFY_TARGETS: ${{ inputs.targets }}
       SVP_VERIFY_STEP_NAMES: up smoke drill-obs-threats test-stack-objstore
-    services:
-      # Published on loopback and Docker bridge gateway (172.17.0.1) for host.docker.internal; never 0.0.0.0.
-      postgres:
-        image: docker.io/library/postgres:15.19-trixie@sha256:64b99032e218b66b1d1a6334995056e1aa57f50a0c522cc856e72dff0e4b0d63
-        env:
-          POSTGRES_PASSWORD: postgres
-        ports:
-          - 127.0.0.1:5432:5432
-          - 172.17.0.1:5432:5432
-        options: >-
-          --health-cmd "pg_isready -U postgres"
-          --health-interval 5s
-          --health-timeout 5s
-          --health-retries 20
+    # Postgres is a container of the compose stack, bootstrapped by make up inside that container.
     steps:
       # Accident guard, not a security boundary (whoever can dispatch can push a branch of that name).
       - name: Check the ref
@@ -88,12 +75,11 @@ jobs:
         with:
           go-version: 1.27.4
           cache-dependency-path: go.sum
-      - run: make ci-bridge-check
-      # CLI tools for Postgres bootstrap and smoke test video generation.
+      # CLI tools for smoke test video generation and JSON parsing.
       - name: Install the tools of the scripts
         run: |
           sudo apt-get update -q
-          sudo apt-get install -y -q --no-install-recommends postgresql-client ffmpeg jq
+          sudo apt-get install -y -q --no-install-recommends ffmpeg jq
       # Clones svp-gitops to obtain staging web release configuration for make up.
       - name: make gitops-clone
         run: |
