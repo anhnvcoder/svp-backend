@@ -1,8 +1,9 @@
-{{- /* Gateway svp (GatewayClass svp) in svp-edge, the single entry point, with two HTTPS listeners on 443: https for
-*.svp.localhost and https-apex for svp.localhost, which the wildcard does not cover. Each serves a certificate
-naming its own hostnames only: one for both would let a browser reuse a connection to svp.localhost for
+{{- /* Gateway svp (GatewayClass svp) in svp-edge, the single entry point, with the HTTPS listeners on 443 of value
+listeners (templates/_helpers.tpl): by default https for *.svp.localhost and https-apex for svp.localhost. Each serves a
+certificate naming its own hostnames only: one for both would let a browser reuse a connection to svp.localhost for
 s3.svp.localhost (RFC 9113 9.1.1), where no route of the apex listener matches. No operations UI is ever routed. */}}
 {{- $annotations := .Values.envoy.service.annotations }}
+{{- $service := .Values.envoy.service }}
 {{- $lbc := "service.beta.kubernetes.io/aws-load-balancer-" }}
 {{- $nlb := "" }}
 {{- range $key, $_ := $annotations }}
@@ -37,6 +38,12 @@ spec:
     type: Kubernetes
     kubernetes:
       envoyService:
+        {{- with $service.type }}
+        type: {{ . }}
+        {{- end }}
+        {{- with $service.name }}
+        name: {{ . }}
+        {{- end }}
         externalTrafficPolicy: {{ .Values.envoy.service.externalTrafficPolicy }}
         {{- with $annotations }}
         annotations:
@@ -101,15 +108,18 @@ metadata:
 spec:
   gatewayClassName: svp
   listeners:
-    - name: https
+    {{- range include "svp-cluster.listeners" . | fromYamlArray }}
+    - name: {{ .name }}
       protocol: HTTPS
       port: 443
-      hostname: {{ .Values.wildcardHost | quote }}
+      {{- with .hostname }}
+      hostname: {{ . | quote }}
+      {{- end }}
       tls:
         mode: Terminate
         certificateRefs:
           - kind: Secret
-            name: svp-wildcard-tls
+            name: {{ .secretName }}
       # Routes attach only from namespaces labelled svp-gateway-routes=true (svp, svp-data): a chart in any other
       # namespace cannot publish a backend on the entry point by itself.
       allowedRoutes:
@@ -118,19 +128,24 @@ spec:
           selector:
             matchLabels:
               svp-gateway-routes: "true"
-    - name: https-apex
-      protocol: HTTPS
-      port: 443
-      hostname: {{ .Values.apexHost | quote }}
-      tls:
-        mode: Terminate
-        certificateRefs:
-          - kind: Secret
-            name: svp-apex-tls
-      # As listener https.
-      allowedRoutes:
-        namespaces:
-          from: Selector
-          selector:
-            matchLabels:
-              svp-gateway-routes: "true"
+    {{- end }}
+{{- with .Values.envoy.targetGroupArn }}
+{{- if not $service.name }}
+{{- fail "envoy.service.name: required with envoy.targetGroupArn, the Service TargetGroupBinding svp-envoy points at" }}
+{{- end }}
+---
+# AWS Load Balancer Controller registers the address and port of every ready Envoy pod behind the Service's 443 (10443)
+# in the target group, and takes a pod out once it stops being ready. No networking block: the controller changes no
+# security group; the rules from the load balancer to the nodes come from where the target group is made.
+apiVersion: elbv2.k8s.aws/v1beta1
+kind: TargetGroupBinding
+metadata:
+  name: svp-envoy
+  namespace: envoy-gateway-system
+spec:
+  targetGroupARN: {{ . | quote }}
+  targetType: ip
+  serviceRef:
+    name: {{ $service.name }}
+    port: 443
+{{- end }}

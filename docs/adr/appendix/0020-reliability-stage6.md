@@ -1310,6 +1310,10 @@ Các dòng dưới đây nguyên văn từ ADR, rút ra để ADR không vượt
 
 - Cái giá: event ghi sau lần backup cuối mất khi phục hồi (RPO của event tới 24 giờ); độ bền event dựa vào replication hay Kafka managed, không vào Velero.
 
+- Chart `velero` 12.2.1, image `velero/velero:v1.18.4` và plugin `velero/velero-plugin-for-aws:v1.14.4` ghim digest, `upgradeCRDs: true`; namespace `velero`, `deployNodeAgent: false`, `EnableCSI`, `snapshotsEnabled: false`, `defaultSnapshotMoveData: false`, pod đạt PSA `restricted`. VolumeSnapshotClass của EBS CSI có nhãn `velero.io/csi-volumesnapshot-class: "true"`, `deletionPolicy: Retain`.
+
+- Diễn tập `deploy/k8s/cloud/velero/drill-restore.sh --context <cluster cloud>` (người học chạy; từ chối `k3d-*` và context rỗng): dừng upload, chờ lag mọi consumer group về 0, rồi ghi offset đã commit của mọi group và high watermark mọi topic; Backup không Secret, có CSI snapshot mọi volume (thiếu thì dừng trước khi xoá); tắt auto-sync của Argo CD; **T0** xoá namespace, Restore, bật lại auto-sync ngay, chờ mọi Application Synced; mọi pod Ready, Redpanda healthy, mọi group có member lại; trước khi có ghi mới kiểm offset đã commit bằng lúc ghi (không mất, không lùi), lag về 0, high watermark DLQ không đổi; **T1** người học xác nhận smoke `passed`; **RTO = T1 − T0**; sau đó kiểm bộ đếm và dòng feed không đổi, pod `svp` phục hồi qua Kyverno (attestation ≤ 72 giờ). Cài bằng `helm --kube-context <ctx> upgrade --install velero vmware-tanzu/velero --version 12.2.1`, cuối buổi `helm uninstall`, xoá namespace và snapshot EBS do diễn tập tạo (lệnh quét ở script).
+
 ### 7. Chaos Mesh (chỉ cluster cloud)
 
 - `clusterScoped: false`, `controllerManager.targetNamespace: svp` cho (a), (b), `svp-data` cho (c); `replicaCount: 1`, `enableProfiling: false`, `dashboard.create: false`, `dashboard.securityMode: true`, `dnsServer.create: false`; mọi thí nghiệm có `duration` và `selector.namespaces`.

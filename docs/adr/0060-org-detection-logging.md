@@ -193,3 +193,7 @@ không analyzer truy cập không dùng.
 ## Thông tin thêm
 
 Phụ lục: [`appendix/0060-org-detection-logging.md`](appendix/0060-org-detection-logging.md) (phương án, bucket, event pattern, bảng giá, nguồn).
+
+### Chỉnh bởi
+
+- §7: [0061](0061-edge-cloudfront-waf-acm.md): thêm bucket `svp-cloudfront-<log>-us-east-1` (log CloudFront v2, khuôn bucket log WAF, key `us-east-1`) cùng delivery destination mỗi env và policy của nó ở `us-east-1`; `SvpLogReader` đọc bucket đó.

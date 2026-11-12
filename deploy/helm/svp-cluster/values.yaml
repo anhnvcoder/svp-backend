@@ -83,7 +83,13 @@ kubeAPIPort: 6443
 wildcardHost: "*.svp.localhost"
 apexHost: svp.localhost
 
-# Who signs the two certificates of Gateway svp (templates/certificates.yaml). selfSigned: a local CA of cert-manager,
+# The HTTPS listeners of Gateway svp on 443, each with the Certificate (issuer of tls below) whose Secret it serves.
+# Empty: https for wildcardHost and https-apex for apexHost. An entry: name, hostname (left out: a listener for any
+# name, where the client sends no SNI), certificate, secretName, dnsNames. Keep a listener named https: routes of
+# other charts attach to it by sectionName.
+listeners: []
+
+# Who signs the certificates of Gateway svp (templates/certificates.yaml). selfSigned: a local CA of cert-manager,
 # trusted by clients that load it (`make k8s-ca`). acme: Let's Encrypt, DNS-01 on the Route 53 hosted zone hostedZoneId
 # that holds wildcardHost and apexHost; no key is in a Secret (cert-manager's controller uses EKS Pod Identity). server:
 # staging spares production's limit on certificates for the same names (5 per 7 days); clients trust no staging one.
@@ -106,12 +112,31 @@ envoy:
     # type ip, and target group attribute preserve_client_ip.enabled=true. The render fails with an NLB that would hand
     # Envoy the load balancer's address instead of the client's: the gateway's rate limits and logs key on that address.
     annotations: {}
-  # NetworkPolicy envoy of envoy-gateway-system (templates/networkpolicies.yaml), for a cluster whose Envoy faces the
-  # internet: only the HTTPS port (every address, clients come with their own), the metrics port (svp-obs, Prometheus)
-  # and the NLB's health check port (from healthCheckCIDR, the VPC's CIDR) reach the Envoy pods of Gateway svp. Off on
-  # k3d: no policy selects those pods, which any pod may reach.
+    # Type of the Service: "" keeps Envoy Gateway's LoadBalancer. ClusterIP where a load balancer outside the cluster
+    # sends to the Envoy pods' addresses through targetGroupArn below, and no load balancer is made for the Service.
+    type: ""
+    # Name of the Service: "" keeps the name Envoy Gateway generates; targetGroupArn needs a fixed one to point at.
+    name: ""
+  # A target group of type ip (HTTPS 443) that AWS Load Balancer Controller fills with the Envoy pods' addresses
+  # (TargetGroupBinding svp-envoy, templates/gateway.yaml); its load balancer and security groups are made outside the
+  # cluster. Empty: no TargetGroupBinding.
+  targetGroupArn: ""
+  # NetworkPolicy envoy of envoy-gateway-system (templates/networkpolicies.yaml): only the HTTPS port (from httpsFrom),
+  # the metrics port (svp-obs, Prometheus) and the load balancer's health check port (from healthCheck) reach the Envoy
+  # pods of Gateway svp. Off on k3d: no policy selects those pods, which any pod may reach.
   networkPolicy:
     enabled: false
+    # Sources (NetworkPolicy peers: ipBlock, namespaceSelector) of 10443, the pods' port of the listeners' 443. The
+    # default lets every address in, for a load balancer that keeps each client's own. Never empty: that means any.
+    httpsFrom:
+      - ipBlock:
+          cidr: 0.0.0.0/0
+    # The load balancer's health check on a port of its own (19003, Envoy's /ready) and its sources, as httpsFrom.
+    # port 0: the port of annotation service.beta.kubernetes.io/aws-load-balancer-healthcheck-port of the Service, if
+    # any, from healthCheckCIDR.
+    healthCheck:
+      port: 0
+      from: []
     healthCheckCIDR: ""
 
 # NodePool default and EC2NodeClass default of Karpenter (templates/karpenter.yaml): on only on EKS, where component

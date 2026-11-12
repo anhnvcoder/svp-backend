@@ -212,9 +212,13 @@ Rate limit, cache, timeout/retry/circuit breaker và job dọn upload chốt ở
   IP 60/giờ, burst 20; `login-ip` theo IP 60/phút, burst 30, và `login-email` theo cặp (IP, email) 10/giờ, burst 5 (khoá chứa
   SHA-256 của email, không có email thô); `refresh` theo IP cho `/auth/refresh`, `/auth/logout` 60/phút, burst 30; `upload`
   (`POST /videos`) 30/giờ, burst 10; `write` 120/phút, burst 60; `read` 600/phút, burst 200, ba lớp sau theo `user_id`. Mọi lần
-  gọi đều được đếm. IP là địa chỉ kết nối; `X-Forwarded-For` chỉ được đọc trên kết nối từ proxy tin cậy, theo
-  `TRUSTED_PROXY_HOPS` và `TRUSTED_PROXY_CIDRS` (compose 0 hop, k3d 1 hop từ Envoy; RL-1,
-  [ADR-0014](../adr/0014-kubernetes-local-stage4.md) §9);
+  gọi đều được đếm. IP là địa chỉ kết nối; header chỉ được đọc trên kết nối từ proxy tin cậy
+  (`TRUSTED_PROXY_CIDRS`; RL-1): `X-Forwarded-For` theo `TRUSTED_PROXY_HOPS` (compose 0 hop, k3d 1 hop từ Envoy;
+  [ADR-0014](../adr/0014-kubernetes-local-stage4.md) §9), hay khi đặt `TRUSTED_CLIENT_ADDRESS_HEADER` thì chỉ header đó,
+  dạng `<ip>:<cổng>` (nhận cả `[<ipv6>]:<cổng>`), không đọc `X-Forwarded-For`; header thiếu, nhiều giá trị hay sai dạng
+  thì địa chỉ kết nối. Biến này cần `TRUSTED_PROXY_CIDRS` và `TRUSTED_PROXY_HOPS` bằng 0, không thì gateway không khởi
+  động, lỗi nêu tên biến; eks đặt `CloudFront-Viewer-Address` với CIDR VPC
+  ([ADR-0061](../adr/0061-edge-cloudfront-waf-acm.md) §9);
 - Valkey lỗi hay quá 50 ms thì `register`, `login-ip`, `login-email`, `refresh`, `upload` **đóng mềm** (bộ đếm trong bộ nhớ của
   từng instance, ngưỡng bằng nửa), `write` và `read` **mở**; gateway log WARN `rate limit store unavailable, using fallback` tối
   đa một dòng mỗi 10 s (RL-2);

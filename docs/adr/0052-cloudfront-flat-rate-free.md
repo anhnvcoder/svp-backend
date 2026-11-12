@@ -142,3 +142,4 @@ và media dùng tên `*.cloudfront.net` (0034 Câu 18), không tên nào trong z
 ### Chỉnh bởi
 
 - §3: [0060](0060-org-detection-logging.md): web ACL ghi mọi request vào bucket `aws-waf-logs-svp-<log>-us-east-1` của `svp-log-archive`, che header `authorization`, `cookie`; phí giao log WAF tới S3 nằm ngoài gói.
+- §2, §3, §4, §7, Hệ quả: [0061](0061-edge-cloudfront-waf-acm.md): gói Free chỉ còn ở distribution media của stg (biến `flat_rate_free`); media của prd pay-as-you-go với access log v2 và response headers policy tự viết (CORS theo `cors_allowed_origins`); media có tên riêng `media.<domain>` với cert ACM, alias trong zone env; web ACL media thêm `AWSManagedRulesAmazonIpReputationList` (4 luật).

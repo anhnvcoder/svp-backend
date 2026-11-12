@@ -190,3 +190,7 @@ artifact Actions ai cũng đọc, plan in ARN, account ID, domain; (c) Infracost
 
 Phụ lục: [`appendix/0059-org-structure-guardrails.md`](appendix/0059-org-structure-guardrails.md) (phương án, statement đủ của mọi policy, bảng
 đối chiếu RCP, permission set, nguồn).
+
+### Chỉnh bởi
+
+- §4, §5, §10: [0061](0061-edge-cloudfront-waf-acm.md): luồng RCP mới (giao log CloudFront v2 vào Log Archive, `dnssec-route53` dùng key KMS, CloudFront VPC origin) qua RCP không ngoại lệ; Internet gateway còn cho NAT và CloudFront VPC origin, không còn NLB; NACL public không còn TCP 443 từ Internet, thêm NACL tầng edge chỉ nhận từ CIDR VPC.

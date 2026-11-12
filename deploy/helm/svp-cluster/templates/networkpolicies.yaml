@@ -169,15 +169,32 @@ spec:
           port: 80
 {{- end }}
 {{- if .Values.envoy.networkPolicy.enabled }}
-{{- $healthCheckPort := index .Values.envoy.service.annotations "service.beta.kubernetes.io/aws-load-balancer-healthcheck-port" | default "traffic-port" }}
-{{- if and (ne $healthCheckPort "traffic-port") (not .Values.envoy.networkPolicy.healthCheckCIDR) }}
+{{- $np := .Values.envoy.networkPolicy }}
+{{- $healthCheckPort := $np.healthCheck.port | int }}
+{{- $healthCheckFrom := $np.healthCheck.from }}
+{{- if not $healthCheckPort }}
+{{- $annotation := "service.beta.kubernetes.io/aws-load-balancer-healthcheck-port" }}
+{{- $annotated := index .Values.envoy.service.annotations $annotation | default "traffic-port" }}
+{{- if ne $annotated "traffic-port" }}
+{{- if not $np.healthCheckCIDR }}
 {{- fail "envoy.networkPolicy.healthCheckCIDR: required when the NLB's health check has a port of its own" }}
 {{- end }}
+{{- $healthCheckPort = $annotated | int }}
+{{- $healthCheckFrom = list (dict "ipBlock" (dict "cidr" $np.healthCheckCIDR)) }}
+{{- end }}
+{{- end }}
+{{- /* A rule with no source lets every source in. */}}
+{{- if not $np.httpsFrom }}
+{{- fail "envoy.networkPolicy.httpsFrom: required, an empty list would let every address reach Envoy's HTTPS port" }}
+{{- end }}
+{{- if and $healthCheckPort (not $healthCheckFrom) }}
+{{- fail "envoy.networkPolicy.healthCheck.from: required with a port, an empty list would let every address in" }}
+{{- end }}
 ---
-# The Envoy pods of Gateway svp, on a cluster whose Envoy faces the internet: once a policy selects them, nothing else
-# reaches them. In: 10443 (the listeners' 443 in the pod: a port under 1024 gets 10000 added) from every address (the
-# NLB keeps each client's own); the metrics port from Prometheus in svp-obs (the canary's analysis); the NLB's health
-# check on a port of its own from the VPC. Out: not restricted (Envoy reaches its controller and every backend).
+# The Envoy pods of Gateway svp: once a policy selects them, nothing else reaches them. In: 10443 (the listeners' 443
+# in the pod: a port under 1024 gets 10000 added) from httpsFrom; the metrics port from Prometheus in svp-obs (the
+# canary's analysis); the load balancer's health check on a port of its own from its sources. Out: not restricted
+# (Envoy reaches its controller and every backend).
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
@@ -191,8 +208,7 @@ spec:
   policyTypes: [Ingress]
   ingress:
     - from:
-        - ipBlock:
-            cidr: 0.0.0.0/0
+        {{- toYaml $np.httpsFrom | nindent 8 }}
       ports:
         - protocol: TCP
           port: 10443
@@ -203,12 +219,11 @@ spec:
       ports:
         - protocol: TCP
           port: 19001
-    {{- if ne $healthCheckPort "traffic-port" }}
+    {{- if $healthCheckPort }}
     - from:
-        - ipBlock:
-            cidr: {{ .Values.envoy.networkPolicy.healthCheckCIDR }}
+        {{- toYaml $healthCheckFrom | nindent 8 }}
       ports:
         - protocol: TCP
-          port: {{ $healthCheckPort | int }}
+          port: {{ $healthCheckPort }}
     {{- end }}
 {{- end }}

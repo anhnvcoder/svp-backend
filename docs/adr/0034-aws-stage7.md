@@ -148,8 +148,7 @@ prd chuẩn production (NAT mỗi AZ, RDS Multi-AZ, node nhiều AZ, bảo vệ 
 
 ### 12. Chi phí 7a (Singapore)
 
-Giá đọc 2026-10-31 [N1]–[N11], mỗi giờ: EKS $0,100; 3 node `m7g.large` $0,119 Spot ($0,306 on-demand); NAT $0,059 + $0,059/GB; IPv4 $0,015; NLB ~$0,031; RDS $0,055;
-EBS $0,016. **Tổng ~$0,40/giờ Spot, ~$0,58 on-demand; buổi 4 giờ ~$2,2–2,4 Spot, ~$3,0–3,1 on-demand, trần $5**; cố định ~$0,50/tháng; bảng có nguồn: phụ lục.
+Giá đọc 2026-10-31, tổng mỗi giờ và mỗi buổi so với trần $5: [phụ lục](appendix/0034-aws-stage7.md#chi-tiết-rút-khỏi-adr).
 
 ### 13. Tài nguyên có thể nằm ngoài state Terraform và cách quét
 
@@ -198,3 +197,4 @@ Phụ lục: [`appendix/0034-aws-stage7.md`](appendix/0034-aws-stage7.md) (trạ
 - Câu 17, §9 "RDS": [0057](0057-postgres17-verify-full.md): PostgreSQL 17 thay 15 ở RDS, CloudNativePG, compose và CI; client nối `verify-full` với bundle CA của RDS trên host RDS; prd lớp `db.m7g.large`; KMS key customer managed, storage autoscaling, tham số ghi log.
 - §3: [0059](0059-org-structure-guardrails.md): org theo AWS SRA thêm account `svp-log-archive`, `svp-security` ở OU `Security`; `svp-stg`, `svp-prd` ở OU `Workloads/NonProd`, `Workloads/Prod`; baseline bảo mật mỗi account áp từ management; permission set chỉ đọc cạnh `SvpAdmin`.
 - §3: [0060](0060-org-detection-logging.md): Cost Anomaly Detection (monitor theo dịch vụ, email hằng ngày, ngưỡng tác động $10) và tag phân bổ chi phí `Project`, `Env`, `Stack` do `aws/bootstrap` quản, thay bật tay.
+- Câu 6, Câu 18, Câu 19, §5, §9 "CloudFront", Hệ quả: [0061](0061-edge-cloudfront-waf-acm.md): CloudFront có WAF trước web, API (VPC origin tới ALB internal ở tầng subnet edge, `TargetGroupBinding` tới Service ClusterIP của Envoy) thay NLB L4; cert ACM thay Let's Encrypt ở stg, prd, Envoy dùng CA nội bộ; gateway trên EKS lấy IP client từ `CloudFront-Viewer-Address` thay `X-Forwarded-For` 1 hop; media có tên riêng `media.<domain>` với cert ACM, media của prd pay-as-you-go; ExternalDNS bỏ.
