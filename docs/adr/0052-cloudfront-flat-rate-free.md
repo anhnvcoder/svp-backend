@@ -136,3 +136,9 @@ và media dùng tên `*.cloudfront.net` (0034 Câu 18), không tên nào trong z
 - [N3] <https://docs.aws.amazon.com/AmazonCloudFront/latest/DeveloperGuide/using-managed-response-headers-policies.html>
 - [N4] <https://raw.githubusercontent.com/hashicorp/terraform-provider-aws/main/website/docs/r/pricingplanmanager_subscription.html.markdown>
 - [N5] <https://aws.amazon.com/waf/pricing/> (đọc 2026-11-05, bảng giá ở phụ lục của [0048](0048-prd-aws.md))
+
+## Thông tin thêm
+
+### Chỉnh bởi
+
+- §3: [0060](0060-org-detection-logging.md): web ACL ghi mọi request vào bucket `aws-waf-logs-svp-<log>-us-east-1` của `svp-log-archive`, che header `authorization`, `cookie`; phí giao log WAF tới S3 nằm ngoài gói.

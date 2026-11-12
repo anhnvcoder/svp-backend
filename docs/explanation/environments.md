@@ -11,6 +11,7 @@ Trang không chép số. Giá trị nằm ở:
 | `teardown.tfvars` | [`aws/envs/prd/teardown.tfvars`](https://github.com/anhnvcoder/svp-infra/blob/main/aws/envs/prd/teardown.tfvars): bảo vệ nhấc khi gỡ prd |
 | gitops root | `aws/gitops/<env>/<env>.tfvars` của `svp-infra` |
 | module `<tên>` | [`aws/modules/<tên>/`](https://github.com/anhnvcoder/svp-infra/tree/main/aws/modules) của `svp-infra`: giá trị chung hai env |
+| root `aws/<tên>` | [`aws/<tên>/`](https://github.com/anhnvcoder/svp-infra/tree/main/aws) của `svp-infra`: root cấp org (`org`, `log-archive`, `baseline`), sống giữa các buổi, chung hai env |
 | `envs/<env>/`, `platforms/eks/`, `base/` | thư mục cùng tên của [`svp-gitops`](https://github.com/anhnvcoder/svp-gitops); `platforms/eks/` dùng chung hai env |
 
 ## Ba nhóm
@@ -24,7 +25,9 @@ Trang không chép số. Giá trị nằm ở:
 Cột "stg so với prd" nói hướng khác biệt; số ở file của cột "Giá trị ở".
 [ADR-0056](../adr/0056-eks-platform-ha.md), [ADR-0057](../adr/0057-postgres17-verify-full.md) và
 [ADR-0058](../adr/0058-managed-data-operations.md) giữ số của Karpenter, nhóm node hệ thống, Envoy và Kyverno HA, PostgreSQL 17, lớp
-RDS, alarm. Mỗi biến của `<env>.tfvars` có ít nhất một dòng; thêm hay bỏ biến thì sửa bảng trong cùng thay đổi (ADR-0055 §1).
+RDS, alarm; [ADR-0059](../adr/0059-org-structure-guardrails.md), [ADR-0060](../adr/0060-org-detection-logging.md) giữ guardrail, log và
+retention cấp org ([`aws-security.md`](aws-security.md)). Mỗi biến của `<env>.tfvars` có ít nhất một dòng; thêm hay bỏ biến thì sửa bảng
+trong cùng thay đổi (ADR-0055 §1).
 
 ## Mạng
 
@@ -33,8 +36,9 @@ RDS, alarm. Mỗi biến của `<env>.tfvars` có ít nhất một dòng; thêm 
 | Số AZ | `az_count` (`<env>.tfvars`) | được giảm | stg ít AZ hơn, vẫn đa AZ | Hai AZ đủ thấy hành vi theo zone (EBS gắn zone, trải pod, MSK cần ít nhất hai AZ); AZ thứ ba chỉ thêm dự phòng | — | [REL10], [MSKBP] |
 | NAT gateway | `single_nat_gateway` (`<env>.tfvars`) | giảm có điều kiện | stg một NAT, prd mỗi AZ một | NAT tính theo giờ mỗi cái | Egress của mọi AZ khi AZ của NAT mất → không kiểm ở stg; prd có NAT mỗi AZ | [NAT] |
 | Ba tầng subnet | module `network` | phải giống | như nhau | Subnet database không có route ra Internet ở cả hai env ([ADR-0054](../adr/0054-data-subnet-tier.md)) | — | [EKSSUB] |
-| VPC flow log | `flow_log_enabled` (`<env>.tfvars`) | phải giống | bật ở cả hai | Điều tra mạng và quyền IAM ghi log chạy ở stg trước | — | [FL] |
-| Retention flow log | `flow_log_retention_days` (`<env>.tfvars`) | được giảm | stg ngắn hơn | Log group bị xoá cùng env | — | [COST] |
+| VPC flow log và đích của nó | module `network` (`flow_log_bucket_arn` do root suy từ id account log) | phải giống | cả hai ghi vào bucket `svp-flowlogs-…` của `svp-log-archive`, cùng định dạng ([ADR-0060](../adr/0060-org-detection-logging.md) §9) | Log nằm ngoài tầm admin của env và còn sau khi env bị gỡ; đường ghi chéo account chạy ở stg trước | — | [FL], [SRA] |
+| Retention flow log | root `aws/log-archive` (lifecycle theo tiền tố account) | được giảm | stg ngắn hơn ([ADR-0060](../adr/0060-org-detection-logging.md) §7) | Log của stg chỉ phủ một buổi vài giờ | — | [COST] |
+| NACL không mở 22, 3389 từ Internet | module `network` | phải giống | như nhau ([ADR-0059](../adr/0059-org-structure-guardrails.md) §10) | Cùng luật mạng; Security Hub đánh giá control EC2.21 trên cả hai | — | [CIS] |
 | Policy S3 gateway endpoint | `s3_endpoint_restricted` (`<env>.tfvars`) | phải giống | bật ở cả hai | Policy chỉ cho bucket trong danh sách: image kéo từ bucket thiếu sẽ lỗi, stg gặp lỗi đó trước prd | — | [S3EP] |
 | Bucket thêm của endpoint | `s3_endpoint_extra_buckets` (`<env>.tfvars`) | phải giống | cùng danh sách | Bucket mà `registry.k8s.io` chuyển hướng client trong AWS tới | — | [S3EP] |
 | NetworkPolicy | add-on `vpc-cni` của module `eks` (network policy agent), chart | phải giống | như nhau | Chính sách mạng của chart áp như nhau mọi nơi | — | [EKSNET] |
@@ -52,6 +56,7 @@ RDS, alarm. Mỗi biến của `<env>.tfvars` có ít nhất một dòng; thêm 
 | Mã hoá Secret bằng CMK | `eks_secrets_kms_encryption` (`<env>.tfvars`) | phải giống | bật ở cả hai | Envelope encryption của Secret; key policy và quyền KMS chạy ở stg trước | — | [EKSENC] |
 | Add-on EKS và version ghim | module `eks` (`addons.tf`) | phải giống | như nhau ([ADR-0056](../adr/0056-eks-platform-ha.md) §8) | Cùng bộ add-on, cùng bản | — | [EKSUPG] |
 | Pod Identity, access entry, IMDSv2 | module `eks` | phải giống | như nhau | Pod lấy quyền qua Pod Identity, không IRSA, không quyền của node | — | [EKSIAM] |
+| Agent GuardDuty Runtime Monitoring và endpoint `guardduty-data` | module `eks` (`addons.tf`), module `network` | phải giống | như nhau ([ADR-0060](../adr/0060-org-detection-logging.md) §5) | Cùng giám sát runtime; agent và endpoint tự quản trong Terraform chạy ở stg trước | — | [GDRT] |
 
 ## Node
 
@@ -62,6 +67,8 @@ RDS, alarm. Mỗi biến của `<env>.tfvars` có ít nhất một dòng; thêm 
 | Karpenter, AMI của EC2NodeClass, `terminationGracePeriod` | component `karpenter`, `platforms/eks/svp-cluster.yaml` | phải giống | như nhau | Cùng controller, cùng AMI với nhóm hệ thống, cùng trần drain | — | [EKSKARP], [KDIS] |
 | Họ, thế hệ, cỡ instance, đĩa, IMDS của node Karpenter | chart `svp-cluster` (`templates/karpenter.yaml`) | phải giống | như nhau | Karpenter chọn cỡ theo pod đang chờ trong cùng tập ở hai env | — | [EKSKARP] |
 | Capacity type của NodePool | `platforms/eks/svp-cluster.yaml` (prd), `envs/stg/svp-cluster.yaml` (stg) | giảm có điều kiện | stg Spot, prd on-demand | Spot rẻ hơn nhiều cho env sống vài giờ | Node bị thu hồi giữa chừng → stg kiểm luôn đường interruption của Karpenter | [SPOT], [KDIS] |
+| SCP chặn Spot qua `RunInstances` | SCP `svp-prod-guardrails` ở OU `Prod` (root `aws/org`) | giảm có điều kiện | chỉ prd | Đi cùng dòng trên: stg chạy Spot nên không chặn | Chặn Spot qua `RunInstances` → phép thử guardrail khi áp org; Spot qua Karpenter do NodePool on-demand giữ ([ADR-0059](../adr/0059-org-structure-guardrails.md) §3) | [SCP] |
+| Key EBS mặc định (CMK `alias/svp-ebs`) | root `aws/baseline` | phải giống | như nhau ([ADR-0059](../adr/0059-org-structure-guardrails.md) §9) | Volume của node, Karpenter, bastion mã hoá bằng cùng loại key; key policy chạy ở stg trước | — | [EBSENC] |
 | `limits` của NodePool | `platforms/eks/svp-cluster.yaml` (prd), `envs/stg/svp-cluster.yaml` (stg) | được giảm | stg trần thấp hơn | Trần chặn chi phí chạy quá | — | [EKSKARP] |
 | Ngân sách disruption của NodePool | `platforms/eks/svp-cluster.yaml` (prd), `envs/stg/svp-cluster.yaml` (stg) | được giảm | stg thay nhiều node một lần hơn | Mức gián đoạn chấp nhận được khác nhau | — | [KDIS] |
 
@@ -126,6 +133,10 @@ RDS, alarm. Mỗi biến của `<env>.tfvars` có ít nhất một dòng; thêm 
 | Thành phần | Giá trị ở | Nhóm | stg so với prd | Lý do | Mất gì → kiểm bù | Nguồn |
 | --- | --- | --- | --- | --- | --- | --- |
 | Chặn truy cập công khai, chỉ TLS, OAC, web ACL WAF, gói CloudFront | module `media`, module `waf` | phải giống | như nhau ([ADR-0052](../adr/0052-cloudfront-flat-rate-free.md)) | Cùng edge, cùng luật WAF | — | [S3SEC] |
+| Log WAF (che `authorization`, `cookie`) | module `waf` (`log_bucket_arn` do root suy từ id account log) | phải giống | cả hai ghi vào bucket `aws-waf-logs-svp-…` của `svp-log-archive` ([ADR-0060](../adr/0060-org-detection-logging.md) §9) | Cùng log request ở edge, cùng che header | — | [WAFLOG] |
+| Retention log WAF | root `aws/log-archive` (lifecycle theo tiền tố account) | được giảm | stg ngắn hơn ([ADR-0060](../adr/0060-org-detection-logging.md) §7) | Log của stg chỉ phủ một buổi vài giờ | — | [COST] |
+| Malware Protection for S3 trên `uploads` | module `media` (`malware-protection.tf`) | phải giống | như nhau ([ADR-0060](../adr/0060-org-detection-logging.md) §6) | Cùng plan, cùng role, cùng tag kết quả trên object | — | [GDMS3] |
+| Data event S3 của trail org | trail `svp-audit` (root `aws/org`) | giảm có điều kiện | chỉ `uploads` (đọc, ghi) và `media` (ghi) của prd | Data event tính theo event; stg không có dữ liệu người dùng thật | Truy vết đọc, ghi object ở stg → không có ở stg; buổi prd kiểm data event có trong bucket trail | [CTDATA] |
 | Xoá bucket còn object | `media_force_destroy` (`<env>.tfvars`; prd nhấc ở `teardown.tfvars`) | được giảm | stg xoá được ngay | Bảo vệ xoá | — | [S3SEC] |
 | Versioning | `media_versioning_enabled` (`<env>.tfvars`) | được giảm | stg tắt | Media stg dựng lại được; bản cũ chỉ tốn chỗ | — | [S3VER] |
 | S3 access log | `media_access_logging_enabled` (`<env>.tfvars`) | phải giống | bật ở cả hai | Cùng log truy cập, cùng bucket log và quyền ghi | — | [S3LOG] |
@@ -190,3 +201,11 @@ RDS, alarm. Mỗi biến của `<env>.tfvars` có ít nhất một dòng; thêm 
 | [S3SEC] | Security best practices for Amazon S3: <https://docs.aws.amazon.com/AmazonS3/latest/userguide/security-best-practices.html> |
 | [S3LOG] | S3 server access logging: <https://docs.aws.amazon.com/AmazonS3/latest/userguide/ServerLogs.html> |
 | [S3VER] | S3 versioning: <https://docs.aws.amazon.com/AmazonS3/latest/userguide/Versioning.html> |
+| [SRA] | AWS Security Reference Architecture, Log Archive account: <https://docs.aws.amazon.com/prescriptive-guidance/latest/security-reference-architecture/log-archive.html> |
+| [CIS] | Security Hub control EC2.21 (CIS AWS Foundations Benchmark): <https://docs.aws.amazon.com/securityhub/latest/userguide/ec2-controls.html#ec2-21> |
+| [GDRT] | GuardDuty Runtime Monitoring, EKS: <https://docs.aws.amazon.com/guardduty/latest/ug/how-runtime-monitoring-works-eks.html> |
+| [SCP] | Service control policies: <https://docs.aws.amazon.com/organizations/latest/userguide/orgs_manage_policies_scps.html> |
+| [EBSENC] | EBS encryption by default: <https://docs.aws.amazon.com/ebs/latest/userguide/encryption-by-default.html> |
+| [WAFLOG] | AWS WAF logging: <https://docs.aws.amazon.com/waf/latest/developerguide/logging.html> |
+| [GDMS3] | GuardDuty Malware Protection for S3: <https://docs.aws.amazon.com/guardduty/latest/ug/gdu-malware-protection-s3.html> |
+| [CTDATA] | CloudTrail data events: <https://docs.aws.amazon.com/awscloudtrail/latest/userguide/logging-data-events-with-cloudtrail.html> |

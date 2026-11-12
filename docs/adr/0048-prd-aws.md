@@ -138,8 +138,7 @@ Chọn các phương án in đậm; `<env>` là `stg` hay `prd`, `<miền>` là 
 - Check của `svp-gitops`: render tầng 1 trên cây của PR; có khoá thì tầng 2 trên `git archive R` với `envs/<env>/` của PR, khoá phải là commit trên `main`;
   khoá vắng thì một cây, như hiện nay (stg luôn vắng). `valuesObject` của mỗi Application phải bằng overlay < image của cây < phần mẫu sinh ra; mọi
   nguồn `svp-gitops` của một Application cùng một revision.
-- Rollback: lượt `promote-prd` với `stg_ref` cũ mở PR đặt lại `gitopsRevision` cùng image, chart của commit đó (Code Owner duyệt); R của `svp-apps` đổi,
-  mọi component sync lại bản cũ.
+- Rollback: lượt `promote-prd` với `stg_ref` cũ mở PR đặt lại `gitopsRevision` cùng image, chart của commit đó (Code Owner duyệt); R của `svp-apps` đổi, mọi component sync lại bản cũ.
 
 ### 8. Promote prd và bằng chứng stg
 
@@ -163,8 +162,7 @@ Buổi T = 4 giờ. H₀ (theo giờ khi prd chạy, chưa gồm Kafka) ~$0,90/g
 - Tốt: SCP và trail áp lên stg và prd; prd chỉ chạy cái stg đã chạy, rollback bằng PR; bootstrap EKS là Terraform theo mẫu GitOps Bridge; EKS không còn nguồn Secret trong cluster.
 - Xấu: ba profile, thêm state; R tăng ~$4/tháng; mỗi lệnh `kubectl` vào prd cần tunnel; thêm tầng `argocd/root` (không bị ghim) và controller
   ApplicationSet; Argo CD, AppProject chỉ đổi khi apply lại; plan của root gitops cần mạng tới GitHub.
-- Ngoài phạm vi: Karpenter (0034 Câu 7 hẹn cho prd, nay để sau), diễn tập migration expand/contract trên RDS, Valkey/ElastiCache HA, Velero, Log Archive
-  và Audit account, permission set chỉ đọc cho prd.
+- Ngoài phạm vi: Karpenter (0034 Câu 7 hẹn cho prd, nay để sau), diễn tập migration expand/contract trên RDS, Valkey/ElastiCache HA, Velero, Log Archive và Audit account, permission set chỉ đọc cho prd.
 - Xem lại khi: có người thứ hai cần quyền; cần control phát hiện liên tục (Control Tower); chi phí thực đo lệch quá 50 %; Source Hydrator lên GA.
 
 ## Xác nhận
@@ -198,3 +196,5 @@ Phụ lục: [`appendix/0048-prd-aws.md`](appendix/0048-prd-aws.md) (phương á
 - §5, §10, "Ngoài phạm vi" của Hệ quả: [0053](0053-msk-elasticache-valkey.md): mật khẩu Kafka và Valkey của EKS do Terraform sinh và ghi write-only vào secret `AmazonMSK_*`, user ElastiCache và entry `kafka-admin`, `kafka-users`, `valkey-users` (mới), không còn bước (1) đặt mật khẩu vào broker và `make eks-secrets` không ghi ba entry đó; phần Kafka của C là MSK và ElastiCache, C của prd ~$11,0; Valkey/ElastiCache HA (Multi-AZ, automatic failover) nay trong phạm vi.
 - §3: [0055](0055-environment-matrix.md): danh sách khác biệt đóng và bảng biến stg/prd của phụ lục thay bằng ma trận ba nhóm (phải giống, được giảm, giảm có điều kiện) có lý do; bastion SSM ở cả hai root, root prd chỉ thêm `teardown.tfvars`; bảng đủ ở `docs/explanation/environments.md`.
 - "Ngoài phạm vi" của Hệ quả: [0056](0056-eks-platform-ha.md): Karpenter nay trong phạm vi: node workload do Karpenter tự quản cấp, managed node group `system` on-demand cho controller nền tảng.
+- §1, "Ngoài phạm vi" của Hệ quả: [0059](0059-org-structure-guardrails.md): account Log Archive `svp-log-archive` và Security Tooling `svp-security` ở OU `Security`; `svp-prd`, `svp-stg` ở OU con `Prod`, `NonProd` của `Workloads`; ba SCP chuyển lên root cùng `svp-protect-baseline`, `svp-deny-iam-users`, OU `Prod` thêm `svp-prod-guardrails`; RCP data perimeter, declarative policy EC2, tag policy; `SvpAdmin` phiên 1 giờ, thêm `SvpReadOnly`, `SvpLogReader`; root tập trung.
+- §1, "Xem lại khi" của Hệ quả: [0060](0060-org-detection-logging.md): trail `svp-audit` ghi vào bucket `svp-cloudtrail-…` của `svp-log-archive` với key ở đó, thêm data event S3 của `uploads` và lệnh ghi vào `media` ở prd; bucket, key trail cũ giữ tới hết Object Lock; GuardDuty, Security Hub CSPM, Config, Access Analyzer toàn org do `svp-security` quản.

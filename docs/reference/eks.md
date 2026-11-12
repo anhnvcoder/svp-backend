@@ -37,6 +37,12 @@ Loại tài liệu (Diátaxis): **reference**, tra cứu khi cần một lệnh 
     `disruptionBudgets` (vào `spec.disruption.budgets`), `terminationGracePeriod`. `platforms/eks/svp-cluster.yaml` giữ giá trị mức prd;
     `envs/stg/svp-cluster.yaml` chỉ ghi đè phần stg giảm (capacity type, `limits`, ngân sách disruption); prd không có overlay. Giá trị và
     lý do: ADR-0056 §2, nhóm của từng khác biệt: [`environments.md`](../explanation/environments.md).
+  - **Agent GuardDuty** ([ADR-0060](../adr/0060-org-detection-logging.md) §5): add-on EKS `aws-guardduty-agent` (DaemonSet mọi node, version ghim
+    ở `aws/modules/eks/addons.tf` của `svp-infra` như add-on khác) gửi sự kiện runtime qua interface endpoint `guardduty-data` của VPC (module
+    `network`, private DNS, security group TCP 443 từ CIDR VPC). Cả hai do Terraform tạo, không do GuardDuty tự quản: endpoint và security
+    group GuardDuty tự tạo nằm ngoài state và chặn destroy VPC cuối buổi. Add-on chỉ `ACTIVE` khi node đã có; coverage của cluster đọc ở
+    GuardDuty của account `svp-security` (Runtime Monitoring → EKS clusters), finding tới email theo
+    [`security-alert.md`](../runbooks/security-alert.md).
   - Kafka là Amazon MSK và Valkey là Amazon ElastiCache ([ADR-0053](../adr/0053-msk-elasticache-valkey.md)); cả hai do Terraform của `svp-infra`
     tạo (module `msk`, `elasticache`), không có broker hay Valkey chạy trong cluster. Client nói với chúng như với `kafka` và `valkey` của compose
     và k3d: SASL_SSL SCRAM-SHA-512 cổng 9096 và `rediss://` cổng 6379, chỉ khác địa chỉ (hợp đồng `cluster` bên dưới) và CA: cert của MSK, ElastiCache
