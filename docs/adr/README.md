@@ -148,6 +148,8 @@ Phụ lục: [`appendix/NNNN-<slug>.md`](appendix/NNNN-<slug>.md) (chỉ khi có
 | [0056](0056-eks-platform-ha.md) | Node EKS do Karpenter tự quản cấp trên một nhóm node hệ thống on-demand; Envoy và Kyverno chạy HA, trải theo zone; log control plane đủ năm loại; add-on và AMI ghim version | Chấp nhận |
 | [0057](0057-postgres17-verify-full.md) | PostgreSQL 17 ở RDS, CloudNativePG, compose và CI; mọi client nối `sslmode=verify-full` với CA của nền tảng; compose có Postgres riêng; RDS lớp M ở prd với CMK, storage autoscaling và tham số ghi log; không proxy kết nối | Chấp nhận |
 | [0058](0058-managed-data-operations.md) | RDS, MSK, ElastiCache có CloudWatch alarm gửi SNS mã hoá CMK tới email, ngưỡng theo khuyến nghị của AWS; MSK tự tăng dung lượng broker; ElastiCache chờ cửa sổ bảo trì ở prd và gửi slow-log tới CloudWatch Logs | Chấp nhận |
+| [0059](0059-org-structure-guardrails.md) | AWS Organizations theo AWS SRA: account Log Archive và Security Tooling ở OU `Security`, `svp-prd`, `svp-stg` ở `Workloads/Prod`, `Workloads/NonProd`; baseline mỗi account áp từ management qua `OrganizationAccountAccessRole`; SCP, RCP data perimeter, declarative policy EC2, tag policy gắn root; root tập trung; permission set chỉ đọc; NACL không mở 22/3389 | Chấp nhận |
+| [0060](0060-org-detection-logging.md) | Phát hiện liên tục toàn org do `svp-security` quản (GuardDuty, Security Hub CSPM cấu hình tập trung với FSBP và CIS v5.0.0, Config ghi liên tục, Access Analyzer); trail, Config, flow log, log WAF, finding về account Log Archive; sự kiện bảo mật và finding nghiêm trọng qua EventBridge tới SNS email; Cost Anomaly Detection và tag phân bổ chi phí trong code | Chấp nhận |
 
 ## Chuẩn áp dụng
 

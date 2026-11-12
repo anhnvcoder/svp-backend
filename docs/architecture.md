@@ -358,6 +358,12 @@ spec của `svp-infra`: [stg](https://github.com/anhnvcoder/svp-infra/blob/main/
 [prd](https://github.com/anhnvcoder/svp-infra/blob/main/docs/diagrams/svp-aws-prd.png),
 [luồng](https://github.com/anhnvcoder/svp-infra/blob/main/docs/diagrams/svp-aws-flows.png).
 
+Account của env nằm trong một org AWS theo AWS Security Reference Architecture: account `svp-log-archive` giữ mọi log bảo mật (trail org, Config,
+flow log, log WAF, finding GuardDuty), account `svp-security` chạy GuardDuty, Security Hub, Config, Access Analyzer cho mọi account và gửi sự
+kiện bảo mật tới email; SCP, RCP gắn ở root của org đặt trần cho mọi account thành viên (không áp lên management), declarative policy EC2 áp cả
+management ([ADR-0059](adr/0059-org-structure-guardrails.md), [ADR-0060](adr/0060-org-detection-logging.md)). Cấu trúc, quyền, luồng log và
+luồng cảnh báo: [`explanation/aws-security.md`](explanation/aws-security.md).
+
 ## 8. Khái niệm xuyên suốt
 
 - **Contract:** [`proto/`](../proto/), REST ở [`services/gateway/openapi.yaml`](../services/gateway/openapi.yaml); topic, page token,

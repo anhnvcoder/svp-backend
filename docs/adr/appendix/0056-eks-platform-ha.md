@@ -51,6 +51,8 @@ Output lệnh chỉ đọc người học chạy ngày 2026-11-11, profile `anhn
 - `aws eks describe-addon-versions --kubernetes-version 1.36` (bản mặc định / mới nhất): `vpc-cni` `v1.22.4-eksbuild.14` /
   `v1.23.3-eksbuild.1`; `kube-proxy` `v1.36.0-eksbuild.65`; `coredns` `v1.14.7-eksbuild.35`; `eks-pod-identity-agent` `v1.4.1-eksbuild.3`;
   `aws-ebs-csi-driver` `v1.67.2-eksbuild.1`; `metrics-server` `v0.9.0-eksbuild.14`.
+- `aws-guardduty-agent` (đọc 2026-11-12, tài liệu GuardDuty, không qua lệnh): `v1.17.3-eksbuild.2`, bản mới nhất cho Kubernetes 1.31–1.36
+  [N18]. Lệnh tra như add-on khác: `aws eks describe-addon-versions --kubernetes-version 1.36 --addon-name aws-guardduty-agent`.
 - `aws ssm get-parameter --name /aws/service/eks/optimized-ami/1.36/amazon-linux-2023/arm64/standard/recommended/release_version`: `1.36.5-20261107`.
   Alias của EC2NodeClass dùng phần ngày: `al2023@v20261107` [N9].
 - Karpenter: release `v1.15.1` (2026-10-23) trên GitHub `aws/karpenter-provider-aws`, bảng compatibility: Kubernetes 1.36 cần ≥ 1.13, 1.37 cần
@@ -76,3 +78,5 @@ Output lệnh chỉ đọc người học chạy ngày 2026-11-11, profile `anhn
 - [N15] EKS Best Practices, Auditing and logging: <https://docs.aws.amazon.com/eks/latest/best-practices/auditing-and-logging.html>
 - [N16] Amazon EKS control plane logs: <https://docs.aws.amazon.com/eks/latest/userguide/control-plane-logs.html>
 - [N17] amazon-eks-ami, `nodeadm`, reserve của kubelet (`getCPUMillicoresToReserve`, `getMemoryMebibytesToReserve`): <https://github.com/awslabs/amazon-eks-ami/blob/main/nodeadm/internal/kubelet/config.go>
+- [N18] GuardDuty, Kubernetes versions supported by the Runtime Monitoring agent:
+  <https://docs.aws.amazon.com/guardduty/latest/ug/prereq-runtime-monitoring-eks-support.html>

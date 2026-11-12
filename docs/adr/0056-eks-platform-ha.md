@@ -100,7 +100,8 @@ giảm của 0055 §3).
 
 ### 8. Ghim version nền tảng
 
-Đọc 2026-11-11 bằng lệnh chỉ đọc của người học ở `ap-southeast-1` (phụ lục §8):
+Đọc 2026-11-11 bằng lệnh chỉ đọc của người học ở `ap-southeast-1`; `aws-guardduty-agent` đọc 2026-11-12 từ bảng hỗ trợ của tài liệu
+GuardDuty, cùng lệnh tra như add-on khác (phụ lục §8):
 
 | Thành phần | Version ghim |
 | --- | --- |
@@ -110,6 +111,7 @@ giảm của 0055 §3).
 | `eks-pod-identity-agent` | `v1.4.1-eksbuild.3` |
 | `aws-ebs-csi-driver` | `v1.67.2-eksbuild.1` |
 | `metrics-server` | `v0.9.0-eksbuild.14` |
+| `aws-guardduty-agent` | `v1.17.3-eksbuild.2` |
 | AMI AL2023 EKS arm64 | `ami_release_version = "1.36.5-20261107"`; alias EC2NodeClass `al2023@v20261107` |
 
 - Bản mới nhất tương thích của mỗi add-on, không bản mặc định: hướng dẫn nâng cluster khuyên giữ add-on ở bản mới nhất [N3]. Hai nơi của AMI
@@ -158,7 +160,7 @@ nâng, Karpenter drift sang AMI `1.N+1` của ngày cũ, hay hết AMI nếu ng�
 
 ## Nguồn
 
-Đọc 2026-11-11; đủ [N1]–[N17] ở phụ lục. [N1] <https://docs.aws.amazon.com/eks/latest/best-practices/karpenter.html>,
+Đọc 2026-11-11; đủ [N1]–[N18] ở phụ lục. [N1] <https://docs.aws.amazon.com/eks/latest/best-practices/karpenter.html>,
 [N5] <https://karpenter.sh/docs/upgrading/compatibility/>, [N9] <https://karpenter.sh/docs/concepts/disruption/>,
 [N11] <https://gateway.envoyproxy.io/docs/tasks/operations/customize-envoyproxy/>, [N13] <https://kyverno.io/docs/installation/methods/>.
 

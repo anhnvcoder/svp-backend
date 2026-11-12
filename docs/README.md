@@ -11,7 +11,7 @@ Mục lục theo [Diátaxis](https://diataxis.fr): mỗi tài liệu thuộc m�
 ## How-to: làm một việc cụ thể
 
 - [`runbooks/`](runbooks/): một runbook cho mỗi cảnh báo mức page, sự cố đã gặp và quy trình tay (dựng `svp-gitops`, `svp-frontend`,
-  `svp-infra`, đổi khoá JWT, phục hồi Postgres). Mục lục và mẫu ở [`runbooks/README.md`](runbooks/README.md).
+  `svp-infra`, đổi khoá JWT, phục hồi Postgres, phân loại cảnh báo bảo mật AWS). Mục lục và mẫu ở [`runbooks/README.md`](runbooks/README.md).
 
 ## Reference: tra cứu
 
@@ -29,6 +29,8 @@ Mục lục theo [Diátaxis](https://diataxis.fr): mỗi tài liệu thuộc m�
 - [`explanation/deployment.md`](explanation/deployment.md): compose, k3d và EKS: mỗi nơi gồm gì, vì sao khác nhau.
 - [`explanation/environments.md`](explanation/environments.md): stg và prd: thành phần nào phải giống, được giảm hay giảm có
   điều kiện, vì sao, và khi giảm thì kiểm bù ở đâu.
+- [`explanation/aws-security.md`](explanation/aws-security.md): org AWS theo AWS SRA: account, guardrail, ai đổi được gì, phát hiện, luồng
+  log và luồng cảnh báo bảo mật.
 - [`explanation/delivery.md`](explanation/delivery.md): CI/CD, chuỗi cung ứng, ba repo và hợp đồng API.
 - [`explanation/observability.md`](explanation/observability.md): trace, metric, log, lỗi và số đo trình duyệt đi từ đâu tới đâu.
 - [`explanation/reliability.md`](explanation/reliability.md): SLO, tải, backup, probe và vận hành.

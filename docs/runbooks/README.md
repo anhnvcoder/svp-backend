@@ -123,7 +123,8 @@ chỉ ở buổi stg kiểm).
 ## Mục lục
 
 Cảnh báo `severity=page` (rule viết tay ở `svp-alerts.yaml`, SLO ở `svp-slos.yaml`, alarm managed ở CloudWatch theo
-[ADR-0058](../adr/0058-managed-data-operations.md) §2; alarm `ticket` của dịch vụ managed không có runbook riêng):
+[ADR-0058](../adr/0058-managed-data-operations.md) §2, email bảo mật của org qua EventBridge và SNS; alarm `ticket` của dịch vụ managed không có
+runbook riêng):
 
 | Alert | Runbook | Nguồn rule |
 | --- | --- | --- |
@@ -145,6 +146,7 @@ Cảnh báo `severity=page` (rule viết tay ở `svp-alerts.yaml`, SLO ở `svp
 | `msk-offline-partitions` | [msk-offline-partitions.md](msk-offline-partitions.md) | ADR-0058 §2, module `msk` (chỉ AWS) |
 | `msk-under-min-isr` | [msk-under-min-isr.md](msk-under-min-isr.md) | ADR-0058 §2, module `msk` (chỉ AWS) |
 | `valkey-memory-high` | [valkey-memory-high.md](valkey-memory-high.md) | ADR-0058 §2, module `elasticache` (chỉ AWS) |
+| Email `svp-security` (sự kiện bảo mật, finding HIGH, CRITICAL) | [security-alert.md](security-alert.md) | [ADR-0060](../adr/0060-org-detection-logging.md) §10, rule `svp-security-*` của root `aws/security`, module `security-baseline` (chỉ AWS, mọi account của org) |
 
 Cảnh báo `ticket` (cùng tên với page của SLO, cửa sổ 1 d/2 h và 3 d/6 h, chỉ hiện ở Alertmanager) dùng chung runbook của
 SLO đó; `WebINPBudgetBurn` chỉ có ticket và không có runbook riêng (dashboard `svp-web`, [ADR-0020](../adr/0020-reliability-stage6.md) §3).

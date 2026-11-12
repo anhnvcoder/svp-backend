@@ -80,8 +80,7 @@ Chọn 1 EKS; 2A–20A (A ở mọi câu từ 2 tới 20), lý do ở từng § 
 ### 1. Nền tảng: EKS 1.36
 
 - **Giá của EKS:** $0,10/giờ mỗi cluster (2 cluster liên tục ≈ $146/tháng), $0,60/giờ ở extended support [N2]; nâng minor ít nhất mỗi ~14 tháng [N18]; ~10
-  controller giữ version và quyền. **Minor 1.36:** cùng k3s v1.36.5, khớp `podSecurityVersion: v1.36`, support tới 2027-08-02 [N18]; 1.37 là bài
-  `eks-minor-upgrade` của 7c; `CLOUD_K8S_VERSION` của `deploy/k8s/k8s.mk` theo 1.36.
+  controller giữ version và quyền. **Minor 1.36:** cùng k3s v1.36.5, khớp `podSecurityVersion: v1.36`, support tới 2027-08-02 [N18]; 1.37 là bài `eks-minor-upgrade` của 7c; `CLOUD_K8S_VERSION` của `deploy/k8s/k8s.mk` theo 1.36.
 
 ### 2. Repo `svp-infra` và bố cục
 
@@ -121,8 +120,7 @@ Managed node group Graviton `m7g.large` × 3, **Spot** ở stg, loại thay th�
   `platforms/<platform>/<tên>.values.tpl` (Helm `tpl` trên `.Values.cluster`); `env=stg platform=k3d` render như cũ.
 - **Hợp đồng `cluster.*`**: giá trị phụ thuộc account hay buổi, không bao giờ vào git. Bảng khoá (tên, nghĩa, ai dùng): [mục "Chi tiết rút khỏi ADR"](appendix/0034-aws-stage7.md#chi-tiết-rút-khỏi-adr).
 - **Ai ghi:** output `cluster_values` của `aws/envs/<env>`, qua `make eks-gitops-up CLUSTER_VALUES=<file>` thành `helm.valuesObject.cluster` của root. **Ai đọc:**
-  mẫu `platforms/eks/*.values.tpl`; check render bằng `deploy/ci/cluster-values.example.yaml`, file trong git đặt `cluster` thì đỏ. Thêm khoá thì sửa cả bốn nơi:
-  output Terraform, mẫu của `svp-gitops`, fixture, bảng này.
+  mẫu `platforms/eks/*.values.tpl`; check render bằng `deploy/ci/cluster-values.example.yaml`, file trong git đặt `cluster` thì đỏ. Thêm khoá thì sửa cả bốn nơi: output Terraform, mẫu của `svp-gitops`, fixture, bảng này.
 
 ### 8. Thành phần local → AWS
 
@@ -198,3 +196,5 @@ Phụ lục: [`appendix/0034-aws-stage7.md`](appendix/0034-aws-stage7.md) (trạ
 - §7, §9 "RDS": [0054](0054-data-subnet-tier.md): VPC ba tầng; RDS, MSK, ElastiCache ở subnet database (route table không `0.0.0.0/0`) thay subnet private của node; `cluster.dbCidrs` là dải của subnet database.
 - Câu 7, §6, §8: [0056](0056-eks-platform-ha.md): node workload do Karpenter tự quản cấp (stg Spot, prd on-demand) thay managed node group cố định; managed node group `system` on-demand mỗi AZ một node cho controller nền tảng; add-on và AMI ghim version; Envoy, Kyverno HA và trải zone; log control plane đủ năm loại ở cả hai env.
 - Câu 17, §9 "RDS": [0057](0057-postgres17-verify-full.md): PostgreSQL 17 thay 15 ở RDS, CloudNativePG, compose và CI; client nối `verify-full` với bundle CA của RDS trên host RDS; prd lớp `db.m7g.large`; KMS key customer managed, storage autoscaling, tham số ghi log.
+- §3: [0059](0059-org-structure-guardrails.md): org theo AWS SRA thêm account `svp-log-archive`, `svp-security` ở OU `Security`; `svp-stg`, `svp-prd` ở OU `Workloads/NonProd`, `Workloads/Prod`; baseline bảo mật mỗi account áp từ management; permission set chỉ đọc cạnh `SvpAdmin`.
+- §3: [0060](0060-org-detection-logging.md): Cost Anomaly Detection (monitor theo dịch vụ, email hằng ngày, ngưỡng tác động $10) và tag phân bổ chi phí `Project`, `Env`, `Stack` do `aws/bootstrap` quản, thay bật tay.

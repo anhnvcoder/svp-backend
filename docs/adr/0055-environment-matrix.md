@@ -135,3 +135,10 @@ env khác, không phải mức khác.
 - [N13] Gateway endpoints for S3: <https://docs.aws.amazon.com/vpc/latest/privatelink/vpc-endpoints-s3.html>
 - [N14] Karpenter disruption: <https://karpenter.sh/docs/concepts/disruption/>
 - [N15] Modifying an ElastiCache cluster: <https://docs.aws.amazon.com/AmazonElastiCache/latest/dg/Clusters.Modify.html>
+
+## Thông tin thêm
+
+### Chỉnh bởi
+
+- §2, §4: [0059](0059-org-structure-guardrails.md): CMK EBS làm key EBS mặc định ở cả hai env (nhóm mã hoá phải giống), NACL không mở 22/3389 ở cả hai env; SCP `svp-prod-guardrails` ở OU `Prod` chặn Spot qua `RunInstances` ở prd, cạnh dòng NodePool Spot của stg.
+- §2, §3, §4: [0060](0060-org-detection-logging.md): flow log VPC ghi thẳng vào bucket của `svp-log-archive` (không còn log group của env), log WAF, agent GuardDuty EKS cùng endpoint `guardduty-data`, Malware Protection cho `uploads` thuộc nhóm phải giống; retention flow log và log WAF: stg 7 ngày, prd 90 ngày (được giảm); data event S3 của trail chỉ cho `uploads`, `media` của prd (giảm có điều kiện: stg không có dữ liệu người dùng thật; kiểm bù ở buổi prd).
