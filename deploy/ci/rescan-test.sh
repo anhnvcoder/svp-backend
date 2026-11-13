@@ -30,14 +30,22 @@ same() {
 has() { grep -qF -- "$2" "$1"; }
 lacks() { ! grep -qF -- "$2" "$1"; }
 
-# --- Fakes: gh answers pr list from gh/prs.json; cosign refuses every signature and takes every attestation.
+# --- Fakes: gh answers pr list from gh/prs.json (an entry with a head only for that --head); cosign refuses every
+# signature and takes every attestation.
 mkdir -p "$work/bin" "$work/gh" "$work/home" "$work/runner-temp"
 cat >"$work/bin/gh" <<'EOF'
 #!/usr/bin/env bash
 printf '%q ' "$@" >>"$FAKE_GH_LOG"
 echo >>"$FAKE_GH_LOG"
 case "$1 $2" in
-"pr list") cat "$FAKE_GH_DIR/prs.json" ;;
+"pr list")
+  head= prev=
+  for a in "$@"; do
+    [ "$prev" != --head ] || head=$a
+    prev=$a
+  done
+  jq --arg h "$head" '[.[] | select((.head // $h) == $h) | del(.head)]' "$FAKE_GH_DIR/prs.json"
+  ;;
 esac
 EOF
 cat >"$work/bin/cosign" <<'EOF'
@@ -200,6 +208,169 @@ check "rescan_one: bundles: no --replace attestation" lacks "$work/cosign.log" "
 rescan_branch "a digest with neither" none 1
 check "rescan_one: neither: nothing attested" lacks "$work/cosign.log" "attest"
 check "rescan_one: neither: nothing replaced" lacks "$work/rescan-one.replace" "replace_vuln_bundle"
+
+# --- ECR: after a digest is attested on GHCR, rescan.sh refreshes it in the ECR of each environment whose envs/ names
+# it, as that environment's rescan role. The fakes of ecr-copy-test.sh keep GHCR and the two ECRs as files; rescan_one
+# is replaced by what it leaves on GHCR: one new vuln bundle. A clone of svp-gitops: main runs the gateway in stg and
+# prd; the open pull request of bot/promote-prd releases a user-service only it names; rollback names a video-service.
+
+# shellcheck source=deploy/ci/ecr-copy-test.sh
+. "$here/ecr-copy-test.sh"
+ecr_fakes "$work/ecr-bin"
+mkdir -p "$work/docker"
+echo '{}' >"$work/docker/config.json"
+export FAKE_REG=$work/reg FAKE_LOG=$work/ecr-calls.log
+stg_account=111111111111 prd_account=222222222222
+stg_ecr=$stg_account.dkr.ecr.ap-southeast-1.amazonaws.com prd_ecr=$prd_account.dkr.ecr.ap-southeast-1.amazonaws.com
+ghcr=ghcr.io/anhnvcoder/svp-backend
+oras_image=registry.example/oras:v0@sha256:$(printf 'e%.0s' $(seq 64))
+vuln_type=https://cosign.sigstore.dev/attestation/vuln/v1
+fx_release "$ghcr/gateway" gateway
+ecr_gateway=$fx_index
+fx_release "$ghcr/user-service" user-service 100
+ecr_user=$fx_index
+mkdir -p "$FAKE_REG/$prd_ecr/svp-backend/user-service"
+cp "$FAKE_REG/$ghcr/user-service/"*.json "$FAKE_REG/$prd_ecr/svp-backend/user-service/"
+fx_release "$ghcr/video-service" video-service 100
+ecr_video=$fx_index
+mkdir -p "$FAKE_REG/$stg_ecr/svp-backend/video-service"
+cp "$FAKE_REG/$ghcr/video-service/"*.json "$FAKE_REG/$stg_ecr/svp-backend/video-service/"
+eg=$work/ecr-gitops
+ge() {
+  GIT_DIR=$eg/.git GIT_WORK_TREE=$eg GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 git -c user.name=test \
+    -c user.email=test@example.invalid -c commit.gpgsign=false -c core.hooksPath=/dev/null "$@"
+}
+# ecr_image ENV SERVICE DIGEST: writes envs/ENV/images/SERVICE.yaml of that clone (web is svp-frontend's).
+ecr_image() {
+  local repo=$ghcr/$2
+  [ "$2" != web ] || repo=ghcr.io/anhnvcoder/svp-frontend/web
+  mkdir -p "$eg/envs/$1/images"
+  printf 'image:\n  repository: %s\n  tag: "%s"\n  digest: "%s"\n' "$repo" "${3:+0123456789ab}" "$3" \
+    >"$eg/envs/$1/images/$2.yaml"
+}
+for e in stg prd; do
+  for svc in user-service video-service engagement-service feed-service media-worker web; do ecr_image "$e" "$svc" ""; done
+  ecr_image "$e" gateway "$ecr_gateway"
+done
+git init -q --bare "$eg.git"
+ge init -q -b main && ge add -A && ge commit -qm release && ge remote add origin "$eg.git" && ge push -q origin main
+ge checkout -q -b prd && ecr_image prd user-service "$ecr_user" && ge commit -qam prd &&
+  ge push -q origin HEAD:refs/heads/bot/promote-prd
+ge checkout -q -b rollback main && ecr_image stg video-service "$ecr_video" && ge commit -qam rollback &&
+  ge push -q origin HEAD:refs/heads/rollback
+ge checkout -q main
+prd_pr='[{"head": "bot/promote-prd", "number": 12, "isCrossRepository": false, "author": {"login": "app/svp-gitops-promoter"}}]'
+# ecr_run NAME WANT_RC VAR=VALUE... -- COMMAND ARGS...: rescan.sh's COMMAND (run or run_digest) in a rescan job of
+# backend with the ECR fakes and the replaced rescan_one; output in ecr-NAME.out, the fakes' calls in ecr-calls.log.
+ecr_run() {
+  local name=$1 want=$2 rc=0 vars=()
+  shift 2
+  while [ "$1" != -- ]; do
+    vars+=("$1")
+    shift
+  done
+  shift
+  fresh
+  : >"$FAKE_LOG"
+  echo "$prd_pr" >"$work/gh/prs.json"
+  # shellcheck disable=SC2016 # expanded by the inner shell
+  on github env PATH="$work/ecr-bin:$work/bin:$PATH" "${backend_rescan[@]}" ORAS_IMAGE="$oras_image" \
+    FAKE_ORAS_IMAGE="$oras_image" FAKE_REG="$FAKE_REG" FAKE_LOG="$FAKE_LOG" DOCKER_CONFIG="$work/docker" \
+    FAKE_AWS_ACCOUNTS="svp-stg=$stg_account svp-prd=$prd_account" FAKE_FAIL_REFERRER="$work/fail-referrer" \
+    ${vars[@]+"${vars[@]}"} "$BASH" -c '
+    . "$1/deploy/ci/rescan.sh"
+    . "$1/deploy/ci/ecr-copy-test.sh"
+    rescan_one() {
+      mkdir -p "$4" && fx_rescan "$2" "$3" "$3-rescan-$$-$RANDOM" >/dev/null && : >"$4/attested"
+      echo "rescanned $2@$3"
+    }
+    shift
+    "$@"' _ "$tree" "$@" >"$work/ecr-$name.out" 2>&1 || rc=$?
+  same "rescan ECR: $name (exit $want)" "$want" "$rc"
+  [ "$rc" = "$want" ] || sed 's/^/      | /' "$work/ecr-$name.out" >&2
+  check "rescan ECR: $name: no account ID printed" lacks "$work/ecr-$name.out" "$stg_account"
+  check "rescan ECR: $name: no account ID printed (prd)" lacks "$work/ecr-$name.out" "$prd_account"
+}
+registries=(SVP_ECR_REGISTRY_STG="$stg_ecr" SVP_ECR_REGISTRY_PRD="$prd_ecr")
+# one_new_vuln NAME ECR REPO DIGEST: ECR's REPO holds one vuln bundle of DIGEST, the one GHCR has now.
+one_new_vuln() {
+  same "rescan ECR: $1" "$(fx_bundles "$ghcr/$3" "$4" "$vuln_type")" "$(fx_bundles "$2/svp-backend/$3" "$4" "$vuln_type")"
+  same "rescan ECR: $1: exactly one" 1 "$(fx_bundles "$2/svp-backend/$3" "$4" "$vuln_type" | grep -c .)"
+}
+ecr_run "main, prd's pull request, a rollback" 0 "${registries[@]}" -- run "$work/ecr-run-1" "$eg" rollback
+one_new_vuln "the user-service only bot/promote-prd names, refreshed in prd's ECR" "$prd_ecr" user-service "$ecr_user"
+one_new_vuln "the video-service of the rollback (vuln 100 hours old), refreshed in stg's ECR" "$stg_ecr" video-service \
+  "$ecr_video"
+check "rescan ECR: prd's ECR as prd's rescan role" has "$FAKE_LOG" \
+  "aws svp-prd ecr batch-delete-image --region ap-southeast-1 --registry-id $prd_account --repository-name svp-backend/user-service"
+check "rescan ECR: stg's ECR as stg's rescan role" has "$FAKE_LOG" \
+  "aws svp-stg ecr batch-delete-image --region ap-southeast-1 --registry-id $stg_account --repository-name svp-backend/video-service"
+check "rescan ECR: the gateway, in no ECR, left out" has "$work/ecr-main, prd's pull request, a rollback.out" \
+  "skip  ECR has no $ecr_gateway"
+check "rescan ECR: the video-service not in prd's ECR" lacks "$FAKE_LOG" "--registry-id $prd_account --repository-name svp-backend/video-service"
+
+# A commit of the code repository (k3d, before svp-gitops) as values_ref: its digests reach no ECR.
+mkdir -p "$tree/deploy/k8s/values/services"
+fx_release "$ghcr/feed-service" feed-service
+ecr_feed=$fx_index
+for svc in gateway user-service video-service engagement-service feed-service media-worker web; do
+  repo=$ghcr/$svc d=
+  [ "$svc" != web ] || repo=ghcr.io/anhnvcoder/svp-frontend/web
+  [ "$svc" != feed-service ] || d=$ecr_feed
+  printf 'image:\n  repository: %s\n  tag: "%s"\n  digest: "%s"\n' "$repo" "${d:+0123456789ab}" "$d" \
+    >"$tree/deploy/k8s/values/services/$svc.yaml"
+done
+gt() {
+  GIT_DIR=$tree/.git GIT_WORK_TREE=$tree GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 git -c user.name=test \
+    -c user.email=test@example.invalid -c commit.gpgsign=false -c core.hooksPath=/dev/null "$@"
+}
+gt init -q -b main && gt add -A && gt commit -qm values
+code=$(gt rev-parse HEAD)
+ecr_run "values_ref a commit of the code repository" 0 "${registries[@]}" -- run "$work/ecr-run-2" "$eg" "$code"
+check "rescan ECR: the code repository's release rescanned" has \
+  "$work/ecr-values_ref a commit of the code repository.out" "rescanned $ghcr/feed-service@$ecr_feed"
+check "rescan ECR: the code repository's release asked of no ECR" lacks "$FAKE_LOG" "$ecr_feed"
+
+ecr_run "no ECR host in the job" 0 -- run "$work/ecr-run-3" "$eg" rollback
+check "rescan ECR: no host: GHCR still rescanned" has "$work/ecr-no ECR host in the job.out" \
+  "rescanned $ghcr/video-service@$ecr_video"
+check "rescan ECR: no host: AWS never called" lacks "$FAKE_LOG" "aws "
+check "rescan ECR: no host: no ECR read" lacks "$FAKE_LOG" "dkr.ecr"
+
+# --- rescan.sh run-digest: a release left in ECR that no ref names. stg: the copy of its leg fails after the index,
+# its vuln ages out, the next copy is refused naming the dispatch; run-digest refreshes it and copies the rest; the leg
+# passes again. prd: promote-prd copied it, then stopped; run-digest refreshes prd's ECR alone and copies nothing.
+fx_release "$ghcr/media-worker" media-worker 100
+ecr_media=$fx_index
+copy_leg() {
+  ecr_run "$1" "$2" -- "$tree/deploy/ci/ecr-copy.sh" copy "$ghcr/media-worker" "$ecr_media" "$stg_ecr"
+}
+touch "$work/fail-referrer"
+copy_leg "the leg's copy fails after the index" 1
+copy_leg "the leg run again, its vuln too old" 1
+check "rescan ECR: the leg run again: names the dispatch of one digest" has \
+  "$work/ecr-the leg run again, its vuln too old.out" "-f image=media-worker -f digest=$ecr_media -f env=<stg|prd>"
+ecr_run "run-digest stg" 0 "${registries[@]}" -- run_digest "$work/ecr-digest-1" media-worker "$ecr_media" stg
+one_new_vuln "run-digest stg: the new vuln in stg's ECR" "$stg_ecr" media-worker "$ecr_media"
+check "rescan ECR: run-digest stg: copied what was missing" has "$work/ecr-run-digest stg.out" "copy    $ghcr/media-worker"
+copy_leg "the leg run again after run-digest" 0
+check "rescan ECR: the leg after run-digest: nothing left to copy" lacks "$FAKE_LOG" "oras cp"
+fx_release "$ghcr/engagement-service" engagement-service 100
+ecr_engagement=$fx_index
+mkdir -p "$FAKE_REG/$prd_ecr/svp-backend/engagement-service"
+cp "$FAKE_REG/$ghcr/engagement-service/"*.json "$FAKE_REG/$prd_ecr/svp-backend/engagement-service/"
+ecr_run "run-digest prd" 0 "${registries[@]}" -- run_digest "$work/ecr-digest-2" engagement-service "$ecr_engagement" prd
+one_new_vuln "run-digest prd: the new vuln in prd's ECR" "$prd_ecr" engagement-service "$ecr_engagement"
+check "rescan ECR: run-digest prd: no copy" lacks "$work/ecr-run-digest prd.out" "copy    "
+check "rescan ECR: run-digest prd: stg's ECR not asked" lacks "$FAKE_LOG" "$stg_account"
+ecr_run "run-digest without the env's host" 1 SVP_ECR_REGISTRY_STG="$stg_ecr" -- \
+  run_digest "$work/ecr-digest-3" engagement-service "$ecr_engagement" prd
+check "rescan ECR: run-digest without the host: names its variable" has \
+  "$work/ecr-run-digest without the env's host.out" "no ECR host of prd in this job (SVP_ECR_REGISTRY_PRD)"
+ecr_run "run-digest of a drill image" 1 "${registries[@]}" -- \
+  run_digest "$work/ecr-digest-4" drill-vulnerable "$ecr_engagement" stg
+check "rescan ECR: run-digest of a drill image: refused" has "$work/ecr-run-digest of a drill image.out" \
+  "drill-vulnerable is no service of release source backend"
 
 if ((failures)); then
   echo "$failures check(s) failed" >&2

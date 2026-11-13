@@ -1,14 +1,18 @@
 # Bảo mật AWS cấp tổ chức
 
-Trang này giải thích lớp bảo mật nằm trên mọi account AWS của lab: org gồm những account nào và vì sao, guardrail gắn ở đâu, ai đổi được gì,
-dịch vụ nào phát hiện bất thường, log đi về đâu và một sự kiện bảo mật tới người học bằng đường nào. Quyết định và lý do ở
-[ADR-0059](../adr/0059-org-structure-guardrails.md) (cấu trúc, guardrail, quyền) và [ADR-0060](../adr/0060-org-detection-logging.md) (phát hiện,
-log, cảnh báo); statement đủ của mọi policy, event pattern, retention và bảng giá ở phụ lục của hai ADR. Bảo mật trong một env (pod, bucket, mạng,
-dịch vụ dữ liệu) ở [`threat-model.md`](../threat-model.md#411-biên-aws); đường vào công khai ở [`edge.md`](edge.md); stg so với prd ở
+Trang này giải thích lớp bảo mật nằm trên mọi account AWS của lab: org gồm những account nào và vì sao, guardrail gắn ở
+đâu, ai đổi được gì, dịch vụ nào phát hiện bất thường, log đi về đâu và một sự kiện bảo mật tới người học bằng đường
+nào. Quyết định và lý do ở [ADR-0059](../adr/0059-org-structure-guardrails.md) (cấu trúc, guardrail, quyền) và
+[ADR-0060](../adr/0060-org-detection-logging.md) (phát hiện, log, cảnh báo); registry và credential AWS của CI ở
+[ADR-0062](../adr/0062-ecr-registry-ci-oidc.md), endpoint interface ở [ADR-0064](../adr/0064-interface-endpoints.md),
+Argo CD trên EKS ở [ADR-0065](../adr/0065-argocd-eks-capability.md); statement đủ của mọi policy, event pattern,
+retention và bảng giá ở phụ lục của các ADR đó. Bảo mật trong một env (pod, bucket, mạng, dịch vụ dữ liệu) ở
+[`threat-model.md`](../threat-model.md#411-biên-aws); đường vào công khai ở [`edge.md`](edge.md); stg so với prd ở
 [`environments.md`](environments.md).
 
-Code ở repo [`svp-infra`](https://github.com/anhnvcoder/svp-infra): root `aws/org`, `aws/log-archive`, `aws/security`, `aws/baseline`,
-`aws/bootstrap` và module `aws/modules/org-policies`, `aws/modules/security-baseline`. Mọi lệnh chạm account do người học chạy.
+Code ở repo [`svp-infra`](https://github.com/anhnvcoder/svp-infra): root `aws/org`, `aws/log-archive`, `aws/security`,
+`aws/baseline`, `aws/bootstrap`, `aws/accounts/<env>` và module `aws/modules/org-policies`,
+`aws/modules/security-baseline`, `aws/modules/registry`, `aws/modules/network`. Mọi lệnh chạm account do người học chạy.
 
 ## Cấu trúc org theo AWS SRA
 
@@ -113,6 +117,12 @@ Root `aws/security` cấu hình các dịch vụ từ account `svp-security`, de
 - **AWS Config**: recorder của baseline ở mọi account, aggregator `svp-org` ở `svp-security`. Không conformance pack: chuẩn CIS của Security Hub
   đã đánh giá cùng các rule.
 - **IAM Access Analyzer** loại `ORGANIZATION` ở hai region: báo tài nguyên chia sẻ ra ngoài org.
+- **Amazon Inspector** ([ADR-0062](../adr/0062-ecr-registry-ci-oidc.md) §10) qua delegated admin `svp-security`, chỉ
+  loại tài nguyên ECR, ở region nhà: cấu hình org (`aws/security/inspector.tf`) tự bật quét ECR cho mọi account thành
+  viên, cả `svp-security`, `svp-log-archive`. Registry của `svp-stg`, `svp-prd` quét nâng cao liên tục chỉ trên repo của
+  pull-through cache (image bên thứ ba); repo phát hành đã qua trivy, grype trước push, rescan hằng ngày và admission
+  đòi báo cáo dưới hạn, nên không quét lại. Không EC2 (node thay mỗi buổi, AMI ghim, vá bằng nâng AMI) và không Lambda
+  (lab không có). Finding vào Security Hub.
 
 Phần không được giám sát và lý do (bastion không có agent runtime, volume mã hoá bằng `alias/svp-ebs` không được quét malware, management ngoài
 hai region, kể cả phiên `AssumeRoot` mở ở đó) ở phần Hệ quả của ADR-0060.
@@ -134,6 +144,99 @@ Mỗi env đón request công khai ở CloudFront, không ở load balancer nào
 
 Control Security Hub FSBP áp lên tài nguyên edge (`CloudFront.*`, `WAF.*`, `ACM.*`, `Route53.*`, `ELB.*`), đạt hay chấp nhận có lý do: phụ lục
 ADR-0061. Mối đe doạ của lớp này ở [threat model](../threat-model.md#413-edge).
+
+## Registry và credential AWS của CI
+
+Image chạy trên EKS nằm trong ECR private của chính account env ([ADR-0062](../adr/0062-ecr-registry-ci-oidc.md)):
+module `registry` ở root `aws/accounts/<env>`, sống qua mọi buổi. Phần bảo mật:
+
+- **Repo phát hành** (`svp-backend/<service>`, `svp-frontend/web`): mã hoá bằng CMK `alias/svp-<env>-ecr` (ECR dùng key
+  qua grant, người đẩy, kéo không cần quyền KMS), tag `IMMUTABLE`, không lifecycle xoá image (một bản phát hành đang
+  chạy hay là đích rollback không bị xoá tự động). Chữ ký và attestation đi theo image dưới dạng referrer, nên Kyverno
+  xác minh ngay ở ECR, cùng identity keyless như ở GHCR.
+- **Pull-through cache** cho năm tiền tố (`ghcr`, `docker-hub`, `quay`, `k8s`, `ecr-public`): credential của GHCR,
+  Docker Hub là secret `ecr-pullthroughcache/*` (PAT chỉ đọc, người học ghi và xoay), ECR đọc bằng service-linked role
+  của nó. Role node chỉ thêm quyền nhập image upstream trên `repository/<tiền tố>/*`.
+- **Role CI ECR:** CI của `svp-backend`, `svp-frontend` có credential AWS, ngoại lệ có ADR của luật "CI không credential
+  AWS"; `svp-infra` vẫn không có. Mỗi account env một IAM OIDC provider `token.actions.githubusercontent.com`; mỗi role
+  tin đúng một chuỗi `sub` dạng bất biến (`repo:<owner>@<owner-id>/<repo>@<repo-id>:...`, không đổi khi repo đổi tên),
+  phiên 1 giờ, chỉ quyền đẩy ECR trên repo của nó:
+
+  | Role | Account | Ai nhận (`sub`) | Repo | Xoá |
+  | --- | --- | --- | --- | --- |
+  | `svp-ci-ecr-release-backend` | stg | `svp-backend`, `ref:refs/heads/main` | `svp-backend/*` | không |
+  | `svp-ci-ecr-release-frontend` | stg | `svp-frontend`, `ref:refs/heads/main` | `svp-frontend/web` | không |
+  | `svp-ci-ecr-promote` | prd | `svp-backend`, `environment:promote-prd` | mọi repo phát hành | không |
+  | `svp-ci-ecr-rescan-backend` | stg, prd | `svp-backend`, `environment:ecr-rescan` | `svp-backend/*` | có |
+  | `svp-ci-ecr-rescan-frontend` | stg, prd | `svp-frontend`, `environment:ecr-rescan` | `svp-frontend/web` | có |
+
+  Tách theo repo nguồn: frontend không ghi được image backend và ngược lại. Tách theo mục đích: prd không có role nhận
+  `main`, image vào prd chỉ qua job `promote-prd` có người duyệt; chỉ role rescan được `BatchDeleteImage` (gỡ báo cáo lỗ
+  hổng cũ). Account ID chỉ ở secret repo, bị che trong log công khai. Luồng phát hành dùng các role:
+  [`delivery.md`](delivery.md#phát-hành-sang-ecr).
+
+```mermaid
+sequenceDiagram
+    participant J as Job CI (main hay environment)
+    participant GH as OIDC của GitHub
+    participant STS as AWS STS (account env)
+    participant ECR as ECR của env
+    J->>GH: xin ID token (id-token: write), audience sts.amazonaws.com
+    GH-->>J: JWT ký, sub = repo:owner@id/repo@id:ref hay :environment
+    J->>STS: AssumeRoleWithWebIdentity (configure-aws-credentials)
+    STS->>STS: kiểm chữ ký, aud, sub đúng một chuỗi của trust policy
+    STS-->>J: credential tạm 1 giờ của role
+    J->>ECR: GetAuthorizationToken, đăng nhập vào DOCKER_CONFIG riêng của job
+    J->>ECR: chép, xác minh trên đúng repo mà role cho
+```
+
+Rủi ro còn lại (job nào trên `main` khai environment `ecr-rescan` cũng nhận role rescan, role rescan ghi và xoá được
+image của repo mình) ở [threat model](../threat-model.md#48-bề-mặt-khác) SC-16.
+
+## Endpoint interface
+
+Mọi gọi API AWS từ VPC của env đi qua endpoint interface ([ADR-0064](../adr/0064-interface-endpoints.md)), module
+`network`: STS, `eks-auth`, Secrets Manager, CloudWatch Logs, SSM, ECR, EC2, ELB, AMP, X-Ray, SQS (danh sách là dữ liệu
+của module). Private DNS bật, nên tên API công khai phân giải ra IP của ENI trong VPC và pod không phải cấu hình gì;
+security group `svp-<env>-endpoints` chỉ nhận TCP 443 từ CIDR của VPC.
+
+- **Endpoint policy:** ở dịch vụ nhận policy, cho mọi hành động nhưng từ chối khi `aws:PrincipalAccount` khác account
+  của env: credential của account khác không dùng được đường này. Policy không thay IAM; dịch vụ không nhận policy thì
+  AWS cho toàn quyền qua endpoint.
+- **Không `kms`:** không thành phần nào trong VPC gọi KMS trực tiếp; EBS, Secrets Manager, ECR, CloudWatch Logs, AMP gọi
+  KMS thay người dùng.
+- **NetworkPolicy:** pod gọi API AWS (Kyverno, External Secrets, Collector, Prometheus agent, ACK) mở thêm TCP 443 tới
+  `awsEndpointCidrs` (EKS: CIDR của VPC) và TCP 80 tới agent Pod Identity, vì private DNS đưa đích của chúng vào dải
+  private mà policy cũ chặn.
+- **Vẫn qua NAT:** GitHub, Telegram, Sigstore, lần kéo đầu của pull-through cache, API ECR Public, API Pricing của
+  Karpenter, Amazon Managed Grafana (bảng: ADR-0064 §6).
+
+## Đăng nhập công cụ vận hành
+
+Người học vào công cụ vận hành của env bằng IAM Identity Center của org, không tài khoản riêng của công cụ. Hai nhóm ở
+`aws/org/identity-center.tf`: `svp-platform-admins`, `svp-platform-viewers`; id nhóm chỉ ở `<env>.auto.tfvars` không
+commit của root `aws/accounts/<env>`.
+
+- **Amazon Managed Grafana** `svp-<env>` ([ADR-0063](../adr/0063-managed-observability.md) §4): xác thực `AWS_SSO`, nhóm
+  admin là `ADMIN`, nhóm viewer là `VIEWER`; quyền đọc AMP, CloudWatch của env qua role `svp-<env>-grafana`
+  (`CUSTOMER_MANAGED`). Grafana Operator trong cluster ghi dashboard bằng token của service account
+  `svp-grafana-operator`, tạo mới mỗi buổi; token không bao giờ vào git.
+- **Argo CD trên EKS** giữ cách cài hiện tại: chart `argo-cd` tự cài, một replica, đăng nhập `admin` cục bộ, UI chỉ qua
+  port-forward loopback (threat model OPS-2). ADR-0065 chọn EKS Capability cho Argo CD (AWS chạy Argo CD, đăng nhập
+  Identity Center theo hai nhóm trên, không tài khoản cục bộ); thay đổi đó là việc riêng, kèm cập nhật threat model.
+
+```mermaid
+sequenceDiagram
+    participant U as Người học (trình duyệt)
+    participant AMG as Amazon Managed Grafana svp-env
+    participant IDC as IAM Identity Center của org
+    U->>AMG: mở URL workspace
+    AMG->>IDC: chuyển hướng tới trang đăng nhập
+    U->>IDC: đăng nhập bằng user của Identity Center
+    IDC-->>AMG: assertion: user, nhóm svp-platform-*
+    AMG->>AMG: vai trò theo nhóm: admins → Admin, viewers → Viewer
+    AMG-->>U: dashboard, truy vấn AMP, CloudWatch bằng role svp-env-grafana
+```
 
 ## Luồng log
 
@@ -203,6 +306,7 @@ flowchart LR
         bus["Bus svp-security-events<br/>policy theo aws:PrincipalOrgID"] --> notify["Rule svp-security-notify"]
         gd["GuardDuty"] --> sh["Security Hub CSPM<br/>aggregator"]
         aa["IAM Access Analyzer"] --> sh
+        insp["Inspector<br/>repo cache ECR"] --> sh
         sh -->|"Security Hub Findings - Imported"| findings["Rule svp-security-findings<br/>HIGH, CRITICAL, NEW, ACTIVE"]
         notify --> sns[["Topic SNS svp-security-alarms<br/>mã hoá CMK"]]
         findings --> sns
@@ -216,9 +320,11 @@ flowchart LR
   xoá, sửa; rule `svp-security-*` bị đổi; GuardDuty, Security Hub, Config, Access Analyzer bị tắt hay đổi; lệnh bị guardrail từ chối;
   đổi IAM, KMS, S3, Identity Center ở ba account không chạy workload. Event pattern đủ ở phụ lục ADR-0060.
 - Sự kiện cần role để sang bus của account khác (`svp-security-forwarder`); bus chỉ nhận từ principal trong org.
-- Finding đi đường riêng: GuardDuty và Access Analyzer gửi finding vào Security Hub, rule trên bus mặc định của `svp-security` chỉ lấy finding
-  mới, còn mở, mức HIGH hay CRITICAL. Finding của control FSBP, CIS không tới email: Security Hub gửi lại sự kiện mỗi lần đánh giá lại, email sẽ
-  lặp; người học đọc bảng Security Hub theo runbook.
+- Finding đi đường riêng: GuardDuty và Access Analyzer gửi finding vào Security Hub, rule trên bus mặc định của
+  `svp-security` chỉ lấy finding mới, còn mở, mức HIGH hay CRITICAL của hai dịch vụ đó (lọc theo `ProductName`). Finding
+  của Inspector chỉ ở Security Hub, không tới email: người học đọc nó cùng bảng Security Hub. Finding của control FSBP,
+  CIS không tới email: Security Hub gửi lại sự kiện mỗi lần đánh giá lại, email sẽ lặp; người học đọc bảng Security Hub
+  theo runbook.
 - Input transformer ghi tên sự kiện hay tiêu đề finding, account, region, principal, mã lỗi và URL runbook
   [`security-alert.md`](../runbooks/security-alert.md), nên email đủ để bắt đầu phân loại.
 - Topic SNS dùng module `alarms` như alarm của dịch vụ managed; publisher là `events.amazonaws.com` thay vì CloudWatch.

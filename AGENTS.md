@@ -118,8 +118,15 @@ nó hoặc dựng bản sao từ event.
   kiểm tra đúng account.
 - Mỗi buổi cloud kết thúc bằng lệnh destroy và lệnh quét tài nguyên sót; AI nhắc cho tới khi người học xác nhận đã chạy cả hai.
   Budget alert bật từ ngày đầu ở cả hai cloud.
-- **Không đăng nhập GHCR hay Sigstore từ máy:** push GHCR, ký, attest chỉ chạy trong CI; bước promote stg, prd chỉ chạy trong CI
-  (token GitHub App), guard của chúng thử bằng `deploy/ci/promote-test.sh`.
+- **Không đăng nhập GHCR, ECR hay Sigstore từ máy:** push GHCR, ký, attest, chép sang ECR chỉ chạy trong CI; bước
+  promote stg, prd chỉ chạy trong CI (token GitHub App), guard của chúng thử bằng `deploy/ci/promote-test.sh`;
+  `deploy/ci/ecr-copy.sh` chỉ chạy qua `deploy/ci/ecr-copy-test.sh` (công cụ giả). `deploy/ci/image-list.sh` chỉ đọc bản
+  clone `svp-gitops` và kho chart, không chạm AWS.
+- **CI có credential AWS, chỉ qua OIDC** ([ADR-0062](docs/adr/0062-ecr-registry-ci-oidc.md) §5, ngoại lệ của luật "CI
+  không credential AWS"): job `ecr-copy`, `promote-prd`, `rescan` của `images.yml` nhận role ECR hẹp theo `sub` (nhánh
+  `main`, environment `promote-prd`, `ecr-rescan`), phiên 1 giờ, chỉ đẩy ECR; account ID chỉ ở secret repo
+  `SVP_AWS_STG_ACCOUNT_ID`, `SVP_AWS_PRD_ACCOUNT_ID`. Không thêm access key, quyền hay job nhận role mà không có ADR;
+  không job `pull_request` nào có `id-token: write`. Không biến `.env` mới cho việc này.
 - **Khoá GitHub App `svp-argocd-notifier`** (chỉ commit status trên `svp-gitops`, [ADR-0032](docs/adr/0032-argocd-deploy-status.md)) do
   người học tạo và đặt vào `.env` (`SVP_ARGOCD_NOTIFY_*`, `make env` không sinh); `make eks-secrets` ghi nó vào entry
   `svp/<env>/argocd-notifications` của AWS Secrets Manager, rồi vào cluster chỉ qua External Secrets thành Secret

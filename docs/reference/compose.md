@@ -131,9 +131,13 @@ Loại tài liệu (Diátaxis): **reference**, tra cứu khi cần một lệnh 
   đếm; `glitchtip` chỉ khởi động sau khi nó thành công. `make glitchtip-init` chạy nó thêm một lần, gắn thư mục output để lấy DSN và
   token cho `.env` (`deploy/observability/glitchtip/init.sh`). Migrate và `createcachetable` đi qua role migrator vì role app không
   tạo được bảng.
-- `make otelcol-validate`: `validate` của Collector ghim (`--network none`) cho cấu hình `obs`, cấu hình `obs-elastic`
-  (file `deploy/observability/elastic/otelcol-config.yaml` ghép đè lên file `obs`) và cấu hình của cluster k3d
-  (`deploy/observability/otelcol/k8s-config.yaml`); chạy lại sau khi sửa một trong ba.
+- `make otelcol-validate`: `validate` của Collector ghim (`--network none`) cho bốn cấu hình: `obs`, `obs-elastic` (file
+  `deploy/observability/elastic/otelcol-config.yaml` ghép đè lên file `obs`) và cấu hình cluster của từng nền tảng, mỗi
+  cái là file chung `deploy/observability/otelcol/k8s-config.yaml` với file đích ghép đè, như chart `svp-observability`
+  gộp chúng ([Collector của cluster](../explanation/observability.md#collector-của-cluster)): `k8s-k3d.yaml` và
+  `k8s-eks.yaml`. Lượt `eks` thêm một `--config` dạng `yaml:` cho ba extension `sigv4auth` đọc web identity từ một role
+  giả, vì `validate` của extension đòi credential mà lượt không mạng, không AWS không có. Chạy lại sau khi sửa một trong
+  các file đó.
 - `make slo`: sinh `deploy/observability/prometheus/rules/slo-generated.yaml` từ `deploy/observability/slo/svp-slos.yaml`
   bằng Sloth; file sinh được commit, chạy lại sau khi sửa spec. `make slo-check`: promtool của image LGTM ghim, không
   mạng: `check config` cho cấu hình Prometheus và hai file rule, rồi `test rules` (`svp-alerts.test.yaml`).

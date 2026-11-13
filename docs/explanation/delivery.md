@@ -10,9 +10,11 @@ nơi image chạy ở [`deployment.md`](deployment.md).
 Vì sao: [ADR-0015](../adr/0015-cicd-devsecops-stage5.md), [ADR-0027](../adr/0027-slsa-build-provenance.md),
 [ADR-0040](../adr/0040-sigstore-bundle-actions-attest.md), [ADR-0041](../adr/0041-github-hardening.md).
 
-Image phát hành build trên GitHub Actions, không trên máy: workflow build, quét, ký và đẩy lên GHCR; một PR trong repo `svp-gitops`
-ghi digest vào values ([hai repo](#hai-repo-code-và-cấu-hình-triển-khai)); Argo CD đồng bộ; Kyverno chỉ cho pod của `svp` chạy
-image đã ký và sạch. Đường dev `make k8s-up` giữ image `dev-*` chưa ký trong registry k3d, policy chạy Audit.
+Image phát hành build trên GitHub Actions, không trên máy: workflow build, quét, ký và đẩy lên GHCR; một PR trong repo
+`svp-gitops` ghi digest vào values ([hai repo](#hai-repo-code-và-cấu-hình-triển-khai)); Argo CD đồng bộ; Kyverno chỉ cho
+pod của `svp` chạy image đã ký và sạch. Cluster k3d kéo bản phát hành từ GHCR (sơ đồ dưới); EKS kéo cùng digest từ ECR
+của account env, nơi CI đã chép image cùng chữ ký và attestation ([phát hành sang ECR](#phát-hành-sang-ecr)). Đường dev
+`make k8s-up` giữ image `dev-*` chưa ký trong registry k3d, policy chạy Audit.
 
 ```mermaid
 flowchart LR
@@ -81,16 +83,18 @@ flowchart LR
   bao giờ ghi lùi) vào `envs/stg/images/<svc>.yaml` cùng commit chart vào `envs/stg/charts.yaml`, mở hay cập nhật một PR cuộn và bật
   auto-merge; PR tự merge khi `gitops-ok` xanh; Argo CD poll thấy commit, sync, gateway đi
   [canary](deployment.md#kubernetes-cục-bộ-k3d). Rollback stg là PR revert trong `svp-gitops`.
-- **Admission** (ADR-0015 §8): Kyverno (admission controller + reports controller; version ghim ở `argocd/apps/components.json` của
-  `svp-gitops`; admission controller một replica ở k3d, ba replica có PDB và trải zone trên EKS, `platforms/eks/kyverno.yaml`,
-  [ADR-0056](../adr/0056-eks-platform-ha.md) §5), một `ImageValidatingPolicy` `svp-images` cho Pod ở namespace `svp`, kiểm theo
-  thứ tự: prefix GHCR của repo và có digest (không gọi mạng), chữ ký đúng identity, attestation `vuln` đúng identity, đủ hai nền
-  tảng, không CRITICAL, không quá 72 giờ; khi bật `requireProvenance` (overlay `envs/<env>/svp-policy.yaml` của `svp-gitops`, bật ở
-  stg và prd) thêm provenance đúng identity, đúng `builder.id`, repository, ref, và `verify-release.sh` đối chiếu commit của nó với
-  chứng chỉ. Đường GitOps Enforce (`Deny`, webhook `Fail`: Kyverno chết hay Sigstore, GHCR không tới được thì pod `svp` mới bị từ
-  chối); đường dev Audit. Namespace khác không qua webhook. Image bên thứ ba (operator, dữ liệu, observability, Argo CD, Kyverno)
-  ghim digest, kiểm tĩnh trong CI bằng bước 4 của `deploy/ci/gitops-check.sh` (`make helm-check`, check của `svp-gitops`), chưa
-  kiểm chữ ký nhà cung cấp.
+- **Admission** (ADR-0015 §8): Kyverno (admission controller + reports controller; version ghim ở
+  `argocd/apps/components.json` của `svp-gitops`; admission controller một replica ở k3d, ba replica có PDB và trải zone
+  trên EKS, `platforms/eks/kyverno.yaml`, [ADR-0056](../adr/0056-eks-platform-ha.md) §5), một `ImageValidatingPolicy`
+  `svp-images` cho Pod ở namespace `svp`, kiểm theo thứ tự: prefix phát hành của nguồn (GHCR ở k3d, ECR của env trên EKS
+  qua value `releaseRegistry`) và có digest (không gọi mạng), chữ ký đúng identity, attestation `vuln` đúng identity, đủ
+  hai nền tảng, không CRITICAL, không quá 72 giờ; khi bật `requireProvenance` (overlay `envs/<env>/svp-policy.yaml` của
+  `svp-gitops`, bật ở stg và prd) thêm provenance đúng identity, đúng `builder.id`, repository, ref, và
+  `verify-release.sh` đối chiếu commit của nó với chứng chỉ. Đường GitOps Enforce (`Deny`, webhook `Fail`: Kyverno chết
+  hay Sigstore, registry phát hành không tới được thì pod `svp` mới bị từ chối); đường dev Audit. Namespace khác không
+  qua webhook. Image bên thứ ba (operator, dữ liệu, observability, Argo CD, Kyverno) ghim digest, kiểm tĩnh trong CI
+  bằng bước 4 của `deploy/ci/gitops-check.sh` (`make helm-check`, check của `svp-gitops`), chưa kiểm chữ ký nhà cung
+  cấp; trên EKS chúng đi qua pull-through cache của ECR ([image bên thứ ba](#image-bên-thứ-ba-trên-eks)).
 - **Thứ tự các phép của policy:** các phép chạy theo thứ tự và dừng ở phép đầu tiên sai, mỗi phép một message nêu image bị từ chối và,
   từ phép 2, nguồn của image. Phép 1 chỉ đọc pod nên từ chối image của registry cục bộ, của Docker Hub hay tên lạ dưới một prefix mà
   không hỏi registry nào; Kyverno chỉ xác minh image mà `matchImageReferences` chọn và cho mọi image khác đi qua. Điều đó chỉ đúng với
@@ -171,6 +175,111 @@ flowchart LR
 - **Chi phí:** repo public nên runner (cả arm64) và package GHCR public không tính tiền; ngân sách thời gian mỗi workflow dưới 10
   phút. Kyverno thêm 0,13–0,16 GiB RAM: cluster dev nghỉ 6,40 GiB, đỉnh 7,92 GiB khi media-worker scale lên (cách đo ADR-0014 §2).
 
+### Phát hành sang ECR
+
+Vì sao: [ADR-0062](../adr/0062-ecr-registry-ci-oidc.md) §3–§5. Pod trên EKS chỉ kéo từ registry trong account của nó, và
+admission đọc chữ ký, attestation ngay ở đó. CI không build lại: sau `sign`, nó chép đúng digest đã ký từ GHCR sang
+**repo phát hành** cùng tên của ECR (`ghcr.io/anhnvcoder/svp-backend/<svc>` → `<registry>/svp-backend/<svc>`,
+`svp-frontend/web` tương tự), cả index, mọi manifest con và mọi referrer (chữ ký, SBOM, `vuln`, provenance). Mỗi bước
+dùng một role OIDC riêng ([`aws-security.md`](aws-security.md#registry-và-credential-aws-của-ci)); account ID chỉ đến từ
+secret repo `SVP_AWS_STG_ACCOUNT_ID`, `SVP_AWS_PRD_ACCOUNT_ID`.
+
+```mermaid
+sequenceDiagram
+    participant M as images.yml trên main
+    participant G as GHCR
+    participant S as ECR stg
+    participant O as svp-gitops
+    participant R as Người duyệt
+    participant P as ECR prd
+    participant K as Kyverno trên EKS
+    M->>G: build, quét, push, ký, attest
+    M->>S: job ecr-copy (role release): chép index và referrer
+    M->>S: verify chữ ký, vuln, provenance, SBOM ở ECR
+    M->>M: artifact ecr-image chỉ khi verify đạt
+    M->>O: job promote đọc ecr-*: PR bot/promote-stg, auto-merge
+    K->>S: pod stg: xác minh, kéo theo digest
+    R->>M: dispatch promote_prd với stg_ref, duyệt environment promote-prd
+    M->>P: job promote-prd (role promote): chép, verify mọi image của envs/stg/images/
+    M->>O: chỉ khi mọi image đạt: PR bot/promote-prd, Code Owner duyệt
+    K->>P: pod prd: xác minh, kéo theo digest
+```
+
+- **Sao chép phát hành** (`deploy/ci/ecr-copy.sh copy REPOSITORY DIGEST REGISTRY`, oras ghim): đồng bộ, chạy lại bao
+  nhiêu lần cũng được và không coi "index đã có" là xong. (i) Index chưa có ở đích thì chép (kéo theo mọi manifest con).
+  (ii) Với từng subject (index và từng manifest con: SBOM nằm trên manifest con, chữ ký, `vuln`, provenance trên index,
+  bảng ở phụ lục ADR-0062), chép referrer nguồn có mà đích thiếu, trừ `vuln` khi đích đã có một; không xoá gì. (iii)
+  Verify trên bản ECR với identity của nguồn (`sources.json`): chữ ký, đúng một `vuln` còn mới hơn `maxAttestationAge`
+  của `svp-policy`, provenance và SBOM khi bản GHCR có. Lần chạy trước đứt giữa chừng (index đã chép, thiếu referrer)
+  thì lần sau chép nốt rồi verify. Không `oras cp -r`: lỗi phải nêu đúng referrer; đích ghi qua referrers API, không tag
+  dự phòng (repo `IMMUTABLE` không nhận ghi đè tag). Mọi output qua bộ lọc thay account ID bằng `<account>`.
+- **Digest phát hành:** job `ecr-copy` (matrix theo image, `fail-fast: false`) tải lên artifact `ecr-<image>` (cùng
+  `repository`, `tag`, `digest` của `release-<image>`) chỉ sau khi verify ở ECR đạt; `promote` cần `[plan, ecr-copy]` và
+  đọc `ecr-*` thay `release-*`. Image lỗi chép hay verify không có artifact nên không được promote; image khác vẫn đi.
+  Chạy lại leg lỗi rồi `promote` thì đi tiếp. `images-ok` tính `ecr-copy`.
+- **Promote prd:** `promote-prd` chép và verify sang ECR prd mọi image mà `envs/stg/images/` ghi ở `stg_ref`, trước khi
+  chạm khoá App; một image lỗi thì không mở PR, thông điệp nêu từng image lỗi. ECR prd chỉ nhận index qua bước này: prd
+  không có role nhận bản từ `main`.
+- **Tập rescan ECR:** rescan hằng ngày ([quét lại](../reference/ci.md#quét-lại-cổng-quét-và-file-ngoại-lệ)) đọc digest
+  từ `envs/<env>/images/` của `svp-gitops` ở `main`, ở mọi PR promote đang mở (`bot/promote-stg`, `bot/promote-stg-web`,
+  `bot/promote-prd`) và ở `values_ref`. Sau khi ghi `vuln` mới trên GHCR, mỗi digest được làm mới ở ECR của mọi env mà
+  `envs/<env>/` ghi nó (`ecr-copy.sh refresh`, role rescan của account đó, environment `ecr-rescan`): index không có ở
+  ECR đó thì bỏ qua; có thì chép `vuln` mới, gỡ mọi `vuln` khác, chép referrer còn thiếu rồi verify, để còn đúng một
+  `vuln`. Refresh lỗi ở một cặp (digest, env) thì job `rescan` đỏ; chạy lại an toàn. Vì vậy PR promote chờ lâu vẫn được
+  làm mới hằng ngày.
+- **Rollback tới digest cũ:** digest cũ vẫn ở ECR (không lifecycle xoá bản phát hành), nhưng `vuln` của nó có thể quá
+  `maxAttestationAge` và admission từ chối. Trước khi sync bản rollback, dispatch `images.yml` với `rescan=true` và
+  `values_ref` là commit `svp-gitops` ghi digest đó dưới `envs/<env>/`: rescan làm mới nó ở GHCR rồi ở ECR của env đó.
+- **Rescan digest chưa promote:** một bản chép vào ECR mà chưa ref nào của `svp-gitops` ghi (leg `ecr-copy` lỗi,
+  `promote-prd` dừng vì image khác) không vào tập rescan; khi `vuln` của nó quá hạn, `copy` lỗi và nêu lệnh dispatch:
+  `rescan=true`, `digest`, `image` và `env`. `rescan.sh run-digest` ghi `vuln` mới trên GHCR, làm mới bản ở ECR của
+  `env` bằng role rescan, và ở stg chép nốt referrer thiếu; sau đó chạy lại leg (rồi `promote`) hay `promote-prd`. Không
+  nới quyền role release hay promote: chỉ role rescan được xoá.
+- **Web:** `svp-frontend` làm cùng ba bước với image `web` bằng chính các script này (checkout ở `.backend-commit`) và
+  role release, rescan của nó; `promote-prd` của backend chép cả `web`.
+
+### Image bên thứ ba trên EKS
+
+Vì sao: [ADR-0062](../adr/0062-ecr-registry-ci-oidc.md) §6–§9. Image của operator, dữ liệu, observability, Argo CD,
+Kyverno ghim digest ở `base/` của `svp-gitops` với registry upstream. Trên EKS chúng đi qua pull-through cache của ECR
+của env thay vì qua NAT tới upstream: không phụ thuộc giới hạn lượt kéo của Docker Hub hay upstream sống, và Inspector
+quét chúng trong account.
+
+```mermaid
+flowchart LR
+    argo["Argo CD tạo Pod<br/>image quay.io/x@sha256"] --> kyv["Kyverno MutatingPolicy<br/>svp-registry-mirror (CREATE)"]
+    kyv -->|"đổi tiền tố:<br/>registry/quay/x@sha256"| api["Pod lưu vào API"]
+    kyv -.->|"Kyverno chết:<br/>failurePolicy Ignore"| api
+    api --> ivp{"ns svp?"}
+    ivp -->|"có: IVP svp-images<br/>xác minh ở ECR"| kubelet["kubelet kéo<br/>role node"]
+    ivp -->|"không"| kubelet
+    kubelet --> ecr[("ECR của env<br/>repo cache quay/x")]
+    ecr -.->|"chưa cache: kéo upstream<br/>credential ecr-pullthroughcache/*"| up["quay.io qua NAT"]
+```
+
+- **Ánh xạ registry** (tiền tố dài nhất thắng): `ghcr.io/anhnvcoder/` → `<registry>/` (repo phát hành); `ghcr.io/` →
+  `<registry>/ghcr/`; `docker.io/` → `<registry>/docker-hub/`; `quay.io/` → `<registry>/quay/`; `registry.k8s.io/` →
+  `<registry>/k8s/`; `public.ecr.aws/` → `<registry>/ecr-public/`. Tên Docker Hub được chuẩn hoá trước khi so (không
+  host, `index.docker.io/`, `registry-1.docker.io/` là `docker.io/`; tên một đoạn thêm `library/`); tag và digest giữ
+  nguyên.
+- **Chuyển hướng image:** `MutatingPolicy` `svp-registry-mirror` của chart `svp-policy` đổi image của `containers`,
+  `initContainers`, `ephemeralContainers` mọi Pod lúc CREATE, mọi namespace trừ `kyverno`. Value `registryMirror.rules`
+  (danh sách `{from, to}`) mặc định rỗng: không render gì, k3d giữ nguyên; trên EKS
+  `platforms/eks/svp-policy.values.tpl` đặt nó từ `cluster.ecrRegistry`. Webhook `failurePolicy: Ignore`: Kyverno chết
+  thì pod kéo thẳng upstream qua NAT, namespace `svp` vẫn bị `svp-images` (`Fail`) chặn. Kyverno không nhận request của
+  `kube-system` (Karpenter, Load Balancer Controller kéo upstream); pod tạo trước khi policy có thì kéo upstream tới lần
+  tạo lại; container thêm bằng `kubectl debug` (UPDATE) không bị đổi.
+- **Ảnh phát hành trên EKS:** value `releaseRegistry` của `svp-policy` (mặc định `ghcr.io/anhnvcoder`, EKS là registry
+  của env) thay phần `ghcr.io/anhnvcoder` của `imagePrefix` trong `sources.json` khi render, nên `svp-images` khớp tham
+  chiếu sau ánh xạ; `registryCredentials: {providers: [amazon]}` cho Kyverno đăng nhập ECR bằng Pod Identity của
+  admission controller (chỉ đọc repo phát hành). `sources.json` giữ GHCR: CI, promote và script đọc nó như cũ.
+- **Làm nóng cache:** ECR không kéo được theo digest một image chưa có trong cache, mà mọi image của cluster ghim
+  digest. Mỗi buổi, sau root `aws/envs/<env>` và trước bootstrap Argo CD, `aws/scripts/ecr-warm.sh` của `svp-infra` kéo
+  **theo tag** qua ECR mọi dòng của danh sách rồi kiểm digest ghim đã có; không có (tag upstream đã dời) thì lỗi, nêu
+  image. Danh sách là output của `deploy/ci/image-list.sh <gitops> <env>`: mỗi dòng `<ref upstream>:<tag>@<digest>` của
+  image bên thứ ba trong bản render EKS của env, cùng nguồn với `pin_check`
+  ([`reference/ci.md`](../reference/ci.md#gitops-checksh-values-checksh-và-policy-kyverno)).
+
 ## Hai repo: code và cấu hình triển khai
 
 Vì sao: [ADR-0025](../adr/0025-gitops-config-repo.md), [ADR-0037](../adr/0037-mainpath-standard-tools.md) §6,
@@ -209,12 +318,14 @@ flowchart LR
   tính lại chúng; bước promote stg của repo code giữ guard tổ tiên ([ADR-0037](../adr/0037-mainpath-standard-tools.md) §6).
 - **Argo CD multi-source:** root `svp-root` và nguồn `ref: values` đọc `svp-gitops` ở `refs/heads/main` (tên đầy đủ, không bao giờ
   tên ngắn: tên ngắn có thể phân giải sang tag cùng tên; ruleset `tags` cấm tạo tag), nguồn chart đọc repo code ở SHA 40 hex.
-- **Quyền:** stg tự động (PR của bot chỉ đổi `envs/stg/`, không Code Owner, tự merge sau `gitops-ok`); prd chỉ qua PR do bot mở
-  chép `envs/stg/` của một commit trên `main` của `svp-gitops` (`stg_ref`), sau khi người học duyệt environment `promote-prd` của
-  repo code (job dừng chờ, admin không bypass) rồi Code Owner duyệt PR; file chung cần Code Owner, người học tự merge bằng bypass
-  ruleset `owners` (có bản ghi). Khoá App chỉ ở hai environment của repo code, mỗi nơi một khoá riêng: `promote` (stg) và
-  `promote-prd` (prd); hai job trên `main` (`promote`, `promote-prd`) dùng khoá của mình với token 1 giờ, chỉ `contents`,
-  `pull_requests` write ([ADR-0041](../adr/0041-github-hardening.md) (d)).
+- **Quyền:** stg tự động (PR của bot chỉ đổi `envs/stg/`, không Code Owner, tự merge sau `gitops-ok`); prd chỉ qua PR do
+  bot mở chép `envs/stg/` của một commit trên `main` của `svp-gitops` (`stg_ref`), sau khi người học duyệt environment
+  `promote-prd` của repo code (job dừng chờ, admin không bypass) rồi Code Owner duyệt PR; file chung cần Code Owner,
+  người học tự merge bằng bypass ruleset `owners` (có bản ghi). Khoá App chỉ ở hai environment của repo code, mỗi nơi
+  một khoá riêng: `promote` (stg) và `promote-prd` (prd); hai job trên `main` (`promote`, `promote-prd`) dùng khoá của
+  mình với token 1 giờ, chỉ `contents`, `pull_requests` write ([ADR-0041](../adr/0041-github-hardening.md) (d)).
+  Environment thứ ba `ecr-rescan` (chỉ `main`, không người duyệt vì rescan chạy theo lịch) không giữ khoá App: tên của
+  nó là `sub` mà role rescan ECR tin.
 - **Không có bản ghi stg** ([ADR-0037](../adr/0037-mainpath-standard-tools.md) §6): cổng prd là duyệt environment `promote-prd` rồi
   duyệt của Code Owner; `stg_ref` không bảo đảm stg đã chạy và smoke qua với đúng bộ đó. Bản ghi trạng thái triển khai được chọn
   là Argo CD Notifications ([ADR-0032](../adr/0032-argocd-deploy-status.md) A, B), dựng khi có EKS stg chạy suốt buổi.

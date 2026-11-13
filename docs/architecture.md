@@ -311,6 +311,7 @@ flowchart TB
             subgraph pub["Subnet public"]
                 nat["NAT gateway"]
             end
+            vpce["Endpoint interface<br/>[private DNS, policy theo account]"]
             subgraph edgenet["Subnet edge, không node, không pod"]
                 alb["ALB internal svp-env-edge<br/>[Terraform; target group svp-env-envoy]"]
             end
@@ -322,7 +323,7 @@ flowchart TB
                     subgraph kn["Node của Karpenter, NodePool default<br/>[Graviton; stg Spot, prd on-demand]"]
                         envoy["Envoy Gateway<br/>[HPA từ 2, PDB, trải zone]"]
                         svc["web, gateway, 4 service gRPC,<br/>media-worker [svp-service]"]
-                        obsn["Observability, GlitchTip [svp-obs]"]
+                        obsn["Collector, Prometheus agent,<br/>Pyroscope, GlitchTip [svp-obs]"]
                     end
                     kyv["Kyverno<br/>[3 replica, PDB, trải zone]"]
                 end
@@ -338,7 +339,12 @@ flowchart TB
         cfe["CloudFront svp-env-web, svp-env-api<br/>[web ACL, cert ACM; VPC origin]"]
         cf["CloudFront svp-env-media<br/>[web ACL, OAC]"]
         q[["SQS + EventBridge<br/>interruption của Karpenter"]]
-        alarm["CloudWatch alarm → SNS svp-env-alarms → email"]
+        alarm["CloudWatch alarm, ruler của AMP<br/>→ SNS svp-env-alarms → email"]
+        subgraph keep["Sống qua destroy [root aws/accounts/env]"]
+            ecr[("ECR<br/>[repo phát hành, pull-through cache]")]
+            amp[("AMP, CloudWatch Logs, X-Ray")]
+            amg["Amazon Managed Grafana<br/>[Identity Center]"]
+        end
     end
     cfe --> alb --> envoy --> svc
     svc --> rds
@@ -350,6 +356,10 @@ flowchart TB
     rds -.-> alarm
     msk -.-> alarm
     vk -.-> alarm
+    kn -->|"kéo image"| vpce --> ecr
+    obsn -->|"SigV4"| vpce --> amp
+    amp -.-> alarm
+    amg --> amp
 ```
 
 Request công khai vào qua CloudFront (mỗi tên một distribution có web ACL), VPC origin, ALB internal, rồi Envoy; vì sao và ai đặt được IP
@@ -357,8 +367,11 @@ client mà gateway tin: [`explanation/edge.md`](explanation/edge.md). Kyverno v�
 co giãn node, chuỗi TLS tới Postgres: [`explanation/deployment.md`](explanation/deployment.md#karpenter-node-theo-pod-đang-chờ); failover
 của RDS, Valkey và hành vi của service: [`explanation/reliability.md`](explanation/reliability.md).
 
-Image đi từ CI tới cluster qua `svp-gitops` và Argo CD ([`explanation/delivery.md`](explanation/delivery.md)). Sơ đồ AWS sinh từ
-spec của `svp-infra`: [stg](https://github.com/anhnvcoder/svp-infra/blob/main/docs/diagrams/svp-aws-stg.png),
+Image đi từ CI tới cluster qua `svp-gitops` và Argo CD; trên EKS node kéo nó từ ECR của account, nơi CI chép bản đã ký
+kèm chữ ký và attestation ([`explanation/delivery.md`](explanation/delivery.md#phát-hành-sang-ecr)). Telemetry ra dịch
+vụ managed, sống qua destroy ([`explanation/observability.md`](explanation/observability.md#eks)); gọi API AWS đi qua
+endpoint interface ([ADR-0064](adr/0064-interface-endpoints.md)). Sơ đồ AWS sinh từ spec của `svp-infra`:
+[stg](https://github.com/anhnvcoder/svp-infra/blob/main/docs/diagrams/svp-aws-stg.png),
 [prd](https://github.com/anhnvcoder/svp-infra/blob/main/docs/diagrams/svp-aws-prd.png),
 [luồng](https://github.com/anhnvcoder/svp-infra/blob/main/docs/diagrams/svp-aws-flows.png).
 

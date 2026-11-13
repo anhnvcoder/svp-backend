@@ -28,16 +28,24 @@ same() {
 has() { grep -qF -- "$2" "$1"; }
 lacks() { ! grep -qF -- "$2" "$1"; }
 
-# --- The fake gh writes each call to gh.log (one line of %q-quoted arguments), answers pr list from gh/prs.json and the
-# statuses of a commit of svp-gitops (gh api --paginate --slurp repos/<repo>/commits/<commit>/statuses...) from
-# gh/statuses/<commit>.json; without that file it fails, as a host that does not answer.
+# --- The fake gh writes each call to gh.log (one line of %q-quoted arguments), answers pr list from gh/prs.json (an
+# entry with a head answers only for that --head) and the statuses of a commit of svp-gitops (gh api --paginate --slurp
+# repos/<repo>/commits/<commit>/statuses...) from gh/statuses/<commit>.json; without the file it fails, as a host that
+# does not answer.
 mkdir -p "$work/bin" "$work/gh" "$work/home"
 cat >"$work/bin/gh" <<'EOF'
 #!/usr/bin/env bash
 printf '%q ' "$@" >>"$FAKE_GH_LOG"
 echo >>"$FAKE_GH_LOG"
 case "$1 $2" in
-"pr list") cat "$FAKE_GH_DIR/prs.json" ;;
+"pr list")
+  head= prev=
+  for a in "$@"; do
+    [ "$prev" != --head ] || head=$a
+    prev=$a
+  done
+  jq --arg h "$head" '[.[] | select((.head // $h) == $h) | del(.head)]' "$FAKE_GH_DIR/prs.json"
+  ;;
 "api --paginate")
   commit=${4#*/commits/}
   cat "$FAKE_GH_DIR/statuses/${commit%%/*}.json"
@@ -262,18 +270,25 @@ list() {
   [ "$rc" = "$want" ] || sed "s/^/      | /" "$work/list.err" >&2
 }
 tab=$'\t'
-app_pr='[{"number": 9, "isCrossRepository": false, "author": {"login": "app/svp-gitops-promoter"}}]'
-person_pr='[{"number": 9, "isCrossRepository": false, "author": {"login": "someone"}},
-  {"number": 10, "isCrossRepository": true, "author": {"login": "app/svp-gitops-promoter"}}]'
+app_pr='[{"head": "bot/promote-stg", "number": 9, "isCrossRepository": false, "author": {"login": "app/svp-gitops-promoter"}}]'
+person_pr='[{"head": "bot/promote-stg", "number": 9, "isCrossRepository": false, "author": {"login": "someone"}},
+  {"head": "bot/promote-stg", "number": 10, "isCrossRepository": true, "author": {"login": "app/svp-gitops-promoter"}}]'
+# pr_queries BRANCH: the two pr list calls of list: the source's promote branch BRANCH, then prd's.
+pr_queries() {
+  gh_line pr list --repo anhnvcoder/svp-gitops --head "$1" --base main --state open --limit 500 \
+    --json number,isCrossRepository,author
+  echo
+  gh_line pr list --repo anhnvcoder/svp-gitops --head bot/promote-prd --base main --state open --limit 500 \
+    --json number,isCrossRepository,author
+}
 list "main of svp-gitops" 0
 same "rescan.sh list: fourteen image files of main" 14 "$(grep -c "main of svp-gitops, envs/" "$work/list.out")"
 check "rescan.sh list: the gateway of stg on main" has "$work/list.out" \
   "gateway${tab}ghcr.io/anhnvcoder/svp-backend/gateway${tab}$digest_b${tab}main of svp-gitops, envs/stg/images/gateway.yaml"
 check "rescan.sh list: a service not released, with an empty digest" has "$work/list.out" \
   "web${tab}ghcr.io/anhnvcoder/svp-backend/web${tab}${tab}main of svp-gitops, envs/prd/images/web.yaml"
-same "rescan.sh list: the app's open pull request of svp-gitops is asked for" \
-  "$(gh_line pr list --repo anhnvcoder/svp-gitops --head bot/promote-stg --base main --state open --limit 500 \
-    --json number,isCrossRepository,author)" "$(cat "$work/gh.log")"
+same "rescan.sh list: the app's open pull requests of stg and of prd are asked for" "$(pr_queries bot/promote-stg)" \
+  "$(cat "$work/gh.log")"
 check "rescan.sh list: no pull request open, bot/promote-stg not read" lacks "$work/list.out" "bot/promote-stg"
 echo "$app_pr" >"$work/gh/prs.json"
 list "the app's pull request open" 0
@@ -282,6 +297,27 @@ check "rescan.sh list: the release of bot/promote-stg" has "$work/list.out" \
 echo "$person_pr" >"$work/gh/prs.json"
 list "only a person's and a fork's pull request" 0
 check "rescan.sh list: theirs not read" lacks "$work/list.out" "bot/promote-stg"
+# bot/promote-prd: the video-service of backend and the web of svp-frontend released to prd, neither on main nor on
+# a promote branch of stg; its pull request is opened by backend's promoter for every source.
+gs checkout -q -b prd main
+image_file prd video-service ghcr.io/anhnvcoder/svp-backend/video-service "${c2:0:12}" "$digest_c"
+image_file prd web ghcr.io/anhnvcoder/svp-frontend/web "aaaaaaaaaaaa" "$digest_d"
+gs commit -qam "prd: video-service c2, web" && gs push -q origin HEAD:refs/heads/bot/promote-prd
+prd_pr='[{"head": "bot/promote-prd", "number": 12, "isCrossRepository": false, "author": {"login": "app/svp-gitops-promoter"}}]'
+echo "$prd_pr" >"$work/gh/prs.json"
+list "prd's pull request open" 0
+check "rescan.sh list: a release only bot/promote-prd names" has "$work/list.out" \
+  "video-service${tab}ghcr.io/anhnvcoder/svp-backend/video-service${tab}$digest_c${tab}bot/promote-prd of svp-gitops (pull request #12), envs/prd/images/video-service.yaml"
+check "rescan.sh list: backend leaves prd's web to svp-frontend" lacks "$work/list.out" "svp-frontend/web"
+list "prd's pull request open, for web" 0 --source web
+same "rescan.sh list --source web: only the web of bot/promote-prd" \
+  "web${tab}ghcr.io/anhnvcoder/svp-frontend/web${tab}$digest_d${tab}bot/promote-prd of svp-gitops (pull request #12), envs/prd/images/web.yaml" \
+  "$(cat "$work/list.out")"
+echo '[{"head": "bot/promote-prd", "number": 12, "isCrossRepository": false, "author": {"login": "someone"}}]' \
+  >"$work/gh/prs.json"
+list "a person's pull request of bot/promote-prd" 0
+check "rescan.sh list: theirs of prd not read" lacks "$work/list.out" "bot/promote-prd"
+echo '[]' >"$work/gh/prs.json"
 # The host does not answer pr list (no prs.json): main's releases and values_ref's are still listed, then it fails.
 rm "$work/gh/prs.json"
 list "the pull requests not answered" 1 bot/promote-stg
@@ -329,16 +365,15 @@ check "rescan.sh list: backend leaves web of svp-frontend out" lacks "$work/list
 check "rescan.sh list: backend says why" has "$work/list.err" \
   "skip  web in main of svp-gitops, envs/stg/images/web.yaml: ghcr.io/anhnvcoder/svp-frontend/web is a release of source web, which its own CI rescans"
 same "rescan.sh list: backend lists its thirteen others" 13 "$(grep -c "main of svp-gitops, envs/" "$work/list.out")"
-web_pr='[{"number": 11, "isCrossRepository": false, "author": {"login": "app/svp-web-promoter"}}]'
+web_pr='[{"head": "bot/promote-stg-web", "number": 11, "isCrossRepository": false, "author": {"login": "app/svp-web-promoter"}}]'
 echo "$web_pr" >"$work/gh/prs.json"
 list "web, its pull request open" 0 --source web
 same "rescan.sh list --source web: web of stg from main and from its branch, nothing else" \
   "web${tab}ghcr.io/anhnvcoder/svp-frontend/web${tab}$digest_d${tab}main of svp-gitops, envs/stg/images/web.yaml
 web${tab}ghcr.io/anhnvcoder/svp-frontend/web${tab}$digest_d${tab}bot/promote-stg-web of svp-gitops (pull request #11), envs/stg/images/web.yaml" \
   "$(cat "$work/list.out")"
-same "rescan.sh list --source web: asks for the pull request of its own branch" \
-  "$(gh_line pr list --repo anhnvcoder/svp-gitops --head bot/promote-stg-web --base main --state open --limit 500 \
-    --json number,isCrossRepository,author)" "$(cat "$work/gh.log")"
+same "rescan.sh list --source web: asks for the pull requests of its own branch and of prd" \
+  "$(pr_queries bot/promote-stg-web)" "$(cat "$work/gh.log")"
 echo '[]' >"$work/gh/prs.json"
 
 # --- After the rename, its retired sources dropped: no source oldweb, and the gateway of stg on main under the former

@@ -529,11 +529,15 @@ chart cấu hình như vậy.
 
 ## AWS
 
-Vì sao: [ADR-0034](../adr/0034-aws-stage7.md) (nền tảng, lý do và bảng đầy đủ), [ADR-0038](../adr/0038-s3-bucket-names.md),
-[ADR-0053](../adr/0053-msk-elasticache-valkey.md) (MSK, ElastiCache), [ADR-0054](../adr/0054-data-subnet-tier.md) (subnet database),
-[ADR-0056](../adr/0056-eks-platform-ha.md) (Karpenter, HA nền tảng), [ADR-0057](../adr/0057-postgres17-verify-full.md) (RDS, TLS),
-[ADR-0058](../adr/0058-managed-data-operations.md) (alarm, vận hành dịch vụ dữ liệu), [ADR-0061](../adr/0061-edge-cloudfront-waf-acm.md) (edge:
-CloudFront, WAF, ALB internal, ACM, DNS; giải thích ở [`edge.md`](edge.md)).
+Vì sao: [ADR-0034](../adr/0034-aws-stage7.md) (nền tảng, lý do và bảng đầy đủ),
+[ADR-0038](../adr/0038-s3-bucket-names.md), [ADR-0053](../adr/0053-msk-elasticache-valkey.md) (MSK, ElastiCache),
+[ADR-0054](../adr/0054-data-subnet-tier.md) (subnet database), [ADR-0056](../adr/0056-eks-platform-ha.md) (Karpenter, HA
+nền tảng), [ADR-0057](../adr/0057-postgres17-verify-full.md) (RDS, TLS),
+[ADR-0058](../adr/0058-managed-data-operations.md) (alarm, vận hành dịch vụ dữ liệu),
+[ADR-0061](../adr/0061-edge-cloudfront-waf-acm.md) (edge: CloudFront, WAF, ALB internal, ACM, DNS; giải thích ở
+[`edge.md`](edge.md)), [ADR-0062](../adr/0062-ecr-registry-ci-oidc.md) (ECR, pull-through cache),
+[ADR-0063](../adr/0063-managed-observability.md) (telemetry managed), [ADR-0064](../adr/0064-interface-endpoints.md)
+(endpoint interface), [ADR-0065](../adr/0065-argocd-eks-capability.md) (Argo CD trên EKS).
 
 Hạ tầng ở repo `svp-infra` (cài đặt GitHub: [`runbooks/svp-infra-setup.md`](../runbooks/svp-infra-setup.md)). Thiết kế: một
 cluster stg ở `ap-southeast-1`, dựng và xoá trong mỗi buổi; prd là cluster thứ hai theo chuẩn production. Hai env chạy cùng dịch vụ, cấu
@@ -553,7 +557,9 @@ flowchart LR
     browser["Trình duyệt"]
     client["Client ngoài<br/>curl, smoke"]
     learner["Máy người học<br/>kubectl, Terraform"]
-    gh["GitHub, GHCR<br/>svp-gitops, chart, image đã ký"]
+    gh["GitHub<br/>svp-gitops, chart"]
+    up["Registry upstream<br/>GHCR, Docker Hub, Quay..."]
+    ci["CI GitHub Actions<br/>role OIDC"]
     mail["Email vận hành"]
     subgraph aws["AWS ap-southeast-1, account của env"]
         r53["Route 53<br/>zone của env, bản ghi do Terraform"]
@@ -567,9 +573,16 @@ flowchart LR
         sqs[["SQS svp-env-karpenter"]]
         cw["CloudWatch alarm<br/>RDS, MSK, ElastiCache"]
         sns[["SNS svp-env-alarms<br/>mã hoá CMK"]]
+        subgraph keep["sống qua destroy, root aws/accounts/env"]
+            ecr[("ECR: repo phát hành,<br/>pull-through cache")]
+            amp[("AMP svp-env, ruler,<br/>Alertmanager")]
+            cwl[("CloudWatch Logs /svp/env/otel,<br/>X-Ray aws/spans")]
+            amg["Managed Grafana svp-env<br/>Identity Center"]
+        end
         subgraph vpc["VPC, stg 2 AZ, prd 3 AZ"]
             alb["ALB internal svp-env-edge<br/>subnet edge, VPC origin"]
             nat["NAT gateway"]
+            vpce["Endpoint interface<br/>private DNS, policy"]
             bastion["Bastion SSM<br/>subnet private"]
             api["API EKS<br/>endpoint private"]
             subgraph dbnet["subnet database, không route ra Internet"]
@@ -586,7 +599,7 @@ flowchart LR
                     envoy["Envoy Gateway<br/>HPA, PDB, trải zone"]
                     app["svp: web, gateway,<br/>4 service gRPC, media-worker"]
                     data["svp-data: Job kafka-init, svp-ops"]
-                    obs["svp-obs: Prometheus, Loki,<br/>Tempo, Pyroscope, GlitchTip"]
+                    obs["svp-obs: Collector, Prometheus agent,<br/>ACK, Grafana Operator,<br/>Pyroscope, GlitchTip"]
                 end
             end
         end
@@ -609,8 +622,18 @@ flowchart LR
     browser -->|"GET HLS"| cf
     cf -->|"OAC"| media
     ctl -->|"đăng ký pod Envoy vào target group"| alb
-    ctl -->|"git, image qua NAT"| nat
+    ctl -->|"git qua NAT"| nat
     nat --> gh
+    karp -->|"kéo image"| vpce
+    vpce --> ecr
+    ecr -.->|"chưa cache: qua NAT"| up
+    ci -->|"chép bản phát hành"| ecr
+    obs -->|"metric, log, span SigV4"| vpce
+    vpce --> amp
+    vpce --> cwl
+    amp -->|"cảnh báo"| sns
+    obs -->|"dashboard qua NAT"| amg
+    amg --> amp
     evb --> sqs
     sqs -->|"interruption"| karpc
     karpc -->|"tạo, xoá node"| karp
@@ -621,8 +644,12 @@ flowchart LR
     learner -->|"tunnel SSM"| bastion --> api
 ```
 
-Alarm nằm ngoài cluster: khi cluster chết, alarm của RDS, MSK, ElastiCache vẫn tới email (ADR-0058; mỗi alarm `page` có runbook cùng tên ở
-[`runbooks/`](../runbooks/README.md)). Máy người học tới API chỉ qua tunnel SSM, cổng local theo env ([`reference/eks.md`](../reference/eks.md)).
+Alarm nằm ngoài cluster: khi cluster chết, alarm của RDS, MSK, ElastiCache vẫn tới email (ADR-0058; mỗi alarm `page` có
+runbook cùng tên ở [`runbooks/`](../runbooks/README.md)); luật của service và SLO được ruler của AMP đánh giá, cũng
+ngoài cluster, tới cùng topic ([`observability.md`](observability.md#eks)). Registry, workspace AMP, log group, Managed
+Grafana nằm ở root `aws/accounts/<env>`, sống qua mọi buổi; endpoint interface thuộc VPC, gỡ cùng buổi. Image của
+cluster đến từ ECR ([`delivery.md`](delivery.md#phát-hành-sang-ecr)). Máy người học tới API chỉ qua tunnel SSM, cổng
+local theo env ([`reference/eks.md`](../reference/eks.md)).
 
 | Thành phần | Local (compose, k3d) | AWS stg, prd |
 | --- | --- | --- |
@@ -639,8 +666,12 @@ Alarm nằm ngoài cluster: khi cluster chết, alarm của RDS, MSK, ElastiCach
 | NetworkPolicy | network policy controller của k3s | Network policy agent của VPC CNI |
 | StorageClass, metrics-server | `local-path`, metrics-server của k3s | `gp3` do chart `svp-cluster` tạo, addon `metrics-server` |
 | Secret | `.env` (compose), ESO provider `kubernetes` (k3d GitOps) | ESO provider `aws`: Secrets Manager + Pod Identity, giá trị từ `make eks-secrets`; mật khẩu Kafka, Valkey do Terraform sinh và ghi write-only (không vào plan, state) |
-| Cảnh báo | Alertmanager (profile `obs`, k3d) | Alertmanager trong cluster, cộng CloudWatch alarm của dịch vụ dữ liệu tới SNS và email |
-| Hạ tầng | `make up`, `make k8s-up`, `make k8s-gitops-up` | Terraform `aws/envs/<env>` của `svp-infra`, `make eks-secrets`, rồi Terraform `aws/gitops/<env>` (Argo CD và root) |
+| Registry | Registry k3d (đường dev), GHCR theo digest (đường GitOps) | ECR private của account env: repo phát hành do CI chép từ GHCR kèm chữ ký, attestation; image bên thứ ba qua pull-through cache, Kyverno đổi tham chiếu lúc tạo pod ([`delivery.md`](delivery.md#image-bên-thứ-ba-trên-eks)) |
+| Telemetry | LGTM (profile `obs`), Prometheus, Loki, Tempo, Grafana trong `svp-obs` (k3d) | Collector, Prometheus agent HA gửi tới AMP, CloudWatch Logs, X-Ray; Amazon Managed Grafana; Pyroscope, GlitchTip trong cluster ([`observability.md`](observability.md#eks)) |
+| Đường tới API AWS | Không có | Endpoint interface có private DNS, policy chặn principal ngoài account; NAT cho GitHub, upstream, Sigstore |
+| Argo CD | Tự cài từ `argocd/bootstrap.json`, `admin`, port-forward | Như k3d: tự cài bằng root `aws/gitops/<env>`, một replica, `admin`, port-forward; ADR-0065 chọn EKS Capability cho thay đổi sau |
+| Cảnh báo | Alertmanager (profile `obs`, k3d) tới Telegram | Ruler và Alertmanager của AMP, cộng CloudWatch alarm của dịch vụ dữ liệu, tới cùng SNS và email |
+| Hạ tầng | `make up`, `make k8s-up`, `make k8s-gitops-up` | Terraform `aws/accounts/<env>` (sống lâu) và `aws/envs/<env>` của `svp-infra`, làm nóng cache ECR, `aws/scripts/bootstrap.sh <env> secrets` (gọi `make eks-secrets`, thêm token Grafana Operator), rồi Terraform `aws/gitops/<env>` (Argo CD và root) |
 
 Version của k3s và EKS ghim ở `K3S_IMAGE_TAG` của [`Makefile`](../../Makefile) và ở cấu hình Terraform của `svp-infra`. Bảng đủ (kể
 cả thứ k3s có sẵn mà EKS không) ở ADR-0034 mục Quyết định 8. Khác biệt k3d/EKS nằm ở lớp `platforms/<platform>/` của `svp-gitops`
