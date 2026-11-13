@@ -74,7 +74,7 @@ x-telemetry-app-env: &telemetry-app-env
 x-postgres-image: &postgres-image docker.io/library/postgres:17.11-trixie@sha256:ff87138949ad9a46f32ff23bd6852b52ce024a13dffe9b4087be98292cdd3b4f
 x-kafka-image: &kafka-image apache/kafka:4.1.2@sha256:5cc2a2fd93fa2687b44015eee04fb2c3edd9e526bd64bf8bec5ff1e268772e0e
 x-valkey-image: &valkey-image docker.io/valkey/valkey:9.1.3-alpine@sha256:bf09d58e96d6b4524a15396b65b242bbe18beebbcc15a04d8ee75ddac62fae0b
-x-s3-image: &s3-image rustfs/rustfs:1.0.4@sha256:ed9210d6411d77ffceb70d94b964a3cb7d225983368bc25bebe01e995293dcc2
+x-s3-image: &s3-image rustfs/rustfs:1.0.5@sha256:b81d16a90ee25bd9511280127ca1471788c6e874cf0f0da759645f46b2dc1d74
 x-glitchtip-image: &glitchtip-image glitchtip/glitchtip:6.2.6@sha256:a3d8eb1b36c1e1603d55ab32711ea3dd8115874742a781a57391a62a16e0dff6
 
 # The local CA's certificate (public), for every client of Postgres, Kafka and Valkey: libpq, pgx and psycopg read it as
