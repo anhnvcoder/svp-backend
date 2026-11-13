@@ -93,8 +93,7 @@ Kyverno kiểm chữ ký và attestation `vuln` ở admission, promote qua PR cu
 
 - Hai file `.github/workflows/ci.yml` và `images.yml`, mỗi file một check tổng (`ci-ok`, `images-ok`, hai check bắt buộc, §11); không workflow nào có `paths:` ở trigger.
 - Không `pull_request_target`, không `workflow_run`. `permissions: {}` ở đầu mỗi file, mỗi job khai đúng quyền cần; **mọi job của lượt `pull_request` chỉ `contents: read`**. Job cần quyền ghi (`packages`, `id-token`, `security-events`, `contents`, `pull-requests`) hay `actions: read` là job riêng có `if:` khác `pull_request` và `github.ref == 'refs/heads/main'`; đường PR và đường `main` của build là hai job gọi chung một script (§4).
-- Action ghim SHA commit đầy đủ kèm comment tag; chỉ action của GitHub và `sigstore/cosign-installer` (`cosign-release: v3.1.3`); không action tiện ích bên thứ ba.
-- trivy 0.76.0, syft v1.54.1, cosign v3.1.3: image ghim digest (`TRIVY_IMAGE`, `SYFT_IMAGE`, `COSIGN_IMAGE`), `env -u DOCKER_DEFAULT_PLATFORM docker run`; mọi bản đã phát hành ít nhất 3 ngày. `make actionlint` (`ACTIONLINT_VERSION` v1.7.12) nằm trong `make check`. Runner `ubuntu-24.04`, `ubuntu-24.04-arm`, không `ubuntu-latest`.
+- Action ghim SHA commit đầy đủ kèm comment tag; chỉ action của GitHub và `sigstore/cosign-installer` (`cosign-release: v3.1.3`); không action tiện ích bên thứ ba. Công cụ ghim digest, runner: phụ lục.
 
 ### 2. `ci.yml`: đủ mục Kiểm tra của `CLAUDE.md`
 
@@ -103,8 +102,7 @@ Kyverno kiểm chữ ký và attestation `vuln` ở admission, promote qua PR cu
 
 ### 3. Chỉ build service có thay đổi
 
-- Tập đường dẫn một image là `image_paths <svc>` của `deploy/k8s/lib.sh`; `deploy/ci/changed-services.sh <base> <head>` dùng đúng nó. Đổi `.github/workflows/images.yml`, bất cứ gì dưới `deploy/ci/`, `deploy/k8s/lib.sh`, hay dòng ghim `TRIVY_IMAGE`, `SYFT_IMAGE`, `COSIGN_IMAGE` của `Makefile` thì build lại cả sáu. Go test luôn toàn repo.
-- Base của phép so: push `main` là `head_sha` của lượt `images.yml` push `main` thành công gần nhất (job `last-success`, `actions: read`); là tổ tiên của HEAD thì so `head_sha..HEAD`, HEAD là tổ tiên thật sự thì không build gì, không có hay không so được thì cả sáu. PR: merge-base với nhánh base. `workflow_dispatch`: merge-base với `origin/main`, input `services` ghi đè.
+- Tập đường dẫn một image là `image_paths <svc>` của `deploy/k8s/lib.sh`, dùng chung với `deploy/ci/changed-services.sh`; base của phép so và điều kiện build lại cả sáu: phụ lục.
 
 ### 4. Image đa kiến trúc, build native, chỉ push đúng thứ đã quét
 
@@ -198,3 +196,5 @@ Phụ lục: [`appendix/0015-cicd-devsecops-stage5.md`](appendix/0015-cicd-devse
 - §10: [0035](0035-renovate-automerge.md): bản `patch`, `digest` tự merge.
 - §6: [0039](0039-mainpath-drills-scan-gate-sourcemaps.md): bị thay một phần, cổng `scan-gate.sh` thay bằng cờ `--exit-code` của trivy, `--fail-on critical` của grype.
 - §11: [0041](0041-github-hardening.md): chỉ squash, lịch sử thẳng, `CODEOWNERS` với ruleset `owners`, `can_approve_pull_request_reviews` tắt.
+- §1, §4, §7, §9: [0062](0062-ecr-registry-ci-oidc.md): job `ecr-copy` sau `sign` chép cùng digest index kèm chữ ký, SBOM, `vuln`, provenance từ GHCR sang ECR của stg bằng role OIDC hẹp (`id-token: write` thêm ở job này; `aws-actions/configure-aws-credentials` ghim SHA vào danh sách action); `promote` chỉ nhận digest đã chép và verify ở ECR, `promote-prd` chép sang ECR prd trước khi mở PR.
+- §8: [0062](0062-ecr-registry-ci-oidc.md): trên `eks` `svp-images` khớp tiền tố `releaseRegistry` (ECR của env) thay `ghcr.io/anhnvcoder`, Kyverno đọc chữ ký, attestation ở ECR bằng Pod Identity; `svp-registry-mirror` đổi image bên thứ ba sang pull-through cache lúc tạo pod.

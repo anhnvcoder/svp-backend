@@ -189,7 +189,8 @@ entry() { cat "$FAKE_STATE/entries/svp_$1_$2.json" 2>/dev/null || true; }
 
 # The entries and keys of the ExternalSecrets of chart svp-cluster on EKS (store aws, s3.mode external,
 # argocdNotifications on, Kafka and Valkey managed) that the script writes, written out here so that its own reading of
-# the chart is checked against them. kafka-admin, kafka-users and valkey-users are Terraform's (terraform_entries_ok).
+# the chart is checked against them. kafka-admin, kafka-users and valkey-users are Terraform's (terraform_entries_ok);
+# grafana-operator is the infrastructure's session script's, never named here.
 want_keys='{
   "argocd-notifications": ["SVP_ALERT_TELEGRAM_BOT_TOKEN", "SVP_ARGOCD_NOTIFY_APP_ID", "SVP_ARGOCD_NOTIFY_INSTALLATION_ID", "SVP_ARGOCD_NOTIFY_PRIVATE_KEY_B64"],
   "glitchtip-runtime": ["SENTRY_AUTH_TOKEN", "SENTRY_DSN", "SENTRY_SOURCEMAPS_TOKEN"],
@@ -265,6 +266,11 @@ else
   fail "aws-secrets.sh, a first run: kubectl called: $(grep '^kubectl ' "$FAKE_STATE/calls" | head -n 3 | paste -sd ';' -)"
 fi
 no_leak "aws-secrets.sh, a first run" "$work/first.out" "$FAKE_STATE/calls"
+if ! grep -q 'svp/stg/grafana-operator' "$FAKE_STATE/calls"; then
+  ok "aws-secrets.sh, a first run: entry grafana-operator neither read nor written (the session's script writes it)"
+else
+  fail "aws-secrets.sh, a first run: entry grafana-operator named: $(grep 'grafana-operator' "$FAKE_STATE/calls" | head -n 3)"
+fi
 
 # --- a run again: glitchtip-runtime has a version. In the order of deploy/k8s/rotate.sh: Reloader checked, the
 # entries, the ExternalSecrets of svp-data, the sync of svp-data, the other ExternalSecrets. No broker in the cluster.

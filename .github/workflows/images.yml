@@ -282,7 +282,7 @@ jobs:
           done 3< <(find "$RUNNER_TEMP/releases" -type f -name digest 2>/dev/null | sort)
           # The two values derived from the charts' commit, as the check of svp-gitops computes them again.
           psv=$(yq_ -e .podSecurityVersion <"$code/deploy/helm/svp-cluster/values.yaml")
-          sum=$(sha256sum "$code/deploy/observability/otelcol/k8s-config.yaml" | cut -d' ' -f1)
+          sum=$(cd "$code/deploy/observability/otelcol" && cat k8s-config.yaml k8s-k3d.yaml k8s-eks.yaml | sha256sum | cut -d' ' -f1)
           yq_ REV="$RUN_COMMIT" PSV="$psv" SUM="$sum" -i \
             '.revision = strenv(REV) | .podSecurityVersion = strenv(PSV) | .collectorConfigSha256 = strenv(SUM)' \
             envs/stg/charts.yaml

@@ -128,10 +128,13 @@ test_a_quoted_revision if fx.says(
 
 test_the_working_tree_reads_no_revision if count(deny(with_charts(worktree, "stg", replace(fx.charts_text, fx.revision, "")))) == 0
 
-test_a_wrong_collector_config_sha256 if fx.says(
-	deny(with_charts(fx.tree_input, "stg", replace(fx.charts_text, fx.sha, "0000000000000000000000000000000000000000000000000000000000000000"))),
-	$"envs/stg/charts.yaml: collectorConfigSha256 is '0000000000000000000000000000000000000000000000000000000000000000', deploy/observability/otelcol/k8s-config.yaml at 0b4c089951cf has sha256 {fx.sha}",
-)
+test_a_wrong_collector_config_sha256 if {
+	zeros := "0000000000000000000000000000000000000000000000000000000000000000"
+	fx.says(
+		deny(with_charts(fx.tree_input, "stg", replace(fx.charts_text, fx.sha, zeros))),
+		$"envs/stg/charts.yaml: collectorConfigSha256 is '{zeros}', deploy/observability/otelcol/k8s-config.yaml, k8s-k3d.yaml and k8s-eks.yaml at 0b4c089951cf, concatenated, have sha256 {fx.sha}",
+	)
+}
 
 test_a_wrong_pod_security_version if fx.says(
 	deny(with_charts(fx.tree_input, "prd", replace(fx.charts_text, "v1.36", "v1.35"))),

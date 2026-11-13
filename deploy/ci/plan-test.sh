@@ -64,6 +64,11 @@ cp "$src/deploy/docker-bake.json" "$tree/deploy/"
 cp -R "$src/deploy/helm/svp-policy/values.yaml" "$src/deploy/helm/svp-policy/files" "$tree/deploy/helm/svp-policy/"
 echo "receivers: {}" >"$tree/deploy/observability/otelcol/k8s-config.yaml"
 ln -s ../../../observability/otelcol/k8s-config.yaml "$tree/deploy/helm/svp-observability/files/otelcol-k8s-config.yaml"
+for platform in k3d eks; do
+  echo "exporters: {}" >"$tree/deploy/observability/otelcol/k8s-$platform.yaml"
+  ln -s "../../../observability/otelcol/k8s-$platform.yaml" \
+    "$tree/deploy/helm/svp-observability/files/otelcol-k8s-$platform.yaml"
+done
 echo "# A decision" >"$tree/docs/decision.md"
 g() {
   GIT_DIR=$tree/.git GIT_WORK_TREE=$tree GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 git -c user.name=test \
@@ -257,6 +262,9 @@ check "plan.sh: the summary names the chart's file" has "$work/summary" "- deplo
 echo "exporters: {}" >>"$tree/deploy/observability/otelcol/k8s-config.yaml"
 g commit -qam "the collector's config"
 plan_charts "a push that changes the file a chart's link points to promotes the charts" true
+echo "extensions: {}" >>"$tree/deploy/observability/otelcol/k8s-eks.yaml"
+g commit -qam "the collector's EKS destinations"
+plan_charts "a push that changes a destination file of the Collector alone promotes the charts" true
 # A base that is not a full SHA (an API that answered nothing or something else) is no base: every service is built.
 for bad in "" "$(g rev-parse --short HEAD~1)" "not-a-sha"; do
   fresh

@@ -1,14 +1,19 @@
-{{- /*
-Config of the Collector (release otel-collector, wave 6, configMap.existingName), from
-deploy/observability/otelcol/k8s-config.yaml through the symlink files/otelcol-k8s-config.yaml.
-*/}}
+{{- /* Config of the Collector (release otel-collector, wave 6, configMap.existingName), in the key relay it mounts: the
+shared file deploy/observability/otelcol/k8s-config.yaml (symlink files/otelcol-k8s-config.yaml) with the destination
+file of collector.destinations merged over it (symlinks files/otelcol-k8s-<destination>.yaml). */}}
 
 {{- /*
-The file `make otelcol-validate` checks is exactly the one that runs. Key relay is the one the Collector chart mounts.
+Maps merge by key; a list or value of the destination file replaces the shared file's, as when the Collector loads the
+two with --config each, the pair `make otelcol-validate` checks. Comments do not survive the merge: the files hold them.
 */}}
-{{- $config := .Files.Get "files/otelcol-k8s-config.yaml" }}
-{{- if not $config }}
-{{- fail "files/otelcol-k8s-config.yaml is empty: the symlink to deploy/observability/otelcol/k8s-config.yaml is broken?" }}
+{{- $shared := .Files.Get "files/otelcol-k8s-config.yaml" | fromYaml }}
+{{- if or (hasKey $shared "Error") (not $shared) }}
+{{- fail "files/otelcol-k8s-config.yaml is missing or not YAML: the symlink to deploy/observability/otelcol/k8s-config.yaml is broken?" }}
+{{- end }}
+{{- $path := printf "files/otelcol-k8s-%s.yaml" (toString .Values.collector.destinations) }}
+{{- $destination := .Files.Get $path | fromYaml }}
+{{- if or (hasKey $destination "Error") (not $destination) }}
+{{- fail (printf "collector.destinations is %q: %s is missing or not YAML (k3d and eks have one, a symlink into deploy/observability/otelcol/)" (toString .Values.collector.destinations) $path) }}
 {{- end }}
 apiVersion: v1
 kind: ConfigMap
@@ -17,4 +22,20 @@ metadata:
   namespace: {{ .Release.Namespace }}
 data:
   relay: |
-    {{- $config | nindent 4 }}
+    {{- mergeOverwrite $shared $destination | toYaml | nindent 4 }}
+{{- if .Values.collector.podMonitor }}
+---
+# The Collector's own metrics where its destination file serves them on collector.metricsPort (the chart's port named
+# metrics) instead of pushing them: Prometheus scrapes them, policy collector lets it in.
+apiVersion: monitoring.coreos.com/v1
+kind: PodMonitor
+metadata:
+  name: otel-collector
+  namespace: {{ .Release.Namespace }}
+spec:
+  selector:
+    matchLabels:
+      {{- toYaml .Values.pods.collector | nindent 6 }}
+  podMetricsEndpoints:
+    - port: metrics
+{{- end }}

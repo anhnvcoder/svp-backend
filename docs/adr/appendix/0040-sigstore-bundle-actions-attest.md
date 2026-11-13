@@ -67,3 +67,14 @@ provenance của `actions/attest`, identity đúng nguồn); `oras discover` ch�
 `gitops-ok`; sau một lượt rescan dispatch, `verify-release.sh` vẫn qua và đọc `scanFinishedOn` mới; `drill-k8s-supplychain` trong 72 giờ sau
 dispatch image diễn tập: ca (a) nhận bản bundle, (b), (c) (CRITICAL trong `vuln` bundle, chưa thử ở spike), (l) từ chối đúng message. Thời
 gian xác minh dưới tải: lượt sync đầu nói ở trên. Chưa kiểm và không có phép kiểm riêng: GHCR với hơn năm bundle.
+
+## Chi tiết rút khỏi ADR
+
+Các dòng dưới đây nguyên văn từ ADR, rút ra để ADR không vượt giới hạn dòng; xếp theo mục của ADR.
+
+### 5. Mức SLSA
+
+- Đoạn về L3 của mục 5, nguyên văn:
+  workflow build, cùng bước của tenant (`sign-image.sh`) cầm `id-token`. L3 cần reusable workflow tách khỏi repo build (F); spike
+  [`reusable-spike`](https://github.com/anhnvcoder/svp-labs/tree/main/reusable-spike) cho thấy Kyverno v1.19.1 không tách được repo gọi ở phép
+  chữ ký và `vuln` khi SAN chung, nên F để lại.

@@ -167,3 +167,8 @@ nâng, Karpenter drift sang AMI `1.N+1` của ngày cũ, hay hết AMI nếu ng�
 ## Thông tin thêm
 
 Phụ lục: [`appendix/0056-eks-platform-ha.md`](appendix/0056-eks-platform-ha.md) (bảng phương án, bảng tính nhóm node hệ thống, nguồn version).
+
+### Chỉnh bởi
+
+- §3, §5: [0062](0062-ecr-registry-ci-oidc.md): role node (group `system`, node Karpenter) thêm `ecr:BatchImportUpstreamImage`, `ecr:CreateRepository` trên repo pull-through cache; Kyverno thêm policy mutate `svp-registry-mirror` (`failurePolicy: Ignore`), admission controller có Pod Identity chỉ đọc repo phát hành.
+- §3: [0065](0065-argocd-eks-capability.md): Argo CD trên `eks` chạy ở control plane của AWS (EKS Capability), không còn pod Argo CD trên node `system` khi thay đổi hiện thực; tới đó §3 giữ nguyên.

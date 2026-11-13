@@ -124,3 +124,7 @@ Chọn CloudWatch alarm → SNS → email, vì chỉ cách này sống khi clust
 ## Thông tin thêm
 
 Phụ lục: [`appendix/0058-managed-data-operations.md`](appendix/0058-managed-data-operations.md) (bảng phương án, nguồn).
+
+### Chỉnh bởi
+
+- §1: [0063](0063-managed-observability.md): topic `svp-<env>-alarms` thêm publisher AMP (`aps.amazonaws.com`, `sns:Publish`): luật và Alertmanager của AMP gửi cảnh báo qua topic này.

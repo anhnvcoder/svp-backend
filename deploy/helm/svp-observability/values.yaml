@@ -18,6 +18,10 @@ pods:
   collector: {app.kubernetes.io/name: opentelemetry-collector, app.kubernetes.io/instance: otel-collector}
   # Chart svp-observability's own: the GlitchTip server (component init is its init Job).
   glitchtip: {app.kubernetes.io/name: glitchtip, app.kubernetes.io/component: server}
+  # Where rules and dashboards go to AWS's managed services: ACK's controller for Amazon Managed Service for Prometheus
+  # (chart prometheusservice-chart, release ack-prometheusservice) and Grafana Operator (release grafana-operator).
+  ack: {app.kubernetes.io/name: prometheusservice-chart, app.kubernetes.io/instance: ack-prometheusservice}
+  grafanaOperator: {app.kubernetes.io/name: grafana-operator, app.kubernetes.io/instance: grafana-operator}
 
 # The releases in svp that send telemetry: all seven send OTLP to the Collector; the Go services but media-worker, five,
 # push profiles to Pyroscope, as in compose (media-worker has no profiler, the web client pushes no profile).
@@ -113,3 +117,42 @@ postgres:
   labels: {cnpg.io/cluster: svp-pg}
   port: 5432
   metricsPort: 9187
+
+# The Collector's config: deploy/observability/otelcol/k8s-config.yaml with the destination file of the platform,
+# k8s-<destinations>.yaml beside it, merged over it (k3d: the backends in the cluster; eks: AWS's managed services).
+collector:
+  destinations: k3d
+  # The backends in the cluster the Collector sends to (policy collector), by name in pods and port; none on eks.
+  backends:
+    - {pod: prometheus, port: 9090}
+    - {pod: loki, port: 3100}
+    - {pod: tempo, port: 4317}
+  # PodMonitor otel-collector: Prometheus scrapes the Collector's own metrics on metricsPort, where its destination file
+  # serves them rather than pushing them (eks).
+  podMonitor: false
+  metricsPort: 8888
+
+# The rules of files/rules/: prometheus, a PrometheusRule each for the Prometheus in the cluster; amp, a
+# RuleGroupsNamespace each in workspace amp.workspaceId and one AlertManagerDefinition sending every alert to SNS topic
+# amp.alarmTopicArn, both through ACK's controller (pods.ack). region: the workspace's and the topic's.
+rules:
+  target: prometheus
+  amp:
+    workspaceId: ""
+    alarmTopicArn: ""
+    region: ""
+
+# The dashboards of files/dashboards/ and their data sources: sidecar, ConfigMaps Grafana of kube-prometheus-stack
+# loads; grafana-operator, a Grafana outside the cluster (grafana.url, its API token in Secret grafana-operator, key
+# token) where Grafana Operator writes them, reading workspace grafana.ampEndpoint and CloudWatch in grafana.region.
+dashboards:
+  target: sidecar
+  grafana:
+    url: ""
+    ampEndpoint: ""
+    region: ""
+
+# CIDRs where the private DNS of AWS's interface endpoints puts the names of AWS APIs (AMP, CloudWatch Logs, X-Ray):
+# the pods that call them (Collector, Prometheus, ACK's controller) get TCP 443 there, and the EKS Pod Identity Agent
+# for their credentials. On EKS the VPC's CIDR; empty where no interface endpoint answers (k3d): no such rule.
+awsEndpointCidrs: []

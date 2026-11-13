@@ -118,9 +118,7 @@ Managed node group Graviton `m7g.large` × 3, **Spot** ở stg, loại thay th�
 - `svp-gitops` thêm giá trị `platform` (`k3d` | `eks`, bắt buộc như `env`) cho root `svp-root`, thư mục `platforms/<platform>/`, trường `platforms` của mỗi
   component trong `components.json`. Values theo thứ tự `base/` < `platforms/<platform>/<tên>.yaml` < `envs/<env>/<tên>.yaml` < `envs/<env>/images/` < mẫu
   `platforms/<platform>/<tên>.values.tpl` (Helm `tpl` trên `.Values.cluster`); `env=stg platform=k3d` render như cũ.
-- **Hợp đồng `cluster.*`**: giá trị phụ thuộc account hay buổi, không bao giờ vào git. Bảng khoá (tên, nghĩa, ai dùng): [mục "Chi tiết rút khỏi ADR"](appendix/0034-aws-stage7.md#chi-tiết-rút-khỏi-adr).
-- **Ai ghi:** output `cluster_values` của `aws/envs/<env>`, qua `make eks-gitops-up CLUSTER_VALUES=<file>` thành `helm.valuesObject.cluster` của root. **Ai đọc:**
-  mẫu `platforms/eks/*.values.tpl`; check render bằng `deploy/ci/cluster-values.example.yaml`, file trong git đặt `cluster` thì đỏ. Thêm khoá thì sửa cả bốn nơi: output Terraform, mẫu của `svp-gitops`, fixture, bảng này.
+- **Hợp đồng `cluster.*`**: giá trị phụ thuộc account hay buổi, không bao giờ vào git. Bảng khoá (tên, nghĩa, ai dùng): [mục "Chi tiết rút khỏi ADR"](appendix/0034-aws-stage7.md#chi-tiết-rút-khỏi-adr); ai ghi, ai đọc, thêm khoá thì sửa đâu: cũng ở đó.
 
 ### 8. Thành phần local → AWS
 
@@ -131,9 +129,7 @@ do `svp-cluster` tạo [N24], RDS thay CloudNativePG, S3 + CloudFront thay RustF
 
 - **RDS:** một instance cho mọi service, PostgreSQL 15, `db.t4g.small`, gp3 20 GB, subnet private, chỉ nhận 5432 từ security group của node, `rds.force_ssl = 1`,
   mã hoá, mật khẩu master ở Secrets Manager (`manage_master_user_password`); **master username cố định `postgres`** [N41], `rds_superuser`, không superuser [N36] (phụ lục).
-- **S3:** bucket `uploads`, `media` tên `<tiền tố>-uploads-<hậu tố ngẫu nhiên>`, chặn public, `BucketOwnerEnforced`, SSE-S3, CORS theo bucket như local, lifecycle
-  `uploads` theo quyết định 2026-10-18 cộng huỷ multipart dở sau 1 ngày; stg `force_destroy`; policy IAM dịch đúng `deploy/s3/*-policy.json`; `If-None-Match: *` [N33],
-  CRC32 full-object [N34]. **CloudFront:** OAC, viewer HTTPS, cache theo `Cache-Control`, `PriceClass_200` [N10]; URL HLS `https://<mediaDomain>/` + khoá object.
+- **S3:** bucket `uploads`, `media` chặn public, `BucketOwnerEnforced`, SSE-S3, CORS, lifecycle; **CloudFront:** OAC, viewer HTTPS, `PriceClass_200` [N10]; chi tiết cấu hình: phụ lục.
 
 ### 10. Secret, IAM và Pod Identity
 
@@ -198,3 +194,7 @@ Phụ lục: [`appendix/0034-aws-stage7.md`](appendix/0034-aws-stage7.md) (trạ
 - §3: [0059](0059-org-structure-guardrails.md): org theo AWS SRA thêm account `svp-log-archive`, `svp-security` ở OU `Security`; `svp-stg`, `svp-prd` ở OU `Workloads/NonProd`, `Workloads/Prod`; baseline bảo mật mỗi account áp từ management; permission set chỉ đọc cạnh `SvpAdmin`.
 - §3: [0060](0060-org-detection-logging.md): Cost Anomaly Detection (monitor theo dịch vụ, email hằng ngày, ngưỡng tác động $10) và tag phân bổ chi phí `Project`, `Env`, `Stack` do `aws/bootstrap` quản, thay bật tay.
 - Câu 6, Câu 18, Câu 19, §5, §9 "CloudFront", Hệ quả: [0061](0061-edge-cloudfront-waf-acm.md): CloudFront có WAF trước web, API (VPC origin tới ALB internal ở tầng subnet edge, `TargetGroupBinding` tới Service ClusterIP của Envoy) thay NLB L4; cert ACM thay Let's Encrypt ở stg, prd, Envoy dùng CA nội bộ; gateway trên EKS lấy IP client từ `CloudFront-Viewer-Address` thay `X-Forwarded-For` 1 hop; media có tên riêng `media.<domain>` với cert ACM, media của prd pay-as-you-go; ExternalDNS bỏ.
+- Câu 9, §8: [0063](0063-managed-observability.md): telemetry của `eks` vào Amazon Managed Service for Prometheus, CloudWatch Logs, X-Ray; Grafana là Amazon Managed Grafana, luật chạy ở AMP tới SNS; Prometheus, Loki, Tempo, Grafana trong cluster không còn ở `eks` (Pyroscope, GlitchTip ở lại); local giữ LGTM.
+- Câu 10, §2: [0062](0062-ecr-registry-ci-oidc.md): image của stg, prd ở ECR private của account env (CI sao chép cùng digest kèm chữ ký, attestation từ GHCR), image bên thứ ba qua pull-through cache; CI của `svp-backend`, `svp-frontend` có role OIDC hẹp theo repo và mục đích; `svp-infra` vẫn không credential AWS.
+- §8, §10: [0064](0064-interface-endpoints.md): API AWS của cluster qua endpoint interface có private DNS ở VPC mỗi env, đích ngoài AWS và vài API AWS không có endpoint ở region vẫn qua NAT (0064 §6); NetworkPolicy thêm TCP 443 tới `awsEndpointCidrs`.
+- Câu 14, §7: [0065](0065-argocd-eks-capability.md): Argo CD trên `eks` chuyển sang EKS Capability cho Argo CD (AWS chạy, giữ HA; đăng nhập Identity Center; đích Application `name: in-cluster`) thay `deploy/k8s/gitops.sh` cài chart; k3d giữ cài tay; hiện thực ở thay đổi riêng, tới đó giữ cách cài hiện tại.

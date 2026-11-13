@@ -40,13 +40,14 @@ trap 'rm -rf "$aws_dir"' EXIT
 
 # --- the entries and their keys, from the ExternalSecrets of chart svp-cluster as rendered for EKS (Kafka and Valkey
 # managed: localKafkaValkey off). The set does not depend on the store, so the render takes store kubernetes, whose
-# entries are named without a prefix and which needs no IAM role. Each YAML document of the render becomes one line of
-# JSON read by Helm itself (fromYaml): no YAML tool of its own.
+# entries are named without a prefix and which needs no IAM role. grafanaOperator stays off: the session's script of
+# the infrastructure repository writes entry grafana-operator, a new token of Amazon Managed Grafana each session.
 chart=$repo_root/deploy/helm/svp-cluster
 helm template svp-cluster "$chart" --show-only templates/external-secrets.yaml \
   --set externalSecrets.enabled=true --set externalSecrets.argocdNotifications=true --set s3.mode=external \
   --set externalSecrets.localKafkaValkey=false \
   >"$aws_dir/render.yaml" || fail "render the ExternalSecrets of chart svp-cluster for EKS"
+# Each YAML document of the render becomes one line of JSON read by Helm itself (fromYaml): no YAML tool of its own.
 mkdir -p "$aws_dir/yj/templates" "$aws_dir/yj/in" && cp "$aws_dir/render.yaml" "$aws_dir/yj/in/doc" &&
   printf 'apiVersion: v2\nname: yj\nversion: 0.1.0\n' >"$aws_dir/yj/Chart.yaml" &&
   printf '%s\n' '{{- range $doc := regexSplit `(?m)^---.*$` (.Files.Get "in/doc") -1 }}' \

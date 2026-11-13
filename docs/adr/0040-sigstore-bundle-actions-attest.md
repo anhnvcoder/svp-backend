@@ -69,9 +69,8 @@ Kyverno v1.19.1.
    đúng một. Không dùng `gh attestation verify` (đòi đăng nhập).
 5. **Mức SLSA: Build L2.** Provenance do `actions/attest` dựng từ claim OIDC đã ký, ký bằng chứng chỉ Fulcio của chính lượt chạy, trên
    runner GitHub-hosted; GitHub tự xếp L2; `subject` do bước của repo đưa vào, L2 cho phép. **Không L3:** attest chạy trong job của chính
-   workflow build, cùng bước của tenant (`sign-image.sh`) cầm `id-token`. L3 cần reusable workflow tách khỏi repo build (F); spike
-   [`reusable-spike`](https://github.com/anhnvcoder/svp-labs/tree/main/reusable-spike) cho thấy Kyverno v1.19.1 không tách được repo gọi ở phép
-   chữ ký và `vuln` khi SAN chung, nên F để lại.
+   workflow build, cùng bước của tenant (`sign-image.sh`) cầm `id-token`. L3 cần reusable workflow tách khỏi repo build (F); Kyverno v1.19.1
+   không tách được repo gọi ở phép chữ ký và `vuln`, nên F để lại (kết quả spike: phụ lục).
 6. **Rủi ro thời gian xác minh, đo sau merge.** CLI không cache mất 36–46 s, quá hạn 30 s; admission thật (cache, TUF đã nạp, trong cluster)
    chưa đo, và pod đầu của một digest mới luôn không cache. Trước merge chưa có image `svp-backend` nào ở định dạng bundle (`images.yml` chỉ
    push và ký trên `main`), nên đo sau merge, ở bản phát hành đầu (mục Xác nhận). Rủi ro nằm gọn giữa merge và lần dựng cluster kế tiếp:
@@ -145,3 +144,7 @@ Repo `svp-frontend`: `.backend-commit`, `.github/workflows/images.yml` (job ký,
 
 Phụ lục: [`appendix/0040-sigstore-bundle-actions-attest.md`](appendix/0040-sigstore-bundle-actions-attest.md) (dòng trạng thái lúc chốt, kết quả đầy đủ của hai spike, ưu nhược từng phương án, các lần
 kiểm với metric và id lượt chạy).
+
+### Chỉnh bởi
+
+- Mục 3: [0062](0062-ecr-registry-ci-oidc.md): rescan làm mới `vuln` cả ở ECR của env (`ecr-copy.sh refresh` chép bundle `vuln` mới, gỡ `vuln` khác bằng `BatchDeleteImage`, đọc lại danh sách referrer, còn đúng một `vuln`); chỉ role rescan có quyền xoá.

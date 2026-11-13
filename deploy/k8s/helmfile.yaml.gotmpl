@@ -153,11 +153,12 @@ cluster would get a Reloader that cannot restart the gateway or the web client. 
 {{- end }}
 {{- if eq $c.name "otel-collector" }}
     # The Collector mounts ConfigMap otel-collector-config of chart svp-observability, which its own chart cannot
-    # checksum, and reads it only when it starts: the checksum of the file that ConfigMap holds goes into the pod
-    # template, so a changed config rolls the pod and an unchanged one does not.
+    # checksum, and reads it only when it starts: the checksum of the files that ConfigMap is made of (the shared
+    # one, then each platform's destination file, concatenated) goes into the pod template, so a changed config rolls
+    # the pod and an unchanged one does not.
     setString:
       - name: podAnnotations.svp-config-sha256
-        value: {{ readFile "../observability/otelcol/k8s-config.yaml" | sha256sum | quote }}
+        value: {{ print (readFile "../observability/otelcol/k8s-config.yaml") (readFile "../observability/otelcol/k8s-k3d.yaml") (readFile "../observability/otelcol/k8s-eks.yaml") | sha256sum | quote }}
 {{- end }}
 {{- if $service }}
 {{- with getOrNil $c.name $images }}

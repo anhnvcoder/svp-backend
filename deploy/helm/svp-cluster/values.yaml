@@ -56,6 +56,12 @@ kyverno:
     - 100.64.0.0/10
     - 169.254.0.0/16
 
+# CIDRs where the private DNS of AWS's interface endpoints puts the names of AWS APIs (STS, ECR, Secrets Manager...):
+# the pods of Kyverno and External Secrets that call those APIs get TCP 443 there too, which privateRanges leaves out,
+# and Kyverno's admission controller gets the EKS Pod Identity Agent (its credentials for ECR). On EKS the VPC's CIDR;
+# empty where no interface endpoint answers (k3d): no such rule.
+awsEndpointCidrs: []
+
 # Reloader (component reloader): restarts the workloads that opt in by annotation when a Secret they name changes. Its
 # pods get NetworkPolicies here like the project's namespaces: default-deny, allow-dns, and allow-kube-api for its pods
 # labelled svp-kube-api=allow (base/reloader.yaml of svp-gitops). It talks to the API server only (watches Secrets,
@@ -210,3 +216,6 @@ externalSecrets:
   # source entry argocd-notifications; on only where the platform turns Argo CD's notifications on (a cluster that runs
   # for a whole session, not one of the runner). Its store in argocd needs a role in aws.roles with store aws.
   argocdNotifications: false
+  # Secret svp-obs/grafana-operator (token), the API token Grafana Operator calls Amazon Managed Grafana with, from
+  # source entry grafana-operator; on where dashboards and data sources go to a managed Grafana.
+  grafanaOperator: false

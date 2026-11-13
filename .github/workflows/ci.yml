@@ -344,6 +344,7 @@ jobs:
       - run: make helm-check
       # Release sources table rules and lookups: no network.
       - run: deploy/ci/sources-test.sh
+      - run: deploy/ci/registry-mirror-test.sh
       # Negative render cases and conftest policies of svp-gitops check: stops before network.
       - run: deploy/ci/gitops-check-test.sh "$SVP_GITOPS_DIR"
       # Cloud context guard and eks-* scripts, which otherwise run only by hand against a cloud cluster: fake tools,

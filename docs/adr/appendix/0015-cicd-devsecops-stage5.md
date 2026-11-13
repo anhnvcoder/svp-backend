@@ -1221,6 +1221,8 @@ Các dòng dưới đây nguyên văn từ ADR, rút ra để ADR không vượt
 
 - `actions/checkout` với `persist-credentials: false` (trừ job promote). Input không tin cậy (tiêu đề, thân PR, `github.head_ref`, input dispatch) chỉ vào script qua `env:`.
 
+- trivy 0.76.0, syft v1.54.1, cosign v3.1.3: image ghim digest (`TRIVY_IMAGE`, `SYFT_IMAGE`, `COSIGN_IMAGE`), `env -u DOCKER_DEFAULT_PLATFORM docker run`; mọi bản đã phát hành ít nhất 3 ngày. `make actionlint` (`ACTIONLINT_VERSION` v1.7.12) nằm trong `make check`. Runner `ubuntu-24.04`, `ubuntu-24.04-arm`, không `ubuntu-latest`.
+
 ### 2. `ci.yml`: đủ mục Kiểm tra của `CLAUDE.md`
 
 - Trigger `pull_request`, `push` `main`, `workflow_dispatch`; concurrency `ci-${{ github.ref }}`, `cancel-in-progress` chỉ ở PR; `contents: read` trừ job SARIF.
@@ -1230,6 +1232,10 @@ Các dòng dưới đây nguyên văn từ ADR, rút ra để ADR không vượt
 ### 3. Chỉ build service có thay đổi
 
 - Concurrency của `images.yml` là `images-${{ github.ref }}-<build|rescan|drill>`, `cancel-in-progress` chỉ ở PR; ma trận `fail-fast: false`; danh sách rỗng thì job build không chạy và `images-ok` vẫn xanh.
+
+- Tập đường dẫn một image là `image_paths <svc>` của `deploy/k8s/lib.sh`; `deploy/ci/changed-services.sh <base> <head>` dùng đúng nó. Đổi `.github/workflows/images.yml`, bất cứ gì dưới `deploy/ci/`, `deploy/k8s/lib.sh`, hay dòng ghim `TRIVY_IMAGE`, `SYFT_IMAGE`, `COSIGN_IMAGE` của `Makefile` thì build lại cả sáu. Go test luôn toàn repo.
+
+- Base của phép so: push `main` là `head_sha` của lượt `images.yml` push `main` thành công gần nhất (job `last-success`, `actions: read`); là tổ tiên của HEAD thì so `head_sha..HEAD`, HEAD là tổ tiên thật sự thì không build gì, không có hay không so được thì cả sáu. PR: merge-base với nhánh base. `workflow_dispatch`: merge-base với `origin/main`, input `services` ghi đè.
 
 ### 5. Tên, tag và version của image
 

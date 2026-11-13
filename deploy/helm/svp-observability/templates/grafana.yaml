@@ -6,6 +6,11 @@ Grafana keeps no state of its own (no volume), so this is all of its configurati
 {{- if not $dashboards }}
 {{- fail "files/dashboards/*.json matches nothing: the symlink into deploy/observability/grafana/dashboards/ is broken?" }}
 {{- end }}
+{{- $target := toString .Values.dashboards.target }}
+{{- if not (has $target (list "sidecar" "grafana-operator")) }}
+{{- fail (printf "dashboards.target is %q: sidecar (Grafana in the cluster) or grafana-operator (a Grafana outside it)" $target) }}
+{{- end }}
+{{- if eq $target "sidecar" }}
 # The five dashboards (four of the services and svp-web, the web client's RUM), the files compose provisions (symlink
 # files/dashboards), in folder svp as there. They are edited in the repository, not in the UI (the sidecar's provider
 # forbids UI updates and deletion).
@@ -103,3 +108,107 @@ data:
         jsonData:
           handleGrafanaManagedAlerts: false
           implementation: prometheus
+{{- else }}
+{{- range $key := list "url" "ampEndpoint" "region" }}
+{{- if not (index $.Values.dashboards.grafana $key) }}
+{{- fail (printf "dashboards.target grafana-operator needs dashboards.grafana.%s" $key) }}
+{{- end }}
+{{- end }}
+# Amazon Managed Grafana, outside the cluster: Grafana Operator calls its API at url with the token of a service account
+# (Secret grafana-operator, written each session). The data sources and dashboards below choose it by label.
+apiVersion: grafana.integreatly.org/v1beta1
+kind: Grafana
+metadata:
+  name: amg
+  namespace: {{ .Release.Namespace }}
+  labels:
+    svp.grafana/instance: amg
+  annotations:
+    {{- include "svp-observability.grafanaOperatorAnnotations" . | nindent 4 }}
+spec:
+  external:
+    url: {{ .Values.dashboards.grafana.url }}
+    apiKey:
+      name: grafana-operator
+      key: token
+---
+# The workspace of Amazon Managed Service for Prometheus under uid prometheus, the uid every panel names. The core
+# Prometheus plugin of Grafana 12 and later signs no request: the Amazon plugin does, with the workspace's IAM role.
+apiVersion: grafana.integreatly.org/v1beta1
+kind: GrafanaDatasource
+metadata:
+  name: prometheus
+  namespace: {{ .Release.Namespace }}
+  annotations:
+    {{- include "svp-observability.grafanaOperatorAnnotations" . | nindent 4 }}
+spec:
+  uid: prometheus
+  instanceSelector:
+    matchLabels:
+      svp.grafana/instance: amg
+  datasource:
+    name: Prometheus
+    type: grafana-amazonprometheus-datasource
+    access: proxy
+    url: {{ .Values.dashboards.grafana.ampEndpoint }}
+    isDefault: true
+    jsonData:
+      sigV4Auth: true
+      sigV4AuthType: ec2_iam_role
+      sigV4Region: {{ .Values.dashboards.grafana.region }}
+      # The services' metric export interval and the agent's scrape interval.
+      timeInterval: 15s
+---
+# CloudWatch of the account, with the workspace's IAM role: the Collector's log group and the spans of X-Ray
+# Transaction Search (log group aws/spans), read with Logs Insights.
+apiVersion: grafana.integreatly.org/v1beta1
+kind: GrafanaDatasource
+metadata:
+  name: cloudwatch
+  namespace: {{ .Release.Namespace }}
+  annotations:
+    {{- include "svp-observability.grafanaOperatorAnnotations" . | nindent 4 }}
+spec:
+  uid: cloudwatch
+  instanceSelector:
+    matchLabels:
+      svp.grafana/instance: amg
+  datasource:
+    name: CloudWatch
+    type: cloudwatch
+    access: proxy
+    jsonData:
+      authType: ec2_iam_role
+      defaultRegion: {{ .Values.dashboards.grafana.region }}
+{{- /* The same five dashboards in folder svp, without the panels that query Tempo, which has no counterpart there
+(traces are searched in CloudWatch). Their references to uid prometheus take the Amazon plugin's type. toJson writes
+a reference's keys sorted, so each is the one string replaced below. */}}
+{{- range $file, $_ := $dashboards }}
+{{- $board := $.Files.Get $file | fromJson }}
+{{- $panels := list }}
+{{- range $board.panels }}
+{{- if ne (toString (dig "datasource" "type" "" .)) "tempo" }}
+{{- $panels = append $panels . }}
+{{- end }}
+{{- end }}
+{{- $_ := set $board "panels" $panels }}
+{{- $json := toJson $board | replace `{"type":"prometheus","uid":"prometheus"}` `{"type":"grafana-amazonprometheus-datasource","uid":"prometheus"}` }}
+{{- if or (contains `"type":"tempo"` $json) (contains `"type":"prometheus"` $json) }}
+{{- fail (printf "%s still names datasource type tempo or prometheus after the rewrite: a reference of another shape?" $file) }}
+{{- end }}
+---
+apiVersion: grafana.integreatly.org/v1beta1
+kind: GrafanaDashboard
+metadata:
+  name: {{ base $file | trimSuffix ".json" }}
+  namespace: {{ $.Release.Namespace }}
+  annotations:
+    {{- include "svp-observability.grafanaOperatorAnnotations" $ | nindent 4 }}
+spec:
+  instanceSelector:
+    matchLabels:
+      svp.grafana/instance: amg
+  folder: svp
+  json: {{ $json | quote }}
+{{- end }}
+{{- end }}
