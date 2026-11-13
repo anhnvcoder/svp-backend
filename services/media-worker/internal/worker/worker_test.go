@@ -430,7 +430,7 @@ func TestHandleValidUploadTwiceGivesSameResult(t *testing.T) {
 		if strings.HasSuffix(k, ".ts") {
 			lastSegment = i
 		}
-		if strings.HasSuffix(k, "/index.m3u8") {
+		if strings.HasSuffix(k, ".m3u8") {
 			firstPlaylist = min(firstPlaylist, i)
 		}
 	}
@@ -448,8 +448,8 @@ func TestHandleValidUploadTwiceGivesSameResult(t *testing.T) {
 	if typ := e.store.types[prefix+transcode.MasterPlaylist]; typ != "application/vnd.apple.mpegurl" {
 		t.Errorf("master content type %q", typ)
 	}
-	if !strings.Contains(string(e.store.get(prefix+transcode.MasterPlaylist)), "\n"+attempt+"/360p/index.m3u8") {
-		t.Errorf("master does not name %s/360p/index.m3u8:\n%s", attempt, e.store.get(prefix+transcode.MasterPlaylist))
+	if !strings.Contains(string(e.store.get(prefix+transcode.MasterPlaylist)), "\n"+attempt+"/index_360p.m3u8") {
+		t.Errorf("master does not name %s/index_360p.m3u8:\n%s", attempt, e.store.get(prefix+transcode.MasterPlaylist))
 	}
 
 	e.handle(t, r)
@@ -882,7 +882,7 @@ func TestHandleTryTimeoutIsTemporary(t *testing.T) {
 		t.Fatalf("Handle = %v, want a temporary deadline error", err)
 	}
 
-	if err := e.w.Handle(ctx, r, kafkax.Attempt{Number: maxAttempts, Last: true}); err != nil {
+	if err := e.w.Handle(ctx, r, kafkax.Attempt{Number: MaxAttempts, Last: true}); err != nil {
 		t.Fatalf("last try: %v", err)
 	}
 	f := decodeOut(t, e.read(t, OutputTopic, 1)[0]).GetTranscodeFailed()
@@ -898,10 +898,10 @@ func TestHandleTryTimeoutIsTemporary(t *testing.T) {
 func TestRebalanceTimeoutCoversRetryBudget(t *testing.T) {
 	t.Parallel()
 	var backoffs time.Duration
-	for n := 1; n < maxAttempts; n++ {
-		backoffs += min(backoffBase<<(n-1), backoffMax)
+	for n := 1; n < MaxAttempts; n++ {
+		backoffs += min(BackoffBase<<(n-1), BackoffMax)
 	}
-	if budget := maxAttempts*(tryTimeout+produceTimeout) + backoffs; rebalanceTimeout < budget {
+	if budget := MaxAttempts*(tryTimeout+ProduceTimeout) + backoffs; rebalanceTimeout < budget {
 		t.Errorf("rebalanceTimeout = %v, retry budget = %v", rebalanceTimeout, budget)
 	}
 	if cfg := New(nil, nil, "", nil).ConsumerConfig(""); cfg.RebalanceTimeout != rebalanceTimeout || !cfg.BlockRebalance {
@@ -1034,8 +1034,8 @@ func TestConsumerRetriesExhaustedPublishesOneFailure(t *testing.T) {
 	if !strings.Contains(f.GetDetail(), "503") {
 		t.Errorf("detail %q does not carry the last error", f.GetDetail())
 	}
-	if _, downloads := e.store.snapshot(); downloads != maxAttempts {
-		t.Errorf("downloads = %d, want %d", downloads, maxAttempts)
+	if _, downloads := e.store.snapshot(); downloads != MaxAttempts {
+		t.Errorf("downloads = %d, want %d", downloads, MaxAttempts)
 	}
 	if n := e.count(t, OutputTopic); n != 1 {
 		t.Errorf("%d events published, want 1", n)

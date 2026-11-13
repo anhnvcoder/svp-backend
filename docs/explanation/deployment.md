@@ -565,7 +565,9 @@ flowchart LR
         end
         evb["EventBridge<br/>sự kiện Spot, rebalance"]
         sqs[["SQS svp-env-karpenter"]]
-        cw["CloudWatch alarm<br/>RDS, MSK, ElastiCache"]
+        cw["CloudWatch alarm<br/>RDS, MSK, ElastiCache, DLQ transcode"]
+        mc["MediaConvert queue svp-env"]
+        mcq[["EventBridge, SQS<br/>svp-env-transcode-events"]]
         sns[["SNS svp-env-alarms<br/>mã hoá CMK"]]
         subgraph vpc["VPC, stg 2 AZ, prd 3 AZ"]
             alb["ALB internal svp-env-edge<br/>subnet edge, VPC origin"]
@@ -604,7 +606,10 @@ flowchart LR
     obs -->|"svp_glitchtip"| rds
     obs -->|"lag: kafkametrics"| msk
     app -->|"Pod Identity,<br/>S3 gateway endpoint"| up
-    app -->|"ghi HLS"| media
+    app -->|"master, header HLS"| media
+    app -->|"Probe, CreateJob, GetJob"| mc
+    mc -->|"đọc gốc, ghi HLS"| s3
+    mc -.->|"trạng thái job"| mcq -.-> app
     browser -->|"POST presigned"| up
     browser -->|"GET HLS"| cf
     cf -->|"OAC"| media
@@ -629,6 +634,7 @@ Alarm nằm ngoài cluster: khi cluster chết, alarm của RDS, MSK, ElastiCach
 | Cluster | k3d, 2 node | EKS: nhóm node hệ thống on-demand (mỗi AZ một node) cho add-on, Argo CD, Karpenter; node workload do Karpenter tạo theo pod đang chờ (cỡ, capacity type, trần: [ADR-0056](../adr/0056-eks-platform-ha.md) §2, §3) |
 | Postgres | PostgreSQL 17: container `postgres` (compose), CloudNativePG `svp-pg` (k3d); cert server của CA local | RDS for PostgreSQL 17, CMK riêng, tham số ghi log; client nối thẳng địa chỉ RDS, CA là bundle của RDS (Secret `rds-ca`); stg một AZ, prd Multi-AZ |
 | Object store | RustFS `s3` | S3 `uploads`, `media`; credential Pod Identity |
+| Transcode | ffmpeg trong pod `media-worker` (lệnh con `serve`) | AWS Elemental MediaConvert qua lệnh con `media-worker mediaconvert`, trạng thái job qua EventBridge và SQS `svp-<env>-transcode-events` ([`transcode.md`](transcode.md)) |
 | CDN | Không có | CloudFront trước mọi tên, mỗi tên một distribution và một web ACL; `media.<domain>` đọc bucket `media` qua OAC ([`edge.md`](edge.md)) |
 | Kafka | `apache/kafka` một broker (container `kafka`, StatefulSet `kafka`), SCRAM-SHA-512 TLS 9096, CA local | Amazon MSK provisioned, một broker mỗi AZ, cùng giao thức, user là secret `AmazonMSK_*`; dung lượng broker tự tăng tới trần của env |
 | Valkey | Container `valkey`, Deployment `valkey`, TLS 6379, aclfile | ElastiCache for Valkey cluster mode tắt (stg một node; prd primary + replica khác AZ, Multi-AZ), cùng access string; slow-log tới CloudWatch Logs |
@@ -654,8 +660,10 @@ Argo CD); `envs/stg` dùng chung cho k3d stg và EKS stg.
    virtual-hosted).
 2. Trình duyệt POST file thẳng lên S3 (CORS chỉ nhận origin web, hạn form 15 phút); `CompleteUpload`: video-service `HEAD` object qua S3
    gateway endpoint (không qua NAT), outbox phát `video.uploaded` vào MSK.
-3. media-worker (KEDA theo lag) tải file gốc từ `uploads`, chạy ffmpeg, ghi HLS bất biến vào bucket `media` (master chỉ tạo một lần bằng
-   `If-None-Match: *`); `transcode.completed` → video-service chuyển `READY`, phát `video.ready` → feed-service fan-out vào timeline (RDS).
+3. media-worker (lệnh con `mediaconvert`, KEDA theo lag) kiểm file bằng `Probe` rồi tạo job MediaConvert; job đọc
+   `uploads`, ghi HLS vào `media`; trạng thái job về qua EventBridge và SQS, bridge đặt header, tạo master một lần bằng
+   `If-None-Match: *` ([`transcode.md`](transcode.md)); `transcode.completed` → video-service chuyển `READY`, phát
+   `video.ready` → feed-service fan-out vào timeline (RDS).
 4. Feed: gateway → feed-service (cache khám phá ở ElastiCache); URL HLS trong response là `https://media.<domain>/` + khoá của object.
 5. Phát: trình duyệt GET master, playlist, segment từ CloudFront (cache theo `Cache-Control: … immutable`); CloudFront đọc `media` bằng
    OAC, đọc thẳng bucket bị từ chối (threat model AWS-2).

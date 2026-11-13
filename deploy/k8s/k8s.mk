@@ -10,7 +10,7 @@ K8S_LIB := . deploy/k8s/lib.sh
 	k8s-ui-argocd k8s-traffic-start k8s-traffic-stop drill-k8s-threats \
 	drill-k8s-supplychain drill-k8s-gitops drill-k8s-reloader k8s-web-sourcemaps k8s-web-e2e cloud-check \
 	gitops-clone web-clone eks-secrets eks-glitchtip-init eks-smoke eks-seed \
-	eks-rl-reset
+	eks-transcode-timing eks-rl-reset
 
 # Compose and k3d never run together on the 16 GB machine (they do not fit in its RAM): the cluster is not created or
 # started beside a running compose stack. `make up` refuses the other way round (deploy/compose/compose.mk).
@@ -196,6 +196,12 @@ eks-seed: ## Seed the EKS cluster CONTEXT=svp-stg|svp-prd for k6 through https:/
 	@$(EKS_CONTEXT_CHECK)
 	@$(EKS_DOMAIN_CHECK)
 	env -u CURL_CA_BUNDLE SVP_STACK=eks SVP_KUBE_CONTEXT='$(CONTEXT)' deploy/k8s/eks-seed.sh 'https://api.$(DOMAIN)'
+
+# CLIP and N are declared in deploy/compose/compose.mk (transcode-timing).
+eks-transcode-timing: ## Upload the video CLIP=<file> N=<n> times to the EKS cluster CONTEXT=svp-stg|svp-prd at https://api.<DOMAIN>, print seconds from complete to READY per upload, then p50 and max (LOCAL LAB ONLY: deletes the register rate limit keys in that cluster's Valkey db 10)
+	@$(EKS_CONTEXT_CHECK)
+	@$(EKS_DOMAIN_CHECK)
+	env -u CURL_CA_BUNDLE SVP_STACK=eks SVP_KUBE_CONTEXT='$(CONTEXT)' deploy/compose/transcode-timing.sh 'https://api.$(DOMAIN)' '$(CLIP)' '$(N)'
 
 # Before each level of a load test: every pod of the k6 profile cloud registers its users from its own address, which
 # a later pod may get again, so the register burst of one address would run out between levels.

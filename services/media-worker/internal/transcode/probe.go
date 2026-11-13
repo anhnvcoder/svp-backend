@@ -32,10 +32,11 @@ var (
 
 // Input limits.
 const (
-	maxStreams  = 8
-	maxSide     = 4096
-	maxFPS      = 120
-	maxDuration = 180 * time.Second
+	maxStreams = 8
+	maxSide    = 4096
+	maxFPS     = 120
+	// MaxDuration is the longest video accepted, and where every encoder stops reading.
+	MaxDuration = 180 * time.Second
 	// durationSlack absorbs container rounding: a 180 s video may report 180.02 s.
 	durationSlack = time.Second
 	// maxProbeOutput caps the JSON read from ffprobe; the entries asked for fit in a few KiB.
@@ -113,15 +114,12 @@ func (p probeResult) check() error {
 			if !slices.Contains(videoCodecs, s.CodecName) {
 				return invalid("stream %d: video codec %q is not allowed", i, s.CodecName)
 			}
-			if s.Width < 2 || s.Height < 2 || max(s.Width, s.Height) > maxSide {
-				return invalid("stream %d: size %dx%d is outside 2 to %d pixels", i, s.Width, s.Height, maxSide)
-			}
 			fps := frameRate(s.AvgFrameRate)
 			if fps == 0 {
 				fps = frameRate(s.RFrameRate)
 			}
-			if fps > maxFPS {
-				return invalid("stream %d: %.2f fps, at most %d allowed", i, fps, maxFPS)
+			if problem := videoProblem(s.Width, s.Height, fps); problem != "" {
+				return invalid("stream %d: %s", i, problem)
 			}
 		case "audio":
 			if !slices.Contains(audioCodecs, s.CodecName) {
@@ -137,8 +135,36 @@ func (p probeResult) check() error {
 	if videos == 0 {
 		return invalid("no video stream")
 	}
-	if d, ok := p.duration(); ok && d > maxDuration+durationSlack {
-		return fmt.Errorf("%w: %.1f s, at most %.0f s allowed", ErrDurationExceeded, d.Seconds(), maxDuration.Seconds())
+	if d, ok := p.duration(); ok {
+		return CheckDuration(d)
+	}
+	return nil
+}
+
+// CheckVideo returns ErrInvalidInput for a video track of width x height pixels at fps frames per
+// second (0 when unknown) outside the input limits.
+func CheckVideo(width, height int, fps float64) error {
+	if problem := videoProblem(width, height, fps); problem != "" {
+		return invalid("%s", problem)
+	}
+	return nil
+}
+
+// videoProblem describes the limit a video track breaks, "" for none.
+func videoProblem(width, height int, fps float64) string {
+	if width < 2 || height < 2 || max(width, height) > maxSide {
+		return fmt.Sprintf("size %dx%d is outside 2 to %d pixels", width, height, maxSide)
+	}
+	if fps > maxFPS {
+		return fmt.Sprintf("%.2f fps, at most %d allowed", fps, maxFPS)
+	}
+	return ""
+}
+
+// CheckDuration returns ErrDurationExceeded for a declared duration d over the limit.
+func CheckDuration(d time.Duration) error {
+	if d > MaxDuration+durationSlack {
+		return fmt.Errorf("%w: %.1f s, at most %.0f s allowed", ErrDurationExceeded, d.Seconds(), MaxDuration.Seconds())
 	}
 	return nil
 }

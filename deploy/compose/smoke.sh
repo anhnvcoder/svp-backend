@@ -6,8 +6,8 @@
 
 # Usage: deploy/compose/smoke.sh [base-url]   (default http://127.0.0.1:8080)
 
-# The HLS output must use the versioned layout (media/<id>/<version>/master.m3u8, variants under
-# <attempt>/<rendition>/) and its master, a variant playlist, a segment and the thumbnail must come with
+# The HLS output must use the versioned layout (media/<id>/<version>/master.m3u8, variants named
+# <attempt>/index_<rendition>.m3u8) and its master, a variant playlist, a segment and the thumbnail must come with
 # Cache-Control: max-age=31536000, immutable.
 
 # `make k8s-smoke` and `make eks-smoke` run the same steps against a cluster, with SVP_STACK=k3d or eks so lib.sh resets
@@ -191,8 +191,8 @@ playlist_key=${playlist_url#"$media_base"/}
 thumbnail_key=${thumbnail_url#"$media_base"/}
 if [[ $playlist_key =~ ^media/$clip_id/$uuid_re/master\.m3u8$ ]]; then
   variant_ref=$(first_uri "$work/master.m3u8")
-  [[ $variant_ref =~ ^$uuid_re/[a-z0-9]+/index\.m3u8$ && $thumbnail_key == "${playlist_key%/*}/${variant_ref%%/*}/thumbnail.jpg" ]] ||
-    fail "master names <attempt>/<rendition>/index.m3u8 and the thumbnail is in that attempt directory (variant $variant_ref, thumbnail key $thumbnail_key)"
+  [[ $variant_ref =~ ^$uuid_re/index_[a-z0-9]+\.m3u8$ && $thumbnail_key == "${playlist_key%/*}/${variant_ref%%/*}/thumbnail.jpg" ]] ||
+    fail "master names <attempt>/index_<rendition>.m3u8 and the thumbnail is in that attempt directory (variant $variant_ref, thumbnail key $thumbnail_key)"
   # One "<name>|<url>" per object: the names have blanks, the URLs none.
   for object in "master|$playlist_url" "variant playlist|$variant_url" "segment|$(resolve "$variant_url" "$segment_ref")" \
     "thumbnail|$thumbnail_url"; do

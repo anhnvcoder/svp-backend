@@ -83,6 +83,10 @@ spec:
       containers:
         - name: {{ .Release.Name }}
           image: {{ include "svp-service.image" . }}
+          {{- with .Values.args }}
+          args:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
           env:
             {{- range $name, $value := .Values.env }}
             - name: {{ $name }}

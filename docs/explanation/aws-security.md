@@ -135,6 +135,14 @@ Mỗi env đón request công khai ở CloudFront, không ở load balancer nào
 Control Security Hub FSBP áp lên tài nguyên edge (`CloudFront.*`, `WAF.*`, `ACM.*`, `Route53.*`, `ELB.*`), đạt hay chấp nhận có lý do: phụ lục
 ADR-0061. Mối đe doạ của lớp này ở [threat model](../threat-model.md#413-edge).
 
+## Transcode bằng MediaConvert
+
+Role `svp-<env>-mediaconvert` mà job MediaConvert chạy bằng chỉ đọc `uploads/*`, ghi `media/*`; trust của nó có
+`aws:SourceAccount` và `aws:SourceArn` là queue của env (chống confused deputy). Role Pod Identity `svp/media-worker`
+chỉ tạo job trên queue đó, `iam:PassRole` đúng role trên, đọc hàng đợi `svp-<env>-transcode-events`. Không luồng nào cần
+ngoại lệ SCP hay RCP. Bảng quyền, luồng SCP, RCP, control FSBP ở [ADR-0066](../adr/0066-mediaconvert-transcode.md) và
+phụ lục; luồng transcode ở [`transcode.md`](transcode.md).
+
 ## Luồng log
 
 Mọi log bảo mật về account `svp-log-archive`. Mỗi loại log một bucket, tên `<tiền tố>-<id account log>-<region>`

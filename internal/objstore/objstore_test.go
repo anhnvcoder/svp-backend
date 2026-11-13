@@ -10,6 +10,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -71,6 +72,9 @@ func TestBucketByPrefix(t *testing.T) {
 		{"uploads/0192", "up-bucket"},
 		{"media/0192/master.m3u8", "media-bucket"},
 		{"media/0192/", "media-bucket"},
+		{"transcode-jobs/0192/0193.json", "media-bucket"},
+		{"transcode-jobs/", ""},
+		{"transcode-jobs0192", ""},
 		{"uploads/", ""},
 		{"media/", ""},
 		{"", ""},
@@ -481,5 +485,126 @@ func TestExists(t *testing.T) {
 				t.Errorf("query = %v, want list-type=2, prefix=%s, max-keys=1", query, key)
 			}
 		})
+	}
+}
+
+// List pages through every key under the prefix of the right bucket, in key order; a prefix
+// without the trailing "/" or outside the contract is refused before any request.
+func TestList(t *testing.T) {
+	t.Parallel()
+	const prefix = "media/v1/e1/a1/"
+	pages := [][]string{{prefix + "index_360p.m3u8", prefix + "index_360p_00001.ts"}, {prefix + "thumb.0000000.jpg"}}
+	var queries []url.Values
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/media" && r.URL.Path != "/media/" {
+			t.Errorf("path %s, want the media bucket", r.URL.Path)
+		}
+		q := r.URL.Query()
+		queries = append(queries, q)
+		page := 0
+		if q.Get("continuation-token") == "next" {
+			page = 1
+		}
+		var b strings.Builder
+		fmt.Fprintf(&b, `<ListBucketResult><Name>media</Name><KeyCount>%d</KeyCount><IsTruncated>%t</IsTruncated>`,
+			len(pages[page]), page == 0)
+		if page == 0 {
+			b.WriteString(`<NextContinuationToken>next</NextContinuationToken>`)
+		}
+		for _, k := range pages[page] {
+			fmt.Fprintf(&b, `<Contents><Key>%s</Key><Size>1</Size></Contents>`, k)
+		}
+		w.Header().Set("Content-Type", "application/xml")
+		_, _ = w.Write([]byte(b.String() + `</ListBucketResult>`))
+	}))
+	defer srv.Close()
+	s := newTestStore(t, testConfig(srv.URL))
+
+	keys, err := s.List(t.Context(), prefix)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := append(slices.Clone(pages[0]), pages[1]...); !slices.Equal(keys, want) {
+		t.Errorf("List() = %v, want %v", keys, want)
+	}
+	if len(queries) != 2 || queries[0].Get("prefix") != prefix || queries[1].Get("prefix") != prefix {
+		t.Errorf("queries = %v, want two pages of prefix %s", queries, prefix)
+	}
+	for _, p := range []string{"media/v1/e1/a1", "other/v1/", "media/", ""} {
+		if _, err := s.List(t.Context(), p); !errors.Is(err, ErrInvalidKey) {
+			t.Errorf("List(%q) error = %v, want ErrInvalidKey", p, err)
+		}
+	}
+	if len(queries) != 2 {
+		t.Errorf("refused prefixes sent %d requests", len(queries)-2)
+	}
+}
+
+// Copy sends one CopyObject in the bucket of both keys that replaces the metadata with the given
+// headers; keys in two buckets or outside the contract are refused before any request, and the
+// errors are classified as for any other call.
+func TestCopy(t *testing.T) {
+	t.Parallel()
+	type sent struct{ method, path, source, directive, contentType, cacheControl string }
+	var got []sent
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		got = append(got, sent{r.Method, r.URL.Path, r.Header.Get("X-Amz-Copy-Source"),
+			r.Header.Get("X-Amz-Metadata-Directive"), r.Header.Get("Content-Type"), r.Header.Get("Cache-Control")})
+		w.Header().Set("Content-Type", "application/xml")
+		if strings.HasSuffix(r.URL.Path, "/denied.ts") {
+			w.WriteHeader(http.StatusForbidden)
+			_, _ = w.Write([]byte(`<Error><Code>AccessDenied</Code></Error>`))
+			return
+		}
+		_, _ = w.Write([]byte(`<CopyObjectResult><ETag>"e"</ETag></CopyObjectResult>`))
+	}))
+	defer srv.Close()
+	s := newTestStore(t, testConfig(srv.URL))
+	const immutable = "max-age=31536000, immutable"
+	const dir = "media/v1/e1/a1/"
+
+	if err := s.Copy(t.Context(), dir+"index_360p_00001.ts", dir+"index_360p_00001.ts", "video/mp2t", immutable); err != nil {
+		t.Fatalf("Copy() in place: %v", err)
+	}
+	if err := s.Copy(t.Context(), dir+"thumb.0000000.jpg", dir+"thumbnail.jpg", "image/jpeg", immutable); err != nil {
+		t.Fatalf("Copy() to another key: %v", err)
+	}
+	if err := s.Copy(t.Context(), dir+"denied.ts", dir+"denied.ts", "video/mp2t", immutable); !errors.Is(err, ErrAccessDenied) {
+		t.Errorf("Copy() refused by storage: error = %v, want ErrAccessDenied", err)
+	}
+	for _, keys := range [][2]string{{"uploads/v1", dir + "x.ts"}, {dir + "x.ts", "uploads/v1"}, {"other/x", "other/x"}} {
+		if err := s.Copy(t.Context(), keys[0], keys[1], "video/mp2t", immutable); !errors.Is(err, ErrInvalidKey) {
+			t.Errorf("Copy(%q, %q) error = %v, want ErrInvalidKey", keys[0], keys[1], err)
+		}
+	}
+
+	want := []sent{
+		{http.MethodPut, "/media/" + dir + "index_360p_00001.ts", "media/" + dir + "index_360p_00001.ts", "REPLACE", "video/mp2t", immutable},
+		{http.MethodPut, "/media/" + dir + "thumbnail.jpg", "media/" + dir + "thumb.0000000.jpg", "REPLACE", "image/jpeg", immutable},
+		{http.MethodPut, "/media/" + dir + "denied.ts", "media/" + dir + "denied.ts", "REPLACE", "video/mp2t", immutable},
+	}
+	if fmt.Sprint(got) != fmt.Sprint(want) {
+		t.Errorf("requests:\n%v\nwant\n%v", got, want)
+	}
+}
+
+// A job record lives in the media bucket, outside media/, and Create writes it once.
+func TestCreateJobRecord(t *testing.T) {
+	t.Parallel()
+	var paths []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		paths = append(paths, r.Method+" "+r.URL.Path+" "+r.Header.Get("If-None-Match"))
+	}))
+	defer srv.Close()
+	s := newTestStore(t, testConfig(srv.URL))
+	f := filepath.Join(t.TempDir(), "record")
+	if err := os.WriteFile(f, []byte(`{"reason":"TRANSCODE_FAILURE_REASON_SOURCE_MISSING"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Create(t.Context(), "transcode-jobs/v1/e1.json", f, "application/json", ""); err != nil {
+		t.Fatal(err)
+	}
+	if want := []string{"PUT /media/transcode-jobs/v1/e1.json *"}; !slices.Equal(paths, want) {
+		t.Errorf("requests = %v, want %v", paths, want)
 	}
 }

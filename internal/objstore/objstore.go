@@ -5,7 +5,7 @@
 // enforces the limit and the file never passes through a service.
 //
 // A key is the contract key verbatim, and its prefix picks the bucket: "uploads/<video_id>" lives
-// in the uploads bucket, "media/<video_id>/..." in the media bucket.
+// in the uploads bucket, "media/<video_id>/..." and "transcode-jobs/..." in the media bucket.
 package objstore
 
 import (
@@ -27,6 +27,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/credentials"
 	"github.com/aws/aws-sdk-go-v2/credentials/endpointcreds"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
+	"github.com/aws/aws-sdk-go-v2/service/s3/types"
 
 	"github.com/anhnvcoder/svp-backend/internal/envcfg"
 
@@ -35,16 +36,19 @@ import (
 	"go.opentelemetry.io/contrib/instrumentation/github.com/aws/aws-sdk-go-v2/otelaws" //nolint:staticcheck // see above
 )
 
-// Key prefixes of the contract; each one maps to its own bucket.
+// Key prefixes of the contract and the bucket each one maps to.
 const (
 	UploadsPrefix = "uploads/"
 	MediaPrefix   = "media/"
+	// JobsPrefix holds the records of transcode jobs, in the media bucket but outside media/: the
+	// CDN does not serve them and deleting a video's media/<video_id>/ leaves them.
+	JobsPrefix = "transcode-jobs/"
 )
 
 var (
-	// ErrInvalidKey is returned for a key (or prefix) outside uploads/ and media/, or naming no
-	// object under them.
-	ErrInvalidKey = errors.New("objstore: key must start with uploads/ or media/ and name an object")
+	// ErrInvalidKey is returned for a key (or prefix) outside uploads/, media/ and transcode-jobs/,
+	// or naming no object under them.
+	ErrInvalidKey = errors.New("objstore: key must start with uploads/, media/ or transcode-jobs/ and name an object")
 	// ErrNotFound is returned when the object (or its bucket) does not exist.
 	ErrNotFound = errors.New("objstore: object not found")
 	// ErrAccessDenied is returned when the credential may not do the operation. It is a
@@ -273,6 +277,13 @@ func New(cfg Config) (*Store, error) {
 	}, nil
 }
 
+// CallCredentials returns the credential that signs calls under cfg, for clients of other AWS
+// services that run with the same identity as the store.
+func CallCredentials(cfg Config) (aws.CredentialsProvider, error) {
+	calls, _, err := newCredentials(cfg)
+	return calls, err
+}
+
 // newCredentials returns the credential providers of cfg.Credentials, one for calls to storage and
 // one for signing forms, checking that exactly the fields of that mode are set.
 func newCredentials(cfg Config) (calls, forms aws.CredentialsProvider, err error) {
@@ -326,7 +337,8 @@ func (s *Store) bucket(key string) (string, error) {
 	switch {
 	case strings.HasPrefix(key, UploadsPrefix) && len(key) > len(UploadsPrefix):
 		return s.uploadsBucket, nil
-	case strings.HasPrefix(key, MediaPrefix) && len(key) > len(MediaPrefix):
+	case strings.HasPrefix(key, MediaPrefix) && len(key) > len(MediaPrefix),
+		strings.HasPrefix(key, JobsPrefix) && len(key) > len(JobsPrefix):
 		return s.mediaBucket, nil
 	default:
 		return "", ErrInvalidKey
@@ -525,6 +537,71 @@ func (s *Store) Exists(ctx context.Context, key string) (bool, error) {
 		return false, classify("list "+key, err)
 	}
 	return len(out.Contents) > 0 && aws.ToString(out.Contents[0].Key) == key, nil
+}
+
+// List returns the key of every object whose key starts with prefix, which must end with "/", in
+// key order.
+func (s *Store) List(ctx context.Context, prefix string) ([]string, error) {
+	bucket, err := s.bucket(prefix)
+	if err != nil {
+		return nil, err
+	}
+	if !strings.HasSuffix(prefix, "/") {
+		return nil, ErrInvalidKey
+	}
+	in := &s3.ListObjectsV2Input{Bucket: aws.String(bucket), Prefix: aws.String(prefix)}
+	if s.listPageSize > 0 {
+		in.MaxKeys = aws.Int32(s.listPageSize)
+	}
+	var keys []string
+	pages := s3.NewListObjectsV2Paginator(s.client, in)
+	for pages.HasMorePages() {
+		page, err := pages.NextPage(ctx)
+		if err != nil {
+			return nil, classify("list "+prefix, err)
+		}
+		for _, obj := range page.Contents {
+			keys = append(keys, aws.ToString(obj.Key))
+		}
+	}
+	return keys, nil
+}
+
+// Copy copies the object at src to dst in the same bucket with new metadata: Content-Type
+// contentType and, unless empty, Cache-Control cacheControl, nothing else kept (MetadataDirective
+// REPLACE). With dst equal to src it rewrites an object's headers in place, which storage only
+// accepts because the metadata is replaced.
+func (s *Store) Copy(ctx context.Context, src, dst, contentType, cacheControl string) error {
+	bucket, err := s.bucket(src)
+	if err != nil {
+		return err
+	}
+	if b, err := s.bucket(dst); err != nil || b != bucket {
+		return ErrInvalidKey
+	}
+	in := &s3.CopyObjectInput{
+		Bucket:            aws.String(bucket),
+		Key:               aws.String(dst),
+		CopySource:        aws.String(copySource(bucket, src)),
+		MetadataDirective: types.MetadataDirectiveReplace,
+		ContentType:       aws.String(contentType),
+	}
+	if cacheControl != "" {
+		in.CacheControl = aws.String(cacheControl)
+	}
+	if _, err := s.client.CopyObject(ctx, in); err != nil {
+		return classify("copy "+src+" to "+dst, err)
+	}
+	return nil
+}
+
+// copySource is the x-amz-copy-source of key in bucket: each path segment URL-encoded.
+func copySource(bucket, key string) string {
+	segs := strings.Split(key, "/")
+	for i, seg := range segs {
+		segs[i] = url.PathEscape(seg)
+	}
+	return bucket + "/" + strings.Join(segs, "/")
 }
 
 // Delete removes key; a key that does not exist is not an error.

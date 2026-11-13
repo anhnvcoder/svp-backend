@@ -99,3 +99,12 @@ Mọi môi trường dùng cùng giao thức và cùng code của client; khác 
   process không khởi động: log ERROR `<service> failed` nêu tên biến và lỗi, thoát mã 1 trước khi listen cổng gRPC; compose
   từ chối dựng container khi biến trống (`${JWT_VERIFY_KEYS:?run make env}`). Chỉ user-service có `JWT_SIGNING_KID`,
   `JWT_SIGNING_KEY`. Đổi khoá: [`jwt-key-rotation.md`](../runbooks/jwt-key-rotation.md).
+- **media-worker chạy một trong hai lệnh con** (đối số của container, value `args` của chart `svp-service`): `serve`
+  (mặc định, ffmpeg) hay `mediaconvert` (AWS Elemental MediaConvert, chỉ EKS;
+  [`transcode.md`](../explanation/transcode.md)). `mediaconvert` đọc mọi biến của `serve` (`KAFKA_BROKERS`, `S3_*`,
+  `WORK_DIR`, `OTEL_*`) và bắt buộc thêm `MEDIACONVERT_QUEUE_ARN` (ARN queue), `MEDIACONVERT_ROLE_ARN` (ARN role job
+  chạy bằng), `TRANSCODE_EVENTS_QUEUE_URL` (URL hàng đợi SQS trạng thái job); cả ba ở region `S3_REGION`, cũng là region
+  của client MediaConvert, SQS, và dùng credential của store (`S3_CREDENTIALS`). Trên EKS chúng đến từ khoá
+  `mediaconvertQueueArn`, `mediaconvertRoleArn`, `transcodeEventsQueueUrl` của hợp đồng cluster. Thiếu, sai dạng hay
+  khác region thì process không khởi động: log ERROR `media-worker failed` nêu tên biến (`… is malformed`,
+  `… is not in the region S3_REGION names`), thoát mã 1. Lệnh con khác thì lỗi `unknown command`.

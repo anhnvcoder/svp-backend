@@ -146,3 +146,4 @@ env khác, không phải mức khác.
 - §2: [0062](0062-ecr-registry-ci-oidc.md): registry ECR, repo phát hành, pull-through cache, quét Inspector, `svp-registry-mirror` thuộc nhóm phải giống ở cả hai env; bộ role CI ECR khác theo thiết kế (stg nhận bản từ `main`, prd chỉ từ `promote-prd`), không phải giảm.
 - §2, §3: [0063](0063-managed-observability.md): đích telemetry, Prometheus agent HA, luật và Alertmanager thuộc nhóm phải giống; retention được giảm ở stg: AMP 31 ngày (prd 150), log group ứng dụng và `aws/spans` 7 ngày (prd 30).
 - §2, §3: [0064](0064-interface-endpoints.md): endpoint interface, private DNS, security group, endpoint policy thuộc nhóm Mạng, phải giống; số AZ đặt ENI được giảm: stg 1, prd bằng số AZ của VPC.
+- §2: [0066](0066-mediaconvert-transcode.md): transcode bằng MediaConvert (queue, tier, giới hạn, role, rule EventBridge, hàng đợi SQS và DLQ, alarm, endpoint `mediaconvert`) thuộc nhóm phải giống; số AZ đặt ENI của endpoint theo 0064.
