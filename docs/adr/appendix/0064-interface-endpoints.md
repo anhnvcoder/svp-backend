@@ -1,4 +1,4 @@
-# Phụ lục ADR-0064: Gọi API AWS từ VPC của stg, prd đi qua endpoint interface có private DNS, một security group chỉ nhận 443 từ VPC, endpoint policy chặn principal ngoài account; ENI ở mọi AZ của prd, một AZ ở stg; NAT chỉ còn cho đích ngoài AWS
+# Phụ lục ADR-0064: Gọi API AWS từ VPC của stg, prd đi qua endpoint interface có private DNS, một security group chỉ nhận 443 từ VPC, endpoint policy chặn principal ngoài account; ENI ở mọi AZ của prd, một AZ ở stg; NAT giữ đích ngoài AWS và vài API AWS
 
 Phụ lục của [ADR-0064](../0064-interface-endpoints.md): phương án, bảng dịch vụ, policy, chi phí, bảng control FSBP, bảng luồng SCP, RCP và nguồn,
 xếp theo §. Mọi nguồn đọc ngày 2026-11-13. Đường dẫn `aws/...` không kèm repo là của `svp-infra`; `<region>` là `ap-southeast-1`.
@@ -9,7 +9,7 @@ xếp theo §. Mọi nguồn đọc ngày 2026-11-13. Đường dẫn `aws/...` 
 | --- | --- | --- | --- | --- | --- |
 | Đường tới API AWS | Không endpoint interface, mọi gọi qua NAT | Hiện hành cho VPC nhỏ, chi phí thấp | $0 theo giờ; không gì mới phải giữ | Mọi gọi rời VPC; không điểm nào đặt policy; dữ liệu $0,059/GB qua NAT; FSBP EC2.10, EC2.55–EC2.57 FAILED | [N14], [N15] |
 | | Chỉ endpoint FSBP đòi (`ec2`, `ecr.api`, `ecr.dkr`, `ssm`) cộng `eks-auth` | Hiện hành | Đạt control, rẻ hơn ~60 % | Secrets Manager, telemetry, STS, SQS vẫn qua NAT: một nửa đường có policy, nửa không | [N2], [N15] |
-| | **Endpoint cho mọi dịch vụ cluster gọi, NAT giữ cho đích ngoài AWS** | Hiện hành, cách của EKS cho private cluster | Mọi gọi API AWS ở trong VPC, một policy; NAT chỉ còn cho đích ngoài AWS | 15 endpoint tính theo giờ mỗi AZ | [N2] |
+| | **Endpoint cho các dịch vụ ở §1, NAT giữ đích ngoài AWS và các API AWS ở §6** | Hiện hành, cách của EKS cho private cluster | Gọi tới các API AWS ở §1 nằm trong VPC, một policy; NAT giữ đích ngoài AWS và các API AWS ở §6 | 15 endpoint tính theo giờ mỗi AZ | [N2] |
 | | VPC cô lập, bỏ NAT | Hiện hành cho môi trường bị quản chặt (Karpenter `isolatedVPC`) | Không đường nào ra Internet | Argo CD cần GitHub, Kyverno cần Sigstore, pull-through cache cần NAT lần kéo đầu: phải thêm mirror git, TUF nội bộ | [N9], [N18] |
 | Nơi đặt endpoint | **Mỗi VPC env một bộ** | Hiện hành | Không Transit Gateway; endpoint gỡ cùng buổi | Hai env hai bộ | — |
 | | Bộ chung ở VPC shared-services qua Transit Gateway và Route 53 Resolver | Hiện hành cho org nhiều VPC | Một bộ cho mọi VPC | Thêm Transit Gateway theo giờ và theo GB, một account mới; lab một VPC mỗi account | — |

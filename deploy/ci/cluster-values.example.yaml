@@ -27,7 +27,8 @@ kafkaBrokers: b-1.svp-stg.kafka.example:9096,b-2.svp-stg.kafka.example:9096
 valkeyHost: master.svp-stg.cache.example
 # Host of the env's private ECR registry, from the root env output of the registry module.
 ecrRegistry: 000000000000.dkr.ecr.ap-southeast-1.amazonaws.com
-# Workspace of Amazon Managed Service for Prometheus; its endpoint is the base of remote write and query.
+# Workspace of Amazon Managed Service for Prometheus made by aws/accounts/<env>, read by the root env into output
+# cluster_values; its endpoint is the base of remote write and query.
 ampWorkspaceId: ws-00000000-0000-0000-0000-000000000000
 ampEndpoint: https://aps-workspaces.ap-southeast-1.amazonaws.com/workspaces/ws-00000000-0000-0000-0000-000000000000/
 # Log group of the application telemetry, from the root env output of the observability module.
