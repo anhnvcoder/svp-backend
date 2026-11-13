@@ -194,3 +194,4 @@ Phụ lục: [`appendix/0059-org-structure-guardrails.md`](appendix/0059-org-str
 ### Chỉnh bởi
 
 - §4, §5, §10: [0061](0061-edge-cloudfront-waf-acm.md): luồng RCP mới (giao log CloudFront v2 vào Log Archive, `dnssec-route53` dùng key KMS, CloudFront VPC origin) qua RCP không ngoại lệ; Internet gateway còn cho NAT và CloudFront VPC origin, không còn NLB; NACL public không còn TCP 443 từ Internet, thêm NACL tầng edge chỉ nhận từ CIDR VPC.
+- §1, §6, §8, §9, §11: [0067](0067-backup-dr.md): account `svp-backup` (đích bản copy) ở OU `Security` theo khuôn `svp-log-archive`, nhận baseline và contact SECURITY như mọi account; `aws/org` bật policy type `BACKUP_POLICY`, trusted access `backup.amazonaws.com`, cross-account backup; tag policy thêm khoá `Backup`, giá trị `backup` của `Stack`; `SvpReadOnly` gán thêm `svp-backup`.

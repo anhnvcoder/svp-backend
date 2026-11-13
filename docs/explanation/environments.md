@@ -19,7 +19,7 @@ Trang không chép số. Giá trị nằm ở:
 
 - **Phải giống:** dịch vụ, version, cấu hình, xác thực và TLS, IAM, mạng, đường tới API, mã hoá, edge, HA của workload nền tảng, loại log và
   giám sát. Khác là lỗi.
-- **Được giảm:** số AZ, cỡ, số lượng, retention, bảo vệ xoá, versioning. Chỉ vì chi phí; stg không mất hành vi cần kiểm.
+- **Được giảm:** số AZ, cỡ, số lượng, retention, bảo vệ xoá. Chỉ vì chi phí; stg không mất hành vi cần kiểm.
 - **Giảm có điều kiện:** stg mất một hành vi (thường là failover); cột "Mất gì → kiểm bù" ghi chỗ kiểm hành vi đó.
 - **Định danh:** tên, account, zone, cổng tunnel, bản phát hành. Khác vì là env khác, không phải mức khác (ADR-0055 §5).
 
@@ -98,6 +98,8 @@ trong cùng thay đổi (ADR-0055 §1).
 | Giữ backup tự động sau khi xoá | `rds_delete_automated_backups` (`<env>.tfvars`) | được giảm | stg xoá cùng instance | Bảo vệ xoá; stg không còn gì sau buổi | — | [RDSDEL] |
 | Deletion protection | `rds_deletion_protection` (`<env>.tfvars`; prd nhấc ở `teardown.tfvars`) | được giảm | stg tắt | Bảo vệ xoá | — | [RDSDEL] |
 | Final snapshot | `rds_skip_final_snapshot` (`<env>.tfvars`) | được giảm | stg bỏ qua | Bảo vệ xoá | — | [RDSDEL] |
+| AWS Backup của RDS, `uploads`, `media`: lịch, selection theo tag, role, vault env, copy sang account `svp-backup` | Backup policy `svp-backup-<env>` (module `org-policies`), `aws/accounts/<env>/backup.tf`, root `aws/backup` | phải giống | như nhau, khác OU gắn policy ([ADR-0067](../adr/0067-backup-dr.md) §4) | Cùng plan, role và đường copy chéo account: diễn tập khôi phục chạy ở stg trước prd | — | [BACKUP] |
+| Retention recovery point, vault lock của bản copy | module `org-policies`, root `aws/backup` | được giảm | stg ngắn hơn, lock hẹp hơn | Retention | — | [BACKUP] |
 | Performance Insights, Database Insights | `rds_performance_insights_enabled` (`<env>.tfvars`) | phải giống | bật ở cả hai | Cùng công cụ đọc tải database | — | [RDSDI] |
 | Retention Performance Insights | `rds_performance_insights_retention_period` (`<env>.tfvars`) | được giảm | cả hai ở mức miễn phí | Retention | — | [RDSDI] |
 | Enhanced monitoring | `rds_monitoring_interval` (`<env>.tfvars`) | phải giống | bật ở cả hai, cùng chu kỳ | Cùng metric hệ điều hành, cùng role IAM | — | [RDSEM] |
@@ -160,7 +162,7 @@ trong cùng thay đổi (ADR-0055 §1).
 | Malware Protection for S3 trên `uploads` | module `media` (`malware-protection.tf`) | phải giống | như nhau ([ADR-0060](../adr/0060-org-detection-logging.md) §6) | Cùng plan, cùng role, cùng tag kết quả trên object | — | [GDMS3] |
 | Data event S3 của trail org | trail `svp-audit` (root `aws/org`) | giảm có điều kiện | chỉ `uploads` (đọc, ghi) và `media` (ghi) của prd | Data event tính theo event; stg không có dữ liệu người dùng thật | Truy vết đọc, ghi object ở stg → không có ở stg; buổi prd kiểm data event có trong bucket trail | [CTDATA] |
 | Xoá bucket còn object | `media_force_destroy` (`<env>.tfvars`; prd nhấc ở `teardown.tfvars`) | được giảm | stg xoá được ngay | Bảo vệ xoá | — | [S3SEC] |
-| Versioning | `media_versioning_enabled` (`<env>.tfvars`) | được giảm | stg tắt | Media stg dựng lại được; bản cũ chỉ tốn chỗ | — | [S3VER] |
+| Versioning | `media_versioning_enabled` (`<env>.tfvars`) | phải giống | bật ở cả hai ([ADR-0067](../adr/0067-backup-dr.md) §4) | AWS Backup chỉ backup bucket có versioning | — | [S3VER] |
 | S3 access log | `media_access_logging_enabled` (`<env>.tfvars`) | phải giống | bật ở cả hai | Cùng log truy cập, cùng bucket log và quyền ghi | — | [S3LOG] |
 | Transcode bằng MediaConvert: queue, tier, giới hạn, role, rule EventBridge, hàng đợi SQS và DLQ, alarm; endpoint `mediaconvert`; lifecycle `transcode-jobs/` | module `transcode`, module `network`, module `media` | phải giống | như nhau ([ADR-0066](../adr/0066-mediaconvert-transcode.md)); compose, k3d chạy ffmpeg ([`transcode.md`](transcode.md)) | Cùng job, quyền, đường trạng thái và alarm: phép kiểm FF-9 và runbook DLQ chạy ở stg trước prd; số AZ đặt ENI của endpoint theo [ADR-0064](../adr/0064-interface-endpoints.md) | — | [MC] |
 
@@ -224,6 +226,7 @@ trong cùng thay đổi (ADR-0055 §1).
 | [S3SEC] | Security best practices for Amazon S3: <https://docs.aws.amazon.com/AmazonS3/latest/userguide/security-best-practices.html> |
 | [S3LOG] | S3 server access logging: <https://docs.aws.amazon.com/AmazonS3/latest/userguide/ServerLogs.html> |
 | [S3VER] | S3 versioning: <https://docs.aws.amazon.com/AmazonS3/latest/userguide/Versioning.html> |
+| [BACKUP] | AWS Backup, Managing AWS Backup resources across multiple AWS accounts: <https://docs.aws.amazon.com/aws-backup/latest/devguide/manage-cross-account.html> |
 | [MC] | AWS Elemental MediaConvert, Working with on-demand queues: <https://docs.aws.amazon.com/mediaconvert/latest/ug/working-with-on-demand-queues.html> |
 | [SRA] | AWS Security Reference Architecture, Log Archive account: <https://docs.aws.amazon.com/prescriptive-guidance/latest/security-reference-architecture/log-archive.html> |
 | [CIS] | Security Hub control EC2.21 (CIS AWS Foundations Benchmark): <https://docs.aws.amazon.com/securityhub/latest/userguide/ec2-controls.html#ec2-21> |

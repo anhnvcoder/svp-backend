@@ -34,8 +34,8 @@ Design notes: docs/explanation/deployment.md.
 {{- $valkeyExternal := include "svp-data.valkeyExternal" . }}
 {{- if not $pgExternal }}
 # Postgres: the database of each service (its pods and its migrate Job), GlitchTip's (its pod and its init Job), the
-# bootstrap Job; the operator reads each instance's status on 8000; Prometheus scrapes the instance's exporter on 9187
-# (PodMonitor svp-pg of chart svp-observability: cnpg_* and the Barman Cloud plugin's barman_cloud_* metrics).
+# bootstrap Job, svp-pg of svp-ops; the operator reads each instance's status on 8000; Prometheus scrapes the instance's
+# exporter on 9187 (PodMonitor svp-pg of chart svp-observability: cnpg_* and the Barman Cloud plugin's barman_cloud_*).
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
@@ -56,6 +56,9 @@ spec:
             matchLabels:
               app.kubernetes.io/name: glitchtip
         {{- include "svp-data.initJob" "pg-bootstrap" | nindent 8 }}
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: svp-ops
       ports:
         - protocol: TCP
           port: 5432
@@ -269,7 +272,8 @@ spec:
         - protocol: TCP
           port: 9096
 ---
-# svp-ops: reached by no pod (kubectl exec goes through the kubelet, not the pod network), reaches Kafka and Valkey.
+# svp-ops: reached by no pod (kubectl exec goes through the kubelet, not the pod network), reaches Kafka, Valkey and
+# Postgres. With RDS the database subnets hold the instances restored from backup too, so svp-pg reaches them as well.
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
@@ -292,3 +296,17 @@ spec:
       ports:
         - protocol: TCP
           port: 6379
+    - to:
+        {{- if $pgExternal }}
+        {{- range .Values.postgres.external.cidrs }}
+        - ipBlock:
+            cidr: {{ . }}
+        {{- end }}
+        {{- else }}
+        - podSelector:
+            matchLabels:
+              cnpg.io/cluster: svp-pg
+        {{- end }}
+      ports:
+        - protocol: TCP
+          port: 5432
