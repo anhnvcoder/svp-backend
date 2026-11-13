@@ -35,7 +35,7 @@ CHAINSAW_VERSION           := v0.2.15
 # the module through the Go module proxy (checked against the checksum database, as go install does) and builds it in
 # its own folder, with the version helmfile --version reports.
 # renovate: datasource=go depName=github.com/helmfile/helmfile
-HELMFILE_VERSION           := v1.8.2
+HELMFILE_VERSION           := v1.8.3
 # actionlint also runs shellcheck on every `run:` script when shellcheck is on PATH: the CI runner has it, a dev
 # machine need not.
 # renovate: datasource=go depName=github.com/rhysd/actionlint
@@ -85,14 +85,14 @@ KYVERNO_CLI_IMAGE := ghcr.io/kyverno/kyverno-cli:v1.19.1@sha256:ced7b2be0b04250c
 # oasdiff compares the spec of a pull request with its base (make api-contract-check), ORAS pushes a new version to
 # GHCR as an OCI artifact on main (deploy/ci/contract.sh); no GitHub Action of either is used.
 # renovate: datasource=docker depName=tufin/oasdiff
-OASDIFF_IMAGE := tufin/oasdiff:v1.34.1@sha256:67a23cfea7d251e2ae34ee703ac8733c5d96bc2e7b90fd0f4d475ec99367b85f
+OASDIFF_IMAGE := tufin/oasdiff:v1.37.0@sha256:ff02af37a254b5199b9d72e7bba93dae5837a9119d59459168d1398893b47aea
 # renovate: datasource=docker depName=ghcr.io/oras-project/oras
 ORAS_IMAGE := ghcr.io/oras-project/oras:v1.3.6@sha256:9cfb578be975b762fd898b9d004243d8003aeb807a3e15b2ed212cdd1326c9eb
 # yq of the steps of images.yml that write svp-gitops (jobs promote and promote-prd, through yq_ of deploy/ci/common.sh),
 # from its official image pinned by digest, run without network: the yq preinstalled on the runner changes with the
 # runner image, unseen by Renovate and unreviewed, and these steps write the deployment repository.
 # renovate: datasource=docker depName=mikefarah/yq
-YQ_IMAGE := mikefarah/yq:4.54.1@sha256:4b3d9475d65571d28cbb19544d3820ec2945e4c8b2f18279394282b8dc3a592e
+YQ_IMAGE := mikefarah/yq:4.54.3@sha256:7834187596ad56fd5a81436114e0b0b9dd54c91bb43946d1f7145b2be5f9c3d2
 # conftest applies the Rego policies of deploy/ci/ignorefile-policies/ (the scan gate's ignore files) and
 # deploy/ci/gitops-tree-policies/ (a tree of svp-gitops), without network. yq above finds a key written twice, which
 # conftest's parser hides.
