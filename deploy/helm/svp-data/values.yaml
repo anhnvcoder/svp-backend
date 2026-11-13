@@ -113,7 +113,7 @@ s3:
   # nothing of the store is rendered here. Postgres archives into s3, so external needs postgres.mode external too.
   mode: cluster
   # The object store, the same image as compose's s3 (RustFS), pinned by the digest of its multi-arch index.
-  image: docker.io/rustfs/rustfs:1.0.4@sha256:ed9210d6411d77ffceb70d94b964a3cb7d225983368bc25bebe01e995293dcc2
+  image: docker.io/rustfs/rustfs:1.0.5@sha256:b81d16a90ee25bd9511280127ca1471788c6e874cf0f0da759645f46b2dc1d74
   storage: 5Gi
   resources:
     requests: {cpu: 100m, memory: 256Mi}
