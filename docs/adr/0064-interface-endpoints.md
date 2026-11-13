@@ -1,4 +1,4 @@
-# 0064. Gọi API AWS từ VPC của stg, prd đi qua endpoint interface có private DNS, một security group chỉ nhận 443 từ VPC, endpoint policy chặn principal ngoài account; ENI ở mọi AZ của prd, một AZ ở stg; NAT chỉ còn cho đích ngoài AWS
+# 0064. Gọi API AWS từ VPC của stg, prd đi qua endpoint interface có private DNS, một security group chỉ nhận 443 từ VPC, endpoint policy chặn principal ngoài account; ENI ở mọi AZ của prd, một AZ ở stg; NAT giữ đích ngoài AWS và vài API AWS
 
 - Trạng thái: Chấp nhận
 - Ngày: 2026-11-13
@@ -25,7 +25,8 @@
 Trạng thái ngành, được, mất, nguồn: [phụ lục](appendix/0064-interface-endpoints.md#phương-án). In đậm là lựa chọn.
 
 - Đường tới API AWS: không endpoint, mọi gọi qua NAT (như hiện có; FSBP EC2.10, EC2.55–EC2.57 FAILED); chỉ endpoint FSBP đòi; **endpoint cho
-  mọi dịch vụ cluster gọi, NAT giữ cho đích ngoài AWS**; VPC cô lập, bỏ NAT (Argo CD cần GitHub, Kyverno cần Sigstore: không được).
+  các dịch vụ ở §1, NAT giữ đích ngoài AWS và các API AWS ở §6**; VPC cô lập, bỏ NAT
+  (Argo CD cần GitHub, Kyverno cần Sigstore: không được).
 - Nơi đặt: **mỗi VPC env một bộ**; bộ endpoint chung ở VPC shared-services qua Transit Gateway (mẫu nhiều VPC; lab một VPC mỗi account).
 - Endpoint policy: mặc định (mọi principal); **chặn principal ngoài account**; thêm vành tài nguyên `aws:ResourceAccount` (vỡ với tài nguyên
   của AWS: tham số SSM công khai Karpenter đọc, bucket layer của ECR).
@@ -33,8 +34,9 @@ Trạng thái ngành, được, mất, nguồn: [phụ lục](appendix/0064-inte
 
 ## Kết quả quyết định
 
-Chọn các phương án in đậm, vì mọi gọi API AWS của cluster đi qua endpoint có policy trong VPC mà pod không đổi gì; NAT chỉ còn cho GitHub,
-registry công khai, Sigstore, Telegram và vài API AWS không có endpoint trong region. Giá trị đủ từng mục, bảng dịch vụ: phụ lục, cùng số §.
+Chọn các phương án in đậm, vì gọi tới các API AWS ở §1 đi qua endpoint có policy trong VPC mà pod không đổi gì; NAT giữ GitHub, registry
+công khai, Sigstore, Telegram và các API AWS ở §6 (không có endpoint ở region, hay có mà §1 không đặt). Giá trị đủ từng mục, bảng dịch vụ:
+phụ lục, cùng số §.
 
 ### 1. Dịch vụ
 
@@ -89,7 +91,7 @@ Dưới ngưỡng chi phí đặt cho thay đổi này; bảng: phụ lục §7.
 
 ### Hệ quả
 
-- Tốt: mọi gọi API AWS của cluster ở trong VPC, qua policy chặn credential ngoài account; FSBP EC2.10, EC2.55–EC2.57 đạt; dữ liệu telemetry
+- Tốt: gọi tới các API AWS ở §1 nằm trong VPC, qua policy chặn credential ngoài account; FSBP EC2.10, EC2.55–EC2.57 đạt; dữ liệu telemetry
   rẻ hơn qua endpoint ($0,01 so với $0,059 mỗi GB qua NAT); Pod Identity, kéo image không phụ thuộc NAT.
 - Xấu: 15 endpoint mỗi env tính theo giờ, khoản cố định lớn nhất của buổi prd trong run; thêm value NetworkPolicy theo nền tảng; stg mất API
   AWS khi AZ đầu hỏng (như NAT của nó); EC2.58, EC2.60 (Incident Manager) FAILED có chủ đích.
