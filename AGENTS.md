@@ -144,6 +144,8 @@ Mọi lệnh chạy từ gốc repo (hay worktree của nó) qua `Makefile`; `ma
 - `make zizmor`: lint bảo mật workflow (zizmor ghim; audit online khi có `GH_TOKEN`); ngoại lệ ở `.github/zizmor.yml`
   ([ADR-0041](docs/adr/0041-github-hardening.md) (g)).
 - `make helm-check`: lint, render mọi chart với `base/`, overlay của bản clone `svp-gitops` và policy Kyverno CLI.
+- `make migration-lint`: squawk trên file migration (`.squawk.toml`); `make migration-drill`: diễn tập đổi tên cột của `internal/dbmigrate` trên
+  1 000 000 dòng, in bảng số đo; chạy khi sửa `services/*/migrations/` ([ADR-0068](docs/adr/0068-zero-downtime-migrations.md), [`schema-change.md`](docs/runbooks/schema-change.md)).
 - `make compose-config`, `make otelcol-validate`, `make slo-check`, `make k6-check`, `make kyverno-test`, `make cloud-check`: kiểm
   cấu hình tĩnh khi sửa phần tương ứng.
 - `make env`, `make up [OBS=lgtm]`, `make smoke`, `make down`: dựng stack compose local và chạy luồng đầu-cuối.

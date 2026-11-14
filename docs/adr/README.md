@@ -157,6 +157,7 @@ Phụ lục: [`appendix/NNNN-<slug>.md`](appendix/NNNN-<slug>.md) (chỉ khi có
 | [0065](0065-argocd-eks-capability.md) | Argo CD trên eks chuyển sang EKS Capability cho Argo CD: AWS chạy và giữ HA, đăng nhập qua IAM Identity Center với vai trò theo nhóm, không tài khoản local; k3d giữ Argo CD tự cài; hiện thực ở thay đổi riêng, tới đó eks giữ hiện trạng | Chấp nhận |
 | [0066](0066-mediaconvert-transcode.md) | Transcode của stg, prd bằng AWS Elemental MediaConvert (tier Basic, queue on-demand) qua lệnh con `media-worker mediaconvert`: Probe trước job, bản ghi job quyết kết quả mỗi version, trạng thái job qua EventBridge và SQS, header đặt ở origin; compose, k3d giữ ffmpeg | Chấp nhận |
 | [0067](0067-backup-dr.md) | Backup và DR của stg, prd: RDS giữ PITR gốc; AWS Backup chụp RDS và S3 hằng ngày theo Backup policy của Organizations, copy sang account `svp-backup` vào vault khoá governance; `uploads` mã hoá SSE-KMS; mất region ngoài phạm vi | Chấp nhận |
+| [0068](0068-zero-downtime-migrations.md) | Migration Postgres không downtime: expand/contract mỗi bước một release, schema phục vụ cả bản trước; `lock_timeout` 2 s ở runner; luật file migration theo khoá; squawk lint trong CI; diễn tập đổi tên cột bằng test Go | Chấp nhận |
 
 ## Chuẩn áp dụng
 

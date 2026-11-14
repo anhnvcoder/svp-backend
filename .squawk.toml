@@ -1,0 +1,49 @@
+pg_version = "17"
+# goose wraps each file in a transaction unless it says `-- +goose NO TRANSACTION`; squawk reads no goose comment,
+# so those files also carry `-- squawk-disable-assume-in-transaction`.
+assume_in_transaction = true
+
+# The migration runner sets lock_timeout on every connection it opens, and sets no statement_timeout (the Job deadline
+# bounds a run), so a SET in each file would only repeat or contradict that.
+excluded_rules = ["require-lock-timeout", "require-statement-timeout"]
+
+# Files applied before the lint existed are never edited (every database that ran them would differ from the file).
+# They ran on tables that were new or nearly empty, and the stg and prd databases start empty. The comment above each
+# entry names the rules that fire in it and whether in Up or in Down; Down only runs locally and in tests.
+excluded_paths = [
+  # Down: ban-drop-table
+  "services/engagement-service/migrations/00001_create_likes.sql",
+  # Up: prefer-bigint-over-int; Down: ban-drop-table
+  "services/engagement-service/migrations/00002_create_view_counts.sql",
+  # Down: ban-drop-table
+  "services/feed-service/migrations/00001_create_feed.sql",
+  # Down: ban-drop-table
+  "services/user-service/migrations/00001_create_users.sql",
+  # Down: ban-drop-table
+  "services/user-service/migrations/00002_create_follows.sql",
+  # Down: ban-drop-table
+  "services/user-service/migrations/00003_create_outbox.sql",
+  # Down: ban-drop-table
+  "services/user-service/migrations/00004_create_refresh_tokens.sql",
+  # Up: adding-not-nullable-field, disallowed-unique-constraint, constraint-missing-not-valid;
+  # Down: ban-drop-function, ban-drop-column
+  "services/user-service/migrations/00005_add_user_profile.sql",
+  # Down: ban-drop-table
+  "services/video-service/migrations/00001_create_videos.sql",
+  # Down: ban-drop-table
+  "services/video-service/migrations/00002_create_outbox.sql",
+  # Up: require-concurrent-index-creation; Down: require-concurrent-index-deletion
+  "services/video-service/migrations/00003_index_uploading_videos.sql",
+  # Down: ban-drop-column
+  "services/video-service/migrations/00004_add_processing_at.sql",
+  # Up: require-concurrent-index-creation; Down: require-concurrent-index-deletion
+  "services/video-service/migrations/00005_index_author_videos.sql",
+  # Up: require-concurrent-index-creation; Down: require-concurrent-index-deletion, ban-drop-column
+  "services/video-service/migrations/00006_add_request_id.sql",
+  # Wrong on purpose, for the rename drill's tests: a RENAME COLUMN that breaks the release before.
+  # Up and Down: renaming-column.
+  "internal/dbmigrate/testdata/rename-naive/*",
+  # Wrong on purpose, for the same tests: a lock wait with no bound, which queues the app's queries behind it.
+  # Down: ban-drop-column.
+  "internal/dbmigrate/testdata/lock-timeout-off/*",
+]

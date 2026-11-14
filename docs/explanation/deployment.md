@@ -481,7 +481,8 @@ chart cấu hình như vậy.
   khoảng 2 giây sau khi pod khởi động (đã đo), và `migrate` lỗi ngay khi bị từ chối kết nối. Container vì vậy được restart trong cùng pod
   (`OnFailure` giữ pod và địa chỉ của nó; pod mới lại đua): ngay lập tức, rồi sau back-off của kubelet 10 giây và 20 giây. Job lỗi khi
   container restart lần thứ ba, khoảng 40 giây sau khi khởi động (đã đo); ba lần restart chừa chỗ cho Postgres ngừng ngắn, và migration
-  còn lỗi sau đó là lỗi thật làm release lỗi.
+  còn lỗi sau đó là lỗi thật làm release lỗi. Mọi kết nối của Job mang `lock_timeout` của runner ([ADR-0068](../adr/0068-zero-downtime-migrations.md) §4),
+  nên một DDL chờ khoá quá hạn lỗi `55P03` thay vì xếp hàng truy vấn của pod cũ sau nó; xử lý ở [`schema-change.md`](../runbooks/schema-change.md).
 - **HPA, PDB, KEDA.** `hpa`: HorizontalPodAutoscaler theo CPU, đọc từ metrics-server mà k3s kèm. Utilization là phần trăm CPU request
   của container, mà mọi release đặt, nên gateway xin 100m scale ra khi pod trung bình 70m. `pdb`: PodDisruptionBudget, chỉ ở nơi luôn có ít
   nhất hai replica chạy: HPA có minimum từ hai trở lên, hay số replica cố định từ hai trở lên không có autoscaler (web; ở overlay prd

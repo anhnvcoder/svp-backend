@@ -95,6 +95,15 @@ liệt kê target):
   chỉnh luật nào có lý do ghi ngay trong file (policy do conftest đọc: namespace theo package, `data.*` do `--data` đưa vào, độ dài
   dòng 200 vì thông điệp là một chuỗi không ngắt được). Không thuộc `make check`; CI chạy ở job `config` ([`ci.md`](ci.md)), hook `pre-commit`
   chạy khi commit đổi `*.rego`.
+- `make migration-lint` ([ADR-0068](../adr/0068-zero-downtime-migrations.md) §8): squawk từ image chính thức `SQUAWK_IMAGE` ghim `tag@sha256`
+  (image chỉ có `linux/amd64`, nên lệnh ghi `--platform`), `--network none`, repo gắn chỉ đọc, lint mọi `services/*/migrations/*.sql` và
+  `internal/dbmigrate/testdata/*/*.sql`; exit khác 0 khi có vấn đề. Luật, luật tắt và migration cũ bị loại trừ (mỗi mục một comment lý do)
+  ở `.squawk.toml`. Không thuộc `make check` (cần Docker); CI chạy ở job `config`. Cách viết file để lint xanh:
+  [`schema-change.md`](../runbooks/schema-change.md).
+- `make migration-drill` (ADR-0068 §11): ba test `TestRenameDrill*` của `internal/dbmigrate` (đổi tên cột theo expand/contract, bản
+  `RENAME COLUMN` một release, chờ khoá quá `lock_timeout`) trên Postgres native với `SVP_DRILL_ROWS=1000000`, `-count=1 -v`, không `-race`
+  (nó làm sai số trễ), cùng `SVP_TEST_POSTGRES_URL`, `SVP_TEST_REDIS_URL` như `make test`; in bảng số đo qua `t.Log`. Số đo một lượt:
+  [phụ lục ADR-0068](../adr/appendix/0068-zero-downtime-migrations.md#số-đo-diễn-tập).
 - `make chainsaw-lint` ([ADR-0050](../adr/0050-bash-to-standard-tools.md) mục 2): kiểm tĩnh các diễn tập Chainsaw dưới
   `deploy/k8s/drills/`, không cần cluster. Mỗi file YAML ở đó phải là đúng một trong ba loại: `chainsaw-test.yaml` (`chainsaw lint
   test`), `.chainsaw.yaml` (`chainsaw lint configuration`), StepTemplate dưới `templates/` (kubeconform `-strict` từ
