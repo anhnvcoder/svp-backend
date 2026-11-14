@@ -283,6 +283,8 @@ jobs:
       - run: make regal-lint
       - run: make conftest-verify
       - run: deploy/ci/scan-gate.sh --check-ignorefile
+      # Pinned squawk in Docker over the migration files, read-only, no network.
+      - run: make migration-lint
       # Image pipeline scripts, which otherwise run only in images.yml (mostly on main), in throwaway repositories with
       # fake gh, cosign and docker: no network, no token. scan-gate-test.sh runs the pinned conftest and yq through
       # Docker; image-gate-test.sh runs the pinned trivy, syft, grype and conftest on small fixtures (no service image,

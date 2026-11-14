@@ -23,7 +23,7 @@ Loại tài liệu (Diátaxis): **reference**, tra cứu khi cần một lệnh 
     merge-base của PR, `main` trước push, hay merge-base với `origin/main` khi dispatch), `api-contract` (luật version của hợp đồng
     REST, [ADR-0033](../adr/0033-svp-web-repo.md) §1: `make api-contract-check BASE=<base>` với base tính như job `buf`, rồi
     `deploy/ci/contract-test.sh`), `config`
-    (đủ lịch sử, `make gitops-clone` và `SVP_GITOPS_DIR` ở `env` của job; `make regal-lint`, `make conftest-verify`, `deploy/ci/scan-gate.sh --check-ignorefile`,
+    (đủ lịch sử, `make gitops-clone` và `SVP_GITOPS_DIR` ở `env` của job; `make regal-lint`, `make conftest-verify`, `deploy/ci/scan-gate.sh --check-ignorefile`, `make migration-lint` (squawk trên file migration, [ADR-0068](../adr/0068-zero-downtime-migrations.md) §8),
     test của script pipeline image trong job giả của Actions và trên máy (`deploy/ci/plan-test.sh`, `image-guard-test.sh` (guard và
     bước của ba composite action, đọc từ file action, docker giả), `image-gate-test.sh` (bước cổng của `image-leg` bằng trivy, syft,
     grype, conftest ghim thật trên fixture `deploy/ci/testdata/image-gate/`), `scan-gate-test.sh`,

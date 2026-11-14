@@ -101,6 +101,9 @@ CONFTEST_IMAGE := openpolicyagent/conftest:v0.71.1@sha256:0e77cdf7c1fcde035f3c57
 # Regal, the linter of the OPA project, for those Rego policies; the image is the one its README gives.
 # renovate: datasource=docker depName=ghcr.io/open-policy-agent/regal
 REGAL_IMAGE := ghcr.io/open-policy-agent/regal:0.43.0@sha256:29460f0ec1340d37f6c0c74bcbd88dd232fd8382c7a2337f0684415bd4c46da1
+# squawk, the Postgres migration linter; its image is amd64 only, so the run below names the platform.
+# renovate: datasource=docker depName=ghcr.io/sbdchd/squawk
+SQUAWK_IMAGE := ghcr.io/sbdchd/squawk:2.72.0@sha256:b7c8c1ad82439744e676c0c0b2447d95ea0866f72ae1f4095d8653dfc89db916
 
 # Tools installed by `go install` land here; the PATH of the caller is not assumed to contain it.
 GOBIN ?= $(shell go env GOPATH)/bin
@@ -122,7 +125,7 @@ SVP_TEST_REDIS_URL ?= redis://127.0.0.1:6379/15
 .DEFAULT_GOAL := help
 
 .PHONY: help tools ci-tools generate generate-go generate-check slo otelcol-validate fmt-check vet lint actionlint buf-lint vulncheck test fuzz \
-	cover check check-go helm-check helm-docs helm-docs-check kyverno-test conftest-verify regal-lint regal-fix chainsaw-lint trivy-config grype renovate-check zizmor api-contract-check hooks web-e2e measure-web measure-upload \
+	cover check check-go helm-check helm-docs helm-docs-check kyverno-test conftest-verify regal-lint regal-fix migration-lint migration-drill chainsaw-lint trivy-config grype renovate-check zizmor api-contract-check hooks web-e2e measure-web measure-upload \
 	web-lighthouse web-sourcemaps docs-check
 
 help: ## List the targets
@@ -335,6 +338,19 @@ regal-lint: ## Regal lint of the Rego policies (deploy/ci/*-policies/, rules in 
 	    -v "$(CURDIR)/$$dir:/p:ro" -v "$(CURDIR)/.regal:/regal:ro" -w /p '$(REGAL_IMAGE)' \
 	    lint . --config-file /regal/config.yaml --fail-level warning --no-color; \
 	done
+
+# squawk over every migration file; rules and excluded files are in .squawk.toml, the repository is mounted read-only.
+# While every file is excluded there squawk finds none to lint, which is not an error here.
+MIGRATION_FILES := $(wildcard services/*/migrations/*.sql internal/dbmigrate/testdata/*/*.sql)
+migration-lint: ## squawk lint of the migration files (services/*/migrations/, dbmigrate testdata, rules in .squawk.toml, SQUAWK_IMAGE, no network, read-only)
+	@env -u DOCKER_DEFAULT_PLATFORM docker run --rm --platform linux/amd64 --user "$$(id -u):$$(id -g)" --network none --read-only \
+	  -v "$(CURDIR):/data:ro" -w /data '$(SQUAWK_IMAGE)' --config .squawk.toml --no-error-on-unmatched-pattern $(MIGRATION_FILES)
+
+# The rename drill's three tests on a million rows (make test runs them on 20 000), with their table of measures.
+# No -race: the race detector would slow the pods' queries and distort the latencies the table reports.
+migration-drill: ## Rename-column drill of internal/dbmigrate on 1 000 000 rows, prints its measures (same test variables as test)
+	SVP_DRILL_ROWS=1000000 SVP_TEST_POSTGRES_URL='$(SVP_TEST_POSTGRES_URL)' SVP_TEST_REDIS_URL='$(SVP_TEST_REDIS_URL)' \
+	  go test -count=1 -v -run '^TestRenameDrill' ./internal/dbmigrate/
 
 # Every YAML file under CHAINSAW_DRILLS is exactly one of three things, and any other is an error (a file nothing checks
 # is not a green one): chainsaw-test.yaml, .chainsaw.yaml, or a StepTemplate under templates/. chainsaw lint (v0.2.15)

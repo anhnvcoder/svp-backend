@@ -7,6 +7,7 @@ import (
 	"net/url"
 	"slices"
 	"strings"
+	"sync"
 	"syscall"
 	"testing"
 	"testing/fstest"
@@ -363,5 +364,209 @@ func TestUpRetriesUntilDatabaseReachable(t *testing.T) {
 	// user info instead.
 	if strings.Contains(logs.String(), u.User.String()+"@") {
 		t.Errorf("log leaks the URL's user info:\n%s", logs)
+	}
+}
+
+// lockHold is how long holdLock keeps its transaction open: well over the runner's 2 s lock_timeout,
+// well under the 10 s the migrations below set for themselves.
+const lockHold = 4 * time.Second
+
+// holdLock runs stmt in a transaction on a connection of its own and commits it lockHold later. It
+// returns once stmt ran, with a function that waits for the commit and returns when it was sent.
+func holdLock(t *testing.T, pool *pgxpool.Pool, stmt string) func() time.Time {
+	t.Helper()
+	tx, err := pool.Begin(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tx.Exec(t.Context(), stmt); err != nil {
+		t.Fatal(err)
+	}
+	sent := make(chan time.Time, 1)
+	go func() {
+		time.Sleep(lockHold)
+		// Taken before Commit: the server releases the lock only after it reads the commit.
+		at := time.Now()
+		if err := tx.Commit(context.Background()); err != nil {
+			t.Errorf("commit the locking transaction: %v", err)
+		}
+		sent <- at
+	}()
+	committed := sync.OnceValue(func() time.Time { return <-sent })
+	// A test that fails early still ends the transaction before its database is dropped.
+	t.Cleanup(func() { committed() })
+	return committed
+}
+
+// upAfterCommit runs Up while holdLock's transaction is open and checks that Up waited for it.
+func upAfterCommit(t *testing.T, url string, fsys fstest.MapFS, committed func() time.Time) {
+	t.Helper()
+	if err := dbmigrate.Up(t.Context(), url, fsys); err != nil {
+		t.Fatalf("Up() = %v", err)
+	}
+	done := time.Now()
+	if at := committed(); done.Before(at) {
+		t.Errorf("Up() returned at %v, before the locking transaction committed at %v", done, at)
+	}
+}
+
+const addNameWithLocalTimeout = `-- +goose Up
+SET LOCAL lock_timeout = '10s';
+ALTER TABLE items ADD COLUMN name text;
+-- +goose Down
+ALTER TABLE items DROP COLUMN name;
+`
+
+const addNameNoTransactionTimeout = `-- +goose NO TRANSACTION
+-- +goose Up
+SET lock_timeout = '10s';
+ALTER TABLE items ADD COLUMN name text;
+RESET lock_timeout;
+-- +goose Down
+ALTER TABLE items DROP COLUMN name;
+`
+
+const recordLockTimeout = `-- +goose Up
+CREATE TABLE seen AS SELECT current_setting('lock_timeout') AS lock_timeout;
+-- +goose Down
+DROP TABLE seen;
+`
+
+// TestUpMigrationSetsLocalLockTimeout: a migration in a transaction outwaits the runner's bound with
+// SET LOCAL.
+func TestUpMigrationSetsLocalLockTimeout(t *testing.T) {
+	t.Parallel()
+	pool := pgtest.New(t, "svp_dbmigrate_local_timeout_test", fstest.MapFS{"00001_create_items.sql": file(createItems)})
+	committed := holdLock(t, pool, "LOCK TABLE items IN ACCESS SHARE MODE")
+	upAfterCommit(t, pool.Config().ConnString(), fstest.MapFS{
+		"00001_create_items.sql": file(createItems),
+		"00002_add_name.sql":     file(addNameWithLocalTimeout),
+	}, committed)
+	if got := strings.Join(columns(t, pool), ","); got != "id,name" {
+		t.Errorf("columns = %s, want id,name", got)
+	}
+}
+
+// TestUpNoTransactionFileSetsAndResetsLockTimeout: a NO TRANSACTION file outwaits the runner's bound
+// with SET, and after its RESET the next migration of the same Up has the runner's bound again.
+func TestUpNoTransactionFileSetsAndResetsLockTimeout(t *testing.T) {
+	t.Parallel()
+	pool := pgtest.New(t, "svp_dbmigrate_notx_timeout_test", fstest.MapFS{"00001_create_items.sql": file(createItems)})
+	committed := holdLock(t, pool, "LOCK TABLE items IN ACCESS SHARE MODE")
+	upAfterCommit(t, pool.Config().ConnString(), fstest.MapFS{
+		"00001_create_items.sql": file(createItems),
+		"00002_add_name.sql":     file(addNameNoTransactionTimeout),
+		"00003_record.sql":       file(recordLockTimeout),
+	}, committed)
+	if got := strings.Join(columns(t, pool), ","); got != "id,name" {
+		t.Errorf("columns = %s, want id,name", got)
+	}
+	var seen string
+	if err := pool.QueryRow(t.Context(), "SELECT lock_timeout FROM seen").Scan(&seen); err != nil {
+		t.Fatal(err)
+	}
+	if seen != "2s" {
+		t.Errorf("lock_timeout in the migration after the NO TRANSACTION file = %q, want 2s", seen)
+	}
+}
+
+// indexConcurrently follows the file rule for an index on a table that exists: its own lock bound,
+// and a DROP that clears an INVALID index left by a failed run.
+const indexConcurrently = `-- +goose NO TRANSACTION
+-- squawk-disable-assume-in-transaction
+-- +goose Up
+SET lock_timeout = '10s';
+DROP INDEX CONCURRENTLY IF EXISTS items_name_key;
+CREATE UNIQUE INDEX CONCURRENTLY IF NOT EXISTS items_name_key ON items (name);
+RESET lock_timeout;
+-- +goose Down
+DROP INDEX CONCURRENTLY IF EXISTS items_name_key;
+`
+
+var withIndex = fstest.MapFS{
+	"00001_create_items.sql": file(createItems),
+	"00002_add_name.sql":     file(addName),
+	"00003_index_name.sql":   file(indexConcurrently),
+}
+
+// nameIndexValid reports whether items_name_key exists and is valid.
+func nameIndexValid(t *testing.T, pool *pgxpool.Pool) (exists, valid bool) {
+	t.Helper()
+	err := pool.QueryRow(t.Context(),
+		"SELECT count(*) = 1, coalesce(bool_and(indisvalid), false) FROM pg_index WHERE indexrelid = to_regclass('items_name_key')",
+	).Scan(&exists, &valid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return exists, valid
+}
+
+// TestUpIndexConcurrentlyReruns: a CREATE INDEX CONCURRENTLY that fails leaves an INVALID index, and
+// the next Up of the same file replaces it with a valid one.
+func TestUpIndexConcurrentlyReruns(t *testing.T) {
+	t.Parallel()
+	pool := pgtest.New(t, "svp_dbmigrate_cic_rerun_test", fstest.MapFS{
+		"00001_create_items.sql": file(createItems),
+		"00002_add_name.sql":     file(addName),
+	})
+	url := pool.Config().ConnString()
+	if _, err := pool.Exec(t.Context(), "INSERT INTO items VALUES (1, 'a'), (2, 'a')"); err != nil {
+		t.Fatal(err)
+	}
+	if err := dbmigrate.Up(t.Context(), url, withIndex); err == nil {
+		t.Fatal("Up() = nil with duplicate names, want a unique violation")
+	}
+	if exists, valid := nameIndexValid(t, pool); !exists || valid {
+		t.Fatalf("after the failed Up, index exists = %v, valid = %v; want an INVALID index left", exists, valid)
+	}
+
+	if _, err := pool.Exec(t.Context(), "UPDATE items SET name = 'b' WHERE id = 2"); err != nil {
+		t.Fatal(err)
+	}
+	if err := dbmigrate.Up(t.Context(), url, withIndex); err != nil {
+		t.Fatalf("Up() after the failed run = %v", err)
+	}
+	if exists, valid := nameIndexValid(t, pool); !exists || !valid {
+		t.Errorf("index exists = %v, valid = %v; want a valid index", exists, valid)
+	}
+}
+
+// TestUpIndexConcurrentlyWaitsForWriters: CREATE INDEX CONCURRENTLY waits for a transaction that has
+// written to the table, longer than the runner's bound, and builds a valid index once it commits.
+func TestUpIndexConcurrentlyWaitsForWriters(t *testing.T) {
+	t.Parallel()
+	pool := pgtest.New(t, "svp_dbmigrate_cic_wait_test", fstest.MapFS{
+		"00001_create_items.sql": file(createItems),
+		"00002_add_name.sql":     file(addName),
+	})
+	// The open INSERT holds ROW EXCLUSIVE, which conflicts with the SHARE lock CIC waits for.
+	committed := holdLock(t, pool, "INSERT INTO items VALUES (1, 'a')")
+	upAfterCommit(t, pool.Config().ConnString(), withIndex, committed)
+	if exists, valid := nameIndexValid(t, pool); !exists || !valid {
+		t.Errorf("index exists = %v, valid = %v; want a valid index", exists, valid)
+	}
+}
+
+func TestUpLogsMigrationSettings(t *testing.T) {
+	pool := pgtest.New(t, "svp_dbmigrate_settings_test", fstest.MapFS{"00001_create_items.sql": file(createItems)})
+	logs := pgretrytest.CaptureDefaultLog(t)
+	if err := dbmigrate.Up(t.Context(), pool.Config().ConnString(), fstest.MapFS{"00001_create_items.sql": file(createItems)}); err != nil {
+		t.Fatalf("Up() = %v", err)
+	}
+	var settings struct {
+		Level       string `json:"level"`
+		LockTimeout string `json:"lock_timeout"`
+	}
+	n := 0
+	for line := range strings.Lines(logs.String()) {
+		if strings.Contains(line, `"msg":"migration settings"`) {
+			n++
+			if err := json.Unmarshal([]byte(line), &settings); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	if n != 1 || settings.Level != "INFO" || settings.LockTimeout != "2s" {
+		t.Errorf("logged %d settings lines, last %+v; want one INFO line with lock_timeout 2s:\n%s", n, settings, logs)
 	}
 }

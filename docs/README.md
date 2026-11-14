@@ -11,7 +11,7 @@ Mục lục theo [Diátaxis](https://diataxis.fr): mỗi tài liệu thuộc m�
 ## How-to: làm một việc cụ thể
 
 - [`runbooks/`](runbooks/): một runbook cho mỗi cảnh báo mức page, sự cố đã gặp và quy trình tay (dựng `svp-gitops`, `svp-frontend`,
-  `svp-infra`, đổi khoá JWT, phục hồi Postgres, phân loại cảnh báo bảo mật AWS). Mục lục và mẫu ở [`runbooks/README.md`](runbooks/README.md).
+  `svp-infra`, đổi khoá JWT, phục hồi Postgres, đổi schema không downtime, phân loại cảnh báo bảo mật AWS). Mục lục và mẫu ở [`runbooks/README.md`](runbooks/README.md).
 
 ## Reference: tra cứu
 
