@@ -252,6 +252,12 @@ Mục 7 cũ ("Đề xuất xem lại") nguyên văn; việc còn mở chuyển v
   khi tài khoản bị dò (mục 6): đọc metric của lớp ở buổi stg; (2) rescan hằng ngày và Kyverno vẫn chỉ chặn CRITICAL, nên
   HIGH có bản vá công bố sau ngày build chỉ hiện ở code scanning tới khi Renovate bump; (3) chân image của
   `svp-frontend` theo luật mới khi kéo action `image-leg` mới.
+- **Cờ chi phí của dịch vụ AWS (2026-11-14):** stg tắt Security Hub CSPM, Config, Inspector ECR và chỉ dựng AMG trong buổi theo
+  `aws/paid-features.json` của `svp-infra` (ORG-6, một dòng ở mục 6). Bề mặt mới là rule `svp-security-guardduty-findings` và role
+  `svp-security-guardduty-forwarder` ở `svp-security`, SSM parameter `/svp/<env>/grafana-workspace-id` mà root env đọc; prd và bốn account
+  dùng chung không đổi. [ADR-0071](../adr/0071-paid-features.md) chỉnh ADR-0055, 0060, 0062, 0063. Đáng xem lại: (1) email finding
+  GuardDuty của stg đi đường `us-east-1` là dòng chung của rule `notify`; (2) digest mới ở stg chỉ có quét cơ bản tới khi promote;
+  (3) cờ đặt cho prd hay account dùng chung chỉ bị chặn bởi review của PR và `plan`; khi áp chỉ phần Config sinh email.
 - **Đề xuất (không bắt buộc), giai đoạn 2:** thêm `etag` (hoặc checksum) của file gốc vào `VideoUploaded`, lấy từ lần `HEAD`
   ở `CompleteUpload`; worker tải file với điều kiện `If-Match` theo giá trị đó. Đóng được UP-2 (file bị thay giữa lúc kiểm và
   lúc đọc). Đây là thêm field nên không phá contract (quy tắc versioning ở

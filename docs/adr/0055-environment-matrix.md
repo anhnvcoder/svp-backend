@@ -118,25 +118,11 @@ env khác, không phải mức khác.
 
 ## Nguồn
 
-Đọc 2026-11-11.
-
-- [N1] The Twelve-Factor App, X. Dev/prod parity: <https://12factor.net/dev-prod-parity>
-- [N2] AWS Well-Architected, REL10-BP01: <https://docs.aws.amazon.com/wellarchitected/latest/reliability-pillar/rel_fault_isolation_multiaz_region_system.html>
-- [N3] AWS Well-Architected, Cost Optimization Pillar: <https://docs.aws.amazon.com/wellarchitected/latest/cost-optimization-pillar/welcome.html>
-- [N4] NAT gateway basics: <https://docs.aws.amazon.com/vpc/latest/userguide/nat-gateway-basics.html>
-- [N5] RDS DB instance class types: <https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/Concepts.DBInstanceClass.Types.html>
-- [N6] RDS Multi-AZ: <https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/Concepts.MultiAZSingleStandby.html>
-- [N7] MSK best practices: <https://docs.aws.amazon.com/msk/latest/developerguide/bestpractices.html>
-- [N8] ElastiCache Multi-AZ: <https://docs.aws.amazon.com/AmazonElastiCache/latest/dg/AutoFailover.html>
-- [N9] EKS cluster endpoint: <https://docs.aws.amazon.com/eks/latest/userguide/cluster-endpoint.html>
-- [N10] EKS Best Practices, Auditing and logging: <https://docs.aws.amazon.com/eks/latest/best-practices/auditing-and-logging.html>
-- [N11] EKS Best Practices, Data encryption: <https://docs.aws.amazon.com/eks/latest/best-practices/data-encryption-and-secrets-management.html>
-- [N12] VPC Flow Logs: <https://docs.aws.amazon.com/vpc/latest/userguide/flow-logs.html>
-- [N13] Gateway endpoints for S3: <https://docs.aws.amazon.com/vpc/latest/privatelink/vpc-endpoints-s3.html>
-- [N14] Karpenter disruption: <https://karpenter.sh/docs/concepts/disruption/>
-- [N15] Modifying an ElastiCache cluster: <https://docs.aws.amazon.com/AmazonElastiCache/latest/dg/Clusters.Modify.html>
+Đọc 2026-11-11; [N1]–[N15] ở phụ lục.
 
 ## Thông tin thêm
+
+Phụ lục: [`appendix/0055-environment-matrix.md`](appendix/0055-environment-matrix.md) (nguồn).
 
 ### Chỉnh bởi
 
@@ -148,3 +134,4 @@ env khác, không phải mức khác.
 - §2, §3: [0064](0064-interface-endpoints.md): endpoint interface, private DNS, security group, endpoint policy thuộc nhóm Mạng, phải giống; số AZ đặt ENI được giảm: stg 1, prd bằng số AZ của VPC.
 - §2: [0066](0066-mediaconvert-transcode.md): transcode bằng MediaConvert (queue, tier, giới hạn, role, rule EventBridge, hàng đợi SQS và DLQ, alarm, endpoint `mediaconvert`) thuộc nhóm phải giống; số AZ đặt ENI của endpoint theo 0064.
 - §2, §3: [0067](0067-backup-dr.md): versioning của hai bucket của module `media` thành phải giống (backup S3 cần versioning; stg bật `media_versioning_enabled`); AWS Backup (Backup policy, vault env, role, opt-in, key vault, alarm) và SSE-KMS của `uploads` thuộc nhóm phải giống; retention recovery point và vault lock được giảm ở stg (2 ngày, lock 1–7; prd 35, lock 7–35).
+- §1, §2, §6: [0071](0071-paid-features.md): luật "stg chạy cùng dịch vụ với prd" thành "stg cùng kiểu prd; phần tốn tiền không cần để chạy theo khối cờ `aws/paid-features.json` của `svp-infra`": AMG của stg chỉ có trong buổi, Inspector ECR (thay bằng quét cơ bản ECR), Security Hub CSPM, Config của stg tắt; prd và bốn account dùng chung giữ mọi dịch vụ; cờ là dữ liệu đọc qua module `paid-features`, không `if env`.
