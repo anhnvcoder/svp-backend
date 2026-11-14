@@ -34,6 +34,7 @@ dịch vụ, tiêu đề, account, region. Phân loại theo nhóm của rule:
 | Bị guardrail từ chối | `svp-security-denied-iam`, `svp-security-denied-detection`, `svp-security-denied-storage` | mã lỗi `AccessDenied…` hay `Client.UnauthorizedOperation` | Ai đó thử việc mà `svp-protect-baseline`, `svp-deny-iam-users` chặn: tạo IAM user, access key, tắt dịch vụ phát hiện, đổi S3 BPA, EBS mặc định, key `alias/svp-ebs`. Guardrail đã giữ; câu hỏi là ai thử và vì sao |
 | Đổi quản trị | `svp-security-admin-iam`, `svp-security-admin-kms-s3`, `svp-security-admin-sso` (management, `svp-log-archive`, `svp-security`) | lệnh IAM, KMS, S3, Identity Center, không mã lỗi | IAM, key, bucket hay permission set của ba account không chạy workload đổi; hợp lệ khi đang `apply` root cấp org |
 | Finding | `svp-security-findings` | `svp-security finding HIGH` hay `CRITICAL` | GuardDuty thấy hành vi đáng ngờ (credential dùng lạ, trao đổi với địa chỉ độc hại, malware), hay Access Analyzer thấy tài nguyên chia sẻ ra ngoài org |
+| Finding của account `security_hub` `off` | `svp-security-guardduty-findings` | `svp-security finding <mức> GuardDuty: <tiêu đề>, account <id> region <region>`; finding của `us-east-1` đến dưới dạng dòng chung `svp-security: GuardDuty Finding …` của rule `svp-security-notify` | GuardDuty thấy hành vi đáng ngờ ở account không có Security Hub (stg): finding mức HIGH, CRITICAL của account đó chỉ tới qua rule này, không qua `svp-security-findings`. Ý nghĩa như dòng Finding |
 
 Người dùng của lab không thấy gì: cảnh báo không đổi đường request. Tác động là ở account: credential, log hay dữ liệu có thể đang bị dùng.
 Control FSBP, CIS bị FAILED không gửi email; đọc định kỳ ở mục [Đọc bảng Security Hub định kỳ](#đọc-bảng-security-hub-định-kỳ).
@@ -46,9 +47,10 @@ AWS (người học chạy), theo thứ tự:
 
 ```sh
 # 1. Có apply nào của người học đang chạy hay vừa chạy không? Có thì so tên lệnh trong email với plan đã đọc.
-# 2. Finding mới, còn mở, HIGH và CRITICAL của mọi account (Security Hub gom us-east-1 về region nhà)
+# 2. Finding mới, còn mở, HIGH và CRITICAL của mọi account có Security Hub (gom us-east-1 về region nhà);
+#    account có cờ `security_hub` = `off` (stg) không có finding ở đây: xem ở bước 3 (GuardDuty)
 sec securityhub get-findings --filters '{"SeverityLabel":[{"Value":"HIGH","Comparison":"EQUALS"},{"Value":"CRITICAL","Comparison":"EQUALS"}],"RecordState":[{"Value":"ACTIVE","Comparison":"EQUALS"}],"WorkflowStatus":[{"Value":"NEW","Comparison":"EQUALS"}]}' --sort-criteria Field=UpdatedAt,SortOrder=desc --query 'Findings[].[UpdatedAt,Severity.Label,ProductName,AwsAccountId,Region,Title,Id,ProductArn]' --output text --max-items 20
-# Bước 3, 4 chạy ở region của finding (cột Region ở bước 2)
+# Bước 3, 4 chạy ở region của finding (cột Region ở bước 2; account `off`: region trong email)
 FR=ap-southeast-1   # hay us-east-1
 fr() { AWS_PROFILE=anhnv-security-ro aws --region "$FR" "$@"; }
 # 3. Chi tiết finding GuardDuty

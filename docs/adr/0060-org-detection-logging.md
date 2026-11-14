@@ -187,8 +187,7 @@ không analyzer truy cập không dùng.
 ## Nguồn
 
 Đọc 2026-11-12; đủ [N1]–[N29] ở phụ lục. [N4] <https://docs.aws.amazon.com/guardduty/latest/ug/guardduty_exportfindings.html>,
-[N5] <https://docs.aws.amazon.com/securityhub/latest/userguide/central-configuration-intro.html>,
-[N21] <https://docs.aws.amazon.com/awscloudtrail/latest/userguide/cloudtrail-event-reference-aws-console-sign-in-events.html>.
+[N5] <https://docs.aws.amazon.com/securityhub/latest/userguide/central-configuration-intro.html>.
 
 ## Thông tin thêm
 
@@ -198,3 +197,4 @@ Phụ lục: [`appendix/0060-org-detection-logging.md`](appendix/0060-org-detect
 
 - §7: [0061](0061-edge-cloudfront-waf-acm.md): thêm bucket `svp-cloudfront-<log>-us-east-1` (log CloudFront v2, khuôn bucket log WAF, key `us-east-1`) cùng delivery destination mỗi env và policy của nó ở `us-east-1`; `SvpLogReader` đọc bucket đó.
 - §1–§4, §12: [0067](0067-backup-dr.md): `svp-backup` nhận GuardDuty, Security Hub, Config, Inspector như mọi account thành viên; chi phí liên tục thêm ~$2,2 mỗi tháng cho account này.
+- §3, §4, §10, §12: [0071](0071-paid-features.md): Security Hub CSPM (configuration policy `svp-security-off`) và Config của từng account theo cờ `security_hub`, `config_recording` của `aws/paid-features.json` (stg tắt, account khác bật; `svp-security` không tắt được Security Hub); rule `svp-security-guardduty-findings` ở hai region của `svp-security` gửi email finding GuardDuty mức ≥ 7 của account có `security_hub` = `off`; chi phí liên tục bớt ~$2,1 mỗi tháng (stg).

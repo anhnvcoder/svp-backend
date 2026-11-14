@@ -3,6 +3,8 @@
 Trang này trả lời: tín hiệu nào (trace, metric, log, profile, lỗi, số đo trình duyệt) đi từ đâu tới đâu, ở compose và ở k3d khác
 nhau ra sao, và web được quan sát thế nào mà không lộ dữ liệu người dùng. SLO và cảnh báo ở [`reliability.md`](reliability.md#slo);
 lệnh ở [`reference/compose.md`](../reference/compose.md), [`reference/k8s.md`](../reference/k8s.md).
+Trên EKS, dashboard ở Amazon Managed Grafana ([ADR-0063](../adr/0063-managed-observability.md)); workspace của stg chỉ có trong buổi
+(cờ `managed_grafana`, [`paid-features.md`](paid-features.md)), còn metric ở AMP và log ở CloudWatch giữ qua các buổi.
 
 ## Compose
 
