@@ -79,7 +79,7 @@ KAFKA_VALKEY_PASSWORD_VARS := SVP_KAFKA_ADMIN_PASSWORD SVP_KAFKA_KEDA_PASSWORD S
 # cluster gives it to the web pods in Secret svp/web-env (deploy/k8s/secrets.sh).
 WEB_KEY_VARS := NEXT_SERVER_ACTIONS_ENCRYPTION_KEY
 
-.PHONY: env env-required local-ca local-files obs-valid obs-exclusive k3d-exclusive db-bootstrap glitchtip-init up down clean-data ps logs compose-config compose-hash slo-check smoke test-stack drill-obs-threats
+.PHONY: env env-required local-ca local-files obs-valid obs-exclusive k3d-exclusive db-bootstrap glitchtip-init up down clean-data ps logs compose-config compose-hash slo-check smoke transcode-timing test-stack drill-obs-threats
 
 # .env is read with the strict rule of deploy/observability/glitchtip/dotenv.sh, the same as glitchtip-init: a line it
 # refuses stops make env, naming the variable, before anything is written.
@@ -217,6 +217,12 @@ slo-check: ## promtool: check the Prometheus config and alert rules, run the rul
 
 smoke: ## Through the gateway at SMOKE_URL: register, log in, follow, upload to READY, play HLS, feed, like and view, unfollow
 	deploy/compose/smoke.sh $(SMOKE_URL)
+
+# Like smoke, it deletes the per-IP register rate limit keys in Valkey db 10 first: lab only.
+CLIP ?=
+N ?=
+transcode-timing: ## Through the gateway at SMOKE_URL: upload the video CLIP=<file> N=<n> times, print seconds from complete to READY per upload, then p50 and max (LOCAL LAB ONLY: deletes the register rate limit keys in Valkey db 10)
+	deploy/compose/transcode-timing.sh $(SMOKE_URL) '$(CLIP)' '$(N)'
 
 # The observability drill on the running stack of `make up OBS=lgtm` (deploy/compose/drills/). It stops user-service
 # and recreates the gateway with a drill-only setting, and every service runs again with its defaults when it ends,

@@ -92,6 +92,10 @@ Loại tài liệu (Diátaxis): **reference**, tra cứu khi cần một lệnh 
     ACM công khai (bỏ `CURL_CA_BUNDLE`).
   - `make eks-seed CONTEXT=… DOMAIN=<domain>`: `deploy/k8s/eks-seed.sh`, 4 user × 8 video ngắn qua API công khai, chờ mọi video
     `READY`, `GET /feed/explore` phải có ≥ 30 (dữ liệu cho k6 profile `cloud`).
+  - `make eks-transcode-timing CONTEXT=… DOMAIN=<domain> CLIP=<file> N=<n>`:
+    `deploy/compose/transcode-timing.sh https://api.<domain>` với `SVP_STACK=eks` (script và output ở
+    [`compose.md`](compose.md)): đo giây từ complete tới `READY` của từng lần upload qua MediaConvert; xoá khoá rate
+    limit đăng ký như `eks-smoke`.
   - `make eks-rl-reset CONTEXT=…`: chỉ xoá khoá rate limit đăng ký như trên, chạy trước mỗi bậc k6 (pod sau có thể nhận lại IP của
     pod trước).
   - `S3_CREDENTIALS` của video-service, media-worker: `static` (mặc định, `S3_ACCESS_KEY_ID`, `S3_SECRET_ACCESS_KEY`) hay `container`
@@ -103,7 +107,10 @@ Loại tài liệu (Diátaxis): **reference**, tra cứu khi cần một lệnh 
     `target_group_arn` của module `edge`) và `edgeCidrs` (danh sách CIDR của subnet edge); hai khoá của MSK, ElastiCache: `kafkaBrokers`, chuỗi
     `host:9096,host:9096,…` là output `bootstrap_brokers` của module `msk`, và `valkeyHost`, host không cổng là `primary_endpoint_address` của module
     `elasticache`, mà `platforms/eks/*.values.tpl` đọc để đặt `KAFKA_BROKERS`, host của Valkey trong `REDIS_URL`, `kafka.brokers` và `valkey.host`
-    của `svp-data`, `SVP_OTELCOL_KAFKA_BROKERS` của Collector); values đọc theo thứ tự `base/` <
+    của `svp-data`, `SVP_OTELCOL_KAFKA_BROKERS` của Collector; ba khoá của transcode: `mediaconvertQueueArn`,
+    `mediaconvertRoleArn`, `transcodeEventsQueueUrl`, output `queue_arn`, `role_arn`, `events_queue_url` của module
+    `transcode`, mà `platforms/eks/media-worker.values.tpl` đọc để đặt ba biến của lệnh con `mediaconvert`
+    ([`environment.md`](environment.md#biến-và-hành-vi-khởi-động-của-service))); values đọc theo thứ tự `base/` <
     `platforms/<platform>/<tên>.yaml` < `envs/<env>/` < `envs/<env>/images/` < `valuesObject` sinh từ
     `platforms/<platform>/<tên>.values.tpl`; Argo CD (không là component) đọc `base/argo-cd.yaml` rồi
     `platforms/<platform>/argo-cd.yaml` khi có (`gitops.sh` cài trên k3d, `gitops-check.sh` render cùng thứ tự); revision không có

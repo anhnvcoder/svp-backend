@@ -162,6 +162,7 @@ trong cùng thay đổi (ADR-0055 §1).
 | Xoá bucket còn object | `media_force_destroy` (`<env>.tfvars`; prd nhấc ở `teardown.tfvars`) | được giảm | stg xoá được ngay | Bảo vệ xoá | — | [S3SEC] |
 | Versioning | `media_versioning_enabled` (`<env>.tfvars`) | được giảm | stg tắt | Media stg dựng lại được; bản cũ chỉ tốn chỗ | — | [S3VER] |
 | S3 access log | `media_access_logging_enabled` (`<env>.tfvars`) | phải giống | bật ở cả hai | Cùng log truy cập, cùng bucket log và quyền ghi | — | [S3LOG] |
+| Transcode bằng MediaConvert: queue, tier, giới hạn, role, rule EventBridge, hàng đợi SQS và DLQ, alarm; endpoint `mediaconvert`; lifecycle `transcode-jobs/` | module `transcode`, module `network`, module `media` | phải giống | như nhau ([ADR-0066](../adr/0066-mediaconvert-transcode.md)); compose, k3d chạy ffmpeg ([`transcode.md`](transcode.md)) | Cùng job, quyền, đường trạng thái và alarm: phép kiểm FF-9 và runbook DLQ chạy ở stg trước prd; số AZ đặt ENI của endpoint theo [ADR-0064](../adr/0064-interface-endpoints.md) | — | [MC] |
 
 ## Secret, IAM và alarm
 
@@ -223,6 +224,7 @@ trong cùng thay đổi (ADR-0055 §1).
 | [S3SEC] | Security best practices for Amazon S3: <https://docs.aws.amazon.com/AmazonS3/latest/userguide/security-best-practices.html> |
 | [S3LOG] | S3 server access logging: <https://docs.aws.amazon.com/AmazonS3/latest/userguide/ServerLogs.html> |
 | [S3VER] | S3 versioning: <https://docs.aws.amazon.com/AmazonS3/latest/userguide/Versioning.html> |
+| [MC] | AWS Elemental MediaConvert, Working with on-demand queues: <https://docs.aws.amazon.com/mediaconvert/latest/ug/working-with-on-demand-queues.html> |
 | [SRA] | AWS Security Reference Architecture, Log Archive account: <https://docs.aws.amazon.com/prescriptive-guidance/latest/security-reference-architecture/log-archive.html> |
 | [CIS] | Security Hub control EC2.21 (CIS AWS Foundations Benchmark): <https://docs.aws.amazon.com/securityhub/latest/userguide/ec2-controls.html#ec2-21> |
 | [GDRT] | GuardDuty Runtime Monitoring, EKS: <https://docs.aws.amazon.com/guardduty/latest/ug/how-runtime-monitoring-works-eks.html> |

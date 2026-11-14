@@ -26,7 +26,8 @@ var allowedMessages = []string{
 	"internal error", "kafka batch sent to dead-letter topic", "like video", "mark video processing", "marshal ViewEvent", "media-worker failed",
 	"panic in grpc handler", "panic in http handler", "presign upload form", "produce view.recorded",
 	"prune timeline", "rpc", "select author videos", "select explore feed", "select following feed", "select stats", "select video",
-	"transcode consumer stopped, restarting", "unlike video", "user-service failed", "video-service failed",
+	"transcode consumer stopped, restarting", "transcode result undecided", "unlike video", "user-service failed",
+	"video-service failed",
 	"views consumer stopped, restarting",
 }
 

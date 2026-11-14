@@ -109,7 +109,7 @@ Compose và k3d không chạy cùng lúc: mỗi bên từ chối khi bên kia đ
 | `services/gateway/` | Biên REST/JSON: route, auth, rate limit, retry và circuit breaker tới gRPC, `openapi.yaml`. |
 | `services/user-service/` | Đăng ký, đăng nhập, JWT, refresh token, hồ sơ, follow (database `svp_user`). |
 | `services/video-service/` | Metadata video, presigned POST, `CompleteUpload`, job dọn upload bỏ dở (database `svp_video`). |
-| `services/media-worker/` | Consumer transcode bằng ffmpeg ra HLS, không có database. |
+| `services/media-worker/` | Consumer transcode ra HLS, không có database: ffmpeg trong container ở compose, k3d; AWS Elemental MediaConvert ở stg, prd ([`docs/explanation/transcode.md`](docs/explanation/transcode.md)). |
 | `services/engagement-service/` | Like, unlike, lượt xem gom theo lô (database `svp_engagement`). |
 | `services/feed-service/` | Feed following (fan-out on write), feed khám phá có cache (database `svp_feed`). |
 | `internal/` | Thư viện dùng chung: kết nối Postgres và retry, Kafka, outbox, Redis (Valkey), telemetry, gRPC, env. |

@@ -115,8 +115,8 @@ func TestRunLandscape1080pGivesThreeRenditions(t *testing.T) {
 	// Each variant is named under the attempt directory, and the master as stored reads back to
 	// the same renditions.
 	for _, r := range []string{"360p", "720p", "1080p"} {
-		if !strings.Contains(string(master), "\n"+testAttempt+"/"+r+"/"+playlistName+"\n") {
-			t.Errorf("master does not list %s/%s/%s:\n%s", testAttempt, r, playlistName, master)
+		if !strings.Contains(string(master), "\n"+testAttempt+"/"+PlaylistName(r)+"\n") {
+			t.Errorf("master does not list %s/%s:\n%s", testAttempt, PlaylistName(r), master)
 		}
 	}
 	if m, err := ParseMaster(master); err != nil || m.Attempt != testAttempt || fmt.Sprint(m.Renditions) != fmt.Sprint(res.Renditions) {
@@ -229,7 +229,7 @@ func TestRunWebMVP9Opus(t *testing.T) {
 		"-c:v", "libvpx-vp9", "-deadline", "realtime", "-cpu-used", "8", "-c:a", "libopus", "-shortest")...)
 	res, out := runOK(t, input)
 	checkRenditions(t, res.Renditions, []Rendition{{"source", 320, 240, 800_000}})
-	if got := probeStreams(t, filepath.Join(out, "source", "seg_000.ts")); got != "video,audio" {
+	if got := probeStreams(t, filepath.Join(out, "index_source_000.ts")); got != "video,audio" {
 		t.Errorf("segment streams = %q, want video,audio", got)
 	}
 }
@@ -239,7 +239,7 @@ func TestRunWithoutAudio(t *testing.T) {
 	input := generate(t, "in.mp4", append(clip("640x360", 2, false), "-c:v", "libx264", "-preset", "ultrafast")...)
 	res, out := runOK(t, input)
 	checkRenditions(t, res.Renditions, []Rendition{{"360p", 640, 360, 800_000}})
-	if got := probeStreams(t, filepath.Join(out, "360p", "seg_000.ts")); got != "video" {
+	if got := probeStreams(t, filepath.Join(out, "index_360p_000.ts")); got != "video" {
 		t.Errorf("segment streams = %q, want video only", got)
 	}
 	master := readFile(t, filepath.Join(out, MasterPlaylist))
@@ -488,37 +488,39 @@ func masterOf(variants ...string) string {
 func TestParseMaster(t *testing.T) {
 	t.Parallel()
 	const a, other = testAttempt, "0190a6e4-7b2c-7d3e-9f40-123456789abd"
-	m, err := ParseMaster([]byte(strings.ReplaceAll(masterOf(a+"/720p/index.m3u8 1280x720", a+"/360p/index.m3u8 640x360"), "\n", "\r\n")))
+	m, err := ParseMaster([]byte(strings.ReplaceAll(masterOf(a+"/index_720p.m3u8 1280x720", a+"/index_360p.m3u8 640x360"), "\n", "\r\n")))
 	if err != nil {
 		t.Fatal(err)
 	}
 	checkRenditions(t, m.Renditions, []Rendition{{"360p", 640, 360, 800_000}, {"720p", 1280, 720, 2_500_000}})
-	if m.Attempt != a || m.LowestPlaylist() != a+"/360p/index.m3u8" {
+	if m.Attempt != a || m.LowestPlaylist() != a+"/index_360p.m3u8" {
 		t.Errorf("attempt %s, lowest %s", m.Attempt, m.LowestPlaylist())
 	}
-	if m, err := ParseMaster([]byte(masterOf(a + "/source/index.m3u8 320x240"))); err != nil || fmt.Sprint(m.Renditions) != "[{source 320 240 800000}]" {
+	if m, err := ParseMaster([]byte(masterOf(a + "/index_source.m3u8 320x240"))); err != nil || fmt.Sprint(m.Renditions) != "[{source 320 240 800000}]" {
 		t.Errorf("source rendition: %+v, %v", m, err)
 	}
 
 	for name, master := range map[string]string{
-		"no attempt directory":  masterOf("360p/index.m3u8 640x360"),
-		"attempt not a UUID":    masterOf("x/360p/index.m3u8 640x360"),
-		"uppercase attempt":     masterOf(strings.ToUpper(a) + "/360p/index.m3u8 640x360"),
-		"two attempts":          masterOf(a+"/360p/index.m3u8 640x360", other+"/720p/index.m3u8 1280x720"),
-		"unknown rendition":     masterOf(a + "/480p/index.m3u8 854x480"),
-		"rendition twice":       masterOf(a+"/360p/index.m3u8 640x360", a+"/360p/index.m3u8 640x360"),
-		"other playlist name":   masterOf(a + "/360p/live.m3u8 640x360"),
-		"deeper path":           masterOf(a + "/360p/x/index.m3u8 640x360"),
-		"traversal":             masterOf(a + "/../index.m3u8 640x360"),
-		"no resolution":         masterOf(a + "/360p/index.m3u8 x"),
-		"no variant":            "#EXTM3U\n#EXT-X-VERSION:3\n",
-		"empty":                 "",
-		"stray URI":             masterOf(a+"/360p/index.m3u8 640x360") + a + "/720p/index.m3u8\n",
-		"variant without a URI": "#EXTM3U\n#EXT-X-STREAM-INF:BANDWIDTH=1,RESOLUTION=640x360",
-		"media tag": masterOf(a+"/360p/index.m3u8 640x360") +
+		"layout with a directory per rendition": masterOf(a + "/360p/index.m3u8 640x360"),
+		"no attempt directory":                  masterOf("index_360p.m3u8 640x360"),
+		"attempt not a UUID":                    masterOf("x/index_360p.m3u8 640x360"),
+		"uppercase attempt":                     masterOf(strings.ToUpper(a) + "/index_360p.m3u8 640x360"),
+		"two attempts":                          masterOf(a+"/index_360p.m3u8 640x360", other+"/index_720p.m3u8 1280x720"),
+		"unknown rendition":                     masterOf(a + "/index_480p.m3u8 854x480"),
+		"rendition twice":                       masterOf(a+"/index_360p.m3u8 640x360", a+"/index_360p.m3u8 640x360"),
+		"other playlist name":                   masterOf(a + "/live_360p.m3u8 640x360"),
+		"group manifest":                        masterOf(a + "/index.m3u8 640x360"),
+		"deeper path":                           masterOf(a + "/x/index_360p.m3u8 640x360"),
+		"traversal":                             masterOf(a + "/../index_360p.m3u8 640x360"),
+		"no resolution":                         masterOf(a + "/index_360p.m3u8 x"),
+		"no variant":                            "#EXTM3U\n#EXT-X-VERSION:3\n",
+		"empty":                                 "",
+		"stray URI":                             masterOf(a+"/index_360p.m3u8 640x360") + a + "/index_720p.m3u8\n",
+		"variant without a URI":                 "#EXTM3U\n#EXT-X-STREAM-INF:BANDWIDTH=1,RESOLUTION=640x360",
+		"media tag": masterOf(a+"/index_360p.m3u8 640x360") +
 			`#EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID="a",NAME="en",URI="audio/index.m3u8"` + "\n",
-		"i-frame tag": masterOf(a+"/360p/index.m3u8 640x360") +
-			`#EXT-X-I-FRAME-STREAM-INF:BANDWIDTH=1,URI="360p/iframes.m3u8"` + "\n",
+		"i-frame tag": masterOf(a+"/index_360p.m3u8 640x360") +
+			`#EXT-X-I-FRAME-STREAM-INF:BANDWIDTH=1,URI="iframes_360p.m3u8"` + "\n",
 	} {
 		if m, err := ParseMaster([]byte(master)); err == nil {
 			t.Errorf("%s: ParseMaster() = %+v, want an error", name, m)
@@ -526,24 +528,45 @@ func TestParseMaster(t *testing.T) {
 	}
 }
 
+// BuildMaster writes what ParseMaster reads back: the same attempt and renditions, lowest first.
+func TestBuildMasterReadsBack(t *testing.T) {
+	t.Parallel()
+	rs := []Rendition{{"360p", 360, 640, 800_000}, {"720p", 720, 1280, 2_500_000}, {"1080p", 1080, 1920, 5_000_000}}
+	data := BuildMaster(testAttempt, rs)
+	want := "#EXTM3U\n#EXT-X-VERSION:3\n" +
+		"#EXT-X-STREAM-INF:BANDWIDTH=984000,RESOLUTION=360x640\n" + testAttempt + "/index_360p.m3u8\n" +
+		"#EXT-X-STREAM-INF:BANDWIDTH=2803000,RESOLUTION=720x1280\n" + testAttempt + "/index_720p.m3u8\n" +
+		"#EXT-X-STREAM-INF:BANDWIDTH=5478000,RESOLUTION=1080x1920\n" + testAttempt + "/index_1080p.m3u8\n"
+	if string(data) != want {
+		t.Errorf("BuildMaster() =\n%s\nwant\n%s", data, want)
+	}
+	m, err := ParseMaster(data)
+	if err != nil || m.Attempt != testAttempt {
+		t.Fatalf("ParseMaster() = %+v, %v", m, err)
+	}
+	checkRenditions(t, m.Renditions, rs)
+}
+
 func TestRewriteMaster(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
-	path := writeFile(t, dir, MasterPlaylist, masterOf("360p/index.m3u8 640x360", "720p/index.m3u8 1280x720"))
+	path := writeFile(t, dir, MasterPlaylist, masterOf("index_360p.m3u8 640x360", "index_720p.m3u8 1280x720"))
 	m, err := rewriteMaster(path, testAttempt)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if want := masterOf(testAttempt+"/360p/index.m3u8 640x360", testAttempt+"/720p/index.m3u8 1280x720"); string(readFile(t, path)) != want {
-		t.Errorf("master =\n%s\nwant\n%s", readFile(t, path), want)
+	want := BuildMaster(testAttempt, []Rendition{{"360p", 640, 360, 800_000}, {"720p", 1280, 720, 2_500_000}})
+	if got := readFile(t, path); string(got) != string(want) {
+		t.Errorf("master =\n%s\nwant\n%s", got, want)
 	}
 	if m.Attempt != testAttempt || len(m.Renditions) != 2 {
 		t.Errorf("rewriteMaster() = %+v", m)
 	}
 
 	for name, master := range map[string]string{
-		"media tag":   masterOf("360p/index.m3u8 640x360") + `#EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID="a",NAME="en",URI="a/index.m3u8"` + "\n",
-		"bad attempt": masterOf("360p/index.m3u8 640x360"),
+		"media tag":   masterOf("index_360p.m3u8 640x360") + `#EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID="a",NAME="en",URI="a/index.m3u8"` + "\n",
+		"bad attempt": masterOf("index_360p.m3u8 640x360"),
+		"old layout":  masterOf("360p/index.m3u8 640x360"),
 	} {
 		attempt := testAttempt
 		if name == "bad attempt" {
@@ -555,6 +578,29 @@ func TestRewriteMaster(t *testing.T) {
 		}
 		if string(readFile(t, path)) != master {
 			t.Errorf("%s: master changed although the rewrite failed", name)
+		}
+	}
+}
+
+// Renditions plans the sizes ffmpeg's scale filter gives each step, by the displayed frame.
+func TestRenditionsMatchScaleFilter(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		width, height  int
+		want           []Rendition
+		thumbW, thumbH int
+	}{
+		{1080, 1920, []Rendition{{"360p", 360, 640, 800_000}, {"720p", 720, 1280, 2_500_000}, {"1080p", 1080, 1920, 5_000_000}}, 720, 1280},
+		{1920, 1080, []Rendition{{"360p", 640, 360, 800_000}, {"720p", 1280, 720, 2_500_000}, {"1080p", 1920, 1080, 5_000_000}}, 1280, 720},
+		{720, 1280, []Rendition{{"360p", 360, 640, 800_000}, {"720p", 720, 1280, 2_500_000}}, 720, 1280},
+		// 360 * 1000 / 562 = 640.57: the nearest even width is 640.
+		{1000, 562, []Rendition{{"360p", 640, 360, 800_000}}, 640, 360},
+		{321, 241, []Rendition{{"source", 320, 240, 800_000}}, 320, 240},
+	}
+	for _, tt := range tests {
+		checkRenditions(t, Renditions(tt.width, tt.height), tt.want)
+		if w, h := ThumbnailSize(tt.width, tt.height); w != tt.thumbW || h != tt.thumbH {
+			t.Errorf("ThumbnailSize(%d, %d) = %dx%d, want %dx%d", tt.width, tt.height, w, h, tt.thumbW, tt.thumbH)
 		}
 	}
 }

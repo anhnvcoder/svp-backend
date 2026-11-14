@@ -40,29 +40,59 @@ var (
 	ErrDurationExceeded = errors.New("transcode: duration exceeded")
 )
 
-// Output layout and content types. Run writes master.m3u8, thumbnail.jpg and one directory per
-// rendition (index.m3u8 and its segments); master.m3u8 names each rendition playlist as
-// <attempt>/<rendition>/index.m3u8, so the caller stores everything but the master under
-// <attempt>/, next to which the master goes.
+// Output layout and content types, the same for every encoder: an attempt's objects sit flat in
+// one directory, each rendition's playlist named PlaylistName(rendition) with its segments next
+// to it, plus thumbnail.jpg. Run writes them and master.m3u8 into its output directory;
+// master.m3u8 names each rendition playlist as <attempt>/PlaylistName(rendition), so the caller
+// stores everything but the master under <attempt>/, next to which the master goes.
 const (
 	MasterPlaylist = "master.m3u8"
 	Thumbnail      = "thumbnail.jpg"
 
-	playlistName = "index.m3u8"
+	// PlaylistBase and PlaylistModifier make the name of a rendition playlist, base + modifier +
+	// rendition + ".m3u8", the way MediaConvert names an HLS output: base name of the destination
+	// plus the output's name modifier.
+	PlaylistBase     = "index"
+	PlaylistModifier = "_"
 
 	contentTypePlaylist = "application/vnd.apple.mpegurl"
 	contentTypeSegment  = "video/mp2t"
 	contentTypeJPEG     = "image/jpeg"
 )
 
+// PlaylistName is the file name of the playlist of rendition, such as index_360p.m3u8.
+func PlaylistName(rendition string) string {
+	return PlaylistBase + PlaylistModifier + rendition + ".m3u8"
+}
+
+// ContentType returns the Content-Type an output file is stored with, by its extension, and
+// false for a file no encoder of this layout writes.
+func ContentType(name string) (string, bool) {
+	switch {
+	case strings.HasSuffix(name, ".ts"):
+		return contentTypeSegment, true
+	case strings.HasSuffix(name, ".m3u8"):
+		return contentTypePlaylist, true
+	case strings.HasSuffix(name, ".jpg"):
+		return contentTypeJPEG, true
+	}
+	return "", false
+}
+
 // Encoding settings: 4 s segments make half the objects and requests of 2 s ones while a short
 // video still starts quickly; a keyframe every 2 s, whatever the fps, so every segment starts on
 // one.
 const (
-	segmentSeconds  = 4
-	keyframeSeconds = 2
-	audioBitrate    = 128_000
+	SegmentSeconds  = 4
+	KeyframeSeconds = 2
+	AudioBitrate    = 128_000
 )
+
+// PeakBitrate is the most a rendition of target bitrate may send, the HLS BANDWIDTH of its video.
+func PeakBitrate(bitrate int) int { return bitrate * 107 / 100 }
+
+// BufferSize is the rate control buffer of a rendition of target bitrate, in bits.
+func BufferSize(bitrate int) int { return bitrate * 3 / 2 }
 
 // Rendition is one HLS variant.
 type Rendition struct {
@@ -113,7 +143,7 @@ type limits struct {
 
 var defaultLimits = limits{probeTimeout: 30 * time.Second, ffmpegTimeout: 10 * time.Minute}
 
-// Run probes input, then writes master.m3u8, <rendition>/index.m3u8 with its segments and
+// Run probes input, then writes master.m3u8, one playlist per rendition with its segments and
 // thumbnail.jpg into outDir, the master naming its rendition playlists under attempt, which must
 // be a canonical UUID. Both paths are local; input must be a file the caller downloaded.
 func Run(ctx context.Context, input, outDir, attempt string) (Result, error) {
@@ -137,7 +167,8 @@ func run(ctx context.Context, input, outDir, attempt string, lim limits) (Result
 	if err != nil {
 		return Result{}, err
 	}
-	rungs := ladderFor(p.firstVideo())
+	v := p.firstVideo()
+	rungs := ladderFor(v.Width, v.Height)
 
 	if err := os.MkdirAll(outDir, 0o750); err != nil {
 		return Result{}, fmt.Errorf("transcode: %w", err)
@@ -148,7 +179,7 @@ func run(ctx context.Context, input, outDir, attempt string, lim limits) (Result
 		return Result{}, err
 	}
 
-	duration, err := readPlaylistDuration(filepath.Join(outDir, rungs[0].name, playlistName))
+	duration, err := readPlaylistDuration(filepath.Join(outDir, PlaylistName(rungs[0].name)))
 	if err != nil {
 		return Result{}, err
 	}
@@ -174,10 +205,10 @@ func run(ctx context.Context, input, outDir, attempt string, lim limits) (Result
 	return Result{Duration: duration, Renditions: renditions, Files: files}, nil
 }
 
-// ladderFor keeps the steps whose short side the source reaches (no upscaling); a source
-// smaller than every step gets one rendition at its own size.
-func ladderFor(v probeStream) []rung {
-	short := min(v.Width, v.Height)
+// ladderFor keeps the steps whose short side a source of width x height (as displayed) reaches
+// (no upscaling); a source smaller than every step gets one rendition at its own size.
+func ladderFor(width, height int) []rung {
+	short := min(width, height)
 	var rungs []rung
 	for _, r := range ladder {
 		if r.short <= short {
@@ -188,6 +219,38 @@ func ladderFor(v probeStream) []rung {
 		return []rung{sourceRung}
 	}
 	return rungs
+}
+
+// Renditions is the ladder for a source of width x height as displayed, lowest first: each
+// rendition with the size scaleFilter gives it and its target bitrate. It is the plan of an
+// encoder that does not run scaleFilter itself.
+func Renditions(width, height int) []Rendition {
+	rungs := ladderFor(width, height)
+	out := make([]Rendition, len(rungs))
+	for i, r := range rungs {
+		w, h := scaledSize(width, height, r.short)
+		out[i] = Rendition{Name: r.name, Width: w, Height: h, Bitrate: r.bitrate}
+	}
+	return out
+}
+
+// ThumbnailSize is the size thumbnailArgs grabs the poster of a width x height source at.
+func ThumbnailSize(width, height int) (int, int) {
+	top := ladderFor(width, height)
+	return scaledSize(width, height, min(top[len(top)-1].short, thumbnailMaxShort))
+}
+
+// scaledSize is the size scaleFilter gives a width x height frame for a step of short side short
+// (0 keeps the source size): ffmpeg rounds the side it computes to the nearest even number.
+func scaledSize(width, height, short int) (int, int) {
+	if short == 0 {
+		return width / 2 * 2, height / 2 * 2
+	}
+	long := func(l, s int) int { return (short*l + s) / (2 * s) * 2 }
+	if width >= height {
+		return long(width, height), short
+	}
+	return short, long(height, width)
 }
 
 // scaleFilter sets the short side of the frame to r.short and the other side to the even size
@@ -215,7 +278,7 @@ func inputArgs(src string, extra ...string) []string {
 // hlsArgs builds the single ffmpeg run that encodes every rendition.
 func hlsArgs(src, outDir string, rungs []rung, audio bool) []string {
 	// -t as an input option caps what is decoded, whatever the metadata claims.
-	args := inputArgs(src, "-t", strconv.Itoa(int(maxDuration.Seconds())))
+	args := inputArgs(src, "-t", strconv.Itoa(int(MaxDuration.Seconds())))
 
 	var graph strings.Builder
 	fmt.Fprintf(&graph, "[0:v:0]split=%d", len(rungs))
@@ -243,28 +306,28 @@ func hlsArgs(src, outDir string, rungs []rung, audio bool) []string {
 	for i, r := range rungs {
 		args = append(args,
 			fmt.Sprintf("-b:v:%d", i), strconv.Itoa(r.bitrate),
-			fmt.Sprintf("-maxrate:v:%d", i), strconv.Itoa(r.bitrate*107/100),
-			fmt.Sprintf("-bufsize:v:%d", i), strconv.Itoa(r.bitrate*3/2),
+			fmt.Sprintf("-maxrate:v:%d", i), strconv.Itoa(PeakBitrate(r.bitrate)),
+			fmt.Sprintf("-bufsize:v:%d", i), strconv.Itoa(BufferSize(r.bitrate)),
 		)
 	}
 	args = append(args,
-		"-force_key_frames", fmt.Sprintf("expr:gte(t,n_forced*%d)", keyframeSeconds),
+		"-force_key_frames", fmt.Sprintf("expr:gte(t,n_forced*%d)", KeyframeSeconds),
 		"-sc_threshold", "0",
 	)
 	if audio {
-		args = append(args, "-c:a", "aac", "-b:a", strconv.Itoa(audioBitrate), "-ac", "2")
+		args = append(args, "-c:a", "aac", "-b:a", strconv.Itoa(AudioBitrate), "-ac", "2")
 	}
 	return append(args,
 		// Drop container, stream and chapter metadata of the source.
 		"-map_metadata", "-1", "-map_chapters", "-1",
 		"-f", "hls",
-		"-hls_time", strconv.Itoa(segmentSeconds),
+		"-hls_time", strconv.Itoa(SegmentSeconds),
 		"-hls_playlist_type", "vod",
 		"-hls_segment_type", "mpegts",
-		"-hls_segment_filename", filepath.Join(outDir, "%v", "seg_%03d.ts"),
+		"-hls_segment_filename", filepath.Join(outDir, PlaylistBase+PlaylistModifier+"%v_%03d.ts"),
 		"-master_pl_name", MasterPlaylist,
 		"-var_stream_map", strings.Join(streamMap, " "),
-		filepath.Join(outDir, "%v", playlistName),
+		filepath.Join(outDir, PlaylistName("%v")),
 	)
 }
 
@@ -278,9 +341,7 @@ const thumbnailMaxShort = 720
 // better) shows no visible loss on a poster and is about a fifth smaller than 3.
 func thumbnailArgs(src, outDir string, top rung, duration time.Duration) []string {
 	at := min(time.Second, duration/2)
-	if top.short > thumbnailMaxShort {
-		top.short = thumbnailMaxShort
-	}
+	top.short = min(top.short, thumbnailMaxShort)
 	args := inputArgs(src, "-ss", strconv.FormatFloat(at.Seconds(), 'f', 3, 64))
 	return append(args,
 		"-map", "0:v:0", "-frames:v", "1",
@@ -415,8 +476,8 @@ func PlaylistDuration(data []byte) (time.Duration, error) {
 	return time.Duration(total * float64(time.Second)).Round(time.Millisecond), nil
 }
 
-// Master is what a master playlist of Run says: the attempt directory its rendition playlists
-// are under and the renditions, lowest bitrate first.
+// Master is what a master playlist of BuildMaster says: the attempt directory its rendition
+// playlists are under and the renditions, lowest bitrate first.
 type Master struct {
 	Attempt    string
 	Renditions []Rendition
@@ -424,15 +485,40 @@ type Master struct {
 
 // LowestPlaylist is the path of the lowest rendition's playlist, relative to the master.
 func (m Master) LowestPlaylist() string {
-	return m.Attempt + "/" + m.Renditions[0].Name + "/" + playlistName
+	return m.Attempt + "/" + PlaylistName(m.Renditions[0].Name)
 }
 
 // knownRungs is every rendition Run may write, lowest bitrate first.
 var knownRungs = append(slices.Clone(ladder), sourceRung)
 
-// ParseMaster reads a master playlist written by Run, the one just transcoded or one stored
+// Step returns the short side (0 for source, which keeps the source size) and the target bitrate
+// of the ladder step named name, and false for a name outside the ladder.
+func Step(name string) (short, bitrate int, ok bool) {
+	k := slices.IndexFunc(knownRungs, func(r rung) bool { return r.name == name })
+	if k < 0 {
+		return 0, 0, false
+	}
+	return knownRungs[k].short, knownRungs[k].bitrate, true
+}
+
+// BuildMaster returns the master playlist naming the playlist of each of renditions, lowest
+// first, under attempt, with the size the encoder reported. BANDWIDTH is the peak of the
+// rendition's video plus the audio bitrate, an upper bound whether or not the video has sound.
+// It names no CODECS: the H.264 level is the encoder's choice, and a wrong one would make a
+// player skip the variant.
+func BuildMaster(attempt string, renditions []Rendition) []byte {
+	var b strings.Builder
+	b.WriteString("#EXTM3U\n#EXT-X-VERSION:3\n")
+	for _, r := range renditions {
+		fmt.Fprintf(&b, "#EXT-X-STREAM-INF:BANDWIDTH=%d,RESOLUTION=%dx%d\n%s/%s\n",
+			PeakBitrate(r.Bitrate)+AudioBitrate, r.Width, r.Height, attempt, PlaylistName(r.Name))
+	}
+	return []byte(b.String())
+}
+
+// ParseMaster reads a master playlist written by BuildMaster, the one just written or one stored
 // before: every #EXT-X-STREAM-INF has a RESOLUTION and is followed by the URI
-// <attempt>/<rendition>/index.m3u8, with one attempt, a canonical UUID, for all of them, and a
+// <attempt>/PlaylistName(<rendition>), with one attempt, a canonical UUID, for all of them, and a
 // rendition name of the ladder; the bitrate is the ladder's target for that name. Anything else
 // is an error: a playlist the caller cannot vouch for, so it must not publish it.
 func ParseMaster(data []byte) (Master, error) {
@@ -454,29 +540,30 @@ func ParseMaster(data []byte) (Master, error) {
 		}
 		i++
 		uri := strings.TrimSpace(lines[i])
-		parts := strings.Split(uri, "/")
-		if len(parts) != 3 || parts[2] != playlistName {
-			return Master{}, fmt.Errorf("transcode: %s: variant URI %q is not <attempt>/<rendition>/%s", MasterPlaylist, uri, playlistName)
+		attempt, file, ok := strings.Cut(uri, "/")
+		if !ok || strings.Contains(file, "/") {
+			return Master{}, fmt.Errorf("transcode: %s: variant URI %q is not <attempt>/%s", MasterPlaylist, uri, PlaylistName("<rendition>"))
 		}
-		if _, err := ids.Parse(parts[0]); err != nil {
-			return Master{}, fmt.Errorf("transcode: %s: attempt %q is not a canonical UUID", MasterPlaylist, parts[0])
+		if _, err := ids.Parse(attempt); err != nil {
+			return Master{}, fmt.Errorf("transcode: %s: attempt %q is not a canonical UUID", MasterPlaylist, attempt)
 		}
-		if m.Attempt != "" && parts[0] != m.Attempt {
+		if m.Attempt != "" && attempt != m.Attempt {
 			return Master{}, fmt.Errorf("transcode: %s: variants under two attempts", MasterPlaylist)
 		}
-		m.Attempt = parts[0]
-		k := slices.IndexFunc(knownRungs, func(r rung) bool { return r.name == parts[1] })
+		m.Attempt = attempt
+		k := slices.IndexFunc(knownRungs, func(r rung) bool { return PlaylistName(r.name) == file })
 		if k < 0 {
-			return Master{}, fmt.Errorf("transcode: %s: unknown rendition %q", MasterPlaylist, parts[1])
+			return Master{}, fmt.Errorf("transcode: %s: %q is not the playlist of a known rendition", MasterPlaylist, file)
 		}
-		if _, dup := found[parts[1]]; dup {
-			return Master{}, fmt.Errorf("transcode: %s: rendition %s listed twice", MasterPlaylist, parts[1])
+		name := knownRungs[k].name
+		if _, dup := found[name]; dup {
+			return Master{}, fmt.Errorf("transcode: %s: rendition %s listed twice", MasterPlaylist, name)
 		}
 		w, h, ok := resolution(attrs)
 		if !ok {
-			return Master{}, fmt.Errorf("transcode: %s lists no resolution for %s", MasterPlaylist, parts[1])
+			return Master{}, fmt.Errorf("transcode: %s lists no resolution for %s", MasterPlaylist, name)
 		}
-		found[parts[1]] = Rendition{Name: parts[1], Width: w, Height: h, Bitrate: knownRungs[k].bitrate}
+		found[name] = Rendition{Name: name, Width: w, Height: h, Bitrate: knownRungs[k].bitrate}
 	}
 	if len(found) == 0 {
 		return Master{}, fmt.Errorf("transcode: %s lists no variant", MasterPlaylist)
@@ -508,10 +595,10 @@ func resolution(attrs string) (int, int, bool) {
 	return 0, 0, false
 }
 
-// rewriteMaster puts attempt/ in front of the URI after each #EXT-X-STREAM-INF of the master
-// playlist ffmpeg wrote at path, then reads the result back with ParseMaster. A master with
-// another tag carrying a URI (#EXT-X-MEDIA, #EXT-X-I-FRAME-STREAM-INF) is an error: ffmpeg writes
-// none for this ladder, and one left unchanged would send a player to the wrong path.
+// rewriteMaster replaces the master playlist ffmpeg wrote at path with BuildMaster of attempt and
+// the renditions it lists, at the sizes ffmpeg encoded, then reads the result back with
+// ParseMaster. A master with another tag carrying a URI (#EXT-X-MEDIA, #EXT-X-I-FRAME-STREAM-INF)
+// is an error: ffmpeg writes none for this ladder, and the rewrite would drop it.
 func rewriteMaster(path, attempt string) (Master, error) {
 	data, err := os.ReadFile(path) //nolint:gosec // the master playlist ffmpeg just wrote
 	if err != nil {
@@ -528,7 +615,11 @@ func rewriteMaster(path, attempt string) (Master, error) {
 			lines[i] = attempt + "/" + strings.TrimSpace(lines[i])
 		}
 	}
-	data = []byte(strings.Join(lines, "\n"))
+	encoded, err := ParseMaster([]byte(strings.Join(lines, "\n")))
+	if err != nil {
+		return Master{}, err
+	}
+	data = BuildMaster(attempt, encoded.Renditions)
 	m, err := ParseMaster(data)
 	if err != nil {
 		return Master{}, err
@@ -555,15 +646,18 @@ func listFiles(outDir string) ([]File, error) {
 			return err
 		}
 		rel = filepath.ToSlash(rel)
+		typ, ok := ContentType(rel)
 		switch {
+		case !ok || strings.Contains(rel, "/"):
+			return fmt.Errorf("unexpected output file %s", rel)
 		case strings.HasSuffix(rel, ".ts"):
-			entries = append(entries, entry{File{rel, contentTypeSegment}, 0})
+			entries = append(entries, entry{File{rel, typ}, 0})
 		case rel == Thumbnail:
-			entries = append(entries, entry{File{rel, contentTypeJPEG}, 1})
+			entries = append(entries, entry{File{rel, typ}, 1})
 		case rel == MasterPlaylist:
-			entries = append(entries, entry{File{rel, contentTypePlaylist}, 3})
-		case strings.HasSuffix(rel, "/"+playlistName):
-			entries = append(entries, entry{File{rel, contentTypePlaylist}, 2})
+			entries = append(entries, entry{File{rel, typ}, 3})
+		case strings.HasPrefix(rel, PlaylistBase+PlaylistModifier) && strings.HasSuffix(rel, ".m3u8"):
+			entries = append(entries, entry{File{rel, typ}, 2})
 		default:
 			return fmt.Errorf("unexpected output file %s", rel)
 		}

@@ -126,7 +126,8 @@ có khối chuẩn bị riêng.
 ## Mục lục
 
 Cảnh báo `severity=page` (rule viết tay ở `svp-alerts.yaml`, SLO ở `svp-slos.yaml`, alarm managed ở CloudWatch theo
-[ADR-0058](../adr/0058-managed-data-operations.md) §2 và alarm DNSSEC của zone prd theo [ADR-0061](../adr/0061-edge-cloudfront-waf-acm.md) §11,
+[ADR-0058](../adr/0058-managed-data-operations.md) §2, alarm DLQ của transcode theo ADR-0066 §7 và alarm DNSSEC của
+zone prd theo [ADR-0061](../adr/0061-edge-cloudfront-waf-acm.md) §11,
 email bảo mật của org qua EventBridge và SNS; alarm `ticket` của dịch vụ managed không có runbook riêng):
 
 | Alert | Runbook | Nguồn rule |
@@ -149,6 +150,7 @@ email bảo mật của org qua EventBridge và SNS; alarm `ticket` của dịch
 | `msk-offline-partitions` | [msk-offline-partitions.md](msk-offline-partitions.md) | ADR-0058 §2, module `msk` (chỉ AWS) |
 | `msk-under-min-isr` | [msk-under-min-isr.md](msk-under-min-isr.md) | ADR-0058 §2, module `msk` (chỉ AWS) |
 | `valkey-memory-high` | [valkey-memory-high.md](valkey-memory-high.md) | ADR-0058 §2, module `elasticache` (chỉ AWS) |
+| `transcode-events-dlq` | [transcode-events-dlq.md](transcode-events-dlq.md) | [ADR-0066](../adr/0066-mediaconvert-transcode.md) §7, module `transcode` (chỉ AWS) |
 | `dnssec-internal-failure` | [dnssec-internal-failure.md](dnssec-internal-failure.md) | ADR-0061 §11, module `account-baseline` (chỉ zone prd, `us-east-1`) |
 | `dnssec-ksk-action-needed` | [dnssec-ksk-action-needed.md](dnssec-ksk-action-needed.md) | ADR-0061 §11, module `account-baseline` (chỉ zone prd, `us-east-1`) |
 | Email `svp-security` (sự kiện bảo mật, finding HIGH, CRITICAL) | [security-alert.md](security-alert.md) | [ADR-0060](../adr/0060-org-detection-logging.md) §10, rule `svp-security-*` của root `aws/security`, module `security-baseline` (chỉ AWS, mọi account của org) |

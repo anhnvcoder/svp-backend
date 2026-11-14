@@ -14,6 +14,11 @@ image:
   # -- Signed index digest of the image the pod runs; see `image.tag`.
   digest: ""
 
+# -- Arguments of the service's container, after the image's entrypoint: empty runs the binary's default command.
+# media-worker on EKS sets [mediaconvert], the command that hands transcoding to AWS Elemental MediaConvert instead of
+# running ffmpeg in the pod (`serve`). The migrate Job never takes them: it runs `migrate`.
+args: []
+
 # -- http: the gateway and the web client (probes on /healthz). grpc: the four gRPC services (Kubernetes' own grpc probe
 # on the standard health service). none: media-worker (no port, no probe, no Service).
 protocol: none

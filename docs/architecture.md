@@ -203,6 +203,8 @@ Saga dạng choreography: mỗi service nghe event rồi làm phần của mình
 video-service chuyển `FAILED` và xoá file dở dang. Mọi bước chịu được event trùng: media-worker ghi output theo version (`event_id`
 của `video.uploaded`), master tạo một lần bằng `If-None-Match: *` ([ADR-0029](adr/0029-immutable-media-versions.md));
 video-service chỉ chuyển trạng thái một chiều; feed-service ghi timeline với khoá chính chống trùng.
+Sơ đồ trên là đường của compose, k3d (ffmpeg trong media-worker); ở stg, prd media-worker giao bước transcode cho
+MediaConvert với cùng event và bố cục ([`explanation/transcode.md`](explanation/transcode.md)).
 
 Với `S3_CREDENTIALS=container`, `internal/objstore` giữ hai cache credential riêng: một ký lời gọi tới storage, một ký form
 presigned (client chỉ để ký, có cache riêng, thay credential sớm hơn nhiều so với cache của lời gọi). Mỗi cache lấy credential
@@ -338,6 +340,7 @@ flowchart TB
         cfe["CloudFront svp-env-web, svp-env-api<br/>[web ACL, cert ACM; VPC origin]"]
         cf["CloudFront svp-env-media<br/>[web ACL, OAC]"]
         q[["SQS + EventBridge<br/>interruption của Karpenter"]]
+        mc["MediaConvert queue svp-env<br/>[trạng thái job: EventBridge → SQS svp-env-transcode-events]"]
         alarm["CloudWatch alarm → SNS svp-env-alarms → email"]
     end
     cfe --> alb --> envoy --> svc
@@ -345,6 +348,8 @@ flowchart TB
     svc --> msk
     svc --> vk
     svc --> s3
+    svc -->|"media-worker mediaconvert"| mc
+    mc --> s3
     cf --> s3
     q --> plat
     rds -.-> alarm

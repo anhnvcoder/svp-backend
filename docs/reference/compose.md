@@ -27,6 +27,10 @@ Loại tài liệu (Diátaxis): **reference**, tra cứu khi cần một lệnh 
   vài lần chạy trong một giờ sẽ cạn burst 20. Việc xoá này **chỉ dùng ở lab local**, không trỏ script vào stack dùng
   chung. Smoke luôn đòi master có version và kiểm đủ `Cache-Control` (mọi bản phát hành ghi key có version từ
   [ADR-0029](../adr/0029-immutable-media-versions.md); biến chuyển tiếp `SVP_SMOKE_LEGACY_MEDIA` đã bỏ, [ADR-0037](../adr/0037-mainpath-standard-tools.md) §4).
+- `make transcode-timing CLIP=<file> N=<n>` (gateway ở `SMOKE_URL`), `make eks-transcode-timing` ([`eks.md`](eks.md)):
+  `deploy/compose/transcode-timing.sh` upload `CLIP` `N` lần, in mỗi lần `<video_id> <giây>` từ complete (202) tới
+  `READY` (độ phân giải 1 s), cuối cùng `p50=<giây> max=<giây>`; video `FAILED` hay quá hạn thì thoát khác 0; xoá khoá
+  rate limit đăng ký như `make smoke` (**chỉ lab local**).
 - Postgres, Kafka và Valkey là container của stack (**Postgres**, **Kafka và Valkey** dưới); mỗi client có role, user và database, db
   hay khoá riêng nên không service nào đọc dữ liệu của service khác. Postgres native `127.0.0.1:5432` không thuộc stack: chỉ `make test` dùng nó. Redis native
   `127.0.0.1:6379` không thuộc stack: chỉ `make test` (db 15) và `make dev` của web dùng nó. Không service lõi nào phụ thuộc service

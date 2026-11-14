@@ -171,8 +171,7 @@ S3, PSA `v1.36`, NLB giữ IP, hairpin, metrics-server, IMDSv2, `rds_superuser`,
 ## Hiện thực ở
 
 - `svp-infra`: `Makefile`, `.tflint.hcl`, `.github/workflows/check.yml` (§2, §15); `aws/bootstrap/` (§2, §3, §5); `aws/modules/{network,eks,rds,media}/` (§6, §8, §9, §11); `github/` (§2); `aws/envs/stg/` (§7, §10); `aws/scripts/`, `docs/runbooks/session-stg.md` (§13, §14).
-- Repo code: `internal/objstore` (§9, §10); chart `svp-data`, `svp-observability`, `svp-cluster`, `svp-service`, `deploy/postgres/bootstrap.sql` (§5, §8, §9);
-  `deploy/ci/gitops-check.sh`, `deploy/ci/cluster-values.example.yaml`, `deploy/k8s/gitops.sh`, target `eks-*` (§7, §14). `svp-gitops`: `platforms/`, `argocd/apps/` (§7).
+- Repo code: `internal/objstore` (§9, §10); chart `svp-data`, `svp-observability`, `svp-cluster`, `svp-service`, `deploy/postgres/bootstrap.sql` (§5, §8, §9); `deploy/ci/gitops-check.sh`, `deploy/ci/cluster-values.example.yaml`, `deploy/k8s/gitops.sh`, target `eks-*` (§7, §14). `svp-gitops`: `platforms/`, `argocd/apps/` (§7).
 
 ## Nguồn
 
@@ -198,3 +197,4 @@ Phụ lục: [`appendix/0034-aws-stage7.md`](appendix/0034-aws-stage7.md) (trạ
 - Câu 10, §2: [0062](0062-ecr-registry-ci-oidc.md): image của stg, prd ở ECR private của account env (CI sao chép cùng digest kèm chữ ký, attestation từ GHCR), image bên thứ ba qua pull-through cache; CI của `svp-backend`, `svp-frontend` có role OIDC hẹp theo repo và mục đích; `svp-infra` vẫn không credential AWS.
 - §8, §10: [0064](0064-interface-endpoints.md): API AWS của cluster qua endpoint interface có private DNS ở VPC mỗi env, đích ngoài AWS và vài API AWS không có endpoint ở region vẫn qua NAT (0064 §6); NetworkPolicy thêm TCP 443 tới `awsEndpointCidrs`.
 - Câu 14, §7: [0065](0065-argocd-eks-capability.md): Argo CD trên `eks` chuyển sang EKS Capability cho Argo CD (AWS chạy, giữ HA; đăng nhập Identity Center; đích Application `name: in-cluster`) thay `deploy/k8s/gitops.sh` cài chart; k3d giữ cài tay; hiện thực ở thay đổi riêng, tới đó giữ cách cài hiện tại.
+- Bối cảnh (7c: MediaConvert): [0066](0066-mediaconvert-transcode.md): stg, prd transcode bằng AWS Elemental MediaConvert (tier Basic, queue on-demand) qua lệnh con `media-worker mediaconvert`, trạng thái job qua EventBridge và SQS, endpoint interface `mediaconvert`; chọn mua thay tự chạy ffmpeg trên EKS, đánh đổi và chi phí ở ADR đó.

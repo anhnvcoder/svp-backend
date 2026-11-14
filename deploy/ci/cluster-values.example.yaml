@@ -44,3 +44,8 @@ externalSecretsRoles:
   svp-obs: arn:aws:iam::111111111111:role/svp-stg-external-secrets-svp-obs
   keda: arn:aws:iam::111111111111:role/svp-stg-external-secrets-keda
   argocd: arn:aws:iam::111111111111:role/svp-stg-external-secrets-argocd
+# Queue and service role of AWS Elemental MediaConvert, and the SQS queue of its job state events, from the root env
+# output of the transcode module; media-worker reads them on platform eks.
+mediaconvertQueueArn: arn:aws:mediaconvert:ap-southeast-1:000000000000:queues/svp-stg
+mediaconvertRoleArn: arn:aws:iam::000000000000:role/svp-stg-mediaconvert
+transcodeEventsQueueUrl: https://sqs.ap-southeast-1.amazonaws.com/000000000000/svp-stg-transcode-events
