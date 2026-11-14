@@ -155,6 +155,7 @@ Phụ lục: [`appendix/NNNN-<slug>.md`](appendix/NNNN-<slug>.md) (chỉ khi có
 | [0063](0063-managed-observability.md) | Telemetry của eks vào dịch vụ managed sống qua destroy: metric tới Amazon Managed Service for Prometheus qua Prometheus agent HA và Collector, log tới CloudWatch Logs, trace tới X-Ray qua OTLP; luật và Alertmanager của AMP qua ACK gửi SNS; Amazon Managed Grafana nhận dashboard qua Grafana Operator; local giữ LGTM | Chấp nhận |
 | [0064](0064-interface-endpoints.md) | Gọi API AWS từ VPC của stg, prd đi qua endpoint interface có private DNS, một security group chỉ nhận 443 từ VPC, endpoint policy chặn principal ngoài account; ENI ở mọi AZ của prd, một AZ ở stg; đích ngoài AWS và vài API AWS (0064 §6) vẫn qua NAT | Chấp nhận |
 | [0065](0065-argocd-eks-capability.md) | Argo CD trên eks chuyển sang EKS Capability cho Argo CD: AWS chạy và giữ HA, đăng nhập qua IAM Identity Center với vai trò theo nhóm, không tài khoản local; k3d giữ Argo CD tự cài; hiện thực ở thay đổi riêng, tới đó eks giữ hiện trạng | Chấp nhận |
+| [0068](0068-zero-downtime-migrations.md) | Migration Postgres không downtime: expand/contract mỗi bước một release, schema phục vụ cả bản trước; `lock_timeout` 2 s ở runner; luật file migration theo khoá; squawk lint trong CI; diễn tập đổi tên cột bằng test Go | Chấp nhận |
 
 ## Chuẩn áp dụng
 
