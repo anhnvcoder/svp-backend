@@ -101,6 +101,11 @@ giữ để tra ngược ai đổi dòng nào, khi nào, kiểm bằng gì. Tài
 > wildcard của `svp-admin`), IN-7 (đóng ở mọi nơi), WEB-13, WEB-22 (đóng đường feed-service đọc session), SEC-3, RL-7, OPS-1 (6 cổng), dòng mới
 > IN-10 (pod `svp-ops`), AWS-5, dòng mới AWS-9, AWS-10 ở 4.11, mục 5, mục 6 (bỏ hai dòng chấp nhận IN-4 ở compose và IN-7, thêm hai dòng).
 > Broker cũ (cổng host không xác thực, Admin API) không còn ở đâu. Phần chỉ kiểm được trên AWS theo mục Xác nhận của ADR-0053.
+> Cập nhật ngày 2026-11-13 theo [ADR-0062](../adr/0062-ecr-registry-ci-oidc.md) (ECR, role OIDC của CI, pull-through cache, chuyển hướng image,
+> Inspector), [ADR-0063](../adr/0063-managed-observability.md) (telemetry managed), [ADR-0064](../adr/0064-interface-endpoints.md) (endpoint
+> interface) và [ADR-0065](../adr/0065-argocd-eks-capability.md) (Argo CD trên EKS): dòng mới SC-16, SC-17, SC-18 ở 4.8, AWS-11 ở 4.11, OPS-5,
+> phần mở đầu 4.11, bốn dòng mới ở mục 6, mục 7 (bỏ "đăng nhập cloud bằng OIDC", thêm GC repo phát hành và EKS Capability). Phần chạy trên AWS
+> kiểm ở buổi stg, prd theo mục Xác nhận của bốn ADR.
 
 ## Tổng hợp theo giai đoạn (mục 5 cũ)
 

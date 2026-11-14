@@ -1,14 +1,14 @@
 #!/usr/bin/env bash
 # gitops-check.sh GITOPS_DIR [BASE]: validates the svp-gitops deployment tree across 5 steps.
-# --worktree tests working charts; --tree tests step 1 alone; --root tests steps 1-2;
-# --policy images-pinned|no-lab-hosts tests a single policy on rendered manifests.
+# --worktree tests working charts; --tree step 1; --root steps 1-2; --policy images-pinned|no-lab-hosts one policy.
+# --images GITOPS_DIR ENV OUT renders ENV on eks as steps 1-4 do and writes the images it runs to OUT.
 # Design notes: docs/reference/ci.md.
 set -euo pipefail
 
 # shellcheck source=deploy/ci/common.sh
 . "$(dirname "$0")/common.sh"
 
-worktree='' tree_only='' root_only='' policy_only=''
+worktree='' tree_only='' root_only='' policy_only='' images_only='' images_env='' images_out=''
 if [ "${1:-}" = --policy ]; then
   policy_only=${2:-}
   case $policy_only in images-pinned | no-lab-hosts) ;; *) policy_only= ;; esac
@@ -26,12 +26,18 @@ elif [ "${1:-}" = --root ]; then
   root_only=1
   shift
   [ $# -eq 1 ] || fail "usage: gitops-check.sh --root GITOPS_DIR"
+elif [ "${1:-}" = --images ]; then
+  images_only=1
+  shift
+  [ $# -eq 3 ] || fail "usage: gitops-check.sh --images GITOPS_DIR ENV OUT"
+  images_env=$2 images_out=$3
+  set -- "$1"
 fi
 if [ -n "$policy_only" ]; then
   tools="jq docker"
 else
   [ $# -ge 1 ] && [ $# -le 2 ] ||
-    fail "usage: gitops-check.sh GITOPS_DIR [BASE] | gitops-check.sh --worktree GITOPS_DIR | gitops-check.sh --tree GITOPS_DIR [BASE] | gitops-check.sh --root GITOPS_DIR | gitops-check.sh --policy images-pinned|no-lab-hosts FILE..."
+    fail "usage: gitops-check.sh GITOPS_DIR [BASE] | gitops-check.sh --worktree GITOPS_DIR | gitops-check.sh --tree GITOPS_DIR [BASE] | gitops-check.sh --root GITOPS_DIR | gitops-check.sh --policy images-pinned|no-lab-hosts FILE... | gitops-check.sh --images GITOPS_DIR ENV OUT"
   tree=$(cd "$1" 2>/dev/null && pwd -P) || fail "$1 is not a directory"
   base=${2:-}
   tools="git jq helm docker"
@@ -42,6 +48,7 @@ for tool in $tools; do
 done
 main=origin/main
 envs="prd stg"
+[ -z "$images_only" ] || [[ " $envs " == *" $images_env "* ]] || fail "--images: environment $images_env is none of: $envs"
 # The platform of the dev path (make k8s-up), which installs every component that runs on it with base/ alone: the
 # renders with base/ alone are that platform's.
 dev_platform=k3d
@@ -465,6 +472,11 @@ for env in $envs; do
 done
 [ -z "$pr_ok" ] || echo "$pr_ok"
 [ -z "$tree_only" ] || exit 0
+# The one environment whose images are listed is rendered alone, the tree having been checked with all of them.
+if [ -n "$images_only" ]; then
+  envs=$images_env
+  : >"$images_out"
+fi
 
 # two_level: non-empty when tree has two-level root (argocd/root then argocd/apps with level 1 values).
 two_level=
@@ -1053,6 +1065,19 @@ render_tree() {
       checked=$((checked + kyverno_checked))
     done
 
+    # The images ENV runs on eks: per component the render of the environment's overlay, else of the platform, else
+    # the base's (what Argo CD would install there; a component that does not run on eks has none).
+    if [ -n "$images_only" ]; then
+      while IFS=$sep read -r name _; do
+        { [ "$name" = argocd ] || runs_on "$name" eks; } || continue
+        for f in "$out/env/$images_env-eks/$name.yaml" "$out/platform/eks/$name.yaml" "$out/base/$name.yaml"; do
+          [ -f "$f" ] || continue
+          image_refs "$name" "$f" | cut -f2 >>"$images_out"
+          break
+        done
+      done <<<"$list"
+    fi
+
     echo "image digests with the charts of $label: charts rendered: $rendered, with a platform's values: $platformed, with an environment's overlay: $overlays; resources of their renders checked by policy images-pinned: $checked"
     if [ -n "$drift" ]; then
       printf 'FAIL  values of an environment or a platform whose render runs other images than the render they add to (charts of %s):\n%s' "$label" "$drift" >&2
@@ -1082,6 +1107,11 @@ done
 [ -z "$unpinned" ] || render_tree "$tree" "$unpinned" ""
 if [ -n "$root_only" ]; then
   echo "ok    $tree: the tree and its root chart"
+  exit 0
+fi
+if [ -n "$images_only" ]; then
+  sort -u "$images_out" -o "$images_out"
+  echo "ok    $(grep -c . "$images_out" || true) images of $images_env on eks in $images_out"
   exit 0
 fi
 

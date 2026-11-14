@@ -31,10 +31,13 @@ Mục lục theo [Diátaxis](https://diataxis.fr): mỗi tài liệu thuộc m�
   điều kiện, vì sao, và khi giảm thì kiểm bù ở đâu.
 - [`explanation/edge.md`](explanation/edge.md): đường vào công khai trên AWS: CloudFront, WAF, ALB internal, Envoy; IP client, chứng chỉ, DNS
   và log của edge.
-- [`explanation/aws-security.md`](explanation/aws-security.md): org AWS theo AWS SRA: account, guardrail, ai đổi được gì, phát hiện, luồng
-  log và luồng cảnh báo bảo mật.
-- [`explanation/delivery.md`](explanation/delivery.md): CI/CD, chuỗi cung ứng, ba repo và hợp đồng API.
-- [`explanation/observability.md`](explanation/observability.md): trace, metric, log, lỗi và số đo trình duyệt đi từ đâu tới đâu.
+- [`explanation/aws-security.md`](explanation/aws-security.md): org AWS theo AWS SRA: account, guardrail, ai đổi được
+  gì, phát hiện, registry ECR và credential AWS của CI, endpoint interface, đăng nhập công cụ vận hành, luồng log và
+  luồng cảnh báo bảo mật.
+- [`explanation/delivery.md`](explanation/delivery.md): CI/CD, chuỗi cung ứng, phát hành sang ECR và image bên thứ ba
+  trên EKS, ba repo và hợp đồng API.
+- [`explanation/observability.md`](explanation/observability.md): trace, metric, log, lỗi và số đo trình duyệt đi từ đâu
+  tới đâu ở compose, k3d và EKS (dịch vụ managed của AWS).
 - [`explanation/reliability.md`](explanation/reliability.md): SLO, tải, backup, probe và vận hành.
 - [`threat-model.md`](threat-model.md): mối đe doạ theo bề mặt (STRIDE) và cách kiểm từng mối.
 - [`adr/`](adr/): nhật ký quyết định kiến trúc, mỗi quyết định một file; không bắt buộc đọc để dùng repo. Mục lục, trạng thái và

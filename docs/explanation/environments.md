@@ -12,7 +12,7 @@ Trang không chép số. Giá trị nằm ở:
 | gitops root | `aws/gitops/<env>/<env>.tfvars` của `svp-infra` |
 | module `<tên>` | [`aws/modules/<tên>/`](https://github.com/anhnvcoder/svp-infra/tree/main/aws/modules) của `svp-infra`: giá trị chung hai env |
 | root `aws/<tên>` | [`aws/<tên>/`](https://github.com/anhnvcoder/svp-infra/tree/main/aws) của `svp-infra`: root cấp org (`org`, `log-archive`, `baseline`), sống giữa các buổi, chung hai env |
-| root `aws/accounts/<env>` | [`aws/accounts/<env>/main.tf`](https://github.com/anhnvcoder/svp-infra/tree/main/aws/accounts) của `svp-infra`: baseline của account env (zone, budget), sống giữa các buổi |
+| root `aws/accounts/<env>` | [`aws/accounts/<env>/main.tf`](https://github.com/anhnvcoder/svp-infra/tree/main/aws/accounts) của `svp-infra`: baseline của account env (zone, budget, registry ECR, nơi nhận telemetry), sống giữa các buổi; giá trị theo env ở khối `locals` cạnh `env` |
 | `envs/<env>/`, `platforms/eks/`, `base/` | thư mục cùng tên của [`svp-gitops`](https://github.com/anhnvcoder/svp-gitops); `platforms/eks/` dùng chung hai env |
 
 ## Ba nhóm
@@ -23,12 +23,14 @@ Trang không chép số. Giá trị nằm ở:
 - **Giảm có điều kiện:** stg mất một hành vi (thường là failover); cột "Mất gì → kiểm bù" ghi chỗ kiểm hành vi đó.
 - **Định danh:** tên, account, zone, cổng tunnel, bản phát hành. Khác vì là env khác, không phải mức khác (ADR-0055 §5).
 
-Cột "stg so với prd" nói hướng khác biệt; số ở file của cột "Giá trị ở".
-[ADR-0056](../adr/0056-eks-platform-ha.md), [ADR-0057](../adr/0057-postgres17-verify-full.md) và
-[ADR-0058](../adr/0058-managed-data-operations.md) giữ số của Karpenter, nhóm node hệ thống, Envoy và Kyverno HA, PostgreSQL 17, lớp
-RDS, alarm; [ADR-0059](../adr/0059-org-structure-guardrails.md), [ADR-0060](../adr/0060-org-detection-logging.md) giữ guardrail, log và
-retention cấp org ([`aws-security.md`](aws-security.md)). Mỗi biến của `<env>.tfvars` có ít nhất một dòng; thêm hay bỏ biến thì sửa bảng
-trong cùng thay đổi (ADR-0055 §1).
+Cột "stg so với prd" nói hướng khác biệt; số ở file của cột "Giá trị ở". [ADR-0056](../adr/0056-eks-platform-ha.md),
+[ADR-0057](../adr/0057-postgres17-verify-full.md) và [ADR-0058](../adr/0058-managed-data-operations.md) giữ số của
+Karpenter, nhóm node hệ thống, Envoy và Kyverno HA, PostgreSQL 17, lớp RDS, alarm;
+[ADR-0062](../adr/0062-ecr-registry-ci-oidc.md), [ADR-0063](../adr/0063-managed-observability.md),
+[ADR-0064](../adr/0064-interface-endpoints.md) giữ số của registry, retention telemetry và endpoint interface;
+[ADR-0059](../adr/0059-org-structure-guardrails.md), [ADR-0060](../adr/0060-org-detection-logging.md) giữ guardrail, log
+và retention cấp org ([`aws-security.md`](aws-security.md)). Mỗi biến của `<env>.tfvars` có ít nhất một dòng; thêm hay
+bỏ biến thì sửa bảng trong cùng thay đổi (ADR-0055 §1).
 
 ## Mạng
 
@@ -43,6 +45,8 @@ trong cùng thay đổi (ADR-0055 §1).
 | Policy S3 gateway endpoint | `s3_endpoint_restricted` (`<env>.tfvars`) | phải giống | bật ở cả hai | Policy chỉ cho bucket trong danh sách: image kéo từ bucket thiếu sẽ lỗi, stg gặp lỗi đó trước prd | — | [S3EP] |
 | Bucket thêm của endpoint | `s3_endpoint_extra_buckets` (`<env>.tfvars`) | phải giống | cùng danh sách | Bucket mà `registry.k8s.io` chuyển hướng client trong AWS tới | — | [S3EP] |
 | NetworkPolicy | add-on `vpc-cni` của module `eks` (network policy agent), chart | phải giống | như nhau | Chính sách mạng của chart áp như nhau mọi nơi | — | [EKSNET] |
+| Endpoint interface: dịch vụ, private DNS, security group `svp-<env>-endpoints`, endpoint policy | module `network` | phải giống | như nhau ([ADR-0064](../adr/0064-interface-endpoints.md)) | Mọi gọi API AWS của cluster đi qua endpoint có policy chặn principal ngoài account; đường đi, policy và NetworkPolicy tới endpoint chạy thử ở stg trước | — | [PLEP], [EKSPRIV] |
+| Số AZ đặt ENI của endpoint interface | `interface_endpoint_az_count` (`<env>.tfvars`) | được giảm | stg một AZ, prd mọi AZ | Endpoint tính theo giờ mỗi AZ; pod ở AZ khác của stg đi chéo AZ tới ENI, cùng đường, cùng policy. stg đã phụ thuộc AZ đầu cho đường ra (một NAT) | — | [PLEP], [COST] |
 
 ## EKS: control plane và truy cập
 
@@ -82,7 +86,26 @@ trong cùng thay đổi (ADR-0055 §1).
 | Kyverno HA (ba replica, PDB, trải zone) | `platforms/eks/kyverno.yaml` | phải giống | như nhau | Admission webhook chết thì không tạo được pod | — | [EKSAPP] |
 | Trải theo zone | chart `svp-service` (`spreadAcrossNodes`) | phải giống | như nhau | Mất một AZ không mất mọi replica | — | [EKSAPP] |
 | Kiểm image (chữ ký, báo cáo lỗ hổng, provenance) | `envs/<env>/svp-policy.yaml` | phải giống | như nhau | prd chỉ chạy image đã qua cùng cổng ở stg | — | [12F] |
-| Observability trong cluster, Argo CD | `platforms/eks/` | phải giống | như nhau | Cùng cách quan sát và triển khai | — | [12F] |
+| Thu telemetry trong cluster (Collector, Prometheus agent), Pyroscope, GlitchTip, Argo CD | `platforms/eks/` | phải giống | như nhau | Cùng cách quan sát và triển khai | — | [12F] |
+
+## Registry và image
+
+| Thành phần | Giá trị ở | Nhóm | stg so với prd | Lý do | Mất gì → kiểm bù | Nguồn |
+| --- | --- | --- | --- | --- | --- | --- |
+| Registry ECR, repo phát hành (KMS, tag bất biến, không lifecycle), pull-through cache, template repo cache | module `registry`, root `aws/accounts/<env>` | phải giống | như nhau ([ADR-0062](../adr/0062-ecr-registry-ci-oidc.md)) | Pod kéo image từ registry trong account của nó; chép, xác minh và cache chạy ở stg trước | — | [ECRPTC], [ECRBP] |
+| Quét Inspector trên repo cache | module `registry`, root `aws/security` | phải giống | như nhau | Image bên thứ ba được quét ở cả hai account; finding vào Security Hub | — | [INSPECR] |
+| Chuyển hướng image (`svp-registry-mirror`), `releaseRegistry`, credential ECR của Kyverno | `platforms/eks/svp-policy.values.tpl` | phải giống | như nhau; host là registry của env | Cùng policy đổi tham chiếu và xác minh ở ECR | — | [ECRPTC] |
+| Bộ role CI ECR | `ci_roles` (khối `locals` của root `aws/accounts/<env>`) | định danh | stg nhận bản phát hành từ `main` (role release mỗi repo code), prd chỉ qua `promote-prd` (role promote); cả hai có role rescan | Đường vào image theo env, không phải mức khác: prd chỉ nhận cái stg đã chạy, qua người duyệt ([ADR-0062](../adr/0062-ecr-registry-ci-oidc.md) §5) | — | [GHOIDC] |
+
+## Observability
+
+| Thành phần | Giá trị ở | Nhóm | stg so với prd | Lý do | Mất gì → kiểm bù | Nguồn |
+| --- | --- | --- | --- | --- | --- | --- |
+| Nơi nhận telemetry (workspace AMP, log group ứng dụng, X-Ray qua Transaction Search, Amazon Managed Grafana), khoá KMS | module `observability`, root `aws/accounts/<env>` | phải giống | như nhau ([ADR-0063](../adr/0063-managed-observability.md)) | Cùng đích, cùng tên metric, luật, dashboard; dữ liệu sống qua destroy ở cả hai | — | [EKSOBS] |
+| Prometheus agent HA, luật và Alertmanager trên AMP, dashboard qua Grafana Operator | `platforms/eks/`, chart `svp-observability` | phải giống | như nhau | Cảnh báo, dashboard và canary đọc cùng dữ liệu ở hai env | — | [EKSOBS] |
+| Retention của workspace AMP | `amp_retention_days` (`locals` của root `aws/accounts/<env>`) | được giảm | stg ngắn hơn, vẫn phủ cửa sổ SLO dài nhất | Lưu trữ tính theo dung lượng giữ | — | [COST] |
+| Retention của log group ứng dụng | `log_retention_days` (`locals` của root `aws/accounts/<env>`) | được giảm | stg ngắn hơn | Log của stg chỉ phủ một buổi vài giờ | — | [COST] |
+| Retention của `aws/spans` | `span_retention_days` (`locals` của root `aws/accounts/<env>`; đặt bằng lệnh của output `spans_retention_command`) | được giảm | stg ngắn hơn | Như log group ứng dụng; log group do X-Ray tạo nên Terraform chỉ in lệnh | — | [COST] |
 
 ## RDS PostgreSQL
 
@@ -185,6 +208,13 @@ trong cùng thay đổi (ADR-0055 §1).
 
 | Nhãn | Nguồn |
 | --- | --- |
+| [PLEP] | AWS PrivateLink, interface VPC endpoints: <https://docs.aws.amazon.com/vpc/latest/privatelink/create-interface-endpoint.html> |
+| [EKSPRIV] | Amazon EKS, private clusters (endpoint cần cho cluster không ra Internet): <https://docs.aws.amazon.com/eks/latest/userguide/private-clusters.html> |
+| [ECRPTC] | Amazon ECR, pull through cache: <https://docs.aws.amazon.com/AmazonECR/latest/userguide/pull-through-cache.html> |
+| [ECRBP] | Security Hub, controls for Amazon ECR: <https://docs.aws.amazon.com/securityhub/latest/userguide/ecr-controls.html> |
+| [INSPECR] | Amazon Inspector, scanning Amazon ECR container images: <https://docs.aws.amazon.com/inspector/latest/user/scanning-ecr.html> |
+| [GHOIDC] | GitHub, OpenID Connect reference: <https://docs.github.com/en/actions/reference/security/oidc> |
+| [EKSOBS] | AWS Prescriptive Guidance, Amazon EKS observability best practices: <https://docs.aws.amazon.com/prescriptive-guidance/latest/amazon-eks-observability-best-practices/introduction.html> |
 | [12F] | The Twelve-Factor App, X. Dev/prod parity: <https://12factor.net/dev-prod-parity> |
 | [REL10] | AWS Well-Architected, REL10-BP01 Deploy the workload to multiple locations: <https://docs.aws.amazon.com/wellarchitected/latest/reliability-pillar/rel_fault_isolation_multiaz_region_system.html> |
 | [COST] | AWS Well-Architected, Cost Optimization Pillar: <https://docs.aws.amazon.com/wellarchitected/latest/cost-optimization-pillar/welcome.html> |

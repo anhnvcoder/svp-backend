@@ -101,6 +101,16 @@ Loại tài liệu (Diátaxis): **reference**, tra cứu khi cần một lệnh 
   dạng cũ. Xác minh bundle chậm hơn (CLI không cache 36–46 s so với 14–16 s) mà `timeoutSeconds` của policy là 30: admission thật của
   bản phát hành bundle đầu chưa đo, **kiểm sau push** ở lượt `verify.yml` `gitops` đầu tiên sau khi bản đó promote stg (hạn 20 s lần
   không cache, ADR-0040 mục 6).
+- **Value theo nền tảng của `svp-policy`** ([ADR-0062](../adr/0062-ecr-registry-ci-oidc.md) §8, §9; giải thích ở
+  [`delivery.md`](../explanation/delivery.md#image-bên-thứ-ba-trên-eks)): `releaseRegistry` (mặc định
+  `ghcr.io/anhnvcoder`) thay host và owner của mọi `imagePrefix` khi render, nên glob và phép 1 của `svp-images` khớp
+  image ở registry khác mà `sources.json` vẫn giữ GHCR; `registryCredentials` (mặc định `{}`) thành `spec.credentials`
+  của `svp-images` (`{providers: [amazon]}` để Kyverno đăng nhập ECR); `registryMirror.rules` (danh sách `{from, to}`,
+  cả hai kết thúc `/`; mặc định rỗng, không render gì) sinh `MutatingPolicy` `svp-registry-mirror` đổi tham chiếu image
+  lúc tạo Pod, tiền tố dài nhất trước, chuẩn hoá Docker Hub. k3d giữ cả ba mặc định, render như cũ; EKS đặt chúng ở
+  `platforms/eks/svp-policy.values.tpl` của `svp-gitops` từ `cluster.ecrRegistry`. Test:
+  `deploy/ci/registry-mirror-test.sh` (Kyverno CLI trên fixture: mọi dạng Docker Hub, tiền tố dài nhất, namespace
+  `kyverno` bị bỏ), cùng `make kyverno-test`.
 
 ## Lệnh của cluster
 

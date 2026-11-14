@@ -6,11 +6,15 @@
 
 # rescan.sh scan-index REPOSITORY DIGEST OUT: scans each platform manifest of the index (trivy reads one per scan).
 # rescan.sh run [--source NAME] OUT GITOPS_DIR [VALUES_REF]: attests the releases `list` prints (CI only).
+# rescan.sh run-digest [--source NAME] OUT IMAGE DIGEST ENV: attests one release no svp-gitops ref names yet (CI only).
 # rescan.sh list [--source NAME] GITOPS_DIR [VALUES_REF]: prints the releases of source NAME, one per line.
 
 # run attests only digests signed on main by the images.yml of source NAME, the repository running the job: an old
 # attestation is replaced whoever signed it, so another source's run would replace it with its own identity and Kyverno
 # would refuse every new pod of those releases. A secret found today is never attested.
+
+# A release read under envs/<env>/ of svp-gitops then gets the new vuln in env's ECR too (ecr-copy.sh refresh), with
+# AWS profile svp-<env> and the host in SVP_ECR_REGISTRY_<ENV> (empty: no ECR, as in tests and on k3d).
 # Design notes: docs/reference/ci.md.
 set -euo pipefail
 
@@ -104,7 +108,7 @@ keep_own() {
 # service, repository, digest and where it was read, tab-separated. Fails, after printing every release it could read,
 # when a file cannot be read or the host does not say whether the promote pull request is open.
 list() {
-  local dir=$1 values_ref=${2:-} refs=() labels=() open i ref e svc file status=0 code=
+  local dir=$1 values_ref=${2:-} refs=() labels=() open prd_app i ref e svc file status=0 code=
   [ "$(git -C "$dir" rev-parse --show-toplevel 2>/dev/null)" = "$(cd "$dir" 2>/dev/null && pwd -P)" ] ||
     fail "$dir is not a clone of svp-gitops (make gitops-clone)"
   # gf ARGS...: an anonymous fetch from svp-gitops into the clone.
@@ -120,6 +124,16 @@ list() {
   elif [ -n "$open" ]; then
     gf "+refs/heads/$source_branch:refs/svp/rescan/promote" || fail "fetch $source_branch of svp-gitops"
     refs+=(refs/svp/rescan/promote) labels+=("$source_branch of svp-gitops (pull request #$open)")
+  fi
+  # prd's promote pull request, opened by backend's promoter, names the releases of every source; keep_own sorts them.
+  prd_app=$(release_source backend | jq -r .promoter) || exit 1
+  if ! open=$(promote_open_pr "$gitops_repo" "$gitops_promote_prd_branch" "$prd_app"); then
+    echo "FAIL  ask the repository's host whether the promote pull request of $gitops_repo is open; $gitops_promote_prd_branch not read" >&2
+    status=1
+  elif [ -n "$open" ]; then
+    gf "+refs/heads/$gitops_promote_prd_branch:refs/svp/rescan/promote-prd" ||
+      fail "fetch $gitops_promote_prd_branch of svp-gitops"
+    refs+=(refs/svp/rescan/promote-prd) labels+=("$gitops_promote_prd_branch of svp-gitops (pull request #$open)")
   fi
   if [ -n "$values_ref" ]; then
     if gf "+$values_ref:refs/svp/rescan/values-ref" 2>/dev/null; then
@@ -195,6 +209,8 @@ rescan_one() {
   *) fail "$repo@$digest has neither Sigstore bundles nor a signature in cosign's older format; not attested" ;;
   esac
   echo "ok    $repo@$digest attested with today's scan ($format format)"
+  # Read by the caller: a new vuln is on GHCR, so ECR gets it too, even when a CRITICAL fails this digest below.
+  : >"$dir/attested"
   # A CRITICAL is now recorded (Kyverno refuses new pods because of it, not because of an old attestation) and fails
   # the run.
   critical=$(jq -s '[.[].Results[]?.Vulnerabilities[]? | select(.Severity == "CRITICAL")] | length' \
@@ -202,11 +218,45 @@ rescan_one() {
   [ "$critical" -eq 0 ] || fail "$repo@$digest: $critical CRITICAL vulnerabilities, recorded in its vuln attestation"
 }
 
-run() {
+# digest_envs DIGEST: reads the lines of list on stdin and prints, once each, the environment of every line of DIGEST
+# read under envs/<env>/ (fields split by hand: read with IFS=<tab> would merge the tabs around an empty digest).
+digest_envs() {
+  local line d
+  while IFS= read -r line; do
+    d=${line#*$'\t'}
+    d=${d#*$'\t'}
+    [ "${d%%$'\t'*}" != "$1" ] || ecr_env "${d#*$'\t'}"
+  done | sort -u
+}
+
+# ecr_env WHERE: prints the environment of a line of list read under envs/<env>/ of svp-gitops; nothing for a line of
+# the code repository, whose digests no ECR holds.
+ecr_env() {
+  if [[ $1 =~ ,\ envs/([a-z0-9-]+)/images/[^/]+\.yaml$ ]]; then echo "${BASH_REMATCH[1]}"; fi
+}
+
+# ecr_registry ENV: prints SVP_ECR_REGISTRY_<ENV>, the ECR host of ENV the job set (empty when it set none).
+ecr_registry() {
+  local var
+  var=SVP_ECR_REGISTRY_$(tr '[:lower:]-' '[:upper:]_' <<<"$1")
+  echo "${!var:-}"
+}
+
+# ecr_refresh REPOSITORY DIGEST ENV: ecr-copy.sh refresh into ENV's ECR as ENV's rescan role (AWS profile svp-ENV);
+# nothing when the job set no ECR host for ENV.
+ecr_refresh() {
+  local registry
+  registry=$(ecr_registry "$3")
+  if [ -z "$registry" ]; then
+    echo "skip  ECR of $3 for $1@$2: no SVP_ECR_REGISTRY_ for it in this job"
+    return 0
+  fi
+  AWS_PROFILE=svp-$3 "$ci_dir/ecr-copy.sh" refresh "$1" "$2" "$registry"
+}
+
+# own_run: fails unless this is a CI run of the repository of source (source_args first), as its signing workflow.
+own_run() {
   [ "${GITHUB_ACTIONS:-}" = true ] || fail "rescan.sh run attests with the workflow's identity: CI only"
-  source_args "$@"
-  set -- ${args[@]+"${args[@]}"}
-  [ $# -ge 2 ] && [ $# -le 3 ] || fail "usage: rescan.sh run [--source NAME] OUT GITOPS_DIR [VALUES_REF]"
   use_build_source
   [ "$build_source_name" = "$source" ] ||
     fail "rescan.sh run --source $source in a run of $(run_repo_url), the repository of release source $build_source_name: a run attests only the releases of its own source (--source $build_source_name)"
@@ -215,12 +265,24 @@ run() {
   builder=$(run_builder_id)
   [ "$builder" = "$sign_subject" ] ||
     fail "this run is $builder, but the releases of source $source are attested only as $sign_subject"
-  local out=$1 lines svc repo digest where key sarif n=0 failed=0 seen=" " own
+}
+
+run() {
+  [ "${GITHUB_ACTIONS:-}" = true ] || fail "rescan.sh run attests with the workflow's identity: CI only"
+  source_args "$@"
+  set -- ${args[@]+"${args[@]}"}
+  [ $# -ge 2 ] && [ $# -le 3 ] || fail "usage: rescan.sh run [--source NAME] OUT GITOPS_DIR [VALUES_REF]"
+  own_run
+  local out=$1 lines line svc repo digest where key sarif n=0 failed=0 seen=" " own e
   mkdir -p "$out/sarif" || fail "create $out"
   out=$(cd "$out" && pwd)
   lines=$(list "$2" "${3:-}") || failed=1
-  while IFS=$'\t' read -r svc repo digest where; do
-    [ -n "$svc" ] || continue
+  while IFS= read -r line; do
+    [ -n "$line" ] || continue
+    # Split by hand, as keep_own does: an empty digest stays empty.
+    svc=${line%%$'\t'*} repo=${line#*$'\t'}
+    digest=${repo#*$'\t'} repo=${repo%%$'\t'*}
+    where=${digest#*$'\t'} digest=${digest%%$'\t'*}
     if [ -z "$digest" ]; then
       step_summary "- $svc in $where: no digest, not released yet: skipped"
       continue
@@ -237,8 +299,41 @@ run() {
     sarif=
     case $where in "main of svp-gitops,"*) sarif=$out/sarif ;; esac
     (rescan_one "$svc" "$repo" "$digest" "$out/$n-$svc" "$sarif") || failed=1
+    [ -e "$out/$n-$svc/attested" ] || continue
+    # Every environment whose envs/ names the digest at any ref read, each its own ECR.
+    for e in $(digest_envs "$digest" <<<"$lines"); do
+      ecr_refresh "$repo" "$digest" "$e" || failed=1
+    done
   done <<<"$lines"
   [ "$n" -gt 0 ] || step_summary "No released digest to rescan."
+  return "$failed"
+}
+
+# run_digest IMAGE DIGEST ENV (source_args first): a release left in ENV's ECR that no ref of svp-gitops names under
+# envs/ENV/ yet (a copy that failed, a promote-prd that stopped): attested again on GHCR, refreshed in that ECR and,
+# in stg's, its missing bundles copied; the leg or promote-prd that stopped then passes when run again.
+run_digest() {
+  [ "${GITHUB_ACTIONS:-}" = true ] || fail "rescan.sh run-digest attests with the workflow's identity: CI only"
+  source_args "$@"
+  set -- ${args[@]+"${args[@]}"}
+  [ $# -eq 4 ] || fail "usage: rescan.sh run-digest [--source NAME] OUT IMAGE DIGEST ENV"
+  local out=$1 img=$2 digest=$3 target=$4 repo registry failed=0
+  repo=$(release_source "$source" | jq -r .imagePrefix)$img || exit 1
+  release_source_of "$img" "$repo" >/dev/null || fail "$img is no service of release source $source"
+  is_digest "$digest" || fail "digest '$digest' is not sha256:<64 hex>"
+  case $target in stg | prd) ;; *) fail "env '$target' is neither stg nor prd" ;; esac
+  registry=$(ecr_registry "$target")
+  [ -n "$registry" ] || fail "no ECR host of $target in this job (SVP_ECR_REGISTRY_$(tr '[:lower:]' '[:upper:]' <<<"$target"))"
+  own_run
+  mkdir -p "$out" || fail "create $out"
+  out=$(cd "$out" && pwd)
+  (rescan_one "$img" "$repo" "$digest" "$out/1-$img" "") || failed=1
+  [ -e "$out/1-$img/attested" ] || return 1
+  ecr_refresh "$repo" "$digest" "$target" || return 1
+  # Only stg's: a release enters prd's ECR through promote-prd alone.
+  if [ "$target" = stg ]; then
+    AWS_PROFILE=svp-stg "$ci_dir/ecr-copy.sh" copy "$repo" "$digest" "$registry" || return 1
+  fi
   return "$failed"
 }
 
@@ -254,6 +349,10 @@ if [[ ${BASH_SOURCE[0]} == "$0" ]]; then
     shift
     run "$@"
     ;;
+  run-digest)
+    shift
+    run_digest "$@"
+    ;;
   list)
     shift
     source_args "$@"
@@ -261,6 +360,6 @@ if [[ ${BASH_SOURCE[0]} == "$0" ]]; then
     [ $# -ge 1 ] && [ $# -le 2 ] || fail "usage: rescan.sh list [--source NAME] GITOPS_DIR [VALUES_REF]"
     list "$1" "${2:-}"
     ;;
-  *) fail "usage: rescan.sh scan-index REPOSITORY DIGEST OUT | rescan.sh run [--source NAME] OUT GITOPS_DIR [VALUES_REF] | rescan.sh list [--source NAME] GITOPS_DIR [VALUES_REF]" ;;
+  *) fail "usage: rescan.sh scan-index REPOSITORY DIGEST OUT | rescan.sh run [--source NAME] OUT GITOPS_DIR [VALUES_REF] | rescan.sh run-digest [--source NAME] OUT IMAGE DIGEST ENV | rescan.sh list [--source NAME] GITOPS_DIR [VALUES_REF]" ;;
   esac
 fi

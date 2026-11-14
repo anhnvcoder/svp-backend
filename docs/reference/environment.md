@@ -33,6 +33,13 @@ Loại tài liệu (Diátaxis): **reference**, tra cứu khi cần một lệnh 
   `SVP_AWS_PRD_ACCOUNT_ID` (id 12 chữ số của account env; script dừng trước mọi lệnh ghi khi account của `AWS_PROFILE` khác biến
   của env đó), `SVP_RDS_MASTER_PASSWORD` (chỉ `eks-secrets`: mật khẩu master của RDS, script buổi của `svp-infra` đọc từ AWS, thành
   key `SVP_PG_SUPERUSER_PASSWORD` của entry `pg-superuser`; không bao giờ đọc từ `.env`).
+- Không ở `.env`, chỉ trong CI của `svp-backend`, `svp-frontend` (credential AWS của job ghi ECR,
+  [ADR-0062](../adr/0062-ecr-registry-ci-oidc.md) §5, [`ci.md`](ci.md)): secret repo `SVP_AWS_STG_ACCOUNT_ID`,
+  `SVP_AWS_PRD_ACCOUNT_ID` (cùng tên với biến terminal ở trên; người học đặt bằng `gh secret set`, secret để account ID
+  bị che trong log công khai); job `rescan` đặt `SVP_ECR_REGISTRY_STG`, `SVP_ECR_REGISTRY_PRD` (host ECR của env) cho
+  `deploy/ci/rescan.sh`, rỗng thì bỏ bước ECR. Không access key nào: role nhận bằng OIDC. Token của Grafana Operator
+  cũng không ở `.env`: script buổi của `svp-infra` ghi thẳng entry `svp/<env>/grafana-operator`, `make eks-secrets`
+  không đọc hay ghi nó.
 - Không ở `.env`, chỉ cho `make drill-k8s-reloader` ([`k8s.md`](k8s.md)): `SVP_DRILL_NEW_VALUES`, đường dẫn tới file giá trị mới
   (mode 600, mỗi dòng `NAME=value`, do `deploy/k8s/drills/reloader/new-values.sh` ghi); không đặt thì diễn tập tự sinh, trừ trên GitHub
   Actions, nơi biến này bắt buộc (bước trước của job đã mask từng giá trị). Diễn tập ghi giá trị mới vào `.env` và để lại đó.
@@ -70,9 +77,12 @@ Mọi môi trường dùng cùng giao thức và cùng code của client; khác 
 - **`SSL_CERT_DIR=/etc/svp-ca`** (container Go) và **`NODE_EXTRA_CA_CERTS=/etc/svp-ca/ca.crt`** (web): chỉ local (compose, k3d), cho
   client tin **CA local** cạnh root của hệ thống; `ca.crt` mount chỉ đọc. Trên EKS không đặt: cert của MSK, ElastiCache nối về CA công
   khai của Amazon. Go trên macOS bỏ qua `SSL_CERT_DIR`, nên biến này chỉ có tác dụng trong container Linux.
-- **Collector** (receiver `kafkametrics`, user `svp-otelcol`): `SVP_KAFKA_OTELCOL_PASSWORD` (compose từ `.env`, cluster từ Secret
-  `svp-obs/otelcol-kafka` khoá `password`), `SVP_OTELCOL_KAFKA_BROKERS` (địa chỉ như `KAFKA_BROKERS`), `SVP_OTELCOL_KAFKA_CA_FILE`
-  (`/etc/svp-ca/ca.crt` ở local, rỗng trên EKS).
+- **Collector** (receiver `kafkametrics`, user `svp-otelcol`): `SVP_KAFKA_OTELCOL_PASSWORD` (compose từ `.env`, cluster
+  từ Secret `svp-obs/otelcol-kafka` khoá `password`), `SVP_OTELCOL_KAFKA_BROKERS` (địa chỉ như `KAFKA_BROKERS`),
+  `SVP_OTELCOL_KAFKA_CA_FILE` (`/etc/svp-ca/ca.crt` ở local, rỗng trên EKS). Chỉ trên EKS (`k8s-eks.yaml`, đặt bởi
+  `platforms/eks/otel-collector.values.tpl` của `svp-gitops` từ `cluster.*`, không ở `.env`): `SVP_OTELCOL_REGION`
+  (region của AMP, CloudWatch Logs, X-Ray), `SVP_OTELCOL_AMP_ENDPOINT` (`cluster.ampEndpoint`, kết thúc `/`),
+  `SVP_OTELCOL_LOG_GROUP` (`cluster.logGroup`).
 - **CLI vận hành** (`/opt/svp/bin/svp-kafka`, `/opt/svp/bin/svp-valkey` từ `deploy/ops/`, chạy trong container `kafka`, `valkey` của
   compose và Deployment `svp-data/svp-ops` của cluster): `svp-kafka` đọc `KAFKA_BROKERS` và `SVP_KAFKA_ADMIN_PASSWORD` (user
   `svp-admin`), `svp-valkey` đọc `VALKEY_HOST` và `SVP_VALKEY_OPS_PASSWORD` (user `svp-ops`, chuyển cho `valkey-cli` qua

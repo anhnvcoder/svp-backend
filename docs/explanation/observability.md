@@ -1,8 +1,9 @@
 # Quan sát: trace, metric, log, lỗi và RUM
 
-Trang này trả lời: tín hiệu nào (trace, metric, log, profile, lỗi, số đo trình duyệt) đi từ đâu tới đâu, ở compose và ở k3d khác
-nhau ra sao, và web được quan sát thế nào mà không lộ dữ liệu người dùng. SLO và cảnh báo ở [`reliability.md`](reliability.md#slo);
-lệnh ở [`reference/compose.md`](../reference/compose.md), [`reference/k8s.md`](../reference/k8s.md).
+Trang này trả lời: tín hiệu nào (trace, metric, log, profile, lỗi, số đo trình duyệt) đi từ đâu tới đâu, ở compose, k3d
+và EKS khác nhau ra sao, và web được quan sát thế nào mà không lộ dữ liệu người dùng. SLO và cảnh báo ở
+[`reliability.md`](reliability.md#slo); lệnh ở [`reference/compose.md`](../reference/compose.md),
+[`reference/k8s.md`](../reference/k8s.md), [`reference/eks.md`](../reference/eks.md).
 
 ## Compose
 
@@ -59,16 +60,64 @@ GlitchTip trên database `svp_glitchtip` của `svp-pg`. Không UI nào có rout
 
 ### Collector của cluster
 
-Release `otel-collector` ở namespace `svp-obs`, Service `otel-collector.svp-obs:4317`. Chart `svp-observability` đặt
-[`deploy/observability/otelcol/k8s-config.yaml`](../../deploy/observability/otelcol/k8s-config.yaml) vào ConfigMap
-`otel-collector-config` (khoá `relay`) qua symlink, nên file là cấu hình thật, không qua template Helm.
+Release `otel-collector` ở namespace `svp-obs`, Service `otel-collector.svp-obs:4317`. Cấu hình là hai file của
+[`deploy/observability/otelcol/`](../../deploy/observability/otelcol/) ([ADR-0063](../adr/0063-managed-observability.md) §6):
 
-Receiver, processor xoá dữ liệu nhạy cảm và telemetry của chính nó giống `config.yaml` của profile `obs` ở compose; chỉ đích khác.
-Compose chuyển mọi thứ tới Collector bên trong `grafana/otel-lgtm` rồi nó tách ra; ở cluster mỗi backend là một Deployment riêng nên
-Collector này gửi từng tín hiệu thẳng tới endpoint OTLP của backend, chính là các endpoint mà Collector trong LGTM dùng: Prometheus
-và Loki qua OTLP/HTTP, Tempo qua OTLP/gRPC. Tên và nhãn metric vì vậy ra từ phần dịch OTLP của chính Prometheus như ở compose, và
-dashboard, rule chạy không đổi. Giữ hai file khớp nhau; `make otelcol-validate` kiểm cả hai. Chỉ hàng đợi của exporter khác có chủ
-đích: ở đây giới hạn theo byte, vì ba exporter dùng chung một `memory_limiter`.
+- `k8s-config.yaml`: phần chung của mọi nền tảng (receiver, processor).
+- File đích của nền tảng: `extensions`, `exporters`, `connectors` riêng và cả khối `service` (pipeline, telemetry của
+  chính Collector). `k8s-k3d.yaml` gửi tới LGTM trong cluster (dưới đây), `k8s-eks.yaml` gửi tới dịch vụ managed
+  ([EKS](#eks)).
+
+Chart `svp-observability` đọc hai file qua symlink dưới `files/`, nên file là cấu hình thật, không qua template Helm, và
+render ConfigMap `otel-collector-config` với một khoá `relay`: file chung gộp sâu với file đích mà value
+`collector.destinations` chọn (`k3d` mặc định, `eks`). Map gộp theo khoá; danh sách và giá trị đơn của file đích thay
+của file chung, đúng như Collector nạp hai `--config` liên tiếp. Release `otel-collector` đọc khoá `relay` như nhau ở
+mọi nền tảng: khác biệt là dữ liệu (value), không nhánh trong template.
+
+```mermaid
+flowchart LR
+    common["k8s-config.yaml<br/>receiver, processor"]
+    k3d["k8s-k3d.yaml<br/>exporter OTLP tới LGTM"]
+    eks["k8s-eks.yaml<br/>exporter SigV4 tới AWS"]
+    chart["chart svp-observability<br/>collector.destinations"]
+    cm["ConfigMap otel-collector-config<br/>khoá relay"]
+    pod["pod otel-collector<br/>annotation checksum"]
+    common --> chart
+    k3d -->|"k3d"| chart
+    eks -->|"eks"| chart
+    chart -->|"gộp sâu"| cm
+    cm --> pod
+```
+
+**Checksum config Collector:** pod Collector chỉ khởi động lại khi annotation trên pod template đổi, vì ConfigMap đổi
+không làm gì pod đang chạy. Giá trị là sha256 (hex) của nội dung `k8s-config.yaml`, `k8s-k3d.yaml`, `k8s-eks.yaml` nối
+liền theo đúng thứ tự đó; file không có ở revision đang tính góp 0 byte, nên revision cũ cho đúng giá trị cũ. Sửa riêng
+file đích của một nền tảng cũng đổi giá trị. Đường dev tính nó trong `deploy/k8s/helmfile.yaml.gotmpl`; đường GitOps ghi
+nó vào khoá `collectorConfigSha256` của `envs/<env>/charts.yaml` (job `promote` tính, check của `svp-gitops` so với
+commit chart ghim: [`reference/ci.md`](../reference/ci.md#gitops-checksh-values-checksh-và-policy-kyverno)).
+
+Receiver, processor xoá dữ liệu nhạy cảm và telemetry của chính nó giống `config.yaml` của profile `obs` ở compose; chỉ
+đích khác. Compose chuyển mọi thứ tới Collector bên trong `grafana/otel-lgtm` rồi nó tách ra; ở k3d mỗi backend là một
+Deployment riêng nên Collector gửi từng tín hiệu thẳng tới endpoint OTLP của backend, chính là các endpoint mà Collector
+trong LGTM dùng: Prometheus và Loki qua OTLP/HTTP, Tempo qua OTLP/gRPC. Tên và nhãn metric vì vậy ra từ phần dịch OTLP
+của chính Prometheus như ở compose, và dashboard, rule chạy không đổi. Giữ `config.yaml` và cặp `k8s-config.yaml` +
+`k8s-k3d.yaml` khớp nhau; `make otelcol-validate` kiểm `config.yaml` và từng cặp file chung + file đích. Chỉ hàng đợi
+của exporter khác có chủ đích: ở `k8s-k3d.yaml` giới hạn theo byte, vì ba exporter dùng chung một `memory_limiter`.
+
+```mermaid
+flowchart LR
+    svc["6 service, web"] -->|"OTLP gRPC 4317"| col["otel-collector"]
+    col -->|"metric OTLP/HTTP"| prom["Prometheus"]
+    col -->|"log OTLP/HTTP"| loki["Loki"]
+    col -->|"trace OTLP/gRPC"| tempo["Tempo<br/>metrics-generator"]
+    tempo -->|"remote write<br/>traces_service_graph_*"| prom
+    prom -->|"cảnh báo"| am["Alertmanager"]
+    am -->|"severity=page"| tg["Telegram"]
+    graf["Grafana"] --> prom
+    graf --> loki
+    graf --> tempo
+    ro["Argo Rollouts"] -->|"PromQL canary"| prom
+```
 
 - **Kafka:** lag consumer group và số broker như ở compose, cùng receiver `kafka_metrics` với user `svp-otelcol`, mật khẩu từ Secret
   `svp-obs/otelcol-kafka` (khoá `password`); k3d nối `kafka.svp-data.svc.cluster.local:9096` và tin CA local, EKS nối bootstrap SCRAM của
@@ -148,6 +197,111 @@ thấy gói sau khi Service đã dịch tới pod (cổng 3000 của Grafana sau
   gì trong cluster hay trên host bị mở. Dải đã công bố của Telegram sẽ hẹp hơn, nhưng chúng đổi không báo trước, và cảnh báo khi đó
   dừng mà không lỗi nào cho thấy. Policy vẫn còn khi Telegram tắt: Alertmanager khi đó không gửi gì. Cái giá: một Alertmanager bị chiếm
   tới được mọi địa chỉ công khai ở cổng 443 (compose cũng không giới hạn nó).
+
+## EKS
+
+Vì sao: [ADR-0063](../adr/0063-managed-observability.md) (đích managed, luật, dashboard, canary),
+[ADR-0064](../adr/0064-interface-endpoints.md) (endpoint interface). Cùng SDK, receiver, processor, luật và dashboard
+như k3d; khác ở chỗ dữ liệu nằm ngoài cluster, trong dịch vụ managed của account env (module `observability` ở root
+`aws/accounts/<env>` của `svp-infra`), nên còn sau khi buổi gỡ cluster và xem được giữa các buổi. Cluster chỉ thu và
+gửi. Retention theo env ở [`environments.md`](environments.md#observability).
+
+```mermaid
+flowchart LR
+    subgraph eks["EKS svp-env"]
+        svc["6 service, web"]
+        col["otel-collector<br/>k8s-eks.yaml"]
+        agent["Prometheus agent<br/>2 replica, trải zone"]
+        ack["ACK prometheusservice"]
+        gop["Grafana Operator"]
+        ro["Argo Rollouts"]
+        pyro["Pyroscope, GlitchTip"]
+    end
+    subgraph aws["Account env, qua endpoint interface"]
+        amp[("Workspace AMP svp-env")]
+        ruler["Ruler, Alertmanager của AMP"]
+        logs[("CloudWatch Logs<br/>/svp/env/otel")]
+        xray["X-Ray, Transaction Search<br/>log group aws/spans"]
+        sns[["SNS svp-env-alarms"]]
+        amg["Amazon Managed Grafana<br/>svp-env"]
+    end
+    svc -->|"OTLP gRPC 4317"| col
+    col -->|"remote write, SigV4"| amp
+    col -->|"OTLP log, SigV4"| logs
+    col -->|"OTLP trace, SigV4"| xray
+    agent -->|"scrape ServiceMonitor,<br/>PodMonitor, Collector :8888"| col
+    agent -->|"remote write, SigV4"| amp
+    ack -->|"RuleGroupsNamespace,<br/>AlertManagerDefinition"| ruler
+    amp --- ruler
+    ruler -->|"page, ticket"| sns
+    sns --> mail["Email vận hành"]
+    gop -->|"dashboard, data source<br/>token service account"| amg
+    amg -->|"PromQL"| amp
+    amg -->|"Logs Insights"| xray
+    ro -->|"PromQL canary, SigV4"| amp
+```
+
+- **Collector** (`k8s-eks.yaml`): metric qua `prometheus_remote_write` tới `<ampEndpoint>api/v1/remote_write`, log qua
+  `otlp_http` tới endpoint OTLP của CloudWatch Logs (header log group, stream; module tạo sẵn cả hai vì endpoint không
+  tạo chúng), trace qua `otlp_http` tới endpoint OTLP của X-Ray. Ba extension `sigv4auth` (`aps`, `logs`, `xray`) ký
+  request bằng credential Pod Identity của ServiceAccount `otel-collector`. Giá trị theo cluster đi qua biến
+  `SVP_OTELCOL_REGION`, `SVP_OTELCOL_AMP_ENDPOINT`, `SVP_OTELCOL_LOG_GROUP`, mà
+  `platforms/eks/otel-collector.values.tpl` của `svp-gitops` đặt từ `cluster.*`; file không giữ host hay account nào.
+- **Tên metric như Prometheus:** exporter dịch tên, nhãn theo cùng thư viện với OTLP receiver của Prometheus ở k3d (hậu
+  tố, đơn vị, resource attribute thành label theo `promoteResourceAttributes` của `base/kube-prometheus-stack.yaml`),
+  nên luật và dashboard chạy nguyên. Bảng khác biệt còn lại (không chạm luật, dashboard nào): phụ lục ADR-0063 §6.
+- **Service graph:** connector `service_graph` của Collector sinh `traces_service_graph_*` cùng tên và label `client`,
+  `server` như metrics-generator của Tempo ở k3d. Collector giữ một replica: connector ghép span hai đầu của một cạnh
+  trong cùng instance.
+- **Metric của chính Collector:** telemetry nội bộ không ký được SigV4 và AMP không nhận OTLP, nên Collector mở `:8888`
+  (port `metrics`) và Prometheus agent scrape nó qua PodMonitor `otel-collector`; tên giữ hậu tố, đơn vị,
+  `service_name`, `service_instance_id` như dashboard USE đọc.
+- **Prometheus agent:** `kube-prometheus-stack` chạy Prometheus chế độ agent
+  (`platforms/eks/kube-prometheus-stack.yaml`), 2 replica trải zone, PDB; scrape ServiceMonitor, PodMonitor như k3d rồi
+  remote write tới cùng workspace với SigV4, external label `cluster: svp-<env>`. AMP khử trùng hai replica theo
+  `__replica__`: giữ mẫu của replica leader, đổi leader khi nó im 30 s. Metric OTLP của service không qua agent mà đi
+  thẳng từ Collector: chia OTLP qua hai replica thì AMP bỏ nửa của replica không làm leader. Agent không đánh giá luật,
+  không có Alertmanager, Grafana của chart; Loki, Tempo chỉ chạy ở k3d (trường `platforms` của `components.json`).
+- **Luật trên AMP:** chart `svp-observability` với `rules.target: amp` render mỗi file luật (`svp-alerts`,
+  `slo-generated`) thành một `RuleGroupsNamespace` của ACK prometheusservice controller trên workspace, mỗi nhóm
+  `interval: 15s` như k3d (cần quota của account nâng chu kỳ tối thiểu của AMP từ 30 s xuống 15 s, ADR-0063 §5). ACK
+  tạo, sửa chúng trong AMP; Argo CD chỉ áp CR. AMP đánh giá luật trễ 60 s (`rule_query_offset` mặc định) để chờ mẫu đến
+  muộn, nên cảnh báo cháy chậm hơn k3d khoảng một phút. Nhóm luật upstream của `kube-prometheus-stack` (`defaultRules`)
+  không chuyển lên AMP: ở k3d chúng không page, và không luật, dashboard nào của dự án đọc recording rule của chúng;
+  danh sách và lý do ở phụ lục ADR-0063 §5.
+- **Cảnh báo tới SNS:** `AlertManagerDefinition` `svp-alerts` gửi mọi cảnh báo `page` và `ticket` tới topic
+  `svp-<env>-alarms` (`alarmTopicArn`), cùng topic với alarm của dịch vụ managed ([dưới](#alarm-của-dịch-vụ-managed)):
+  subject `[<severity>] <alertname>`, thông điệp giữ `runbook_url`; nhắc lại page mỗi 4 giờ, ticket mỗi 24 giờ. Topic
+  nhận `aps.amazonaws.com` làm publisher chỉ cho workspace của env. Alertmanager của AMP chỉ có receiver SNS, nên
+  Telegram chỉ còn ở k3d. Cuối buổi `pre-destroy.sh` của `svp-infra` xoá các CR khi ACK còn chạy, nên luật trong AMP đi
+  theo; CR mang `adoption-policy: adopt-or-create` để buổi sau nhận lại bản còn sót.
+- **Dashboard trên AMG:** workspace Amazon Managed Grafana `svp-<env>` đăng nhập bằng IAM Identity Center
+  (`svp-platform-admins` là Admin, `svp-platform-viewers` là Viewer). Với `dashboards.target: grafana-operator`, chart
+  render cho Grafana Operator (namespace `svp-obs`) một CR `Grafana` ngoài cluster trỏ `grafanaUrl`, token đọc từ Secret
+  `grafana-operator` (ExternalSecret từ entry `svp/<env>/grafana-operator`; script buổi của `svp-infra` tạo token mới
+  cho service account `svp-grafana-operator` mỗi buổi), hai data source (`prometheus` kiểu
+  `grafana-amazonprometheus-datasource` ký SigV4, `cloudwatch`) và năm dashboard của
+  `deploy/observability/grafana/dashboards/`. Hai panel đọc datasource `tempo` (TraceQL của `svp-red.json`, service map
+  của `svp-pipeline.json`) bị bỏ; panel `traces_service_graph_*` giữ. Tìm trace ở trang Traces của CloudWatch
+  (Transaction Search); AMG đọc span bằng Logs Insights trên `aws/spans`, không có data source `xray` (plugin của nó
+  không thấy trace khi Transaction Search bật).
+- **Canary hỏi AMP:** chart `svp-service` nhận value `canaryPrometheus` (`address`, `sigv4Region`); trên EKS
+  `platforms/eks/gateway.values.tpl`, `web.values.tpl` đặt `address` là `ampEndpoint` bỏ `/` cuối và `sigv4Region`, nên
+  mỗi metric của AnalysisTemplate thêm `authentication.sigv4`. Controller Argo Rollouts ký bằng Pod Identity của nó (chỉ
+  `aps:QueryMetrics`). Mặc định của chart vẫn là `http://kps-prometheus.svp-obs:9090` của k3d: ở EKS Prometheus chế độ
+  agent không trả lời truy vấn.
+- **Quyền:** mỗi ServiceAccount một role Pod Identity của module `eks` (`svp-infra`), trust theo cluster, namespace,
+  ServiceAccount: `otel-collector` ghi AMP, log group, span; `kps-prometheus` ghi AMP;
+  `ack-prometheusservice-controller` quản rule groups và alert manager definition của workspace; `argo-rollouts` truy
+  vấn AMP. Bảng action: ADR-0063 §11.
+- **Đường mạng:** private DNS của endpoint interface (`aps-workspaces`, `logs`, `xray`, `sts`, `eks-auth`…) phân giải
+  tên API ra IP trong VPC. NetworkPolicy `allow-aws-apis-collector`, `allow-aws-apis-prometheus`, `allow-aws-apis-ack`
+  mở TCP 443 tới `awsEndpointCidrs` (EKS: CIDR của VPC) và TCP 80 tới agent Pod Identity `169.254.170.23`; policy `ack`
+  không mở gì thêm. API của AMG không có endpoint interface, nên policy `grafana-operator` mở TCP 443 tới mọi địa chỉ
+  IPv4 công khai qua NAT, như `allow-alertmanager-telegram` ở k3d ([ADR-0064](../adr/0064-interface-endpoints.md) §6);
+  cái giá: một Grafana Operator bị chiếm tới được mọi địa chỉ công khai ở cổng 443.
+- **Pyroscope, GlitchTip** ở lại trong cluster như k3d (AWS không có dịch vụ tương đương; AMG không tới được dịch vụ
+  trong VPC): dữ liệu mất khi gỡ buổi, xem bằng port-forward.
 
 ## Web
 
@@ -244,11 +398,13 @@ Khi feed-service đọc Postgres để trả trang khám phá, nó ghi dòng `ex
 
 ## Cảnh báo
 
-Rule viết tay ở [`deploy/observability/prometheus/rules/svp-alerts.yaml`](../../deploy/observability/prometheus/rules/svp-alerts.yaml);
-cảnh báo burn rate của SLO ở `slo-generated.yaml` ([SLO](reliability.md#slo)). Rule được đánh giá mỗi 15 s và kiểm bằng
-`svp-alerts.test.yaml` (`make slo-check`). Trong rule viết tay, mọi cảnh báo là page trừ `PostgresBackupTooOld`,
-`RateLimitFallbackElevated` và `ArgoCDApplicationNotConverged` (ticket). Annotation nêu service, target hay pod, không bao giờ nêu
-giá trị của user; `runbook_url` trỏ tới runbook cùng tên cảnh báo trong `docs/runbooks/` trên `main`.
+Rule viết tay ở
+[`deploy/observability/prometheus/rules/svp-alerts.yaml`](../../deploy/observability/prometheus/rules/svp-alerts.yaml);
+cảnh báo burn rate của SLO ở `slo-generated.yaml` ([SLO](reliability.md#slo)). Rule được đánh giá mỗi 15 s (Prometheus ở
+compose, k3d; ruler của AMP trên EKS, [mục EKS](#eks)) và kiểm bằng `svp-alerts.test.yaml` (`make slo-check`). Trong
+rule viết tay, mọi cảnh báo là page trừ `PostgresBackupTooOld`, `RateLimitFallbackElevated` và
+`ArgoCDApplicationNotConverged` (ticket). Annotation nêu service, target hay pod, không bao giờ nêu giá trị của user;
+`runbook_url` trỏ tới runbook cùng tên cảnh báo trong `docs/runbooks/` trên `main`.
 
 - **Gauge đẩy qua OTLP:** gauge đẩy qua OTLP không có staleness marker khi tiến trình dừng, nên mẫu cuối của instance đã dừng vẫn
   hiện trong 5 phút lookback, và mỗi lần restart mang `service_instance_id` mới. Vì vậy rule trên gauge giữ chỉ các mẫu mới hơn 45 s
@@ -299,6 +455,6 @@ flowchart LR
   xác nhận.
 - Alarm `page` mang URL runbook cùng tên trong mô tả, như `runbook_url` của rule Prometheus: runbook ở
   [`runbooks/`](../runbooks/README.md#alarm-của-dịch-vụ-managed-rds-msk-elasticache). Alarm `ticket` không có runbook riêng.
-- Hai kênh là cái giá: cảnh báo của service và SLO ở Alertmanager (Telegram), cảnh báo của dịch vụ dữ liệu ở email. Metric của RDS, MSK,
-  ElastiCache không vào Grafana; Database Insights, enhanced monitoring, log export của RDS, broker log MSK và slow-log Valkey đọc ở
-  CloudWatch.
+- Trên EKS cảnh báo của service và SLO cũng tới topic này (Alertmanager của AMP, [mục EKS](#eks)), nên mọi cảnh báo của
+  env tới cùng email; Telegram chỉ còn ở k3d. Metric của RDS, MSK, ElastiCache không vào dashboard nào của dự án;
+  Database Insights, enhanced monitoring, log export của RDS, broker log MSK và slow-log Valkey đọc ở CloudWatch.
