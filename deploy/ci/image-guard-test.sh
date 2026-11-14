@@ -30,6 +30,7 @@ same() {
 }
 has() { grep -qF -- "$2" "$1"; }
 lacks() { ! grep -qF -- "$2" "$1"; }
+same_count() { [ "$(grep -cF -- "$2" "$3")" -eq "$1" ]; }
 real_docker=$(command -v docker)
 yq_image=$(sed -n 's/^YQ_IMAGE[[:space:]]*:=[[:space:]]*//p' "$src/Makefile")
 
@@ -146,6 +147,12 @@ case " $* " in
   for a in "$@"; do case $a in *:/out) out=${a%:/out} ;; esac; done
   [ "${FAKE_GRYPE:-0}" = 1 ] || { cp "$FAKE_GRYPE_JSON" "$out/grype.json" && echo '{}' >"$out/grype.sarif.raw"; }
   exit "${FAKE_GRYPE:-0}"
+  ;;
+# trivy convert: the --exit-code passes find nothing, the JSON pass prints FAKE_TRIVY_KEPT (nothing when empty).
+*" convert --exit-code "*) exit 0 ;;
+*" convert --format json "*)
+  [ -z "${FAKE_TRIVY_KEPT:-}" ] || cat "$FAKE_TRIVY_KEPT"
+  exit 0
   ;;
 esac
 while [ $# -gt 0 ] && [ "$1" != "$FAKE_ORAS_IMAGE" ]; do shift; done
@@ -390,10 +397,11 @@ refused "leg of a repository no release source names" \
   "${web_run[@]}" GITHUB_REPOSITORY=octo/repo -- leg web amd64 "$out"
 
 # --- grype (step grype of image-leg) with the fake grype.
-# match ID SEVERITY PURL: one match of a grype report.
+# match ID SEVERITY PURL [STATE]: one match of a grype report, its fix in state STATE (fixed: 9.9.9 when not given).
 match() {
-  jq -n --arg id "$1" --arg sev "$2" --arg purl "$3" '{
-    vulnerability: {id: $id, severity: $sev, fix: {versions: ["9.9.9"], state: "fixed"}},
+  jq -n --arg id "$1" --arg sev "$2" --arg purl "$3" --arg st "${4:-fixed}" '{
+    vulnerability: {id: $id, severity: $sev,
+      fix: {versions: (if $st == "fixed" then ["9.9.9"] else [] end), state: $st}},
     artifact: {name: ($purl | sub("^pkg:[^/]+/(.*/)?"; "") | sub("@.*$"; "")),
       version: ($purl | sub("^[^@]*@"; "") | sub("[?#].*$"; "")), purl: $purl}}'
 }
@@ -405,7 +413,8 @@ grype_report() {
     ignoredMatches: [range($n) | {}]}' <<<"$*" >"$work/grype.json"
 }
 critical_npm=$(match CVE-2026-1111 Critical pkg:npm/left-pad@1.0.0)
-high_npm=$(match CVE-2026-2222 High pkg:npm/zod@3.25.76)
+high_npm=$(match CVE-2026-2222 High pkg:npm/zod@3.25.76 not-fixed)
+high_fixed=$(match CVE-2026-4444 High pkg:npm/qs@6.0.0)
 grype() {
   local name=$1 want=$2
   shift 2
@@ -420,7 +429,7 @@ grype_report 1 "$critical_npm" "$high_npm"
 grype "a Critical blocks" 1 FAKE_GRYPE=2
 check "grype: --fail-on critical and the tree's .grype.yaml" has "$work/docker.log" \
   "-v $webtree/.grype.yaml:/ignore/grype.yaml:ro fake.invalid/grype@sha256:3 sbom:/out/sbom.spdx.json -c /ignore/grype.yaml --fail-on critical -o json=/out/grype.json -o sarif=/out/grype.sarif.raw -q"
-same "grype in a job: one line in the summary, the Critical under it" '- web linux/arm64 (grype): Critical 1, High 1, excepted by .grype.yaml 1
+same "grype in a job: one line in the summary, the Critical under it" '- web linux/arm64 (grype): Critical 1, High 1 (with a fix 0), excepted by .grype.yaml 1
 critical  CVE-2026-1111 left-pad@1.0.0 pkg:npm/left-pad@1.0.0 (fixed: 9.9.9)' "$(cat "$work/summary")"
 check "grype: a Critical says nothing ships" has "$work/step.out" \
   "web linux/arm64 (grype): Critical vulnerabilities; nothing is pushed, signed or attested"
@@ -430,11 +439,140 @@ check "grype: allow-critical runs grype without --fail-on" lacks "$work/docker.l
 check "grype: allow-critical says so" has "$work/step.out" \
   "note  web linux/arm64 (grype): Critical vulnerabilities let through (allow-critical)"
 grype_report 0 "$high_npm"
-grype "High and below only counted" 0
-check "grype: the counts" has "$work/step.out" "web linux/arm64 (grype): Critical 0, High 1, excepted by .grype.yaml 0"
+grype "a High with no fix only counted" 0
+check "grype: the counts" has "$work/step.out" \
+  "web linux/arm64 (grype): Critical 0, High 1 (with a fix 0), excepted by .grype.yaml 0"
+check "grype: a High with no fix passes" has "$work/step.out" "ok    web linux/arm64 (grype) passes the scan gate"
+grype_report 0 "$high_npm" "$high_fixed"
+grype "a High with a fix blocks" 1
+check "grype: a High with a fix says nothing ships" has "$work/step.out" \
+  "web linux/arm64 (grype): High vulnerabilities with a fix; nothing is pushed, signed or attested"
+same "grype: a High with a fix, the counts and the match in the summary" \
+  '- web linux/arm64 (grype): Critical 0, High 2 (with a fix 1), excepted by .grype.yaml 0
+high  CVE-2026-4444 qs@6.0.0 pkg:npm/qs@6.0.0 (fixed: 9.9.9)' "$(cat "$work/summary")"
+check "grype: a High with a fix, grype ran once" same_count 1 "sbom:/out/sbom.spdx.json" "$work/docker.log"
+check "grype: a High with a fix, no filter flag" lacks "$work/docker.log" "--only-fixed"
+check "grype: a High with a fix says no pass" lacks "$work/step.out" "passes the scan gate"
+grype "allow-critical lets a High with a fix through" 0 ALLOW_CRITICAL=true
+check "grype: allow-critical says so for a High with a fix" has "$work/step.out" \
+  "note  web linux/arm64 (grype): High vulnerabilities with a fix let through (allow-critical)"
+grype_report 1 "$critical_npm" "$high_fixed"
+grype "a Critical and a High with a fix: both said, blocked" 1 FAKE_GRYPE=2
+check "grype: the Critical said" has "$work/step.out" "web linux/arm64 (grype): Critical vulnerabilities;"
+check "grype: the High with a fix said" has "$work/step.out" "web linux/arm64 (grype): High vulnerabilities with a fix;"
+# grype moves a match its .grype.yaml covers to ignoredMatches, out of matches: there it is not counted.
+jq -n --argjson u "$high_npm" --argjson m "$high_fixed" '{descriptor: {name: "grype", version: "0.121.0"},
+  matches: [$u], ignoredMatches: [$m]}' >"$work/grype.json"
+grype "a High with a fix .grype.yaml excepts passes" 0
+check "grype: the High with a fix .grype.yaml excepts is counted as excepted only" has "$work/step.out" \
+  "web linux/arm64 (grype): Critical 0, High 1 (with a fix 0), excepted by .grype.yaml 1"
 grype "grype failing (exit 1) is no pass" 2 FAKE_GRYPE=1
 check "grype: grype failing is said" has "$work/step.out" "web linux/arm64: grype could not scan"
 grype "grype failing is no pass with allow-critical" 2 FAKE_GRYPE=1 ALLOW_CRITICAL=true
+
+# --- trivy-report and fixed-high: the counts of a trivy report, and the HIGH with a fix of a report each scanner left.
+tvuln() {
+  jq -n --arg id "$1" --arg sev "$2" --arg st "$3" '{VulnerabilityID: $id, PkgName: "zod", InstalledVersion: "3.25.76",
+    PkgIdentifier: {PURL: "pkg:npm/zod@3.25.76"}, Severity: $sev, Status: $st}
+    + (if $st == "fixed" then {FixedVersion: "3.25.77"} else {} end)'
+}
+rm -rf "$work/tleg" && mkdir -p "$work/tleg"
+jq -s --arg c "$config" '{SchemaVersion: 2, Metadata: {ImageID: $c}, Results: [{Target: "app", Vulnerabilities: .}]}' \
+  <<<"$(tvuln CVE-2026-1111 CRITICAL affected) $(tvuln CVE-2026-2222 HIGH fixed) $(tvuln CVE-2026-3333 HIGH affected)" \
+  >"$work/tleg/trivy.json"
+guard github "trivy-report: a report with a CRITICAL, a HIGH with a fix and one without" 0 -- trivy-report \
+  "gw linux/amd64" "$work/tleg"
+same "trivy-report: the counts in the summary" "- gw linux/amd64 (trivy): CRITICAL 1, HIGH 2 (with a fix 1), secrets 0" \
+  "$(cat "$work/summary")"
+guard github "fixed-high trivy: a HIGH with a fix" 1 -- fixed-high trivy "gw linux/amd64" "$work/tleg/trivy.json"
+same "fixed-high trivy: the finding in the summary, never the unfixed HIGH or the CRITICAL" \
+  "high  CVE-2026-2222 zod@3.25.76 pkg:npm/zod@3.25.76 (fixed: 3.25.77)" "$(cat "$work/summary")"
+check "fixed-high trivy: the finding in the log" has "$work/run.err" "high  CVE-2026-2222 zod@3.25.76"
+jq -n --arg c "$config" '{SchemaVersion: 2, Metadata: {ImageID: $c}}' >"$work/tleg/empty.json"
+guard github "fixed-high trivy: a report without results passes" 0 -- fixed-high trivy "gw linux/amd64" \
+  "$work/tleg/empty.json"
+echo '{"Results": "not a list"}' >"$work/tleg/broken.json"
+guard github "fixed-high trivy: a report it cannot read" 2 -- fixed-high trivy "gw linux/amd64" "$work/tleg/broken.json"
+check "fixed-high trivy: a report it cannot read says so" has "$work/run.err" "cannot be read for HIGH with a fix"
+guard github "fixed-high grype: a report it cannot read" 2 -- fixed-high grype "web linux/arm64" "$work/tleg/broken.json"
+: >"$work/tleg/blank.json"
+echo '{}' >"$work/tleg/object.json"
+for f in blank object; do
+  guard github "fixed-high trivy: $f.json is no trivy report" 2 -- fixed-high trivy "gw linux/amd64" "$work/tleg/$f.json"
+  guard github "fixed-high grype: $f.json is no grype report" 2 -- fixed-high grype "web linux/arm64" \
+    "$work/tleg/$f.json"
+done
+# trivy_gate NAME WANT [VAR=VALUE...]: step trivy-gate of image-leg on a report without results.
+trivy_gate() {
+  local name=$1 want=$2
+  shift 2
+  fresh
+  rm -rf "$work/tgate" && mkdir -p "$work/tgate" && cp "$work/tleg/empty.json" "$work/tgate/trivy.json"
+  step image-leg trivy-gate github "trivy gate: $name" "$want" OUT="$work/tgate" LABEL="gw linux/amd64" \
+    GUARD="$tree/deploy/ci/image-guard.sh" TRIVY_IMAGE=fake.invalid/trivy@sha256:1 TRIVYIGNORE= ALLOW_CRITICAL=false \
+    TRIVY_CACHE="$work/cache/trivy" "$@"
+}
+trivy_gate "the JSON pass prints a report without results, it passes" 0 FAKE_TRIVY_KEPT="$work/tleg/empty.json"
+check "trivy gate: a report without results says it passes" has "$work/step.out" \
+  "ok    gw linux/amd64 (trivy) passes the scan gate"
+trivy_gate "the JSON pass exits 0 and prints nothing, no pass" 2 FAKE_TRIVY_KEPT=
+check "trivy gate: the JSON it cannot read is said" has "$work/step.err" "cannot be read for HIGH with a fix"
+check "trivy gate: no JSON says no pass" lacks "$work/step.out" "passes the scan gate"
+guard github "fixed-high: another scanner is refused" 1 -- fixed-high syft "gw linux/amd64" "$work/tleg/trivy.json"
+
+# --- sarif: the SARIF of each scanner for the Security tab.
+# sarif_leg GRYPE_SARIF_RAW: leg $work/sleg with a trivy SARIF and that raw grype SARIF next to $work/grype.json.
+sarif_leg() {
+  rm -rf "$work/sleg" && mkdir -p "$work/sleg"
+  echo '{"version": "2.1.0", "runs": [{"tool": {"driver": {"name": "Trivy"}}, "results": []}]}' \
+    >"$work/sleg/trivy.sarif.tmp"
+  cp "$work/grype.json" "$work/sleg/grype.json"
+  printf '%s' "$1" >"$work/sleg/grype.sarif.raw"
+}
+# sarif_rule MATCH: the rule and the result grype writes for MATCH, as grype names them (<vulnerability>-<package>).
+sarif_rule() {
+  jq -c '"\(.vulnerability.id)-\(.artifact.name)" as $id | {rule: {id: $id}, result: {ruleId: $id}}' <<<"$1"
+}
+# What grype writes with -o sarif when nothing matched: no rules key (omitempty), an empty list of results.
+grype_sarif_empty='{
+  "version": "2.1.0",
+  "$schema": "https://docs.oasis-open.org/sarif/sarif/v2.1.0/errata01/os/schemas/sarif-schema-2.1.0.json",
+  "runs": [
+    {
+      "tool": {
+        "driver": {
+          "name": "grype",
+          "version": "0.121.0",
+          "informationUri": "https://github.com/anchore/grype"
+        }
+      },
+      "results": []
+    }
+  ]
+}'
+sarif_empty='{"id":"grype-image-gateway-amd64/","rules":[],"results":[]}'
+sarif_of() { jq -c '.runs[0] | {id: .automationDetails.id, rules: [.tool.driver.rules[].id], results:
+  [.results[].ruleId]}' "$work/sleg/grype.sarif"; }
+grype_report 0
+sarif_leg "$grype_sarif_empty"
+guard github "sarif: grype matched nothing" 0 -- sarif gateway amd64 "$work/sleg"
+same "sarif: grype matched nothing, no rule and no result under its category" "$sarif_empty" "$(sarif_of)"
+check "sarif: the raw grype SARIF is removed" test ! -e "$work/sleg/grype.sarif.raw"
+jq -n '{descriptor: {name: "grype"}, matches: null}' >"$work/grype.json"
+for raw in '.runs[0].results = null' '.runs[0] |= del(.results)' '.runs[0].tool.driver.rules = null'; do
+  sarif_leg "$(jq "$raw" <<<"$grype_sarif_empty")"
+  guard github "sarif: matches null, $raw" 0 -- sarif gateway amd64 "$work/sleg"
+  same "sarif: matches null, $raw, no rule and no result" "$sarif_empty" "$(sarif_of)"
+done
+low_fixed=$(match CVE-2026-5555 Low pkg:npm/ms@2.0.0)
+grype_report 0 "$critical_npm" "$high_fixed" "$low_fixed"
+sarif_leg "$(jq -s --argjson base "$grype_sarif_empty" \
+  '. as $m | $base | .runs[0].tool.driver.rules = ($m | map(.rule)) | .runs[0].results = ($m | map(.result))' \
+  <<<"$(sarif_rule "$critical_npm") $(sarif_rule "$high_fixed") $(sarif_rule "$low_fixed")")"
+guard github "sarif: grype matched a Critical, a High and a Low" 0 -- sarif gateway amd64 "$work/sleg"
+kept='["CVE-2026-1111-left-pad","CVE-2026-4444-qs"]'
+same "sarif: the Critical and the High kept, the Low dropped" \
+  "{\"id\":\"grype-image-gateway-amd64/\",\"rules\":$kept,\"results\":$kept}" "$(sarif_of)"
 
 # --- push (step 'Push the scanned image' of image-leg has no id: its guard subcommands, then the step by name).
 # leg_dir DIR ARCH: a scanned leg of gateway at the backend's commit.

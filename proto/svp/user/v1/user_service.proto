@@ -33,9 +33,11 @@ service UserService {
   //
   // Errors:
   // - INVALID_ARGUMENT: malformed email (`INVALID_EMAIL`), password not
-  //   meeting the policy (`INVALID_PASSWORD`), handle not of the picked form
-  //   (`INVALID_HANDLE`), or display name breaking its rules
-  //   (`INVALID_DISPLAY_NAME`).
+  //   meeting the length policy (`INVALID_PASSWORD`), password that is
+  //   common or breached, or equal (ignoring case) to the email, the part of
+  //   the email before the @, or the picked handle (`PASSWORD_BLOCKLISTED`),
+  //   handle not of the picked form (`INVALID_HANDLE`), or display name
+  //   breaking its rules (`INVALID_DISPLAY_NAME`).
   // - ALREADY_EXISTS: the email is already registered
   //   (`EMAIL_ALREADY_REGISTERED`), or the handle is taken
   //   (`HANDLE_ALREADY_TAKEN`). When both are, the reason is whichever the

@@ -242,6 +242,16 @@ Mục 7 cũ ("Đề xuất xem lại") nguyên văn; việc còn mở chuyển v
   tầm admin account env. [ADR-0067](../adr/0067-backup-dr.md) chỉnh ADR-0020, 0055, 0058, 0059, 0060. Đáng xem lại: (1) role Backup dùng được mọi
   key của account qua dịch vụ (managed policy); (2) phiên chỉ đọc của `svp-pg` không phải ranh giới, role `_reader` riêng cần thêm secret qua
   ba repo; (3) gỡ tag `Backup` ngừng backup tài nguyên mà chưa có alarm riêng.
+- **Cứng hoá xác thực, cổng quét HIGH có bản vá (2026-11-14):** bề mặt mới là khoá cặp đã biết ở Valkey db 10 của
+  gateway (IP, SHA-256 email, 30 ngày: dữ liệu cá nhân mới, JWT-4) và danh sách mật khẩu nhúng vào binary user-service
+  từ nguồn bên thứ ba ghim commit (JWT-12). Thu hẹp được: dò phân tán trên một tài khoản (JWT-4, lớp `login-account`),
+  mật khẩu phổ biến (JWT-12), response mang token vào cache và đoán kiểu nội dung ở mọi môi trường, không chỉ sau edge
+  (JWT-13), token lộ còn dùng được tối đa 15 phút 30 giây (JWT-3), image còn HIGH có bản vá không được push (FF-8,
+  SC-1). [ADR-0069](../adr/0069-auth-hardening.md) chỉnh ADR-0010, 0016, 0020, 0061;
+  [ADR-0070](../adr/0070-scan-gate-high-fixed.md) chỉnh ADR-0015, 0030, 0039. Đáng xem lại: (1) chủ thật ở IP mới bị 429
+  khi tài khoản bị dò (mục 6): đọc metric của lớp ở buổi stg; (2) rescan hằng ngày và Kyverno vẫn chỉ chặn CRITICAL, nên
+  HIGH có bản vá công bố sau ngày build chỉ hiện ở code scanning tới khi Renovate bump; (3) chân image của
+  `svp-frontend` theo luật mới khi kéo action `image-leg` mới.
 - **Đề xuất (không bắt buộc), giai đoạn 2:** thêm `etag` (hoặc checksum) của file gốc vào `VideoUploaded`, lấy từ lần `HEAD`
   ở `CompleteUpload`; worker tải file với điều kiện `If-Match` theo giá trị đó. Đóng được UP-2 (file bị thay giữa lúc kiểm và
   lúc đọc). Đây là thêm field nên không phá contract (quy tắc versioning ở

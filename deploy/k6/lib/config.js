@@ -5,6 +5,11 @@
 
 const holdPattern = /^[1-9][0-9]*[smh]$/;
 
+// The VUs use the access tokens setup() issued once, which last 15 minutes (TTL of internal/authtoken): the load
+// (ramp + hold + rampDown) must end before them, after setup() may have taken its 3m (setupTimeout of main.js) and with
+// the executor's 30s gracefulStop, rounded down. deploy/k6/cloud/render.sh refuses a longer run with the same number.
+const maxRunSeconds = 11 * 60;
+
 // Each route of the scenarios: the tag `route` (the gateway's OpenAPI path or the Next route, the same text as the
 // server's http_route and the RUM route label, so k6 and server numbers pair up), its app and the status it expects.
 export const routes = {
@@ -49,8 +54,8 @@ const profiles = {
   // fewer), 12 users and 2 web sessions each; 1 000 feed requests a second at 20 pods.
   cloud: {
     executor: "ramping-arrival-rate",
-    ramp: "10m",
-    hold: "10m",
+    ramp: "3m",
+    hold: "7m",
     rampDown: "1m",
     pods: 20,
     users: 12,
@@ -89,6 +94,19 @@ if (rampEnv !== "" && !base.ramp) {
 const ramp = rampEnv || base.ramp;
 if (ramp && !holdPattern.test(ramp)) {
   throw new Error(`SVP_K6_RAMP must be a whole number of s, m or h, like 2m (got "${ramp}")`);
+}
+// seconds of DURATION, already checked against holdPattern.
+function seconds(duration) {
+  const n = Number(duration.slice(0, -1));
+  return n * { s: 1, m: 60, h: 3600 }[duration.slice(-1)];
+}
+const runSeconds = [ramp, hold, base.rampDown].filter(Boolean).reduce((sum, d) => sum + seconds(d), 0);
+if (runSeconds > maxRunSeconds) {
+  throw new Error(
+    `ramp + hold + rampDown of profile ${profileName} is ${runSeconds}s, over the ${maxRunSeconds}s budget: the ` +
+      `access tokens setup() issues last 15m and setup() may take 3m, so a longer run ends on 401s ` +
+      `(shorten SVP_K6_RAMP or SVP_K6_HOLD)`,
+  );
 }
 const podsEnv = env("SVP_K6_PODS");
 if (podsEnv !== "" && profileName !== "cloud") {

@@ -66,8 +66,9 @@ flowchart LR
 - **Build** (ADR-0015 §3, §4, §6): chỉ service có thay đổi so với lần push `main` thành công cuối (tập đường dẫn `image_paths` của
   `deploy/k8s/lib.sh`; đổi đường build, quét, ký thì cả sáu). Image `web` build, ký, promote ở CI của `svp-frontend` bằng cùng script
   ([ba repo](#ba-repo-và-hợp-đồng-api)); trivy quét cả gói npm của `node_modules` (ADR-0019 §1). Mỗi service build native trên
-  runner amd64 và arm64, trivy quét tar cục bộ của từng kiến trúc: bí mật (mọi severity) và lỗ hổng CRITICAL chặn **trước** push,
-  HIGH chỉ báo (SARIF lên tab Security của `main`); ngoại lệ chỉ qua `.trivyignore.yaml` có lý do, tối đa 30 ngày. Push đúng image
+  runner amd64 và arm64, trivy quét tar cục bộ của từng kiến trúc: bí mật (mọi severity), lỗ hổng CRITICAL và HIGH có bản vá chặn
+  **trước** push ([ADR-0070](../adr/0070-scan-gate-high-fixed.md)), HIGH chưa có bản vá chỉ báo (SARIF lên tab Security của `main`);
+  ngoại lệ chỉ qua `.trivyignore.yaml` có lý do, tối đa 30 ngày. Push đúng image
   đã quét (so config digest), rồi ghép index đa kiến trúc `ghcr.io/anhnvcoder/svp-backend/<svc>:<12 hex commit>`.
 - **Ký và attestation** (ADR-0015 §7): cosign keyless bằng OIDC của GitHub (chứng chỉ Fulcio, ghi Rekor; không khoá dài hạn), ký
   digest index với identity `images.yml@refs/heads/main`; attestation `vuln` trên index gộp kết quả quét hai nền tảng,

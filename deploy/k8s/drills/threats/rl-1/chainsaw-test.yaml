@@ -152,7 +152,7 @@ spec:
             : >"$work/rl1.email-keys"
             while read -r i; do
               h=$(awk -v i="$i" '$1 == i { print $2 }' "$work/rl1.hashes")
-              grep ":$h\$" "$work/rl-keys" >>"$work/rl1.email-keys" || true
+              grep "^svp:gw:rl:login-email:.*:$h\$" "$work/rl-keys" >>"$work/rl1.email-keys" || true
             done <"$work/rl1.passed"
             rl1_spread=
             if [[ -s $work/rl1.email-keys ]]; then
@@ -302,7 +302,7 @@ spec:
           . "$work/rl1.state"
           present=0 absent=0 wrong=0
           while read -r i h; do
-            if grep -q ":$h\$" "$work/rl-keys"; then
+            if grep -q "^svp:gw:rl:login-email:.*:$h\$" "$work/rl-keys"; then
               if grep -qx "$i" "$work/rl1.passed"; then present=$((present + 1)); else wrong=$((wrong + 1)); fi
             else
               if grep -qx "$i" "$work/rl1.passed"; then wrong=$((wrong + 1)); else absent=$((absent + 1)); fi

@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
 # scan-gate.sh: the scan gate outside the image pipeline (image-leg gates its own legs) and the ignore-file check.
 # Usage: scan-gate.sh [--allow-critical] LABEL REPORT | --grype LABEL DIR | --check-ignorefile
-# --allow-critical (the daily rescan) lets CRITICAL through in trivy's report, never a secret.
-# Never prints the raw report: counts, CRITICAL findings, and rule, file and line of each secret.
+# --allow-critical (the daily rescan) lets CRITICAL and HIGH with a fix through in trivy's report, never a secret.
+# Never prints the raw report: counts, CRITICAL findings, HIGH with a fix, and rule, file and line of each secret.
 
 # Blocks (exit 1) on any secret, whatever its severity (a pushed package cannot be taken back, so nothing ignores one),
-# on any CRITICAL vulnerability left after .trivyignore.yaml and .grype.yaml, and on an ignore file breaking its rules.
+# on CRITICAL or HIGH with a fix left after .trivyignore.yaml and .grype.yaml, and on an ignore file breaking its rules.
 # Exit 2: the scan could not be read or run. Each rule of .grype.yaml must match an entry of .trivyignore.yaml.
 # Design notes: docs/reference/ci.md.
 set -euo pipefail
@@ -120,10 +120,11 @@ if [ "$mode" = grype ]; then
     echo "FAIL  $label: grype could not scan $input/sbom.spdx.json" >&2
     exit 2
   fi
-  read -r critical high excepted < <(jq -r '[([.matches[] | select(.vulnerability.severity == "Critical")] | length),
-    ([.matches[] | select(.vulnerability.severity == "High")] | length), (.ignoredMatches // [] | length)] | @tsv' \
-    "$input/grype.json")
-  summary "$label (grype): Critical $critical, High $high, excepted by .grype.yaml $excepted"
+  read -r critical high fixed excepted < <(jq -r '[.matches[].vulnerability] as $v
+    | [([$v[] | select(.severity == "Critical")] | length), ([$v[] | select(.severity == "High")] | length),
+      ([$v[] | select(.severity == "High" and .fix.state == "fixed")] | length), (.ignoredMatches // [] | length)]
+    | @tsv' "$input/grype.json")
+  summary "$label (grype): Critical $critical, High $high (with a fix $fixed), excepted by .grype.yaml $excepted"
   if [ "$critical" -gt 0 ]; then
     jq -r '.matches[] | select(.vulnerability.severity == "Critical")
       | "critical  \(.vulnerability.id) \(.artifact.name)@\(.artifact.version) \(.artifact.purl // "no purl")"
@@ -132,6 +133,13 @@ if [ "$mode" = grype ]; then
   fi
   if [ "$rc" -eq 2 ]; then
     echo "FAIL  $label (grype): Critical vulnerabilities; nothing is pushed, signed or attested" >&2
+    blocked=1
+  fi
+  rc=0
+  "$ci_dir/image-guard.sh" fixed-high grype "$label" "$input/grype.json" || rc=$?
+  [ "$rc" -le 1 ] || exit 2
+  if [ "$rc" -eq 1 ]; then
+    echo "FAIL  $label (grype): High vulnerabilities with a fix; nothing is pushed, signed or attested" >&2
     blocked=1
   fi
   [ "$blocked" -eq 0 ] && echo "ok    $label (grype) passes the scan gate"
@@ -143,10 +151,11 @@ jq -e '.SchemaVersion == 2 and (.Metadata.ImageID | test("^sha256:[0-9a-f]{64}$"
   echo "FAIL  $label: $report is not a trivy image JSON report (SchemaVersion 2 with Metadata.ImageID)" >&2
   exit 2
 }
-read -r critical high secrets < <(jq -r '[.Results[]?.Vulnerabilities[]?.Severity] as $s
-  | [([$s[] | select(. == "CRITICAL")] | length), ([$s[] | select(. == "HIGH")] | length),
-    ([.Results[]?.Secrets[]?] | length)] | @tsv' "$report")
-summary "$label (trivy): CRITICAL $critical, HIGH $high, secrets $secrets"
+read -r critical high fixed secrets < <(jq -r '[.Results[]?.Vulnerabilities[]?] as $v
+  | [([$v[] | select(.Severity == "CRITICAL")] | length), ([$v[] | select(.Severity == "HIGH")] | length),
+    ([$v[] | select(.Severity == "HIGH" and .Status == "fixed")] | length), ([.Results[]?.Secrets[]?] | length)]
+  | @tsv' "$report")
+summary "$label (trivy): CRITICAL $critical, HIGH $high (with a fix $fixed), secrets $secrets"
 
 # Each pass reads only its own findings: the vulnerabilities without the secrets, the secrets without the
 # vulnerabilities. trivy exits 5 (--exit-code) for a finding, 1 when it fails.
@@ -182,6 +191,21 @@ if [ "$rc" -ne 0 ]; then
     echo "note  $label (trivy): CRITICAL vulnerabilities let through (--allow-critical)" >&2
   else
     echo "FAIL  $label (trivy): CRITICAL vulnerabilities; nothing is pushed, signed or attested" >&2
+    blocked=1
+  fi
+fi
+trivy_ convert --format json "${ignore[@]}" /in/vulnerabilities.json >"$tmp/kept.json" || {
+  echo "FAIL  $label: trivy could not read $report" >&2
+  exit 2
+}
+rc=0
+"$ci_dir/image-guard.sh" fixed-high trivy "$label" "$tmp/kept.json" || rc=$?
+[ "$rc" -le 1 ] || exit 2
+if [ "$rc" -eq 1 ]; then
+  if [ "$allow_critical" = true ]; then
+    echo "note  $label (trivy): HIGH vulnerabilities with a fix let through (--allow-critical)" >&2
+  else
+    echo "FAIL  $label (trivy): HIGH vulnerabilities with a fix; nothing is pushed, signed or attested" >&2
     blocked=1
   fi
 fi

@@ -24,8 +24,10 @@ const (
 	IssuerName = "svp-user"
 	// Audience is the aud claim of every token.
 	Audience = "svp-api"
-	// TTL is how long a token stays valid after it is issued.
-	TTL = time.Hour
+	// TTL is how long a token stays valid after it is issued. An access token cannot be revoked, so
+	// TTL (plus Leeway) bounds how long a leaked token works; 15 minutes keeps that window short while
+	// the refresh token, rotated on each use, carries the long session.
+	TTL = 15 * time.Minute
 	// Leeway is the clock skew allowed when checking exp, nbf and iat.
 	Leeway = 30 * time.Second
 )

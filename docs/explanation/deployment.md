@@ -43,7 +43,8 @@ Giới hạn RAM, CPU của từng container ở [`deploy/compose/compose.yaml`]
 - **Valkey** ([ADR-0010](../adr/0010-redis-ratelimit-cache-resilience-stage2c.md) mục 1, ADR-0053 §8, §9; cùng phần mềm với ElastiCache
   for Valkey): container `valkey`, TLS ở `valkey:6379` (không cổng thường, không publish), user `default` tắt, mỗi client một user ACL
   chỉ được db và tiền tố của mình, qua `REDIS_URL=rediss://<user>:<mật khẩu>@valkey:6379/<db>`: gateway `svp-gateway` db 10, tiền tố
-  `svp:gw:` (rate limit, `svp:gw:rl:<lớp>:<định danh>`); web `svp-web` db 9, tiền tố `svp:web:` (session, khoá single-flight của
+  `svp:gw:` (rate limit `svp:gw:rl:<lớp>:<định danh>`, cặp đã biết của đăng nhập
+  `svp:gw:login-known:<IP>:<email băm>`); web `svp-web` db 9, tiền tố `svp:web:` (session, khoá single-flight của
   refresh); feed-service `svp-feed-service` db 14, tiền tố `svp:feed:` (cache trang đầu feed khám phá). aclfile do `make up` ghi từ mật
   khẩu của `.env` (`deploy/valkey/aclfile.sh`, access string của ADR-0053 §9). Không persistence, `maxmemory 64mb`, `noeviction`; mọi
   khoá có TTL. `make test` vẫn dùng Redis native `127.0.0.1:6379` db 15, mỗi test một tiền tố `svp:test:<hex>:`. Client có timeout ngắn

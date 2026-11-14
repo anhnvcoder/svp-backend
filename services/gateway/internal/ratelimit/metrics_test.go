@@ -3,6 +3,7 @@ package ratelimit
 import (
 	"context"
 	"fmt"
+	"slices"
 	"testing"
 	"time"
 
@@ -61,6 +62,9 @@ func TestDecisionSeriesStartAtZero(t *testing.T) {
 	collect := readDecisions(t)
 	New(downClient(t), "svp:test:down:")
 	got := collect()
+	if !slices.Contains(classes, LoginAccount) {
+		t.Errorf("classes %v lack login-account", classes)
+	}
 	if len(got) != len(classes)*4 {
 		t.Errorf("series = %d, want %d: %v", len(got), len(classes)*4, got)
 	}

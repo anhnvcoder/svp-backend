@@ -15,6 +15,7 @@ import (
 	"google.golang.org/grpc/status"
 
 	userv1 "github.com/anhnvcoder/svp-backend/gen/go/svp/user/v1"
+	"github.com/anhnvcoder/svp-backend/internal/authtoken"
 	"github.com/anhnvcoder/svp-backend/internal/grpcerr"
 	"github.com/anhnvcoder/svp-backend/internal/secret"
 	"github.com/anhnvcoder/svp-backend/services/user-service/internal/password"
@@ -231,8 +232,9 @@ func TestRefreshRotates(t *testing.T) {
 	if err != nil || sub != id {
 		t.Fatalf("access token subject = %q, %v; want %q", sub, err, id)
 	}
-	if exp := resp.GetExpiresAt().AsTime(); exp.Before(before.Add(time.Hour - 2*time.Second)) {
-		t.Errorf("access expires_at = %v, want about an hour from now", exp)
+	if exp := resp.GetExpiresAt().AsTime(); exp.Before(before.Add(authtoken.TTL-time.Second)) ||
+		exp.After(time.Now().Add(authtoken.TTL)) {
+		t.Errorf("access expires_at = %v, want about %v from now", exp, authtoken.TTL)
 	}
 	t1 := resp.GetRefreshToken()
 	if t1 == t0 || len(t1) != refreshTokenLen {

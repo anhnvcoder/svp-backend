@@ -1,0 +1,28 @@
+{
+  "SchemaVersion": 2,
+  "ArtifactName": "/image.tar",
+  "ArtifactType": "container_image",
+  "Metadata": {
+    "ImageID": "sha256:3333333333333333333333333333333333333333333333333333333333333333"
+  },
+  "Results": [
+    {
+      "Target": "app/node_modules/left-pad/package.json",
+      "Class": "lang-pkgs",
+      "Type": "node-pkg",
+      "Vulnerabilities": [
+        {
+          "VulnerabilityID": "CVE-2026-5555",
+          "PkgName": "left-pad",
+          "PkgIdentifier": {
+            "PURL": "pkg:npm/left-pad@1.0.0"
+          },
+          "InstalledVersion": "1.0.0",
+          "Status": "affected",
+          "Severity": "CRITICAL",
+          "Title": "A CRITICAL vulnerability of the fixture, with no fix yet"
+        }
+      ]
+    }
+  ]
+}

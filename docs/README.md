@@ -33,6 +33,8 @@ Mục lục theo [Diátaxis](https://diataxis.fr): mỗi tài liệu thuộc m�
   đường cùng hợp đồng event, bản ghi job quyết kết quả mỗi version, bố cục output, lỗi và cách nhận ra.
 - [`explanation/edge.md`](explanation/edge.md): đường vào công khai trên AWS: CloudFront, WAF, ALB internal, Envoy; IP client, chứng chỉ, DNS
   và log của edge.
+- [`explanation/authentication.md`](explanation/authentication.md): đăng ký, đăng nhập, làm mới phiên, đăng xuất: thứ
+  tự kiểm, giới hạn đăng nhập, mật khẩu chặn, header bảo mật và cái giá.
 - [`explanation/aws-security.md`](explanation/aws-security.md): org AWS theo AWS SRA: account, guardrail, ai đổi được gì, phát hiện, luồng
   log và luồng cảnh báo bảo mật.
 - [`explanation/delivery.md`](explanation/delivery.md): CI/CD, chuỗi cung ứng, ba repo và hợp đồng API.

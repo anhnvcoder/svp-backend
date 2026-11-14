@@ -16,6 +16,7 @@ import (
 	"google.golang.org/grpc/status"
 
 	engagementv1 "github.com/anhnvcoder/svp-backend/gen/go/svp/engagement/v1"
+	"github.com/anhnvcoder/svp-backend/internal/grpcerr"
 	"github.com/anhnvcoder/svp-backend/internal/redistest"
 	"github.com/anhnvcoder/svp-backend/internal/redisx"
 	"github.com/anhnvcoder/svp-backend/services/gateway/internal/httpx"
@@ -266,6 +267,154 @@ func TestLoginIPLimitBehindProxy(t *testing.T) {
 	wantRateLimitedSince(t, untilLimited(t, 15, 2*time.Second, func(i int) *httptest.ResponseRecorder {
 		return login(direct, fmt.Sprintf("198.51.100.%d", 20+i), i)
 	}), 2*time.Second, start)
+}
+
+// loginAccountInterval is the interval of class login-account: 100 a day, one every 14.4 minutes.
+const loginAccountInterval = 24 * time.Hour / 100
+
+// loginFrom sends a login of email from remoteAddr.
+func loginFrom(t *testing.T, e *env, remoteAddr, email string) *httptest.ResponseRecorder {
+	t.Helper()
+	body := fmt.Sprintf(`{"email":%q,"password":"correct horse"}`, email)
+	return e.send(t, remoteAddr, http.MethodPost, "/auth/login", body, "", nil)
+}
+
+// invalidCredentials is user-service's answer to a wrong password and to an email without an
+// account alike.
+func invalidCredentials() error {
+	return grpcerr.New(codes.Unauthenticated, "INVALID_CREDENTIALS", "invalid email or password")
+}
+
+// knownKey is the Redis key of the known pair (ip, email) of e.
+func (e *redisEnv) knownKey(ip, email string) string {
+	return e.prefix + "login-known:" + ratelimit.LoginEmailID(ip, email)
+}
+
+// TestLoginAccountLimitedAcrossIPs: the logins of one email, however it is written, share one
+// bucket across every IP: a burst of 10, then one every 14.4 minutes. An email without an account
+// is counted and refused the same way as one with an account.
+func TestLoginAccountLimitedAcrossIPs(t *testing.T) {
+	logs := captureLog(t)
+	e := newRedisEnv(t)
+	e.users.fail(invalidCredentials())
+	var refused []problem
+	for _, email := range []string{"a@example.com", "nobody@example.com"} {
+		written := []string{email, "  " + strings.ToUpper(email), strings.ToUpper(email[:1]) + email[1:] + "\t"}
+		calls := len(e.users.recorded())
+		start := time.Now()
+		for i := range 10 {
+			wantStatus(t, loginFrom(t, e.env, fmt.Sprintf("192.0.2.%d:5000", i+1), written[i%len(written)]), http.StatusUnauthorized)
+		}
+		rec := loginFrom(t, e.env, "192.0.2.100:5000", " "+email)
+		wantRateLimitedSince(t, rec, loginAccountInterval, start)
+		refused = append(refused, decodeProblem(t, rec))
+		if n := len(e.users.recorded()) - calls; n != 10 {
+			t.Errorf("%s: user-service got %d calls, want 10", email, n)
+		}
+	}
+	if a, b := refused[0], refused[1]; a.Code != b.Code || a.Detail != b.Detail || a.Status != b.Status {
+		t.Errorf("an email without an account is refused with %+v, one with an account with %+v", b, a)
+	}
+	if !strings.Contains(logs.String(), `"rate_limit":"login-account"`) {
+		t.Errorf("access log does not name the rate limit:\n%s", logs)
+	}
+	for _, key := range scanKeys(t, e.client, e.prefix) {
+		if strings.Contains(key, "login-known:") || strings.Contains(strings.ToLower(key), "example") {
+			t.Errorf("key %s: a failed login made its pair known, or a key holds the email", key)
+		}
+	}
+	e.wantTTLs(t)
+}
+
+// TestLoginRemembersPairOnSuccessOnly: a login that user-service refuses, or cannot answer, makes
+// no pair known; a successful one makes its pair known for 30 days.
+func TestLoginRemembersPairOnSuccessOnly(t *testing.T) {
+	e := newRedisEnv(t)
+	const remote, email = "192.0.2.1:5000", "a@example.com"
+	key := e.knownKey("192.0.2.1", email)
+	for _, tt := range []struct {
+		err    error
+		status int
+	}{
+		{invalidCredentials(), http.StatusUnauthorized},
+		{status.Error(codes.Unavailable, "user-service is down"), http.StatusServiceUnavailable},
+	} {
+		e.users.fail(tt.err)
+		wantStatus(t, loginFrom(t, e.env, remote, email), tt.status)
+		if n := e.client.Exists(t.Context(), key).Val(); n != 0 {
+			t.Errorf("after a %d login: key %s exists, want no known pair", tt.status, key)
+		}
+	}
+	e.users.setHook(nil)
+	wantStatus(t, loginFrom(t, e.env, remote, email), http.StatusOK)
+	if v := e.client.Get(t.Context(), key).Val(); v != "1" {
+		t.Errorf("GET %s = %q, want 1", key, v)
+	}
+	if ttl := e.client.PTTL(t.Context(), key).Val(); ttl <= 30*24*time.Hour-time.Minute || ttl > 30*24*time.Hour {
+		t.Errorf("PTTL %s = %v, want 30 days", key, ttl)
+	}
+}
+
+// TestKnownPairSkipsLoginAccount: once the email's login-account bucket is spent from other IPs,
+// its owner still logs in from the IP of an earlier successful login, which login-email and
+// login-ip still limit.
+func TestKnownPairSkipsLoginAccount(t *testing.T) {
+	e := newRedisEnv(t)
+	const owner, email = "192.0.2.1:5000", "a@example.com"
+	start := time.Now()
+	// The owner's successful login counts in login-account too: 1 of its burst of 10.
+	wantStatus(t, loginFrom(t, e.env, owner, email), http.StatusOK)
+	e.users.fail(invalidCredentials())
+	for i := range 9 {
+		wantStatus(t, loginFrom(t, e.env, fmt.Sprintf("198.51.100.%d:5000", i+1), email), http.StatusUnauthorized)
+	}
+	wantRateLimitedSince(t, loginFrom(t, e.env, "198.51.100.100:5000", email), loginAccountInterval, start)
+
+	e.users.setHook(nil)
+	for i := range 4 {
+		if rec := loginFrom(t, e.env, owner, email); rec.Code != http.StatusOK {
+			t.Fatalf("login %d from the known IP: status %d, want 200", i+2, rec.Code)
+		}
+	}
+	// The 6th login of the pair: login-email, 10 an hour, refuses it.
+	wantRateLimitedSince(t, loginFrom(t, e.env, owner, email), 6*time.Minute, start)
+
+	// Moving the owner's login-ip TAT (Unix ms, as the GCRA script stores it) an hour past Redis's
+	// now spends that bucket: the answer then waits for login-ip, about an hour, not for login-email.
+	ipKey := e.prefix + "rl:" + ratelimit.LoginIP.Name + ":192.0.2.1"
+	now, err := e.client.Time(t.Context()).Result()
+	if err != nil {
+		t.Fatalf("redis TIME: %v", err)
+	}
+	if err := e.client.Set(t.Context(), ipKey, now.Add(time.Hour).UnixMilli(), 2*time.Hour).Err(); err != nil {
+		t.Fatalf("set bucket %s: %v", ipKey, err)
+	}
+	got := rateLimitedRetryAfter(t, loginFrom(t, e.env, owner, email))
+	if n, err := strconv.Atoi(got); err != nil || n < 3500 || n > 3571 {
+		t.Errorf("Retry-After = %q, want from 3500 to 3571 (login-ip)", got)
+	}
+	e.wantTTLs(t)
+}
+
+// TestLoginAccountWhileRedisDown: while Redis fails, login-account is limited by its in-memory
+// fallback (burst 5, one every 28.8 minutes), and no pair is known, not even one that logged in.
+func TestLoginAccountWhileRedisDown(t *testing.T) {
+	logs := captureLog(t)
+	e := newEnv(t)
+	const email = "a@example.com"
+	start := time.Now()
+	for i := range 5 {
+		wantStatus(t, loginFrom(t, e, fmt.Sprintf("192.0.2.%d:5000", i+1), email), http.StatusOK)
+	}
+	for _, remote := range []string{"192.0.2.1:5000", "192.0.2.100:5000"} {
+		wantRateLimitedSince(t, loginFrom(t, e, remote, email), 24*time.Hour/50, start)
+	}
+	if n := len(e.users.recorded()); n != 5 {
+		t.Errorf("user-service got %d calls, want 5", n)
+	}
+	if n := strings.Count(logs.String(), "rate limit store unavailable, using fallback"); n != 1 {
+		t.Errorf("WARN logged %d times, want 1", n)
+	}
 }
 
 // refreshOrLogout sends the i-th request of a run that alternates /auth/refresh and
