@@ -489,13 +489,14 @@ grype_sbom() {
 # grype_sarif DIR CATEGORY: filters DIR/grype.sarif.raw to HIGH/CRITICAL matches, matching trivy SARIF format.
 grype_sarif() {
   local dir=$1 category=$2
+  # With no match grype omits rules from the SARIF; null and missing lists are read as empty ones.
   jq --slurpfile g "$dir/grype.json" --arg c "$category" '
-    ([$g[0].matches[] | select(.vulnerability.severity == "Critical" or .vulnerability.severity == "High")
+    ([($g[0].matches // [])[] | select(.vulnerability.severity == "Critical" or .vulnerability.severity == "High")
       | "\(.vulnerability.id)-\(.artifact.name)"] | unique) as $keep
     | .runs[] |= (.automationDetails.id = $c
-      | .results |= map(select(.ruleId | IN($keep[])))
+      | .results |= (. // [] | map(select(.ruleId | IN($keep[]))))
       | ([.results[].ruleId] | unique) as $used
-      | .tool.driver.rules |= map(select(.id | IN($used[]))))' \
+      | .tool.driver.rules |= (. // [] | map(select(.id | IN($used[])))))' \
     "$dir/grype.sarif.raw" >"$dir/grype.sarif" || fail "write the SARIF of grype in $dir"
   rm -f "$dir/grype.sarif.raw"
 }

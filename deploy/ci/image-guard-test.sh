@@ -520,6 +520,60 @@ check "trivy gate: the JSON it cannot read is said" has "$work/step.err" "cannot
 check "trivy gate: no JSON says no pass" lacks "$work/step.out" "passes the scan gate"
 guard github "fixed-high: another scanner is refused" 1 -- fixed-high syft "gw linux/amd64" "$work/tleg/trivy.json"
 
+# --- sarif: the SARIF of each scanner for the Security tab.
+# sarif_leg GRYPE_SARIF_RAW: leg $work/sleg with a trivy SARIF and that raw grype SARIF next to $work/grype.json.
+sarif_leg() {
+  rm -rf "$work/sleg" && mkdir -p "$work/sleg"
+  echo '{"version": "2.1.0", "runs": [{"tool": {"driver": {"name": "Trivy"}}, "results": []}]}' \
+    >"$work/sleg/trivy.sarif.tmp"
+  cp "$work/grype.json" "$work/sleg/grype.json"
+  printf '%s' "$1" >"$work/sleg/grype.sarif.raw"
+}
+# sarif_rule MATCH: the rule and the result grype writes for MATCH, as grype names them (<vulnerability>-<package>).
+sarif_rule() {
+  jq -c '"\(.vulnerability.id)-\(.artifact.name)" as $id | {rule: {id: $id}, result: {ruleId: $id}}' <<<"$1"
+}
+# What grype writes with -o sarif when nothing matched: no rules key (omitempty), an empty list of results.
+grype_sarif_empty='{
+  "version": "2.1.0",
+  "$schema": "https://docs.oasis-open.org/sarif/sarif/v2.1.0/errata01/os/schemas/sarif-schema-2.1.0.json",
+  "runs": [
+    {
+      "tool": {
+        "driver": {
+          "name": "grype",
+          "version": "0.121.0",
+          "informationUri": "https://github.com/anchore/grype"
+        }
+      },
+      "results": []
+    }
+  ]
+}'
+sarif_empty='{"id":"grype-image-gateway-amd64/","rules":[],"results":[]}'
+sarif_of() { jq -c '.runs[0] | {id: .automationDetails.id, rules: [.tool.driver.rules[].id], results:
+  [.results[].ruleId]}' "$work/sleg/grype.sarif"; }
+grype_report 0
+sarif_leg "$grype_sarif_empty"
+guard github "sarif: grype matched nothing" 0 -- sarif gateway amd64 "$work/sleg"
+same "sarif: grype matched nothing, no rule and no result under its category" "$sarif_empty" "$(sarif_of)"
+check "sarif: the raw grype SARIF is removed" test ! -e "$work/sleg/grype.sarif.raw"
+jq -n '{descriptor: {name: "grype"}, matches: null}' >"$work/grype.json"
+for raw in '.runs[0].results = null' '.runs[0] |= del(.results)' '.runs[0].tool.driver.rules = null'; do
+  sarif_leg "$(jq "$raw" <<<"$grype_sarif_empty")"
+  guard github "sarif: matches null, $raw" 0 -- sarif gateway amd64 "$work/sleg"
+  same "sarif: matches null, $raw, no rule and no result" "$sarif_empty" "$(sarif_of)"
+done
+low_fixed=$(match CVE-2026-5555 Low pkg:npm/ms@2.0.0)
+grype_report 0 "$critical_npm" "$high_fixed" "$low_fixed"
+sarif_leg "$(jq -s --argjson base "$grype_sarif_empty" \
+  '. as $m | $base | .runs[0].tool.driver.rules = ($m | map(.rule)) | .runs[0].results = ($m | map(.result))' \
+  <<<"$(sarif_rule "$critical_npm") $(sarif_rule "$high_fixed") $(sarif_rule "$low_fixed")")"
+guard github "sarif: grype matched a Critical, a High and a Low" 0 -- sarif gateway amd64 "$work/sleg"
+kept='["CVE-2026-1111-left-pad","CVE-2026-4444-qs"]'
+same "sarif: the Critical and the High kept, the Low dropped" \
+  "{\"id\":\"grype-image-gateway-amd64/\",\"rules\":$kept,\"results\":$kept}" "$(sarif_of)"
+
 # --- push (step 'Push the scanned image' of image-leg has no id: its guard subcommands, then the step by name).
 # leg_dir DIR ARCH: a scanned leg of gateway at the backend's commit.
 leg_dir() {
