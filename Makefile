@@ -402,10 +402,10 @@ trivy-config: ## trivy config on the repository, report only (TRIVY_CONFIG_SARIF
 	env -u DOCKER_DEFAULT_PLATFORM docker run --rm --user "$$(id -u):$$(id -g)" -v "$(CURDIR):/src:ro" --workdir /src \
 		"$$@" --quiet --cache-dir /tmp/trivy --ignorefile deploy/ci/trivy-config-ignore.yaml --exit-code 0 .
 
-# deploy/ci/scan-gate.sh --grype runs grype on an SPDX SBOM with --fail-on critical and .grype.yaml (any Critical left
-# after its rules fails). IMAGE=<ref>@sha256:<digest> [ARCH=amd64|arm64] first has the pinned syft read the image of
-# that platform from its registry, anonymously. grype needs the network for its DB, and a DB it cannot fetch fails the
-# target. SVP_GRYPE_CACHE, when set, keeps the DB in that directory (it is about 3 GB unpacked); unset, in $TMPDIR.
+# deploy/ci/scan-gate.sh --grype runs grype on an SPDX SBOM with --fail-on critical and .grype.yaml (any Critical, or
+# High with a fix, left after its rules fails). IMAGE=<ref>@sha256:<digest> [ARCH=amd64|arm64] has syft read the image
+# of that platform from its registry, anonymously. grype needs the network for its DB, and a DB it cannot fetch fails
+# the target. SVP_GRYPE_CACHE, when set, keeps the DB in that directory (it is about 3 GB unpacked); unset, in $TMPDIR.
 SBOM ?=
 IMAGE ?=
 ARCH ?= amd64

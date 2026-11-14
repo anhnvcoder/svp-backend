@@ -174,12 +174,8 @@ giống (0055). ADR cũ chỉnh (dòng `### Chỉnh bởi`): 0020 §2, 0034 §5,
 
 ## Xác nhận
 
-- Lúc quyết chưa hiện thực. Kiểm tĩnh: `make check` của `svp-infra` (test mocked `edge`, `media`, `waf`, `network`, `account-baseline`,
-  `log-archive`), `make check`, `make helm-check` của repo này, `make docs-check`.
-- **Phép kiểm edge** (runbook buổi): `curl -sI` web, api, media có HSTS, nosniff, cert ACM đúng tên, TLS ≥ 1.2; tên ALB ra IP private; mẫu thử
-  KnownBadInputs nhận 403 ở web, api; log gateway có IP công khai của máy người học, kể cả khi tự đặt `CloudFront-Viewer-Address`,
-  `X-Forwarded-For`; object mới trong bucket log CloudFront và bucket log WAF; `dig +dnssec` có cờ `ad`; `dig CAA`; plan lần hai `No changes`;
-  sau destroy `sweep.sh <env>` sạch.
+- Lúc quyết chưa hiện thực. Kiểm tĩnh: `make check` của `svp-infra` (test mocked `edge`, `media`, `waf`, `network`, `account-baseline`, `log-archive`),
+  `make check`, `make helm-check` của repo này, `make docs-check`. Phép kiểm edge: [phụ lục](appendix/0061-edge-cloudfront-waf-acm.md#phép-kiểm-edge).
 
 ## Hiện thực ở
 
@@ -197,4 +193,8 @@ giống (0055). ADR cũ chỉnh (dòng `### Chỉnh bởi`): 0020 §2, 0034 §5,
 ## Thông tin thêm
 
 Phụ lục: [`appendix/0061-edge-cloudfront-waf-acm.md`](appendix/0061-edge-cloudfront-waf-acm.md) (phương án, giá trị đủ từng §, bảng header,
-luật WAF, trường log, bảng control FSBP, bảng luồng RCP, bảng giá và chi phí, nguồn).
+luật WAF, trường log, bảng control FSBP, bảng luồng RCP, bảng giá và chi phí, phép kiểm edge, nguồn).
+
+### Chỉnh bởi
+
+- §6: [0069](0069-auth-hardening.md): gateway đặt nosniff, CSP, Cache-Control; policy api override = true ghi đè cùng giá trị.

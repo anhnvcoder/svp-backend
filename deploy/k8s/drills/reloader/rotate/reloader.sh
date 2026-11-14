@@ -305,9 +305,9 @@ unb64url() {
 }
 
 # jwt_new_token: writes $state/new.auth, the Authorization header of a token for the drill's user signed with
-# JWT_DRILL_SIGNING_KEY under the kid of JWT_VERIFY_KEY_NEW: the claims user-service writes (internal/authtoken:
-# iss svp-user, aud svp-api, sub, iat, exp an hour later, jti), alg EdDSA. Until JWT_VERIFY_KEYS holds that key,
-# nothing takes it. The key goes to openssl in a private file of $state, removed at once.
+# JWT_DRILL_SIGNING_KEY under the kid of JWT_VERIFY_KEY_NEW: the claims of internal/authtoken, alg EdDSA, but exp an
+# hour after iat, not authtoken.TTL; it still verifies, as Verify bounds exp, not exp - iat. Until JWT_VERIFY_KEYS
+# holds that key, nothing takes it. The key goes to openssl in a private file of $state, removed at once.
 jwt_new_token() {
   local kid sub now header payload
   kid=$(value new JWT_VERIFY_KEY_NEW)

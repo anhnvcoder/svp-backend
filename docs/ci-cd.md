@@ -300,7 +300,7 @@ và không còn ở workflow: bản đo một lần của `dev-k3d`, `web-canary
   ([`threat-model.md`](threat-model.md) GIT-1 tới GIT-6).
 - **govulncheck chặn, trivy và grype chặn image, CodeQL chỉ báo.** govulncheck chỉ đỏ với lỗ hổng mà code gọi tới (theo đồ thị
   gọi), nên ít báo giả; trivy và grype là hai DB và hai cách khớp khác nhau trên cùng image (grype đọc SBOM syft, thấy binary
-  ngoài trình quản lý gói mà trivy không thấy), cùng cổng CRITICAL; ngoại lệ là một mục `.trivyignore.yaml` kèm rule `.grype.yaml` cùng id và version ([ADR-0039](adr/0039-mainpath-drills-scan-gate-sourcemaps.md) §2). CodeQL theo luồng dữ liệu qua
+  ngoài trình quản lý gói mà trivy không thấy), cùng cổng CRITICAL và HIGH có bản vá ([ADR-0070](adr/0070-scan-gate-high-fixed.md)); ngoại lệ là một mục `.trivyignore.yaml` kèm rule `.grype.yaml` cùng id và version ([ADR-0039](adr/0039-mainpath-drills-scan-gate-sourcemaps.md) §2). CodeQL theo luồng dữ liệu qua
   hàm và tệp, còn mới ở repo nên chưa là check bắt buộc; gosec trong `check` vẫn là cổng SAST chặn (ADR-0030 §1, §4, §6).
 - **Vì sao job `drill-*` nằm trong `images.yml` dù luôn skip ở PR và push.** Ký keyless không có khoá: danh tính ký là chứng chỉ
   Fulcio cấp cho đúng file workflow và ref đang chạy (SAN là `server_url` + `job_workflow_ref`, ADR-0015 §7), và Kyverno chỉ tin
@@ -457,8 +457,8 @@ Trang một lượt chạy (Actions → chọn lượt) có đồ thị job, dan
   cho sự kiện này (ví dụ cả nhóm `build`, `sign`, `promote`, `drill-*` ở lượt PR). Muốn biết skip có đúng không, mở log job
   `images-ok`: mỗi job một dòng `ok    <job> skipped: not part of this run`, hay `::error::<job> was skipped, but this run needed
   it`.
-- **Summary của job** (cuộn xuống dưới đồ thị), từ hai nguồn. Script ghi vào `$GITHUB_STEP_SUMMARY` (`step_summary` của `common.sh`): một dòng mỗi lần quét của mỗi chân build của `images.yml` (`image-guard.sh` trong bước của `image-leg`), của `scan-gate.sh` ở rescan và `make grype` (`(trivy): CRITICAL n, HIGH n, secrets n` và
-  `(grype): Critical n, High n, excepted by .grype.yaml n`; chi tiết CRITICAL ở bảng của trivy trong log, HIGH ở SARIF); `plan` (chế độ, base, image được chọn và lý do); `rescan.sh` của lượt quét lại hằng ngày hay dispatch `rescan=true` (service chưa phát hành bị bỏ qua, hay không
+- **Summary của job** (cuộn xuống dưới đồ thị), từ hai nguồn. Script ghi vào `$GITHUB_STEP_SUMMARY` (`step_summary` của `common.sh`): một dòng mỗi lần quét của mỗi chân build của `images.yml` (`image-guard.sh` trong bước của `image-leg`), của `scan-gate.sh` ở rescan và `make grype` (`(trivy): CRITICAL n, HIGH n (with a fix n), secrets n` và
+  `(grype): Critical n, High n (with a fix n), excepted by .grype.yaml n`; chi tiết CRITICAL ở bảng của trivy trong log, HIGH có bản vá ở danh sách của `image-guard.sh fixed-high`, mọi HIGH ở SARIF); `plan` (chế độ, base, image được chọn và lý do); `rescan.sh` của lượt quét lại hằng ngày hay dispatch `rescan=true` (service chưa phát hành bị bỏ qua, hay không
   có digest đã phát hành nào để quét). Chính YAML của `ci.yml` ghi thẳng `$GITHUB_STEP_SUMMARY`: bảng SARIF (mức, rule, vị trí
   mỗi phát hiện, tối đa 50 dòng) của golangci-lint ở `check`, `gitleaks`, `trivy-config`, và
   dòng "buf breaking skipped" của `buf` khi bỏ qua; khi chuyển nền tảng, các bước này viết lại cùng YAML

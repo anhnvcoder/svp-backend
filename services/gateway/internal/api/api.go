@@ -59,10 +59,12 @@ type dependency struct {
 	health healthpb.HealthClient
 }
 
-// New returns the gateway's HTTP handler: every route on its own mux, behind Trace, Recover,
-// AccessLog and ValidUTF8, with RequireAuth in front of the routes that need a caller. Every
-// route but healthz and readyz is rate limited by limits: register, login, refresh, logout and
-// the public video by client IP, the others by the authenticated user, after RequireAuth. A
+// New returns the gateway's HTTP handler: every route on its own mux, behind Trace,
+// SecurityHeaders, Recover, AccessLog and ValidUTF8, with RequireAuth in front of the routes
+// that need a caller. Every route but healthz and readyz is rate limited by limits: register,
+// login, refresh, logout and the public video by client IP, the others by the authenticated
+// user, after RequireAuth. SecurityHeaders sits outside Recover so a 500 for a panic, and every
+// problem response, carries its headers too. A
 // request that matches no route gets a problem response too. mediaBaseURL is the public
 // base that media object keys are appended to, without a trailing slash. clientAddr finds the
 // client's address, for the rate limits by IP and the client.address of spans alike. serverName
@@ -120,7 +122,7 @@ func New(userConn, videoConn, feedConn, engagementConn grpc.ClientConnInterface,
 	mux.Handle("GET /feed/explore", authed(ratelimit.Read, s.exploreFeed))
 	mux.HandleFunc("GET /healthz", healthz)
 	mux.HandleFunc("GET /readyz", s.readyz)
-	return httpx.Trace(serverName, clientAddr)(httpx.Recover(httpx.AccessLog(httpx.ValidUTF8(httpx.Routes(mux)))))
+	return httpx.Trace(serverName, clientAddr)(httpx.SecurityHeaders(httpx.Recover(httpx.AccessLog(httpx.ValidUTF8(httpx.Routes(mux))))))
 }
 
 // allow counts the request in class c under id and, when the class refuses it, writes the 429
@@ -202,7 +204,9 @@ type tokenResponse struct {
 }
 
 // login checks the client IP before reading the body, and the (IP, email) pair once the body
-// decodes.
+// decodes; a pair that is not known then counts in the email's bucket across every IP
+// (login-account), before user-service is called, whatever its answer. Only a successful login
+// makes its pair known.
 func (s *server) login(w http.ResponseWriter, r *http.Request) {
 	ip := ratelimit.ClientIP(r, s.clientAddr)
 	if !s.allow(w, r, ratelimit.LoginIP, ip) {
@@ -215,6 +219,10 @@ func (s *server) login(w http.ResponseWriter, r *http.Request) {
 	if !s.allow(w, r, ratelimit.LoginEmail, ratelimit.LoginEmailID(ip, req.Email)) {
 		return
 	}
+	if !s.limits.KnownPair(r.Context(), ip, req.Email) &&
+		!s.allow(w, r, ratelimit.LoginAccount, ratelimit.EmailHash(req.Email)) {
+		return
+	}
 	ctx, cancel := callContext(r)
 	defer cancel()
 	resp, err := s.users.Login(ctx, &userv1.LoginRequest{Email: req.Email, Password: req.Password})
@@ -222,6 +230,7 @@ func (s *server) login(w http.ResponseWriter, r *http.Request) {
 		httpx.WriteGRPCError(w, r, err)
 		return
 	}
+	s.limits.RememberPair(r.Context(), ip, req.Email)
 	writeJSON(w, http.StatusOK, tokenResponse{
 		AccessToken:      resp.GetAccessToken(),
 		TokenType:        "Bearer",
@@ -521,10 +530,10 @@ type publicVideoStats struct {
 // Only a 200 may be kept by a shared cache, for 30 seconds: counters lag by about a minute
 // anyway. Everything else is no-store: a 404 is heuristically cacheable (RFC 9110 section
 // 15.1), and a video still PROCESSING must not stay a cached 404 once READY; a 429 belongs to
-// one client. video-service answers every video it will not show (no such video, not READY, an
-// id that is not a UUID) with the same NOT_FOUND, which goes out unchanged.
+// one client; SecurityHeaders has set no-store before this runs. video-service answers every
+// video it will not show (no such video, not READY, an id that is not a UUID) with the same
+// NOT_FOUND, which goes out unchanged.
 func (s *server) getPublicVideo(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Cache-Control", "no-store")
 	if !s.allow(w, r, ratelimit.Public, ratelimit.ClientIP(r, s.clientAddr)) {
 		return
 	}

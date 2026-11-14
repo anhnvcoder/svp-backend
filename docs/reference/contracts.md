@@ -165,8 +165,8 @@ cũ không vỡ. Route đăng ký ở `services/gateway/internal/api/api.go`:
 
 | Route | Xác thực | Lớp rate limit | Việc |
 | --- | --- | --- | --- |
-| `POST /auth/register` | không | `register` | đăng ký; `handle`, `display_name` tuỳ chọn (thiếu handle thì sinh `u_` + 12 hex); trùng handle 409 `HANDLE_ALREADY_TAKEN`, sai dạng 400 `INVALID_HANDLE` |
-| `POST /auth/login` | không | `login-ip`, `login-email` | đổi email và mật khẩu lấy access token và refresh token |
+| `POST /auth/register` | không | `register` | đăng ký; `handle`, `display_name` tuỳ chọn (thiếu handle thì sinh `u_` + 12 hex); trùng handle 409 `HANDLE_ALREADY_TAKEN`, sai dạng 400 `INVALID_HANDLE`; mật khẩu phổ biến, đã lộ hay bằng email, handle 400 `PASSWORD_BLOCKLISTED` |
+| `POST /auth/login` | không | `login-ip`, `login-email`, `login-account` | đổi email và mật khẩu lấy access token và refresh token |
 | `POST /auth/refresh` | không (refresh token trong thân) | `refresh` | đổi refresh token lấy cặp token mới; token đã trình không dùng lại được ([ADR-0016](../adr/0016-web-client.md) §2–5) |
 | `POST /auth/logout` | không (refresh token trong thân) | `refresh` | thu hồi cả họ refresh token của lần đăng nhập; idempotent, trả 204 |
 | `GET /me`, `PATCH /me` | Bearer JWT | `read`, `write` | hồ sơ của mình (`user_id`, `handle`, `display_name`, không có email); đổi tên hiển thị |
@@ -187,6 +187,11 @@ Item của feed và của danh sách video mang `author` (`user_id`, `handle`, `
 
 `playlist_url`, `thumbnail_url` là `MEDIA_PUBLIC_BASE_URL` + `/` + object key, ở cả item của feed. Path hay query không
 phải UTF-8 hợp lệ thì gateway trả 400 `INVALID_UTF8` ở mọi route, không gọi service.
+
+Mọi response của gateway, cả `/healthz`, `/readyz`, 404 và problem, mang header bảo mật
+`X-Content-Type-Options: nosniff`, `Content-Security-Policy: default-src 'none'; frame-ancestors 'none'` và
+`Cache-Control: no-store`; chỉ `GET /public/videos/{video_id}` thành công thay `Cache-Control` như bảng trên
+(`httpx.SecurityHeaders`, lý do ở [xác thực](../explanation/authentication.md#header-bảo-mật)).
 
 Chi tiết hiện thực của luồng upload chốt ở [ADR-0008](../adr/0008-async-upload-pipeline-stage2a.md):
 
@@ -210,7 +215,12 @@ Rate limit, cache, timeout/retry/circuit breaker và job dọn upload chốt ở
 
 - mọi route trừ `/healthz`, `/readyz` có rate limit GCRA bằng một Lua script trong Valkey db 10 (mục 2): `register` theo
   IP 60/giờ, burst 20; `login-ip` theo IP 60/phút, burst 30, và `login-email` theo cặp (IP, email) 10/giờ, burst 5 (khoá chứa
-  SHA-256 của email, không có email thô); `refresh` theo IP cho `/auth/refresh`, `/auth/logout` 60/phút, burst 30; `upload`
+  SHA-256 của email, không có email thô), rồi `login-account` theo email trên mọi IP 100/24 giờ, burst 10 (id
+  `EmailHash`), trừ **cặp đã biết**: cặp (IP, email) đã đăng nhập thành công, giữ ở khoá
+  `svp:gw:login-known:<IP>:<EmailHash>` tới hết hạn của cả họ refresh token, bỏ qua `login-account` nhưng vẫn qua hai
+  lớp kia; Valkey lỗi khi đọc khoá đó thì cặp coi là chưa biết (thứ tự kiểm và lý do ở
+  [xác thực](../explanation/authentication.md#đăng-nhập)); `refresh` theo IP cho `/auth/refresh`, `/auth/logout`
+  60/phút, burst 30 (mỗi phiên đang dùng gọi một lần trong mỗi hạn access token); `upload`
   (`POST /videos`) 30/giờ, burst 10; `write` 120/phút, burst 60; `read` 600/phút, burst 200, ba lớp sau theo `user_id`. Mọi lần
   gọi đều được đếm. IP là địa chỉ kết nối; header chỉ được đọc trên kết nối từ proxy tin cậy
   (`TRUSTED_PROXY_CIDRS`; RL-1): `X-Forwarded-For` theo `TRUSTED_PROXY_HOPS` (compose 0 hop, k3d 1 hop từ Envoy;
@@ -219,7 +229,8 @@ Rate limit, cache, timeout/retry/circuit breaker và job dọn upload chốt ở
   thì địa chỉ kết nối. Biến này cần `TRUSTED_PROXY_CIDRS` và `TRUSTED_PROXY_HOPS` bằng 0, không thì gateway không khởi
   động, lỗi nêu tên biến; eks đặt `CloudFront-Viewer-Address` với CIDR VPC
   ([ADR-0061](../adr/0061-edge-cloudfront-waf-acm.md) §9);
-- Valkey lỗi hay quá 50 ms thì `register`, `login-ip`, `login-email`, `refresh`, `upload` **đóng mềm** (bộ đếm trong bộ nhớ của
+- Valkey lỗi hay quá 50 ms thì `register`, `login-ip`, `login-email`, `login-account`, `refresh`, `upload` **đóng mềm**
+  (bộ đếm trong bộ nhớ của
   từng instance, ngưỡng bằng nửa), `write` và `read` **mở**; gateway log WARN `rate limit store unavailable, using fallback` tối
   đa một dòng mỗi 10 s (RL-2);
 - lớp `public` theo IP cho `GET /public/videos/{video_id}`: 120/phút, burst 60, Valkey lỗi thì đóng mềm 60/phút, burst 30

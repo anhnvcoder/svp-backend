@@ -147,3 +147,4 @@ ADR này chỉnh [ADR-0007](0007-go-monorepo-toolchain-and-stage1-scope.md) ph�
 ### Chỉnh bởi
 
 - §6: [0039](0039-mainpath-drills-scan-gate-sourcemaps.md): grype đọc `.grype.yaml` với `--fail-on critical` thay áp `.trivyignore.yaml` bằng jq; mục hết hạn bị bắt ở phép kiểm file của job `config`.
+- §6: [0070](0070-scan-gate-high-fixed.md): cổng grype chặn thêm High có `vulnerability.fix.state == "fixed"`, trừ `drill-vulnerable` (`allow-critical`); High chưa có bản vá vẫn chỉ đếm.

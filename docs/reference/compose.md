@@ -186,7 +186,9 @@ Loại tài liệu (Diátaxis): **reference**, tra cứu khi cần một lệnh 
   profile mà `SVP_K6_PROFILE` chọn (`local`, `ci`, `cloud`; `lib/config.js`). Biến môi trường: `SVP_K6_PROFILE`; `SVP_API_URL`
   (gateway), `SVP_WEB_URL` (địa chỉ k6 gọi tới web client) và `SVP_WEB_ORIGIN` (origin người dùng mở web, gửi làm `Host` và `Origin`);
   `SVP_K6_HOLD` và `SVP_K6_RAMP` (thời gian giữ tốc độ đầy đủ và thời gian tăng dần tới đó, mặc định theo profile; số nguyên kèm
-  `s`, `m` hay `h`); `SVP_K6_RESULTS` (thư mục ghi `summary.json`; không đặt thì ra stdout); `SVP_K6_PODS` và
+  `s`, `m` hay `h`; `ramp + hold + rampDown` của mọi profile không quá ngân sách `maxRunSeconds` của `lib/config.js`,
+  vì VU dùng access token cấp một lần trong `setup()`, không làm mới: vượt thì k6 dừng lúc khởi tạo, message nêu hạn
+  access token); `SVP_K6_RESULTS` (thư mục ghi `summary.json`; không đặt thì ra stdout); `SVP_K6_PODS` và
   `SVP_K6_VIEWER_IP` (chỉ Job cloud).
 - Mọi tốc độ trong `lib/config.js` tính theo phút, nên route dưới một request mỗi giây (`POST /videos`) không cần tốc độ lẻ. Tốc độ
   của profile `cloud` là tổng của cả Job: k6 chia chúng cho `pods` tiến trình bằng `--execution-segment`, còn mỗi pod đăng ký pool
@@ -208,8 +210,9 @@ Loại tài liệu (Diátaxis): **reference**, tra cứu khi cần một lệnh 
   vẫn đi hết pool của chính pod). Video tiến sau mỗi lượt của cùng một user, từ offset riêng: nếu lấy từ iteration chia dư cho số
   video như user, hai thứ quay đồng bộ và một user chỉ thấy `videos / gcd(users, videos)` video (5 trong 30 với 12 user), lặp lại
   các cặp (user, video) mà RL-3 chặn ở gateway.
-- Job k6 trên cluster cloud (`deploy/k6/cloud/`): 20 pod profile `cloud`, 1 000 request feed mỗi giây (tổng 1 250 req/s) giữ ít nhất
-  10 phút. Người học chạy với context kubectl của cluster cloud, không từ `make`; cần `kubectl` và `jq`; context `k3d-*` (laptop
+- Job k6 trên cluster cloud (`deploy/k6/cloud/`): 20 pod profile `cloud`, 1 000 request feed mỗi giây (tổng 1 250 req/s)
+  suốt thời gian giữ của profile (ngắn vì ngân sách `maxRunSeconds` ở trên).
+  Người học chạy với context kubectl của cluster cloud, không từ `make`; cần `kubectl` và `jq`; context `k3d-*` (laptop
   16 GB) bị từ chối trước mọi lệnh kubectl. `render.sh` in manifest ra stdout (namespace `svp-load`, ConfigMap `svp-k6-scripts` chứa
   script của `deploy/k6/` như trong working tree, Job Indexed của `job.yaml.in`), không chạm cluster và không đọc `.env`;
   `run.sh` áp output đó và `make cloud-check` kiểm nó (chạy `render.sh` không đối số). Image là `K6_IMAGE` đọc từ `Makefile` gốc: một nơi ghim k6
@@ -223,8 +226,10 @@ Loại tài liệu (Diátaxis): **reference**, tra cứu khi cần một lệnh 
     chúng. Chỉ nhận certificate, file chứa khoá riêng bị từ chối. Không có cờ thì pod tin root của image (chỉ cho kiểm tĩnh).
     `run.sh start` luôn truyền cờ này với CA nội bộ của cluster, người học không truyền gì.
   - `--pods`: 1 tới 20 pod (mặc định 20), mỗi pod giữ tải của một pod thiết kế nên tổng co theo số pod (`lib/config.js`,
-    `SVP_K6_PODS`). `--ramp`, `--hold`: thời gian tăng và giữ, như `2m` (mặc định 10m mỗi cái); đặt một trong hai thì hạn của Job
-    tính theo độ dài lượt chạy thay vì mặc định 3600 s.
+    `SVP_K6_PODS`). `--ramp`, `--hold`: thời gian tăng và giữ, như `2m` (mặc định 3m và 7m, như profile
+    `cloud` của `lib/config.js`); cộng 1 phút giảm tải mà vượt `max_run_seconds` của `render.sh` (cùng số với
+    `maxRunSeconds` của `lib/config.js`: token của `setup()` hết hạn giữa lượt) thì `render.sh` từ chối; đặt một
+    trong hai thì hạn của Job tính theo độ dài lượt chạy thay vì mặc định 3600 s.
   - `start`: tìm ClusterIP của Service Envoy của Gateway `svp`, đọc đúng khoá `ca.crt` của Secret `svp-edge/svp-edge-tls`
     (certificate của Envoy; jsonpath, không đọc khoá riêng cùng Secret) vào file tạm, xoá khi `run.sh` thoát, render manifest với
     `--ca-file` file đó và áp chúng (namespace, ConfigMap, Job `svp-k6`); từ chối khi đã có Job `svp-k6`, và dừng với thông báo

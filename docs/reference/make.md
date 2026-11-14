@@ -85,7 +85,7 @@ liệt kê target):
   bảng ra terminal. Repo được mount chỉ đọc và container chạy bằng uid của người gọi, nên báo cáo thuộc về họ; bộ policy mà trivy
   tải về nằm trong cache bên trong container.
 - `make grype`: cổng grype của pipeline image, chạy từ một máy: `deploy/ci/scan-gate.sh --grype` chạy grype trên SBOM SPDX với
-  `--fail-on critical` và `.grype.yaml` (Critical nào còn lại sau luật của nó là đỏ). `SBOM=<đường dẫn tuyệt đối>` quét tài liệu đó;
+  `--fail-on critical` và `.grype.yaml`, rồi `image-guard.sh fixed-high` trên `grype.json` (Critical, hay High có `fix.state` `fixed`, còn lại sau luật của `.grype.yaml` là đỏ). `SBOM=<đường dẫn tuyệt đối>` quét tài liệu đó;
   `IMAGE=<ref>@sha256:<digest> [ARCH=amd64|arm64]` trước hết cho syft ghim đọc image của nền tảng đó từ registry, ẩn danh. grype cần
   mạng cho DB của nó, và DB không tải được thì target thất bại. `SVP_GRYPE_CACHE`, khi đặt, giữ DB ở thư mục đó (khoảng 3 GB sau
   khi giải nén); không đặt thì ở `$TMPDIR`.

@@ -18,9 +18,9 @@
             "PURL": "pkg:npm/zod@3.25.76"
           },
           "InstalledVersion": "3.25.76",
-          "FixedVersion": "3.25.77",
+          "Status": "affected",
           "Severity": "HIGH",
-          "Title": "A HIGH vulnerability of the fixture"
+          "Title": "A HIGH vulnerability of the fixture, with no fix yet"
         }
       ]
     }

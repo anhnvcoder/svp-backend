@@ -8,7 +8,7 @@
 
 ## Ý nghĩa và tác động tới người dùng
 
-Access token là JWT Ed25519, hạn **1 giờ** (`TTL` của `internal/authtoken`), header mang `kid`. user-service ký bằng
+Access token là JWT Ed25519, hạn **15 phút** (`TTL` của `internal/authtoken`), header mang `kid`. user-service ký bằng
 `JWT_SIGNING_KID` + `JWT_SIGNING_KEY`; gateway và bốn service gRPC (user, video, engagement, feed) kiểm bằng `JWT_VERIFY_KEYS`,
 danh sách `kid:<public key base64>` cách nhau dấu phẩy, nên cả năm nhận được nhiều khoá cùng lúc. Gateway kiểm token của client,
 mỗi service kiểm lại token gateway chuyển tiếp ([ADR-0042](../adr/0042-caller-identity-grpc.md)): khoá công khai mới phải tới
@@ -100,14 +100,15 @@ kubectl --context k3d-svp -n svp rollout status deployment/user-service --timeou
 
 Token mới mang `kid` mới, gateway và bốn service đã nhận nó từ bước 1; token cũ còn hợp lệ tới khi hết hạn.
 
-**Bước 3. Bỏ khoá cũ**, sau khi user-service cuối cùng còn khoá cũ đã dừng ít nhất **1 giờ** (hạn access token) cộng vài phút dư
-cho lệch đồng hồ: xoá mục `<kid cũ>:<base64 cũ>,` khỏi `JWT_VERIFY_KEYS`, áp dụng như bước 1. Rồi xoá file tạm:
+**Bước 3. Bỏ khoá cũ**, sau khi user-service cuối cùng còn khoá cũ đã dừng ít nhất **15 phút 30 giây** (`TTL` cộng
+`Leeway` của `internal/authtoken`: token còn được nhận tới lúc đó) cộng vài phút dư cho lệch đồng hồ:
+xoá mục `<kid cũ>:<base64 cũ>,` khỏi `JWT_VERIFY_KEYS`, áp dụng như bước 1. Rồi xoá file tạm:
 
 ```sh
 rm -f "$jwtnew"; ls -l .env        # .env vẫn mode 600 (-rw-------)
 ```
 
-**Khi nghi lộ khoá:** làm bước 0, 1, 2 rồi bước 3 **ngay**, không chờ 1 giờ: mọi access token ký bằng khoá cũ (kể cả token giả
+**Khi nghi lộ khoá:** làm bước 0, 1, 2 rồi bước 3 **ngay**, không chờ: mọi access token ký bằng khoá cũ (kể cả token giả
 mạo) bị 401 từ lúc đó. Cái giá là người dùng web **phải đăng nhập lại**: BFF chỉ refresh khi access token còn dưới 30 s
 (`server/session-access.ts` của repo `svp-frontend`), nên phiên có token cũ còn hạn lâu hơn gửi nó đi, gateway trả 401, và web coi phiên là hỏng
 (`server/feed.ts`, `server/api-proxy.ts` của `svp-frontend`: `SessionAccess.end`): xoá phiên và thu hồi cả họ refresh token; trang feed

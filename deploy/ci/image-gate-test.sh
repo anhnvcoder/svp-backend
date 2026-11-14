@@ -98,9 +98,28 @@ gate() {
   step trivy-gate "$want" OUT="$work/out" LABEL="gw linux/amd64" GUARD="$src/deploy/ci/image-guard.sh" \
     TRIVY_IMAGE="$trivy_image" TRIVY_CACHE="$work/cache/trivy" TRIVYIGNORE= ALLOW_CRITICAL=false "$@"
 }
-gate "a HIGH only passes" 0 clean.json
+gate "a HIGH with no fix only passes" 0 clean.json
 check "trivy gate: the pass is said" has "$work/step.out" "ok    gw linux/amd64 (trivy) passes the scan gate"
-same "trivy gate: one summary line" "- gw linux/amd64 (trivy): CRITICAL 0, HIGH 1, secrets 0" "$(cat "$work/summary")"
+same "trivy gate: one summary line" "- gw linux/amd64 (trivy): CRITICAL 0, HIGH 1 (with a fix 0), secrets 0" \
+  "$(cat "$work/summary")"
+gate "a HIGH with a fix blocks" 1 high-fixed.json
+check "trivy gate: a HIGH with a fix says nothing ships" has "$work/step.out" \
+  "gw linux/amd64 (trivy): HIGH vulnerabilities with a fix; nothing is pushed, signed or attested"
+same "trivy gate: the counts, then the HIGH with a fix only" "- gw linux/amd64 (trivy): CRITICAL 0, HIGH 2 (with a fix 1), secrets 0
+high  CVE-2026-4444 qs@6.0.0 pkg:npm/qs@6.0.0 (fixed: 6.0.1)" "$(cat "$work/summary")"
+check "trivy gate: a HIGH with a fix is no CRITICAL" lacks "$work/step.out" "CRITICAL vulnerabilities"
+gate "a HIGH with a fix with allow-critical (drill-vulnerable) passes" 0 high-fixed.json ALLOW_CRITICAL=true
+check "trivy gate: allow-critical says so for a HIGH with a fix" has "$work/step.out" \
+  "note  gw linux/amd64 (trivy): HIGH vulnerabilities with a fix let through (allow-critical)"
+mkdir -p "$work/tree-qs"
+printf 'vulnerabilities:\n  - id: CVE-2026-4444\n    statement: Accepted for the test.\n    expired_at: %s\n    purls:\n      - pkg:npm/qs@6.0.0\n' \
+  "$soon" >"$work/tree-qs/.trivyignore.yaml"
+gate "a HIGH with a fix covered by an entry of .trivyignore.yaml in force passes" 0 high-fixed.json \
+  TRIVYIGNORE="$work/tree-qs/.trivyignore.yaml"
+gate "a CRITICAL with no fix blocks" 1 critical-unfixed.json
+check "trivy gate: a CRITICAL with no fix says nothing ships" has "$work/step.out" \
+  "gw linux/amd64 (trivy): CRITICAL vulnerabilities; nothing is pushed, signed or attested"
+check "trivy gate: a CRITICAL with no fix is no HIGH with a fix" lacks "$work/step.out" "HIGH vulnerabilities with a fix"
 check "trivy gate: the report itself is not printed" lacks "$work/step.out" '"Results"'
 gate "a CRITICAL blocks" 1 critical.json
 check "trivy gate: a CRITICAL says nothing ships" has "$work/step.out" \

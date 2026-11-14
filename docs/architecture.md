@@ -247,30 +247,12 @@ user-service cấp JWT ký bằng khoá riêng; gateway kiểm chữ ký bằng 
 trong gRPC metadata `authorization`; mỗi service kiểm lại bằng `JWT_VERIFY_KEYS` và lấy người gọi từ `sub`
 ([ADR-0042](adr/0042-caller-identity-grpc.md)). Login trả thêm refresh token mờ (user-service chỉ lưu SHA-256), xoay mỗi lần dùng;
 trình lại token đã dùng thì cả họ bị thu hồi ([ADR-0016](adr/0016-web-client.md)). Session của web có idle và absolute timeout
-([ADR-0046](adr/0046-web-session-lifetime.md)).
+([ADR-0046](adr/0046-web-session-lifetime.md)). Sơ đồ sequence của đăng ký, đăng nhập, làm mới phiên, đăng xuất và lý do
+từng bước ở [`explanation/authentication.md`](explanation/authentication.md).
 
-```mermaid
-sequenceDiagram
-    participant B as Trình duyệt
-    participant W as web (BFF)
-    participant R as Valkey db 9
-    participant G as gateway
-    participant U as user-service
-    B->>W: POST form đăng nhập (Server Action, kiểm CSRF)
-    W->>G: POST /auth/login
-    G->>U: Login
-    U-->>W: access token, refresh token (họ mới)
-    W->>R: session mới (khoá sha256(sid))
-    W-->>B: Set-Cookie svp_sid (HttpOnly), 303
-    W->>R: access token sắp hết hạn: SET khoá refresh NX (single-flight giữa replica)
-    W->>G: POST /auth/refresh
-    G->>U: Refresh (một transaction, khoá theo họ)
-    U-->>W: cặp token mới, token cũ đánh dấu đã dùng
-    W->>R: compare-and-set session
-```
-
-Refresh không rõ kết quả thì BFF giữ session và không thử lại trong request đó. Access token đã cấp sống tới hết hạn (JWT-3 của
-[`threat-model.md`](threat-model.md#41-jwt-và-đăng-nhập)).
+Access token sống `authtoken.TTL` (15 phút, [ADR-0069](adr/0069-auth-hardening.md) §4); đã cấp thì sống tới hết hạn
+(JWT-3 của [`threat-model.md`](threat-model.md#41-jwt-và-đăng-nhập)), nên BFF làm mới trước khi hết hạn. Refresh không
+rõ kết quả thì BFF giữ session và không thử lại trong request đó.
 
 ## 7. Triển khai
 

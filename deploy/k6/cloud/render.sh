@@ -17,7 +17,8 @@
 #   --pods           1 to 20 pods run the load (default 20, the design), each with the load of one pod of the design
 
 #   --ramp, --hold   how long the rate ramps up and holds (a whole number of s, m or h, like 2m; default the profile's
-#                    10m each); either one sets the Job's deadline from the run's length instead of the default 3600 s
+#                    3m and 7m; with the 1m down at most 11m in all); either one sets the Job's deadline from the run's
+#                    length instead of the default 3600 s
 set -euo pipefail
 
 here=$(cd "$(dirname "$0")" && pwd)
@@ -29,8 +30,10 @@ die() {
   exit 1
 }
 
-# The design's pod count and the run of profile cloud (lib/config.js): ramp 10m, hold 10m, down 1m.
-design_pods=20 profile_ramp=10m profile_hold=10m ramp_down_seconds=60
+# The design's pod count and the run of profile cloud (lib/config.js): ramp 3m, hold 7m, down 1m.
+design_pods=20 profile_ramp=3m profile_hold=7m ramp_down_seconds=60
+# The longest run the access tokens of setup() outlive: maxRunSeconds of lib/config.js, which says why.
+max_run_seconds=660
 # What the deadline adds to the run itself (job.yaml.in): pull and schedule the pods, setup(), the summary.
 deadline_margin_seconds=900
 duration_re='^[1-9][0-9]*[smh]$'
@@ -61,12 +64,15 @@ done
 [[ $envoy_ip =~ ^[0-9]{1,3}(\.[0-9]{1,3}){3}$|^[0-9a-f:]+$ ]] || die "--envoy-ip is not an IP address: $envoy_ip"
 [[ $pods =~ ^[1-9][0-9]*$ ]] && [ "$pods" -le "$design_pods" ] || die "--pods is not a whole number from 1 to $design_pods: $pods"
 [ -z "$ramp" ] || [[ $ramp =~ $duration_re ]] || die "--ramp is not a whole number of s, m or h, like 2m: $ramp"
-[ -z "$hold" ] || [[ $hold =~ $duration_re ]] || die "--hold is not a whole number of s, m or h, like 10m: $hold"
+[ -z "$hold" ] || [[ $hold =~ $duration_re ]] || die "--hold is not a whole number of s, m or h, like 7m: $hold"
+run_seconds=$(($(seconds "${ramp:-$profile_ramp}") + $(seconds "${hold:-$profile_hold}") + ramp_down_seconds))
+[ "$run_seconds" -le "$max_run_seconds" ] || die "ramp + hold + 1m down is ${run_seconds}s, over the \
+${max_run_seconds}s budget: the access tokens setup() issues last 15m and setup() may take 3m, \
+so a longer run ends on 401s"
 
 deadline=3600
 if [ -n "$ramp$hold" ]; then
-  deadline=$(($(seconds "${ramp:-$profile_ramp}") + $(seconds "${hold:-$profile_hold}") + ramp_down_seconds +
-    deadline_margin_seconds))
+  deadline=$((run_seconds + deadline_margin_seconds))
 fi
 
 if [ -n "$ca_file" ]; then

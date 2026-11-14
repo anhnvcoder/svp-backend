@@ -60,10 +60,10 @@ webtree=$work/svp-frontend
 mkdir -p "$webtree"
 digest_b=sha256:$(printf 'b%.0s' $(seq 64))
 
-# The verdicts are trivy's and grype's: a fake docker stands in for both and records each call in docker.log, answering
-# with FAKE_TRIVY_VULNS (convert with --severity), FAKE_TRIVY_SECRETS (without), FAKE_GRYPE (report: FAKE_GRYPE_JSON).
-# What the scanners do with these flags (an entry covering exactly its package version, a HIGH secret found without
-# --severity, include-aliases) was run with the pinned images, not here. The pinned conftest and yq run for real.
+# The verdicts are trivy's and grype's: a fake docker stands in for both, logs each call in docker.log and answers
+# FAKE_TRIVY_SECRETS (secrets), FAKE_TRIVY_VULNS (--severity), FAKE_TRIVY_KEPT or its input (JSON convert), FAKE_GRYPE
+# (report: FAKE_GRYPE_JSON). What the scanners do with these flags (an entry covering exactly its package version, a
+# HIGH secret found without --severity, include-aliases) ran with the pinned images; conftest and yq run for real.
 conftest_image=$(sed -n 's/^CONFTEST_IMAGE[[:space:]]*:=[[:space:]]*//p' "$src/Makefile")
 yq_image=$(sed -n 's/^YQ_IMAGE[[:space:]]*:=[[:space:]]*//p' "$src/Makefile")
 real_docker=$(command -v docker)
@@ -94,7 +94,10 @@ for a in "$@"; do
 done
 if [ -n "$convert" ]; then
   cp "$in/$file" "$FAKE_DOCKER_DIR/$file"
-  if [ -n "$severity" ]; then exit "${FAKE_TRIVY_VULNS:-0}"; else exit "${FAKE_TRIVY_SECRETS:-0}"; fi
+  [ "$file" != secrets.json ] || exit "${FAKE_TRIVY_SECRETS:-0}"
+  [ -z "$severity" ] || exit "${FAKE_TRIVY_VULNS:-0}"
+  cat "${FAKE_TRIVY_KEPT:-$in/$file}"
+  exit 0
 fi
 case " $* " in
 *" sbom:/out/sbom.spdx.json "*)
@@ -149,15 +152,16 @@ jq -n --arg c "$digest_b" '{SchemaVersion: 2, Metadata: {ImageID: $c}, Results: 
   >"$work/report.json"
 ignore_files
 gate github "scan-gate.sh: trivy finds a secret, it blocks" 1 FAKE_TRIVY_SECRETS=5 -- "gw linux/amd64" "$work/report.json"
-same "scan-gate.sh in a job: one line in the summary, the secret under it" '- gw linux/amd64 (trivy): CRITICAL 0, HIGH 1, secrets 1
+same "scan-gate.sh in a job: one line in the summary, the secret under it" '- gw linux/amd64 (trivy): CRITICAL 0, HIGH 1 (with a fix 0), secrets 1
 secret  aws-key (HIGH) in app line 3' "$(cat "$work/summary")"
-same "scan-gate.sh in a job: the counts in the log" "gw linux/amd64 (trivy): CRITICAL 0, HIGH 1, secrets 1" \
+same "scan-gate.sh in a job: the counts in the log" "gw linux/amd64 (trivy): CRITICAL 0, HIGH 1 (with a fix 0), secrets 1" \
   "$(cat "$work/gate.out")"
 check "scan-gate.sh in a job: the secret in the log too, rule, file and line" has "$work/gate.err" \
   "secret  aws-key (HIGH) in app line 3"
-same "scan-gate.sh: the secret pass, then the vulnerability pass" \
+same "scan-gate.sh: the secret pass, the CRITICAL pass, then the JSON the HIGH with a fix are read from" \
   "convert --exit-code 5 --format json --output /dev/null --ignorefile  /in/secrets.json --cache-dir /cache
-convert --exit-code 5 --format table --table-mode detailed --severity CRITICAL --ignorefile /ignore.yaml /in/vulnerabilities.json --cache-dir /cache" \
+convert --exit-code 5 --format table --table-mode detailed --severity CRITICAL --ignorefile /ignore.yaml /in/vulnerabilities.json --cache-dir /cache
+convert --format json --ignorefile /ignore.yaml /in/vulnerabilities.json --cache-dir /cache" \
   "$(sed 's/^.* trivy@sha256:1 //' "$work/docker.log")"
 check "scan-gate.sh: the ignore file trivy reads is the tree's" grep -qF -- "-v $tree/.trivyignore.yaml:/ignore.yaml:ro" \
   "$work/docker.log"
@@ -168,7 +172,7 @@ same "scan-gate.sh: the vulnerability pass reads only the vulnerabilities" \
 gate local "scan-gate.sh: --allow-critical never lets a secret through" 1 FAKE_TRIVY_SECRETS=5 -- --allow-critical \
   "gw linux/amd64" "$work/report.json"
 same "scan-gate.sh on a machine: the summary line in the log, no counts line" \
-  "- gw linux/amd64 (trivy): CRITICAL 0, HIGH 1, secrets 1" "$(cat "$work/gate.out")"
+  "- gw linux/amd64 (trivy): CRITICAL 0, HIGH 1 (with a fix 0), secrets 1" "$(cat "$work/gate.out")"
 check "scan-gate.sh on a machine: the secret in the log" has "$work/gate.err" "secret  aws-key (HIGH) in app line 3"
 gate local "scan-gate.sh: trivy finds a CRITICAL, it blocks" 1 FAKE_TRIVY_VULNS=5 -- "gw linux/amd64" "$work/report.json"
 check "scan-gate.sh: a CRITICAL says nothing ships" has "$work/gate.err" \
@@ -192,10 +196,67 @@ gate local "scan-gate.sh: this tree without ignore files passes" 0 -- "gw linux/
 check "scan-gate.sh: without .trivyignore.yaml trivy reads no ignore file" grep -qF -- \
   "--severity CRITICAL --ignorefile  /in/vulnerabilities.json" "$work/docker.log"
 
-# match ID SEVERITY PURL: one match of a grype report.
+# The second step on HIGH: the Status of each finding in the JSON trivy convert prints with the ignore file (here the
+# fake prints its input, or FAKE_TRIVY_KEPT: what the real trivy leaves is image-gate-test.sh's).
+# vuln ID SEVERITY STATUS: one vulnerability of a trivy report; FixedVersion only when STATUS is fixed.
+vuln() {
+  jq -n --arg id "$1" --arg sev "$2" --arg st "$3" '{VulnerabilityID: $id, PkgName: "zod", InstalledVersion: "3.25.76",
+    PkgIdentifier: {PURL: "pkg:npm/zod@3.25.76"}, Severity: $sev, Status: $st}
+    + (if $st == "fixed" then {FixedVersion: "3.25.77"} else {} end)'
+}
+# trivy_report FILE VULN...: a trivy image report holding the vulnerabilities.
+trivy_report() {
+  local file=$1
+  shift
+  jq -s --arg c "$digest_b" '{SchemaVersion: 2, Metadata: {ImageID: $c},
+    Results: [{Target: "app", Vulnerabilities: .}]}' <<<"$*" >"$file"
+}
+ignore_files
+trivy_report "$work/high-unfixed.json" "$(vuln CVE-2026-3333 HIGH affected)"
+gate github "scan-gate.sh: a HIGH with no fix only counted" 0 -- "gw linux/amd64" "$work/high-unfixed.json"
+same "scan-gate.sh: a HIGH with no fix, the counts" "- gw linux/amd64 (trivy): CRITICAL 0, HIGH 1 (with a fix 0), secrets 0" \
+  "$(cat "$work/summary")"
+trivy_report "$work/high-fixed.json" "$(vuln CVE-2026-2222 HIGH fixed)" "$(vuln CVE-2026-3333 HIGH affected)"
+gate github "scan-gate.sh: a HIGH with a fix blocks" 1 -- "gw linux/amd64" "$work/high-fixed.json"
+check "scan-gate.sh: a HIGH with a fix says nothing ships" has "$work/gate.err" \
+  "FAIL  gw linux/amd64 (trivy): HIGH vulnerabilities with a fix; nothing is pushed, signed or attested"
+same "scan-gate.sh: a HIGH with a fix, the counts and the finding in the summary" \
+  '- gw linux/amd64 (trivy): CRITICAL 0, HIGH 2 (with a fix 1), secrets 0
+high  CVE-2026-2222 zod@3.25.76 pkg:npm/zod@3.25.76 (fixed: 3.25.77)' "$(cat "$work/summary")"
+check "scan-gate.sh: a HIGH with a fix is named in the log" has "$work/gate.err" \
+  "high  CVE-2026-2222 zod@3.25.76 pkg:npm/zod@3.25.76 (fixed: 3.25.77)"
+check "scan-gate.sh: no filter flag drops what is unfixed" lacks "$work/docker.log" "--ignore-unfixed"
+gate local "scan-gate.sh: --allow-critical lets a HIGH with a fix through" 0 -- --allow-critical "gw linux/amd64" \
+  "$work/high-fixed.json"
+check "scan-gate.sh: --allow-critical says so for a HIGH with a fix" has "$work/gate.err" \
+  "note  gw linux/amd64 (trivy): HIGH vulnerabilities with a fix let through (--allow-critical)"
+trivy_report "$work/kept.json" "$(vuln CVE-2026-3333 HIGH affected)"
+gate local "scan-gate.sh: a HIGH with a fix an entry of .trivyignore.yaml covers passes" 0 \
+  FAKE_TRIVY_KEPT="$work/kept.json" -- "gw linux/amd64" "$work/high-fixed.json"
+check "scan-gate.sh: the JSON of the HIGH pass is trivy's with the ignore file" grep -qF -- \
+  "convert --format json --ignorefile /ignore.yaml /in/vulnerabilities.json" "$work/docker.log"
+trivy_report "$work/critical-unfixed.json" "$(vuln CVE-2026-1111 CRITICAL affected)"
+gate local "scan-gate.sh: a CRITICAL with no fix blocks as before" 1 FAKE_TRIVY_VULNS=5 -- "gw linux/amd64" \
+  "$work/critical-unfixed.json"
+check "scan-gate.sh: a CRITICAL with no fix is the CRITICAL step's" has "$work/gate.err" \
+  "FAIL  gw linux/amd64 (trivy): CRITICAL vulnerabilities; nothing is pushed, signed or attested"
+check "scan-gate.sh: a CRITICAL with no fix is no HIGH with a fix" lacks "$work/gate.err" "HIGH vulnerabilities with a fix"
+echo '{"Results": "not a list"}' >"$work/kept-broken.json"
+gate local "scan-gate.sh: JSON the HIGH step cannot read is no pass" 2 FAKE_TRIVY_KEPT="$work/kept-broken.json" -- \
+  "gw linux/amd64" "$work/high-unfixed.json"
+: >"$work/kept-blank.json"
+gate local "scan-gate.sh: trivy convert exiting 0 with no JSON is no pass" 2 FAKE_TRIVY_KEPT="$work/kept-blank.json" -- \
+  "gw linux/amd64" "$work/high-unfixed.json"
+check "scan-gate.sh: no JSON for the HIGH step is said" has "$work/gate.err" "cannot be read for HIGH with a fix"
+echo '{}' >"$work/kept-object.json"
+gate local "scan-gate.sh: JSON that is no trivy report is no pass" 2 FAKE_TRIVY_KEPT="$work/kept-object.json" -- \
+  "gw linux/amd64" "$work/high-unfixed.json"
+
+# match ID SEVERITY PURL [STATE]: one match of a grype report, its fix in state STATE (fixed: 9.9.9 when not given).
 match() {
-  jq -n --arg id "$1" --arg sev "$2" --arg purl "$3" '{
-    vulnerability: {id: $id, severity: $sev, fix: {versions: ["9.9.9"], state: "fixed"}},
+  jq -n --arg id "$1" --arg sev "$2" --arg purl "$3" --arg st "${4:-fixed}" '{
+    vulnerability: {id: $id, severity: $sev,
+      fix: {versions: (if $st == "fixed" then ["9.9.9"] else [] end), state: $st}},
     artifact: {name: ($purl | sub("^pkg:[^/]+/(.*/)?"; "") | sub("@.*$"; "")),
       version: ($purl | sub("^[^@]*@"; "") | sub("[?#].*$"; "")), purl: $purl}}'
 }
@@ -209,7 +270,8 @@ grype_report() {
 mkdir -p "$work/leg"
 echo '{"spdxVersion": "SPDX-2.3"}' >"$work/leg/sbom.spdx.json"
 critical_npm=$(match CVE-2026-1111 Critical pkg:npm/left-pad@1.0.0)
-high_npm=$(match CVE-2026-2222 High pkg:npm/zod@3.25.76)
+high_npm=$(match CVE-2026-2222 High pkg:npm/zod@3.25.76 not-fixed)
+high_fixed=$(match CVE-2026-4444 High pkg:npm/qs@6.0.0)
 grype_report "$work/grype.json" 1 "$critical_npm" "$high_npm"
 ignore_files
 grype_gate() { gate "$1" "$2" "$3" FAKE_GRYPE_JSON="$work/grype.json" "${@:4}"; }
@@ -218,7 +280,7 @@ grype_gate github "scan-gate.sh --grype: grype finds a Critical, it blocks" 1 FA
 check "scan-gate.sh --grype: grype runs with --fail-on critical and the tree's .grype.yaml" grep -qF -- \
   "-v $tree/.grype.yaml:/ignore/grype.yaml:ro grype@sha256:1 sbom:/out/sbom.spdx.json -c /ignore/grype.yaml --fail-on critical -o json=/out/grype.json -o sarif=/out/grype.sarif.raw -q" \
   "$work/docker.log"
-same "scan-gate.sh --grype in a job: one line in the summary, the Critical under it" '- web linux/arm64 (grype): Critical 1, High 1, excepted by .grype.yaml 1
+same "scan-gate.sh --grype in a job: one line in the summary, the Critical under it" '- web linux/arm64 (grype): Critical 1, High 1 (with a fix 0), excepted by .grype.yaml 1
 critical  CVE-2026-1111 left-pad@1.0.0 pkg:npm/left-pad@1.0.0 (fixed: 9.9.9)' "$(cat "$work/summary")"
 check "scan-gate.sh --grype: the report itself is not printed" lacks "$work/gate.out" '"matches"'
 # Only the rescan lets CRITICAL through, in trivy's report; make grype never does.
@@ -228,9 +290,24 @@ check "scan-gate.sh --grype: --allow-critical is refused, naming the usage" has 
   "usage: scan-gate.sh [--allow-critical] LABEL REPORT | --grype LABEL DIR | --check-ignorefile"
 check "scan-gate.sh --grype: --allow-critical is refused before grype runs" test ! -s "$work/docker.log"
 grype_report "$work/grype.json" 0 "$high_npm"
-grype_gate local "scan-gate.sh --grype: High and below only counted" 0 -- --grype "web linux/arm64" "$work/leg"
+grype_gate local "scan-gate.sh --grype: a High with no fix only counted" 0 -- --grype "web linux/arm64" "$work/leg"
 check "scan-gate.sh --grype: the counts" has "$work/gate.out" \
-  "- web linux/arm64 (grype): Critical 0, High 1, excepted by .grype.yaml 0"
+  "- web linux/arm64 (grype): Critical 0, High 1 (with a fix 0), excepted by .grype.yaml 0"
+grype_report "$work/grype.json" 0 "$high_npm" "$high_fixed"
+grype_gate github "scan-gate.sh --grype: a High with a fix blocks" 1 -- --grype "web linux/arm64" "$work/leg"
+check "scan-gate.sh --grype: a High with a fix says nothing ships" has "$work/gate.err" \
+  "FAIL  web linux/arm64 (grype): High vulnerabilities with a fix; nothing is pushed, signed or attested"
+same "scan-gate.sh --grype: a High with a fix, the counts and the match in the summary" \
+  '- web linux/arm64 (grype): Critical 0, High 2 (with a fix 1), excepted by .grype.yaml 0
+high  CVE-2026-4444 qs@6.0.0 pkg:npm/qs@6.0.0 (fixed: 9.9.9)' "$(cat "$work/summary")"
+check "scan-gate.sh --grype: no filter flag drops what is unfixed" lacks "$work/docker.log" "--only-fixed"
+# grype moves a match its .grype.yaml covers to ignoredMatches, out of matches: there it is not counted.
+jq -n --argjson u "$high_npm" --argjson m "$high_fixed" '{descriptor: {name: "grype", version: "0.121.0"},
+  matches: [$u], ignoredMatches: [$m]}' >"$work/grype.json"
+grype_gate local "scan-gate.sh --grype: a High with a fix .grype.yaml excepts passes" 0 -- --grype "web linux/arm64" \
+  "$work/leg"
+check "scan-gate.sh --grype: the High with a fix .grype.yaml excepts is counted as excepted only" has "$work/gate.out" \
+  "- web linux/arm64 (grype): Critical 0, High 1 (with a fix 0), excepted by .grype.yaml 1"
 grype_gate local "scan-gate.sh --grype: grype failing (a DB it cannot fetch) is no pass" 2 FAKE_GRYPE=1 -- --grype \
   "web linux/arm64" "$work/leg"
 check "scan-gate.sh --grype: grype failing is said" has "$work/gate.err" "FAIL  web linux/arm64: grype could not scan"

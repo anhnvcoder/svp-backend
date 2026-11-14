@@ -17,7 +17,7 @@
 openapi: 3.1.0
 info:
   title: Short-video platform API
-  version: 1.1.0
+  version: 1.2.0
   description: |
     JSON fields are snake_case and times are RFC 3339 in UTC.
 
@@ -32,11 +32,18 @@ info:
 
     Every route but `/healthz` and `/readyz` is rate limited, to slow down password guessing, mass
     sign-ups and junk writes: `/auth/register` and `/auth/login` by the client's address,
-    `/auth/login` also by the address and email together, `/auth/refresh` and `/auth/logout` by
-    the client's address in one shared bucket of 60 a minute with bursts of 30,
+    `/auth/login` also by the address and email together, and by the email alone across every
+    address (100 a day with bursts of 10) unless that address has logged in to that account in the
+    last 30 days, so guessing one password list from many addresses is slowed too;
+    `/auth/refresh` and `/auth/logout` by the client's address in one shared bucket of 60 a minute
+    with bursts of 30,
     `/public/videos/{video_id}` by the client's address, 120 a minute with bursts of 60, the other
     routes by the authenticated user. Every call counts, successful or not. Over the limit the
     answer is a 429 with code `RATE_LIMITED` and a `Retry-After` header in seconds.
+
+    Every response carries the security headers `X-Content-Type-Options: nosniff` and
+    `Content-Security-Policy: default-src 'none'; frame-ancestors 'none'`, and
+    `Cache-Control: no-store` unless its operation says a cache may keep it.
 
     Items of the feeds and of the video lists, and the videos of `GET /videos/{video_id}` and
     `GET /public/videos/{video_id}`, carry an optional `author` and `stats`: the gateway reads
@@ -78,7 +85,10 @@ paths:
           description: |
             A body that is not one JSON object with known, non-null fields (`INVALID_JSON`), or an
             invalid `email` (`INVALID_EMAIL`), `password` (`INVALID_PASSWORD`), `handle`
-            (`INVALID_HANDLE`) or `display_name` (`INVALID_DISPLAY_NAME`), checked in that order.
+            (`INVALID_HANDLE`) or `display_name` (`INVALID_DISPLAY_NAME`), checked in that order;
+            between the password and the handle, a password that is on the list of common or
+            leaked passwords, or equal (ignoring case) to the email, the part of the email before
+            the @, or the handle (`PASSWORD_BLOCKLISTED`).
           content:
             application/problem+json:
               schema:
@@ -121,6 +131,13 @@ paths:
       responses:
         "200":
           description: Logged in.
+          headers:
+            Cache-Control:
+              $ref: "#/components/headers/NoStore"
+            X-Content-Type-Options:
+              $ref: "#/components/headers/ContentTypeOptions"
+            Content-Security-Policy:
+              $ref: "#/components/headers/ContentSecurityPolicy"
           content:
             application/json:
               schema:
@@ -166,6 +183,13 @@ paths:
       responses:
         "200":
           description: New tokens; the presented refresh token no longer works.
+          headers:
+            Cache-Control:
+              $ref: "#/components/headers/NoStore"
+            X-Content-Type-Options:
+              $ref: "#/components/headers/ContentTypeOptions"
+            Content-Security-Policy:
+              $ref: "#/components/headers/ContentSecurityPolicy"
           content:
             application/json:
               schema:
@@ -1002,6 +1026,16 @@ components:
       schema:
         type: string
         const: no-store
+    ContentTypeOptions:
+      description: Tells a browser not to read the body as a type other than the one declared.
+      schema:
+        type: string
+        const: nosniff
+    ContentSecurityPolicy:
+      description: Lets the body load nothing and be framed by no page.
+      schema:
+        type: string
+        const: default-src 'none'; frame-ancestors 'none'
 
   parameters:
     IdempotencyKey:
@@ -1162,7 +1196,7 @@ components:
       required: [access_token, token_type, expires_at, refresh_token, refresh_expires_at]
       properties:
         access_token:
-          description: JWT signed with Ed25519 (EdDSA), valid for 1 hour.
+          description: JWT signed with Ed25519 (EdDSA), valid for 15 minutes.
           type: string
         token_type:
           type: string

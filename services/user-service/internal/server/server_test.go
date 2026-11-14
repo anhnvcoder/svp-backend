@@ -109,14 +109,16 @@ func (b *lockedBuffer) String() string {
 	return b.buf.String()
 }
 
-// spyHasher wraps a real Hasher, counts VerifyDummy calls and can make Hash fail.
+// spyHasher wraps a real Hasher, counts Hash and VerifyDummy calls and can make Hash fail.
 type spyHasher struct {
 	Hasher
+	hashCalls  atomic.Int32
 	dummyCalls atomic.Int32
 	hashErr    error
 }
 
 func (h *spyHasher) Hash(ctx context.Context, pw secret.String) (string, error) {
+	h.hashCalls.Add(1)
 	if h.hashErr != nil {
 		return "", h.hashErr
 	}
@@ -269,6 +271,62 @@ func TestRegister(t *testing.T) {
 	for _, bad := range []string{"", "short", "1234567", strings.Repeat("p", password.MaxLength+1)} {
 		_, err := e.client.Register(t.Context(), &userv1.RegisterRequest{Email: newEmail(), Password: bad})
 		wantError(t, err, codes.InvalidArgument, ReasonInvalidPassword)
+	}
+}
+
+func TestRegisterRejectsBlocklistedPassword(t *testing.T) {
+	hasher := &spyHasher{Hasher: password.NewHasher()}
+	e := newEnv(t, hasher)
+	email := newEmail()
+	local, _, _ := strings.Cut(email, "@")
+	handle := "picked_" + ids.New()[:8]
+	for _, c := range []struct{ pw, handle string }{
+		{"password", ""},
+		{"PassWord", ""},
+		{strings.ToUpper(email), ""},
+		{local, ""},
+		{strings.ToUpper(handle), handle},
+		// The password is checked before the handle, as the proto documents.
+		{"password", "_"},
+	} {
+		_, err := e.client.Register(t.Context(), &userv1.RegisterRequest{Email: email, Password: c.pw, Handle: c.handle})
+		wantError(t, err, codes.InvalidArgument, ReasonPasswordBlocklisted)
+	}
+	// Length is checked first: a listed entry is at least MinLength long, so this only shows the order.
+	_, err := e.client.Register(t.Context(), &userv1.RegisterRequest{Email: email, Password: "1234567"})
+	wantError(t, err, codes.InvalidArgument, ReasonInvalidPassword)
+
+	if n := hasher.hashCalls.Load(); n != 0 {
+		t.Errorf("Hash ran %d times for rejected passwords, want 0", n)
+	}
+	var users int
+	if err := testPool.QueryRow(t.Context(), "SELECT count(*) FROM users WHERE email = $1", email).Scan(&users); err != nil {
+		t.Fatal(err)
+	}
+	if users != 0 {
+		t.Errorf("%d users created with %s, want 0", users, email)
+	}
+}
+
+func TestLoginAcceptsBlocklistedPasswordSetBefore(t *testing.T) {
+	// The blocklist applies when a password is set: an account that already has a listed password still logs in.
+	const listed = "password"
+	if err := password.CheckBlocklist(secret.New(listed), "", ""); !errors.Is(err, password.ErrBlocklisted) {
+		t.Fatalf("%q is not blocklisted: %v", listed, err)
+	}
+	e := newEnv(t, password.NewHasher())
+	email := newEmail()
+	hash, err := password.NewHasher().Hash(t.Context(), secret.New(listed))
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := insertUser(t, email, hash)
+	resp, err := e.client.Login(t.Context(), &userv1.LoginRequest{Email: email, Password: listed})
+	if err != nil {
+		t.Fatalf("Login: %v", err)
+	}
+	if sub, err := e.verifier.Verify(resp.GetAccessToken()); err != nil || sub != id {
+		t.Errorf("token subject = %q (err %v), want %q", sub, err, id)
 	}
 }
 
