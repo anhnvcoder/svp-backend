@@ -12,7 +12,7 @@ postgres:
   mode: cluster
   external:
     # DNS name of the managed Postgres (the RDS endpoint, the name its certificate holds), and the CIDRs its addresses
-    # are in (the database subnets), the only addresses the pg-bootstrap Job may reach on 5432.
+    # are in (the database subnets), the only addresses the pg-bootstrap Job and svp-ops may reach on 5432.
     host: ""
     cidrs: []
   # The major of RDS, compose and CI; minimal: no extension is needed.
@@ -95,15 +95,19 @@ kafka:
     requests: {cpu: 50m, memory: 64Mi}
     limits: {cpu: "1", memory: 512Mi}
 
-# Deployment svp-ops: the one place in the cluster where scripts, drills and runbooks run the Kafka CLI and valkey-cli
-# (kubectl exec deploy/svp-ops -c kafka -- /opt/svp/bin/svp-kafka ..., -c valkey -- /opt/svp/bin/svp-valkey ...), as
-# svp-admin and svp-ops. Both containers only sleep until then; a Kafka CLI run is one JVM of a 256 MiB heap.
+# Deployment svp-ops: the one place in the cluster where scripts, drills and runbooks run the Kafka CLI, valkey-cli and
+# psql (kubectl exec deploy/svp-ops -c kafka -- /opt/svp/bin/svp-kafka ..., -c valkey -- /opt/svp/bin/svp-valkey ...,
+# -c postgres -- /opt/svp/bin/svp-pg ...), as svp-admin, svp-ops and the read-only app roles. The containers only sleep
+# until then; a Kafka CLI run is one JVM of a 256 MiB heap, psql of postgres.image prints a few rows.
 svpOps:
   resources:
     kafka:
       requests: {cpu: 10m, memory: 32Mi}
       limits: {cpu: 500m, memory: 512Mi}
     valkey:
+      requests: {cpu: 5m, memory: 8Mi}
+      limits: {cpu: 200m, memory: 64Mi}
+    postgres:
       requests: {cpu: 5m, memory: 8Mi}
       limits: {cpu: 200m, memory: 64Mi}
 

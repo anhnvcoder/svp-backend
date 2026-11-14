@@ -59,8 +59,10 @@ Loại tài liệu (Diátaxis): **reference**, tra cứu khi cần một lệnh 
     và ghi một lần cho cả MSK/ElastiCache lẫn entry Secrets Manager `svp/<env>/kafka-admin`, `kafka-users`, `valkey-users`; `make eks-secrets`
     không ghi ba entry này, chỉ kiểm chúng tồn tại. Chart `svp-data` chạy ở `kafka.mode: external`, `valkey.mode: external`: Job `kafka-init`
     (PostSync) tạo topic và ACL trên MSK, Deployment `svp-ops` là CLI vận hành; NetworkPolicy của hai pod đó chỉ mở tới `cluster.dbCidrs` (subnet
-    database) cổng 9096, 6379. Lệnh vận hành mẫu:
-    `kubectl --context svp-<env> -n svp-data exec deploy/svp-ops -c kafka -- /opt/svp/bin/svp-kafka topics --list`.
+    database) cổng 9096, 6379 (`svp-ops` thêm 5432 tới RDS). Lệnh vận hành mẫu:
+    `kubectl --context svp-<env> -n svp-data exec deploy/svp-ops -c kafka -- /opt/svp/bin/svp-kafka topics --list`; đọc RDS bằng role app,
+    phiên chỉ đọc:
+    `kubectl --context svp-<env> -n svp-data exec deploy/svp-ops -c postgres -- /opt/svp/bin/svp-pg feed -c 'SELECT count(*) FROM follows'`.
   - Nguồn của mọi Secret trên EKS là AWS Secrets Manager, entry `svp/<env>/<entry>` region `ap-southeast-1` (vỏ entry không giá trị do
     module `external-secrets` của `svp-infra` tạo); `make eks-secrets`, `make eks-glitchtip-init` ghi giá trị với `AWS_PROFILE` của
     account env (biến ở [`environment.md`](environment.md)). Mỗi lệnh `aws` ghi `--profile` và `--region` ngay trong lệnh; trước lần đọc

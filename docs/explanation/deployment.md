@@ -413,7 +413,7 @@ chart cấu hình như vậy.
   `svp` và `svp-obs` cũng cần policy egress riêng ở đó; KEDA, operator CloudNativePG và Envoy ở namespace nền tảng, vốn không chặn gì
   chiều ra. Pod duy nhất ở đây gọi pod khác của namespace là Postgres, mà backup của nó đi tới object store `s3` (policy
   `postgres-backup`). Cổng là cổng của pod: NetworkPolicy thấy gói sau khi Service đã được dịch sang pod. Với `postgres.mode: external` không
-  có pod Postgres: Job `pg-bootstrap` tới Postgres managed ở `postgres.external.cidrs`. Với `s3.mode: external` không có pod object
+  có pod Postgres: Job `pg-bootstrap` và `svp-ops` tới Postgres managed ở `postgres.external.cidrs`. Với `s3.mode: external` không có pod object
   store và không Job `s3-init`.
 - **Hai chế độ Valkey** (`valkey.mode`). `cluster`: Deployment `valkey` (image và cấu hình của container `valkey` ở compose), TLS ở
   `valkey.svp-data.svc.cluster.local:6379` với cert của CA local (Secret `valkey-tls`), aclfile từ Secret `valkey-acl`. `external`:
@@ -433,13 +433,19 @@ chart cấu hình như vậy.
   transactional id trước mọi ACL khác (`allow.everyone.if.no.acl.found=true` như mặc định của MSK, nên mọi tài nguyên phải có ACL; threat
   model IN-4), tạo topic và ACL, tạo user chỉ ở `cluster` (MSK giữ user bằng secret `AmazonMSK_*`), thử đăng nhập lại tới 10 phút vì MSK áp
   secret SCRAM mới chậm.
-- **CLI vận hành: Deployment `svp-ops`** (ADR-0053 §13). Một replica, hai container `kafka` (Kafka CLI của image `apache/kafka`) và
-  `valkey` (`valkey-cli` của image Valkey), lệnh `sleep infinity`; wrapper `svp-kafka`, `svp-valkey` của `deploy/ops/` mount từ ConfigMap
+- **CLI vận hành: Deployment `svp-ops`** (ADR-0053 §13). Một replica, ba container `kafka` (Kafka CLI của image `apache/kafka`),
+  `valkey` (`valkey-cli` của image Valkey) và `postgres` (`psql` của `postgres.image`), lệnh `sleep infinity`; wrapper `svp-kafka`,
+  `svp-valkey`, `svp-pg` của `deploy/ops/` mount từ ConfigMap
   vào `/opt/svp/bin` (`defaultMode: 0555`). Script, drill, runbook chạy `kubectl --context <ctx> -n svp-data exec deploy/svp-ops -c kafka
-  -- /opt/svp/bin/svp-kafka …` (`-c valkey -- /opt/svp/bin/svp-valkey …`), giống nhau trên k3d và EKS trừ context. Pod giữ mật khẩu
+  -- /opt/svp/bin/svp-kafka …` (`-c valkey -- /opt/svp/bin/svp-valkey …`, `-c postgres -- /opt/svp/bin/svp-pg …`), giống nhau trên k3d và
+  EKS trừ context. Pod giữ mật khẩu
   `svp-admin` và `svp-ops` (Secret `svp-ops`), đổi lấy một đường duy nhất kiểm được thay vì pod tạm mỗi lần: PSA `restricted`, root FS chỉ
-  đọc (`emptyDir` `/tmp`), không token ServiceAccount, không Service, NetworkPolicy không ingress và egress chỉ 9096, 6379 (threat model
-  IN-10). `SVP_AS_USER` đăng nhập user thường, mật khẩu là dòng đầu của stdin, lấy từ Secret của chính client đó.
+  đọc (`emptyDir` `/tmp`), không token ServiceAccount, không Service, NetworkPolicy không ingress và egress chỉ 9096, 6379, 5432 (threat
+  model IN-10). `SVP_AS_USER` đăng nhập user thường, mật khẩu là dòng đầu của stdin, lấy từ Secret của chính client đó. `svp-pg` đăng nhập
+  role app của video, engagement hay feed (mật khẩu là file từ Secret `pg-roles`, không vào biến môi trường), `verify-full` với CA của nền
+  tảng (`local-ca` hay `rds-ca`), phiên `default_transaction_read_only`; egress 5432 tới pod `svp-pg` (NetworkPolicy `postgres` nhận lại
+  `svp-ops`) hay tới `postgres.external.cidrs`, nơi cả instance khôi phục từ backup nằm. Dùng ở diễn tập khôi phục của stg, prd
+  ([`backup-dr.md`](backup-dr.md)).
 - **Quyền CONNECT của Postgres trong cluster.** `bootstrap.sql` (`files/pg-bootstrap.sh`) gỡ `CONNECT` khỏi `PUBLIC` chỉ trên các
   database `svp_*`. Ba database mà `initdb` và CloudNativePG tạo, `postgres`, `app` và `template1`, giữ quyền mặc định `CONNECT` cho
   `PUBLIC` của Postgres, nên mọi role của service đăng nhập được vào đó (và tạo bảng tạm ở hai cái đầu). Không cái nào cần: mỗi service và

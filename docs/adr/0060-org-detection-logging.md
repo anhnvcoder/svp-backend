@@ -197,3 +197,4 @@ Phụ lục: [`appendix/0060-org-detection-logging.md`](appendix/0060-org-detect
 ### Chỉnh bởi
 
 - §7: [0061](0061-edge-cloudfront-waf-acm.md): thêm bucket `svp-cloudfront-<log>-us-east-1` (log CloudFront v2, khuôn bucket log WAF, key `us-east-1`) cùng delivery destination mỗi env và policy của nó ở `us-east-1`; `SvpLogReader` đọc bucket đó.
+- §1–§4, §12: [0067](0067-backup-dr.md): `svp-backup` nhận GuardDuty, Security Hub, Config, Inspector như mọi account thành viên; chi phí liên tục thêm ~$2,2 mỗi tháng cho account này.

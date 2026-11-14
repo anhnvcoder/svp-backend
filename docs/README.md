@@ -11,7 +11,7 @@ Mục lục theo [Diátaxis](https://diataxis.fr): mỗi tài liệu thuộc m�
 ## How-to: làm một việc cụ thể
 
 - [`runbooks/`](runbooks/): một runbook cho mỗi cảnh báo mức page, sự cố đã gặp và quy trình tay (dựng `svp-gitops`, `svp-frontend`,
-  `svp-infra`, đổi khoá JWT, phục hồi Postgres, đổi schema không downtime, phân loại cảnh báo bảo mật AWS). Mục lục và mẫu ở [`runbooks/README.md`](runbooks/README.md).
+  `svp-infra`, đổi khoá JWT, phục hồi Postgres, khôi phục RDS và S3 của stg, prd, đổi schema không downtime, phân loại cảnh báo bảo mật AWS). Mục lục và mẫu ở [`runbooks/README.md`](runbooks/README.md).
 
 ## Reference: tra cứu
 
@@ -40,6 +40,8 @@ Mục lục theo [Diátaxis](https://diataxis.fr): mỗi tài liệu thuộc m�
 - [`explanation/delivery.md`](explanation/delivery.md): CI/CD, chuỗi cung ứng, ba repo và hợp đồng API.
 - [`explanation/observability.md`](explanation/observability.md): trace, metric, log, lỗi và số đo trình duyệt đi từ đâu tới đâu.
 - [`explanation/reliability.md`](explanation/reliability.md): SLO, tải, backup, probe và vận hành.
+- [`explanation/backup-dr.md`](explanation/backup-dr.md): backup và DR của stg, prd: dữ liệu nào chép đi đâu, account `svp-backup`,
+  lịch của Backup policy, diễn tập PITR và object S3, xoá cuối buổi.
 - [`threat-model.md`](threat-model.md): mối đe doạ theo bề mặt (STRIDE) và cách kiểm từng mối.
 - [`adr/`](adr/): nhật ký quyết định kiến trúc, mỗi quyết định một file; không bắt buộc đọc để dùng repo. Mục lục, trạng thái và
   quy ước (ADR ngắn, chi tiết và số đo ở phụ lục) ở [`adr/README.md`](adr/README.md).
