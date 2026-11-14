@@ -298,6 +298,8 @@ nhánh `if` theo môi trường.
   (gateway db 10 `svp:gw:*`, feed-service db 14 `svp:feed:*`, web db 9 `svp:web:*`), user `default` tắt.
 - Script, drill, runbook chạm Kafka và Valkey chỉ qua **CLI vận hành** `/opt/svp/bin/svp-kafka`, `/opt/svp/bin/svp-valkey`: trong container
   `kafka`, `valkey` của compose, trong Deployment `svp-ops` (namespace `svp-data`) ở k3d và EKS.
+- RDS và hai bucket của `media` có backup hằng ngày bằng AWS Backup, chép sang account `svp-backup`; RDS thêm PITR gốc. Phạm vi, RTO/RPO và
+  diễn tập: [`explanation/backup-dr.md`](explanation/backup-dr.md).
 - Trên AWS, RDS, MSK và ElastiCache nằm ở subnet database, route table không có `0.0.0.0/0`; egress 5432, 9096, 6379 của pod chỉ tới dải
   của subnet đó (`cluster.dbCidrs`, [ADR-0054](adr/0054-data-subnet-tier.md)).
 

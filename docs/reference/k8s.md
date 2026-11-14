@@ -687,11 +687,14 @@ Phần này ghi vì sao các hàm và script ở `deploy/k8s/` làm như vậy; 
   một địa chỉ ở đó (IP công khai của máy), và pod của một bài load test, vốn đặt header đó là IP của chính nó, có thể nhận địa chỉ của các lượt
   trước. `SVP_AS_USER=<user>` làm `valkey_cli` đăng nhập user đó (mật khẩu là dòng
   đầu của stdin) để thử quyền của nó.
-- **CLI vận hành trên cluster** (Deployment `svp-ops` của chart `svp-data`, namespace `svp-data`, một replica): hai container `kafka` (image
-  `apache/kafka`) và `valkey` chạy `sleep infinity`, wrapper ở `/opt/svp/bin` (ConfigMap `svp-ops-bin`); lệnh
-  `kubectl --context <ctx> -n svp-data exec deploy/svp-ops -c kafka -- /opt/svp/bin/svp-kafka …` và `-c valkey -- /opt/svp/bin/svp-valkey …`; k3d và
-  EKS khác nhau chỉ ở context và giá trị biến (`KAFKA_BROKERS`, `VALKEY_HOST`). Secret `svp-ops` giữ `SVP_KAFKA_ADMIN_PASSWORD` và
-  `SVP_VALKEY_OPS_PASSWORD`. Pod chạy PSA restricted, không token ServiceAccount, không Service, egress chỉ tới Kafka 9096 và Valkey 6379.
+- **CLI vận hành trên cluster** (Deployment `svp-ops` của chart `svp-data`, namespace `svp-data`, một replica): ba container `kafka` (image
+  `apache/kafka`), `valkey` và `postgres` (image `postgres.image` của chart) chạy `sleep infinity`, wrapper ở `/opt/svp/bin` (ConfigMap
+  `svp-ops-bin`); lệnh `kubectl --context <ctx> -n svp-data exec deploy/svp-ops -c kafka -- /opt/svp/bin/svp-kafka …`, `-c valkey --
+  /opt/svp/bin/svp-valkey …` và `-c postgres -- /opt/svp/bin/svp-pg <video|engagement|feed> -c '<SQL>'`; k3d và EKS khác nhau chỉ ở context và
+  giá trị biến (`KAFKA_BROKERS`, `VALKEY_HOST`, `SVP_PG_HOST`). Secret `svp-ops` giữ `SVP_KAFKA_ADMIN_PASSWORD` và `SVP_VALKEY_OPS_PASSWORD`;
+  Secret `pg-roles` (mount vào container `postgres`) giữ mật khẩu ba role ứng dụng `svp_video_app`, `svp_engagement_app`, `svp_feed_app`.
+  Pod chạy PSA restricted, không token ServiceAccount, không Service, egress chỉ tới Kafka 9096, Valkey 6379 và Postgres 5432 (cluster: pod
+  `svp-pg`; RDS: `postgres.external.cidrs`); ở `mode: cluster` NetworkPolicy `postgres` nhận thêm ingress 5432 từ pod `svp-ops`.
   Đăng nhập user thường (`SVP_AS_USER`): mật khẩu lấy từ Secret của chính client đó (`svp/<service>-env` khoá `KAFKA_SASL_PASSWORD` hay phần mật
   khẩu của `REDIS_URL`, `keda/keda-kafka`, `svp-obs/otelcol-kafka`) và đưa qua stdin của `kubectl exec -i`, không trên dòng lệnh.
 

@@ -236,6 +236,12 @@ Mục 7 cũ ("Đề xuất xem lại") nguyên văn; việc còn mở chuyển v
   [ADR-0058](../adr/0058-managed-data-operations.md) chỉnh ADR-0034. Đáng xem lại: (1) buổi stg kiểm `verify-full` tới RDS, tunnel SSM và
   đường interruption của Karpenter; (2) role controller Karpenter tạo được instance và instance profile trong account, giới hạn bởi policy của
   submodule và `limits` của NodePool; (3) Postgres native vẫn `trust` cho loopback, tới được từ container compose (WEB-13).
+- **Backup và DR của stg, prd (2026-11-13):** bề mặt mới là AWS Backup (vault env, Backup policy của Organizations, role
+  `svp-<env>-backup`), account `svp-backup` với vault copy khoá governance, statement chéo account của key RDS, `uploads` SSE-KMS và container
+  `postgres` của `svp-ops` giữ mật khẩu ba role app (BAK-3, IN-10, tài sản ở mục 3, hai dòng ở mục 6). Thu hẹp được: bản sao dữ liệu nằm ngoài
+  tầm admin account env. [ADR-0067](../adr/0067-backup-dr.md) chỉnh ADR-0020, 0055, 0058, 0059, 0060. Đáng xem lại: (1) role Backup dùng được mọi
+  key của account qua dịch vụ (managed policy); (2) phiên chỉ đọc của `svp-pg` không phải ranh giới, role `_reader` riêng cần thêm secret qua
+  ba repo; (3) gỡ tag `Backup` ngừng backup tài nguyên mà chưa có alarm riêng.
 - **Đề xuất (không bắt buộc), giai đoạn 2:** thêm `etag` (hoặc checksum) của file gốc vào `VideoUploaded`, lấy từ lần `HEAD`
   ở `CompleteUpload`; worker tải file với điều kiện `If-Match` theo giá trị đó. Đóng được UP-2 (file bị thay giữa lúc kiểm và
   lúc đọc). Đây là thêm field nên không phá contract (quy tắc versioning ở

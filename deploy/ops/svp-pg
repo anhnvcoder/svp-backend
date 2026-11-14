@@ -1,0 +1,59 @@
+#!/usr/bin/env bash
+# svp-pg <video|engagement|feed> [--host HOST] -c SQL: runs one SQL string with psql in the database svp_<service> as
+# its app role svp_<service>_app, in a read-only session, e.g. `svp-pg feed -c 'SELECT count(*) FROM follows'`. The way
+# drills and session scripts read the services' data, run where it is installed as /opt/svp/bin/svp-pg: container
+# postgres of Deployment svp-ops of chart svp-data. Compose has none: scripts there exec psql in container postgres.
+
+# HOST defaults to SVP_PG_HOST, the platform's Postgres (Service svp-pg-rw, or the RDS endpoint); --host names another
+# server whose certificate the same CA signs, such as an RDS instance restored from a backup. The login is checked with
+# sslmode=verify-full against SVP_CA_FILE; the password is the file <service> of SVP_PG_PASSWORD_DIR.
+
+# Output is for scripts: rows only, unaligned, fields separated by a tab; the first error stops psql with exit 3.
+# default_transaction_read_only guards against a mistaken write, not against the role: the app role may turn it off.
+# The password reaches psql in PGPASSWORD, never on a command line, and is never printed.
+# Design notes: docs/explanation/deployment.md.
+set -euo pipefail
+
+fail() {
+  echo "svp-pg: $1" >&2
+  exit 2
+}
+usage="usage: svp-pg <video|engagement|feed> [--host HOST] -c SQL"
+
+[[ $# -gt 0 ]] || fail "$usage"
+service=$1
+shift
+case $service in
+  video | engagement | feed) ;;
+  *) fail "the service is video, engagement or feed (got '$service'); $usage" ;;
+esac
+host=${SVP_PG_HOST:-}
+sql=
+while [[ $# -gt 0 ]]; do
+  case $1 in
+    --host)
+      [[ $# -ge 2 ]] || fail "--host needs a host name; $usage"
+      host=$2
+      shift 2
+      ;;
+    -c)
+      [[ $# -ge 2 && -n $2 && -z $sql ]] || fail "one -c SQL, not empty; $usage"
+      sql=$2
+      shift 2
+      ;;
+    *) fail "unknown argument '$1'; $usage" ;;
+  esac
+done
+[[ -n $sql ]] || fail "-c SQL is missing; $usage"
+[[ -n $host ]] || fail "SVP_PG_HOST is not set and no --host given"
+[[ $host =~ ^[A-Za-z0-9.-]+$ ]] || fail "HOST is a DNS name of letters, digits, . and - (got '$host')"
+[[ -n ${SVP_CA_FILE:-} ]] || fail "SVP_CA_FILE is not set: verify-full needs the CA the server's certificate chains to"
+[[ -n ${SVP_PG_PASSWORD_DIR:-} ]] || fail "SVP_PG_PASSWORD_DIR is not set"
+password_file=$SVP_PG_PASSWORD_DIR/$service
+[[ -r $password_file ]] || fail "no readable password file $password_file for svp_${service}_app"
+IFS= read -r PGPASSWORD <"$password_file" || true
+[[ -n $PGPASSWORD ]] || fail "the password file of svp_${service}_app is empty"
+
+export PGPASSWORD PGHOST=$host PGPORT=5432 PGDATABASE=svp_$service PGUSER=svp_${service}_app PGSSLMODE=verify-full \
+  PGSSLROOTCERT=$SVP_CA_FILE PGCONNECT_TIMEOUT=10 PGAPPNAME=svp-pg PGOPTIONS='-c default_transaction_read_only=on'
+exec psql -X -q -A -t -F $'\t' -v ON_ERROR_STOP=1 -v VERBOSITY=terse -c "$sql"
