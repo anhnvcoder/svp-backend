@@ -48,20 +48,22 @@ spec:
           metadata:
             name: svp-secrets-reader
             namespace: svp-data
-    - description: "SEC-6-reader: read the image of deployment svp/media-worker"
+    # Only dry runs, in namespaces the image policy does not check: the drills' pinned probe image is enough.
+    - description: "SEC-6-reader: read SVP_PROBE_IMAGE of deploy/k8s/lib.sh"
       script:
         env:
-        - name: CALLER_KUBECONFIG
-          value: (env('KUBECONFIG'))
+        - name: PROBE_IMAGE
+          value: (env('SVP_PROBE_IMAGE'))
         content: |
           set -eu
-          export KUBECONFIG="$CALLER_KUBECONFIG"
-          kubectl --context k3d-svp -n svp get deployment media-worker -o jsonpath='{.spec.template.spec.containers[0].image}'
+          case $PROBE_IMAGE in
+            *@sha256:*) printf %s "$PROBE_IMAGE" ;;
+            *) echo "FAIL  SVP_PROBE_IMAGE is '$PROBE_IMAGE', not an image pinned by digest: run the drill with deploy/k8s/drills/run.sh" >&2; exit 1 ;;
+          esac
         check:
           ($error): ~
-          (trim_space($stdout) != ''): true
         outputs:
-        - name: workerImage
+        - name: probeImage
           value: (trim_space($stdout))
     - description: "SEC-6-reader: a pod in svp-data running as svp-secrets-reader (token mounted) is refused by ValidatingAdmissionPolicy svp-store-serviceaccount-pods (server-side dry run)"
       continueOnError: true
@@ -83,7 +85,7 @@ spec:
                 type: RuntimeDefault
             containers:
             - name: c
-              image: ($workerImage)
+              image: ($probeImage)
               securityContext:
                 allowPrivilegeEscalation: false
                 readOnlyRootFilesystem: true
@@ -115,7 +117,7 @@ spec:
                 type: RuntimeDefault
             containers:
             - name: c
-              image: ($workerImage)
+              image: ($probeImage)
               securityContext:
                 allowPrivilegeEscalation: false
                 readOnlyRootFilesystem: true

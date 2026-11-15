@@ -177,9 +177,11 @@ esac
 EOF
 chmod 755 "$bin"/*
 
-# --- the clone of svp-gitops (gitops_dir only checks it is one), with the two Rollouts of components.json.
+# --- the clone of svp-gitops (gitops_dir only checks it is one), with the three releases of components.json that set
+# canary in their values files: gateway and web behind an HTTPRoute, feed-service (gRPC) without one.
 gitops=$work/gitops
-mkdir -p "$gitops/argocd/apps"
+mkdir -p "$gitops/argocd/apps" "$gitops/base/services"
+for r in gateway web feed-service; do printf 'canary: true\n' >"$gitops/base/services/$r.yaml"; done
 git -C "$gitops" init -q
 git -C "$gitops" remote add origin https://github.com/anhnvcoder/svp-gitops.git
 cat >"$gitops/argocd/apps/components.json" <<'EOF'
@@ -187,6 +189,7 @@ cat >"$gitops/argocd/apps/components.json" <<'EOF'
   {"name": "svp-cluster", "namespace": "cert-manager", "wave": 1, "path": "deploy/helm/svp-cluster"},
   {"name": "gateway", "namespace": "svp", "wave": 7, "path": "deploy/helm/svp-service", "values": "base/services/gateway.yaml", "canaryRoute": "api"},
   {"name": "web", "namespace": "svp", "wave": 7, "path": "deploy/helm/svp-service", "values": "base/services/web.yaml", "canaryRoute": "web"},
+  {"name": "feed-service", "namespace": "svp", "wave": 6, "path": "deploy/helm/svp-service", "values": "base/services/feed-service.yaml"},
   {"name": "external-secrets", "namespace": "external-secrets", "wave": 0, "gitopsOnly": true, "canaryRoute": "x"}
 ]}
 EOF
@@ -203,8 +206,8 @@ names=(SVP_PG_SUPERUSER_PASSWORD
   SVP_S3_ROOT_PASSWORD SVP_VIDEO_S3_SECRET_KEY SVP_MEDIA_WORKER_S3_SECRET_KEY SVP_PG_BACKUP_S3_SECRET_KEY
   SVP_KAFKA_ADMIN_PASSWORD SVP_KAFKA_KEDA_PASSWORD SVP_KAFKA_USER_SERVICE_PASSWORD SVP_KAFKA_VIDEO_SERVICE_PASSWORD
   SVP_KAFKA_ENGAGEMENT_SERVICE_PASSWORD SVP_KAFKA_FEED_SERVICE_PASSWORD SVP_KAFKA_MEDIA_WORKER_PASSWORD
-  SVP_KAFKA_OTELCOL_PASSWORD JWT_SIGNING_KID JWT_SIGNING_KEY JWT_VERIFY_KEYS SVP_GRAFANA_ADMIN_PASSWORD
-  GLITCHTIP_SECRET_KEY GLITCHTIP_ADMIN_PASSWORD)
+  SVP_KAFKA_DLQ_REPLAY_PASSWORD SVP_KAFKA_OTELCOL_PASSWORD JWT_SIGNING_KID JWT_SIGNING_KEY JWT_VERIFY_KEYS
+  SVP_GRAFANA_ADMIN_PASSWORD GLITCHTIP_SECRET_KEY GLITCHTIP_ADMIN_PASSWORD)
 : >"$work/secrets"
 {
   for n in "${names[@]}"; do
@@ -371,7 +374,7 @@ no_leak "secrets.sh, dev path" "$work/dev.out" "$FAKE_STATE/calls"
 # ExternalSecrets (chart svp-cluster, files/external-secrets.yaml), with the values of .env and .local/ca/.
 want_secrets='svp-data/kafka-admin=SVP_KAFKA_ADMIN_PASSWORD
 svp-data/svp-ops=SVP_KAFKA_ADMIN_PASSWORD SVP_VALKEY_OPS_PASSWORD
-svp-data/kafka-users=SVP_KAFKA_USER_SERVICE_PASSWORD SVP_KAFKA_VIDEO_SERVICE_PASSWORD SVP_KAFKA_ENGAGEMENT_SERVICE_PASSWORD SVP_KAFKA_FEED_SERVICE_PASSWORD SVP_KAFKA_MEDIA_WORKER_PASSWORD SVP_KAFKA_KEDA_PASSWORD SVP_KAFKA_OTELCOL_PASSWORD
+svp-data/kafka-users=SVP_KAFKA_USER_SERVICE_PASSWORD SVP_KAFKA_VIDEO_SERVICE_PASSWORD SVP_KAFKA_ENGAGEMENT_SERVICE_PASSWORD SVP_KAFKA_FEED_SERVICE_PASSWORD SVP_KAFKA_MEDIA_WORKER_PASSWORD SVP_KAFKA_DLQ_REPLAY_PASSWORD SVP_KAFKA_KEDA_PASSWORD SVP_KAFKA_OTELCOL_PASSWORD
 svp-data/valkey-acl=users.acl
 svp-data/kafka-tls=kafka.pem
 svp-data/valkey-tls=valkey.crt valkey.key
@@ -547,7 +550,7 @@ source_keys="$(applied_keys svp-secrets/kafka-users)|$(applied_keys svp-secrets/
 if [ "$rc" = 0 ] && [ "$annotated" = "svp-data/pg-superuser svp-data/s3-root svp-obs/grafana-admin svp/user-service-env" ] &&
   before "$admin" "$(line '^applied svp-secrets/')" && before "$sources" "$last_server" && before "$last_server" "$valkey" &&
   before "$valkey" "$patch" && before "$patch" "$synced" && before "$synced" "$first_client" &&
-  [ "$source_keys" = "SVP_KAFKA_KEDA_PASSWORD SVP_KAFKA_USER_SERVICE_PASSWORD SVP_KAFKA_VIDEO_SERVICE_PASSWORD SVP_KAFKA_ENGAGEMENT_SERVICE_PASSWORD SVP_KAFKA_FEED_SERVICE_PASSWORD SVP_KAFKA_MEDIA_WORKER_PASSWORD SVP_KAFKA_OTELCOL_PASSWORD|SVP_VALKEY_GATEWAY_PASSWORD SVP_VALKEY_FEED_SERVICE_PASSWORD SVP_VALKEY_WEB_PASSWORD SVP_VALKEY_OPS_PASSWORD|ca.crt|server.crt server.key postgres.crt postgres.key" ] &&
+  [ "$source_keys" = "SVP_KAFKA_KEDA_PASSWORD SVP_KAFKA_USER_SERVICE_PASSWORD SVP_KAFKA_VIDEO_SERVICE_PASSWORD SVP_KAFKA_ENGAGEMENT_SERVICE_PASSWORD SVP_KAFKA_FEED_SERVICE_PASSWORD SVP_KAFKA_MEDIA_WORKER_PASSWORD SVP_KAFKA_DLQ_REPLAY_PASSWORD SVP_KAFKA_OTELCOL_PASSWORD|SVP_VALKEY_GATEWAY_PASSWORD SVP_VALKEY_FEED_SERVICE_PASSWORD SVP_VALKEY_WEB_PASSWORD SVP_VALKEY_OPS_PASSWORD|ca.crt|server.crt server.key postgres.crt postgres.key" ] &&
   [ "$(applied_value svp-secrets/local-tls server.key)" = "$(cat "$fake/.local/ca/server.key")" ] &&
   [ "$(applied_value svp-secrets/local-tls postgres.key)" = "$(cat "$fake/.local/ca/postgres.key")" ] &&
   grep -q '"operation":{"initiatedBy":{"username":"svp-rotate-' "$FAKE_STATE/calls" &&
@@ -907,6 +910,23 @@ for c in "0 own" "1 own" "0 running"; do
   fi
   keep_calls
 done
+
+# A gRPC release with canary set and no canaryRoute (feed-service): its canary ahead starts drill traffic too.
+new_state svp-data svp svp-obs keda
+set_state reloader 1
+rollouts
+set_state rollout-feed-service
+set_state phase-feed-service Paused
+install_run "$work/grpc.out" install_releases
+start=$(line '^traffic start$')
+later_waves=$(last_line '^helmfile .* sync -l wave!=0,wave!=1 ')
+if [ "$rc" = 0 ] && before "$start" "$later_waves" && before "$later_waves" "$(line '^traffic stop$')" &&
+  grep -q "^ok    Reloader runs" "$work/grpc.out" && ! grep -q 'canary of gateway\|canary of web' "$work/grpc.out"; then
+  ok "install.sh, a canary of feed-service (gRPC, no canaryRoute) ahead: drill traffic started before the later waves, stopped after them"
+else
+  fail "install.sh, a canary of feed-service ahead: exit $rc, start $start, later waves $later_waves"$'\n'"$(show "$work/grpc.out" "$FAKE_STATE/calls")"
+fi
+keep_calls
 
 # --- 10. install.sh's hooks around a release whose helm upgrade failed on its migrate Job: presync starts the watcher,
 # postsync (helmfile passes failed) stops it, prints the log of its last failed attempt and fails naming the release.

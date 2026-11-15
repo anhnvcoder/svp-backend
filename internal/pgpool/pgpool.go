@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"net/url"
+	"strconv"
 	"time"
 
 	"github.com/exaring/otelpgx"
@@ -17,6 +18,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	semconv "go.opentelemetry.io/otel/semconv/v1.43.0"
 
+	"github.com/anhnvcoder/svp-backend/internal/envcfg"
 	"github.com/anhnvcoder/svp-backend/internal/pgretry"
 )
 
@@ -44,10 +46,32 @@ var ErrInvalidURL = errors.New("pgpool: invalid database URL; want postgres://us
 // process opens one pool per name: a second pool needs a name of its own (WithName), or the two
 // report over each other.
 //
-// Without options the pool has pgx's defaults, pool_max_conns of the URL or max(4, NumCPU)
-// connections; WithMaxConns sets the size instead.
+// The pool holds at most DefaultMaxConns connections, or the size WithMaxConns sets; pool_max_conns
+// of the URL is ignored, so that MaxConns, read from DATABASE_MAX_CONNS, is the only size setting.
 func New(ctx context.Context, databaseURL string, opts ...Option) (*pgxpool.Pool, error) {
 	return open(ctx, databaseURL, pgretry.Window, opts...)
+}
+
+// MaxConnsEnv is the variable that sets the most Postgres connections one process opens.
+const MaxConnsEnv = "DATABASE_MAX_CONNS"
+
+// DefaultMaxConns is the pool size when MaxConnsEnv is unset or empty, and the size New gives a
+// pool without WithMaxConns: a fixed number, so that the connections a process opens are counted
+// in the connection budget of its database, whatever node it runs on.
+const DefaultMaxConns = 10
+
+// MaxConns returns the value of MaxConnsEnv, or DefaultMaxConns when it is unset or empty. Anything
+// but an integer of at least atLeast is an error that names the variable but not the value.
+func MaxConns(atLeast int32) (int32, error) {
+	v := envcfg.String(MaxConnsEnv, "")
+	if v == "" {
+		return DefaultMaxConns, nil
+	}
+	n, err := strconv.ParseInt(v, 10, 32)
+	if err != nil || n < int64(atLeast) {
+		return 0, fmt.Errorf("%s: want an integer of at least %d", MaxConnsEnv, atLeast)
+	}
+	return int32(n), nil //nolint:gosec // n fits in int32: ParseInt was given bitSize 32
 }
 
 // Option changes the pool New opens.
@@ -131,6 +155,7 @@ func parseConfig(databaseURL string, o options) (*pgxpool.Config, error) {
 	if cfg.ConnConfig.ConnectTimeout == 0 && !setsConnectTimeout(databaseURL) {
 		cfg.ConnConfig.ConnectTimeout = ConnectTimeout
 	}
+	cfg.MaxConns = DefaultMaxConns
 	if o.maxConns != 0 {
 		cfg.MaxConns = o.maxConns
 	}

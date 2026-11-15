@@ -493,7 +493,7 @@ jobs:
           fail-on-severity: high
 
   # End-to-end compose stack report outside ci-ok: flaky runs on shared runners must not block a merge.
-  # Six backend services built from PR, web client from staging release.
+  # Backend services built from the PR, web client from the staging release.
   # make env writes random secrets that are never printed/uploaded; rate-limit resets touch only this run's Valkey.
   stack:
     name: stack (end-to-end, report only)

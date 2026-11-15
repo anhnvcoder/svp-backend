@@ -276,8 +276,13 @@ jobs:
               $seen == *" $svc "* ]] || ! is_digest "$D"; then
               fail "$dir is no release of a service of this repository at this commit, or a second one ($R:$T@$D)"
             fi
-            yq_ R="$R" T="$T" D="$D" -i \
-              '.image.repository = strenv(R) | .image.tag = strenv(T) | .image.digest = strenv(D)' "envs/stg/images/$svc.yaml"
+            file=envs/stg/images/$svc.yaml
+            if [ -f "$file" ]; then
+              yq_ R="$R" T="$T" D="$D" -i \
+                '.image.repository = strenv(R) | .image.tag = strenv(T) | .image.digest = strenv(D)' "$file"
+            else
+              promote_image_file stg "$svc" "$R" "$T" "$D" >"$file" && git add "$file"
+            fi
             seen+="$svc "
           done 3< <(find "$RUNNER_TEMP/releases" -type f -name digest 2>/dev/null | sort)
           # The two values derived from the charts' commit, as the check of svp-gitops computes them again.
@@ -350,7 +355,7 @@ jobs:
 
           ## Phạm vi
 
-          Bot \`$app\` chỉ sửa khối \`image\` của \`envs/stg/images/<service>.yaml\` và ba giá trị \`revision\`, \`podSecurityVersion\`,
+          Bot \`$app\` chỉ sửa khối \`image\` của \`envs/stg/images/<service>.yaml\` (tạo file đó cho service mới) và ba giá trị \`revision\`, \`podSecurityVersion\`,
           \`collectorConfigSha256\` của \`envs/stg/charts.yaml\`. Mỗi lượt build dựng lại nhánh \`$branch\` từ \`main\` và giữ các bản chưa merge của PR này."
           id=$(gh api "users/${app}%5Bbot%5D" --jq .id)
           git -c user.name="${app}[bot]" -c user.email="$id+${app}[bot]@users.noreply.github.com" \
@@ -434,15 +439,26 @@ jobs:
           ref=$REF
           lease=$(git rev-parse --verify --quiet "refs/remotes/origin/$branch") || lease=
           git checkout --quiet -B "$branch" origin/main
-          # Read into a variable, not through a pipe into read: a file missing at stg_ref fails the step.
-          list='' rows=''
+          # Read into a variable, not through a pipe into read: a file of stg_ref that cannot be read fails the step.
+          # A service stg_ref has no file of is a new release the revision of stg there does not build yet.
+          list='' rows='' count=0
           for svc in "${svp_services[@]}"; do
+            if ! git cat-file -e "$ref:envs/stg/images/$svc.yaml" 2>/dev/null; then
+              echo "skip  $svc: envs/stg/images/$svc.yaml is missing at ${ref:0:12}, a release stg does not run yet"
+              continue
+            fi
             line=$(git show "$ref:envs/stg/images/$svc.yaml" | yq_ '.image | [.repository, .tag, .digest] | join("|")')
             IFS='|' read -r R T D <<<"$line"
-            yq_ R="$R" T="$T" D="$D" -i \
-              '.image.repository = strenv(R) | .image.tag = strenv(T) | .image.digest = strenv(D)' "envs/prd/images/$svc.yaml"
+            file=envs/prd/images/$svc.yaml
+            if [ -f "$file" ]; then
+              yq_ R="$R" T="$T" D="$D" -i \
+                '.image.repository = strenv(R) | .image.tag = strenv(T) | .image.digest = strenv(D)' "$file"
+            else
+              promote_image_file prd "$svc" "$R" "$T" "$D" >"$file" && git add "$file"
+            fi
             list+="- $svc: $R:$T@$D"$'\n'
             rows+="$(promote_image_row "$svc" "$R" "$T" "$D")"$'\n'
+            count=$((count + 1))
           done
           line=$(git show "$ref:envs/stg/charts.yaml" |
             yq_ '[.revision, .podSecurityVersion, .collectorConfigSha256] | join("|")')
@@ -464,7 +480,7 @@ jobs:
           Run: $RUN_URL"
           body="## Thay đổi gì
 
-          Đưa prd lên đúng bộ mà stg chạy ở commit [\`${ref:0:12}\`](https://github.com/$repo/commit/$ref) của \`svp-gitops\`: image của ${#svp_services[@]} service, chart, và
+          Đưa prd lên đúng bộ mà stg chạy ở commit [\`${ref:0:12}\`](https://github.com/$repo/commit/$ref) của \`svp-gitops\`: image của $count service, chart, và
           \`gitopsRevision\` (prd render \`argocd/apps\`, \`base/\`, \`platforms/\` ở commit đó).
 
           | Service | Commit | Image |
@@ -489,7 +505,7 @@ jobs:
 
           ## Phạm vi
 
-          Bot \`$app\` chỉ sửa khối \`image\` của ${#svp_services[@]} file \`envs/prd/images/*.yaml\` và bốn giá trị \`revision\`, \`podSecurityVersion\`,
+          Bot \`$app\` chỉ sửa khối \`image\` của $count file \`envs/prd/images/*.yaml\` (tạo file của service mới) và bốn giá trị \`revision\`, \`podSecurityVersion\`,
           \`collectorConfigSha256\`, \`gitopsRevision\` của \`envs/prd/charts.yaml\`. Các dòng khác của file, kể cả chú thích, giữ nguyên."
           id=$(gh api "users/${app}%5Bbot%5D" --jq .id)
           git -c user.name="${app}[bot]" -c user.email="$id+${app}[bot]@users.noreply.github.com" \

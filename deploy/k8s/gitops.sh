@@ -131,7 +131,7 @@ if ! "$repo_root/deploy/ci/values-check.sh" --gitops "$work/release" ""; then
   refresh="gh workflow run images.yml --repo anhnvcoder/svp-backend --ref main -f rescan=true"
   fail "a release at ${sha:0:12} of svp-gitops is not signed, its vuln attestation is not clean and fresh, or the provenance the policy requires is missing or wrong (above); nothing was created. Refresh the vuln attestations of the releases: $refresh, then run this again once that run is green (a missing provenance needs a new release instead, as named above)"
 fi
-ok "release images at ${sha:0:12} of svp-gitops: GHCR serves all seven anonymously, each signed by its release source with a fresh, clean vuln attestation"
+ok "release images at ${sha:0:12} of svp-gitops: GHCR serves every release image anonymously, each signed by its release source with a fresh, clean vuln attestation"
 # The Applications to wait for: the root, svp-apps it renders and one per component of components.json at the revision
 # (the copy svp-apps renders, as stg pins no gitopsRevision) that runs on the platform (no platforms in components.json:
 # every platform).

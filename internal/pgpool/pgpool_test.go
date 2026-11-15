@@ -16,7 +16,6 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
-	"github.com/jackc/pgx/v5/pgxpool"
 	"go.opentelemetry.io/otel"
 	metricnoop "go.opentelemetry.io/otel/metric/noop"
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
@@ -59,24 +58,20 @@ func TestParseConfigConnectTimeout(t *testing.T) {
 	}
 }
 
-// WithMaxConns sets the pool's size; without it the size is pgx's own, from the URL or the
-// default.
+// WithMaxConns sets the pool's size; without it the size is DefaultMaxConns. pool_max_conns of the
+// URL never applies: DATABASE_MAX_CONNS is the one size setting.
 func TestParseConfigMaxConns(t *testing.T) {
 	t.Parallel()
 	for _, u := range []string{
 		"postgres://svp@127.0.0.1:5432/svp_user",
 		"postgres://svp@127.0.0.1:5432/svp_user?pool_max_conns=7",
 	} {
-		pgxDefault, err := pgxpool.ParseConfig(u)
-		if err != nil {
-			t.Fatal(err)
-		}
 		cfg, err := parseConfig(u, options{})
 		if err != nil {
 			t.Fatal(err)
 		}
-		if cfg.MaxConns != pgxDefault.MaxConns {
-			t.Errorf("%s without options: MaxConns = %d, want pgx's %d", u, cfg.MaxConns, pgxDefault.MaxConns)
+		if cfg.MaxConns != DefaultMaxConns {
+			t.Errorf("%s without options: MaxConns = %d, want %d", u, cfg.MaxConns, DefaultMaxConns)
 		}
 		var o options
 		WithMaxConns(3)(&o)
@@ -86,6 +81,45 @@ func TestParseConfigMaxConns(t *testing.T) {
 		if cfg.MaxConns != 3 {
 			t.Errorf("%s with WithMaxConns(3): MaxConns = %d, want 3", u, cfg.MaxConns)
 		}
+	}
+}
+
+func TestMaxConns(t *testing.T) {
+	for _, tc := range []struct {
+		value   string
+		atLeast int32
+		want    int32
+		wantErr bool
+	}{
+		{value: "", atLeast: 1, want: DefaultMaxConns},
+		{value: "", atLeast: 2, want: DefaultMaxConns},
+		{value: "1", atLeast: 1, want: 1},
+		{value: "25", atLeast: 1, want: 25},
+		{value: "2", atLeast: 2, want: 2},
+		{value: "1", atLeast: 2, wantErr: true},
+		{value: "0", atLeast: 1, wantErr: true},
+		{value: "-4", atLeast: 1, wantErr: true},
+		{value: "ten", atLeast: 1, wantErr: true},
+		{value: "4.5", atLeast: 1, wantErr: true},
+		{value: " 10", atLeast: 1, wantErr: true},
+		{value: "99999999999", atLeast: 1, wantErr: true},
+	} {
+		t.Run(fmt.Sprintf("%q at least %d", tc.value, tc.atLeast), func(t *testing.T) {
+			t.Setenv(MaxConnsEnv, tc.value)
+			got, err := MaxConns(tc.atLeast)
+			if tc.wantErr {
+				if err == nil || !strings.Contains(err.Error(), MaxConnsEnv) {
+					t.Fatalf("MaxConns() error = %v, want one naming %s", err, MaxConnsEnv)
+				}
+				if len(tc.value) > 1 && strings.Contains(err.Error(), tc.value) {
+					t.Errorf("error %q carries the value", err)
+				}
+				return
+			}
+			if err != nil || got != tc.want {
+				t.Errorf("MaxConns() = %d, %v; want %d, nil", got, err, tc.want)
+			}
+		})
 	}
 }
 

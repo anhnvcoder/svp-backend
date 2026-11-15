@@ -137,7 +137,7 @@ func TestConnectStopsWhenDeadlinePassedDuringAttempt(t *testing.T) {
 		calls++
 		conn, err := pgconn.Connect(ctx, "postgres://svp:pw@"+addr+"/svp_user?sslmode=disable")
 		if err == nil {
-			_ = conn.Close(context.Background())
+			_ = conn.Close(context.WithoutCancel(ctx))
 		}
 		return err
 	})

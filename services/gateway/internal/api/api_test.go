@@ -513,7 +513,7 @@ func newEnvServing(t *testing.T, clientAddr httpx.ClientAddr, limits *ratelimit.
 	engagement, engagementConn := startBackend(t, func(s *grpc.Server) { engagementv1.RegisterEngagementServiceServer(s, stats) }, engagementOpts...)
 	verifier := authtoken.NewVerifier(map[string]ed25519.PublicKey{testKID: key.Public().(ed25519.PublicKey)})
 	return &env{
-		handler:    New(userConn, videoConn, feedConn, engagementConn, verifier, mediaBase, limits, clientAddr, "gateway:8080"),
+		handler:    New(userConn, videoConn, feedConn, engagementConn, verifier, mediaBase, limits, clientAddr, "gateway:8080", 150),
 		users:      users,
 		videos:     videos,
 		feeds:      feeds,

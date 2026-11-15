@@ -49,6 +49,17 @@ const (
 	keepaliveMinTime     = 10 * time.Second
 	keepaliveTime        = 30 * time.Second
 	keepaliveTimeout     = 10 * time.Second
+	// The longest RPC a client gives a deadline is the gateway's 3 s call timeout, which the
+	// grace must cover so that no RPC is cut off by an aged connection.
+	maxConnectionAge      = 30 * time.Second
+	maxConnectionAgeGrace = 10 * time.Second
+)
+
+// connectionAge and connectionAgeGrace are the values of maxConnectionAge and maxConnectionAgeGrace
+// that serve applies; tests shorten them.
+var (
+	connectionAge      = maxConnectionAge
+	connectionAgeGrace = maxConnectionAgeGrace
 )
 
 // readiness is the background check that sets the status of readinessService.
@@ -77,7 +88,12 @@ type readiness struct {
 //   - a client may ping at most every 10 s, also with no RPC in flight, or it is sent GOAWAY
 //     (too_many_pings); no client sets keepalive;
 //   - the server pings a connection idle for 30 s and closes it when the ping has no answer within
-//     10 s, so a dead client is dropped in about 40 s instead of the 2 h default.
+//     10 s, so a dead client is dropped in about 40 s instead of the 2 h default;
+//   - a connection older than 30 s (grpc-go adds up to 10 % jitter) is sent GOAWAY, and RPCs still
+//     running on it get 10 s to finish before it closes. A client with the default pick_first policy
+//     that reaches the service through a ClusterIP otherwise holds one connection to one pod for
+//     good, so a new pod or a canary would receive no traffic; reconnecting makes kube-proxy choose
+//     a pod again. A mesh later balances per request, and this setting stays harmless.
 //
 // The standard health service reports the overall health "" SERVING from the moment the server
 // listens until shutdown starts, whatever ready returns: liveness must not depend on anything
@@ -103,7 +119,10 @@ func serve(ctx context.Context, lis net.Listener, logger *slog.Logger, register 
 		grpc.MaxRecvMsgSize(maxRecvMsgSize),
 		grpc.MaxConcurrentStreams(maxConcurrentStreams),
 		grpc.KeepaliveEnforcementPolicy(keepalive.EnforcementPolicy{MinTime: keepaliveMinTime, PermitWithoutStream: true}),
-		grpc.KeepaliveParams(keepalive.ServerParameters{Time: keepaliveTime, Timeout: keepaliveTimeout}),
+		grpc.KeepaliveParams(keepalive.ServerParameters{
+			Time: keepaliveTime, Timeout: keepaliveTimeout,
+			MaxConnectionAge: connectionAge, MaxConnectionAgeGrace: connectionAgeGrace,
+		}),
 	)
 
 	hs := health.NewServer()

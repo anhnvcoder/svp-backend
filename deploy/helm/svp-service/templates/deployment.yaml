@@ -11,7 +11,7 @@ never does.
 
 {{- /*
 With canary set it is an Argo Rollouts Rollout instead: the same pod template, and a new revision goes out as a canary
-behind Envoy rather than as a rolling update.
+(behind Envoy, or a share of the pods for gRPC) rather than as a rolling update.
 */}}
 
 {{- /*
@@ -69,16 +69,24 @@ spec:
       securityContext:
         {{- include "svp-service.podSecurityContext" . | nindent 8 }}
       {{- if .Values.spreadAcrossNodes }}
-      # Zones first, then nodes; k3d's nodes have no zone label, so only the second applies there.
+      # Zones first, then nodes; k3d's nodes have no zone label, so only the second applies there. The zone one is
+      # hard only where zoneSpread says so: DoNotSchedule filters out every node without the label.
       topologySpreadConstraints:
-        {{- range list "topology.kubernetes.io/zone" "kubernetes.io/hostname" }}
         - maxSkew: 1
-          topologyKey: {{ . }}
+          topologyKey: topology.kubernetes.io/zone
+          whenUnsatisfiable: {{ .Values.zoneSpread.whenUnsatisfiable }}
+          {{- with .Values.zoneSpread.minDomains }}
+          minDomains: {{ . }}
+          {{- end }}
+          labelSelector:
+            matchLabels:
+              {{- include "svp-service.selectorLabels" . | nindent 14 }}
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
           whenUnsatisfiable: ScheduleAnyway
           labelSelector:
             matchLabels:
-              {{- include "svp-service.selectorLabels" $ | nindent 14 }}
-        {{- end }}
+              {{- include "svp-service.selectorLabels" . | nindent 14 }}
       {{- end }}
       containers:
         - name: {{ .Release.Name }}
@@ -87,7 +95,20 @@ spec:
           args:
             {{- toYaml . | nindent 12 }}
           {{- end }}
+          {{- if hasKey .Values.env "OTEL_RESOURCE_ATTRIBUTES" }}
+          {{- fail (printf "release %s sets env.OTEL_RESOURCE_ATTRIBUTES: the chart sets it from the pod's name and namespace, and a second entry would replace them" .Release.Name) }}
+          {{- end }}
           env:
+            # The pod's name and namespace as resource attributes of all telemetry. Kubernetes expands $(VAR) only for a
+            # variable declared earlier in this list, so the two come first.
+            - name: SVP_POD_NAME
+              valueFrom:
+                fieldRef: {fieldPath: metadata.name}
+            - name: SVP_POD_NAMESPACE
+              valueFrom:
+                fieldRef: {fieldPath: metadata.namespace}
+            - name: OTEL_RESOURCE_ATTRIBUTES
+              value: k8s.pod.name=$(SVP_POD_NAME),k8s.namespace.name=$(SVP_POD_NAMESPACE)
             {{- range $name, $value := .Values.env }}
             - name: {{ $name }}
               value: {{ $value | quote }}
@@ -126,6 +147,14 @@ spec:
           # that times out makes the kubelet restart a pod that is still alive, which costs more CPU. Liveness exists
           # only to catch a hung process, so it waits 5 s (a hang is still killed after ~35 s); readiness stays short (2
           # s) so a slow pod leaves the Service quickly.
+
+          # The startup probe gives a slow start (a node with saturated CPU, a cold Node.js process) 60 s before
+          # liveness may restart the container, as for gRPC: the kubelet runs no other probe until it passes.
+          startupProbe:
+            httpGet: {path: /healthz, port: http}
+            periodSeconds: 2
+            timeoutSeconds: 2
+            failureThreshold: 30
           readinessProbe:
             httpGet: {path: /healthz, port: http}
             periodSeconds: 5

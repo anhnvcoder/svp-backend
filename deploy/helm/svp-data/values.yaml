@@ -140,11 +140,11 @@ initJobs:
     limits: {cpu: 500m, memory: 512Mi}
 
 # Who may reach the data pods. Pods are chosen by label, so the policies exist before
-# their clients do: the six services and their migrate Jobs are labelled app.kubernetes.io/name=<service>.
+# their clients do: the services and their migrate Jobs are labelled app.kubernetes.io/name=<service>.
 clients:
   # Database of each service, by its pods and its migrate Job.
   postgres: [user-service, video-service, engagement-service, feed-service]
   # Rate limits (db 10), the explore cache (db 14) and the web client's sessions (db 9).
   valkey: [gateway, feed-service, web]
-  kafka: [user-service, video-service, engagement-service, feed-service, media-worker]
+  kafka: [user-service, video-service, engagement-service, feed-service, media-worker, dlq-replay]
   s3: [video-service, media-worker]

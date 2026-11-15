@@ -3,8 +3,8 @@
 # when the test ends, whether it failed or not.
 
 # The namespace enforces Pod Security restricted at podSecurityVersion of deploy/helm/svp-cluster/values.yaml and has no
-# NetworkPolicy. The pod runs the image of Deployment svp/media-worker (pulled from the cluster's own registry), which has
-# busybox nc and nslookup, and meets the restricted standard, or the namespace would refuse it.
+# NetworkPolicy. The pod runs SVP_PROBE_IMAGE of deploy/k8s/lib.sh (exported by deploy/k8s/drills/run.sh), Alpine with
+# busybox nc and nslookup, as uid 65532 and within the restricted standard, or the namespace would refuse it.
 
 # A namespace of that name left by a killed run (it carries the label managed-by=probeOwner) is deleted first; one without
 # the label is someone else's: the step fails and, at the end of the test, nothing is deleted.
@@ -50,17 +50,17 @@ spec:
         kubectl --context k3d-svp delete namespace "$PROBE_NS" --ignore-not-found --wait=true --timeout=120s >/dev/null
   - script:
       env:
-      - name: CALLER_KUBECONFIG
-        value: (env('KUBECONFIG'))
+      - name: PROBE_IMAGE
+        value: (env('SVP_PROBE_IMAGE'))
       outputs:
-      - name: workerImage
+      - name: probeImage
         value: ($stdout)
       content: |
         set -eu
-        export KUBECONFIG="$CALLER_KUBECONFIG"
-        image=$(kubectl --context k3d-svp -n svp get deployment media-worker -o jsonpath='{.spec.template.spec.containers[0].image}')
-        [ -n "$image" ] || { echo "FAIL  read the image of deployment svp/media-worker" >&2; exit 1; }
-        printf %s "$image"
+        case $PROBE_IMAGE in
+          *@sha256:*) printf %s "$PROBE_IMAGE" ;;
+          *) echo "FAIL  SVP_PROBE_IMAGE is '$PROBE_IMAGE', not an image pinned by digest: run the drill with deploy/k8s/drills/run.sh" >&2; exit 1 ;;
+        esac
   - script:
       outputs:
       - name: psaVersion
@@ -100,7 +100,7 @@ spec:
               type: RuntimeDefault
           containers:
           - name: probe
-            image: ($workerImage)
+            image: ($probeImage)
             command: [sleep, "900"]
             securityContext:
               allowPrivilegeEscalation: false

@@ -1,4 +1,4 @@
-# Defaults shared by the seven releases of svp-service (the six Go services and the web client). Each release's own
+# Defaults shared by the releases of svp-service (the Go services and the web client). Each release's own
 # values are base/services/<service>.yaml of svp-gitops; the release name is the service name, which names the pods'
 # label app.kubernetes.io/name, the Service, the ServiceAccount and the Secrets.
 
@@ -39,23 +39,31 @@ hpa: {}
 # drain for good (minAvailable: 1) or allows everything (0), so a single-replica service has none.
 pdb: {}
 # -- Spread the replicas over the zones, then over the nodes (topologySpreadConstraints on topology.kubernetes.io/zone,
-# then kubernetes.io/hostname, both ScheduleAnyway): with two replicas, losing one zone or one node leaves one serving.
-# Soft, so a cluster with one zone or one node still schedules them; k3d's nodes have no zone label.
+# as `zoneSpread` says, then kubernetes.io/hostname, ScheduleAnyway): with two replicas, losing one zone or one node
+# leaves one serving. Soft by default, so a cluster with one zone or one node still schedules them; k3d's nodes have no
+# zone label.
 spreadAcrossNodes: false
+# -- The zone constraint of `spreadAcrossNodes`. whenUnsatisfiable: ScheduleAnyway or DoNotSchedule, under which a pod
+# waits rather than land in a zone that has more replicas than another, and no node without a zone label (k3d's) takes
+# it. minDomains, DoNotSchedule only: the zones counted even while one has no node, so a pod waits for that zone and
+# Karpenter opens a node there instead of the scheduler filling the zones that have nodes.
+zoneSpread:
+  whenUnsatisfiable: ScheduleAnyway
 # -- KEDA ScaledObject on the consumer lag of a Kafka group, logged in through ClusterTriggerAuthentication keda-kafka
 # (chart svp-data; Kafka user svp-keda): {minReplicas, maxReplicas, kafka: {topic, consumerGroup, lagThreshold}}.
 # The broker is env.KAFKA_BROKERS, the one the service consumes from (kafka.svp-data.svc.cluster.local:9096 on k3d,
 # the brokers of Amazon MSK on EKS).
 keda: {}
 
-# -- Run the service as an Argo Rollouts Rollout with an analysed canary instead of a Deployment: Service
-# <release>-canary beside the stable one, the release's HTTPRoute split between the two, AnalysisTemplate
-# <release>-canary on Envoy's metrics of the canary backend. Only a release with an HTTPRoute can set it (the gateway,
-# the web client): Envoy measures the canary on that route.
+# -- Run the service as an Argo Rollouts Rollout with an analysed canary instead of a Deployment. With httpRoute.host:
+# Service <release>-canary beside the stable one, the route split between the two, analysis on Envoy's metrics of the
+# canary backend. A gRPC release: the weight is the canary's share of the pods behind its one Service, analysis on
+# rpc.server.call.duration of the canary's pods. Any other release fails the render: nothing measures its canary.
 canary: false
 # -- Limits of the canary's analysis, per release since what a good response time is depends on the service: p99Ms, the
-# p99 in ms the canary must stay under; errorRatio, the share of 5xx among its responses that are not 4xx it must stay
-# under. Required with canary set; the release's values file says why its numbers.
+# p99 in ms the canary must stay under; errorRatio, the share it must stay under of 5xx among its responses that are not
+# 4xx (gRPC: of the server-error status codes UNKNOWN, INTERNAL, UNAVAILABLE, DATA_LOSS, DEADLINE_EXCEEDED among all its
+# calls). Required with canary set; the release's values file says why its numbers.
 canaryLimits: {}
 # -- Prometheus the canary's analysis queries. address: its HTTP API, no trailing slash (Argo Rollouts appends
 # /api/v1/query); on EKS the query endpoint of the env's Amazon Managed Service for Prometheus workspace. sigv4Region:
@@ -80,7 +88,9 @@ migrateResources:
   limits: {cpu: 500m, memory: 128Mi}
 
 # -- Environment of every service; a values file adds its own. Secrets are never here: they come from Secret
-# <service>-env (deploy/k8s/secrets.sh, from .env).
+# <service>-env (deploy/k8s/secrets.sh, from .env). The chart sets OTEL_RESOURCE_ATTRIBUTES itself (k8s.pod.name and
+# k8s.namespace.name, from SVP_POD_NAME and SVP_POD_NAMESPACE of the downward API), so a values file that sets it fails
+# the render.
 env:
   # -- Traces, metrics and logs go to the Collector in svp-obs; until it runs, export fails with a rate-limited WARN and
   # the service works as before.

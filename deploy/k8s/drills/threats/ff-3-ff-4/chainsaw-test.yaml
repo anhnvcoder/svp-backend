@@ -179,7 +179,8 @@ spec:
 
   - name: ff-4-psa
     try:
-    - description: "FF-4: read podSecurityVersion of deploy/helm/svp-cluster/values.yaml and the image of deployment svp/media-worker"
+    # The dry runs in svp also meet the image policy, which admits only signed releases: the web client's is one.
+    - description: "FF-4: read podSecurityVersion of deploy/helm/svp-cluster/values.yaml and the image of a running web pod of svp"
       script:
         shell: bash
         env:
@@ -189,10 +190,11 @@ spec:
           export KUBECONFIG="$CALLER_KUBECONFIG"
           version=$(sed -n 's/^podSecurityVersion: *//p' "$(git rev-parse --show-toplevel)/deploy/helm/svp-cluster/values.yaml")
           [[ $version =~ ^v1\.[0-9]+$ ]] || { echo "FAIL  read podSecurityVersion in deploy/helm/svp-cluster/values.yaml (got '$version')" >&2; exit 1; }
-          image=$(kubectl --context k3d-svp -n svp get deployment media-worker -o jsonpath='{.spec.template.spec.containers[0].image}')
-          [ -n "$image" ] || { echo "FAIL  read the image of deployment svp/media-worker" >&2; exit 1; }
+          image=$(kubectl --context k3d-svp -n svp get pods -l app.kubernetes.io/name=web,app.kubernetes.io/component=server \
+            --field-selector status.phase=Running -o jsonpath='{.items[0].spec.containers[?(@.name=="web")].image}')
+          [ -n "$image" ] || { echo "FAIL  read the image of container web of a running web pod in svp" >&2; exit 1; }
           jq -n --arg version "$version" --arg image "$image" \
-            '{psaVersion: $version, psaDenied: "violates PodSecurity \"restricted:\($version)\"", workerImage: $image}'
+            '{psaVersion: $version, psaDenied: "violates PodSecurity \"restricted:\($version)\"", releaseImage: $image}'
         check:
           ($error): ~
         outputs:
@@ -201,8 +203,8 @@ spec:
         # The admission message of a pod PSA refuses at that version.
         - name: psaDenied
           value: (json_parse($stdout).psaDenied)
-        - name: workerImage
-          value: (json_parse($stdout).workerImage)
+        - name: releaseImage
+          value: (json_parse($stdout).releaseImage)
     - description: "FF-4: namespace svp enforces PSA restricted at podSecurityVersion"
       continueOnError: true
       assert:
@@ -277,7 +279,7 @@ spec:
                 type: RuntimeDefault
             containers:
             - name: c
-              image: ($workerImage)
+              image: ($releaseImage)
               securityContext:
                 allowPrivilegeEscalation: false
                 readOnlyRootFilesystem: true
@@ -301,8 +303,8 @@ spec:
         shell: bash
         env:
         - *kubeconfig
-        - name: WORKER_IMAGE
-          value: ($workerImage)
+        - name: RELEASE_IMAGE
+          value: ($releaseImage)
         content: |
           set -euo pipefail
           export KUBECONFIG="$CALLER_KUBECONFIG"
@@ -322,7 +324,7 @@ spec:
                 type: RuntimeDefault
             containers:
               - name: c
-                image: $WORKER_IMAGE
+                image: $RELEASE_IMAGE
                 securityContext:
                   allowPrivilegeEscalation: false
                   readOnlyRootFilesystem: true

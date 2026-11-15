@@ -12,7 +12,8 @@
 // 30 days.
 //
 // Configuration comes from the environment: LISTEN_ADDR (default 127.0.0.1:9104) and
-// DATABASE_URL (required for serve and migrate); serve also needs KAFKA_BROKERS and reads
+// DATABASE_URL (required for serve and migrate); serve also needs KAFKA_BROKERS, reads
+// DATABASE_MAX_CONNS (default 10), the most Postgres connections it opens, and reads
 // REDIS_URL (default redis://127.0.0.1:6379/14) for the explore cache. Redis is not needed to
 // start or to serve: a failed or slow cache read falls back to Postgres. serve exports telemetry
 // when OTEL_EXPORTER_OTLP_ENDPOINT is set, profiles when PYROSCOPE_SERVER_ADDRESS is, and reports
@@ -62,7 +63,8 @@ const (
 	// out meanwhile.
 	pruneInterval = time.Hour
 	// pruneTimeout bounds one prune run, every batch included, so a run stuck on a lock or a slow
-	// database gives up and leaves the rest to the next run.
+	// database gives up and leaves the rest to the next run. It is the statement timeout of each
+	// batch too, as one batch alone may take most of the run.
 	pruneTimeout = 2 * time.Minute
 )
 
@@ -106,6 +108,10 @@ func run(ctx context.Context, logger *slog.Logger, args []string) error {
 
 func serve(ctx context.Context, logger *slog.Logger) (err error) {
 	databaseURL, err := envcfg.Required("DATABASE_URL")
+	if err != nil {
+		return err
+	}
+	maxConns, err := pgpool.MaxConns(1)
 	if err != nil {
 		return err
 	}
@@ -163,12 +169,13 @@ func serve(ctx context.Context, logger *slog.Logger) (err error) {
 			pool.Close()
 		}
 	}()
-	pool, err = pgpool.New(ctx, databaseURL)
+	pool, err = pgpool.New(ctx, databaseURL, pgpool.WithMaxConns(maxConns))
 	if err != nil {
 		return err
 	}
 
 	proj := projector.New(pool, logger)
+	//nolint:contextcheck // the constructor seeds its metric series at startup, with no request
 	newConsumer := func() (runner, error) { return kafkax.NewConsumer(proj.ConsumerConfig(brokers)) }
 	// The consumer and the pruner stop with the server; a consumer that cannot be created stops
 	// the server too.
@@ -184,7 +191,10 @@ func serve(ctx context.Context, logger *slog.Logger) (err error) {
 	pruneLoop := telemetry.NewLoop("timeline-prune")
 	go func() {
 		defer close(pruneDone)
-		runPrune(ctx, logger, pruneInterval, pruneTimeout, pruneLoop, proj.PruneTimeline)
+		prune := func(ctx context.Context, onBatch func()) (int64, error) {
+			return proj.PruneTimeline(ctx, pruneTimeout, onBatch)
+		}
+		runPrune(ctx, logger, pruneInterval, pruneTimeout, pruneLoop, prune)
 	}()
 
 	srv := server.New(pool, cache, cacheKeyPrefix, logger)

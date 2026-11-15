@@ -691,3 +691,79 @@ func TestShutdownSetsHealthNotServing(t *testing.T) {
 	stopWatch()
 	h.stop(t)
 }
+
+// countingListener counts the connections the server accepts.
+type countingListener struct {
+	net.Listener
+	accepted atomic.Int32
+}
+
+func (l *countingListener) Accept() (net.Conn, error) {
+	c, err := l.Listener.Accept()
+	if err == nil {
+		l.accepted.Add(1)
+	}
+	return c, err
+}
+
+func TestConnectionAgeLimitsCoverGatewayCallTimeout(t *testing.T) {
+	t.Parallel()
+	// The gateway gives every gRPC call a 3 s deadline (callTimeout in its api package).
+	if maxConnectionAgeGrace < 3*time.Second {
+		t.Errorf("maxConnectionAgeGrace = %v, want at least the 3 s gateway call timeout", maxConnectionAgeGrace)
+	}
+	if maxConnectionAge <= maxConnectionAgeGrace {
+		t.Errorf("maxConnectionAge = %v, want more than the grace %v", maxConnectionAge, maxConnectionAgeGrace)
+	}
+}
+
+// Not parallel: the test shortens package variables that serve reads, and parallel tests only
+// start after every sequential one has ended.
+func TestConnectionAgeSendsGoAwayAndKeepsRunningRPC(t *testing.T) {
+	oldAge, oldGrace := connectionAge, connectionAgeGrace
+	connectionAge, connectionAgeGrace = 200*time.Millisecond, 5*time.Second
+	t.Cleanup(func() { connectionAge, connectionAgeGrace = oldAge, oldGrace })
+
+	var lc net.ListenConfig
+	inner, err := lc.Listen(t.Context(), "tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	lis := &countingListener{Listener: inner}
+	conn, err := grpc.NewClient(lis.Addr().String(), grpc.WithTransportCredentials(insecure.NewCredentials()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	h := startOn(t, lis, conn, alwaysReady)
+	ctx := timeout(t)
+
+	rpcErr := make(chan error, 1)
+	go func() { rpcErr <- h.invoke(ctx, "Block") }()
+	<-h.svc.started
+	if n := lis.accepted.Load(); n != 1 {
+		t.Fatalf("accepted connections = %d, want 1", n)
+	}
+
+	// After the age the server sends GOAWAY: the client drops the connection for new RPCs and
+	// opens a second one, while Block keeps running on the first.
+	deadline := time.Now().Add(3 * time.Second)
+	for lis.accepted.Load() < 2 {
+		if time.Now().After(deadline) {
+			t.Fatal("client did not open a second connection after the connection age")
+		}
+		if err := h.invoke(ctx, "Echo"); err != nil {
+			t.Fatalf("Echo during GOAWAY = %v, want nil", err)
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	select {
+	case err := <-rpcErr:
+		t.Fatalf("running RPC ended with %v when GOAWAY arrived, want it to keep running", err)
+	default:
+	}
+
+	close(h.svc.release)
+	if err := <-rpcErr; err != nil {
+		t.Errorf("RPC running at GOAWAY = %v, want nil", err)
+	}
+}

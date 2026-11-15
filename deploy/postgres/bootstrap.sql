@@ -3,9 +3,9 @@
 -- local Postgres, CloudNativePG's svp-pg) or as a role with only CREATEROLE and CREATEDB (the master user of Amazon
 -- RDS, a member of rds_superuser, which is no superuser).
 
--- bootstrap.sh runs it once per service with psql -v db=<database> -v migrator=<role> -v app=<role> and the two role
--- passwords in the environment variables SVP_MIGRATOR_PASSWORD and SVP_APP_PASSWORD, so they never appear on a command
--- line.
+-- bootstrap.sh runs it once per service with psql -v db=<database> -v migrator=<role> -v app=<role>
+-- -v statement_timeout=<value> -v idle_in_transaction_session_timeout=<value> and the two role passwords in the
+-- environment variables SVP_MIGRATOR_PASSWORD and SVP_APP_PASSWORD, so they never appear on a command line.
 \set ON_ERROR_STOP on
 -- Terse errors: no "LINE n:" excerpt that could echo a password back.
 \set VERBOSITY terse
@@ -46,6 +46,19 @@ WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname = :'db') \gexec
 ALTER DATABASE :"db" OWNER TO :"migrator";
 REVOKE ALL ON DATABASE :"db" FROM PUBLIC;
 GRANT CONNECT ON DATABASE :"db" TO :"app";
+
+-- Timeouts of the app role in its database, so a runaway query or a transaction left open gives its connection back.
+-- An empty value resets one: GlitchTip, a third-party app, gets no timeout its code was not written for. A setting
+-- applies from the next login; connections already open keep the value they started with.
+SELECT CASE WHEN :'statement_timeout' = ''
+    THEN format('ALTER ROLE %I IN DATABASE %I RESET statement_timeout', :'app', :'db')
+    ELSE format('ALTER ROLE %I IN DATABASE %I SET statement_timeout = %L', :'app', :'db', :'statement_timeout')
+    END \gexec
+SELECT CASE WHEN :'idle_in_transaction_session_timeout' = ''
+    THEN format('ALTER ROLE %I IN DATABASE %I RESET idle_in_transaction_session_timeout', :'app', :'db')
+    ELSE format('ALTER ROLE %I IN DATABASE %I SET idle_in_transaction_session_timeout = %L', :'app', :'db',
+        :'idle_in_transaction_session_timeout')
+    END \gexec
 
 -- Schema and default privileges live inside the database, so the rest runs connected to it.
 \connect :db

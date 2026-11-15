@@ -54,7 +54,7 @@ func (s *server) grantEntitlement(w http.ResponseWriter, r *http.Request) {
 		httpx.WriteProblem(w, r, http.StatusBadRequest, "INVALID_TIER", "tier must be sd, hd or fhd")
 		return
 	}
-	ctx, cancel := callContext(r)
+	ctx, cancel := callContext(r.Context())
 	defer cancel()
 	resp, err := s.videos.GrantEntitlement(ctx, &videov1.GrantEntitlementRequest{VideoId: r.PathValue("video_id"), Tier: tier})
 	if err != nil {
@@ -96,7 +96,7 @@ func (s *server) playback(w http.ResponseWriter, r *http.Request) {
 		httpx.WriteProblem(w, r, http.StatusNotFound, "RENDITION_NOT_FOUND", "no such playlist")
 		return
 	}
-	ctx, cancel := callContext(r)
+	ctx, cancel := callContext(r.Context())
 	defer cancel()
 	resp, err := s.videos.GetPlaybackPlaylist(ctx, &videov1.GetPlaybackPlaylistRequest{
 		VideoId:   r.PathValue("video_id"),

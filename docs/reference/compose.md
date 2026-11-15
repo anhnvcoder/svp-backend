@@ -7,7 +7,7 @@ Loại tài liệu (Diátaxis): **reference**, tra cứu khi cần một lệnh 
 - `make up` / `make smoke` / `make down`: dựng stack compose profile `core` (`tls-init` (cert và khoá của CA local vào volume `svp-tls`), Postgres `postgres` và bootstrap role, database trong nó, Kafka `kafka` + `kafka-init` (topic, user, ACL),
   Valkey `valkey`, object store `s3` (RustFS, [ADR-0022](../adr/0022-local-object-store-minio-replacement.md)) + job `s3-init` tạo
   bucket, user, policy, CORS, migrate, gateway, user-service, video-service, media-worker, engagement-service,
-  feed-service, web client `web`), chạy luồng đầu-cuối qua gateway ở `127.0.0.1:8080` (gồm refresh token, dùng lại token
+  feed-service, `dlq-replay` (công cụ phát lại DLQ, chờ ở `standby`), web client `web`), chạy luồng đầu-cuối qua gateway ở `127.0.0.1:8080` (gồm refresh token, dùng lại token
   cũ thì cả họ bị thu hồi, logout, follow, hồ sơ: handle tự chọn, trùng handle 409, handle sinh `u_…`, `GET`/`PATCH /me`
   không có email, `followed_by_me`, danh sách video theo tác giả chỉ tác giả thấy video chưa `READY`, tạo video với
   `Idempotency-Key` rồi gọi lặp cùng khoá nhận lại đúng `video_id` đó, upload video bằng presigned POST lên object store, chờ `READY`, tải HLS và thumbnail, output HLS bất biến
@@ -42,7 +42,7 @@ Loại tài liệu (Diátaxis): **reference**, tra cứu khi cần một lệnh 
   Grafana (3000), Alertmanager (9093), GlitchTip (8000). Cổng gRPC nằm trong mạng compose
   ([threat model](../threat-model.md) IN-2); Collector (4317) và Prometheus (9090), Tempo (3200), Loki (3100), Pyroscope (4040) của LGTM
   cũng vậy, từ host đọc chúng qua datasource proxy của Grafana.
-- Năm mạng. `default` chứa mọi thứ trừ media-worker, web và `blackbox`. `worker` (internal, không route ra ngoài) chỉ chứa media-worker, Kafka,
+- Năm mạng. `default` chứa mọi thứ trừ media-worker, dlq-replay, web và `blackbox`. `worker` (internal, không route ra ngoài) chỉ chứa media-worker, dlq-replay, Kafka,
   object store và Collector, nên worker chạy ffmpeg trên file người dùng tải lên không tới được gateway, service gRPC, Postgres,
   LGTM hay internet (threat model FF-4, FF-5); Collector ở đó chỉ nhận telemetry, không làm proxy cho worker. `web` chỉ chứa web,
   gateway và, khi có `obs`, GlitchTip và Collector: server Next render mọi trang thay cho trình duyệt, nên code chạy được trong đó
@@ -75,6 +75,9 @@ Loại tài liệu (Diátaxis): **reference**, tra cứu khi cần một lệnh 
     `deploy/postgres/bootstrap.sql` cho từng database bằng `docker compose … exec -T postgres psql` dưới user `postgres` qua socket; máy không cần
     `psql`. Mật khẩu role đọc từ `.env` theo luật của `dotenv.sh`, tới psql qua biến môi trường mà dòng lệnh chỉ nêu tên (`-e NAME`), không bao giờ
     ở dòng lệnh hay output. Mật khẩu superuser `SVP_COMPOSE_PG_SUPERUSER_PASSWORD` (do `make env` sinh) chỉ được đặt khi image khởi tạo volume rỗng.
+    Bootstrap cũng đặt `statement_timeout` và `idle_in_transaction_session_timeout` cho role app của bốn database service (không cho role
+    migrator, GlitchTip) bằng `ALTER ROLE … IN DATABASE … SET`, giá trị `bootstrap.sh` truyền; chạy lại thì ghi đè. Kết nối đang mở giữ giá
+    trị cũ tới lần đăng nhập sau, nên đổi giá trị xong phải khởi động lại service.
   - Script trên máy chạm Postgres compose chỉ bằng `docker compose … exec -T postgres psql …` qua Makefile (tiền tố
     `env -u DOCKER_DEFAULT_PLATFORM`), không `psql -h 127.0.0.1 -p 5432`: cổng đó là Postgres native của máy.
   - Stack bắt đầu rỗng: dữ liệu dev ở Postgres native không chuyển sang, `make up` tạo role, database và schema mới trong container. Database
@@ -101,6 +104,17 @@ Loại tài liệu (Diátaxis): **reference**, tra cứu khi cần một lệnh 
     của `AGENTS.md`). `SVP_AS_USER=<user>` (`exec -T valkey env SVP_AS_USER=<user> /opt/svp/bin/svp-valkey …`) đăng nhập user khác để thử quyền của nó, mật khẩu là dòng đầu của stdin; mật khẩu
     không bao giờ ở dòng lệnh hay output. Helper của script là `valkey_cli` trong `deploy/compose/lib.sh`. `deploy/ops/ops-test.sh` thử hai wrapper không cần broker hay server (CI chạy nó).
   - Replication factor khác 1 chỉ có trên MSK (stg 2, prd 3), nơi `aws_msk_configuration` đặt; topic đã có giữ số replica nó có.
+- **Phát lại DLQ**: service `dlq-replay` (profile `core`, image `svp/dlq-replay:dev`) chạy lệnh con `standby`, không nối
+  Kafka, nên stack không tốn gì khi chưa phát lại. `make dlq-replay ARGS='replay --from <topic>.dlq …'` chạy
+  `docker compose exec -T dlq-replay /app $(ARGS)` (tiền tố `env -u DOCKER_DEFAULT_PLATFORM` do Makefile thêm; `ARGS`
+  rỗng thì target dừng). Cờ của `replay` ở doc comment của `services/dlq-replay/cmd/dlq-replay/main.go`; quy trình và
+  luật dùng ở [`kafka-dlq-records.md`](../runbooks/kafka-dlq-records.md). Container đăng nhập Kafka bằng user
+  `svp-dlq-replay` (`SVP_KAFKA_DLQ_REPLAY_PASSWORD` của `.env`): đọc bốn topic `*.dlq`, ghi bốn topic gốc, không group,
+  không quyền cluster (ACL ở `deploy/kafka/kafka-init.sh`). Nó ở mạng `worker` (không có khoá object store), root chỉ
+  đọc, bỏ mọi capability, không cổng.
+- `media-worker` có `stop_grace_period: 570s`: khi `docker stop` hay `make down`, worker làm nốt job đang chạy tối đa
+  540 s rồi commit, sau đó đóng client và flush telemetry; dừng container ngắn hơn thì job dở bị huỷ và record được giao
+  lại.
 - Job `s3-init` chạy với image của object store: `curl` của nó ký từng request (SigV4) bằng user root và gọi API S3 cùng API quản trị
   của RustFS (`/rustfs/admin/v3`, nhận JSON thường). Idempotent: chạy lại giữ bucket và object, đặt lại secret key và policy của
   user, bucket policy và CORS theo đúng script và môi trường của nó. Không in secret.
@@ -116,18 +130,19 @@ Loại tài liệu (Diátaxis): **reference**, tra cứu khi cần một lệnh 
   trên loopback (OPS-2).
 - `make up IMAGES=stg`, `WEB_FROM=clone|stg|image` [`WEB_IMAGE=ghcr.io/<repository>@sha256:<digest>`]
   ([ADR-0033](../adr/0033-svp-web-repo.md) §6, §7; `compose_images` của `deploy/k8s/lib.sh` đặt biến image mà
-  `deploy/compose/compose.yaml` đọc): không đặt `IMAGES` thì sáu service backend build từ working tree, một lượt bằng
+  `deploy/compose/compose.yaml` đọc): không đặt `IMAGES` thì mọi service backend build từ working tree, một lượt bằng
   `docker buildx bake -f deploy/docker-bake.json` (bảng image dùng chung với `make k8s-up` và CI,
   [ADR-0050](../adr/0050-bash-to-standard-tools.md)) thành `svp/<service>:dev` trước compose; compose không tự build service backend
   (`pull_policy: never`), nên `docker compose up` lẻ cần image do `make up` build; `IMAGES=stg` chạy
-  bản phát hành stg của sáu service (bốn job migrate cùng image) theo digest của `envs/stg/images/` trong bản clone `svp-gitops` như
+  bản phát hành stg của mọi service backend (bốn job migrate cùng image) theo digest của `envs/stg/images/` trong bản clone `svp-gitops` như
   đang có (không fetch), không build Go. `WEB_FROM` không đặt hay `stg`: bản web của stg theo digest (nên `make up` cần bản clone
   `svp-gitops` và mạng tới GHCR); `clone`: build web từ thư mục web (`web_dir`, mục `make web-clone` của [`k8s.md`](k8s.md)); `image`: `WEB_IMAGE`.
   Mỗi bản của stg phải là repository của một nguồn phát hành có service đó
   (bảng nguồn của working tree) và GHCR cho kéo ẩn danh (`WEB_IMAGE` cũng phải kéo ẩn danh được); `make up` `docker pull` từng digest
   theo kiến trúc máy trước khi dựng (kéo không được thì dừng trước khi chạy gì), bản phát hành chạy với `pull_policy: never`, có bản
-  phát hành thì sáu service của `IMAGES=stg` không bake, `--build` chỉ còn cho web khi `WEB_FROM=clone`. Giá trị sai (`IMAGES` khác `stg`, `WEB_IMAGE` thiếu `WEB_FROM=image`, tag
-  thay digest) thì dừng nêu lý do. Chế độ này cho job e2e: target diễn tập dựng lại service bằng `compose up --no-deps` không mang
+  phát hành thì các service của `IMAGES=stg` không bake, `--build` chỉ còn cho web khi `WEB_FROM=clone`. Giá trị sai (`IMAGES` khác `stg`, `WEB_IMAGE` thiếu `WEB_FROM=image`, tag
+  thay digest) thì dừng nêu lý do. Cần file image stg của mọi service trong bảng bake: `make up IMAGES=stg` đỏ ở service chưa có
+  `envs/stg/images/<service>.yaml` (một release mới có file đó sau lượt promote stg đầu tiên của nó). Chế độ này cho job e2e: target diễn tập dựng lại service bằng `compose up --no-deps` không mang
   biến của `make up` (sẽ chạy image `svp/<service>:dev` của lần bake trước thay bản phát hành), nên `make drill-obs-threats` (`deploy/compose/drills/common.sh`) từ chối
   chạy khi một service mà diễn tập dừng hay dựng lại chạy image `ghcr.io/…` (web bản phát hành không chặn: không diễn tập nào dựng lại
   web), nêu service và lệnh dựng lại (`make down`, rồi `make up` không `IMAGES`),

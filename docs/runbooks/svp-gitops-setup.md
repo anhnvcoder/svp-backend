@@ -499,6 +499,12 @@ PR đổi file có chủ (mục Leo thang). Job đỏ trước push (nhánh khô
 đọc log `sign`; `gh` lỗi khi đọc PR đang mở → chạy lại job. `pull request #… was merged or closed during this run` → chạy lại job (từ
 `main` như đang có).
 
+**Release mới** ([ADR-0072](../adr/0072-pod-operations.md) §2; service vừa vào group `default` của `deploy/docker-bake.json`): lượt `images.yml`
+đầu tạo package GHCR `svp-backend/<svc>` ở trạng thái private, và PR `bot/promote-stg` tạo `envs/stg/images/<svc>.yaml`. Check của PR kéo ẩn
+danh nên đỏ tới khi người học bật public cho package đó, cách làm như
+[`svp-frontend-setup.md`](svp-frontend-setup.md) C1 (không API đổi visibility); không đợi buổi stg. Check còn đỏ tới khi PR nâng
+`CHECKER_COMMIT` (C5) merge. Xong cả hai thì chạy lại check của PR promote: `gh run rerun <id lượt check> --repo anhnvcoder/svp-gitops --failed`.
+
 #### C2. Bản ghi triển khai stg (đã bỏ)
 
 Job `record-stg` của `verify.yml`, Deployment `stg` trên `svp-gitops` và phép "bộ prd = một bản ghi" của check đã bỏ ([ADR-0037](../adr/0037-mainpath-standard-tools.md) §6): stg dựng và xoá mỗi lượt, không Argo CD nào sống đủ lâu để báo trạng thái, bản ghi do chính token App ghi nên chỉ chặn
@@ -520,7 +526,7 @@ cũ còn trên `svp-gitops` không ai đọc; để nguyên.
 
 3. Job `promote-prd` dừng ở trạng thái chờ duyệt environment `promote-prd`: **Review deployments** ở trang lượt chạy (hay thông báo của
    GitHub) → tích `promote-prd` → **Approve and deploy** (**Reject** thì job đỏ và không PR prd nào mở). Sau duyệt nó dựng lại nhánh `bot/promote-prd` thành một commit trên `main` của `svp-gitops`, chép giá trị
-   `image` của cả bảy `envs/stg/images/*.yaml` và ba khoá của `envs/stg/charts.yaml` ở `stg_ref` vào cùng file dưới `envs/prd/` (`yq -i`,
+   `image` của mọi `envs/stg/images/*.yaml` và ba khoá của `envs/stg/charts.yaml` ở `stg_ref` vào cùng file dưới `envs/prd/` (`yq -i`,
    comment của file prd giữ nguyên), mở hay cập nhật PR (không auto-merge), mô tả nêu `stg_ref` và lệnh rescan cho bộ cũ.
 4. Đọc diff của PR, so bộ với `envs/stg/` ở `stg_ref` và với lượt `gitops` đã kiểm commit đó, chờ `gitops-ok` xanh, **Approve**, merge.
 
@@ -555,6 +561,12 @@ về (thường commit merge của PR promote stg trước bản lỗi; `git log
 có attestation `vuln` quá 48 giờ: chạy lệnh rescan mà mô tả PR in ra (`… -f rescan=true -f values_ref=<stg_ref>`) rồi Re-run check.
 Duyệt và merge như C3. Rollback prd là promote một bộ từng nằm ở stg, không phải sửa tay.
 
+Khi `stg_ref` cũ hơn lúc một release mới có file `envs/prd/images/<svc>.yaml`: `promote-prd` chỉ tạo hay sửa file, luật tác giả cấm bot xoá, nên
+file đó còn lại và check của PR bot đỏ ("holds … exactly one file per service"). Commit người đẩy lên nhánh của bot vẫn bị xét như PR của
+bot (tác giả là bot) nên phép xoá ở đó cũng đỏ; PR rollback là PR của người học: đóng PR `bot/promote-prd`, tạo nhánh từ `main` của
+`svp-gitops`, chép `envs/prd/` của nhánh bot vào đó, `git rm envs/prd/images/<svc>.yaml` và mở PR (Code Owner duyệt như C3). PR của
+người không bị luật tác giả giới hạn.
+
 **stg** (người học mở PR revert trong `svp-gitops`):
 
 1. Trên PR promote đã merge gây lỗi, bấm **Revert** (GitHub tạo nhánh và PR revert). Giữ tiêu đề `Revert "…"` và dòng `This reverts
@@ -581,7 +593,7 @@ nếu đang chạy.
   `deploy/helm/svp-cluster/values.yaml`, sha256 của `deploy/observability/otelcol/k8s-config.yaml`) tính từ commit đó. Lượt push `main`
   chỉ đổi `deploy/helm/` hay file mà symlink trong đó trỏ tới (không image nào build) vẫn chạy job `promote` và chỉ ghi `charts.yaml`
   (summary của job `plan` ghi "No image to build, but the charts changed"). Không sửa tay `envs/stg/charts.yaml`.
-- **prd** chỉ đổi qua C3: `charts.yaml` đi cùng bảy digest của `envs/stg/` ở `stg_ref`.
+- **prd** chỉ đổi qua C3: `charts.yaml` đi cùng các digest của `envs/stg/` ở `stg_ref`.
 - Check của `svp-gitops` chặn `revision` không trên `main` của repo code và giá trị dẫn xuất sai. Luật "image không mới hơn chart"
   (tag image là tổ tiên của `revision`) đã bỏ ([ADR-0037](../adr/0037-mainpath-standard-tools.md) §6); còn guard ở bước promote stg (C1).
 

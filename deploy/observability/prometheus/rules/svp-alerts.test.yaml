@@ -1178,6 +1178,71 @@ tests:
         alertname: KafkaDLQRecords
         exp_alerts: []
 
+  # Outbox series born at 1 (the first failed row) fires until it has 10 minutes of history.
+  - interval: 15s
+    input_series:
+      - series: 'svp_outbox_rows_failed_total{service_name="video-service",service_instance_id="a",topic="video.lifecycle.v1"}'
+        values: '_x2 1x60'
+    alert_rule_test:
+      - eval_time: 30s
+        alertname: OutboxRowsFailed
+        exp_alerts:
+          - exp_labels:
+              severity: page
+              service_name: video-service
+              topic: video.lifecycle.v1
+            exp_annotations:
+              summary: "video-service: the outbox relay gave up on events for video.lifecycle.v1, they were never sent"
+              runbook_url: "https://github.com/anhnvcoder/svp-backend/blob/main/docs/runbooks/outbox-rows-failed.md"
+      - eval_time: 615s
+        alertname: OutboxRowsFailed
+        exp_alerts:
+          - exp_labels:
+              severity: page
+              service_name: video-service
+              topic: video.lifecycle.v1
+            exp_annotations:
+              summary: "video-service: the outbox relay gave up on events for video.lifecycle.v1, they were never sent"
+              runbook_url: "https://github.com/anhnvcoder/svp-backend/blob/main/docs/runbooks/outbox-rows-failed.md"
+      - eval_time: 630s
+        alertname: OutboxRowsFailed
+        exp_alerts: []
+
+  # Failed-rows counter 0 -> 1 fires for 10 minutes; a counter at 0 does not.
+  - interval: 15s
+    input_series:
+      - series: 'svp_outbox_rows_failed_total{service_name="video-service",service_instance_id="a",topic="video.lifecycle.v1"}'
+        values: '0x4 1x60'
+      - series: 'svp_outbox_rows_failed_total{service_name="user-service",service_instance_id="b",topic="user.follows.v1"}'
+        values: '0x64'
+    alert_rule_test:
+      - eval_time: 60s
+        alertname: OutboxRowsFailed
+        exp_alerts: []
+      - eval_time: 75s
+        alertname: OutboxRowsFailed
+        exp_alerts:
+          - exp_labels:
+              severity: page
+              service_name: video-service
+              topic: video.lifecycle.v1
+            exp_annotations:
+              summary: "video-service: the outbox relay gave up on events for video.lifecycle.v1, they were never sent"
+              runbook_url: "https://github.com/anhnvcoder/svp-backend/blob/main/docs/runbooks/outbox-rows-failed.md"
+      - eval_time: 645s
+        alertname: OutboxRowsFailed
+        exp_alerts:
+          - exp_labels:
+              severity: page
+              service_name: video-service
+              topic: video.lifecycle.v1
+            exp_annotations:
+              summary: "video-service: the outbox relay gave up on events for video.lifecycle.v1, they were never sent"
+              runbook_url: "https://github.com/anhnvcoder/svp-backend/blob/main/docs/runbooks/outbox-rows-failed.md"
+      - eval_time: 660s
+        alertname: OutboxRowsFailed
+        exp_alerts: []
+
   # Lag of feed-service for 2 minutes fires; media-worker lag during one transcode does not.
   - interval: 15s
     input_series:

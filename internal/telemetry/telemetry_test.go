@@ -446,3 +446,48 @@ func TestSetupProfilerShutdown(t *testing.T) {
 		}
 	}
 }
+
+func resourceOf(t *testing.T) *attribute.Set {
+	t.Helper()
+	shutdown, err := Setup(context.Background(), "code-service")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = shutdown(context.Background()) })
+	tp := otel.GetTracerProvider().(*sdktrace.TracerProvider)
+	recorder := tracetest.NewSpanRecorder()
+	tp.RegisterSpanProcessor(recorder)
+	_, span := otel.Tracer("test").Start(context.Background(), "work")
+	span.End()
+	return recorder.Ended()[0].Resource().Set()
+}
+
+func TestSetupResourceFromEnvironment(t *testing.T) {
+	setupEnv(t)
+	t.Setenv("OTEL_RESOURCE_ATTRIBUTES", "k8s.pod.name=p1,service.name=x,service.instance.id=y")
+	t.Setenv("OTEL_SERVICE_NAME", "z")
+	attrs := resourceOf(t)
+	if v, _ := attrs.Value("k8s.pod.name"); v.AsString() != "p1" {
+		t.Errorf("k8s.pod.name = %q, want p1 from the environment", v.AsString())
+	}
+	if v, _ := attrs.Value("service.name"); v.AsString() != "code-service" {
+		t.Errorf("service.name = %q, want the service name of the code", v.AsString())
+	}
+	if v, _ := attrs.Value("service.instance.id"); v.AsString() == "" || v.AsString() == "y" {
+		t.Errorf("service.instance.id = %q, want the one the code generates", v.AsString())
+	}
+}
+
+func TestSetupInvalidResourceEnvironmentKeepsCodeResource(t *testing.T) {
+	setupEnv(t)
+	t.Setenv("OTEL_RESOURCE_ATTRIBUTES", "no-equals-sign")
+	var logs bytes.Buffer
+	slog.SetDefault(slog.New(slog.NewTextHandler(&logs, nil)))
+	attrs := resourceOf(t)
+	if v, _ := attrs.Value("service.name"); v.AsString() != "code-service" {
+		t.Errorf("service.name = %q, want code-service", v.AsString())
+	}
+	if !bytes.Contains(logs.Bytes(), []byte("telemetry export failed")) {
+		t.Errorf("invalid OTEL_RESOURCE_ATTRIBUTES not reported through the error handler; log: %q", logs.String())
+	}
+}

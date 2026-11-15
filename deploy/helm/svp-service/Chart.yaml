@@ -3,10 +3,10 @@ name: svp-service
 description: >-
   One service of the short-video platform on k3d, namespace svp: its Deployment, Service, ServiceAccount,
   NetworkPolicies, the migrate Job of a service with a database, the HTTPRoute of the gateway and, where a release asks
-  for them, its HPA, PodDisruptionBudget or KEDA ScaledObject, or an Argo Rollouts canary in place of the Deployment. One chart for the six Go services and the web client, one release and one
+  for them, its HPA, PodDisruptionBudget or KEDA ScaledObject, or an Argo Rollouts canary in place of the Deployment. One chart for the Go services and the web client, one release and one
   values file (base/services/<service>.yaml of svp-gitops) each.
 type: application
 version: 0.1.0
-# No appVersion: the chart is shared by seven releases, each running its own image (tag and digest in the release's
+# No appVersion: the chart is shared by every release, each running its own image (tag and digest in the release's
 # values file of svp-gitops), and it is never packaged or published on its own, so no single version of an application
 # belongs to it.

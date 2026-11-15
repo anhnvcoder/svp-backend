@@ -111,6 +111,7 @@ có khối chuẩn bị riêng.
   `kubectl --context k3d-svp -n svp-data exec deploy/svp-ops -c kafka -- /opt/svp/bin/svp-kafka …` và `… -c valkey --
   /opt/svp/bin/svp-valkey -n <db> …`. Gateway db 10, feed-service db 14, web db 9. `svp-ops` chỉ đọc khoá `svp:*` và xoá đúng hai tiền
   tố mà `AGENTS.md` cho phép (`svp:gw:rl:register:*` ở db 10, `svp:feed:explore:*` ở db 14); không `FLUSHDB`/`FLUSHALL`.
+  Ngoại lệ duy nhất: phát lại record DLQ qua release `dlq-replay` ([`kafka-dlq-records.md`](kafka-dlq-records.md)).
 - Postgres của compose chỉ qua container `postgres`: `dc exec -T postgres psql -U postgres -d <database> -X -c '…'` (user
   `postgres` qua socket Unix trong container, không `psql` trên host, không cổng publish). Postgres native `-h 127.0.0.1 -p 5432`
   chỉ còn `make test` dùng; nó **dùng chung với dự án khác**: không restart.
@@ -135,6 +136,7 @@ email bảo mật của org qua EventBridge và SNS; alarm `ticket` của dịch
 | `KafkaConsumerLagHigh` | [kafka-consumer-lag-high.md](kafka-consumer-lag-high.md) | `svp-alerts.yaml` (2 biến thể) |
 | `RateLimitFallbackActive` | [rate-limit-fallback-active.md](rate-limit-fallback-active.md) | `svp-alerts.yaml` |
 | `KafkaDLQRecords` | [kafka-dlq-records.md](kafka-dlq-records.md) | `svp-alerts.yaml` |
+| `OutboxRowsFailed` | [outbox-rows-failed.md](outbox-rows-failed.md) | `svp-alerts.yaml` |
 | `CircuitBreakerOpen` | [circuit-breaker-open.md](circuit-breaker-open.md) | `svp-alerts.yaml` |
 | `BackgroundLoopStalled` | [background-loop-stalled.md](background-loop-stalled.md) | `svp-alerts.yaml` (4 biến thể) |
 | `FeedAvailabilityBudgetBurn` | [feed-availability-budget-burn.md](feed-availability-budget-burn.md) | SLO `feed-availability` |

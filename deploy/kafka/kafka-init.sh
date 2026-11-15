@@ -155,6 +155,15 @@ allow svp-media-worker Write --topic media.transcodes.v1 --topic video.lifecycle
 allow svp-media-worker Read --topic video.lifecycle.v1
 allow svp-media-worker Read --group media-worker
 
+# The DLQ replay tool reads a dead-letter topic by partition assignment (no group, no commit) and writes each record
+# back to the topic it was dead-lettered from, so the consumers that failed on it get it again: WRITE on the source
+# topics is the whole point of the tool, which an operator runs by hand. READ only on the dead-letter topics.
+user svp-dlq-replay
+allow svp-dlq-replay Read --topic video.lifecycle.v1.dlq --topic media.transcodes.v1.dlq --topic user.follows.v1.dlq \
+  --topic engagement.views.v1.dlq
+allow svp-dlq-replay Write --topic video.lifecycle.v1 --topic media.transcodes.v1 --topic user.follows.v1 \
+  --topic engagement.views.v1
+
 # KEDA's Kafka scaler only reads the lag of media-worker's group: metadata of the topic, the group's committed and the
 # partitions' end offsets. DESCRIBE alone gives that and lets it neither consume nor join the group.
 user svp-keda

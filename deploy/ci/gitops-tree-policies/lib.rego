@@ -1,5 +1,5 @@
 # Helpers of the policies on a tree of svp-gitops (packages gitops.*); gitops-check.sh builds their one JSON input.
-# Input keys: worktree, tree, charts, sources, pull_request; data.gitops_check holds environments and services.
+# Input keys: worktree, tree, charts, sources, built, pull_request; data.gitops_check holds environments and services.
 # Design notes: docs/reference/ci.md.
 package gitops
 
@@ -10,7 +10,7 @@ services := data.gitops_check.services
 # The release source whose repository holds the charts: its bot also promotes charts.yaml and the whole set of prd.
 chart_source := "backend"
 
-# The chart of the seven releases.
+# The chart of the releases of the services.
 service_chart := "deploy/helm/svp-service"
 
 is_file(path) if input.tree[path].type == "file"

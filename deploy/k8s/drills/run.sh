@@ -27,9 +27,9 @@
 # holds a Secret value of threats is replaced by a line saying so. A drill with no test, or whose report holds another
 # number of tests than its folder (less those left out), fails.
 
-# threats reads the Secret values its tests use first (7 Kafka users of svp-data/kafka-users, svp-feed-service's Valkey
-# password in svp/feed-service-env, the Grafana admin, 3 object store users of svp-data/pg-backup-s3 and s3-users) into
-# a file of mode 600, removed on exit, no value on a command line: fewer than 12 fail the drill before chainsaw.
+# threats reads the Secret values its tests use first (the Kafka users of svp-data/kafka-users, svp-feed-service's
+# Valkey password in svp/feed-service-env, the Grafana admin, the object store users of svp-data/pg-backup-s3 and
+# s3-users) into a mode 600 file, removed on exit, no value on a command line: fewer than 12 fail the drill first.
 # reloader puts in that file the old and the new value of each variable it changes and GlitchTip's API token.
 
 # The terminal gets every line of the output but those that hold one of the values, and once chainsaw has ended the log
@@ -102,8 +102,8 @@ threats)
   } 2>/dev/null | grep -v '^$' >"$secrets" || true
   n=$(grep -c . "$secrets" || true)
   ((n >= 12)) ||
-    fail "SECRETS: read the 12 Secret values the drill uses (7 Kafka users, Valkey's svp-feed-service, Grafana admin, 3 object store users) to search its output (got $n)"
-  searched="the drill read (7 Kafka users, Valkey's svp-feed-service, Grafana admin, 3 object store users)"
+    fail "SECRETS: read at least 12 of the Secret values the drill uses (Kafka users, Valkey's svp-feed-service, Grafana admin, object store users) to search its output (got $n)"
+  searched="the drill read (Kafka users, Valkey's svp-feed-service, Grafana admin, object store users)"
   ;;
 reloader)
   [ -s .k8s/ca.crt ] || fail "drill-k8s-reloader: .k8s/ca.crt missing; run make k8s-up (or make k8s-ca)"

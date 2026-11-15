@@ -14,7 +14,9 @@ import (
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/mediaconvert"
 	"github.com/aws/aws-sdk-go-v2/service/mediaconvert/types"
+	"github.com/twmb/franz-go/pkg/kerr"
 	"github.com/twmb/franz-go/pkg/kgo"
+	"github.com/twmb/franz-go/pkg/kmsg"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/propagation"
@@ -861,5 +863,145 @@ func TestTranscodeDuration(t *testing.T) {
 	if len(points) != 2 || points["ready"].Count != 3 || points["ready"].Sum != 36 ||
 		points["failed"].Count != 2 || points["failed"].Sum != 6 {
 		t.Errorf("samples = %+v, want three ready of 12 s and two failed of 3 s", points)
+	}
+}
+
+// holdingMC is fakeMC with each CreateJob first held by hold, which gets the call's context; an
+// error from hold fails the call.
+type holdingMC struct {
+	*fakeMC
+	hold func(ctx context.Context) error
+}
+
+func (m holdingMC) CreateJob(ctx context.Context, in *mediaconvert.CreateJobInput, opts ...func(*mediaconvert.Options)) (*mediaconvert.CreateJobOutput, error) {
+	if err := m.hold(ctx); err != nil {
+		return nil, err
+	}
+	return m.fakeMC.CreateJob(ctx, in, opts...)
+}
+
+// drainingConsumer runs the bridge's consumer with the drain time drain; the test stops it with
+// the returned cancel and reads Run's result from the channel.
+func (e *env) drainingConsumer(t *testing.T, drain time.Duration) (context.CancelFunc, <-chan error) {
+	t.Helper()
+	cfg := e.b.ConsumerConfig(e.brokers)
+	cfg.BackoffBase, cfg.BackoffMax = time.Millisecond, 2*time.Millisecond
+	cfg.DrainTimeout = drain
+	c, err := kafkax.NewConsumer(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- c.Run(ctx) }()
+	t.Cleanup(cancel)
+	return cancel, done
+}
+
+// committedOffset returns the offset worker.Group committed on worker.InputTopic, -1 when none.
+func (e *env) committedOffset(t *testing.T) int64 {
+	t.Helper()
+	req := kmsg.NewPtrOffsetFetchRequest()
+	req.Group = worker.Group
+	resp, err := req.RequestWith(t.Context(), e.client)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := kerr.ErrorForCode(resp.ErrorCode); err != nil {
+		t.Fatal(err)
+	}
+	for _, tp := range resp.Topics {
+		for _, p := range tp.Partitions {
+			if tp.Topic == worker.InputTopic && p.Offset >= 0 {
+				return p.Offset
+			}
+		}
+	}
+	return -1
+}
+
+func TestConsumerConfigDrains(t *testing.T) {
+	t.Parallel()
+	cfg := newEnv(t).b.ConsumerConfig("")
+	if cfg.DrainTimeout != worker.DrainTimeout || cfg.RebalanceTimeout != rebalanceTimeout || !cfg.BlockRebalance {
+		t.Errorf("consumer config = %+v", cfg)
+	}
+}
+
+// Stopping the consumer while CreateJob is in hand: within the drain time the job is created and
+// recorded and the record committed; past it the call is canceled then, not at the stop, and
+// nothing is recorded or committed, so the record is delivered again.
+func TestStopDrainsRecordInHand(t *testing.T) {
+	t.Parallel()
+	const drain = 300 * time.Millisecond
+	for _, tc := range []struct {
+		name    string
+		release bool
+	}{
+		{"finished within the drain time", true},
+		{"past the drain time", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			e := newEnv(t)
+			started, release := make(chan struct{}), make(chan struct{})
+			canceled := make(chan time.Time, 1)
+			e.b.mc = holdingMC{fakeMC: e.mc, hold: func(ctx context.Context) error {
+				close(started)
+				select {
+				case <-release:
+					return nil
+				case <-ctx.Done():
+					canceled <- time.Now()
+					return ctx.Err()
+				}
+			}}
+			r, id, version := uploadedRecord(t)
+			cancel, done := e.drainingConsumer(t, drain)
+			if err := kafkax.Produce(t.Context(), e.client, r); err != nil {
+				t.Fatal(err)
+			}
+			select {
+			case <-started:
+			case <-time.After(15 * time.Second):
+				t.Fatal("CreateJob never called")
+			}
+			stop := time.Now()
+			cancel()
+			if tc.release {
+				time.Sleep(drain / 2)
+				close(release)
+			}
+
+			select {
+			case err := <-done:
+				if err != nil {
+					t.Fatalf("consumer: %v", err)
+				}
+			case <-time.After(drain + 5*time.Second):
+				t.Fatal("consumer did not stop")
+			}
+			wantOffset, wantJobs := int64(-1), 0
+			if tc.release {
+				wantOffset, wantJobs = 1, 1
+				e.recordedJob(t, id, version)
+			} else {
+				if after := (<-canceled).Sub(stop); after < drain {
+					t.Errorf("CreateJob canceled %v after the stop, want at least the drain time %v", after, drain)
+				}
+				if rec := e.recordOf(id, version); rec != nil {
+					t.Errorf("version recorded past the drain time: %s", rec)
+				}
+			}
+			if got := e.committedOffset(t); got != wantOffset {
+				t.Errorf("committed offset = %d, want %d", got, wantOffset)
+			}
+			if n := len(e.mc.jobIDs()); n != wantJobs {
+				t.Errorf("%d jobs created, want %d", n, wantJobs)
+			}
+			if n := len(e.events(t)); n != 0 {
+				t.Errorf("%d events published", n)
+			}
+		})
 	}
 }

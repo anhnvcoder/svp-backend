@@ -1108,7 +1108,7 @@ func TestPruneTimelineDeletesOnlyExpired(t *testing.T) {
 
 	// A batch of 2 needs four DELETEs for 7 rows, the last one partial.
 	batches := 0
-	n, err := p.pruneTimeline(t.Context(), 2, func() { batches++ })
+	n, err := p.pruneTimeline(t.Context(), time.Minute, 2, func() { batches++ })
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1128,7 +1128,7 @@ func TestPruneTimelineDeletesOnlyExpired(t *testing.T) {
 
 	// Nothing left to do, which is still a batch done.
 	batches = 0
-	if n, err := p.PruneTimeline(t.Context(), func() { batches++ }); err != nil || n != 0 || batches != 1 {
+	if n, err := p.PruneTimeline(t.Context(), time.Minute, func() { batches++ }); err != nil || n != 0 || batches != 1 {
 		t.Errorf("PruneTimeline again = %d, %v with %d batches, want 0, nil with 1", n, err, batches)
 	}
 }
@@ -1147,7 +1147,7 @@ func TestPruneTimelineReportsBatchesOfARunCutShort(t *testing.T) {
 	defer cancel()
 	batches := 0
 	// The deadline comes once the first batch is done, so the second DELETE never runs.
-	n, err := p.pruneTimeline(ctx, 2, func() {
+	n, err := p.pruneTimeline(ctx, time.Minute, 2, func() {
 		batches++
 		cancel()
 	})
@@ -1156,5 +1156,122 @@ func TestPruneTimelineReportsBatchesOfARunCutShort(t *testing.T) {
 	}
 	if n != 2 || batches != 1 {
 		t.Errorf("pruneTimeline() deleted %d rows in %d reported batches, want 2 in 1", n, batches)
+	}
+}
+
+// shortRoleTimeout is the statement timeout of strictPool's sessions, standing in for the app
+// role's: shorter than every wait the tests below hold a statement in.
+const shortRoleTimeout = 100 * time.Millisecond
+
+// strictPool returns a pool to the test database whose sessions start with statement_timeout
+// shortRoleTimeout, as the app role's sessions start with its own.
+func strictPool(t *testing.T) *pgxpool.Pool {
+	t.Helper()
+	cfg := testPool.Config()
+	cfg.ConnConfig.RuntimeParams["statement_timeout"] = shortRoleTimeout.String()
+	pool, err := pgxpool.NewWithConfig(t.Context(), cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(pool.Close)
+	return pool
+}
+
+// Each transaction sets the statement timeout it is given for itself only: the session keeps its
+// own once the transaction ends.
+func TestTransactionSetsItsStatementTimeout(t *testing.T) {
+	needDB(t)
+	p := New(strictPool(t), slog.New(slog.DiscardHandler))
+	for _, tc := range []struct {
+		timeout time.Duration
+		want    string
+	}{{handlerTimeout, "30s"}, {2 * time.Minute, "2min"}} {
+		var got string
+		err := p.inTx(t.Context(), tc.timeout, func(tx pgx.Tx) error {
+			return tx.QueryRow(t.Context(), "SHOW statement_timeout").Scan(&got)
+		})
+		if err != nil || got != tc.want {
+			t.Errorf("statement_timeout in a transaction of %s = %q, %v; want %q", tc.timeout, got, err, tc.want)
+		}
+	}
+	var session string
+	if err := p.pool.QueryRow(t.Context(), "SHOW statement_timeout").Scan(&session); err != nil || session != "100ms" {
+		t.Errorf("statement_timeout after the transactions = %q, %v; want the session's 100ms", session, err)
+	}
+}
+
+// release lets go of holder after a wait longer than shortRoleTimeout, and fails the test when done
+// reports before then: the statement waiting on holder outlived the session's statement timeout.
+func release(t *testing.T, holder pgx.Tx, done <-chan error) {
+	t.Helper()
+	select {
+	case err := <-done:
+		t.Fatalf("returned while the lock was held: %v", err)
+	case <-time.After(3 * shortRoleTimeout):
+	}
+	if err := holder.Rollback(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// A fan-out waiting on the author lock longer than the role's statement timeout goes on, within
+// the attempt's own timeout, and applies once the lock is free.
+func TestAuthorTxOutlastsRoleStatementTimeout(t *testing.T) {
+	needDB(t)
+	p := New(strictPool(t), slog.New(slog.DiscardHandler))
+	author, b, video := ids.New(), ids.New(), ids.New()
+	handle(t, p, followRecord(t, b, author))
+
+	holder, err := testPool.Begin(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = holder.Rollback(context.Background()) }()
+	if _, err := holder.Exec(t.Context(),
+		"SELECT pg_advisory_xact_lock(hashtextextended('feed-author:' || $1::uuid::text, 0))", author); err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan error, 1)
+	go func() { done <- p.Handle(t.Context(), readyRecord(t, video, author, now()), kafkax.Attempt{Number: 1}) }()
+	release(t, holder, done)
+	if err := <-done; err != nil {
+		t.Fatalf("Handle = %v, want nil once the lock is free", err)
+	}
+	if got := timeline(t, b); !slices.Equal(got, []string{video}) {
+		t.Errorf("timeline = %v, want [%s]", got, video)
+	}
+}
+
+// A prune batch waiting on a row longer than the role's statement timeout goes on with the
+// statement timeout it was given, and deletes the row once it is free.
+func TestPruneBatchOutlastsRoleStatementTimeout(t *testing.T) {
+	needDB(t)
+	p := New(strictPool(t), slog.New(slog.DiscardHandler))
+	user := ids.New()
+	if _, err := testPool.Exec(t.Context(),
+		"INSERT INTO timeline (user_id, published_at, video_id) VALUES ($1, $2, gen_random_uuid())",
+		user, now().Add(-31*24*time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+
+	holder, err := testPool.Begin(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = holder.Rollback(context.Background()) }()
+	if _, err := holder.Exec(t.Context(), "SELECT 1 FROM timeline WHERE user_id = $1 FOR UPDATE", user); err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan error, 1)
+	go func() {
+		_, err := p.PruneTimeline(t.Context(), time.Minute, func() {})
+		done <- err
+	}()
+	release(t, holder, done)
+	if err := <-done; err != nil {
+		t.Fatalf("PruneTimeline = %v, want nil once the row is free", err)
+	}
+	if got := count(t, "SELECT count(*) FROM timeline WHERE user_id = $1", user); got != 0 {
+		t.Errorf("%d expired rows left, want 0", got)
 	}
 }
