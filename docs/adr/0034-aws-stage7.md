@@ -165,8 +165,7 @@ destroy`; `sweep.sh` chỉ đọc, exit 1 khi còn gì ngoài `aws/bootstrap`. B
 
 ## Xác nhận
 
-Lúc quyết chưa hiện thực. Mười tám giả định chỉ chứng minh được trên AWS (VPC CNI NetworkPolicy, API 443, credential Pod Identity với form 15 phút, ghi có điều kiện
-S3, PSA `v1.36`, NLB giữ IP, hairpin, metrics-server, IMDSv2, `rds_superuser`, Spot, Docker Hub, chứng chỉ, PVC, chi phí ±50 %, thời gian buổi, bucket không liệt kê ẩn danh, k6 đạt SLO) kiểm ở buổi AWS stg; bảng phép kiểm và cột Kết quả: phụ lục, "Kiểm chứng sau".
+Lúc quyết chưa hiện thực. Mười tám giả định chỉ chứng minh được trên AWS kiểm ở buổi AWS stg; danh sách, phép kiểm, cột Kết quả: phụ lục, "Kiểm chứng sau".
 
 ## Hiện thực ở
 
@@ -198,3 +197,4 @@ Phụ lục: [`appendix/0034-aws-stage7.md`](appendix/0034-aws-stage7.md) (trạ
 - §8, §10: [0064](0064-interface-endpoints.md): API AWS của cluster qua endpoint interface có private DNS ở VPC mỗi env, đích ngoài AWS và vài API AWS không có endpoint ở region vẫn qua NAT (0064 §6); NetworkPolicy thêm TCP 443 tới `awsEndpointCidrs`.
 - Câu 14, §7: [0065](0065-argocd-eks-capability.md): Argo CD trên `eks` chuyển sang EKS Capability cho Argo CD (AWS chạy, giữ HA; đăng nhập Identity Center; đích Application `name: in-cluster`) thay `deploy/k8s/gitops.sh` cài chart; k3d giữ cài tay; hiện thực ở thay đổi riêng, tới đó giữ cách cài hiện tại.
 - Bối cảnh (7c: MediaConvert): [0066](0066-mediaconvert-transcode.md): stg, prd transcode bằng AWS Elemental MediaConvert (tier Basic, queue on-demand) qua lệnh con `media-worker mediaconvert`, trạng thái job qua EventBridge và SQS, endpoint interface `mediaconvert`; chọn mua thay tự chạy ffmpeg trên EKS, đánh đổi và chi phí ở ADR đó.
+- §2: [0076](0076-terraform-plan-infracost-pr.md): ngoại lệ thứ hai của "CI không credential": `plan.yml` của `svp-infra` chạy `terraform plan` trên PR cùng repo bằng role OIDC chỉ đọc `svp-ci-terraform-plan` của `svp-stg`, `svp-prd` (Deny dữ liệu workload, không ghi hay khoá state), mỗi lượt chờ người học duyệt environment `terraform-plan`, chỉ đăng tóm tắt đã che; `check.yml` giữ không credential; CI không `apply`; Infracost ước chi phí từ HCL.

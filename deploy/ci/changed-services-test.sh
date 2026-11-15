@@ -35,6 +35,8 @@ cp "$src/deploy/docker-bake.json" "$tree/deploy/"
 cp -R "$src/deploy/k8s/drills" "$tree/deploy/k8s/"
 cp -R "$src/deploy/helm/svp-policy/values.yaml" "$src/deploy/helm/svp-policy/files" "$tree/deploy/helm/svp-policy/"
 echo "# A decision" >"$tree/docs/decision.md"
+# release-please writes the changelog with the first release, so the copy of deploy/ci/ may not hold it yet.
+echo "# Changelog" >"$tree/deploy/ci/CHANGELOG.md"
 g() {
   GIT_DIR=$tree/.git GIT_WORK_TREE=$tree GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 git -c user.name=test \
     -c user.email=test@example.invalid -c commit.gpgsign=false -c core.hooksPath=/dev/null "$@"
@@ -83,7 +85,7 @@ for f in changed-services-test.sh plan-test.sh promote-test.sh rescan-test.sh sc
   ghcr-digest.sh ghcr-digest-test.sh verify-host.sh verify-mask.sh verify-collect.sh verify-collect-test.sh \
   verify-steps/steps.sh verify-steps/supplychain.sh verify-steps/supplychain-test.sh \
   verify-steps/admission-metrics.sh verify-steps/objstore.sh gitops-check.sh gitops-check-test.sh values-check.sh \
-  verify-release.sh ignorefile-policies/grypeignore.rego gitops-tree-policies/author.rego; do
+  verify-release.sh ignorefile-policies/grypeignore.rego gitops-tree-policies/author.rego CHANGELOG.md; do
   same "changed-services: a change of $f builds nothing" "" "$(changed_by "deploy/ci/$f")"
 done
 for f in drills/run.sh drills/.chainsaw.yaml drills/gitops/env/chainsaw-test.yaml drills/gitops/gitops-test.sh \

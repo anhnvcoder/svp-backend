@@ -173,6 +173,7 @@ Phụ lục: [`appendix/0033-svp-web-repo.md`](appendix/0033-svp-web-repo.md) (t
 
 ### Chỉnh bởi
 
+- §3, §9: [0077](0077-versioned-gitops-checker.md): PR ở `svp-gitops` ghim checker theo tag semver (Renovate nâng `CHECKER_VERSION` cùng `CHECKER_COMMIT`), thay "bump `CHECKER_COMMIT`" tay.
 - §2, §3, §9: [0036](0036-repo-rename.md): tên repo (`svp-web` thành `svp-frontend`, repo backend thành `svp-backend`), prefix và identity của hai nguồn, check không đọc bản clone repo web, bước 8 của §9 (gỡ `web` khỏi nguồn backend cũ) làm trong bảng chuyển.
 - §7: [0039](0039-mainpath-drills-scan-gate-sourcemaps.md): image `web-sourcemaps` và `gitops-sourcemaps.sh` bỏ; `verify.yml` thôi clone `svp-frontend` và input `web_ref` (bị thay một phần).
 - §10: [0035](0035-renovate-automerge.md): Renovate của `svp-web`: bản `patch`, `digest` của gói npm, Node, base image và service container của CI tự merge khi `ci-ok`, `images-ok` xanh; action, `.backend-commit`, `api/contract.json`, minor, major giữ tay.

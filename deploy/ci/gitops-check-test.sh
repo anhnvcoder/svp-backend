@@ -912,6 +912,88 @@ else
   fail "values-check: an image file naming the repository of another service (exit $rc, want 1, '$want', no release verified):"$'\n'"$(sed 's/^/      /' <<<"$out")"
 fi
 
+# The services an image file may name are those of the release sources at the commit its environment pins, not this
+# checker's own list. k6 builds zzz-service, which the docker-bake.json of this checker does not know: stg pins k6, prd
+# k3 (a commit that does not build it), k0 predates the table (there the checker's own list applies). Built without
+# touching the working tree of the throwaway repository.
+idx=$work/k6.index
+GIT_INDEX_FILE=$idx cg read-tree "$k3"
+blob=$(cg show "$k3:deploy/helm/svp-policy/files/sources.json" | jq '.sources[0].services += ["zzz-service"]' | cg hash-object -w --stdin)
+GIT_INDEX_FILE=$idx cg update-index --cacheinfo "100644,$blob,deploy/helm/svp-policy/files/sources.json"
+k6=$(cg commit-tree "$(GIT_INDEX_FILE=$idx cg write-tree)" -p "$k3" -m "a service the checker does not know")
+# vc_run DIR BASE: values-check.sh --gitops DIR BASE of the throwaway repository, as a machine runs it; sets $out, $rc.
+vc_run() {
+  rc=0
+  out=$(env -i PATH="$PATH" HOME="$HOME" AWS_CONFIG_FILE=/dev/null AWS_SHARED_CREDENTIALS_FILE=/dev/null \
+    TMPDIR="${TMPDIR:-/tmp}" "$code/deploy/ci/values-check.sh" --gitops "$1" "$2" 2>&1) || rc=$?
+}
+# vc_expect NAME WANT_RC MESSAGE...: the last vc_run exited WANT_RC and printed each MESSAGE.
+vc_expect() {
+  local name=$1 want=$2 m
+  shift 2
+  [ "$rc" = "$want" ] || {
+    fail "$name (exit $rc, want $want):"$'\n'"$(sed 's/^/      /' <<<"$out")"
+    return
+  }
+  for m in "$@"; do
+    [[ $out == *"$m"* ]] || {
+      fail "$name: no '$m' in:"$'\n'"$(sed 's/^/      /' <<<"$out")"
+      return
+    }
+  done
+  ok "$name"
+}
+# vc_tree REV: a git repository holding sources_tree at REV for stg, with no digest in any image file, committed.
+vc_tree() {
+  local t f
+  t=$(sources_tree "$1" ghcr.io/anhnvcoder/svp-backend/ ghcr.io/anhnvcoder/svp-frontend/web)
+  for f in "$t"/envs/*/images/*.yaml; do sed -i.bak 's/^  digest: .*/  digest: ""/' "$f" && rm "$f.bak"; done
+  git init -q "$t" && gw "$t" add -A && gw "$t" -c commit.gpgsign=false commit -q -m base
+  echo "$t"
+}
+t=$(sources_tree "$k6" ghcr.io/anhnvcoder/svp-backend/ ghcr.io/anhnvcoder/svp-frontend/web)
+for f in "$t"/envs/*/images/*.yaml; do sed -i.bak 's/^  digest: .*/  digest: ""/' "$f" && rm "$f.bak"; done
+vc_run "$t" ""
+vc_expect "values-check: a service of the commit stg pins that this checker does not know is read" 0 \
+  "ok    envs/stg/images/zzz-service.yaml: no digest" "ok    envs/stg/images/gateway.yaml: no digest"
+[[ $out != *"envs/prd/images/zzz-service.yaml"* ]] || fail "values-check: prd, which pins k3, is read for zzz-service"
+t=$(vc_tree "$k6")
+base=$(gw "$t" rev-parse HEAD)
+sed -i.bak 's/^  tag: .*/  tag: "000000000000"/' "$t/envs/stg/images/zzz-service.yaml" && rm "$t/envs/stg/images/zzz-service.yaml.bak"
+cp "$t/envs/stg/images/zzz-service.yaml" "$t/envs/stg/images/mystery-service.yaml"
+cp "$t/envs/stg/images/zzz-service.yaml" "$t/envs/prd/images/zzz-service.yaml"
+gw "$t" add -A && gw "$t" -c commit.gpgsign=false commit -q -m "change"
+vc_run "$t" "$base"
+vc_expect "values-check: a changed image file of a new service passes, a name no table knows and a service prd does not build fail" 1 \
+  "ok    envs/stg/images/zzz-service.yaml: no digest" \
+  "FAIL  envs/stg/images/mystery-service.yaml is not the image file of a service" \
+  "FAIL  envs/prd/images/zzz-service.yaml is not the image file of a service"
+# A rollback of stg to k3, which does not build zzz-service, removes its file: a note. The file of a service k3 builds
+# stays required.
+t=$(vc_tree "$k6")
+base=$(gw "$t" rev-parse HEAD)
+sed -i.bak "s/^revision: .*/revision: $k3/" "$t/envs/stg/charts.yaml" && rm "$t/envs/stg/charts.yaml.bak"
+rm "$t/envs/stg/images/zzz-service.yaml"
+gw "$t" add -A && gw "$t" -c commit.gpgsign=false commit -q -m "rollback"
+vc_run "$t" "$base"
+vc_expect "values-check: a rollback to a commit that does not build a service removes its file" 0 \
+  "note  envs/stg/images/zzz-service.yaml was removed: the commit stg pins does not build zzz-service" \
+  "ok    envs/stg/images/gateway.yaml: no digest"
+gw "$t" rm -q envs/stg/images/gateway.yaml && gw "$t" -c commit.gpgsign=false commit -q -m "remove gateway"
+vc_run "$t" "$base"
+vc_expect "values-check: the removed file of a service the pinned commit builds fails" 1 \
+  "FAIL  envs/stg/images/gateway.yaml was removed: the GitOps path needs the image file of every service the commit stg pins builds" \
+  "note  envs/stg/images/zzz-service.yaml was removed"
+# Charts from before the table keep the list of this checker.
+t=$(vc_tree "$k0")
+base=$(gw "$t" rev-parse HEAD)
+cp "$t/envs/stg/images/gateway.yaml" "$t/envs/stg/images/zzz-service.yaml"
+sed -i.bak 's/^  tag: .*/  tag: "000000000000"/' "$t/envs/stg/images/gateway.yaml" && rm "$t/envs/stg/images/gateway.yaml.bak"
+gw "$t" add -A && gw "$t" -c commit.gpgsign=false commit -q -m "change"
+vc_run "$t" "$base"
+vc_expect "values-check: charts from before the table: the list of the checker applies" 1 \
+  "ok    envs/stg/images/gateway.yaml: no digest" "FAIL  envs/stg/images/zzz-service.yaml is not the image file of a service"
+
 # --- collectorConfigSha256: the Collector's files concatenated (k8s-config.yaml, k8s-k3d.yaml, k8s-eks.yaml), a file a
 # revision does not hold adding nothing. k3 holds k8s-config.yaml alone, k4 adds the two destination files, k5 changes
 # k8s-eks.yaml alone; origin/main moves to k5 for these cases, then back to k3.

@@ -42,6 +42,23 @@ test_the_bot_of_backend_adds_the_image_file_of_a_new_release_to_stg if count(den
 	backend_bot, backend_bot, [["A", "envs/stg/images/dlq-replay.yaml"]],
 ))) == 0
 
+# A service of another source that only the table of the revision prd pins lists: the checker's own list lacks it.
+test_the_bot_of_backend_promotes_a_new_service_of_another_source_to_prd if count(deny(fx.pull_request(
+	object.union(fx.tree_input, {"sources": {"prd": {"revision": fx.revision, "sources": [
+		fx.backend,
+		object.union(fx.web, {"services": ["web", "portal"]}),
+	]}}}),
+	backend_bot, backend_bot, [["A", "envs/prd/images/portal.yaml"]],
+))) == 0
+
+test_the_bot_of_backend_adds_an_image_file_of_a_service_only_the_checker_lists_to_prd if fx.says(
+	deny(fx.pull_request(
+		object.union(fx.tree_input, {"sources": {"prd": {"revision": fx.revision, "sources": [fx.backend]}}}),
+		backend_bot, backend_bot, [["A", "envs/prd/images/web.yaml"]],
+	)),
+	"envs/prd/images/web.yaml: changed by svp-gitops-promoter[bot], the bot of release source backend, which publishes",
+)
+
 test_a_person_changes_anything if count(by("anhnvcoder", [
 	["M", "envs/stg/svp-cluster.yaml"],
 	["M", "base/tempo.yaml"],

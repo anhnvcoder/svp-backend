@@ -24,29 +24,13 @@ Ràng buộc: lab một người trên tài khoản cá nhân, gói Free, mọi 
 
 ## Phương án đã cân nhắc
 
-- Duyệt PR: **0 approval**.
-- Duyệt PR: 1 approval với tài khoản thứ hai: duyệt giả, [0025](0025-gitops-config-repo.md) §7.
-- Code Owner: **chỉ đường nhạy cảm**.
-- Code Owner: `*` cả repo: chặn mọi PR Renovate tự merge.
-- Code Owner: không `CODEOWNERS`.
-- Cổng prd: **environment `promote-prd` có người duyệt**.
-- Cổng prd: chỉ duyệt Code Owner trên PR prd.
-- Cổng prd: `prevent_self_review = true`.
-- Lint bảo mật workflow: **zizmor qua image ghim**.
-- Lint bảo mật workflow: zizmor qua action chính thức.
-- Lint bảo mật workflow: poutine.
-- Lint bảo mật workflow: octoscan.
-- Lint bảo mật workflow: chỉ CodeQL `actions`.
-- Tiêu đề PR: **job shell**.
-- Tiêu đề PR: ruleset metadata restrictions.
-- Tiêu đề PR: action bên thứ ba.
-- Tiêu đề PR: commitlint.
-- Check: **`strict = false`**.
-- Check: `strict = true`.
-- Check: merge queue.
-- Renovate: **tự merge hẹp lại**.
-- Renovate: giữ [0035](0035-renovate-automerge.md).
-- Renovate: tắt hẳn tự merge.
+- Duyệt PR: **0 approval**; 1 approval với tài khoản thứ hai (duyệt giả, [0025](0025-gitops-config-repo.md) §7).
+- Code Owner: **chỉ đường nhạy cảm**; `*` cả repo (chặn mọi PR Renovate tự merge); không `CODEOWNERS`.
+- Cổng prd: **environment `promote-prd` có người duyệt**; chỉ duyệt Code Owner trên PR prd; `prevent_self_review = true`.
+- Lint bảo mật workflow: **zizmor qua image ghim**; zizmor qua action chính thức; poutine; octoscan; chỉ CodeQL `actions`.
+- Tiêu đề PR: **job shell**; ruleset metadata restrictions; action bên thứ ba; commitlint.
+- Check: **`strict = false`**; `strict = true`; merge queue.
+- Renovate: **tự merge hẹp lại**; giữ [0035](0035-renovate-automerge.md); tắt hẳn tự merge.
 
 ## Kết quả quyết định
 
@@ -149,16 +133,7 @@ Thứ tự áp: cài đặt repo, ruleset (chưa có `pr-title`), environment `p
 
 ## Nguồn
 
-- Tính đến 2026-11-01. [N1] [About rulesets](https://docs.github.com/en/repositories/configuring-branches-and-merges-in-your-repository/managing-rulesets/about-rulesets): ruleset có ở repo public của gói Free. [N2] [Available rules for rulesets](https://docs.github.com/en/repositories/configuring-branches-and-merges-in-your-repository/managing-rulesets/available-rules-for-rulesets): linear history, merge method bắt buộc; metadata restrictions chỉ gói Enterprise, kiểm metadata commit (squash: commit kết quả).
-- [N3] [Managing a merge queue](https://docs.github.com/en/repositories/configuring-branches-and-merges-in-your-repository/configuring-pull-request-merges/managing-a-merge-queue): "available in any public repository owned by an organization, or in private repositories owned by organizations using GitHub Enterprise Cloud".
-- [N4] [Deployments and environments](https://docs.github.com/en/actions/reference/workflows-and-actions/deployments-and-environments): required reviewers, prevent self-review, tắt admin bypass; ở gói Free chỉ cho repo public. [N5] [Managing private keys for GitHub Apps](https://docs.github.com/en/apps/creating-github-apps/authenticating-with-a-github-app/managing-private-keys-for-github-apps): tới 25 khoá mỗi App.
-- [N6] [Managing GitHub Actions settings for a repository](https://docs.github.com/en/repositories/managing-your-repositorys-settings-and-features/enabling-features-for-your-repository/managing-github-actions-settings-for-a-repository): chế độ "Allow OWNER, and select non-OWNER…", action cục bộ và reusable workflow.
-- [N7] [ossf/scorecard-action](https://github.com/ossf/scorecard-action) v2.5.0 (2026-10-12): `publish_results`, Workflow Restrictions, Branch-Protection đọc ruleset không cần token admin. [N8] [Scorecard checks: Code-Review](https://github.com/ossf/scorecard/blob/main/docs/checks.md#code-review).
-- [N9] zizmor: [Installation](https://docs.zizmor.sh/installation/) (image `ghcr.io/zizmorcore/zizmor`), [Usage](https://docs.zizmor.sh/usage/) (chế độ online, exit code, persona), [Configuration](https://docs.zizmor.sh/configuration/), [releases](https://github.com/zizmorcore/zizmor/releases).
-- [N10] [boostsecurityio/poutine](https://github.com/boostsecurityio/poutine). [N11] [synacktiv/octoscan](https://github.com/synacktiv/octoscan). [N12] [rhysd/actionlint](https://github.com/rhysd/actionlint).
-- [N13] [CodeQL: supported languages and frameworks](https://codeql.github.com/docs/codeql-overview/supported-languages-and-frameworks/) (GitHub Actions workflows). [N14] [actions/dependency-review-action](https://github.com/actions/dependency-review-action) v5.0.0: repo public, `fail-on-severity`, `allow-licenses`.
-- [N15] [Conventional Commits 1.0.0](https://www.conventionalcommits.org/en/v1.0.0/). [N16] [About code owners](https://docs.github.com/en/repositories/managing-your-repositorys-settings-and-features/customizing-your-repository/about-code-owners).
-- [N17] Renovate: [configuration options](https://docs.renovatebot.com/configuration-options/) (`automerge`, `matchUpdateTypes`, `matchDepTypes`). [N18] [Events that trigger workflows: `pull_request`](https://docs.github.com/en/actions/reference/workflows-and-actions/events-that-trigger-workflows#pull_request) (loại `edited`).
+Tính đến 2026-11-01; [N1]–[N18] kèm link và ghi chú ở [phụ lục](appendix/0041-github-hardening.md#nguồn).
 
 ## Thông tin thêm
 
@@ -169,3 +144,5 @@ công cụ lint bảo mật workflow tính đến 2026-11-01).
 
 - (h): [0047](0047-pr-title-required-condition.md): điều kiện để pr-title thành bắt buộc
 - (d), (f): [0062](0062-ecr-registry-ci-oidc.md): environment `ecr-rescan` ở `svp-backend`, `svp-frontend` (chỉ nhánh `main`, không người duyệt) cho job rescan nhận role OIDC rescan; `aws-actions/configure-aws-credentials` vào danh sách action của hai repo; secret repo `SVP_AWS_STG_ACCOUNT_ID`, `SVP_AWS_PRD_ACCOUNT_ID` do người học đặt.
+- (d): [0076](0076-terraform-plan-infracost-pr.md): environment `terraform-plan` ở `svp-infra` (người học duyệt mỗi lượt, `can_admins_bypass = false`, `prevent_self_review = false`, không giới hạn nhánh vì job chạy trên PR) cho job plan nhận role OIDC chỉ đọc; secret account ID và tfvars của nó do người học đặt.
+- (d), (f): [0077](0077-versioned-gitops-checker.md): environment `release` ở `svp-backend` (chỉ `main`, không người duyệt) giữ khoá App thứ ba `svp-release-please` (`contents`, `pull_requests` write, chỉ cài trên `svp-backend`); `googleapis/release-please-action` vào danh sách action của `svp-backend`.

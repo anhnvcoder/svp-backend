@@ -295,6 +295,15 @@ Mục 7 cũ ("Đề xuất xem lại") nguyên văn; việc còn mở chuyển v
   runner, EKS chỉ kiểm ở buổi stg, nguồn probe link-local trên VPC CNI chưa kiểm; (2) cổng probe mở cho địa chỉ SNAT
   không qua ztunnel, `kubectl port-forward` không qua ztunnel; (3) telemetry ra `svp-obs` vẫn plaintext ngoài mesh; (4)
   istiod và `istio-reader-service-account` đọc mọi Secret của cluster, istiod ghi được workload ở mọi namespace.
+- **Plan, chi phí và phát hành checker (2026-11-15):** bề mặt mới là role OIDC chỉ đọc `svp-ci-terraform-plan` mà `plan.yml` của
+  `svp-infra` assume sau lượt duyệt environment `terraform-plan` (AWS-11, AWS-6), khoá API Infracost và dữ liệu gửi Cloud Pricing API
+  (SC-16), App `svp-release-please` với `release.yml` và tag `gitops-check-v*` bất biến mà `svp-gitops` ghim cùng version (GIT-7, GIT-5, GIT-6,
+  SC-2); bốn tài sản ở mục 3, ba chỗ vượt ranh giới ở mục 2, ba dòng ở mục 6, mục 7. Thu hẹp được: người duyệt PR hạ tầng thấy thay đổi và
+  chi phí trước merge; đổi hợp đồng giữa checker và cây `svp-gitops` không còn cần ghim tạm hay nâng commit tay.
+  [ADR-0076](../adr/0076-terraform-plan-infracost-pr.md) chỉnh ADR-0034, 0041, 0059, 0062; [ADR-0077](../adr/0077-versioned-gitops-checker.md)
+  chỉnh ADR-0025, 0041, 0072. Đáng xem lại: (1) lượt đã duyệt chạy mọi code của PR với role, kể cả HCL và provider của lock trong PR, nên
+  phạm vi người học đọc trước khi duyệt là cả diff; (2) refresh với tập Deny và token 300 s trong lượt dài chỉ kiểm được ở buổi cloud;
+  (3) bước khớp tag chưa kiểm commit của tag nằm trên `main`; (4) lượt đầu của release-please với quyền App đã chốt (không `issues: write`).
 - **Đề xuất (không bắt buộc), giai đoạn 2:** thêm `etag` (hoặc checksum) của file gốc vào `VideoUploaded`, lấy từ lần `HEAD`
   ở `CompleteUpload`; worker tải file với điều kiện `If-Match` theo giá trị đó. Đóng được UP-2 (file bị thay giữa lúc kiểm và
   lúc đọc). Đây là thêm field nên không phá contract (quy tắc versioning ở

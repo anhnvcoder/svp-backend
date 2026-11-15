@@ -135,5 +135,5 @@ allowed(t, s) if t.service in s.services
 allowed(t, s) if {
 	t.env == "prd"
 	s.name == gitops.chart_source
-	t.service in gitops.services
+	t.service in gitops.listed(t.env)
 }

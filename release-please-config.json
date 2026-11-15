@@ -1,0 +1,11 @@
+{
+  "$schema": "https://raw.githubusercontent.com/googleapis/release-please/v17.6.0/schemas/config.json",
+  "packages": {
+    "deploy/ci": {
+      "release-type": "simple",
+      "component": "gitops-check",
+      "initial-version": "1.0.0",
+      "include-component-in-tag": true
+    }
+  }
+}

@@ -151,7 +151,7 @@ Theo thứ tự hay gặp (hai cái đầu đã gặp khi dựng `svp-gitops`), 
 
    Thứ token lộ làm được mà không ai duyệt: PR chỉ đổi `envs/stg/images/web.yaml` qua `gitops-ok`, mà check chỉ nhận image dưới prefix
    `svp-frontend`, tag là commit trên `main` của `svp-frontend`, ký bởi `images.yml@refs/heads/main` của `svp-frontend` (ADR-0033 §3). Lưu ý cửa sổ từ
-   bước 1 tới bước 4 của ADR-0033 §9 (từ lúc có khoá ở A3–A5 tới khi D1 "Trước đó" bump `CHECKER_COMMIT`): checker còn cũ chưa có luật tác
+   bước 1 tới bước 4 của ADR-0033 §9 (từ lúc có khoá ở A3–A5 tới khi D1 "Trước đó" nâng ghim checker): checker còn cũ chưa có luật tác
    giả, nên trong cửa sổ đó token lộ đổi được mọi file `envs/stg/` mà bot backend được đổi, ví dụ `charts.yaml`. Suspend ngay bước 1 là
    việc cần làm đầu tiên, trước mọi bước khác. Nên trường hợp xấu
    nhất là stg chạy một bản web **thật** khác (thường là bản cũ hơn); file khác, `envs/prd/` hay image không ký đều đỏ. Commit lạ của
@@ -472,13 +472,14 @@ trong state ở UI.
 ### D1. PR đầu của bot web (bản phát hành đầu)
 
 **Trước đó** (ADR-0033 §9 bước 4, [ADR-0036](../adr/0036-repo-rename.md) §4 bước 2): `check.yml` của `svp-gitops` đã ghim
-`CHECKER_COMMIT` lên một commit của backend có bảng nguồn hiện tại (bump theo C5 của
-[svp-gitops-setup.md](svp-gitops-setup.md#c5-bump-commit-ghim-chart-và-checker)); check checkout repo code
+checker (`CHECKER_VERSION`, `CHECKER_COMMIT` là commit của tag `gitops-check-v<CHECKER_VERSION>`) lên một bản phát hành của backend có bảng
+nguồn hiện tại (nâng theo C5 của [svp-gitops-setup.md](svp-gitops-setup.md#c5-bump-commit-ghim-chart-và-checker)); check checkout repo code
 `anhnvcoder/svp-backend` và không checkout repo web nữa (check tự clone ẩn danh repo của mỗi nguồn khác `backend`):
 
 ```sh
 gh api -H 'Accept: application/vnd.github.raw' repos/anhnvcoder/svp-gitops/contents/.github/workflows/check.yml |
-  grep -n 'CHECKER_COMMIT:\|repository: anhnvcoder/\|SVP_SOURCE_DIR_[A-Z]*:'   # CHECKER_COMMIT, repository: anhnvcoder/svp-backend; không SVP_SOURCE_DIR_*
+  grep -n 'CHECKER_VERSION:\|CHECKER_COMMIT:\|repository: anhnvcoder/\|SVP_SOURCE_DIR_[A-Z]*:'
+# Expect CHECKER_VERSION, CHECKER_COMMIT and repository: anhnvcoder/svp-backend; no SVP_SOURCE_DIR_*.
 ```
 
 **Làm gì:** không làm gì. Lượt `images.yml` trên `main` của `svp-frontend` ký xong thì job `promote` (environment `promote`; bước shell

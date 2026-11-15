@@ -165,6 +165,8 @@ Phụ lục: [`appendix/NNNN-<slug>.md`](appendix/NNNN-<slug>.md) (chỉ khi có
 | [0073](0073-premium-playback.md) | Video premium: vé giả lập ở video-service, object dưới tiền tố `premium/` riêng, playlist do API kiểm vé và viết lại, segment qua signed URL CloudFront (key group hai khoá), bản xem thử công khai dưới `preview/`; local, k3d ký bằng presign S3 | Chấp nhận |
 | [0074](0074-cost-uptime.md) | Chi phí compute theo namespace, service bằng OpenCost (giá on-demand công khai, đọc Prometheus của k3d hay AMP qua sidecar SigV4 với Pod Identity chỉ đọc); uptime từ ngoài vào bằng blackbox exporter trong cluster probe qua DNS công khai, CloudFront, hạn cert; SLO `public-uptime` và cảnh báo mất probe ở ruler AMP; không dịch vụ AWS tính tiền mới | Chấp nhận |
 | [0075](0075-service-mesh.md) | Service mesh Istio ambient ở k3d và EKS: mTLS STRICT giữa mọi pod của `svp`, quyền theo ServiceAccount, cân tải và canary gRPC theo request qua một waypoint chung ở namespace `svp-mesh`; compose không có mesh | Chấp nhận |
+| [0076](0076-terraform-plan-infracost-pr.md) | PR của `svp-infra` có `terraform plan` bằng role OIDC chỉ đọc (`ReadOnlyAccess` + Deny dữ liệu workload, không ghi state) mà người học duyệt từng lượt qua environment `terraform-plan`, chỉ đăng tóm tắt đã che; Infracost ước chi phí từ HCL; CI không `apply` | Chấp nhận |
+| [0077](0077-versioned-gitops-checker.md) | Checker của `svp-gitops` phát hành theo semver bằng release-please (tag `gitops-check-v<semver>` bất biến, App riêng), `svp-gitops` ghim version cùng commit của tag, Renovate nâng; đổi hợp đồng chéo repo theo expand–contract; image và chart giữ ghim commit | Chấp nhận |
 
 ## Chuẩn áp dụng
 
