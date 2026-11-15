@@ -308,7 +308,7 @@ flowchart TB
                     subgraph kn["Node của Karpenter, NodePool default<br/>[Graviton; stg Spot, prd on-demand]"]
                         envoy["Envoy Gateway<br/>[HPA từ 2, PDB, trải zone]"]
                         svc["web, gateway, 4 service gRPC,<br/>media-worker [svp-service]"]
-                        obsn["Observability, GlitchTip [svp-obs]"]
+                        obsn["Observability, GlitchTip, OpenCost,<br/>blackbox exporter [svp-obs]"]
                     end
                     kyv["Kyverno<br/>[3 replica, PDB, trải zone]"]
                 end
@@ -336,6 +336,8 @@ flowchart TB
     mc --> s3
     cf --> s3
     q --> plat
+    obsn -->|"probe web, api qua NAT, tên công khai"| cfe
+    obsn -->|"probe media"| cf
     rds -.-> alarm
     msk -.-> alarm
     vk -.-> alarm
@@ -364,6 +366,8 @@ luồng cảnh báo: [`explanation/aws-security.md`](explanation/aws-security.md
   mã lỗi gRPC sang HTTP, route: [`reference/contracts.md`](reference/contracts.md).
 - **Idempotency:** mọi consumer chịu được event trùng; `POST /videos` nhận `Idempotency-Key` ([ADR-0043](adr/0043-idempotency-key.md)).
 - **Quan sát:** OpenTelemetry Collector, lỗi ở GlitchTip, RUM của web: [`explanation/observability.md`](explanation/observability.md).
+- **Chi phí và uptime:** chi phí compute theo namespace, service bằng OpenCost; probe từ ngoài vào bằng blackbox exporter, SLO `public-uptime`:
+  [`explanation/cost-and-uptime.md`](explanation/cost-and-uptime.md) ([ADR-0074](adr/0074-cost-uptime.md)).
 - **Bảo mật:** [`threat-model.md`](threat-model.md); chuỗi cung ứng: [`explanation/delivery.md`](explanation/delivery.md#cicd-và-chuỗi-cung-ứng).
 - **Độ tin cậy:** SLO, tải, backup, probe ([ADR-0044](adr/0044-grpc-readiness.md)): [`explanation/reliability.md`](explanation/reliability.md),
   [`runbooks/`](runbooks/).

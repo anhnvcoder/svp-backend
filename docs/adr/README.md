@@ -161,6 +161,7 @@ Phụ lục: [`appendix/NNNN-<slug>.md`](appendix/NNNN-<slug>.md) (chỉ khi có
 | [0069](0069-auth-hardening.md) | Cứng hoá xác thực: giới hạn đăng nhập theo tài khoản có cặp đã biết, header bảo mật ở gateway, access token 15 phút, chặn mật khẩu phổ biến hay đã lộ | Chấp nhận |
 | [0070](0070-scan-gate-high-fixed.md) | Cổng quét image chặn CRITICAL và HIGH có bản vá | Chấp nhận |
 | [0071](0071-paid-features.md) | Dịch vụ AWS tốn tiền mà hệ thống không cần để chạy có cờ theo account trong file commit `aws/paid-features.json` của `svp-infra`, đọc qua module `paid-features`; prd và bốn account dùng chung bật hết; stg chỉ dựng AMG trong buổi, tắt Inspector ECR, Security Hub CSPM, Config; GuardDuty, CloudTrail, KMS, Backup không có cờ | Chấp nhận |
+| [0074](0074-cost-uptime.md) | Chi phí compute theo namespace, service bằng OpenCost (giá on-demand công khai, đọc Prometheus của k3d hay AMP qua sidecar SigV4 với Pod Identity chỉ đọc); uptime từ ngoài vào bằng blackbox exporter trong cluster probe qua DNS công khai, CloudFront, hạn cert; SLO `public-uptime` và cảnh báo mất probe ở ruler AMP; không dịch vụ AWS tính tiền mới | Chấp nhận |
 
 ## Chuẩn áp dụng
 

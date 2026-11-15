@@ -144,6 +144,9 @@ email bảo mật của org qua EventBridge và SNS; alarm `ticket` của dịch
 | `WebAvailabilityBudgetBurn` | [web-availability-budget-burn.md](web-availability-budget-burn.md) | SLO `web-availability` |
 | `PostgresWALArchivingFailing` | [postgres-wal-archiving-failing.md](postgres-wal-archiving-failing.md) | `svp-alerts.yaml`, nhóm `postgres-backup` (chỉ k3d) |
 | `ArgoCDApplicationDegraded` | [argocd-application-degraded.md](argocd-application-degraded.md) | `svp-alerts.yaml`, nhóm `argocd` (chỉ cluster GitOps) |
+| `PublicUptimeBudgetBurn` | [public-uptime-budget-burn.md](public-uptime-budget-burn.md) | SLO `public-uptime` |
+| `UptimeProbesAbsent` | [uptime-probes-absent.md](uptime-probes-absent.md) | `svp-alerts.yaml`, nhóm `svp-uptime` |
+| `TLSCertExpiryImminent` | [tls-cert-expiry-imminent.md](tls-cert-expiry-imminent.md) | `svp-alerts.yaml`, nhóm `svp-uptime` (chuỗi TLS: k3d, eks) |
 | `rds-storage-low` | [rds-storage-low.md](rds-storage-low.md) | ADR-0058 §2, module `rds` (chỉ AWS) |
 | `rds-txid-wraparound` | [rds-txid-wraparound.md](rds-txid-wraparound.md) | ADR-0058 §2, module `rds` (chỉ AWS) |
 | `msk-disk-high` | [msk-disk-high.md](msk-disk-high.md) | ADR-0058 §2, module `msk` (chỉ AWS) |
@@ -159,7 +162,8 @@ Cảnh báo `ticket` (cùng tên với page của SLO, cửa sổ 1 d/2 h và 3 
 SLO đó; `WebINPBudgetBurn` chỉ có ticket và không có runbook riêng (dashboard `svp-web`, [ADR-0020](../adr/0020-reliability-stage6.md) §3).
 Cảnh báo ticket viết tay `PostgresBackupTooOld` (nhóm `postgres-backup`, chỉ k3d, 2 biến thể) có runbook
 [postgres-backup-too-old.md](postgres-backup-too-old.md); `ArgoCDApplicationNotConverged` (nhóm `argocd`, chỉ cluster GitOps) dùng chung
-[argocd-application-degraded.md](argocd-application-degraded.md).
+[argocd-application-degraded.md](argocd-application-degraded.md); `TLSCertExpiringSoon` (nhóm `svp-uptime`) dùng chung
+[tls-cert-expiry-imminent.md](tls-cert-expiry-imminent.md).
 
 Sự cố đã gặp và quy trình:
 

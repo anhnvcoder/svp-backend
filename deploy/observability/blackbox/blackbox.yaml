@@ -1,0 +1,12 @@
+# Probe module of the compose stack (profile obs). Plain HTTP inside the compose network, so there is no TLS to check;
+# only 200 counts, without following redirects, over IPv4 as in the modules of the cluster.
+modules:
+  http_compose:
+    prober: http
+    timeout: 5s
+    http:
+      preferred_ip_protocol: ip4
+      valid_status_codes: [200]
+      follow_redirects: false
+      headers:
+        User-Agent: svp-uptime-probe

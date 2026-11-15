@@ -1672,3 +1672,232 @@ tests:
       - eval_time: 1h
         alertname: ArgoCDApplicationNotConverged
         exp_alerts: []
+
+  # UptimeProbesAbsent: the probes answer for 10 minutes, then the series stops (`_`: no sample, no staleness marker).
+  # The last sample is at 585 s, the 5 m window is empty from 885 s and `for: 5m` fires it at 1185 s. The second
+  # series, which keeps answering, shows that a live series does not fire it.
+  - interval: 15s
+    input_series:
+      - series: 'probe_success{job="blackbox-http",probe="web",instance="https://svp.example/healthz"}'
+        values: '1x39 _x120'
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: UptimeProbesAbsent
+        exp_alerts: []
+      - eval_time: 18m
+        alertname: UptimeProbesAbsent
+        exp_alerts: []
+      - eval_time: 21m
+        alertname: UptimeProbesAbsent
+        exp_alerts:
+          - exp_labels:
+              severity: page
+              job: blackbox-http
+            exp_annotations:
+              summary: "No probe_success series from the black-box probes for 5 minutes, uptime is not measured"
+              runbook_url: "https://github.com/anhnvcoder/svp-backend/blob/main/docs/runbooks/uptime-probes-absent.md"
+
+  - interval: 15s
+    input_series:
+      - series: 'probe_success{job="blackbox-http",probe="web",instance="https://svp.example/healthz"}'
+        values: '1x159'
+      - series: 'probe_success{job="blackbox-dns",probe="dns-web",instance="kube-dns:53"}'
+        values: '1x159'
+    alert_rule_test:
+      - eval_time: 30m
+        alertname: UptimeProbesAbsent
+        exp_alerts: []
+    promql_expr_test:
+      - expr: 'absent_over_time(probe_success{job="blackbox-http"}[5m])'
+        eval_time: 30m
+        exp_samples: []
+
+  # Only the DNS job answers: the alert still fires, because it looks at job blackbox-http alone.
+  - interval: 15s
+    input_series:
+      - series: 'probe_success{job="blackbox-dns",probe="dns-web",instance="kube-dns:53"}'
+        values: '1x159'
+    alert_rule_test:
+      - eval_time: 30m
+        alertname: UptimeProbesAbsent
+        exp_alerts:
+          - exp_labels:
+              severity: page
+              job: blackbox-http
+            exp_annotations:
+              summary: "No probe_success series from the black-box probes for 5 minutes, uptime is not measured"
+              runbook_url: "https://github.com/anhnvcoder/svp-backend/blob/main/docs/runbooks/uptime-probes-absent.md"
+
+  # TLS expiry. A sample is the Unix time of the earliest expiry (promtool time starts at 0): time left = value - t.
+  # web has 21 d + 4 h (above both limits all 3 h), api 21 d + 30 min (under 21 d after 30 min), media 7 d + 2 h (under
+  # 21 d at once, under 7 d after 2 h). `for` delays the ticket 1 h and the page 15 min: media pends at 2 h 10 min.
+  - interval: 1m
+    input_series:
+      - series: 'probe_ssl_earliest_cert_expiry{job="blackbox-http",probe="web",instance="https://svp.example/healthz"}'
+        values: '1828800+0x180'
+      - series: 'probe_ssl_earliest_cert_expiry{job="blackbox-http",probe="api",instance="https://api.svp.example/readyz"}'
+        values: '1816200+0x180'
+      - series: 'probe_ssl_earliest_cert_expiry{job="blackbox-http",probe="media",instance="https://media.svp.example/media/uptime-probe.txt"}'
+        values: '612000+0x180'
+    alert_rule_test:
+      - eval_time: 1h
+        alertname: TLSCertExpiringSoon
+        exp_alerts:
+          - exp_labels:
+              severity: ticket
+              probe: media
+              instance: "https://media.svp.example/media/uptime-probe.txt"
+            exp_annotations:
+              summary: "Probe media: the TLS certificate expires in less than 21 days"
+      - eval_time: 3h
+        alertname: TLSCertExpiringSoon
+        exp_alerts:
+          - exp_labels:
+              severity: ticket
+              probe: api
+              instance: "https://api.svp.example/readyz"
+            exp_annotations:
+              summary: "Probe api: the TLS certificate expires in less than 21 days"
+          - exp_labels:
+              severity: ticket
+              probe: media
+              instance: "https://media.svp.example/media/uptime-probe.txt"
+            exp_annotations:
+              summary: "Probe media: the TLS certificate expires in less than 21 days"
+      - eval_time: 2h10m
+        alertname: TLSCertExpiryImminent
+        exp_alerts: []
+      - eval_time: 3h
+        alertname: TLSCertExpiryImminent
+        exp_alerts:
+          - exp_labels:
+              severity: page
+              probe: media
+              instance: "https://media.svp.example/media/uptime-probe.txt"
+            exp_annotations:
+              summary: "Probe media: the TLS certificate expires in less than 7 days"
+              runbook_url: "https://github.com/anhnvcoder/svp-backend/blob/main/docs/runbooks/tls-cert-expiry-imminent.md"
+
+  # Compute cost recording rules, two nodes with different prices. The CPU and RAM prices of n1 come from two OpenCost
+  # instances (extra `instance`, `job` labels): `max by (node)` must keep one price, not double the cost.
+  # Per hour: CPU n1 0.04, n2 0.08; RAM n1 0.005, n2 0.01; node total n1 0.2, n2 0.4. Namespace svp is 0.175 (web 0.03,
+  # gateway 0.145: CPU 0.02 + 0.08 + 0.02, RAM 0.01 + 0.04 + 0.005 over its three pods); svp-obs is 0.08 + 0.04 = 0.12.
+  - interval: 15s
+    input_series:
+      - series: 'node_cpu_hourly_cost{node="n1",instance="opencost-a:9003",job="opencost"}'
+        values: '0.04x20'
+      - series: 'node_cpu_hourly_cost{node="n1",instance="opencost-b:9003",job="opencost"}'
+        values: '0.04x20'
+      - series: 'node_cpu_hourly_cost{node="n2",instance="opencost-a:9003",job="opencost"}'
+        values: '0.08x20'
+      - series: 'node_ram_hourly_cost{node="n1",instance="opencost-a:9003",job="opencost"}'
+        values: '0.005x20'
+      - series: 'node_ram_hourly_cost{node="n1",instance="opencost-b:9003",job="opencost"}'
+        values: '0.005x20'
+      - series: 'node_ram_hourly_cost{node="n2",instance="opencost-a:9003",job="opencost"}'
+        values: '0.01x20'
+      - series: 'node_total_hourly_cost{node="n1",instance="opencost-a:9003",job="opencost"}'
+        values: '0.2x20'
+      - series: 'node_total_hourly_cost{node="n2",instance="opencost-a:9003",job="opencost"}'
+        values: '0.4x20'
+      - series: 'container_cpu_allocation{namespace="svp",pod="web-0",container="web",node="n1",instance="opencost-a:9003",job="opencost"}'
+        values: '0.5x20'
+      - series: 'container_cpu_allocation{namespace="svp",pod="gateway-0",container="gateway",node="n2",instance="opencost-a:9003",job="opencost"}'
+        values: '1x20'
+      - series: 'container_cpu_allocation{namespace="svp",pod="gateway-1",container="gateway",node="n1",instance="opencost-a:9003",job="opencost"}'
+        values: '0.5x20'
+      - series: 'container_cpu_allocation{namespace="svp-obs",pod="prometheus-0",container="prometheus",node="n1",instance="opencost-a:9003",job="opencost"}'
+        values: '2x20'
+      - series: 'container_memory_allocation_bytes{namespace="svp",pod="web-0",container="web",node="n1",instance="opencost-a:9003",job="opencost"}'
+        values: '2147483648x20'
+      - series: 'container_memory_allocation_bytes{namespace="svp",pod="gateway-0",container="gateway",node="n2",instance="opencost-a:9003",job="opencost"}'
+        values: '4294967296x20'
+      - series: 'container_memory_allocation_bytes{namespace="svp",pod="gateway-1",container="gateway",node="n1",instance="opencost-a:9003",job="opencost"}'
+        values: '1073741824x20'
+      - series: 'container_memory_allocation_bytes{namespace="svp-obs",pod="prometheus-0",container="prometheus",node="n1",instance="opencost-a:9003",job="opencost"}'
+        values: '8589934592x20'
+    promql_expr_test:
+      - expr: 'round(namespace:svp_compute_cost_usd_per_hour:sum, 0.0001)'
+        eval_time: 4m
+        exp_samples:
+          - labels: '{namespace="svp"}'
+            value: 0.175
+          - labels: '{namespace="svp-obs"}'
+            value: 0.12
+      - expr: 'round(service:svp_compute_cost_usd_per_hour:sum, 0.0001)'
+        eval_time: 4m
+        exp_samples:
+          - labels: '{service="web"}'
+            value: 0.03
+          - labels: '{service="gateway"}'
+            value: 0.145
+      - expr: 'round(cluster:svp_node_cost_usd_per_hour:sum, 0.0001)'
+        eval_time: 4m
+        exp_samples:
+          - labels: '{}'
+            value: 0.6
+
+  # SLO public-uptime: every probe fails for 2 hours, so the error ratio is 1 on every window and both the page pair
+  # (5 m and 1 h) and the ticket pair (2 h and 1 d) fire.
+  - interval: 15s
+    input_series:
+      - series: 'probe_success{job="blackbox-http",probe="web",instance="https://svp.example/healthz"}'
+        values: '0x480'
+      - series: 'probe_success{job="blackbox-http",probe="api",instance="https://api.svp.example/readyz"}'
+        values: '0x480'
+      - series: 'probe_success{job="blackbox-http",probe="media",instance="https://media.svp.example/media/uptime-probe.txt"}'
+        values: '0x480'
+    alert_rule_test:
+      - eval_time: 2h
+        alertname: PublicUptimeBudgetBurn
+        exp_alerts:
+          - exp_labels:
+              severity: page
+              sloth_severity: page
+              sloth_id: svp-public-uptime
+              sloth_service: svp
+              sloth_slo: public-uptime
+            exp_annotations:
+              summary: "blackbox: probes of web, api and media burn the 99.9% uptime budget"
+              title: "(page) svp public-uptime SLO error budget burn rate is too fast."
+              runbook_url: "https://github.com/anhnvcoder/svp-backend/blob/main/docs/runbooks/public-uptime-budget-burn.md"
+          - exp_labels:
+              severity: ticket
+              sloth_severity: ticket
+              sloth_id: svp-public-uptime
+              sloth_service: svp
+              sloth_slo: public-uptime
+            exp_annotations:
+              summary: "blackbox: probes of web, api and media burn the 99.9% uptime budget"
+              title: "(ticket) svp public-uptime SLO error budget burn rate is too fast."
+
+  # SLO public-uptime: probes that answer, and a failing DNS probe (another job, not in the SLI), fire nothing.
+  - interval: 15s
+    input_series:
+      - series: 'probe_success{job="blackbox-http",probe="web",instance="https://svp.example/healthz"}'
+        values: '1x480'
+      - series: 'probe_success{job="blackbox-dns",probe="dns-web",instance="kube-dns:53"}'
+        values: '0x480'
+    alert_rule_test:
+      - eval_time: 2h
+        alertname: PublicUptimeBudgetBurn
+        exp_alerts: []
+    promql_expr_test:
+      - expr: 'round(slo:sli_error:ratio_rate5m{sloth_slo="public-uptime"}, 0.0001)'
+        eval_time: 2h
+        exp_samples:
+          - labels: '{sloth_id="svp-public-uptime",sloth_service="svp",sloth_slo="public-uptime",sloth_window="5m"}'
+            value: 0
+
+  - interval: 15s
+    input_series:
+      - series: 'probe_success{job="blackbox-dns",probe="dns-web",instance="kube-dns:53"}'
+        values: '0x480'
+    alert_rule_test:
+      - eval_time: 2h
+        alertname: PublicUptimeBudgetBurn
+        exp_alerts: []
+    promql_expr_test:
+      - expr: 'slo:sli_error:ratio_rate5m{sloth_slo="public-uptime"}'
+        eval_time: 2h
+        exp_samples: []

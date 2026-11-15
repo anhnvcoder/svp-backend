@@ -192,9 +192,9 @@ agent `aps:RemoteWrite`; ACK bốn hành động rule groups namespace, bốn al
 
 ## Thông tin thêm
 
-Phụ lục: [`appendix/0063-managed-observability.md`](appendix/0063-managed-observability.md) (phương án, giá trị đủ từng §, bảng nhóm luật upstream,
-bảng dịch tên metric, bảng control FSBP, bảng luồng SCP, RCP, bảng giá, chi phí và bảng tổng của run, hợp đồng cluster, nguồn).
+Phụ lục: [`appendix/0063-managed-observability.md`](appendix/0063-managed-observability.md) (phương án, giá trị đủ từng §, bảng nhóm luật upstream, bảng dịch tên metric, bảng control FSBP, bảng luồng SCP, RCP, bảng giá, chi phí và bảng tổng của run, hợp đồng cluster, nguồn).
 
 ### Chỉnh bởi
 
 - §4, §12: [0071](0071-paid-features.md): AMG của stg theo cờ `managed_grafana` = `session`: workspace, role, gán nhóm, service account `svp-grafana-operator` dựng ở bước mở và gỡ ở bước đóng của buổi (root `aws/accounts/<env>`, biến `session_open`); root env đọc id workspace từ SSM parameter `/svp/<env>/grafana-workspace-id` thay biến `grafana_workspace_id`; prd giữ workspace; tháng không buổi bớt $9.
+- §5, §11: [0074](0074-cost-uptime.md): nhóm `svp-uptime`, `svp-cost` và SLO `public-uptime` vào hai file luật sẵn có, đi cùng `RuleGroupsNamespace` `svp-alerts`, `slo-generated`; danh tính Pod Identity thêm OpenCost (`svp-obs/opencost`, role `<cluster>-opencost`): `aps:QueryMetrics`, `aps:GetSeries`, `aps:GetLabels`, `aps:GetMetricMetadata` trên workspace của env, qua sidecar `aws-sigv4-proxy`.

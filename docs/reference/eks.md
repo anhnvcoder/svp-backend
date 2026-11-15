@@ -51,6 +51,17 @@ Loại tài liệu (Diátaxis): **reference**, tra cứu khi cần một lệnh 
     group GuardDuty tự tạo nằm ngoài state và chặn destroy VPC cuối buổi. Add-on chỉ `ACTIVE` khi node đã có; coverage của cluster đọc ở
     GuardDuty của account `svp-security` (Runtime Monitoring → EKS clusters), finding tới email theo
     [`security-alert.md`](../runbooks/security-alert.md).
+  - **Chi phí và uptime** ([ADR-0074](../adr/0074-cost-uptime.md), [`cost-and-uptime.md`](../explanation/cost-and-uptime.md)): component
+    `opencost` ở chế độ AMP (`platforms/eks/opencost.yaml`, `opencost.values.tpl`): Prometheus trong cluster tắt, OpenCost hỏi workspace
+    `cluster.ampWorkspaceId` qua sidecar `sigv4proxy` (`localhost:8005`, ký cho `aps-workspaces.<cluster.region>.amazonaws.com`, không `role_arn`),
+    cluster id `cluster.name`, giá on-demand công khai của AWS tải qua NAT. Credential của sidecar là EKS Pod Identity của ServiceAccount
+    `svp-obs/opencost`: khoá `opencost` của `local.pod_identity` (`aws/modules/eks/pod-identity.tf` của `svp-infra`), role `<cluster>-opencost` chỉ
+    `aps:QueryMetrics`, `aps:GetSeries`, `aps:GetLabels`, `aps:GetMetricMetadata` trên workspace của env. Chart `svp-observability` đặt
+    `opencost.query: amp`, `opencost.publicPricing: true`, `probes.egress: internet` (`platforms/eks/svp-observability.yaml`); URL probe
+    `https://<cluster.domain>/healthz`, `https://api.<cluster.domain>/readyz`, `https://<cluster.mediaDomain>/media/uptime-probe.txt` và ba probe DNS
+    tới `kube-dns.kube-system.svc.cluster.local:53` ở `svp-observability.values.tpl`. blackbox là component `blackbox-exporter-public` (chỉ nền tảng
+    `eks`, module `http_public` kiểm TLS bằng CA hệ thống, `dns_*` ở `blackbox-exporter-public.values.tpl`). Log sidecar:
+    `kubectl --context svp-<env> -n svp-obs logs deploy/opencost -c sigv4proxy`.
   - Kafka là Amazon MSK và Valkey là Amazon ElastiCache ([ADR-0053](../adr/0053-msk-elasticache-valkey.md)); cả hai do Terraform của `svp-infra`
     tạo (module `msk`, `elasticache`), không có broker hay Valkey chạy trong cluster. Client nói với chúng như với `kafka` và `valkey` của compose
     và k3d: SASL_SSL SCRAM-SHA-512 cổng 9096 và `rediss://` cổng 6379, chỉ khác địa chỉ (hợp đồng `cluster` bên dưới) và CA: cert của MSK, ElastiCache

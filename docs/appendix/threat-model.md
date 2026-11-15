@@ -258,6 +258,12 @@ Mục 7 cũ ("Đề xuất xem lại") nguyên văn; việc còn mở chuyển v
   dùng chung không đổi. [ADR-0071](../adr/0071-paid-features.md) chỉnh ADR-0055, 0060, 0062, 0063. Đáng xem lại: (1) email finding
   GuardDuty của stg đi đường `us-east-1` là dòng chung của rule `notify`; (2) digest mới ở stg chỉ có quét cơ bản tới khi promote;
   (3) cờ đặt cho prd hay account dùng chung chỉ bị chặn bởi review của PR và `plan`; khi áp chỉ phần Config sinh email.
+- **Chi phí và uptime (2026-11-15):** bề mặt mới là blackbox exporter ở `svp-obs` (cổng 9115 nhận URL tuỳ ý, egress TCP 443 công khai trên
+  EKS; ở compose hai mạng internal `probe`, `probe-web`), OpenCost (ClusterRole đọc cluster-wide gồm ConfigMap, credential Pod Identity đọc AMP
+  của sidecar `sigv4proxy`, egress TCP 443 công khai cho bảng giá trên EKS) và object `media/uptime-probe.txt` đọc ẩn danh (OPS-5, OPS-6, WEB-13,
+  một chỗ vượt ranh giới ở mục 2, hai dòng ở mục 6). Thu hẹp được: lỗi của DNS, cert, CloudFront, WAF, ALB nay thành cảnh báo, và mất probe
+  là page ở ruler AMP. [ADR-0074](../adr/0074-cost-uptime.md) chỉnh ADR-0011, 0056, 0063. Đáng xem lại: (1) egress công khai của hai pod khi có
+  NetworkPolicy theo tên miền; (2) probe k3d không kiểm chuỗi TLS; (3) Bot Control chuyển sang chặn làm probe bị 403.
 - **Đề xuất (không bắt buộc), giai đoạn 2:** thêm `etag` (hoặc checksum) của file gốc vào `VideoUploaded`, lấy từ lần `HEAD`
   ở `CompleteUpload`; worker tải file với điều kiện `If-Match` theo giá trị đó. Đóng được UP-2 (file bị thay giữa lúc kiểm và
   lúc đọc). Đây là thêm field nên không phá contract (quy tắc versioning ở

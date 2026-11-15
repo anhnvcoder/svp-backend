@@ -11,9 +11,8 @@ Grafana keeps no state of its own (no volume), so this is all of its configurati
 {{- fail (printf "dashboards.target is %q: sidecar (Grafana in the cluster) or grafana-operator (a Grafana outside it)" $target) }}
 {{- end }}
 {{- if eq $target "sidecar" }}
-# The five dashboards (four of the services and svp-web, the web client's RUM), the files compose provisions (symlink
-# files/dashboards), in folder svp as there. They are edited in the repository, not in the UI (the sidecar's provider
-# forbids UI updates and deletion).
+# Every dashboard of files/dashboards (a symlink to the files compose provisions), in folder svp as there. They are
+# edited in the repository, not in the UI (the sidecar's provider forbids UI updates and deletion).
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -180,7 +179,7 @@ spec:
     jsonData:
       authType: ec2_iam_role
       defaultRegion: {{ .Values.dashboards.grafana.region }}
-{{- /* The same five dashboards in folder svp, without the panels that query Tempo, which has no counterpart there
+{{- /* The same dashboards in folder svp, without the panels that query Tempo, which has no counterpart there
 (traces are searched in CloudWatch). Their references to uid prometheus take the Amazon plugin's type. toJson writes
 a reference's keys sorted, so each is the one string replaced below. */}}
 {{- range $file, $_ := $dashboards }}

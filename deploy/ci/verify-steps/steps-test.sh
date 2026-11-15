@@ -20,8 +20,8 @@ same() { if [ "$3" = "$2" ]; then ok "$1"; else fail "$1"$'\n'"      want: $2"$'
 has() { if grep -qF -- "$3" "$work/$1.log"; then ok "$1: $2"; else fail "$1: $2"; fi; }
 lacks() { if grep -qF -- "$3" "$work/$1.log"; then fail "$1: $2"; else ok "$1: $2"; fi; }
 
-compose="up smoke drill-obs-threats test-stack-objstore"
-gitops="k8s-gitops-up drill-k8s-gitops gitops-admission-metrics k8s-smoke drill-k8s-reloader drill-k8s-supplychain drill-k8s-threats"
+compose="up smoke uptime-cost drill-obs-threats test-stack-objstore"
+gitops="k8s-gitops-up drill-k8s-gitops gitops-admission-metrics k8s-smoke uptime-cost drill-k8s-reloader drill-k8s-supplychain drill-k8s-threats"
 dev="k8s-up k8s-smoke drill-k8s-reloader drill-k8s-supplychain"
 
 # steps NAME NAMES TARGETS ARG [VAR=VALUE...]: runs steps.sh ARG with NAMES and TARGETS, logging to $work/NAME.log.
@@ -42,6 +42,10 @@ same "check: a name that is no step of the job stops it" 2 "$(steps unknown "$gi
 has unknown "it names the name and the job's steps" "not a step of this job: drill-k8s-thraets (its steps: $gitops); nothing started"
 same "check: a step of the other job is unknown" 2 "$(steps other "$compose" k8s-smoke check)"
 same "check: the build step of job gitops is no step of dev-k3d" 2 "$(steps dev-other "$dev" k8s-gitops-up check)"
+same "check: uptime-cost is a step of job gitops" 0 "$(steps uptime-gitops "$gitops" uptime-cost check)"
+same "check: uptime-cost is a step of job compose" 0 "$(steps uptime-compose "$compose" uptime-cost check)"
+same "check: uptime-cost is no step of dev-k3d" 2 "$(steps uptime-dev "$dev" uptime-cost check)"
+same "check: a misspelt uptime-cost stops it" 2 "$(steps uptime-typo "$gitops" uptime-costs check)"
 has other "the steps of compose-obs are listed" "(its steps: $compose)"
 same "check: a check of the scenario that is now a test of drill-k8s-gitops is unknown" 2 \
   "$(steps old "$gitops" gitops-external-secrets check)"
@@ -62,17 +66,19 @@ same "table: exits 0 whatever the steps gave" 0 \
   "$(steps table "$gitops" "k8s-smoke drill-k8s-gitops drill-k8s-supplychain drill-k8s-threats" table SVP_VERIFY_STEPS="$json")"
 same "table: one line per step in order: outcome, why a step was skipped, absent for an id the job lacks" \
   "$(printf 'step\toutcome\tnote\n%s\n' "$(printf '%s\t%s\t%s\n' k8s-gitops-up success '' drill-k8s-gitops failure '' \
-    gitops-admission-metrics skipped 'not in targets' k8s-smoke success '' drill-k8s-reloader absent 'no step of that id in the job' \
+    gitops-admission-metrics skipped 'not in targets' k8s-smoke success '' uptime-cost absent 'no step of that id in the job' \
+    drill-k8s-reloader absent 'no step of that id in the job' \
     drill-k8s-supplychain cancelled '' drill-k8s-threats absent 'no step of that id in the job')")" "$(cat "$work/table.out/results.tsv")"
 has table "the table is printed" "  drill-k8s-gitops             failure"
 lacks table "no output of a step is read" OUTPUT-MARKER
 grep -q OUTPUT-MARKER "$work/table.out/results.tsv" && fail "table: no output of a step in results.tsv" ||
   ok "table: no output of a step in results.tsv"
-json=$(jq -n '{up: {outcome: "failure"}, smoke: {outcome: "skipped"}, "drill-obs-threats": {outcome: "skipped"},
-  "test-stack-objstore": {outcome: "skipped"}}')
+json=$(jq -n '{up: {outcome: "failure"}, smoke: {outcome: "skipped"}, "uptime-cost": {outcome: "skipped"},
+  "drill-obs-threats": {outcome: "skipped"}, "test-stack-objstore": {outcome: "skipped"}}')
 steps table-build "$compose" smoke table SVP_VERIFY_STEPS="$json" >/dev/null
 same "table: after a failed build step, a chosen step skipped is for it, the others not in targets" \
-  "$(printf '%s\n' "up failure " "smoke skipped build step failed" "drill-obs-threats skipped not in targets" \
+  "$(printf '%s\n' "up failure " "smoke skipped build step failed" "uptime-cost skipped not in targets" \
+    "drill-obs-threats skipped not in targets" \
     "test-stack-objstore skipped not in targets")" \
   "$(awk -F '\t' 'NR > 1 { print $1, $2, $3 }' "$work/table-build.out/results.tsv")"
 json=$(jq -n '{up: {outcome: "success"}, smoke: {outcome: "skipped"}, "drill-obs-threats": {outcome: "skipped"},
@@ -190,7 +196,7 @@ broken no-build-check "step drill-k8s-threats has another if:" \
   "/id: drill-k8s-threats/{n;s/steps.k8s-gitops-up.outcome == 'success' \&\& //;}"
 broken other-name "step k8s-smoke has another if:" "/id: k8s-smoke/{n;s/' k8s-smoke '/' drill-k8s-threats '/;}"
 broken no-timeout "step drill-k8s-threats has no timeout-minutes" '/id: drill-k8s-threats/{n;n;d;}'
-broken budget "gitops: timeout-minutes 245 holds less" 's/timeout-minutes: 250/timeout-minutes: 245/'
+broken budget "gitops: timeout-minutes 260 holds less" 's/timeout-minutes: 265/timeout-minutes: 260/'
 broken dev-budget "dev-k3d: timeout-minutes 200 holds less" 's/timeout-minutes: 210/timeout-minutes: 200/'
 broken dev-reloader-if "step drill-k8s-reloader has another if:" \
   "/id: drill-k8s-reloader/{n;s/steps.k8s-up.outcome == 'success' \&\& //;}"
@@ -209,7 +215,7 @@ broken output "step smoke does not send its output to its file" 's|run: make smo
 broken continue "has continue-on-error" '/id: k8s-smoke/a\
         continue-on-error: true'
 broken interpolated "puts an expression into a shell" 's|run: deploy/ci/verify-steps/steps.sh check|run: deploy/ci/verify-steps/steps.sh check ${{ inputs.targets }}|'
-broken order "are not all there in that order" 's/SVP_VERIFY_STEP_NAMES: up smoke drill-obs-threats/SVP_VERIFY_STEP_NAMES: up drill-obs-threats smoke/'
+broken order "are not all there in that order" 's/SVP_VERIFY_STEP_NAMES: up smoke uptime-cost/SVP_VERIFY_STEP_NAMES: up uptime-cost smoke/'
 broken cleanup "after the build step does not run always()" "/- name: make k8s-down\$/{n;s/if: always() \&\& /if: /;}"
 
 if ((failures)); then

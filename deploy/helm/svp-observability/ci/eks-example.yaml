@@ -32,3 +32,19 @@ dashboards:
 # The VPC's CIDR, where the interface endpoints are.
 awsEndpointCidrs:
   - 10.0.0.0/16
+
+# Uptime probes of the public domain through CloudFront, and DNS probes of its three names.
+probes:
+  egress: internet
+  http:
+    - {name: web, module: http_public, url: https://svp.example/healthz}
+    - {name: api, module: http_public, url: https://api.svp.example/readyz}
+    - {name: media, module: http_public, url: https://d111111abcdef8.cloudfront.net/media/uptime-probe.txt}
+  dns:
+    - {name: web, module: dns_web, server: kube-dns.kube-system.svc.cluster.local:53}
+    - {name: api, module: dns_api, server: kube-dns.kube-system.svc.cluster.local:53}
+    - {name: media, module: dns_media, server: kube-dns.kube-system.svc.cluster.local:53}
+# OpenCost queries the workspace and downloads AWS's public price list.
+opencost:
+  query: amp
+  publicPricing: true
