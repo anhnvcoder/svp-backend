@@ -524,6 +524,8 @@ services:
       S3_PUBLIC_ENDPOINT: http://127.0.0.1:9000
       S3_ACCESS_KEY_ID: svp-video-service
       S3_SECRET_ACCESS_KEY: ${SVP_VIDEO_S3_SECRET_KEY:?run make env}
+      # No CloudFront locally: premium segments get SigV4 presigned GET URLs on S3_PUBLIC_ENDPOINT.
+      MEDIA_SIGNER: s3
       # Abandoned uploads are cleaned up after this long, so their objects do not stay in the store. Only the
       # upload-cleanup drill sets SVP_UPLOAD_* short; a value under the 15 minutes of an upload form is for drills only.
       UPLOAD_ABANDON_AFTER: ${SVP_UPLOAD_ABANDON_AFTER:-1h}

@@ -32,6 +32,9 @@ message VideoUploaded {
   string content_type = 4;
   // Size of the source object in bytes.
   int64 size_bytes = 5;
+  // The video is premium: media-worker writes its output under `premium/`
+  // and a public preview under `preview/`.
+  bool premium = 6;
 }
 
 // VideoReady: the video is READY and published. Carries every field a feed
@@ -43,11 +46,18 @@ message VideoReady {
   google.protobuf.Duration duration = 4;
   // Object key of the HLS master playlist,
   // `media/<video_id>/<version>/master.m3u8` (videos made before versions:
-  // `media/<video_id>/master.m3u8`).
+  // `media/<video_id>/master.m3u8`); `premium/<video_id>/<version>/master.m3u8`
+  // for a premium video.
   string playlist_key = 5;
   // Object key of the thumbnail image under `media/<video_id>/`, in the
-  // directory the master playlist names.
+  // directory the master playlist names; under `preview/<video_id>/` for a
+  // premium video.
   string thumbnail_key = 6;
   // Publication time used to order feeds.
   google.protobuf.Timestamp published_at = 7;
+  // The video is premium.
+  bool premium = 8;
+  // Object key of the public preview's master playlist,
+  // `preview/<video_id>/<version>/master.m3u8`; empty for a regular video.
+  string preview_playlist_key = 9;
 }

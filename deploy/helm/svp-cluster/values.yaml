@@ -220,3 +220,7 @@ externalSecrets:
   # Secret svp-obs/grafana-operator (token), the API token Grafana Operator calls Amazon Managed Grafana with, from
   # source entry grafana-operator; on where dashboards and data sources go to a managed Grafana.
   grafanaOperator: false
+  # Keys MEDIA_SIGNING_KEY_ID and MEDIA_SIGNING_KEY of Secret svp/video-service-env, the CloudFront key video-service
+  # signs the URLs of premium objects with, from source entry media-signing; on where the media sit behind CloudFront
+  # (MEDIA_SIGNER cloudfront), off where video-service presigns them on the object store itself.
+  mediaSigning: false

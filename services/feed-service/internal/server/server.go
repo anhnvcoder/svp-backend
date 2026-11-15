@@ -355,6 +355,7 @@ func pageOf(rows []store.GetFollowingFeedRow, size int32) ([]*feedv1.FeedItem, s
 			PlaylistKey:  r.PlaylistKey,
 			ThumbnailKey: r.ThumbnailKey,
 			PublishedAt:  timestamppb.New(r.PublishedAt),
+			Premium:      r.Premium,
 		}
 	}
 	return items, next

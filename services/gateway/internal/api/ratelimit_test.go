@@ -536,6 +536,8 @@ func TestUserRoutesRateLimitedByUser(t *testing.T) {
 		{"upload", http.MethodPost, "/videos", initBody, 10, 2 * time.Minute},
 		{"write", http.MethodPut, "/videos/" + videoID + "/like", "", 60, time.Second / 2},
 		{"read", http.MethodGet, "/feed/explore", "", 200, time.Second / 10},
+		{"write entitlement", http.MethodPut, "/me/entitlements/" + videoID, `{"tier":"hd"}`, 60, time.Second / 2},
+		{"read playback", http.MethodGet, "/videos/" + videoID + "/playback/master.m3u8", "", 200, time.Second / 10},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			e := newRedisEnv(t)

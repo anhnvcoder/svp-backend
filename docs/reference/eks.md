@@ -81,11 +81,13 @@ Loại tài liệu (Diátaxis): **reference**, tra cứu khi cần một lệnh 
     `SVP_AWS_PRD_ACCOUNT_ID` của env, không thì dừng. Mỗi entry một `put-secret-value --secret-string file://<file>`, file JSON trong
     thư mục `mktemp -d` mode 700 xoá khi thoát: giá trị không qua đối số, stdout, stderr.
   - `AWS_PROFILE=anhnv-<env> make eks-secrets CONTEXT=svp-<env>` (`deploy/k8s/aws-secrets.sh`): entry và key đọc từ render
-    ExternalSecret của chart `svp-cluster` (`files/external-secrets.yaml`, object store managed, `externalSecrets.argocdNotifications`
-    bật): `pg-superuser` (`SVP_PG_SUPERUSER_PASSWORD` từ biến môi trường `SVP_RDS_MASTER_PASSWORD`, bắt buộc, không đọc `.env`),
-    `pg-roles`, `jwt-signing`, `jwt-verify`, `web`, `obs`, `argocd-notifications` (key đặt tên như `.env`,
+    ExternalSecret của chart `svp-cluster` (`files/external-secrets.yaml`, object store managed, `externalSecrets.argocdNotifications`,
+    `externalSecrets.mediaSigning` bật): `pg-superuser` (`SVP_PG_SUPERUSER_PASSWORD` từ biến môi trường `SVP_RDS_MASTER_PASSWORD`,
+    bắt buộc, không đọc `.env`), `pg-roles`, `jwt-signing`, `jwt-verify`, `web`, `obs`, `argocd-notifications` (key đặt tên như `.env`,
     giá trị từ `.env`; hai biến Telegram tuỳ chọn, rỗng thì ghi rỗng), không `s3-root`, `s3-users`, và không `kafka-admin`, `kafka-users`,
-    `valkey-users` (của Terraform; chỉ kiểm chúng đã có, nên apply root `aws/envs/<env>` trước); `glitchtip-runtime` ghi ba key
+    `valkey-users` (của Terraform; chỉ kiểm chúng đã có, nên apply root `aws/envs/<env>` trước), không `media-signing` (khoá ký URL
+    media premium, chỉ `aws/scripts/media-signing-key.sh <env> activate <a|b>` của `svp-infra` ghi; chỉ kiểm entry có version
+    `AWSCURRENT`, chưa có thì dừng trước mọi lệnh ghi, nêu lệnh `activate`); `glitchtip-runtime` ghi ba key
     rỗng chỉ khi entry chưa có version `AWSCURRENT`, không bao giờ ghi đè. Thiếu biến bắt buộc, khoá Server Action hay khoá GitHub App
     sai dạng (kiểm như `k8s-secrets`), entry chưa có (chưa apply root env) thì dừng trước mọi lệnh ghi. Lần đầu (`glitchtip-runtime`
     chưa có version) không hỏi cluster; lần sau là đổi secret của env đang chạy, xem dưới.
@@ -109,6 +111,14 @@ Loại tài liệu (Diátaxis): **reference**, tra cứu khi cần một lệnh 
     `deploy/compose/transcode-timing.sh https://api.<domain>` với `SVP_STACK=eks` (script và output ở
     [`compose.md`](compose.md)): đo giây từ complete tới `READY` của từng lần upload qua MediaConvert; xoá khoá rate
     limit đăng ký như `eks-smoke`.
+  - `make eks-premium-check CONTEXT=… DOMAIN=<domain> [WAIT_EXPIRY=1]`: `deploy/k8s/premium-edge-check.sh https://api.<domain>` (bỏ
+    `CURL_CA_BUNDLE`), **Kiểm edge premium** của buổi: chỉ `curl` tới API và CDN qua HTTPS, không API AWS, không `kubectl`, không xoá khoá
+    rate limit (hai user nằm trong burst đăng ký). Tạo user A, B, video thường V0 và hai video premium V1, V2 của A, B mua giả lập `sd` của V1,
+    rồi in mỗi phép một dòng có mốc UTC: ca âm của CloudFront (cả path mã hoá `premium%2F`, `%70remium/`, `media/..%2Fpremium/`,
+    `preview/..%2Fpremium/`) và route phát, bản xem thử không ký 200, tỉ lệ trúng cache của lượt 2–3 cho segment công khai (V0) và đã ký
+    (V1), không đỏ theo tỉ lệ; `WAIT_EXPIRY=1` chờ qua `DateLessThan` của một policy (tới khoảng 20 phút) rồi đòi 403. Token, mật khẩu, query
+    ký chỉ ở file riêng của thư mục tạm, xoá khi thoát. Thoát khác 0 khi một phép trượt. Đọc kết quả:
+    [`premium-playback.md`](../explanation/premium-playback.md#kiểm-bằng-gì); self-test `deploy/k8s/premium-edge-check-test.sh` chạy trong CI.
   - `make eks-rl-reset CONTEXT=…`: chỉ xoá khoá rate limit đăng ký như trên, chạy trước mỗi bậc k6 (pod sau có thể nhận lại IP của
     pod trước).
   - `S3_CREDENTIALS` của video-service, media-worker: `static` (mặc định, `S3_ACCESS_KEY_ID`, `S3_SECRET_ACCESS_KEY`) hay `container`
@@ -136,6 +146,8 @@ Loại tài liệu (Diátaxis): **reference**, tra cứu khi cần một lệnh 
 Lệnh `terraform` và script buổi ở `svp-infra` (`aws/scripts/`); mỗi bước xong mới sang bước sau:
 
 1. Apply root `aws/envs/<env>` (cluster, RDS, MSK, ElastiCache, vỏ entry Secrets Manager; mật khẩu Kafka, Valkey được sinh và ghi trong cùng apply).
+   Khoá ký media: `media-signing-key.sh <env> new a` trước `plan` của root, `activate a` sau `apply` (bước 7 và 10 của runbook buổi
+   `docs/runbooks/session-<env>.md` ở `svp-infra`), nên entry `media-signing` có giá trị trước bước 2.
 2. `AWS_PROFILE=anhnv-<env> make eks-secrets CONTEXT=svp-<env>`: nguồn có trước Argo CD.
 3. Mở tunnel tới API (output `api_tunnel_command`, terminal riêng) và thêm context (output `kubeconfig_command`); chỉ prd: PR promote prd
    đã merge trước bước này.

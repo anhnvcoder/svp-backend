@@ -1,7 +1,7 @@
 -- name: CreateVideo :exec
 -- request_id is NULL for a call without an idempotency key.
-INSERT INTO videos (id, author_id, title, status, size_bytes, content_type, request_id)
-VALUES ($1, $2, $3, 'UPLOADING', $4, $5, sqlc.narg(request_id));
+INSERT INTO videos (id, author_id, title, status, size_bytes, content_type, premium, request_id)
+VALUES ($1, $2, $3, 'UPLOADING', $4, $5, $6, sqlc.narg(request_id));
 
 -- name: GetVideoByRequestID :one
 -- The video an earlier InitUpload of the author created with this idempotency key. Runs on
@@ -23,7 +23,8 @@ RETURNING *;
 -- Locks the row; only a PROCESSING video moves, so a redelivered transcode.completed, or one for
 -- a video that has failed meanwhile, updates nothing.
 UPDATE videos
-SET status = 'READY', duration_ms = $2, playlist_key = $3, thumbnail_key = $4, published_at = now()
+SET status = 'READY', duration_ms = $2, playlist_key = $3, thumbnail_key = $4, preview_playlist_key = $5,
+    published_at = now()
 WHERE id = $1 AND status = 'PROCESSING'
 RETURNING *;
 
@@ -31,7 +32,7 @@ RETURNING *;
 -- Only a PROCESSING video moves: READY stays READY, and a redelivery finds FAILED already.
 UPDATE videos SET status = 'FAILED'
 WHERE id = $1 AND status = 'PROCESSING'
-RETURNING processing_at;
+RETURNING processing_at, premium;
 
 -- name: ClockTimestamp :one
 -- The current time on Postgres's clock, the one that set processing_at. Read outside a
@@ -79,3 +80,15 @@ WHERE author_id = @author_id
   AND (created_at, id) < (COALESCE(sqlc.narg(before_created_at)::timestamptz, 'infinity'), @before_id::uuid)
 ORDER BY created_at DESC, id DESC
 LIMIT @row_limit;
+
+-- name: UpsertEntitlement :one
+-- The primary key settles concurrent purchases of one user and video: one row, holding the tier of
+-- the write that commits last.
+INSERT INTO video_entitlements (user_id, video_id, tier)
+VALUES ($1, $2, $3)
+ON CONFLICT (user_id, video_id) DO UPDATE SET tier = EXCLUDED.tier, granted_at = now()
+RETURNING *;
+
+-- name: GetEntitlementTier :one
+SELECT tier FROM video_entitlements
+WHERE user_id = $1 AND video_id = $2;

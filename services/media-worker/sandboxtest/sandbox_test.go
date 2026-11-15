@@ -326,6 +326,17 @@ func (s *store) Create(_ context.Context, key, path, _, cacheControl string) err
 	return nil
 }
 
+func (s *store) Upload(_ context.Context, key, path, _, cacheControl string) error {
+	data, err := os.ReadFile(path) //nolint:gosec // a file of the try under test
+	if err != nil {
+		return err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.objects[key], s.caches[key] = data, cacheControl
+	return nil
+}
+
 func (s *store) Exists(_ context.Context, key string) (bool, error) { return s.get(key) != nil, nil }
 
 func (s *store) List(_ context.Context, prefix string) ([]string, error) { return s.keys(prefix), nil }

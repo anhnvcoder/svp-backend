@@ -17,7 +17,7 @@ Trong sơ đồ, `env` là `stg` hay `prd`; `<domain>` là tên zone của env.
 | --- | --- | --- |
 | `<domain>` | `svp-<env>-web` | VPC origin `svp-<env>-edge` tới ALB internal `svp-<env>-edge`, rồi Envoy, rồi `web` |
 | `api.<domain>` | `svp-<env>-api` | Cùng VPC origin, ALB, Envoy, rồi `gateway` |
-| `media.<domain>` | `svp-<env>-media` | Bucket S3 `media` qua OAC |
+| `media.<domain>` | `svp-<env>-media` | Bucket S3 `media` qua OAC; mọi path trừ `media/*`, `preview/*` đòi URL đã ký bằng khoá của key group `svp-<env>-media` |
 
 Mỗi tên một distribution vì một distribution gắn đúng một web ACL, và mỗi tên cần luật riêng: web có Bot Control, api có ATP cho đăng nhập.
 Envoy định tuyến theo Host như ở k3d, nên distribution chuyển nguyên Host của trình duyệt.
@@ -144,12 +144,30 @@ ADR-0061). Job k6 tin CA nội bộ bằng `ca.crt` của Secret `svp-edge-tls`.
 flowchart LR
     b["Trình duyệt, hls.js"] -->|"GET HLS, thumbnail<br/>media.domain"| cf["CloudFront svp-env-media<br/>web ACL svp-env-media"]
     cf -->|"OAC"| s3[("S3 media")]
+    kg["Key group svp-env-media<br/>khoá công khai ô a, b"] -.->|"behavior mặc định: kiểm chữ ký<br/>trừ media/*, preview/*"| cf
     cf -.->|"prd: log chuẩn v2"| log[("Bucket log CloudFront<br/>Log Archive")]
 ```
 
 Media giữ origin S3 qua OAC; bucket chỉ cho distribution của chính nó đọc. stg giữ gói CloudFront flat-rate Free: không log chuẩn, header CORS
 là policy managed `Managed-SimpleCORS`. prd trả theo dùng (pay-as-you-go): log chuẩn v2 và response headers policy `svp-prd-media` (CORS chỉ
 origin của web, HSTS, nosniff). Biến `media_flat_rate_free` của `<env>.tfvars` chọn giữa hai cách.
+
+Distribution có ba behavior, cùng GET, HEAD, `https-only`, nén và response headers policy. Behavior mặc định cần chữ ký: `trusted_key_groups`
+là key group `svp-<env>-media`, gồm khoá công khai của một hay hai ô (`a`, `b`, để xoay). Hai `ordered_cache_behavior` `media/*` và
+`preview/*` công khai, không key group.
+
+Key group nằm ở behavior mặc định, không ở một behavior `premium/*` riêng, vì CloudFront chọn behavior trên path đã chuẩn hoá theo RFC 3986
+rồi gửi path thô cho S3. Chuẩn hoá giải mã escape của ký tự không dành riêng và bỏ đoạn `..`, nên `GET /%70remium/<id>/…` được khớp như
+`premium/…`; escape của ký tự dành riêng thì giữ, nên `GET /premium%2F<id>/…` không khớp `premium/*`, còn S3 có thể giải `%2F` thành key
+`premium/`. Với chặn mặc định, path nào sau chuẩn hoá không bắt đầu bằng `media/` hay `preview/` cũng cần chữ ký. Hai behavior công khai vẫn
+gửi path thô: `GET /media/..%2Fpremium/<id>/…` khớp `media/*` (`..%2Fpremium` không phải đoạn `..`) và tới S3 thành key
+`media/../premium/…`. Tài liệu S3 coi đó là một tên key hợp lệ, không có object nào mang tên đó, nên S3 trả 403; `premium/` ở riêng chỉ khi
+S3 đọc key theo nghĩa đen, không giải `..`. Ca âm của các path này nằm trong **Kiểm edge premium** của buổi
+([`premium-playback.md`](premium-playback.md#kiểm-bằng-gì)).
+
+CloudFront kiểm chữ ký custom policy và hạn trước khi tìm trong cache; cache policy `Managed-CachingOptimized` không đưa query vào cache key,
+nên chữ ký không làm giảm tỉ lệ trúng cache. Ba behavior nằm dưới trần 5 behavior của gói Free. Ai ký, phạm vi, hạn và khoá:
+[`premium-playback.md`](premium-playback.md), [ADR-0073](../adr/0073-premium-playback.md) §7 (cả nguồn AWS của cách chuẩn hoá path).
 
 ## DNS
 
@@ -196,4 +214,6 @@ từng khác biệt ở [`environments.md`](environments.md#edge-cloudfront-waf-
   client của gateway (`make test`, `make fuzz`); render chart với values eks và policy Kyverno (`make helm-check`).
 - Trong buổi stg, prd: mục Phép kiểm edge của runbook
   [`session-stg.md`](https://github.com/anhnvcoder/svp-infra/blob/main/docs/runbooks/session-stg.md#phép-kiểm-edge) của `svp-infra` (header, cert,
-  TLS, ALB chỉ có IP private, mẫu thử WAF bị chặn, IP thật ở span gateway kể cả khi tự đặt header, log edge có object, DNSSEC, CAA).
+  TLS, ALB chỉ có IP private, mẫu thử WAF bị chặn, IP thật ở span gateway kể cả khi tự đặt header, log edge có object, DNSSEC, CAA); với
+  media premium, `make eks-premium-check` của repo này ([`reference/eks.md`](../reference/eks.md)): segment `premium/` không ký hay ký cho
+  video, rendition khác bị 403, tỉ lệ trúng cache của segment đã ký so với công khai.

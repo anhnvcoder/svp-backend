@@ -1,8 +1,8 @@
 #!/bin/sh
 # Creates the buckets, their CORS rules, the anonymous read policy of `media` and one user per service on the local
-# object store (RustFS). Each service gets its own user and policy limited to the prefixes it needs, and never the root
-# credential, so a compromised service cannot read or write the other's objects; `media` allows anonymous GetObject
-# only, never listing, and `uploads` nothing anonymous (threat model UP-4, UP-5, UP-6, FF-4).
+# object store (RustFS). Each service gets its own user and policy limited to the prefixes it needs, never the root
+# credential, so a compromised service cannot reach the other's objects. Anonymous callers may GetObject under media/
+# and preview/ of `media` only, never premium/ nor a listing, and nothing in `uploads` (UP-4, UP-5, UP-6, FF-4, PRM-4).
 
 # Browsers may read answers cross-origin only from the origins in S3_CORS_ALLOWED_ORIGINS and only for what the web
 # client does: POST a presigned form to uploads, GET (and HEAD) under media (WEB-10). The store's global CORS list stays
@@ -102,8 +102,10 @@ bucket media
 # Retry-After of a refusal, which a cross-origin answer only shows when exposed.
 private uploads
 cors uploads '<AllowedMethod>POST</AllowedMethod><AllowedHeader>*</AllowedHeader><ExposeHeader>Retry-After</ExposeHeader>'
-# media: anonymous GetObject on single objects under media/ only, never ListBucket (UP-6). hls.js
-# loads playlists and segments with XHR; HEAD answers like GET.
+# media: anonymous GetObject on single objects under media/ and preview/, never under premium/, which
+# only presigned URLs reach, and never ListBucket (UP-6, PRM-4). RustFS applies this policy to signed
+# requests too, so premium/ stays private only by being left out. hls.js loads playlists and
+# segments with XHR; HEAD answers like GET.
 must "bucket policy of media" "200 204" PUT /media?policy --data-binary "@$dir/media-anonymous.json"
 cors media '<AllowedMethod>GET</AllowedMethod><AllowedMethod>HEAD</AllowedMethod><AllowedHeader>*</AllowedHeader>'
 # The object the uptime probe of the media host reads (same key, body and headers as the AWS one): small, never cached.
