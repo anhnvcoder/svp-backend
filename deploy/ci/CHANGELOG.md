@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.1.1](https://github.com/anhnvcoder/svp-backend/compare/gitops-check-v1.1.0...gitops-check-v1.1.1) (2026-11-15)
+
+
+### Bug Fixes
+
+* review findings left in code, deploy scripts and docs ([#150](https://github.com/anhnvcoder/svp-backend/issues/150)) ([6bc59f3](https://github.com/anhnvcoder/svp-backend/commit/6bc59f3f4aa1098a02c8d753c8d5181cacaa1b6a))
+
 ## [1.1.0](https://github.com/anhnvcoder/svp-backend/compare/gitops-check-v1.0.0...gitops-check-v1.1.0) (2026-11-15)
 
 
