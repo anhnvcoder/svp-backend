@@ -2,8 +2,13 @@ package main
 
 import (
 	"context"
+	"crypto/rand"
+	"crypto/rsa"
+	"crypto/x509"
+	"encoding/pem"
 	"errors"
 	"log/slog"
+	"maps"
 	"strings"
 	"sync"
 	"testing"
@@ -25,12 +30,21 @@ func setStorageEnv(t *testing.T, env map[string]string) {
 	}
 }
 
+// setSignerEnv sets the MEDIA_* variables of the signer to env, unset when env has none.
+func setSignerEnv(t *testing.T, env map[string]string) {
+	t.Helper()
+	for _, name := range []string{"MEDIA_SIGNER", "MEDIA_SIGNED_BASE_URL", "MEDIA_SIGNING_KEY_ID", "MEDIA_SIGNING_KEY"} {
+		t.Setenv(name, env[name])
+	}
+}
+
 func TestServeMalformedKafkaBrokersNamesTheVariable(t *testing.T) {
 	setStorageEnv(t, map[string]string{
 		"S3_ENDPOINT":          "http://s3:9000",
 		"S3_ACCESS_KEY_ID":     "svp-video-service",
 		"S3_SECRET_ACCESS_KEY": "secret-value",
 	})
+	setSignerEnv(t, map[string]string{"MEDIA_SIGNER": "s3"})
 	// The broker list is checked before the database is opened, so this URL is never dialled.
 	t.Setenv("DATABASE_URL", "postgres://unused@127.0.0.1:1/unused")
 	t.Setenv("JWT_VERIFY_KEYS", calleridtest.VerifyKeys())
@@ -101,6 +115,7 @@ func serveEnv(t *testing.T) {
 	t.Setenv("JWT_VERIFY_KEYS", calleridtest.VerifyKeys())
 	t.Setenv("UPLOAD_ABANDON_AFTER", "")
 	t.Setenv("UPLOAD_SWEEP_INTERVAL", "")
+	setSignerEnv(t, map[string]string{"MEDIA_SIGNER": "s3"})
 	// A valid DSN whose host never resolves: the probe sends no event.
 	t.Setenv("SENTRY_DSN", "http://public@glitchtip.invalid/1")
 	for _, name := range []string{"OTEL_SDK_DISABLED", "OTEL_EXPORTER_OTLP_ENDPOINT", "OTEL_TRACES_SAMPLER",
@@ -370,5 +385,75 @@ func TestServeRequiresVerifyKeys(t *testing.T) {
 		if err == nil || !strings.Contains(err.Error(), "JWT_VERIFY_KEYS") {
 			t.Errorf("JWT_VERIFY_KEYS=%q: serve() = %v, want an error naming JWT_VERIFY_KEYS", keys, err)
 		}
+	}
+}
+
+// testKeyPEM returns the PKCS#8 PEM of a new RSA key of bits.
+func testKeyPEM(t *testing.T, bits int) string {
+	t.Helper()
+	key, err := rsa.GenerateKey(rand.Reader, bits)
+	if err != nil {
+		t.Fatal(err)
+	}
+	der, err := x509.MarshalPKCS8PrivateKey(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: der}))
+}
+
+// The signer is configured before anything is reached: a wrong combination stops serve with an
+// error naming the variable and carrying no part of a key; a valid one gets past it.
+func TestServeChecksTheSignerConfiguration(t *testing.T) {
+	serveEnv(t)
+	// Past the signer, serve stops here: the broker list is not a host:port.
+	t.Setenv("KAFKA_BROKERS", "kafka:notaport")
+	key := testKeyPEM(t, 2048)
+	const notAKey = "not-a-key-secret-material"
+	cloudFront := map[string]string{
+		"MEDIA_SIGNER":          "cloudfront",
+		"MEDIA_SIGNED_BASE_URL": "https://media.svp.example",
+		"MEDIA_SIGNING_KEY_ID":  "K2JCJMDEHXQW5F",
+		"MEDIA_SIGNING_KEY":     key,
+	}
+	with := func(base map[string]string, name, value string) map[string]string {
+		env := maps.Clone(base)
+		env[name] = value
+		return env
+	}
+	for _, tc := range []struct {
+		name     string
+		env      map[string]string
+		variable string
+	}{
+		{"no signer", map[string]string{}, "MEDIA_SIGNER"},
+		{"unknown signer", map[string]string{"MEDIA_SIGNER": "gcs"}, "MEDIA_SIGNER"},
+		{"s3 with a key", map[string]string{"MEDIA_SIGNER": "s3", "MEDIA_SIGNING_KEY": key}, "MEDIA_SIGNING_KEY"},
+		{"s3 with a key id", map[string]string{"MEDIA_SIGNER": "s3", "MEDIA_SIGNING_KEY_ID": "K2JCJMDEHXQW5F"}, "MEDIA_SIGNING_KEY_ID"},
+		{"s3 with a base URL", map[string]string{"MEDIA_SIGNER": "s3", "MEDIA_SIGNED_BASE_URL": "https://media.svp.example"},
+			"MEDIA_SIGNED_BASE_URL"},
+		{"cloudfront without base URL", with(cloudFront, "MEDIA_SIGNED_BASE_URL", ""), "MEDIA_SIGNED_BASE_URL"},
+		{"cloudfront over http", with(cloudFront, "MEDIA_SIGNED_BASE_URL", "http://media.svp.example"), "MEDIA_SIGNED_BASE_URL"},
+		{"cloudfront base URL with a path", with(cloudFront, "MEDIA_SIGNED_BASE_URL", "https://media.svp.example/premium"),
+			"MEDIA_SIGNED_BASE_URL"},
+		{"cloudfront without key id", with(cloudFront, "MEDIA_SIGNING_KEY_ID", ""), "MEDIA_SIGNING_KEY_ID"},
+		{"cloudfront without key", with(cloudFront, "MEDIA_SIGNING_KEY", ""), "MEDIA_SIGNING_KEY"},
+		{"cloudfront key not PEM", with(cloudFront, "MEDIA_SIGNING_KEY", notAKey), "MEDIA_SIGNING_KEY"},
+		{"cloudfront key of 1024 bits", with(cloudFront, "MEDIA_SIGNING_KEY", testKeyPEM(t, 1024)), "MEDIA_SIGNING_KEY"},
+		{"cloudfront valid", cloudFront, "KAFKA_BROKERS"},
+		{"s3 valid", map[string]string{"MEDIA_SIGNER": "s3"}, "KAFKA_BROKERS"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			setSignerEnv(t, tc.env)
+			err := serve(t.Context(), slog.New(slog.DiscardHandler))
+			if err == nil || !strings.Contains(err.Error(), tc.variable) {
+				t.Fatalf("serve() = %v, want an error naming %s", err, tc.variable)
+			}
+			for _, leak := range []string{notAKey, "-----BEGIN", key[40:80]} {
+				if strings.Contains(err.Error(), leak) {
+					t.Errorf("error leaks the key: %v", err)
+				}
+			}
+		})
 	}
 }

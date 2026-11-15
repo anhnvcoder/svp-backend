@@ -190,3 +190,7 @@ prd; $0 lúc không buổi. Bảng: phụ lục, mục "Chi phí".
 Phụ lục: [`appendix/0066-mediaconvert-transcode.md`](appendix/0066-mediaconvert-transcode.md) (phương án, giá trị →
 nguồn, quyết định kết quả từng nhánh, mã lỗi, bảng quyền, chi phí, control FSBP, luồng SCP, RCP, phương pháp và bảng đo
 hai đường, nguồn).
+
+### Chỉnh bởi
+
+- §5, §8, §9: [0073](0073-premium-playback.md): output của video premium dưới `premium/<video_id>/<version>/<attempt>/` cùng bố cục phẳng, bản xem thử chép sang `preview/` (§5); `settle` của video premium làm bản xem thử trước master đầy đủ, video premium một segment → `transcode.failed` `PREVIEW_TOO_SHORT`; module `media` thêm key group và behavior `premium/*` (§8); role `svp-<env>-mediaconvert` thêm `s3:PutObject` trên `premium/*` của `media`; quyền S3 của role media-worker trên `media/*` (cả `ListBucket` theo tiền tố) mở sang `premium/*`, `preview/*` (§9).

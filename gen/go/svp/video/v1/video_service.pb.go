@@ -23,6 +23,63 @@ const (
 	_ = protoimpl.EnforceVersion(protoimpl.MaxVersion - 20)
 )
 
+// Tier is the quality level an entitlement unlocks. Each tier includes the
+// renditions of the lower ones.
+type Tier int32
+
+const (
+	Tier_TIER_UNSPECIFIED Tier = 0
+	// Renditions `source` and `360p`.
+	Tier_TIER_SD Tier = 1
+	// The SD renditions and `720p`.
+	Tier_TIER_HD Tier = 2
+	// Every rendition of the ladder.
+	Tier_TIER_FHD Tier = 3
+)
+
+// Enum value maps for Tier.
+var (
+	Tier_name = map[int32]string{
+		0: "TIER_UNSPECIFIED",
+		1: "TIER_SD",
+		2: "TIER_HD",
+		3: "TIER_FHD",
+	}
+	Tier_value = map[string]int32{
+		"TIER_UNSPECIFIED": 0,
+		"TIER_SD":          1,
+		"TIER_HD":          2,
+		"TIER_FHD":         3,
+	}
+)
+
+func (x Tier) Enum() *Tier {
+	p := new(Tier)
+	*p = x
+	return p
+}
+
+func (x Tier) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (Tier) Descriptor() protoreflect.EnumDescriptor {
+	return file_svp_video_v1_video_service_proto_enumTypes[0].Descriptor()
+}
+
+func (Tier) Type() protoreflect.EnumType {
+	return &file_svp_video_v1_video_service_proto_enumTypes[0]
+}
+
+func (x Tier) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use Tier.Descriptor instead.
+func (Tier) EnumDescriptor() ([]byte, []int) {
+	return file_svp_video_v1_video_service_proto_rawDescGZIP(), []int{0}
+}
+
 // VideoStatus is the lifecycle state. Transitions only move forward:
 // UPLOADING -> PROCESSING -> READY, and UPLOADING or PROCESSING -> FAILED.
 type VideoStatus int32
@@ -69,11 +126,11 @@ func (x VideoStatus) String() string {
 }
 
 func (VideoStatus) Descriptor() protoreflect.EnumDescriptor {
-	return file_svp_video_v1_video_service_proto_enumTypes[0].Descriptor()
+	return file_svp_video_v1_video_service_proto_enumTypes[1].Descriptor()
 }
 
 func (VideoStatus) Type() protoreflect.EnumType {
-	return &file_svp_video_v1_video_service_proto_enumTypes[0]
+	return &file_svp_video_v1_video_service_proto_enumTypes[1]
 }
 
 func (x VideoStatus) Number() protoreflect.EnumNumber {
@@ -82,7 +139,7 @@ func (x VideoStatus) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use VideoStatus.Descriptor instead.
 func (VideoStatus) EnumDescriptor() ([]byte, []int) {
-	return file_svp_video_v1_video_service_proto_rawDescGZIP(), []int{0}
+	return file_svp_video_v1_video_service_proto_rawDescGZIP(), []int{1}
 }
 
 type Video struct {
@@ -95,17 +152,26 @@ type Video struct {
 	Duration *durationpb.Duration `protobuf:"bytes,5,opt,name=duration,proto3" json:"duration,omitempty"`
 	// Object key of the HLS master playlist,
 	// `media/<video_id>/<version>/master.m3u8` (videos made before versions:
-	// `media/<video_id>/master.m3u8`). Set once READY.
+	// `media/<video_id>/master.m3u8`); `premium/<video_id>/<version>/master.m3u8`
+	// for a premium video, which clients never fetch directly. Set once READY.
 	PlaylistKey string `protobuf:"bytes,6,opt,name=playlist_key,json=playlistKey,proto3" json:"playlist_key,omitempty"`
 	// Object key of the thumbnail image under `media/<video_id>/`, in the
-	// directory the master playlist names. Set once READY.
+	// directory the master playlist names; under `preview/<video_id>/` for a
+	// premium video. Set once READY.
 	ThumbnailKey string `protobuf:"bytes,7,opt,name=thumbnail_key,json=thumbnailKey,proto3" json:"thumbnail_key,omitempty"`
 	// When InitUpload created the video.
 	CreatedAt *timestamppb.Timestamp `protobuf:"bytes,8,opt,name=created_at,json=createdAt,proto3" json:"created_at,omitempty"`
 	// When the video became READY. Set once READY.
-	PublishedAt   *timestamppb.Timestamp `protobuf:"bytes,9,opt,name=published_at,json=publishedAt,proto3" json:"published_at,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	PublishedAt *timestamppb.Timestamp `protobuf:"bytes,9,opt,name=published_at,json=publishedAt,proto3" json:"published_at,omitempty"`
+	// True for a premium video: its full playback needs an entitlement.
+	// Fixed at InitUpload.
+	Premium bool `protobuf:"varint,10,opt,name=premium,proto3" json:"premium,omitempty"`
+	// Object key of the public preview's master playlist,
+	// `preview/<video_id>/<version>/master.m3u8`. Set once a premium video is
+	// READY; empty for a regular video.
+	PreviewPlaylistKey string `protobuf:"bytes,11,opt,name=preview_playlist_key,json=previewPlaylistKey,proto3" json:"preview_playlist_key,omitempty"`
+	unknownFields      protoimpl.UnknownFields
+	sizeCache          protoimpl.SizeCache
 }
 
 func (x *Video) Reset() {
@@ -201,6 +267,82 @@ func (x *Video) GetPublishedAt() *timestamppb.Timestamp {
 	return nil
 }
 
+func (x *Video) GetPremium() bool {
+	if x != nil {
+		return x.Premium
+	}
+	return false
+}
+
+func (x *Video) GetPreviewPlaylistKey() string {
+	if x != nil {
+		return x.PreviewPlaylistKey
+	}
+	return ""
+}
+
+// Entitlement is what a user bought on one premium video.
+type Entitlement struct {
+	state   protoimpl.MessageState `protogen:"open.v1"`
+	VideoId string                 `protobuf:"bytes,1,opt,name=video_id,json=videoId,proto3" json:"video_id,omitempty"`
+	Tier    Tier                   `protobuf:"varint,2,opt,name=tier,proto3,enum=svp.video.v1.Tier" json:"tier,omitempty"`
+	// When the entitlement was last granted or changed.
+	GrantedAt     *timestamppb.Timestamp `protobuf:"bytes,3,opt,name=granted_at,json=grantedAt,proto3" json:"granted_at,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *Entitlement) Reset() {
+	*x = Entitlement{}
+	mi := &file_svp_video_v1_video_service_proto_msgTypes[1]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *Entitlement) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*Entitlement) ProtoMessage() {}
+
+func (x *Entitlement) ProtoReflect() protoreflect.Message {
+	mi := &file_svp_video_v1_video_service_proto_msgTypes[1]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use Entitlement.ProtoReflect.Descriptor instead.
+func (*Entitlement) Descriptor() ([]byte, []int) {
+	return file_svp_video_v1_video_service_proto_rawDescGZIP(), []int{1}
+}
+
+func (x *Entitlement) GetVideoId() string {
+	if x != nil {
+		return x.VideoId
+	}
+	return ""
+}
+
+func (x *Entitlement) GetTier() Tier {
+	if x != nil {
+		return x.Tier
+	}
+	return Tier_TIER_UNSPECIFIED
+}
+
+func (x *Entitlement) GetGrantedAt() *timestamppb.Timestamp {
+	if x != nil {
+		return x.GrantedAt
+	}
+	return nil
+}
+
 type InitUploadRequest struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	Title string                 `protobuf:"bytes,1,opt,name=title,proto3" json:"title,omitempty"`
@@ -212,14 +354,16 @@ type InitUploadRequest struct {
 	// lowercase form, generated by the client once per video and sent again on
 	// every retry of that creation (Google AIP-155). Unique per caller. Empty
 	// means no key: the call always creates a video.
-	RequestId     string `protobuf:"bytes,4,opt,name=request_id,json=requestId,proto3" json:"request_id,omitempty"`
+	RequestId string `protobuf:"bytes,4,opt,name=request_id,json=requestId,proto3" json:"request_id,omitempty"`
+	// Creates a premium video; see the InitUpload comment. Default false.
+	Premium       bool `protobuf:"varint,5,opt,name=premium,proto3" json:"premium,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
 func (x *InitUploadRequest) Reset() {
 	*x = InitUploadRequest{}
-	mi := &file_svp_video_v1_video_service_proto_msgTypes[1]
+	mi := &file_svp_video_v1_video_service_proto_msgTypes[2]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -231,7 +375,7 @@ func (x *InitUploadRequest) String() string {
 func (*InitUploadRequest) ProtoMessage() {}
 
 func (x *InitUploadRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_svp_video_v1_video_service_proto_msgTypes[1]
+	mi := &file_svp_video_v1_video_service_proto_msgTypes[2]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -244,7 +388,7 @@ func (x *InitUploadRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use InitUploadRequest.ProtoReflect.Descriptor instead.
 func (*InitUploadRequest) Descriptor() ([]byte, []int) {
-	return file_svp_video_v1_video_service_proto_rawDescGZIP(), []int{1}
+	return file_svp_video_v1_video_service_proto_rawDescGZIP(), []int{2}
 }
 
 func (x *InitUploadRequest) GetTitle() string {
@@ -275,6 +419,13 @@ func (x *InitUploadRequest) GetRequestId() string {
 	return ""
 }
 
+func (x *InitUploadRequest) GetPremium() bool {
+	if x != nil {
+		return x.Premium
+	}
+	return false
+}
+
 type InitUploadResponse struct {
 	state   protoimpl.MessageState `protogen:"open.v1"`
 	VideoId string                 `protobuf:"bytes,1,opt,name=video_id,json=videoId,proto3" json:"video_id,omitempty"`
@@ -292,7 +443,7 @@ type InitUploadResponse struct {
 
 func (x *InitUploadResponse) Reset() {
 	*x = InitUploadResponse{}
-	mi := &file_svp_video_v1_video_service_proto_msgTypes[2]
+	mi := &file_svp_video_v1_video_service_proto_msgTypes[3]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -304,7 +455,7 @@ func (x *InitUploadResponse) String() string {
 func (*InitUploadResponse) ProtoMessage() {}
 
 func (x *InitUploadResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_svp_video_v1_video_service_proto_msgTypes[2]
+	mi := &file_svp_video_v1_video_service_proto_msgTypes[3]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -317,7 +468,7 @@ func (x *InitUploadResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use InitUploadResponse.ProtoReflect.Descriptor instead.
 func (*InitUploadResponse) Descriptor() ([]byte, []int) {
-	return file_svp_video_v1_video_service_proto_rawDescGZIP(), []int{2}
+	return file_svp_video_v1_video_service_proto_rawDescGZIP(), []int{3}
 }
 
 func (x *InitUploadResponse) GetVideoId() string {
@@ -357,7 +508,7 @@ type CompleteUploadRequest struct {
 
 func (x *CompleteUploadRequest) Reset() {
 	*x = CompleteUploadRequest{}
-	mi := &file_svp_video_v1_video_service_proto_msgTypes[3]
+	mi := &file_svp_video_v1_video_service_proto_msgTypes[4]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -369,7 +520,7 @@ func (x *CompleteUploadRequest) String() string {
 func (*CompleteUploadRequest) ProtoMessage() {}
 
 func (x *CompleteUploadRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_svp_video_v1_video_service_proto_msgTypes[3]
+	mi := &file_svp_video_v1_video_service_proto_msgTypes[4]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -382,7 +533,7 @@ func (x *CompleteUploadRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CompleteUploadRequest.ProtoReflect.Descriptor instead.
 func (*CompleteUploadRequest) Descriptor() ([]byte, []int) {
-	return file_svp_video_v1_video_service_proto_rawDescGZIP(), []int{3}
+	return file_svp_video_v1_video_service_proto_rawDescGZIP(), []int{4}
 }
 
 func (x *CompleteUploadRequest) GetVideoId() string {
@@ -401,7 +552,7 @@ type CompleteUploadResponse struct {
 
 func (x *CompleteUploadResponse) Reset() {
 	*x = CompleteUploadResponse{}
-	mi := &file_svp_video_v1_video_service_proto_msgTypes[4]
+	mi := &file_svp_video_v1_video_service_proto_msgTypes[5]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -413,7 +564,7 @@ func (x *CompleteUploadResponse) String() string {
 func (*CompleteUploadResponse) ProtoMessage() {}
 
 func (x *CompleteUploadResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_svp_video_v1_video_service_proto_msgTypes[4]
+	mi := &file_svp_video_v1_video_service_proto_msgTypes[5]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -426,7 +577,7 @@ func (x *CompleteUploadResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CompleteUploadResponse.ProtoReflect.Descriptor instead.
 func (*CompleteUploadResponse) Descriptor() ([]byte, []int) {
-	return file_svp_video_v1_video_service_proto_rawDescGZIP(), []int{4}
+	return file_svp_video_v1_video_service_proto_rawDescGZIP(), []int{5}
 }
 
 func (x *CompleteUploadResponse) GetVideo() *Video {
@@ -445,7 +596,7 @@ type GetVideoRequest struct {
 
 func (x *GetVideoRequest) Reset() {
 	*x = GetVideoRequest{}
-	mi := &file_svp_video_v1_video_service_proto_msgTypes[5]
+	mi := &file_svp_video_v1_video_service_proto_msgTypes[6]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -457,7 +608,7 @@ func (x *GetVideoRequest) String() string {
 func (*GetVideoRequest) ProtoMessage() {}
 
 func (x *GetVideoRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_svp_video_v1_video_service_proto_msgTypes[5]
+	mi := &file_svp_video_v1_video_service_proto_msgTypes[6]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -470,7 +621,7 @@ func (x *GetVideoRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetVideoRequest.ProtoReflect.Descriptor instead.
 func (*GetVideoRequest) Descriptor() ([]byte, []int) {
-	return file_svp_video_v1_video_service_proto_rawDescGZIP(), []int{5}
+	return file_svp_video_v1_video_service_proto_rawDescGZIP(), []int{6}
 }
 
 func (x *GetVideoRequest) GetVideoId() string {
@@ -481,15 +632,19 @@ func (x *GetVideoRequest) GetVideoId() string {
 }
 
 type GetVideoResponse struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Video         *Video                 `protobuf:"bytes,1,opt,name=video,proto3" json:"video,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	state protoimpl.MessageState `protogen:"open.v1"`
+	Video *Video                 `protobuf:"bytes,1,opt,name=video,proto3" json:"video,omitempty"`
+	// The tier the caller holds on this video; the author of a premium video
+	// always holds TIER_FHD. TIER_UNSPECIFIED means no entitlement, which is
+	// every case for a regular video, its author included.
+	EntitlementTier Tier `protobuf:"varint,2,opt,name=entitlement_tier,json=entitlementTier,proto3,enum=svp.video.v1.Tier" json:"entitlement_tier,omitempty"`
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
 }
 
 func (x *GetVideoResponse) Reset() {
 	*x = GetVideoResponse{}
-	mi := &file_svp_video_v1_video_service_proto_msgTypes[6]
+	mi := &file_svp_video_v1_video_service_proto_msgTypes[7]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -501,7 +656,7 @@ func (x *GetVideoResponse) String() string {
 func (*GetVideoResponse) ProtoMessage() {}
 
 func (x *GetVideoResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_svp_video_v1_video_service_proto_msgTypes[6]
+	mi := &file_svp_video_v1_video_service_proto_msgTypes[7]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -514,7 +669,7 @@ func (x *GetVideoResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetVideoResponse.ProtoReflect.Descriptor instead.
 func (*GetVideoResponse) Descriptor() ([]byte, []int) {
-	return file_svp_video_v1_video_service_proto_rawDescGZIP(), []int{6}
+	return file_svp_video_v1_video_service_proto_rawDescGZIP(), []int{7}
 }
 
 func (x *GetVideoResponse) GetVideo() *Video {
@@ -522,6 +677,13 @@ func (x *GetVideoResponse) GetVideo() *Video {
 		return x.Video
 	}
 	return nil
+}
+
+func (x *GetVideoResponse) GetEntitlementTier() Tier {
+	if x != nil {
+		return x.EntitlementTier
+	}
+	return Tier_TIER_UNSPECIFIED
 }
 
 type GetPublicVideoRequest struct {
@@ -533,7 +695,7 @@ type GetPublicVideoRequest struct {
 
 func (x *GetPublicVideoRequest) Reset() {
 	*x = GetPublicVideoRequest{}
-	mi := &file_svp_video_v1_video_service_proto_msgTypes[7]
+	mi := &file_svp_video_v1_video_service_proto_msgTypes[8]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -545,7 +707,7 @@ func (x *GetPublicVideoRequest) String() string {
 func (*GetPublicVideoRequest) ProtoMessage() {}
 
 func (x *GetPublicVideoRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_svp_video_v1_video_service_proto_msgTypes[7]
+	mi := &file_svp_video_v1_video_service_proto_msgTypes[8]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -558,7 +720,7 @@ func (x *GetPublicVideoRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetPublicVideoRequest.ProtoReflect.Descriptor instead.
 func (*GetPublicVideoRequest) Descriptor() ([]byte, []int) {
-	return file_svp_video_v1_video_service_proto_rawDescGZIP(), []int{7}
+	return file_svp_video_v1_video_service_proto_rawDescGZIP(), []int{8}
 }
 
 func (x *GetPublicVideoRequest) GetVideoId() string {
@@ -578,7 +740,7 @@ type GetPublicVideoResponse struct {
 
 func (x *GetPublicVideoResponse) Reset() {
 	*x = GetPublicVideoResponse{}
-	mi := &file_svp_video_v1_video_service_proto_msgTypes[8]
+	mi := &file_svp_video_v1_video_service_proto_msgTypes[9]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -590,7 +752,7 @@ func (x *GetPublicVideoResponse) String() string {
 func (*GetPublicVideoResponse) ProtoMessage() {}
 
 func (x *GetPublicVideoResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_svp_video_v1_video_service_proto_msgTypes[8]
+	mi := &file_svp_video_v1_video_service_proto_msgTypes[9]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -603,7 +765,7 @@ func (x *GetPublicVideoResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetPublicVideoResponse.ProtoReflect.Descriptor instead.
 func (*GetPublicVideoResponse) Descriptor() ([]byte, []int) {
-	return file_svp_video_v1_video_service_proto_rawDescGZIP(), []int{8}
+	return file_svp_video_v1_video_service_proto_rawDescGZIP(), []int{9}
 }
 
 func (x *GetPublicVideoResponse) GetVideo() *Video {
@@ -624,7 +786,7 @@ type ListAuthorVideosRequest struct {
 
 func (x *ListAuthorVideosRequest) Reset() {
 	*x = ListAuthorVideosRequest{}
-	mi := &file_svp_video_v1_video_service_proto_msgTypes[9]
+	mi := &file_svp_video_v1_video_service_proto_msgTypes[10]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -636,7 +798,7 @@ func (x *ListAuthorVideosRequest) String() string {
 func (*ListAuthorVideosRequest) ProtoMessage() {}
 
 func (x *ListAuthorVideosRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_svp_video_v1_video_service_proto_msgTypes[9]
+	mi := &file_svp_video_v1_video_service_proto_msgTypes[10]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -649,7 +811,7 @@ func (x *ListAuthorVideosRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListAuthorVideosRequest.ProtoReflect.Descriptor instead.
 func (*ListAuthorVideosRequest) Descriptor() ([]byte, []int) {
-	return file_svp_video_v1_video_service_proto_rawDescGZIP(), []int{9}
+	return file_svp_video_v1_video_service_proto_rawDescGZIP(), []int{10}
 }
 
 func (x *ListAuthorVideosRequest) GetAuthorId() string {
@@ -683,7 +845,7 @@ type ListAuthorVideosResponse struct {
 
 func (x *ListAuthorVideosResponse) Reset() {
 	*x = ListAuthorVideosResponse{}
-	mi := &file_svp_video_v1_video_service_proto_msgTypes[10]
+	mi := &file_svp_video_v1_video_service_proto_msgTypes[11]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -695,7 +857,7 @@ func (x *ListAuthorVideosResponse) String() string {
 func (*ListAuthorVideosResponse) ProtoMessage() {}
 
 func (x *ListAuthorVideosResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_svp_video_v1_video_service_proto_msgTypes[10]
+	mi := &file_svp_video_v1_video_service_proto_msgTypes[11]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -708,7 +870,7 @@ func (x *ListAuthorVideosResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListAuthorVideosResponse.ProtoReflect.Descriptor instead.
 func (*ListAuthorVideosResponse) Descriptor() ([]byte, []int) {
-	return file_svp_video_v1_video_service_proto_rawDescGZIP(), []int{10}
+	return file_svp_video_v1_video_service_proto_rawDescGZIP(), []int{11}
 }
 
 func (x *ListAuthorVideosResponse) GetVideos() []*Video {
@@ -725,11 +887,205 @@ func (x *ListAuthorVideosResponse) GetNextPageToken() string {
 	return ""
 }
 
+type GrantEntitlementRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	VideoId       string                 `protobuf:"bytes,1,opt,name=video_id,json=videoId,proto3" json:"video_id,omitempty"`
+	Tier          Tier                   `protobuf:"varint,2,opt,name=tier,proto3,enum=svp.video.v1.Tier" json:"tier,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *GrantEntitlementRequest) Reset() {
+	*x = GrantEntitlementRequest{}
+	mi := &file_svp_video_v1_video_service_proto_msgTypes[12]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *GrantEntitlementRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*GrantEntitlementRequest) ProtoMessage() {}
+
+func (x *GrantEntitlementRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_svp_video_v1_video_service_proto_msgTypes[12]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use GrantEntitlementRequest.ProtoReflect.Descriptor instead.
+func (*GrantEntitlementRequest) Descriptor() ([]byte, []int) {
+	return file_svp_video_v1_video_service_proto_rawDescGZIP(), []int{12}
+}
+
+func (x *GrantEntitlementRequest) GetVideoId() string {
+	if x != nil {
+		return x.VideoId
+	}
+	return ""
+}
+
+func (x *GrantEntitlementRequest) GetTier() Tier {
+	if x != nil {
+		return x.Tier
+	}
+	return Tier_TIER_UNSPECIFIED
+}
+
+type GrantEntitlementResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Entitlement   *Entitlement           `protobuf:"bytes,1,opt,name=entitlement,proto3" json:"entitlement,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *GrantEntitlementResponse) Reset() {
+	*x = GrantEntitlementResponse{}
+	mi := &file_svp_video_v1_video_service_proto_msgTypes[13]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *GrantEntitlementResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*GrantEntitlementResponse) ProtoMessage() {}
+
+func (x *GrantEntitlementResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_svp_video_v1_video_service_proto_msgTypes[13]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use GrantEntitlementResponse.ProtoReflect.Descriptor instead.
+func (*GrantEntitlementResponse) Descriptor() ([]byte, []int) {
+	return file_svp_video_v1_video_service_proto_rawDescGZIP(), []int{13}
+}
+
+func (x *GrantEntitlementResponse) GetEntitlement() *Entitlement {
+	if x != nil {
+		return x.Entitlement
+	}
+	return nil
+}
+
+type GetPlaybackPlaylistRequest struct {
+	state   protoimpl.MessageState `protogen:"open.v1"`
+	VideoId string                 `protobuf:"bytes,1,opt,name=video_id,json=videoId,proto3" json:"video_id,omitempty"`
+	// Ladder name such as `720p`. Empty asks for the master playlist.
+	Rendition     string `protobuf:"bytes,2,opt,name=rendition,proto3" json:"rendition,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *GetPlaybackPlaylistRequest) Reset() {
+	*x = GetPlaybackPlaylistRequest{}
+	mi := &file_svp_video_v1_video_service_proto_msgTypes[14]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *GetPlaybackPlaylistRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*GetPlaybackPlaylistRequest) ProtoMessage() {}
+
+func (x *GetPlaybackPlaylistRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_svp_video_v1_video_service_proto_msgTypes[14]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use GetPlaybackPlaylistRequest.ProtoReflect.Descriptor instead.
+func (*GetPlaybackPlaylistRequest) Descriptor() ([]byte, []int) {
+	return file_svp_video_v1_video_service_proto_rawDescGZIP(), []int{14}
+}
+
+func (x *GetPlaybackPlaylistRequest) GetVideoId() string {
+	if x != nil {
+		return x.VideoId
+	}
+	return ""
+}
+
+func (x *GetPlaybackPlaylistRequest) GetRendition() string {
+	if x != nil {
+		return x.Rendition
+	}
+	return ""
+}
+
+type GetPlaybackPlaylistResponse struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// The playlist text (`application/vnd.apple.mpegurl`).
+	Content       string `protobuf:"bytes,1,opt,name=content,proto3" json:"content,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *GetPlaybackPlaylistResponse) Reset() {
+	*x = GetPlaybackPlaylistResponse{}
+	mi := &file_svp_video_v1_video_service_proto_msgTypes[15]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *GetPlaybackPlaylistResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*GetPlaybackPlaylistResponse) ProtoMessage() {}
+
+func (x *GetPlaybackPlaylistResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_svp_video_v1_video_service_proto_msgTypes[15]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use GetPlaybackPlaylistResponse.ProtoReflect.Descriptor instead.
+func (*GetPlaybackPlaylistResponse) Descriptor() ([]byte, []int) {
+	return file_svp_video_v1_video_service_proto_rawDescGZIP(), []int{15}
+}
+
+func (x *GetPlaybackPlaylistResponse) GetContent() string {
+	if x != nil {
+		return x.Content
+	}
+	return ""
+}
+
 var File_svp_video_v1_video_service_proto protoreflect.FileDescriptor
 
 const file_svp_video_v1_video_service_proto_rawDesc = "" +
 	"\n" +
-	" svp/video/v1/video_service.proto\x12\fsvp.video.v1\x1a\x1egoogle/protobuf/duration.proto\x1a\x1fgoogle/protobuf/timestamp.proto\"\x81\x03\n" +
+	" svp/video/v1/video_service.proto\x12\fsvp.video.v1\x1a\x1egoogle/protobuf/duration.proto\x1a\x1fgoogle/protobuf/timestamp.proto\"\xcd\x03\n" +
 	"\x05Video\x12\x19\n" +
 	"\bvideo_id\x18\x01 \x01(\tR\avideoId\x12\x1b\n" +
 	"\tauthor_id\x18\x02 \x01(\tR\bauthorId\x12\x14\n" +
@@ -740,14 +1096,23 @@ const file_svp_video_v1_video_service_proto_rawDesc = "" +
 	"\rthumbnail_key\x18\a \x01(\tR\fthumbnailKey\x129\n" +
 	"\n" +
 	"created_at\x18\b \x01(\v2\x1a.google.protobuf.TimestampR\tcreatedAt\x12=\n" +
-	"\fpublished_at\x18\t \x01(\v2\x1a.google.protobuf.TimestampR\vpublishedAt\"\x8a\x01\n" +
+	"\fpublished_at\x18\t \x01(\v2\x1a.google.protobuf.TimestampR\vpublishedAt\x12\x18\n" +
+	"\apremium\x18\n" +
+	" \x01(\bR\apremium\x120\n" +
+	"\x14preview_playlist_key\x18\v \x01(\tR\x12previewPlaylistKey\"\x8b\x01\n" +
+	"\vEntitlement\x12\x19\n" +
+	"\bvideo_id\x18\x01 \x01(\tR\avideoId\x12&\n" +
+	"\x04tier\x18\x02 \x01(\x0e2\x12.svp.video.v1.TierR\x04tier\x129\n" +
+	"\n" +
+	"granted_at\x18\x03 \x01(\v2\x1a.google.protobuf.TimestampR\tgrantedAt\"\xa4\x01\n" +
 	"\x11InitUploadRequest\x12\x14\n" +
 	"\x05title\x18\x01 \x01(\tR\x05title\x12\x1d\n" +
 	"\n" +
 	"size_bytes\x18\x02 \x01(\x03R\tsizeBytes\x12!\n" +
 	"\fcontent_type\x18\x03 \x01(\tR\vcontentType\x12\x1d\n" +
 	"\n" +
-	"request_id\x18\x04 \x01(\tR\trequestId\"\x9b\x02\n" +
+	"request_id\x18\x04 \x01(\tR\trequestId\x12\x18\n" +
+	"\apremium\x18\x05 \x01(\bR\apremium\"\x9b\x02\n" +
 	"\x12InitUploadResponse\x12\x19\n" +
 	"\bvideo_id\x18\x01 \x01(\tR\avideoId\x12\x1d\n" +
 	"\n" +
@@ -764,9 +1129,10 @@ const file_svp_video_v1_video_service_proto_rawDesc = "" +
 	"\x16CompleteUploadResponse\x12)\n" +
 	"\x05video\x18\x01 \x01(\v2\x13.svp.video.v1.VideoR\x05video\",\n" +
 	"\x0fGetVideoRequest\x12\x19\n" +
-	"\bvideo_id\x18\x01 \x01(\tR\avideoId\"=\n" +
+	"\bvideo_id\x18\x01 \x01(\tR\avideoId\"|\n" +
 	"\x10GetVideoResponse\x12)\n" +
-	"\x05video\x18\x01 \x01(\v2\x13.svp.video.v1.VideoR\x05video\"2\n" +
+	"\x05video\x18\x01 \x01(\v2\x13.svp.video.v1.VideoR\x05video\x12=\n" +
+	"\x10entitlement_tier\x18\x02 \x01(\x0e2\x12.svp.video.v1.TierR\x0fentitlementTier\"2\n" +
 	"\x15GetPublicVideoRequest\x12\x19\n" +
 	"\bvideo_id\x18\x01 \x01(\tR\avideoId\"C\n" +
 	"\x16GetPublicVideoResponse\x12)\n" +
@@ -778,20 +1144,37 @@ const file_svp_video_v1_video_service_proto_rawDesc = "" +
 	"page_token\x18\x03 \x01(\tR\tpageToken\"o\n" +
 	"\x18ListAuthorVideosResponse\x12+\n" +
 	"\x06videos\x18\x01 \x03(\v2\x13.svp.video.v1.VideoR\x06videos\x12&\n" +
-	"\x0fnext_page_token\x18\x02 \x01(\tR\rnextPageToken*\x95\x01\n" +
+	"\x0fnext_page_token\x18\x02 \x01(\tR\rnextPageToken\"\\\n" +
+	"\x17GrantEntitlementRequest\x12\x19\n" +
+	"\bvideo_id\x18\x01 \x01(\tR\avideoId\x12&\n" +
+	"\x04tier\x18\x02 \x01(\x0e2\x12.svp.video.v1.TierR\x04tier\"W\n" +
+	"\x18GrantEntitlementResponse\x12;\n" +
+	"\ventitlement\x18\x01 \x01(\v2\x19.svp.video.v1.EntitlementR\ventitlement\"U\n" +
+	"\x1aGetPlaybackPlaylistRequest\x12\x19\n" +
+	"\bvideo_id\x18\x01 \x01(\tR\avideoId\x12\x1c\n" +
+	"\trendition\x18\x02 \x01(\tR\trendition\"7\n" +
+	"\x1bGetPlaybackPlaylistResponse\x12\x18\n" +
+	"\acontent\x18\x01 \x01(\tR\acontent*D\n" +
+	"\x04Tier\x12\x14\n" +
+	"\x10TIER_UNSPECIFIED\x10\x00\x12\v\n" +
+	"\aTIER_SD\x10\x01\x12\v\n" +
+	"\aTIER_HD\x10\x02\x12\f\n" +
+	"\bTIER_FHD\x10\x03*\x95\x01\n" +
 	"\vVideoStatus\x12\x1c\n" +
 	"\x18VIDEO_STATUS_UNSPECIFIED\x10\x00\x12\x1a\n" +
 	"\x16VIDEO_STATUS_UPLOADING\x10\x01\x12\x1b\n" +
 	"\x17VIDEO_STATUS_PROCESSING\x10\x02\x12\x16\n" +
 	"\x12VIDEO_STATUS_READY\x10\x03\x12\x17\n" +
-	"\x13VIDEO_STATUS_FAILED\x10\x042\xc7\x03\n" +
+	"\x13VIDEO_STATUS_FAILED\x10\x042\x96\x05\n" +
 	"\fVideoService\x12O\n" +
 	"\n" +
 	"InitUpload\x12\x1f.svp.video.v1.InitUploadRequest\x1a .svp.video.v1.InitUploadResponse\x12[\n" +
 	"\x0eCompleteUpload\x12#.svp.video.v1.CompleteUploadRequest\x1a$.svp.video.v1.CompleteUploadResponse\x12I\n" +
 	"\bGetVideo\x12\x1d.svp.video.v1.GetVideoRequest\x1a\x1e.svp.video.v1.GetVideoResponse\x12[\n" +
 	"\x0eGetPublicVideo\x12#.svp.video.v1.GetPublicVideoRequest\x1a$.svp.video.v1.GetPublicVideoResponse\x12a\n" +
-	"\x10ListAuthorVideos\x12%.svp.video.v1.ListAuthorVideosRequest\x1a&.svp.video.v1.ListAuthorVideosResponseB\xb6\x01\n" +
+	"\x10ListAuthorVideos\x12%.svp.video.v1.ListAuthorVideosRequest\x1a&.svp.video.v1.ListAuthorVideosResponse\x12a\n" +
+	"\x10GrantEntitlement\x12%.svp.video.v1.GrantEntitlementRequest\x1a&.svp.video.v1.GrantEntitlementResponse\x12j\n" +
+	"\x13GetPlaybackPlaylist\x12(.svp.video.v1.GetPlaybackPlaylistRequest\x1a).svp.video.v1.GetPlaybackPlaylistResponseB\xb6\x01\n" +
 	"\x10com.svp.video.v1B\x11VideoServiceProtoP\x01Z=github.com/anhnvcoder/svp-backend/gen/go/svp/video/v1;videov1\xa2\x02\x03SVX\xaa\x02\fSvp.Video.V1\xca\x02\fSvp\\Video\\V1\xe2\x02\x18Svp\\Video\\V1\\GPBMetadata\xea\x02\x0eSvp::Video::V1b\x06proto3"
 
 var (
@@ -806,51 +1189,66 @@ func file_svp_video_v1_video_service_proto_rawDescGZIP() []byte {
 	return file_svp_video_v1_video_service_proto_rawDescData
 }
 
-var file_svp_video_v1_video_service_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
-var file_svp_video_v1_video_service_proto_msgTypes = make([]protoimpl.MessageInfo, 12)
+var file_svp_video_v1_video_service_proto_enumTypes = make([]protoimpl.EnumInfo, 2)
+var file_svp_video_v1_video_service_proto_msgTypes = make([]protoimpl.MessageInfo, 17)
 var file_svp_video_v1_video_service_proto_goTypes = []any{
-	(VideoStatus)(0),                 // 0: svp.video.v1.VideoStatus
-	(*Video)(nil),                    // 1: svp.video.v1.Video
-	(*InitUploadRequest)(nil),        // 2: svp.video.v1.InitUploadRequest
-	(*InitUploadResponse)(nil),       // 3: svp.video.v1.InitUploadResponse
-	(*CompleteUploadRequest)(nil),    // 4: svp.video.v1.CompleteUploadRequest
-	(*CompleteUploadResponse)(nil),   // 5: svp.video.v1.CompleteUploadResponse
-	(*GetVideoRequest)(nil),          // 6: svp.video.v1.GetVideoRequest
-	(*GetVideoResponse)(nil),         // 7: svp.video.v1.GetVideoResponse
-	(*GetPublicVideoRequest)(nil),    // 8: svp.video.v1.GetPublicVideoRequest
-	(*GetPublicVideoResponse)(nil),   // 9: svp.video.v1.GetPublicVideoResponse
-	(*ListAuthorVideosRequest)(nil),  // 10: svp.video.v1.ListAuthorVideosRequest
-	(*ListAuthorVideosResponse)(nil), // 11: svp.video.v1.ListAuthorVideosResponse
-	nil,                              // 12: svp.video.v1.InitUploadResponse.FormFieldsEntry
-	(*durationpb.Duration)(nil),      // 13: google.protobuf.Duration
-	(*timestamppb.Timestamp)(nil),    // 14: google.protobuf.Timestamp
+	(Tier)(0),                           // 0: svp.video.v1.Tier
+	(VideoStatus)(0),                    // 1: svp.video.v1.VideoStatus
+	(*Video)(nil),                       // 2: svp.video.v1.Video
+	(*Entitlement)(nil),                 // 3: svp.video.v1.Entitlement
+	(*InitUploadRequest)(nil),           // 4: svp.video.v1.InitUploadRequest
+	(*InitUploadResponse)(nil),          // 5: svp.video.v1.InitUploadResponse
+	(*CompleteUploadRequest)(nil),       // 6: svp.video.v1.CompleteUploadRequest
+	(*CompleteUploadResponse)(nil),      // 7: svp.video.v1.CompleteUploadResponse
+	(*GetVideoRequest)(nil),             // 8: svp.video.v1.GetVideoRequest
+	(*GetVideoResponse)(nil),            // 9: svp.video.v1.GetVideoResponse
+	(*GetPublicVideoRequest)(nil),       // 10: svp.video.v1.GetPublicVideoRequest
+	(*GetPublicVideoResponse)(nil),      // 11: svp.video.v1.GetPublicVideoResponse
+	(*ListAuthorVideosRequest)(nil),     // 12: svp.video.v1.ListAuthorVideosRequest
+	(*ListAuthorVideosResponse)(nil),    // 13: svp.video.v1.ListAuthorVideosResponse
+	(*GrantEntitlementRequest)(nil),     // 14: svp.video.v1.GrantEntitlementRequest
+	(*GrantEntitlementResponse)(nil),    // 15: svp.video.v1.GrantEntitlementResponse
+	(*GetPlaybackPlaylistRequest)(nil),  // 16: svp.video.v1.GetPlaybackPlaylistRequest
+	(*GetPlaybackPlaylistResponse)(nil), // 17: svp.video.v1.GetPlaybackPlaylistResponse
+	nil,                                 // 18: svp.video.v1.InitUploadResponse.FormFieldsEntry
+	(*durationpb.Duration)(nil),         // 19: google.protobuf.Duration
+	(*timestamppb.Timestamp)(nil),       // 20: google.protobuf.Timestamp
 }
 var file_svp_video_v1_video_service_proto_depIdxs = []int32{
-	0,  // 0: svp.video.v1.Video.status:type_name -> svp.video.v1.VideoStatus
-	13, // 1: svp.video.v1.Video.duration:type_name -> google.protobuf.Duration
-	14, // 2: svp.video.v1.Video.created_at:type_name -> google.protobuf.Timestamp
-	14, // 3: svp.video.v1.Video.published_at:type_name -> google.protobuf.Timestamp
-	12, // 4: svp.video.v1.InitUploadResponse.form_fields:type_name -> svp.video.v1.InitUploadResponse.FormFieldsEntry
-	14, // 5: svp.video.v1.InitUploadResponse.expires_at:type_name -> google.protobuf.Timestamp
-	1,  // 6: svp.video.v1.CompleteUploadResponse.video:type_name -> svp.video.v1.Video
-	1,  // 7: svp.video.v1.GetVideoResponse.video:type_name -> svp.video.v1.Video
-	1,  // 8: svp.video.v1.GetPublicVideoResponse.video:type_name -> svp.video.v1.Video
-	1,  // 9: svp.video.v1.ListAuthorVideosResponse.videos:type_name -> svp.video.v1.Video
-	2,  // 10: svp.video.v1.VideoService.InitUpload:input_type -> svp.video.v1.InitUploadRequest
-	4,  // 11: svp.video.v1.VideoService.CompleteUpload:input_type -> svp.video.v1.CompleteUploadRequest
-	6,  // 12: svp.video.v1.VideoService.GetVideo:input_type -> svp.video.v1.GetVideoRequest
-	8,  // 13: svp.video.v1.VideoService.GetPublicVideo:input_type -> svp.video.v1.GetPublicVideoRequest
-	10, // 14: svp.video.v1.VideoService.ListAuthorVideos:input_type -> svp.video.v1.ListAuthorVideosRequest
-	3,  // 15: svp.video.v1.VideoService.InitUpload:output_type -> svp.video.v1.InitUploadResponse
-	5,  // 16: svp.video.v1.VideoService.CompleteUpload:output_type -> svp.video.v1.CompleteUploadResponse
-	7,  // 17: svp.video.v1.VideoService.GetVideo:output_type -> svp.video.v1.GetVideoResponse
-	9,  // 18: svp.video.v1.VideoService.GetPublicVideo:output_type -> svp.video.v1.GetPublicVideoResponse
-	11, // 19: svp.video.v1.VideoService.ListAuthorVideos:output_type -> svp.video.v1.ListAuthorVideosResponse
-	15, // [15:20] is the sub-list for method output_type
-	10, // [10:15] is the sub-list for method input_type
-	10, // [10:10] is the sub-list for extension type_name
-	10, // [10:10] is the sub-list for extension extendee
-	0,  // [0:10] is the sub-list for field type_name
+	1,  // 0: svp.video.v1.Video.status:type_name -> svp.video.v1.VideoStatus
+	19, // 1: svp.video.v1.Video.duration:type_name -> google.protobuf.Duration
+	20, // 2: svp.video.v1.Video.created_at:type_name -> google.protobuf.Timestamp
+	20, // 3: svp.video.v1.Video.published_at:type_name -> google.protobuf.Timestamp
+	0,  // 4: svp.video.v1.Entitlement.tier:type_name -> svp.video.v1.Tier
+	20, // 5: svp.video.v1.Entitlement.granted_at:type_name -> google.protobuf.Timestamp
+	18, // 6: svp.video.v1.InitUploadResponse.form_fields:type_name -> svp.video.v1.InitUploadResponse.FormFieldsEntry
+	20, // 7: svp.video.v1.InitUploadResponse.expires_at:type_name -> google.protobuf.Timestamp
+	2,  // 8: svp.video.v1.CompleteUploadResponse.video:type_name -> svp.video.v1.Video
+	2,  // 9: svp.video.v1.GetVideoResponse.video:type_name -> svp.video.v1.Video
+	0,  // 10: svp.video.v1.GetVideoResponse.entitlement_tier:type_name -> svp.video.v1.Tier
+	2,  // 11: svp.video.v1.GetPublicVideoResponse.video:type_name -> svp.video.v1.Video
+	2,  // 12: svp.video.v1.ListAuthorVideosResponse.videos:type_name -> svp.video.v1.Video
+	0,  // 13: svp.video.v1.GrantEntitlementRequest.tier:type_name -> svp.video.v1.Tier
+	3,  // 14: svp.video.v1.GrantEntitlementResponse.entitlement:type_name -> svp.video.v1.Entitlement
+	4,  // 15: svp.video.v1.VideoService.InitUpload:input_type -> svp.video.v1.InitUploadRequest
+	6,  // 16: svp.video.v1.VideoService.CompleteUpload:input_type -> svp.video.v1.CompleteUploadRequest
+	8,  // 17: svp.video.v1.VideoService.GetVideo:input_type -> svp.video.v1.GetVideoRequest
+	10, // 18: svp.video.v1.VideoService.GetPublicVideo:input_type -> svp.video.v1.GetPublicVideoRequest
+	12, // 19: svp.video.v1.VideoService.ListAuthorVideos:input_type -> svp.video.v1.ListAuthorVideosRequest
+	14, // 20: svp.video.v1.VideoService.GrantEntitlement:input_type -> svp.video.v1.GrantEntitlementRequest
+	16, // 21: svp.video.v1.VideoService.GetPlaybackPlaylist:input_type -> svp.video.v1.GetPlaybackPlaylistRequest
+	5,  // 22: svp.video.v1.VideoService.InitUpload:output_type -> svp.video.v1.InitUploadResponse
+	7,  // 23: svp.video.v1.VideoService.CompleteUpload:output_type -> svp.video.v1.CompleteUploadResponse
+	9,  // 24: svp.video.v1.VideoService.GetVideo:output_type -> svp.video.v1.GetVideoResponse
+	11, // 25: svp.video.v1.VideoService.GetPublicVideo:output_type -> svp.video.v1.GetPublicVideoResponse
+	13, // 26: svp.video.v1.VideoService.ListAuthorVideos:output_type -> svp.video.v1.ListAuthorVideosResponse
+	15, // 27: svp.video.v1.VideoService.GrantEntitlement:output_type -> svp.video.v1.GrantEntitlementResponse
+	17, // 28: svp.video.v1.VideoService.GetPlaybackPlaylist:output_type -> svp.video.v1.GetPlaybackPlaylistResponse
+	22, // [22:29] is the sub-list for method output_type
+	15, // [15:22] is the sub-list for method input_type
+	15, // [15:15] is the sub-list for extension type_name
+	15, // [15:15] is the sub-list for extension extendee
+	0,  // [0:15] is the sub-list for field type_name
 }
 
 func init() { file_svp_video_v1_video_service_proto_init() }
@@ -863,8 +1261,8 @@ func file_svp_video_v1_video_service_proto_init() {
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_svp_video_v1_video_service_proto_rawDesc), len(file_svp_video_v1_video_service_proto_rawDesc)),
-			NumEnums:      1,
-			NumMessages:   12,
+			NumEnums:      2,
+			NumMessages:   17,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

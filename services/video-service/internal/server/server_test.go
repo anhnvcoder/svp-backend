@@ -135,6 +135,12 @@ type fakeStorage struct {
 	failDeletes int
 	// presignErr, when set, is returned by PresignPost instead of a form.
 	presignErr error
+	// files are the objects Read returns, by key; readErr, when set, is returned instead.
+	files   map[string][]byte
+	readErr error
+	reads   int
+	// getTTLs lists the ttl of each PresignGet call, in order.
+	getTTLs []time.Duration
 }
 
 // Signing credentials of the fake; the endpoint is never called.
@@ -156,7 +162,7 @@ func newFakeStorage() *fakeStorage {
 	if err != nil {
 		panic(err)
 	}
-	return &fakeStorage{Store: st, objects: map[string]objstore.ObjectInfo{}}
+	return &fakeStorage{Store: st, objects: map[string]objstore.ObjectInfo{}, files: map[string][]byte{}}
 }
 
 func (f *fakeStorage) Head(_ context.Context, key string) (objstore.ObjectInfo, error) {
@@ -230,6 +236,54 @@ func (f *fakeStorage) put(videoID string, size int64, contentType string) {
 	f.objects[objstore.UploadsPrefix+videoID] = objstore.ObjectInfo{Size: size, ContentType: contentType}
 }
 
+// Read returns what putFile stored at key, as the store would with no size limit reached.
+func (f *fakeStorage) Read(_ context.Context, key string, _ int64) ([]byte, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.reads++
+	if f.readErr != nil {
+		return nil, f.readErr
+	}
+	data, ok := f.files[key]
+	if !ok {
+		return nil, fmt.Errorf("read %s: %w", key, objstore.ErrNotFound)
+	}
+	return data, nil
+}
+
+// PresignGet records ttl and signs for real.
+func (f *fakeStorage) PresignGet(ctx context.Context, key string, ttl time.Duration) (string, error) {
+	f.mu.Lock()
+	f.getTTLs = append(f.getTTLs, ttl)
+	f.mu.Unlock()
+	return f.Store.PresignGet(ctx, key, ttl)
+}
+
+func (f *fakeStorage) putFile(key, content string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.files[key] = []byte(content)
+}
+
+// setReadErr makes Read fail with err from now on; nil reads again.
+func (f *fakeStorage) setReadErr(err error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.readErr = err
+}
+
+func (f *fakeStorage) readCalls() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.reads
+}
+
+func (f *fakeStorage) presignTTLs() []time.Duration {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return slices.Clone(f.getTTLs)
+}
+
 func (f *fakeStorage) headCalls() int {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -248,7 +302,7 @@ func newServerWithStorage() (*Server, *fakeStorage, *logBuffer) {
 	logs := &logBuffer{}
 	logger := slog.New(logx.NewHandler(slog.NewJSONHandler(logs, nil)))
 	storage := newFakeStorage()
-	return New(testPool, storage, logger), storage, logs
+	return New(testPool, storage, nil, logger), storage, logs
 }
 
 // call runs handler the way the gRPC server does: through CallerInterceptor, with an access
@@ -665,7 +719,7 @@ func TestDatabaseErrorIsGenericInternal(t *testing.T) {
 	}
 	closed.Close()
 	logs := &logBuffer{}
-	s := New(closed, newFakeStorage(), slog.New(logx.NewHandler(slog.NewJSONHandler(logs, nil))))
+	s := New(closed, newFakeStorage(), nil, slog.New(logx.NewHandler(slog.NewJSONHandler(logs, nil))))
 
 	_, initErr := initUpload(t, s, ids.New(), validRequest())
 	_, getErr := getVideo(t, s, ids.New(), ids.New())

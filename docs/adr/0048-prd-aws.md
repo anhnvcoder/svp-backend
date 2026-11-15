@@ -181,8 +181,7 @@ Buổi T = 4 giờ. H₀ (theo giờ khi prd chạy, chưa gồm Kafka) ~$0,90/g
 
 ## Nguồn
 
-Đọc 2026-11-05; đủ [N1]–[N21] và giá ở phụ lục. [N1] <https://docs.aws.amazon.com/organizations/latest/userguide/orgs_best-practices_mgmt-acct.html>,
-[N5] <https://github.com/hashicorp/terraform-provider-kubernetes/blob/main/docs/index.md>, [N13] <https://github.com/gitops-bridge-dev/gitops-bridge>, [N15] <https://github.com/argoproj/argo-cd/blob/v3.5.5/docs/operator-manual/applicationset/Generators-Cluster.md>, [N21] <https://github.com/argoproj/argo-cd/blob/v3.5.5/reposerver/repository/repository.go#L807-L812>.
+Đọc 2026-11-05; đủ [N1]–[N21] và giá ở phụ lục. [N1] <https://docs.aws.amazon.com/organizations/latest/userguide/orgs_best-practices_mgmt-acct.html>, [N5] <https://github.com/hashicorp/terraform-provider-kubernetes/blob/main/docs/index.md>, [N13] <https://github.com/gitops-bridge-dev/gitops-bridge>, [N15] <https://github.com/argoproj/argo-cd/blob/v3.5.5/docs/operator-manual/applicationset/Generators-Cluster.md>, [N21] <https://github.com/argoproj/argo-cd/blob/v3.5.5/reposerver/repository/repository.go#L807-L812>.
 
 ## Thông tin thêm
 
@@ -198,3 +197,4 @@ Phụ lục: [`appendix/0048-prd-aws.md`](appendix/0048-prd-aws.md) (phương á
 - §1, "Ngoài phạm vi" của Hệ quả: [0059](0059-org-structure-guardrails.md): account Log Archive `svp-log-archive` và Security Tooling `svp-security` ở OU `Security`; `svp-prd`, `svp-stg` ở OU con `Prod`, `NonProd` của `Workloads`; ba SCP chuyển lên root cùng `svp-protect-baseline`, `svp-deny-iam-users`, OU `Prod` thêm `svp-prod-guardrails`; RCP data perimeter, declarative policy EC2, tag policy; `SvpAdmin` phiên 1 giờ, thêm `SvpReadOnly`, `SvpLogReader`; root tập trung.
 - §1, "Xem lại khi" của Hệ quả: [0060](0060-org-detection-logging.md): trail `svp-audit` ghi vào bucket `svp-cloudtrail-…` của `svp-log-archive` với key ở đó, thêm data event S3 của `uploads` và lệnh ghi vào `media` ở prd; bucket, key trail cũ giữ tới hết Object Lock; GuardDuty, Security Hub CSPM, Config, Access Analyzer toàn org do `svp-security` quản.
 - §4, §6: [0061](0061-edge-cloudfront-waf-acm.md): mỗi env ba web ACL (web, api, media) thêm IP reputation, ATP ở api, Bot Control ở web; `pre-destroy.sh` không còn chờ NLB và bản ghi DNS của ExternalDNS (ALB, target group, bản ghi edge do Terraform).
+- §5: [0073](0073-premium-playback.md): entry `svp/<env>/media-signing` chỉ do `media-signing-key.sh activate` của `svp-infra` ghi (khoá sinh trên máy, không từ `.env`), `make eks-secrets` chỉ kiểm nó đã có giá trị.

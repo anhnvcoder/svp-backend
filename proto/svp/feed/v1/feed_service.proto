@@ -47,15 +47,18 @@ message FeedItem {
   string author_id = 2;
   string title = 3;
   google.protobuf.Duration duration = 4;
-  // Object key of the HLS master playlist,
-  // `media/<video_id>/<version>/master.m3u8` (videos made before versions:
-  // `media/<video_id>/master.m3u8`).
+  // Object key of the HLS master playlist, `media/<video_id>/<version>/master.m3u8` (before versions:
+  // `media/<video_id>/master.m3u8`). A premium video holds the public preview,
+  // `preview/<video_id>/<version>/master.m3u8`, never a key under `premium/`.
   // The gateway turns it into a public URL.
   string playlist_key = 5;
   // Object key of the thumbnail image under `media/<video_id>/`, in the
-  // directory the master playlist names.
+  // directory the master playlist names; under `preview/<video_id>/` for a
+  // premium video.
   string thumbnail_key = 6;
   google.protobuf.Timestamp published_at = 7;
+  // The video is premium; playing it in full needs an entitlement.
+  bool premium = 8;
 }
 
 message GetFollowingFeedRequest {

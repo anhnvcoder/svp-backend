@@ -5,7 +5,7 @@
       "Effect": "Allow",
       "Principal": { "AWS": ["*"] },
       "Action": ["s3:GetObject"],
-      "Resource": ["arn:aws:s3:::media/media/*"]
+      "Resource": ["arn:aws:s3:::media/media/*", "arn:aws:s3:::media/preview/*"]
     }
   ]
 }

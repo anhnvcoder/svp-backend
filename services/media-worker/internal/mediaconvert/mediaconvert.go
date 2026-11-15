@@ -7,11 +7,12 @@
 // Flow of a version (the event_id of its video.uploaded, as in package worker): Probe the source
 // in the uploads bucket against the limits of package transcode; a source over them gets a
 // record of its failure reason and no job. Otherwise CreateJob writes the HLS renditions and a
-// frame capture flat into media/<video_id>/<version>/<attempt>/, attempt being a new UUID per
-// call, and the job is recorded. When the job completes, every object of the attempt is copied
-// in place with the Cache-Control and Content-Type that worker gives its objects, the frame
-// capture becomes thumbnail.jpg, the master playlist is created once, and the result is read
-// back from the stored playlists as worker reads it.
+// frame capture flat into media/<video_id>/<version>/<attempt>/ (premium/ for a premium video,
+// flagged in the job's metadata), attempt being a new UUID per call, and the job is recorded.
+// When the job completes, every object of the attempt is copied in place with the Cache-Control
+// and Content-Type that worker gives its objects, the frame capture becomes thumbnail.jpg, a
+// premium video's public preview is published as worker publishes it, the master playlist is
+// created once, and the result is read back from the stored playlists as worker reads it.
 //
 // Idempotency: the job record transcode-jobs/<video_id>/<version>.json in the media bucket is
 // written only with If-None-Match, so the first record wins and is never replaced. The result
@@ -92,6 +93,7 @@ type Queue interface {
 // ErrExists and ErrAccessDenied wrapped; anything else is temporary.
 type Storage interface {
 	Download(ctx context.Context, key, path string, maxBytes int64) error
+	Upload(ctx context.Context, key, path, contentType, cacheControl string) error
 	// Create writes key only when it holds no object yet, ErrExists otherwise.
 	Create(ctx context.Context, key, path, contentType, cacheControl string) error
 	// Exists lists key: false only when storage answered that it holds no such object.
@@ -172,7 +174,7 @@ func (b *Bridge) Handle(ctx context.Context, r *kgo.Record, a kafkax.Attempt) er
 	ctx = logx.With(ctx, slog.String("video_id", id), slog.String("version", version))
 
 	res, err := b.try(ctx, id, func(ctx context.Context, dir string) (settled, error) {
-		return b.uploaded(ctx, dir, id, version)
+		return b.uploaded(ctx, dir, id, version, up.GetPremium())
 	})
 	if err != nil {
 		if ctx.Err() != nil || !a.Last {

@@ -10,7 +10,7 @@ K8S_LIB := . deploy/k8s/lib.sh
 	k8s-ui-argocd k8s-traffic-start k8s-traffic-stop drill-k8s-threats \
 	drill-k8s-supplychain drill-k8s-gitops drill-k8s-reloader k8s-web-sourcemaps k8s-web-e2e cloud-check \
 	gitops-clone web-clone eks-secrets eks-glitchtip-init eks-smoke eks-seed \
-	eks-transcode-timing eks-rl-reset
+	eks-transcode-timing eks-rl-reset eks-premium-check
 
 # Compose and k3d never run together on the 16 GB machine (they do not fit in its RAM): the cluster is not created or
 # started beside a running compose stack. `make up` refuses the other way round (deploy/compose/compose.mk).
@@ -202,6 +202,12 @@ eks-transcode-timing: ## Upload the video CLIP=<file> N=<n> times to the EKS clu
 	@$(EKS_CONTEXT_CHECK)
 	@$(EKS_DOMAIN_CHECK)
 	env -u CURL_CA_BUNDLE SVP_STACK=eks SVP_KUBE_CONTEXT='$(CONTEXT)' deploy/compose/transcode-timing.sh 'https://api.$(DOMAIN)' '$(CLIP)' '$(N)'
+
+WAIT_EXPIRY ?=
+eks-premium-check: ## Check premium playback at the edge of the EKS cluster CONTEXT=svp-stg|svp-prd through https://api.<DOMAIN> and its CDN: the refusals of CloudFront and of the playback route, CloudFront's cache hit ratio for public and signed segments, and with WAIT_EXPIRY=1 the refusal of a signed URL past its expiry (waits up to about 20 minutes); curl only, no AWS API, no kubectl
+	@$(EKS_CONTEXT_CHECK)
+	@$(EKS_DOMAIN_CHECK)
+	env -u CURL_CA_BUNDLE SVP_KUBE_CONTEXT='$(CONTEXT)' deploy/k8s/premium-edge-check.sh $(if $(filter 1,$(WAIT_EXPIRY)),--wait-expiry) 'https://api.$(DOMAIN)'
 
 # Before each level of a load test: every pod of the k6 profile cloud registers its users from its own address, which
 # a later pod may get again, so the register burst of one address would run out between levels.

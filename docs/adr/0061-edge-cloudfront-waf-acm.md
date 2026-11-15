@@ -192,9 +192,9 @@ giống (0055). ADR cũ chỉnh (dòng `### Chỉnh bởi`): 0020 §2, 0034 §5,
 
 ## Thông tin thêm
 
-Phụ lục: [`appendix/0061-edge-cloudfront-waf-acm.md`](appendix/0061-edge-cloudfront-waf-acm.md) (phương án, giá trị đủ từng §, bảng header,
-luật WAF, trường log, bảng control FSBP, bảng luồng RCP, bảng giá và chi phí, phép kiểm edge, nguồn).
+Phụ lục: [`appendix/0061-edge-cloudfront-waf-acm.md`](appendix/0061-edge-cloudfront-waf-acm.md) (phương án, giá trị đủ từng §, bảng header, luật WAF, trường log, bảng control FSBP, bảng luồng RCP, bảng giá và chi phí, phép kiểm edge, nguồn).
 
 ### Chỉnh bởi
 
 - §6: [0069](0069-auth-hardening.md): gateway đặt nosniff, CSP, Cache-Control; policy api override = true ghi đè cùng giá trị.
+- §2, §8: [0073](0073-premium-playback.md): distribution media thêm `ordered_cache_behavior` `premium/*` có `trusted_key_groups` (key group `svp-<env>-media`), cùng cache policy và response headers policy với behavior mặc định; `cs-uri-query` của media mang `Policy`, `Signature`, `Key-Pair-Id`, `Hash-Algorithm` của URL đã ký, dùng được tới hạn chữ ký (≤ độ dài video + 20 phút).

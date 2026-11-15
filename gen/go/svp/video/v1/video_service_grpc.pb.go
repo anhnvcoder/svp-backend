@@ -19,11 +19,13 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	VideoService_InitUpload_FullMethodName       = "/svp.video.v1.VideoService/InitUpload"
-	VideoService_CompleteUpload_FullMethodName   = "/svp.video.v1.VideoService/CompleteUpload"
-	VideoService_GetVideo_FullMethodName         = "/svp.video.v1.VideoService/GetVideo"
-	VideoService_GetPublicVideo_FullMethodName   = "/svp.video.v1.VideoService/GetPublicVideo"
-	VideoService_ListAuthorVideos_FullMethodName = "/svp.video.v1.VideoService/ListAuthorVideos"
+	VideoService_InitUpload_FullMethodName          = "/svp.video.v1.VideoService/InitUpload"
+	VideoService_CompleteUpload_FullMethodName      = "/svp.video.v1.VideoService/CompleteUpload"
+	VideoService_GetVideo_FullMethodName            = "/svp.video.v1.VideoService/GetVideo"
+	VideoService_GetPublicVideo_FullMethodName      = "/svp.video.v1.VideoService/GetPublicVideo"
+	VideoService_ListAuthorVideos_FullMethodName    = "/svp.video.v1.VideoService/ListAuthorVideos"
+	VideoService_GrantEntitlement_FullMethodName    = "/svp.video.v1.VideoService/GrantEntitlement"
+	VideoService_GetPlaybackPlaylist_FullMethodName = "/svp.video.v1.VideoService/GetPlaybackPlaylist"
 )
 
 // VideoServiceClient is the client API for VideoService service.
@@ -41,9 +43,10 @@ const (
 //
 // All ids are UUIDv7 strings in canonical lowercase form (36 chars). Media
 // locations are object keys (for example
-// `media/<video_id>/<version>/master.m3u8`),
-// never absolute URLs: the gateway builds public URLs from per-environment
-// configuration (the local object store, a CDN in the cloud).
+// `media/<video_id>/<version>/master.m3u8`; a premium video lives under
+// `premium/` and `preview/` instead of `media/`), never absolute URLs: the
+// gateway builds public URLs from per-environment configuration (the local
+// object store, a CDN in the cloud).
 type VideoServiceClient interface {
 	// InitUpload creates a video in UPLOADING owned by the caller and returns a
 	// presigned POST for the object key `uploads/<video_id>`. The policy limits
@@ -53,8 +56,8 @@ type VideoServiceClient interface {
 	// Without request_id each call creates a new video. With request_id
 	// (Google AIP-155) a repeated call is answered from the video the first
 	// call created: when the caller already has a video with this request_id
-	// and the same title, size_bytes and content_type (compared after the same
-	// normalization as on creation) still UPLOADING, the call returns that
+	// and the same title, size_bytes, content_type and premium (compared after
+	// the same normalization as on creation) still UPLOADING, the call returns that
 	// video_id with a newly signed form and creates nothing. The new form
 	// expires with the first one, 15 minutes after the video was created.
 	// Repeated calls do not count against the open upload limit. Concurrent
@@ -62,11 +65,15 @@ type VideoServiceClient interface {
 	// request_id is bound to its video for as long as the video exists: it
 	// does not expire.
 	//
+	// premium marks the video as premium for good: it is fixed here and never
+	// changes, because the media of a premium video is stored under other
+	// prefixes than a regular one.
+	//
 	// Errors:
 	// - INVALID_ARGUMENT: empty title, size_bytes not in (0, 500 MB],
 	//   content_type not a `video/*` type, request_id not a canonical lowercase
 	//   UUID (`INVALID_REQUEST_ID`), or request_id already used by the caller
-	//   with another title, size_bytes or content_type
+	//   with another title, size_bytes, content_type or premium
 	//   (`IDEMPOTENCY_KEY_MISMATCH`).
 	// - FAILED_PRECONDITION: the first call of request_id cannot be answered
 	//   again: its video has left UPLOADING, or its upload window has ended
@@ -91,7 +98,8 @@ type VideoServiceClient interface {
 	//   declared size or content type, or the video is already FAILED.
 	CompleteUpload(ctx context.Context, in *CompleteUploadRequest, opts ...grpc.CallOption) (*CompleteUploadResponse, error)
 	// GetVideo returns one video. Videos that are not READY are visible only
-	// to their author, so processing or failed videos do not leak.
+	// to their author, so processing or failed videos do not leak. The response
+	// also tells which tier the caller holds on a premium video.
 	//
 	// Errors:
 	// - INVALID_ARGUMENT: video_id is not a UUID.
@@ -128,6 +136,33 @@ type VideoServiceClient interface {
 	//   page_size is negative (`INVALID_PAGE_SIZE`), or page_token cannot be
 	//   decoded (`INVALID_PAGE_TOKEN`).
 	ListAuthorVideos(ctx context.Context, in *ListAuthorVideosRequest, opts ...grpc.CallOption) (*ListAuthorVideosResponse, error)
+	// GrantEntitlement records that the caller bought the premium video at tier
+	// (a simulated purchase: nothing is charged). Idempotent: a repeated call
+	// overwrites the tier of the caller's entitlement, so it can also upgrade or
+	// downgrade it. Requires caller.
+	//
+	// Errors:
+	// - INVALID_ARGUMENT: video_id is not a UUID, or tier is unspecified or
+	//   not a known Tier (`INVALID_TIER`).
+	// - NOT_FOUND: no such video, or it is not READY (`VIDEO_NOT_FOUND`).
+	// - FAILED_PRECONDITION: the video is not premium (`VIDEO_NOT_PREMIUM`), or
+	//   the caller is its author, who already holds TIER_FHD (`ALREADY_ENTITLED`).
+	GrantEntitlement(ctx context.Context, in *GrantEntitlementRequest, opts ...grpc.CallOption) (*GrantEntitlementResponse, error)
+	// GetPlaybackPlaylist returns an HLS playlist of a premium video, rewritten
+	// for the caller. With an empty rendition it is the master playlist, cut
+	// down to the renditions of the caller's tier. With a rendition (for example
+	// `720p`) it is that rendition's media playlist, whose segment URIs are
+	// signed absolute URLs valid for that rendition only. Requires caller; the
+	// caller needs an entitlement, or is the video's author (who has TIER_FHD).
+	//
+	// Errors:
+	// - INVALID_ARGUMENT: video_id is not a UUID.
+	// - NOT_FOUND: no such video, or it is not READY (`VIDEO_NOT_FOUND`); the
+	//   video has no such rendition (`RENDITION_NOT_FOUND`).
+	// - FAILED_PRECONDITION: the video is not premium (`VIDEO_NOT_PREMIUM`).
+	// - PERMISSION_DENIED: the caller has no entitlement (`NOT_ENTITLED`), or
+	//   the rendition is above the caller's tier (`RENDITION_NOT_ENTITLED`).
+	GetPlaybackPlaylist(ctx context.Context, in *GetPlaybackPlaylistRequest, opts ...grpc.CallOption) (*GetPlaybackPlaylistResponse, error)
 }
 
 type videoServiceClient struct {
@@ -188,6 +223,26 @@ func (c *videoServiceClient) ListAuthorVideos(ctx context.Context, in *ListAutho
 	return out, nil
 }
 
+func (c *videoServiceClient) GrantEntitlement(ctx context.Context, in *GrantEntitlementRequest, opts ...grpc.CallOption) (*GrantEntitlementResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(GrantEntitlementResponse)
+	err := c.cc.Invoke(ctx, VideoService_GrantEntitlement_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *videoServiceClient) GetPlaybackPlaylist(ctx context.Context, in *GetPlaybackPlaylistRequest, opts ...grpc.CallOption) (*GetPlaybackPlaylistResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(GetPlaybackPlaylistResponse)
+	err := c.cc.Invoke(ctx, VideoService_GetPlaybackPlaylist_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // VideoServiceServer is the server API for VideoService service.
 // All implementations must embed UnimplementedVideoServiceServer
 // for forward compatibility.
@@ -203,9 +258,10 @@ func (c *videoServiceClient) ListAuthorVideos(ctx context.Context, in *ListAutho
 //
 // All ids are UUIDv7 strings in canonical lowercase form (36 chars). Media
 // locations are object keys (for example
-// `media/<video_id>/<version>/master.m3u8`),
-// never absolute URLs: the gateway builds public URLs from per-environment
-// configuration (the local object store, a CDN in the cloud).
+// `media/<video_id>/<version>/master.m3u8`; a premium video lives under
+// `premium/` and `preview/` instead of `media/`), never absolute URLs: the
+// gateway builds public URLs from per-environment configuration (the local
+// object store, a CDN in the cloud).
 type VideoServiceServer interface {
 	// InitUpload creates a video in UPLOADING owned by the caller and returns a
 	// presigned POST for the object key `uploads/<video_id>`. The policy limits
@@ -215,8 +271,8 @@ type VideoServiceServer interface {
 	// Without request_id each call creates a new video. With request_id
 	// (Google AIP-155) a repeated call is answered from the video the first
 	// call created: when the caller already has a video with this request_id
-	// and the same title, size_bytes and content_type (compared after the same
-	// normalization as on creation) still UPLOADING, the call returns that
+	// and the same title, size_bytes, content_type and premium (compared after
+	// the same normalization as on creation) still UPLOADING, the call returns that
 	// video_id with a newly signed form and creates nothing. The new form
 	// expires with the first one, 15 minutes after the video was created.
 	// Repeated calls do not count against the open upload limit. Concurrent
@@ -224,11 +280,15 @@ type VideoServiceServer interface {
 	// request_id is bound to its video for as long as the video exists: it
 	// does not expire.
 	//
+	// premium marks the video as premium for good: it is fixed here and never
+	// changes, because the media of a premium video is stored under other
+	// prefixes than a regular one.
+	//
 	// Errors:
 	// - INVALID_ARGUMENT: empty title, size_bytes not in (0, 500 MB],
 	//   content_type not a `video/*` type, request_id not a canonical lowercase
 	//   UUID (`INVALID_REQUEST_ID`), or request_id already used by the caller
-	//   with another title, size_bytes or content_type
+	//   with another title, size_bytes, content_type or premium
 	//   (`IDEMPOTENCY_KEY_MISMATCH`).
 	// - FAILED_PRECONDITION: the first call of request_id cannot be answered
 	//   again: its video has left UPLOADING, or its upload window has ended
@@ -253,7 +313,8 @@ type VideoServiceServer interface {
 	//   declared size or content type, or the video is already FAILED.
 	CompleteUpload(context.Context, *CompleteUploadRequest) (*CompleteUploadResponse, error)
 	// GetVideo returns one video. Videos that are not READY are visible only
-	// to their author, so processing or failed videos do not leak.
+	// to their author, so processing or failed videos do not leak. The response
+	// also tells which tier the caller holds on a premium video.
 	//
 	// Errors:
 	// - INVALID_ARGUMENT: video_id is not a UUID.
@@ -290,6 +351,33 @@ type VideoServiceServer interface {
 	//   page_size is negative (`INVALID_PAGE_SIZE`), or page_token cannot be
 	//   decoded (`INVALID_PAGE_TOKEN`).
 	ListAuthorVideos(context.Context, *ListAuthorVideosRequest) (*ListAuthorVideosResponse, error)
+	// GrantEntitlement records that the caller bought the premium video at tier
+	// (a simulated purchase: nothing is charged). Idempotent: a repeated call
+	// overwrites the tier of the caller's entitlement, so it can also upgrade or
+	// downgrade it. Requires caller.
+	//
+	// Errors:
+	// - INVALID_ARGUMENT: video_id is not a UUID, or tier is unspecified or
+	//   not a known Tier (`INVALID_TIER`).
+	// - NOT_FOUND: no such video, or it is not READY (`VIDEO_NOT_FOUND`).
+	// - FAILED_PRECONDITION: the video is not premium (`VIDEO_NOT_PREMIUM`), or
+	//   the caller is its author, who already holds TIER_FHD (`ALREADY_ENTITLED`).
+	GrantEntitlement(context.Context, *GrantEntitlementRequest) (*GrantEntitlementResponse, error)
+	// GetPlaybackPlaylist returns an HLS playlist of a premium video, rewritten
+	// for the caller. With an empty rendition it is the master playlist, cut
+	// down to the renditions of the caller's tier. With a rendition (for example
+	// `720p`) it is that rendition's media playlist, whose segment URIs are
+	// signed absolute URLs valid for that rendition only. Requires caller; the
+	// caller needs an entitlement, or is the video's author (who has TIER_FHD).
+	//
+	// Errors:
+	// - INVALID_ARGUMENT: video_id is not a UUID.
+	// - NOT_FOUND: no such video, or it is not READY (`VIDEO_NOT_FOUND`); the
+	//   video has no such rendition (`RENDITION_NOT_FOUND`).
+	// - FAILED_PRECONDITION: the video is not premium (`VIDEO_NOT_PREMIUM`).
+	// - PERMISSION_DENIED: the caller has no entitlement (`NOT_ENTITLED`), or
+	//   the rendition is above the caller's tier (`RENDITION_NOT_ENTITLED`).
+	GetPlaybackPlaylist(context.Context, *GetPlaybackPlaylistRequest) (*GetPlaybackPlaylistResponse, error)
 	mustEmbedUnimplementedVideoServiceServer()
 }
 
@@ -314,6 +402,12 @@ func (UnimplementedVideoServiceServer) GetPublicVideo(context.Context, *GetPubli
 }
 func (UnimplementedVideoServiceServer) ListAuthorVideos(context.Context, *ListAuthorVideosRequest) (*ListAuthorVideosResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method ListAuthorVideos not implemented")
+}
+func (UnimplementedVideoServiceServer) GrantEntitlement(context.Context, *GrantEntitlementRequest) (*GrantEntitlementResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method GrantEntitlement not implemented")
+}
+func (UnimplementedVideoServiceServer) GetPlaybackPlaylist(context.Context, *GetPlaybackPlaylistRequest) (*GetPlaybackPlaylistResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method GetPlaybackPlaylist not implemented")
 }
 func (UnimplementedVideoServiceServer) mustEmbedUnimplementedVideoServiceServer() {}
 func (UnimplementedVideoServiceServer) testEmbeddedByValue()                      {}
@@ -426,6 +520,42 @@ func _VideoService_ListAuthorVideos_Handler(srv interface{}, ctx context.Context
 	return interceptor(ctx, in, info, handler)
 }
 
+func _VideoService_GrantEntitlement_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GrantEntitlementRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(VideoServiceServer).GrantEntitlement(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: VideoService_GrantEntitlement_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(VideoServiceServer).GrantEntitlement(ctx, req.(*GrantEntitlementRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _VideoService_GetPlaybackPlaylist_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetPlaybackPlaylistRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(VideoServiceServer).GetPlaybackPlaylist(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: VideoService_GetPlaybackPlaylist_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(VideoServiceServer).GetPlaybackPlaylist(ctx, req.(*GetPlaybackPlaylistRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // VideoService_ServiceDesc is the grpc.ServiceDesc for VideoService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -452,6 +582,14 @@ var VideoService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "ListAuthorVideos",
 			Handler:    _VideoService_ListAuthorVideos_Handler,
+		},
+		{
+			MethodName: "GrantEntitlement",
+			Handler:    _VideoService_GrantEntitlement_Handler,
+		},
+		{
+			MethodName: "GetPlaybackPlaylist",
+			Handler:    _VideoService_GetPlaybackPlaylist_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

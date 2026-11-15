@@ -494,13 +494,21 @@ func newEnvBehind(t *testing.T, clientAddr httpx.ClientAddr, limits *ratelimit.L
 // newEnvDialed is newEnvBehind with userOpts added to the dial options of user-service too.
 func newEnvDialed(t *testing.T, clientAddr httpx.ClientAddr, limits *ratelimit.Limiter, userOpts, engagementOpts []grpc.DialOption) *env {
 	t.Helper()
+	return newEnvServing(t, clientAddr, limits, userOpts, engagementOpts, fakeVideos{}, fakeFeed{})
+}
+
+// newEnvServing is newEnvDialed with videoSrv and feedSrv as the fake video and feed services.
+func newEnvServing(t *testing.T, clientAddr httpx.ClientAddr, limits *ratelimit.Limiter, userOpts, engagementOpts []grpc.DialOption,
+	videoSrv videov1.VideoServiceServer, feedSrv feedv1.FeedServiceServer,
+) *env {
+	t.Helper()
 	key, err := authtoken.GenerateKey()
 	if err != nil {
 		t.Fatal(err)
 	}
 	users, userConn := startBackend(t, func(s *grpc.Server) { userv1.RegisterUserServiceServer(s, fakeUsers{}) }, userOpts...)
-	videos, videoConn := startBackend(t, func(s *grpc.Server) { videov1.RegisterVideoServiceServer(s, fakeVideos{}) })
-	feeds, feedConn := startBackend(t, func(s *grpc.Server) { feedv1.RegisterFeedServiceServer(s, fakeFeed{}) })
+	videos, videoConn := startBackend(t, func(s *grpc.Server) { videov1.RegisterVideoServiceServer(s, videoSrv) })
+	feeds, feedConn := startBackend(t, func(s *grpc.Server) { feedv1.RegisterFeedServiceServer(s, feedSrv) })
 	stats := &fakeEngagement{}
 	engagement, engagementConn := startBackend(t, func(s *grpc.Server) { engagementv1.RegisterEngagementServiceServer(s, stats) }, engagementOpts...)
 	verifier := authtoken.NewVerifier(map[string]ed25519.PublicKey{testKID: key.Public().(ed25519.PublicKey)})
@@ -1321,6 +1329,11 @@ func TestAuthenticatedRoutesNeedToken(t *testing.T) {
 		{http.MethodGet, "/me/videos", ""},
 		{http.MethodGet, "/profiles/bob", ""},
 		{http.MethodGet, "/users/" + userB + "/videos", ""},
+		{http.MethodPut, "/me/entitlements/" + videoID, `{"tier":"sd"}`},
+		{http.MethodGet, "/videos/" + videoID + "/playback/master.m3u8", ""},
+		{http.MethodGet, "/videos/" + videoID + "/playback/360p.m3u8", ""},
+		// A file of the wrong form is refused for the token before its form is checked.
+		{http.MethodGet, "/videos/" + videoID + "/playback/index.ts", ""},
 	}
 	for _, rt := range routes {
 		for _, token := range []string{"", "not-a-jwt"} {

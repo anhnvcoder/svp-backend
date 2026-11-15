@@ -131,7 +131,10 @@ type VideoUploaded struct {
 	// MIME type declared at InitUpload and checked at CompleteUpload.
 	ContentType string `protobuf:"bytes,4,opt,name=content_type,json=contentType,proto3" json:"content_type,omitempty"`
 	// Size of the source object in bytes.
-	SizeBytes     int64 `protobuf:"varint,5,opt,name=size_bytes,json=sizeBytes,proto3" json:"size_bytes,omitempty"`
+	SizeBytes int64 `protobuf:"varint,5,opt,name=size_bytes,json=sizeBytes,proto3" json:"size_bytes,omitempty"`
+	// The video is premium: media-worker writes its output under `premium/`
+	// and a public preview under `preview/`.
+	Premium       bool `protobuf:"varint,6,opt,name=premium,proto3" json:"premium,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -201,6 +204,13 @@ func (x *VideoUploaded) GetSizeBytes() int64 {
 	return 0
 }
 
+func (x *VideoUploaded) GetPremium() bool {
+	if x != nil {
+		return x.Premium
+	}
+	return false
+}
+
 // VideoReady: the video is READY and published. Carries every field a feed
 // item needs, so feed-service never calls video-service back.
 type VideoReady struct {
@@ -211,15 +221,22 @@ type VideoReady struct {
 	Duration *durationpb.Duration   `protobuf:"bytes,4,opt,name=duration,proto3" json:"duration,omitempty"`
 	// Object key of the HLS master playlist,
 	// `media/<video_id>/<version>/master.m3u8` (videos made before versions:
-	// `media/<video_id>/master.m3u8`).
+	// `media/<video_id>/master.m3u8`); `premium/<video_id>/<version>/master.m3u8`
+	// for a premium video.
 	PlaylistKey string `protobuf:"bytes,5,opt,name=playlist_key,json=playlistKey,proto3" json:"playlist_key,omitempty"`
 	// Object key of the thumbnail image under `media/<video_id>/`, in the
-	// directory the master playlist names.
+	// directory the master playlist names; under `preview/<video_id>/` for a
+	// premium video.
 	ThumbnailKey string `protobuf:"bytes,6,opt,name=thumbnail_key,json=thumbnailKey,proto3" json:"thumbnail_key,omitempty"`
 	// Publication time used to order feeds.
-	PublishedAt   *timestamppb.Timestamp `protobuf:"bytes,7,opt,name=published_at,json=publishedAt,proto3" json:"published_at,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	PublishedAt *timestamppb.Timestamp `protobuf:"bytes,7,opt,name=published_at,json=publishedAt,proto3" json:"published_at,omitempty"`
+	// The video is premium.
+	Premium bool `protobuf:"varint,8,opt,name=premium,proto3" json:"premium,omitempty"`
+	// Object key of the public preview's master playlist,
+	// `preview/<video_id>/<version>/master.m3u8`; empty for a regular video.
+	PreviewPlaylistKey string `protobuf:"bytes,9,opt,name=preview_playlist_key,json=previewPlaylistKey,proto3" json:"preview_playlist_key,omitempty"`
+	unknownFields      protoimpl.UnknownFields
+	sizeCache          protoimpl.SizeCache
 }
 
 func (x *VideoReady) Reset() {
@@ -301,6 +318,20 @@ func (x *VideoReady) GetPublishedAt() *timestamppb.Timestamp {
 	return nil
 }
 
+func (x *VideoReady) GetPremium() bool {
+	if x != nil {
+		return x.Premium
+	}
+	return false
+}
+
+func (x *VideoReady) GetPreviewPlaylistKey() string {
+	if x != nil {
+		return x.PreviewPlaylistKey
+	}
+	return ""
+}
+
 var File_svp_video_v1_events_proto protoreflect.FileDescriptor
 
 const file_svp_video_v1_events_proto_rawDesc = "" +
@@ -312,7 +343,7 @@ const file_svp_video_v1_events_proto_rawDesc = "" +
 	"\x0evideo_uploaded\x18\x02 \x01(\v2\x1b.svp.video.v1.VideoUploadedH\x00R\rvideoUploaded\x12;\n" +
 	"\vvideo_ready\x18\x03 \x01(\v2\x18.svp.video.v1.VideoReadyH\x00R\n" +
 	"videoReadyB\a\n" +
-	"\x05event\"\xa8\x01\n" +
+	"\x05event\"\xc2\x01\n" +
 	"\rVideoUploaded\x12\x19\n" +
 	"\bvideo_id\x18\x01 \x01(\tR\avideoId\x12\x1b\n" +
 	"\tauthor_id\x18\x02 \x01(\tR\bauthorId\x12\x1d\n" +
@@ -320,7 +351,8 @@ const file_svp_video_v1_events_proto_rawDesc = "" +
 	"source_key\x18\x03 \x01(\tR\tsourceKey\x12!\n" +
 	"\fcontent_type\x18\x04 \x01(\tR\vcontentType\x12\x1d\n" +
 	"\n" +
-	"size_bytes\x18\x05 \x01(\x03R\tsizeBytes\"\x98\x02\n" +
+	"size_bytes\x18\x05 \x01(\x03R\tsizeBytes\x12\x18\n" +
+	"\apremium\x18\x06 \x01(\bR\apremium\"\xe4\x02\n" +
 	"\n" +
 	"VideoReady\x12\x19\n" +
 	"\bvideo_id\x18\x01 \x01(\tR\avideoId\x12\x1b\n" +
@@ -329,7 +361,9 @@ const file_svp_video_v1_events_proto_rawDesc = "" +
 	"\bduration\x18\x04 \x01(\v2\x19.google.protobuf.DurationR\bduration\x12!\n" +
 	"\fplaylist_key\x18\x05 \x01(\tR\vplaylistKey\x12#\n" +
 	"\rthumbnail_key\x18\x06 \x01(\tR\fthumbnailKey\x12=\n" +
-	"\fpublished_at\x18\a \x01(\v2\x1a.google.protobuf.TimestampR\vpublishedAtB\xb0\x01\n" +
+	"\fpublished_at\x18\a \x01(\v2\x1a.google.protobuf.TimestampR\vpublishedAt\x12\x18\n" +
+	"\apremium\x18\b \x01(\bR\apremium\x120\n" +
+	"\x14preview_playlist_key\x18\t \x01(\tR\x12previewPlaylistKeyB\xb0\x01\n" +
 	"\x10com.svp.video.v1B\vEventsProtoP\x01Z=github.com/anhnvcoder/svp-backend/gen/go/svp/video/v1;videov1\xa2\x02\x03SVX\xaa\x02\fSvp.Video.V1\xca\x02\fSvp\\Video\\V1\xe2\x02\x18Svp\\Video\\V1\\GPBMetadata\xea\x02\x0eSvp::Video::V1b\x06proto3"
 
 var (

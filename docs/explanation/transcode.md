@@ -105,8 +105,9 @@ kết thúc ở cùng một bước `settle` trên bản ghi job, nên đường
 2. **Job.** Settings dựng trong Go: thang rendition của `serve` trên kích thước hiển thị (sau xoay theo `rotation` của
    Probe), H.264 + AAC, không audio khi nguồn không có, một frame capture JPEG. `InputClippings` cắt tại frame cuối của
    thời lượng Probe báo, không quá giới hạn: trần chi phí khi metadata nói dối. `UserMetadata` mang `video_id`,
-   `version`, `attempt` và `traceparent`, nên trace của `video.uploaded` nối tới lần `settle` từ SQS. Job chạy với
-   **Role MediaConvert** `svp-<env>-mediaconvert`, chỉ đọc `uploads/*`, ghi `media/*`.
+   `version`, `attempt` và `traceparent`, nên trace của `video.uploaded` nối tới lần `settle` từ SQS; video premium thêm
+   `premium` `true`, nên lần `settle` từ SQS biết destination nằm dưới `premium/`. Job chạy với **Role MediaConvert**
+   `svp-<env>-mediaconvert`, chỉ đọc `uploads/*`, ghi `media/*`, `premium/*`.
 3. **Trạng thái.** Rule `svp-<env>-mediaconvert-job-state` chỉ khớp `COMPLETE` và `ERROR` của queue env, gửi vào hàng
    đợi SQS thay vì gọi thẳng bridge: bridge chết thì event chờ trong hàng đợi. Bridge chỉ hành động trên message mà nó
    bảo đảm được (job thuộc queue env, `UserMetadata` đúng dạng, destination nằm dưới thư mục lần thử); message khác ở
@@ -136,11 +137,11 @@ bản đã có. Kết quả của version là kết quả của job (hay lý do)
 đổi được kết quả, kể cả khi `ERROR` của nó tới trước `COMPLETE` của job đã ghi. Đường SQS cũng ghi bản ghi khi version
 chưa có, nên job tạo xong mà mất response vẫn có thể là job thắng. Lý lẽ từng nhánh ở phụ lục ADR-0066 §6.
 
-Bản ghi nằm ngoài tiền tố `media/` vì hai lẽ: bucket policy chỉ cho CloudFront đọc `media/*`, nên bản ghi không ra CDN;
-video-service xoá `media/<video_id>/` khi video `FAILED`, nên một job lạc tới sau lần dọn đó vẫn thấy bản ghi và không
-phát kết quả khác. Lifecycle của module `media` xoá tiền tố `transcode-jobs/` sau hạn mà ADR-0066 §6 ghi, dài hơn mọi
-job và hạn giữ message của SQS, Kafka. Hỏi bản ghi có chưa bằng `ListObjectsV2` theo đúng key: không có quyền liệt kê
-thì `GET` một key thiếu trả 403, không phải 404.
+Bản ghi nằm ngoài tiền tố `media/` vì hai lẽ: bucket policy chỉ cho CloudFront đọc ba tiền tố media (`media/*`,
+`preview/*`, `premium/*`), nên bản ghi không ra CDN; video-service xoá thư mục của video dưới tiền tố của nó khi video
+`FAILED`, nên một job lạc tới sau lần dọn đó vẫn thấy bản ghi và không phát kết quả khác. Lifecycle của module `media`
+xoá tiền tố `transcode-jobs/` sau hạn mà ADR-0066 §6 ghi, dài hơn mọi job và hạn giữ message của SQS, Kafka. Hỏi bản
+ghi có chưa bằng `ListObjectsV2` theo đúng key: không có quyền liệt kê thì `GET` một key thiếu trả 403, không phải 404.
 
 Hợp đồng là at-least-once: mỗi version phát kết quả ít nhất một lần, mọi event phát cho một version mang cùng một kết
 quả (trừ `meta`). Phát lại là bình thường: message SQS lặp, crash sau publish trước `DeleteMessage` hay trước commit
@@ -151,7 +152,8 @@ khi một job có thể còn chạy sẽ khiến video-service xoá file mà job
 
 ## Bố cục output
 
-Hai đường ghi cùng một bố cục. Mọi object của một lần thử nằm phẳng trong `media/<video_id>/<version>/<attempt>/`:
+Hai đường ghi cùng một bố cục. Mọi object của một lần thử nằm phẳng trong `media/<video_id>/<version>/<attempt>/`
+(video premium: cùng bố cục dưới `premium/`, cộng bản xem thử dưới `preview/`, mục dưới):
 
 - playlist mỗi rendition `index_<rendition>.m3u8` (`<rendition>` là bậc của thang: `360p`, `720p`, `1080p` hay
   `source`), segment cùng thư mục, playlist trỏ tương đối;
@@ -165,6 +167,13 @@ tên playlist bằng tên gốc của destination (`.../<attempt>/index`) cộng
 mục, còn thư mục con mỗi rendition không có trong tài liệu của nó; `serve` đổi theo để chỉ có một dạng. Master kiểu cũ
 (`<attempt>/<rendition>/index.m3u8`) trong volume local không đọc lại được: dựng lại stack local.
 
+**Video premium** (cờ `premium` của `video.uploaded`) có thêm bản xem thử công khai, ở cả hai đường: các segment đầu của
+rendition thấp nhất chép (`Copy`) cùng tên sang `preview/<video_id>/<version>/<attempt>/`, cùng `thumbnail.jpg` và
+playlist VOD `index_<rendition>.m3u8` của chúng; master xem thử `preview/<video_id>/<version>/master.m3u8` tạo một lần
+như master đầy đủ, và trước nó. Ở đường cloud, `settle` cắt bản xem thử từ playlist bất biến trước bước `CopyObject` tại
+chỗ. Rendition thấp nhất chỉ một segment thì không có bản xem thử: `transcode.failed` với lý do `PREVIEW_TOO_SHORT`,
+không thử lại. Số segment, thứ tự ghi và vì sao: [`premium-playback.md`](premium-playback.md#bản-xem-thử).
+
 MediaConvert không đặt được `Cache-Control` trên output S3. Khi `settle` job `COMPLETE`, bridge liệt kê thư mục lần thử
 và `CopyObject` tại chỗ từng object (`MetadataDirective` `REPLACE`, `Cache-Control` và `Content-Type` như `serve` ghi),
 chép frame capture thành `thumbnail.jpg`, rồi mới tạo master. Player chỉ tới object qua master, nên không object nào
@@ -176,8 +185,10 @@ stg (gói Free, chỉ policy managed) và prd.
 
 `transcode.completed` dựng chỉ từ object đã lưu, cùng một hàm (`worker.ReadStored`) cho mọi lần phát ở cả hai đường: đọc
 master, lấy lần thử và các rendition từ `ParseMaster`, thời lượng là tổng `EXTINF` của playlist rendition thấp nhất,
-`playlist_key` là master, `thumbnail_key` là `thumbnail.jpg` của lần thử trong master. Bridge không lấy thời lượng hay
-kích thước từ event: mọi lần phát lại, từ `video.uploaded` hay từ SQS, đọc cùng các object nên ra cùng một event.
+`playlist_key` là master, `thumbnail_key` là `thumbnail.jpg` của lần thử trong master. Với video premium, `ReadStored`
+đọc thêm master xem thử: `preview_playlist_key` là master đó, `thumbnail_key` là thumbnail dưới `preview/` của lần thử
+mà master xem thử nêu. Bridge không lấy thời lượng hay kích thước từ event: mọi lần phát lại, từ `video.uploaded` hay từ
+SQS, đọc cùng các object nên ra cùng một event.
 
 Master ghi kích thước thật của mỗi rendition từ `GetJob` (`outputGroupDetails`), ghép với bậc của thang theo cạnh ngắn,
 và tên, bitrate của thang; hàm dựng master là của `serve`.
