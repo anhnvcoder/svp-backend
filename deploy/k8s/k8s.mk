@@ -184,7 +184,7 @@ EKS_DOMAIN_CHECK = printf '%s' '$(DOMAIN)' | grep -Eqx '([a-z0-9]([a-z0-9-]*[a-z
 # both targets take AWS_PROFILE (the profile of the account of the environment, whose id SVP_AWS_<ENV>_ACCOUNT_ID of
 # the session's terminal must match) from the environment, and name it and the region in every aws call.
 # SVP_RDS_MASTER_PASSWORD comes from the environment (the session's script reads it from AWS), never from .env.
-eks-secrets: env-required ## With AWS_PROFILE=<profile of the environment>, write the entries svp/<env>/* of AWS Secrets Manager of the EKS cluster CONTEXT=svp-stg|svp-prd from .env (keys of chart svp-cluster's files/external-secrets.yaml), pg-superuser from SVP_RDS_MASTER_PASSWORD of the environment (required), glitchtip-runtime empty only while it has no value; kafka-admin, kafka-users and valkey-users only checked to exist (Terraform of the infrastructure repository writes them with Amazon MSK and ElastiCache); on a running environment (Reloader must run there) a whole change of credentials: the ExternalSecrets of svp-data built again, Application svp-data synced (its init Jobs set the new passwords), then every other ExternalSecret built again, whose workloads Reloader restarts (no value printed)
+eks-secrets: env-required ## With AWS_PROFILE=<profile of the environment>, write the entries svp/<env>/* of AWS Secrets Manager of the EKS cluster CONTEXT=svp-stg|svp-prd from .env (keys of chart svp-cluster's files/external-secrets.yaml), pg-superuser from SVP_RDS_MASTER_PASSWORD of the environment (required), glitchtip-runtime empty only while it has no value; kafka-admin, kafka-users and valkey-users only checked to exist (Terraform of the infrastructure repository writes them with Amazon MSK and ElastiCache), media-signing checked to hold a value (aws/scripts/media-signing-key.sh activate of that repository; otherwise nothing is written); on a running environment (Reloader must run there) a whole change of credentials: the ExternalSecrets of svp-data built again, Application svp-data synced (its init Jobs set the new passwords), then every other ExternalSecret built again, whose workloads Reloader restarts (no value printed)
 	@$(EKS_CONTEXT_CHECK)
 	SVP_KUBE_CONTEXT='$(CONTEXT)' deploy/k8s/aws-secrets.sh
 
@@ -224,6 +224,6 @@ eks-rl-reset: ## Delete the register rate limit keys (svp:gw:rl:register:*, SCAN
 # docs/reference/eks.md), so no argocd CLI or port-forward is needed.
 .PHONY: eks-wait
 APP ?=
-eks-wait: ## Wait for the Argo CD Application APP=svp-observability (Healthy) or APP=svp-root (Synced, then Healthy) of the EKS cluster CONTEXT=svp-stg|svp-prd, 30 minutes at most, printing its last sync and health status on timeout (kubectl only, no argocd CLI)
+eks-wait: ## Wait for the Argo CD Application APP=svp-observability (Healthy) or APP=svp-root (Synced, then Healthy) of the EKS cluster CONTEXT=svp-stg|svp-prd within one budget for the whole wait (deploy/k8s/eks-wait.sh), printing its last sync and health status on timeout (kubectl only, no argocd CLI)
 	@$(EKS_CONTEXT_CHECK)
 	SVP_KUBE_CONTEXT='$(CONTEXT)' deploy/k8s/eks-wait.sh '$(APP)'

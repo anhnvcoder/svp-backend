@@ -10,9 +10,9 @@
 (`TLSCertExpiryImminent`, page), hay dưới **21 ngày**, liền 1 giờ (`TLSCertExpiringSoon`, ticket). Nhãn `probe` (`web`, `api`,
 `media`) cho biết đích nào. Compose (HTTP) không có chuỗi TLS nên không cháy ở đó.
 
-21 ngày nằm dưới mốc gia hạn tự động của ACM (60 ngày trước hạn) và của cert-manager (còn 1/3 thời hạn, mặc định 90 ngày), nên
-cảnh báo cháy nghĩa là **gia hạn tự động đã hỏng** ([ADR-0074](../adr/0074-cost-uptime.md) §10), không phải cert chỉ sắp tới
-kỳ gia hạn.
+21 ngày nằm dưới mốc gia hạn tự động của ACM (45 ngày trước hạn với cert 198 ngày ACM cấp hiện nay) và của cert-manager
+(còn 1/3 thời hạn, mặc định 90 ngày), nên cảnh báo cháy nghĩa là **gia hạn tự động đã hỏng**
+([ADR-0074](../adr/0074-cost-uptime.md) §10), không phải cert chỉ sắp tới kỳ gia hạn.
 
 Người dùng: chưa thấy gì khi cảnh báo cháy. Cert hết hạn thì trình duyệt chặn trang, client API từ chối kết nối; probe cũng đỏ,
 `PublicUptimeBudgetBurn` cháy theo ([public-uptime-budget-burn.md](public-uptime-budget-burn.md)). Trên k3d probe không kiểm chuỗi tin cậy
@@ -66,7 +66,6 @@ dig +short CNAME _<token>.<domain>   # is the ACM DNS validation record still th
 
 ```sh
 kubectl --context k3d-svp get clusterissuers.cert-manager.io svp-ca
-kubectl --context k3d-svp -n <ns> annotate certificates.cert-manager.io <tên> cert-manager.io/issue-temporary-certificate- --overwrite
 kubectl --context k3d-svp -n <ns> delete secret <secret của certificate>   # cert-manager cấp lại ngay
 ```
 

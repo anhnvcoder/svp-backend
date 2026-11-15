@@ -312,8 +312,10 @@ groups:
           summary: "No probe_success series from the black-box probes for 5 minutes, uptime is not measured"
           runbook_url: "https://github.com/anhnvcoder/svp-backend/blob/main/docs/runbooks/uptime-probes-absent.md"
 
-      # 21 days is below where ACM (60 days before expiry) and cert-manager (a third of the lifetime left) renew, so
-      # firing means the renewal broke. `min by` takes the nearest expiry when a target presents several certificates.
+      # 21 days is below where ACM renews (45 days before expiry for the 198-day certificates it issues, 60 for the
+      # older 395-day ones: https://docs.aws.amazon.com/acm/latest/userguide/dns-renewal-validation.html) and where
+      # cert-manager does (a third of the lifetime left), so firing means the renewal broke. `min by` takes the nearest
+      # expiry when a target presents several certificates.
       - alert: TLSCertExpiringSoon
         expr: >-
           min by (probe, instance) (probe_ssl_earliest_cert_expiry{job="blackbox-http"}) - time() < 21 * 86400
@@ -322,6 +324,7 @@ groups:
           severity: ticket
         annotations:
           summary: "Probe {{ $labels.probe }}: the TLS certificate expires in less than 21 days"
+          runbook_url: "https://github.com/anhnvcoder/svp-backend/blob/main/docs/runbooks/tls-cert-expiry-imminent.md"
       - alert: TLSCertExpiryImminent
         expr: >-
           min by (probe, instance) (probe_ssl_earliest_cert_expiry{job="blackbox-http"}) - time() < 7 * 86400

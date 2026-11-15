@@ -163,10 +163,10 @@ Từ `always` sang giá trị kia trên state đã có tài nguyên; root chưa 
   control findings in Security Hub CSPM, AWS Config must be enabled for your account in each AWS Region"; "you must turn on recording in AWS Config
   for the types of resources that correspond to your enabled controls".
 - [N6] Tắt Security Hub CSPM: <https://docs.aws.amazon.com/securityhub/latest/userguide/securityhub-disable.html>,
-  <https://docs.aws.amazon.com/securityhub/1.0/APIReference/API_DisableSecurityHub.html>: "Security Hub CSPM stops generating, updating, and
-  ingesting findings for the account"; "After 30 days, Security Hub CSPM permanently deletes all existing archived findings"; "After 90 days,
-  Security Hub CSPM permanently deletes all existing active findings"; "Any standards that were enabled are disabled, and your administrator and
-  member account associations are removed"; "Security Hub CSPM might initially generate duplicate findings".
+  <https://docs.aws.amazon.com/securityhub/1.0/APIReference/API_DisableSecurityHub.html>: "Security Hub CSPM stops generating, updating,
+  and ingesting findings for the account"; "After 30 days, Security Hub CSPM permanently deletes all existing archived findings"; "After
+  90 days, Security Hub CSPM permanently deletes all existing active findings"; "Security Hub CSPM might initially generate duplicate
+  findings".
 - [N7] Lịch chạy check: <https://docs.aws.amazon.com/securityhub/latest/userguide/securityhub-standards-schedule.html>: "After you enable a
   security standard, AWS Security Hub CSPM begins to run all checks within two hours. Most checks begin to run within 25 minutes".
 - [N8] `DeleteConfigurationRecorder`: <https://docs.aws.amazon.com/config/latest/APIReference/API_DeleteConfigurationRecorder.html>: "This

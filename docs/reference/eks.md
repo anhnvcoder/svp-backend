@@ -128,12 +128,13 @@ Loại tài liệu (Diátaxis): **reference**, tra cứu khi cần một lệnh 
   - `AWS_PROFILE=anhnv-<env> make eks-glitchtip-init CONTEXT=svp-<env>`: như `k8s-glitchtip-init`, đọc DSN và token trong pod GlitchTip,
     ghi vào entry `svp/<env>/glitchtip-runtime` rồi `force-sync` ba ExternalSecret `svp/sentry`, `svp-obs/glitchtip-api`,
     `svp-obs/glitchtip-sourcemaps` và restart service khởi động khi chưa có DSN hiện tại; idempotent.
-  - `make eks-wait CONTEXT=svp-<env> APP=<svp-observability|svp-root>`: `deploy/k8s/eks-wait.sh`, `kubectl wait` chờ Application xuất
-    hiện (`--for=create`: `svp-root` do ApplicationSet `svp-bootstrap` tạo, `svp-observability` do `svp-root` tạo khi các sync wave trước
-    đã Healthy), rồi chờ `status.health.status` = `Healthy` (với `svp-root`, trước đó `status.sync.status` = `Synced`); không cần CLI
-    `argocd` hay port-forward. Một ngân sách 30 phút cho mọi lượt chờ; quá hạn thì exit khác 0 và in trạng thái sync, health cuối.
-    Thiếu ApplicationSet `svp-bootstrap` thì lỗi ngay, nêu bước 4 (apply root `aws/gitops/<env>`). Chỉ đọc, nhưng chạm cluster EKS nên
-    AI không chạy, người học chạy.
+  - `make eks-wait CONTEXT=svp-<env> APP=<svp-observability|svp-root>`: `deploy/k8s/eks-wait.sh`, `kubectl wait` chờ
+    Application xuất hiện (`--for=create`: `svp-root` do ApplicationSet `svp-bootstrap` tạo, `svp-observability` do
+    `svp-root` tạo khi các sync wave trước đã Healthy), rồi chờ `status.health.status` = `Healthy` (với `svp-root`,
+    trước đó `status.sync.status` = `Synced`); không cần CLI `argocd` hay port-forward. Một ngân sách cho mọi lượt chờ
+    (`deploy/k8s/eks-wait.sh`); quá hạn thì exit khác 0 và in trạng thái sync, health cuối. Thiếu ApplicationSet
+    `svp-bootstrap` thì lỗi ngay, nêu bước 4 (apply root `aws/gitops/<env>`). Chỉ đọc, nhưng chạm cluster EKS nên AI
+    không chạy, người học chạy.
   - `make eks-smoke CONTEXT=… DOMAIN=<domain>`: `deploy/compose/smoke.sh https://api.<domain>` với `SVP_STACK=eks`, qua CloudFront với cert
     ACM công khai (bỏ `CURL_CA_BUNDLE`).
   - `make eks-seed CONTEXT=… DOMAIN=<domain>`: `deploy/k8s/eks-seed.sh`, 4 user × 8 video ngắn qua API công khai, chờ mọi video
@@ -203,7 +204,8 @@ Lệnh làm trọn một lượt xoay credential theo cùng thứ tự với `ma
 
 1. Cluster phải chạy Reloader (và workload opt in theo tên Secret của chúng), không thì dừng trước mọi lệnh ghi
    (`FAIL  cluster svp-<env> is not ready for a change of credentials: <lý do>`).
-2. Ghi mọi entry của `.env` (trừ `glitchtip-runtime`, đã có giá trị; trừ ba entry Kafka, Valkey của Terraform).
+2. Ghi mọi entry của `.env` (trừ `glitchtip-runtime`, đã có giá trị; trừ ba entry Kafka, Valkey của Terraform và entry
+   `media-signing`).
 3. `force-sync` các ExternalSecret của `svp-data`.
 4. Một sync của Application `svp-data` (hook PostSync `pg-bootstrap` đặt mật khẩu mới trong Postgres, `kafka-init` đăng nhập MSK bằng `svp-admin`
    và đặt lại topic, ACL), chờ đúng lượt sync đó `Succeeded`; `Failed`, `Error` hay quá 600 giây thì dừng, ExternalSecret của client chưa dựng
@@ -216,6 +218,11 @@ Mật khẩu của user Kafka, Valkey không sinh bằng lệnh này mà ở Ter
 (Valkey) của root env, apply, rồi chạy `aws/scripts/bootstrap.sh <env> secrets` của `svp-infra` (gọi lệnh trên với mật khẩu master RDS). Thiếu
 lượt này thì cluster giữ mật khẩu cũ: ExternalSecret có `refreshPolicy: OnChange`, không tự đọc lại entry. MSK áp secret mới tới broker trong
 tối đa 10 phút, và kết nối mới của pod chưa restart có thể bị từ chối trong khoảng đó (ADR-0053 §12).
+
+Khoá ký URL media premium (entry `media-signing`) cũng không do lệnh này ghi: chạy
+`aws/scripts/media-signing-key.sh <env> activate <a|b>` của `svp-infra`, rồi `aws/scripts/bootstrap.sh <env> secrets`.
+Các phép kiểm sau khi đổi khoá ở
+[`media-signing-keys.md`](https://github.com/anhnvcoder/svp-infra/blob/main/docs/runbooks/media-signing-keys.md).
 
 Dòng cần thấy, theo thứ tự: `ok    ExternalSecrets of the server built again from their source`, `ok    init Jobs of svp-data done (sync of Application svp-data Succeeded)`,
 `ok    ExternalSecrets of the clients built again from their source`, `ok    Reloader restarts each workload whose Secret changed`. Một

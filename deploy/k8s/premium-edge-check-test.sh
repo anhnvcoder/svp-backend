@@ -66,6 +66,13 @@ while [ $# -gt 0 ]; do
   esac
   shift
 done
+# A signed URL on the command line is visible to ps: logged for the test to refuse.
+case $url in *Signature=*) echo "${url%%\?*}" >>"$s/argv-signed" ;; esac
+# Without form lines, a config file holds a URL quoted as curl reads one.
+if [ -n "$cfg" ] && ! grep -q '^form' "$cfg"; then
+  url=$(perl -ne 'print s/\\(.)/$1/gr if s/^url = "(.*)"\n\z/$1/' "$cfg")
+  cfg=
+fi
 probe=$(sed -n 's/.*[?&]svp_probe=\([0-9]*\).*/\1/p' <<<"$url")
 echo "$method ${url%%\?*}${probe:+ svp_probe=$probe}${as_is:+ path-as-is}" >>"$s/calls"
 off() { [ -f "$s/off-$1" ]; }
@@ -158,7 +165,10 @@ case $url in
     # rule default-signed off is the layout of a public default with premium/* alone signed.
     case $(sed 's/%70/p/g' <<<"$path") in
       "$cdn/media/"* | "$cdn/preview/"*) ;;
-      "$cdn/premium/"*) signed signature || { answer 403 Error </dev/null; exit 0; } ;;
+      "$cdn/premium/"*)
+        signed signature || { answer 403 Error </dev/null; exit 0; }
+        # Rule probe-query off: an edge whose signature covers the whole query, so svp_probe breaks it.
+        if off probe-query && [[ $query == *svp_probe=* ]]; then answer 403 Error </dev/null; exit 0; fi ;;
       *) off default-signed || signed signature || { answer 403 Error </dev/null; exit 0; } ;;
     esac
     # S3 gets the raw path and decodes it into the key; a key with a .. segment names no object, and without
@@ -254,6 +264,11 @@ fi
 found=$(leaks "$work/pass.out")
 if [ -z "$found" ]; then ok "every rule kept: no password, token, policy or signature in the output"; else fail "secrets in the output: $found"; fi
 if [ -z "$(left)" ]; then ok "every rule kept: nothing left in TMPDIR or the working folder"; else fail "left behind: $(left)"; fi
+if [ ! -e "$FAKE_STATE/argv-signed" ]; then
+  ok "every rule kept: no signed URL on curl's command line"
+else
+  fail "signed URLs on curl's command line:"$'\n'"$(sed 's/^/      /' "$FAKE_STATE/argv-signed" 2>/dev/null)"
+fi
 probes=$(for r in 1 2 3; do grep -c "^GET https://cdn.svp.example/.*/index_360p_[0-9].ts svp_probe=$r\$" "$FAKE_STATE/calls"; done |
   paste -sd ' ' -)
 if [ "$probes" = "6 6 6" ]; then
@@ -295,6 +310,11 @@ off_fails rendition-scope "V1's 360p signature on a 720p segment of V1: want 403
 off_fails rendition "B's 720p playlist of V1 (tier sd): want 403 RENDITION_NOT_ENTITLED, got 200 "
 off_fails entitlement "B's master of V2 (no tier): want 403 NOT_ENTITLED, got 200 "
 off_fails preview-segment "V1 preview segment, no signature: want 200, got 403"
+# A signature over the whole query: each signed segment of the cache rounds, svp_probe in its query, is refused.
+probe_rows=()
+for r in 1 2 3; do probe_rows+=("v1 segment of round $r: want 200, got 403" "v1 segment of round $r: want 200, got 403"
+  "v1 segment of round $r: want 200, got 403"); done
+off_fails probe-query "${probe_rows[@]}"
 # A public default with premium/* alone signed: %70remium/ normalizes into premium/*, premium%2F reaches S3 and plays.
 off_fails default-signed "$(unsigned segment premium%2F)" "$(unsigned playlist premium%2F)"
 # An S3 that resolves .. in a key: the public behaviors hand out premium/ objects.

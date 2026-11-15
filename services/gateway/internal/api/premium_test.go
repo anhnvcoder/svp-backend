@@ -19,6 +19,7 @@ import (
 	feedv1 "github.com/anhnvcoder/svp-backend/gen/go/svp/feed/v1"
 	videov1 "github.com/anhnvcoder/svp-backend/gen/go/svp/video/v1"
 	"github.com/anhnvcoder/svp-backend/internal/grpcerr"
+	"github.com/anhnvcoder/svp-backend/internal/objstore"
 	"github.com/anhnvcoder/svp-backend/services/gateway/internal/httpx"
 )
 
@@ -472,5 +473,14 @@ func TestPlaybackErrors(t *testing.T) {
 				e.videos.only(t)
 			})
 		}
+	}
+}
+
+// The gateway keeps its own copy of the prefix so that its binary does not link the object store
+// and its SDK; a test may import it.
+func TestPremiumPrefixIsObjstores(t *testing.T) {
+	t.Parallel()
+	if premiumPrefix != objstore.PremiumPrefix {
+		t.Errorf("premiumPrefix = %q, want objstore.PremiumPrefix %q", premiumPrefix, objstore.PremiumPrefix)
 	}
 }

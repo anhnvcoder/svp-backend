@@ -94,11 +94,15 @@ nào, và hiện ở `BackgroundLoopStalled` ([background-loop-stalled.md](backg
   promote, theo ruleset `main`) để event mới không lỗi nữa; dòng đã bỏ vẫn nằm trong bảng.
 - Nguyên nhân 2, 3: đưa cấu hình topic về như cũ qua PR (`deploy/kafka/kafka-init.sh` cho compose, k3d; Terraform của
   svp-infra cho MSK, người học chạy).
-- Dòng bị bỏ không bị xoá: vòng dọn chỉ xoá dòng đã gửi quá 24 giờ, nên event còn đó để phát lại.
+- Dòng bị bỏ không bị xoá: vòng dọn chỉ xoá dòng đã gửi quá 24 giờ. Dòng của nguyên nhân 2, 3 phát lại được; dòng của
+  nguyên nhân 1 thì không (payload đã lưu vẫn quá lớn sau khi sửa producer): sửa thực thể bằng thao tác mới, như bước 1
+  của mục dưới.
 
 ## Khôi phục và xác nhận
 
-Phát lại **sau khi đã sửa nguyên nhân** và chỉ khi người trực quyết. Không sửa tay database của stg, prd (không `UPDATE`
+Phát lại dòng của nguyên nhân 2, 3 **sau khi đã sửa nguyên nhân** và chỉ khi người trực quyết. Dòng của nguyên nhân 1
+không phát lại bằng requeue: nó lỗi lại và cảnh báo cháy lại; đi đường "sửa thực thể bằng một thao tác mới" của bước 1.
+Không sửa tay database của stg, prd (không `UPDATE`
 bằng psql): event được xếp lại hàng bằng một migration trong release mang bản sửa, đi qua PR, review và Job `migrate`
 như mọi thay đổi schema ([schema-change.md](schema-change.md)):
 

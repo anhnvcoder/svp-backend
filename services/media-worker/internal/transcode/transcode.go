@@ -23,6 +23,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
 	"go.opentelemetry.io/otel"
@@ -396,6 +397,10 @@ func runTool(ctx context.Context, timeout time.Duration, stdout io.Writer, dirs 
 	}
 	cmd := exec.CommandContext(ctx, name, args...) //nolint:gosec // fixed tool names; the arguments are built by this package
 	cmd.Env = []string{}
+	// A group of its own keeps a terminal's Ctrl-C from killing the tool along with the worker: the
+	// worker then drains, and a tool killed mid-drain would fail the job as bad input. A stop still
+	// ends the tool through ctx.
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	cmd.Stdout = stdout
 	stderr := &tailBuffer{max: 4096}
 	cmd.Stderr = stderr

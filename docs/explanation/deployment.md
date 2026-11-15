@@ -615,7 +615,7 @@ flowchart TD
   (chờ request đang chạy) phải nhỏ hơn `terminationGracePeriodSeconds`.
 - **Drain của media-worker.** Một job transcode kéo dài hàng chục giây tới vài phút, nên huỷ nó khi scale-down là bỏ
   phí việc và làm record `video.uploaded` giao lại. Từ SIGTERM consumer ngừng poll, record đang xử lý chạy tiếp bằng
-  context riêng tới khi xong hay hết `worker.DrainTimeout`; xong thì commit offset, hết hạn thì huỷ như trước và
+  context riêng tới khi xong hay hết `worker.DrainTimeout`; xong thì commit offset, hết hạn thì huỷ và
   record giao lại cho pod khác. Cơ chế nằm ở `kafkax.ConsumerConfig.DrainTimeout` (0 là huỷ ngay, hành vi của mọi
   consumer khác) và áp cho cả lệnh `serve` lẫn `mediaconvert`; chi tiết ở
   [`transcode.md`](transcode.md#dừng-pod-và-drain). `terminationGracePeriodSeconds` của release `media-worker`

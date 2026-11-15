@@ -70,9 +70,9 @@ type Attempt struct {
 //
 // ctx is canceled when the consumer stops, at once when ConsumerConfig.DrainTimeout is zero, or
 // once the drain time has passed since the stop otherwise; a handler that returns an error after
-// that leaves the record uncommitted, so it is delivered again. During the drain ctx stays live,
-// so a handler that finishes in time settles its record as usual. ctx carries a consumer span extracted from the
-// record's trace headers; logs and Produce use that span's context.
+// that leaves the record uncommitted, so it is delivered again. During the drain ctx stays live, so
+// a handler that finishes in time settles its record as usual. ctx carries a consumer span
+// extracted from the record's trace headers; logs and Produce use that span's context.
 type Handler func(ctx context.Context, r *kgo.Record, a Attempt) error
 
 type permanentError struct{ err error }

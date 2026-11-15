@@ -419,9 +419,8 @@ provenance. Package do `GITHUB_TOKEN` tạo ở lần đẩy đầu thường l�
 private. Gắn repo: package có nhãn `org.opencontainers.image.source` của `svp-frontend` từ lần đẩy đầu thì tự gắn và workflow của `svp-frontend`
 giữ quyền ghi; package gắn repo khác thì lượt sau của `svp-frontend` không đẩy được.
 
-**Kiểm:** hai dòng `anon svp-frontend/…` của "Kiểm tra nhanh" in `200` (hay `make github-check`: dòng
-`package ghcr.io/anhnvcoder/svp-frontend/web
-pulls anonymously` là `ok`). Repo gắn với package (cần `read:packages`):
+**Kiểm:** hai dòng `anon svp-frontend/…` của "Kiểm tra nhanh" in `200` (hay `make github-check`, dòng
+`package ghcr.io/anhnvcoder/svp-frontend/web pulls anonymously` là `ok`). Repo gắn với package (cần `read:packages`):
 
 ```sh
 for p in svp-frontend%2Fweb; do

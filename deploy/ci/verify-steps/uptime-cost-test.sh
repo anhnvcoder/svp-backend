@@ -125,7 +125,7 @@ run() {
   rm -f "$work/forwarded" "$work/round"
   : >"$work/$name.calls"
   env PATH="$work/bin:$PATH" FAKE_DIR="$dir" FAKE_CALLS="$work/$name.calls" FAKE_FORWARDED="$work/forwarded" \
-    FAKE_ROUND="$work/round" "$@" "$here/uptime-cost.sh" "$mode" >"$work/$name.log" 2>&1 </dev/null || rc=$?
+    FAKE_ROUND="$work/round" "$@" "${script:-$here/uptime-cost.sh}" "$mode" >"$work/$name.log" 2>&1 </dev/null || rc=$?
   echo "$rc"
 }
 same() { if [ "$2" = "$3" ]; then ok "$1"; else fail "$1 (want $2, got $3)"; fi; }
@@ -182,16 +182,28 @@ shown absent-pending k8s \
   "$(vector '{"alertname": "UptimeProbesAbsent", "alertstate": "pending", "severity": "page"}' 1)" inactive
 has absent-pending "a pending UptimeProbesAbsent is shown and does not fail the step" "pending page"
 
+# A copy of the script that gives up after its first round: a failing case reads the same in round 1 as in round 40,
+# and each full wait forks the fakes 40 times. The whole wait runs once, in case cluster-down (full=1).
+one_round=$work/uptime-cost-one-round.sh
+sed 's/^rounds=40$/rounds=1/' "$here/uptime-cost.sh" >"$one_round"
+grep -qx 'rounds=1' "$one_round" || {
+  echo "FAIL  uptime-cost.sh has no line rounds=40 for the one-round copy" >&2
+  exit 1
+}
+chmod 755 "$one_round"
+
 # broken NAME MODE WANT FILE CONTENT [VAR=VALUE...]: a run whose answer FILE is CONTENT (absent: the query fails)
-# fails naming WANT.
+# fails naming WANT, after one round, or after the whole wait of 40 rounds with full=1.
 broken() {
+  local script=$one_round rounds=1
+  [ "${full:-}" != 1 ] || script=$here/uptime-cost.sh rounds=40
   rm -rf "${work:?}/$1"
   fixture "$work/$1"
   if [ "$5" = absent ]; then rm -f "$work/$1/$4"; else echo "$5" >"$work/$1/$4"; fi
   same "$1: exit 1" 1 "$(run "$1" "$2" "$work/$1" "${@:6}")"
   has "$1" "the failure names the condition" "FAIL  uptime-cost: $3"
-  has "$1" "the last read is printed" "not every condition held within 10 minutes; the last read, round 40:"
-  same "$1: it waited 39 pauses" 39 "$(pauses)"
+  has "$1" "the last read is printed" "not every condition held within 10 minutes; the last read, round $rounds:"
+  same "$1: it waited $((rounds - 1)) pauses" $((rounds - 1)) "$(pauses)"
 }
 for p in web api media; do
   others=()
@@ -237,7 +249,7 @@ if grep -qE '^  alert PublicUptimeBudgetBurn \(shown only\) +no answer$' "$work/
   fail "alerts-unread: PublicUptimeBudgetBurn is shown as not read"; fi
 lacks alerts-unread "and does not fail the step" "FAIL  uptime-cost: alert PublicUptimeBudgetBurn"
 broken prometheus-down compose "Prometheus answers a query: last read no answer" success.json absent
-broken cluster-down k8s "Prometheus answers a query: last read no answer" success.json absent FAKE_KUBECTL_FAIL=1
+full=1 broken cluster-down k8s "Prometheus answers a query: last read no answer" success.json absent FAKE_KUBECTL_FAIL=1
 same "cluster-down: the port-forward is started again in each round" 40 \
   "$(grep -c '^kubectl --context k3d-svp -n svp-obs port-forward ' "$work/cluster-down.calls")"
 broken prometheus-error k8s "Prometheus answers a query: last read no answer" success.json '{"status": "error"}'

@@ -314,7 +314,7 @@ func TestRotateOutOfOrder(t *testing.T) {
 			want: "lacks the verify key", edit: func(r *rotation) {
 				v := r.vars()
 				first, _, _ := strings.Cut(v["JWT_VERIFY_KEYS"], ",")
-				_, _, _, other := newPair(t)
+				_, _, _, other := newPair(r.t)
 				r.secrets = append(r.secrets, other)
 				r.write("JWT_SIGNING_KID=" + v["JWT_SIGNING_KID"] + "\nJWT_SIGNING_KEY=" + v["JWT_SIGNING_KEY"] + "\n" +
 					envMid + "JWT_VERIFY_KEYS=" + first + "," + r.pending()["JWT_SIGNING_KID"] + ":" + other + "\n")

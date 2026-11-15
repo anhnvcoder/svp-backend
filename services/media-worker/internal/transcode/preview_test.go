@@ -19,7 +19,7 @@ func mediaPlaylist(n int) string {
 	return b.String()
 }
 
-// The preview keeps min(3, n/2) segments: never more than half of the video, never more than
+// The preview keeps min(3, n/2) segments: never more than half of its segments, never more than
 // 12 s, and none at all for a video of one segment.
 func TestCutPreviewSegmentCount(t *testing.T) {
 	t.Parallel()

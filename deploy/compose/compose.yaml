@@ -65,8 +65,8 @@ x-telemetry-env: &telemetry-env
   OTEL_SDK_DISABLED: ${SVP_OTEL_SDK_DISABLED:-false}
 
 # The five services on the `default` network also push profiles to LGTM's Pyroscope and report
-# errors to the tracker at SENTRY_DSN (empty: off). media-worker gets neither: its network reaches
-# only the Collector.
+# errors to the tracker at SENTRY_DSN (empty: off). media-worker and dlq-replay get neither: their
+# network reaches only the Collector.
 x-telemetry-app-env: &telemetry-app-env
   <<: *telemetry-env
   PYROSCOPE_SERVER_ADDRESS: ${SVP_PYROSCOPE_SERVER_ADDRESS-http://lgtm:4040}
@@ -952,7 +952,7 @@ services:
 
   # GlitchTip web and task worker in one process, with no Valkey: one container to run instead of several, within the
   # RAM budget. Its init commands are skipped: glitchtip-init ran them. On `default` for the Go services and on `web`
-  # for the web client, which joins no other network; media-worker, on `worker`, reports no errors.
+  # for the web client, which joins no other network; media-worker and dlq-replay, on `worker`, report no errors.
   glitchtip:
     profiles: [obs]
     image: *glitchtip-image

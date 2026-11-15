@@ -32,8 +32,12 @@ left() {
   echo "${n}s"
 }
 
+# svp-root comes from the generator of ApplicationSet svp-bootstrap, whose status conditions say why it made none;
+# svp-observability comes from svp-root.
+parent=applications.argoproj.io/svp-root
+[ "$app" != svp-root ] || parent=applicationsets.argoproj.io/svp-bootstrap
 kc -n argocd wait "applications.argoproj.io/$app" --for=create --timeout="$(left)" ||
-  fail "Application argocd/$app did not appear in $kube_context in time; read svp-root with kubectl --context $kube_context -n argocd describe applications.argoproj.io/svp-root, and check root aws/gitops/${kube_context#svp-} is applied (step 4 of the sequence in docs/reference/eks.md)"
+  fail "Application argocd/$app did not appear in $kube_context in time; read ${parent#*/} with kubectl --context $kube_context -n argocd describe $parent, and check root aws/gitops/${kube_context#svp-} is applied (step 4 of the sequence in docs/reference/eks.md)"
 
 # wait_for FIELD VALUE: kubectl wait on the jsonpath FIELD of the Application until it is VALUE. On timeout, prints
 # the sync and health status the Application ended with.

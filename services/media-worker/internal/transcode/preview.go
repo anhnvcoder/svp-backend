@@ -18,7 +18,7 @@ type Preview struct {
 	// Playlist is the VOD playlist of Segments, ended by #EXT-X-ENDLIST.
 	Playlist []byte
 	// Segments are the file names of the first segments of the rendition, in playlist order:
-	// min(PreviewMaxSegments, n/2) of its n segments, so a preview is at most half of the video.
+	// min(PreviewMaxSegments, n/2) of its n segments, so a preview is at most half of its segments.
 	Segments []string
 }
 

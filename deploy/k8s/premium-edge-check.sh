@@ -70,12 +70,16 @@ code() { field code; }
 # fetch URL FILE [CURL_FLAG...]: anonymous GET of URL from the CDN into FILE, its headers in FILE.headers; prints the
 # HTTP status.
 fetch() {
-  local url=$1 file=$2
+  local url=$1 file=$2 quoted
   shift 2
   [[ $url == https://* ]] || fail "a media URL of the API is not https (${url%%\?*})"
   : >"$file"
   : >"$file.headers"
-  curl -sS --max-time "$transfer_max_time" "$@" -o "$file" -D "$file.headers" -w '%{http_code}' "$url" || true
+  # A signed URL is a credential: it goes to curl in a config file, quoted as curl reads one, never on its command line.
+  quoted=${url//\\/\\\\}
+  printf 'url = "%s"\n' "${quoted//\"/\\\"}" >"$work/fetch.curl"
+  curl -sS --max-time "$transfer_max_time" "$@" -o "$file" -D "$file.headers" -w '%{http_code}' -K "$work/fetch.curl" || true
+  rm -f "$work/fetch.curl"
 }
 # x_cache FILE: the first word of CloudFront's X-Cache header of the last fetch into FILE (Hit, RefreshHit, Miss...),
 # empty when the answer has none (it did not come through CloudFront).

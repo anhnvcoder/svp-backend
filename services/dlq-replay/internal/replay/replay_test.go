@@ -90,8 +90,10 @@ func seed(t *testing.T, brokers string, rs ...*kgo.Record) {
 	}
 }
 
-// readTopic returns what topic holds, after waiting up to wait for n records.
-func readTopic(t *testing.T, brokers, topic string, n int, wait time.Duration) []*kgo.Record {
+// readTopic returns what topic holds: it waits up to a long deadline for want records, then reads
+// a short window more, so a record beyond want shows up as an extra. A slow reader only makes the
+// wait longer.
+func readTopic(t *testing.T, brokers, topic string, want int) []*kgo.Record {
 	t.Helper()
 	cl, err := kafkax.NewClient(brokers, "test-reader", kgo.ConsumeTopics(topic),
 		kgo.FetchMaxWait(100*time.Millisecond))
@@ -99,12 +101,16 @@ func readTopic(t *testing.T, brokers, topic string, n int, wait time.Duration) [
 		t.Fatal(err)
 	}
 	defer cl.Close()
-	ctx, cancel := context.WithTimeout(t.Context(), wait)
-	defer cancel()
 	var out []*kgo.Record
-	for len(out) < n && ctx.Err() == nil {
-		out = append(out, cl.PollFetches(ctx).Records()...)
+	poll := func(wait time.Duration, until func() bool) {
+		ctx, cancel := context.WithTimeout(t.Context(), wait)
+		defer cancel()
+		for !until() && ctx.Err() == nil {
+			out = append(out, cl.PollFetches(ctx).Records()...)
+		}
 	}
+	poll(15*time.Second, func() bool { return len(out) >= want })
+	poll(500*time.Millisecond, func() bool { return false })
 	return out
 }
 
@@ -172,7 +178,7 @@ func TestCopiesRecordToItsSourceTopic(t *testing.T) {
 	if sum.Replayed != 1 || sum.Skipped != 0 || sum.DryRun != 0 || sum.LastReplayed[0] != 0 || sum.Resume != nil {
 		t.Errorf("summary = %+v, want 1 replayed at offset 0", sum)
 	}
-	got := readTopic(t, brokers, source, 1, 10*time.Second)
+	got := readTopic(t, brokers, source, 1)
 	if len(got) != 1 {
 		t.Fatalf("%d records in %s, want 1", len(got), source)
 	}
@@ -192,7 +198,7 @@ func TestCopiesRecordToItsSourceTopic(t *testing.T) {
 	if out.Timestamp.Before(before.Add(-time.Second)) {
 		t.Errorf("copy timestamp = %v, want the time of the replay (after %v)", out.Timestamp, before)
 	}
-	if n := len(readTopic(t, brokers, other, 1, 300*time.Millisecond)); n != 0 {
+	if n := len(readTopic(t, brokers, other, 0)); n != 0 {
 		t.Errorf("%d records in %s, want 0", n, other)
 	}
 }
@@ -210,7 +216,7 @@ func TestToOverridesHeaderAndMissingHeaderIsSkipped(t *testing.T) {
 	if sum.Replayed != 1 || sum.Skipped != 1 {
 		t.Errorf("summary = %+v, want 1 replayed, 1 skipped", sum)
 	}
-	if got := values(readTopic(t, brokers, source, 1, 10*time.Second)); !equal(got, []string{"0"}) {
+	if got := values(readTopic(t, brokers, source, 1)); !equal(got, []string{"0"}) {
 		t.Errorf("%s = %v, want [0]", source, got)
 	}
 	lines := logs.lines(t, "dlq record")
@@ -227,7 +233,7 @@ func TestToOverridesHeaderAndMissingHeaderIsSkipped(t *testing.T) {
 	if sum.Replayed != 2 || sum.Skipped != 0 {
 		t.Errorf("summary with --to = %+v, want 2 replayed", sum)
 	}
-	if got := values(readTopic(t, brokers, other, 2, 10*time.Second)); !equal(got, []string{"0", "1"}) {
+	if got := values(readTopic(t, brokers, other, 2)); !equal(got, []string{"0", "1"}) {
 		t.Errorf("%s = %v, want [0 1]", other, got)
 	}
 }
@@ -246,7 +252,7 @@ func TestOffsetRange(t *testing.T) {
 	if sum.Replayed != 2 || sum.LastReplayed[0] != 2 {
 		t.Errorf("summary = %+v, want 2 replayed, last at offset 2", sum)
 	}
-	if got := values(readTopic(t, brokers, source, 3, time.Second)); !equal(got, []string{"1", "2"}) {
+	if got := values(readTopic(t, brokers, source, 2)); !equal(got, []string{"1", "2"}) {
 		t.Errorf("%s = %v, want [1 2]", source, got)
 	}
 }
@@ -262,14 +268,18 @@ func TestTimeRange(t *testing.T) {
 	}
 	cfg := config(brokers)
 	cfg.Since, cfg.Until = base.Add(time.Minute), base.Add(3*time.Minute)
-	sum, _, err := replay(t, cfg)
+	sum, logs, err := replay(t, cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if sum.Replayed != 2 {
 		t.Errorf("summary = %+v, want 2 replayed", sum)
 	}
-	if got := values(readTopic(t, brokers, source, 3, time.Second)); !equal(got, []string{"1", "2"}) {
+	// The end --until selected is the --end-offset that repeats the range by offsets.
+	if lines := logs.lines(t, "dlq replay finished"); len(lines) != 1 || lines[0]["end"] != "0@3" {
+		t.Errorf("summary lines = %v, want end 0@3", lines)
+	}
+	if got := values(readTopic(t, brokers, source, 2)); !equal(got, []string{"1", "2"}) {
 		t.Errorf("%s = %v, want [1 2]", source, got)
 	}
 
@@ -293,7 +303,7 @@ func TestGroupFilter(t *testing.T) {
 	if sum.Replayed != 1 || sum.Skipped != 2 {
 		t.Errorf("summary = %+v, want 1 replayed, 2 skipped", sum)
 	}
-	if got := values(readTopic(t, brokers, source, 2, time.Second)); !equal(got, []string{"1"}) {
+	if got := values(readTopic(t, brokers, source, 1)); !equal(got, []string{"1"}) {
 		t.Errorf("%s = %v, want [1]", source, got)
 	}
 }
@@ -312,7 +322,7 @@ func TestPartitionFilter(t *testing.T) {
 	if sum.Replayed != 1 || sum.LastReplayed[1] != 0 || len(sum.LastReplayed) != 1 {
 		t.Errorf("summary = %+v, want 1 replayed from partition 1", sum)
 	}
-	if got := values(readTopic(t, brokers, source, 2, time.Second)); !equal(got, []string{"1"}) {
+	if got := values(readTopic(t, brokers, source, 1)); !equal(got, []string{"1"}) {
 		t.Errorf("%s = %v, want [1]", source, got)
 	}
 
@@ -334,7 +344,7 @@ func TestDryRunProducesNothing(t *testing.T) {
 	if sum.DryRun != 1 || sum.Skipped != 1 || sum.Replayed != 0 {
 		t.Errorf("summary = %+v, want 1 dry run, 1 skipped", sum)
 	}
-	if n := len(readTopic(t, brokers, source, 1, 500*time.Millisecond)); n != 0 {
+	if n := len(readTopic(t, brokers, source, 0)); n != 0 {
 		t.Errorf("%d records in %s, want 0", n, source)
 	}
 }
@@ -354,7 +364,7 @@ func TestViewsDestinationWarnsOnce(t *testing.T) {
 			t.Errorf("dry run %v: %d warnings, want 1", dryRun, n)
 		}
 	}
-	if n := len(readTopic(t, brokers, viewsTopic, 2, 5*time.Second)); n != 2 {
+	if n := len(readTopic(t, brokers, viewsTopic, 2)); n != 2 {
 		t.Errorf("%d records in %s, want 2", n, viewsTopic)
 	}
 
@@ -388,12 +398,13 @@ func TestProduceErrorStopsAndNamesResumeOffset(t *testing.T) {
 	if sum.Replayed != 1 || sum.Resume[0] != 1 || len(sum.Resume) != 1 {
 		t.Errorf("summary = %+v, want 1 replayed, resume at 0@1", sum)
 	}
-	if got := values(readTopic(t, brokers, source, 2, time.Second)); !equal(got, []string{"0"}) {
+	if got := values(readTopic(t, brokers, source, 1)); !equal(got, []string{"0"}) {
 		t.Errorf("%s = %v, want [0]", source, got)
 	}
 	lines := logs.lines(t, "dlq replay stopped")
-	if len(lines) != 1 || lines[0]["resume_from"] != "0@1" || lines[0]["last_replayed"] != "0@0" {
-		t.Errorf("summary lines = %v, want resume_from 0@1", lines)
+	if len(lines) != 1 || lines[0]["resume_from"] != "0@1" || lines[0]["last_replayed"] != "0@0" ||
+		lines[0]["end"] != "0@3" {
+		t.Errorf("summary lines = %v, want resume_from 0@1, end 0@3", lines)
 	}
 }
 
