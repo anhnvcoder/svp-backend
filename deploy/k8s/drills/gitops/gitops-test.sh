@@ -273,7 +273,7 @@ application() {
 }
 pod() {
   printf 'apiVersion: v1\nkind: Pod\nmetadata: {name: gateway-1, namespace: svp, labels: {app.kubernetes.io/name: gateway}}\n'
-  printf 'spec:\n  containers:\n  - name: istio-proxy\n    env: [{name: SENTRY_ENVIRONMENT, value: stg}]\n'
+  printf 'spec:\n  containers:\n  - name: sidecar\n    env: [{name: SENTRY_ENVIRONMENT, value: stg}]\n'
   printf '  - name: gateway\n    env: [{name: OTHER, value: x}%s]\nstatus: {phase: %s}\n' "${2:+, {name: SENTRY_ENVIRONMENT, value: $2\}}" "$1"
 }
 same "env: an Application with stg in the valuesObject of its chart source passes" yes \

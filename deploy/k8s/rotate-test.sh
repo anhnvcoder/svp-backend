@@ -138,6 +138,9 @@ case $args in
   "get job video-service-migrate -o jsonpath={.status.conditions[?(@.type==\"Failed\")].status}") printf True ;;
   "get pods -o json") echo '{"items": []}' ;;
   "get rollout "*" -o jsonpath={.status.phase}") name=${args#get rollout }; cat "$s/phase-${name%% *}" 2>/dev/null || true ;;
+  # install.sh's postsync hook: a Rollout as JSON (file rollout-json-<name>), a route that exists (route-<kind>-<name>).
+  "get rollout "*" -o json") name=${args#get rollout }; cat "$s/rollout-json-${name%% *}" ;;
+  "get HTTPRoute "* | "get GRPCRoute "*) set -- $args; [ -f "$s/route-$2-$3" ] ;;
   *) echo "fake kubectl: unexpected call: $args" >&2; exit 3 ;;
 esac
 EOF
@@ -178,7 +181,7 @@ EOF
 chmod 755 "$bin"/*
 
 # --- the clone of svp-gitops (gitops_dir only checks it is one), with the three releases of components.json that set
-# canary in their values files: gateway and web behind an HTTPRoute, feed-service (gRPC) without one.
+# canary in their values files: gateway and web behind an HTTPRoute, feed-service (gRPC) behind a GRPCRoute.
 gitops=$work/gitops
 mkdir -p "$gitops/argocd/apps" "$gitops/base/services"
 for r in gateway web feed-service; do printf 'canary: true\n' >"$gitops/base/services/$r.yaml"; done
@@ -189,7 +192,7 @@ cat >"$gitops/argocd/apps/components.json" <<'EOF'
   {"name": "svp-cluster", "namespace": "cert-manager", "wave": 1, "path": "deploy/helm/svp-cluster"},
   {"name": "gateway", "namespace": "svp", "wave": 7, "path": "deploy/helm/svp-service", "values": "base/services/gateway.yaml", "canaryRoute": "api"},
   {"name": "web", "namespace": "svp", "wave": 7, "path": "deploy/helm/svp-service", "values": "base/services/web.yaml", "canaryRoute": "web"},
-  {"name": "feed-service", "namespace": "svp", "wave": 6, "path": "deploy/helm/svp-service", "values": "base/services/feed-service.yaml"},
+  {"name": "feed-service", "namespace": "svp", "wave": 6, "path": "deploy/helm/svp-service", "values": "base/services/feed-service.yaml", "canaryRoute": "feed-service"},
   {"name": "external-secrets", "namespace": "external-secrets", "wave": 0, "gitopsOnly": true, "canaryRoute": "x"}
 ]}
 EOF
@@ -911,7 +914,7 @@ for c in "0 own" "1 own" "0 running"; do
   keep_calls
 done
 
-# A gRPC release with canary set and no canaryRoute (feed-service): its canary ahead starts drill traffic too.
+# A gRPC release with canary set (feed-service, canaryRoute its GRPCRoute): its canary ahead starts drill traffic too.
 new_state svp-data svp svp-obs keda
 set_state reloader 1
 rollouts
@@ -922,7 +925,7 @@ start=$(line '^traffic start$')
 later_waves=$(last_line '^helmfile .* sync -l wave!=0,wave!=1 ')
 if [ "$rc" = 0 ] && before "$start" "$later_waves" && before "$later_waves" "$(line '^traffic stop$')" &&
   grep -q "^ok    Reloader runs" "$work/grpc.out" && ! grep -q 'canary of gateway\|canary of web' "$work/grpc.out"; then
-  ok "install.sh, a canary of feed-service (gRPC, no canaryRoute) ahead: drill traffic started before the later waves, stopped after them"
+  ok "install.sh, a canary of feed-service (gRPC, canaryRoute its GRPCRoute) ahead: drill traffic started before the later waves, stopped after them"
 else
   fail "install.sh, a canary of feed-service ahead: exit $rc, start $start, later waves $later_waves"$'\n'"$(show "$work/grpc.out" "$FAKE_STATE/calls")"
 fi
@@ -944,6 +947,39 @@ if [ "$rc" = 1 ] && grep -qxF '    [svp] migrate: password authentication failed
   ok "install.sh's hooks, a release whose migrate Job failed: the log of its last failed attempt (marked as namespace svp), the containers not ready, a failure naming the release; no watcher or file left"
 else
   fail "install.sh's hooks, a release whose migrate Job failed: exit $rc"$'\n'"$(show "$work/hook.out" "$FAKE_STATE/calls")"
+fi
+keep_calls
+
+# --- 10b. install.sh's postsync hook on a gRPC release with canary set: its Rollout moves the weights of GRPCRoute
+# user-service, which canaryRoute must name. None, or the name of no GRPCRoute (an HTTPRoute of that name is another
+# kind), fails before the Rollout is waited for; the right one waits for it.
+grpc_hook() {
+  new_state svp
+  set_state rollout-user-service
+  jq -n '{metadata: {generation: 1}, status: {observedGeneration: 1, phase: "Healthy"}, spec: {strategy: {canary:
+    {trafficRouting: {plugins: {"argoproj-labs/gatewayAPI": {grpcRoute: "user-service", namespace: "svp"}}}}}}}' \
+    >"$FAKE_STATE/rollout-json-user-service"
+  [ -z "$2" ] || set_state "route-$2-user-service"
+  rc=0
+  env PATH="$bin:$PATH" TMPDIR="$work/tmp" "$fake/deploy/k8s/install.sh" hook postsync user-service svp service "$1" "" \
+    >"$work/grpc-hook.out" 2>&1 || rc=$?
+}
+for c in "|GRPCRoute|component user-service has no canaryRoute in argocd/apps/components.json, the name of its Rollout's GRPCRoute" \
+  "user-service|HTTPRoute|canaryRoute 'user-service' of component user-service in argocd/apps/components.json names no GRPCRoute of release user-service"; do
+  IFS='|' read -r route kind want <<<"$c"
+  grpc_hook "$route" "$kind"
+  if [ "$rc" = 1 ] && grep -qxF "FAIL  $want" "$work/grpc-hook.out" && ! grep -q 'Healthy' "$work/grpc-hook.out"; then
+    ok "install.sh's postsync hook, a gRPC canary, canaryRoute '$route', $kind user-service in the cluster: refused, the Rollout not waited for"
+  else
+    fail "install.sh's postsync hook, a gRPC canary, canaryRoute '$route', a $kind: exit $rc"$'\n'"$(show "$work/grpc-hook.out" "$FAKE_STATE/calls")"
+  fi
+  keep_calls
+done
+grpc_hook user-service GRPCRoute
+if [ "$rc" = 0 ] && grep -qx 'ok    rollout user-service Healthy' "$work/grpc-hook.out"; then
+  ok "install.sh's postsync hook, a gRPC canary whose canaryRoute names its GRPCRoute: the Rollout waited for until Healthy"
+else
+  fail "install.sh's postsync hook, a gRPC canary with its GRPCRoute: exit $rc"$'\n'"$(show "$work/grpc-hook.out" "$FAKE_STATE/calls")"
 fi
 keep_calls
 

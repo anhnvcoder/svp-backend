@@ -21,8 +21,8 @@ has() { if grep -qF -- "$3" "$work/$1.log"; then ok "$1: $2"; else fail "$1: $2"
 lacks() { if grep -qF -- "$3" "$work/$1.log"; then fail "$1: $2"; else ok "$1: $2"; fi; }
 
 compose="up smoke uptime-cost drill-obs-threats test-stack-objstore"
-gitops="k8s-gitops-up drill-k8s-gitops gitops-admission-metrics k8s-smoke uptime-cost drill-k8s-reloader drill-k8s-supplychain drill-k8s-threats"
-dev="k8s-up k8s-smoke drill-k8s-reloader drill-k8s-supplychain"
+gitops="k8s-gitops-up drill-k8s-gitops gitops-admission-metrics k8s-smoke drill-k8s-mesh uptime-cost drill-k8s-reloader drill-k8s-supplychain drill-k8s-threats"
+dev="k8s-up k8s-smoke drill-k8s-mesh drill-k8s-reloader drill-k8s-supplychain"
 
 # steps NAME NAMES TARGETS ARG [VAR=VALUE...]: runs steps.sh ARG with NAMES and TARGETS, logging to $work/NAME.log.
 steps() {
@@ -66,7 +66,8 @@ same "table: exits 0 whatever the steps gave" 0 \
   "$(steps table "$gitops" "k8s-smoke drill-k8s-gitops drill-k8s-supplychain drill-k8s-threats" table SVP_VERIFY_STEPS="$json")"
 same "table: one line per step in order: outcome, why a step was skipped, absent for an id the job lacks" \
   "$(printf 'step\toutcome\tnote\n%s\n' "$(printf '%s\t%s\t%s\n' k8s-gitops-up success '' drill-k8s-gitops failure '' \
-    gitops-admission-metrics skipped 'not in targets' k8s-smoke success '' uptime-cost absent 'no step of that id in the job' \
+    gitops-admission-metrics skipped 'not in targets' k8s-smoke success '' drill-k8s-mesh absent 'no step of that id in the job' \
+    uptime-cost absent 'no step of that id in the job' \
     drill-k8s-reloader absent 'no step of that id in the job' \
     drill-k8s-supplychain cancelled '' drill-k8s-threats absent 'no step of that id in the job')")" "$(cat "$work/table.out/results.tsv")"
 has table "the table is printed" "  drill-k8s-gitops             failure"
@@ -183,6 +184,25 @@ same "gitops_ref: a workflow command fails" 1 "$(gitops_ref ref-inject $'main\n:
 lacks ref-inject "the rejected value is not printed back" BAD-REF-MARKER
 has ref-branch "it says why" "gitops_ref is main or a full commit SHA of svp-gitops (40 hex); nothing started"
 
+same "workflow: the three jobs check the ref with the same script" 1 \
+  "$(workflow_json "$wf" | jq '[.jobs[].steps[] | select(.id == "ref") | .run] | unique | length')"
+refrun=$(workflow_json "$wf" | jq -r '.jobs.gitops.steps[] | select(.id == "ref") | .run')
+# ref NAME EVENT REF: executes the Check the ref step for EVENT on REF, logging to $work/NAME.log.
+ref() {
+  local rc=0
+  mkdir -p "$work/$1.runner"
+  GITHUB_EVENT_NAME=$2 GITHUB_REF=$3 GITHUB_ENV=$work/$1.runner/env RUNNER_TEMP=$work/$1.runner \
+    bash -c "$refrun" >"$work/$1.log" 2>&1 </dev/null || rc=$?
+  echo "$rc"
+}
+same "ref: a schedule on main passes" 0 "$(ref ref-schedule schedule refs/heads/main)"
+same "ref: a dispatch on main passes" 0 "$(ref ref-dispatch-main workflow_dispatch refs/heads/main)"
+same "ref: a dispatch on a feat/* branch passes" 0 "$(ref ref-feat workflow_dispatch refs/heads/feat/m1-service-mesh)"
+same "ref: a dispatch on another branch fails" 1 "$(ref ref-fix workflow_dispatch refs/heads/fix/m1-service-mesh)"
+same "ref: a dispatch on a tag fails" 1 "$(ref ref-tag workflow_dispatch refs/tags/feat/v1)"
+same "ref: a schedule on a feat/* branch fails" 1 "$(ref ref-schedule-feat schedule refs/heads/feat/m1-service-mesh)"
+has ref-fix "it says why" "verify runs on main, or dispatched on a feat/* branch, not workflow_dispatch on refs/heads/fix/m1-service-mesh"
+
 mkdir -p "$work/broken"
 # broken NAME WANT SED: applies sed expression to workflow and asserts problems output contains WANT.
 broken() {
@@ -196,8 +216,8 @@ broken no-build-check "step drill-k8s-threats has another if:" \
   "/id: drill-k8s-threats/{n;s/steps.k8s-gitops-up.outcome == 'success' \&\& //;}"
 broken other-name "step k8s-smoke has another if:" "/id: k8s-smoke/{n;s/' k8s-smoke '/' drill-k8s-threats '/;}"
 broken no-timeout "step drill-k8s-threats has no timeout-minutes" '/id: drill-k8s-threats/{n;n;d;}'
-broken budget "gitops: timeout-minutes 260 holds less" 's/timeout-minutes: 265/timeout-minutes: 260/'
-broken dev-budget "dev-k3d: timeout-minutes 200 holds less" 's/timeout-minutes: 210/timeout-minutes: 200/'
+broken budget "gitops: timeout-minutes 280 holds less" 's/timeout-minutes: 285/timeout-minutes: 280/'
+broken dev-budget "dev-k3d: timeout-minutes 215 holds less" 's/timeout-minutes: 225/timeout-minutes: 215/'
 broken dev-reloader-if "step drill-k8s-reloader has another if:" \
   "/id: drill-k8s-reloader/{n;s/steps.k8s-up.outcome == 'success' \&\& //;}"
 broken values-after "dev-k3d: the new values of drill-k8s-reloader are not made and masked by a step of their own before the build step" \

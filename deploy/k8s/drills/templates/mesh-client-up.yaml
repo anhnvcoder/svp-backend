@@ -1,0 +1,137 @@
+# Pod clientName of namespace svp with the gateway's labels, for the drills of the mesh (deploy/k8s/drills/mesh/): the
+# gateway's NetworkPolicies select it, so its calls pass the network layer as the gateway's do and meet the mesh's own
+# layers (STRICT mTLS, the AuthorizationPolicies). Use it as a step of the test, with the bindings that differ.
+
+# clientServiceAccount is its identity in the mesh (the test makes any other than gateway and default first);
+# clientDataplaneMode ambient puts it in the mesh, none leaves it out. The image is that of a running web pod (container
+# web): svp admits only signed releases, and its node runs deploy/k8s/drills/templates/ambient-probe.js.
+
+# A readiness gate nobody sets keeps the pod not Ready, so the gateway's Service never sends it a request. Chainsaw
+# deletes the pod when the test ends; one a killed run left (label managed-by=clientOwner) is deleted first, one
+# without it fails the step and stays.
+
+# kubectl in the scripts uses the caller's kubeconfig and context k3d-svp (templates/probe-up.yaml says why); the first
+# step checks Chainsaw itself runs on that cluster.
+apiVersion: chainsaw.kyverno.io/v1alpha1
+kind: StepTemplate
+metadata:
+  name: mesh-client-up
+spec:
+  bindings:
+  - name: clientName
+    value: drill-mesh-gateway
+  - name: clientOwner
+    value: svp-drill-mesh
+  - name: clientServiceAccount
+    value: gateway
+  - name: clientDataplaneMode
+    value: ambient
+  try:
+  - script:
+      env:
+      - name: CLIENT
+        value: ($clientName)
+      - name: CLIENT_OWNER
+        value: ($clientOwner)
+      - name: CALLER_KUBECONFIG
+        value: (env('KUBECONFIG'))
+      content: |
+        set -eu
+        chainsaw=$(kubectl config view --minify -o jsonpath='{.clusters[0].cluster.server}' 2>/dev/null || true)
+        export KUBECONFIG="$CALLER_KUBECONFIG"
+        k3d=$(kubectl config view --minify --context k3d-svp -o jsonpath='{.clusters[0].cluster.server}' 2>/dev/null || true)
+        if [ -z "$k3d" ] || [ "$chainsaw" != "$k3d" ]; then
+          echo "FAIL  chainsaw runs on ${chainsaw:-no cluster}, not on context k3d-svp (${k3d:-not in the kubeconfig}): run it with --kube-context k3d-svp" >&2
+          exit 1
+        fi
+        kubectl --context k3d-svp -n svp get pod "$CLIENT" >/dev/null 2>&1 || exit 0
+        owner=$(kubectl --context k3d-svp -n svp get pod "$CLIENT" -o jsonpath='{.metadata.labels.app\.kubernetes\.io/managed-by}')
+        if [ "$owner" != "$CLIENT_OWNER" ]; then
+          echo "FAIL  pod svp/$CLIENT exists without label app.kubernetes.io/managed-by=$CLIENT_OWNER: not this drill's, delete it yourself" >&2
+          exit 1
+        fi
+        kubectl --context k3d-svp -n svp delete pod "$CLIENT" --ignore-not-found --wait=true --timeout=60s >/dev/null
+  - script:
+      env:
+      - name: CALLER_KUBECONFIG
+        value: (env('KUBECONFIG'))
+      outputs:
+      - name: webImage
+        value: ($stdout)
+      content: |
+        set -eu
+        export KUBECONFIG="$CALLER_KUBECONFIG"
+        image=$(kubectl --context k3d-svp -n svp get pods -l app.kubernetes.io/name=web,app.kubernetes.io/component=server \
+          --field-selector status.phase=Running -o jsonpath='{.items[0].spec.containers[?(@.name=="web")].image}')
+        [ -n "$image" ] || { echo "FAIL  read the image of container web of a running web pod in svp" >&2; exit 1; }
+        printf %s "$image"
+  - apply:
+      resource:
+        apiVersion: v1
+        kind: Pod
+        metadata:
+          name: ($clientName)
+          namespace: svp
+          labels:
+            app.kubernetes.io/name: gateway
+            app.kubernetes.io/component: server
+            app.kubernetes.io/managed-by: ($clientOwner)
+            istio.io/dataplane-mode: ($clientDataplaneMode)
+        spec:
+          serviceAccountName: ($clientServiceAccount)
+          automountServiceAccountToken: false
+          restartPolicy: Never
+          terminationGracePeriodSeconds: 1
+          readinessGates:
+          - conditionType: drill.svp/not-a-backend
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 65532
+            runAsGroup: 65532
+            seccompProfile:
+              type: RuntimeDefault
+          containers:
+          - name: probe
+            image: ($webImage)
+            # Exits after 900 s, as probe-up.yaml's sleep: a pod a killed run leaves behind does not run on.
+            command: [/nodejs/bin/node, -e, "setTimeout(() => {}, 900000)"]
+            securityContext:
+              allowPrivilegeEscalation: false
+              readOnlyRootFilesystem: true
+              capabilities:
+                drop: [ALL]
+            resources:
+              requests: {cpu: 10m, memory: 32Mi}
+              limits: {cpu: 200m, memory: 128Mi}
+  - wait:
+      apiVersion: v1
+      kind: Pod
+      name: ($clientName)
+      namespace: svp
+      timeout: 120s
+      for:
+        condition:
+          name: ContainersReady
+  # Istio's CNI agent marks a pod it has handed to ztunnel with ambient.istio.io/redirection=enabled.
+  - script:
+      env:
+      - name: CLIENT
+        value: ($clientName)
+      - name: MODE
+        value: ($clientDataplaneMode)
+      - name: CALLER_KUBECONFIG
+        value: (env('KUBECONFIG'))
+      content: |
+        set -eu
+        export KUBECONFIG="$CALLER_KUBECONFIG"
+        for _ in $(seq 30); do
+          got=$(kubectl --context k3d-svp -n svp get pod "$CLIENT" -o jsonpath='{.metadata.annotations.ambient\.istio\.io/redirection}')
+          case $MODE:$got in
+            ambient:enabled) echo "pod svp/$CLIENT is in the mesh (ambient.istio.io/redirection=enabled)"; exit 0 ;;
+            none:enabled) echo "FAIL  pod svp/$CLIENT has istio.io/dataplane-mode=none but ztunnel captures it" >&2; exit 1 ;;
+            none:*) echo "pod svp/$CLIENT is outside the mesh (ambient.istio.io/redirection='$got')"; exit 0 ;;
+          esac
+          sleep 2
+        done
+        echo "FAIL  pod svp/$CLIENT in the mesh within 60 s (ambient.istio.io/redirection='$got')" >&2
+        exit 1

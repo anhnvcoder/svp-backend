@@ -161,9 +161,10 @@ func (b backend) serviceConfig() string {
 	return string(cfg)
 }
 
-// dialOptions are the options of every connection to b: plain text (no mTLS between services),
-// client spans and metrics, b's own circuit breaker, and b's service config. A service config
-// from the resolver (a DNS TXT record) is ignored, so the retry policy is always this one.
+// dialOptions are the options of every connection to b: plain text from the process (on the
+// cluster the mesh encrypts it with mTLS; compose has no mesh layer), client spans and metrics,
+// b's own circuit breaker, and b's service config. A service config from the resolver (a DNS TXT
+// record) is ignored, so the retry policy is always this one.
 func (b backend) dialOptions() []grpc.DialOption {
 	return []grpc.DialOption{
 		grpc.WithTransportCredentials(insecure.NewCredentials()),

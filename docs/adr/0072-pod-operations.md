@@ -183,8 +183,7 @@ lời gọi thì Inconclusive; ngưỡng là `canaryLimits` của release.
   `internal/telemetry/`, `internal/outbox/`, `services/user-service/migrations/`, `services/video-service/migrations/`,
   `deploy/observability/prometheus/rules/svp-alerts.yaml`, `.golangci.yml`, `docs/runbooks/kafka-dlq-records.md`,
   `docs/runbooks/outbox-rows-failed.md`.
-- `svp-gitops`: `base/services/`, `envs/stg/`, `envs/prd/` (`DATABASE_MAX_CONNS`), `argocd/apps/templates/applications.yaml`
-  (`PruneLast`), `platforms/eks/` (`zoneSpread`). `svp-infra`: `aws/modules/msk/main.tf`, `aws/modules/registry/main.tf`,
+- `svp-gitops`: `base/services/`, `envs/stg/`, `envs/prd/` (`DATABASE_MAX_CONNS`), `argocd/apps/templates/applications.yaml` (`PruneLast`), `platforms/eks/` (`zoneSpread`). `svp-infra`: `aws/modules/msk/main.tf`, `aws/modules/registry/main.tf`,
   `github/scripts/github-app.py` (user MSK, repo ECR, package GHCR `dlq-replay`).
 
 ## Nguồn
@@ -197,4 +196,5 @@ Phụ lục: [`appendix/0072-pod-operations.md`](appendix/0072-pod-operations.md
 
 ### Chỉnh bởi
 
+- §8: [0075](0075-service-mesh.md): release `protocol: grpc` có `canary: true` là Rollout có `trafficRouting` qua plugin Gateway API trên `GRPCRoute` tên release (parent là Service của release, waypoint của mesh thực thi), chia theo request thay theo số pod; bước, analysis trên pod canary, giới hạn giữ; Tuổi kết nối gRPC giữ (vô hại sau waypoint, vẫn chia tải ở compose và cho client ngoài mesh).
 - §2, Hệ quả: [0077](0077-versioned-gitops-checker.md): release mới không cần bản checker mới; check của `svp-gitops` lấy danh sách service từ bảng nguồn ở commit mà `envs/<env>/charts.yaml` ghim, nên file image của service mới hợp lệ ngay trong PR promote stg đầu tiên, không chờ PR nâng ghim checker.

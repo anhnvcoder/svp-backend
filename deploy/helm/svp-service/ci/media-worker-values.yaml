@@ -1,0 +1,9 @@
+# media-worker's form on its own (helm lint or template -f this file): no port, reached by no pod, so its
+# AuthorizationPolicy admits no one and STRICT mTLS still applies. Placeholder image.
+image: {repository: ghcr.io/example/media-worker, tag: "000000000000"}
+protocol: none
+resources:
+  requests: {cpu: 500m, memory: 256Mi}
+  limits: {cpu: "2", memory: 2Gi}
+ingressFrom: []
+egressTo: [kafka, s3, collector]

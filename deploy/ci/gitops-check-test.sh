@@ -617,6 +617,33 @@ EOF
 policy_case "an image where the policy does not read fails as outside it" 1 images-pinned \
   "  base/outside.yaml: quay.io/example/worker:v2 (in a field policy images-pinned does not read: add it there)" \
   base/outside.yaml
+# Go templates in the text (istiod's pod templates) are no image; a real one beside them, on the next line or on the
+# same line, still is.
+cat >"$pd/base/template.yaml" <<'EOF'
+apiVersion: example.com/v1
+kind: Thing
+metadata:
+  name: thing
+  namespace: platform
+spec:
+  podTemplate: |
+    image: "{{ .ProxyImage }}"
+    image: {{ annotation .ObjectMeta `example.com/image` .Values.image | quote }}
+    args: ["--proxy-image={{ .ProxyImage }}"]
+EOF
+policy_case "a Go template where an image goes is no image" 0 images-pinned \
+  "ok    policy images-pinned: 1 resources pass" base/template.yaml
+{
+  cat "$pd/base/template.yaml"
+  echo '    image: quay.io/example/next:v1'
+  echo '    run: "{{ .Bin }} quay.io/example/beside:v1"'
+} >"$pd/base/template-beside.yaml"
+policy_case "an image on the line after a Go template" 1 images-pinned \
+  "  base/template-beside.yaml: quay.io/example/next:v1 (in a field policy images-pinned does not read: add it there)" \
+  base/template-beside.yaml
+policy_case "an image on the line of a Go template" 1 images-pinned \
+  "  base/template-beside.yaml: quay.io/example/beside:v1 (in a field policy images-pinned does not read: add it there)" \
+  base/template-beside.yaml
 cat >"$pd/base/route.yaml" <<'EOF'
 apiVersion: gateway.networking.k8s.io/v1
 kind: HTTPRoute

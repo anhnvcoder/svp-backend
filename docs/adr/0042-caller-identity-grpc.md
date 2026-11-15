@@ -142,3 +142,9 @@ Chọn **5** cho lớp ứng dụng ở mọi môi trường; **1a** (Istio ambi
 
 Phụ lục: [`appendix/0042-caller-identity-grpc.md`](appendix/0042-caller-identity-grpc.md) (dòng trạng thái lúc chốt, hai bảng phương án với
 trạng thái ngành và RAM, trích dẫn OWASP đầy đủ, ưu nhược từng phương án, lệnh benchmark, nguồn đầy đủ).
+
+### Chỉnh bởi
+
+- §4, Hệ quả: [0075](0075-service-mesh.md): Istio ambient dựng ở cả k3d (đường dev và GitOps) và EKS, không chỉ EKS; RAM đo trên runner
+  của `verify.yml`; mTLS STRICT ở mọi pod của `svp`, mesh xác thực service gọi bằng principal (pod gRPC chỉ nhận waypoint, waypoint chỉ
+  nhận gateway); IN-3 đóng trên cluster, compose vẫn không có lớp kênh.

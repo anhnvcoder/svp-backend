@@ -26,8 +26,8 @@ Thiết kế tổng thể ở [`architecture.md`](../architecture.md), khác bi�
 | --- | --- | --- | --- | --- |
 | WA-1 | REL 12, PERF 5 | SLO và yêu cầu độ trễ (feed p99 < 150 ms tại 1 000 req/s) chưa có số đo ở tải mục tiêu trên cloud | High | Chạy k6 profile `cloud` theo SLO: đo ở buổi stg/prd chung |
 | WA-2 | REL 12, REL 13 | RTO, RPO và failover của dữ liệu managed chưa diễn tập trên cloud | High | Diễn tập PITR, object S3, failover RDS, Valkey, mất broker MSK, drain một AZ: đo ở buổi stg/prd chung |
-| WA-3 | SEC 9 | gRPC giữa gateway và service đi plaintext trong cluster, access token chuyển tiếp không mã hoá; NetworkPolicy là lớp chặn duy nhất | High | Dựng Istio ambient theo ADR-0042: mTLS STRICT, AuthorizationPolicy theo service account; đo độ trễ thêm ở buổi stg/prd chung |
-| WA-4 | PERF 2, REL 7 | Gateway gọi service bằng `pick_first` qua ClusterIP: tải chia theo kết nối, không theo request | Medium | Cân tải gRPC theo request (waypoint L7 của mesh hay client `round_robin`), đề xuất ADR |
+| WA-3 | SEC 9 | Mesh Istio ambient mã hoá gRPC trong cluster và kiểm danh tính theo service account ([ADR-0075](../adr/0075-service-mesh.md)), nhưng chưa kiểm trên EKS thật: probe của kubelet tới pod trong mesh đến từ `169.254.7.127`, nguồn mà tài liệu network policy của VPC CNI không nói tới; telemetry OTLP ra `svp-obs` và compose nằm ngoài mesh | Medium | Buổi stg/prd chung: pod `svp` Ready sau khi vào mesh; đo độ trễ thêm của waypoint (p99 client trừ p99 server cùng method) |
+| WA-4 | PERF 2, REL 7 | Waypoint cân tải gRPC theo request thay `pick_first` qua ClusterIP, nhưng chưa đo dưới tải k6 trên cloud: chia đều giữa pod và một chặng Envoy thêm vào mọi lời gọi | Medium | Đo ở buổi stg/prd chung cùng k6 profile `cloud` |
 | WA-5 | REL 1 | Không có danh mục Service Quotas và cảnh báo theo quota; các giới hạn đã biết nằm rải trong ADR | Medium | Danh mục quota của mỗi account, kiểm trước buổi, alarm theo mức dùng quota; đề xuất ADR |
 | WA-6 | OPS 5, OPS 6 | `plan` trên PR ([ADR-0076](../adr/0076-terraform-plan-infracost-pr.md)) chỉ chạy khi role OIDC chỉ đọc đã apply ở account env | Medium | Apply role, bật biến plan ở buổi cloud |
 | WA-7 | OPS 6, SEC 11 | Không có cổng tự động "bộ prd = bộ stg đã kiểm" (GIT-4); provenance đạt SLSA Build L2, không L3 | Medium | Giữ chấp nhận tới điều kiện xem lại của GIT-4 |
@@ -41,7 +41,7 @@ Thiết kế tổng thể ở [`architecture.md`](../architecture.md), khác bi�
 | WA-15 | OPS 2, OPS 10 | Một người vận hành, không luân phiên trực; cảnh báo page chỉ tới email và Telegram | Medium | Chấp nhận ở quy mô lab; lịch trực và escalation khi có người thứ hai |
 | WA-16 | SUS 1, SUS 6 | Chưa có mục tiêu và số đo bền vững; region chọn theo độ trễ và giá, không xét bền vững | Medium | Đặt số đo proxy (vCPU-giờ mỗi phút video, GB lưu mỗi video) trên dashboard chi phí |
 
-Rủi ro High nằm ở Reliability, Performance Efficiency (WA-1, WA-2) và Security (WA-3); Operational Excellence, Cost Optimization,
+Rủi ro High nằm ở Reliability, Performance Efficiency (WA-1, WA-2); Operational Excellence, Security, Cost Optimization,
 Sustainability chỉ có rủi ro Medium.
 
 ## Operational Excellence
@@ -55,7 +55,7 @@ Câu hỏi theo [OPS].
 | OPS 3. How does your organizational culture support your business outcomes? | Postmortem không đổ lỗi ([`postmortems/`](../postmortems/)), RFC một trang cho người không làm kỹ thuật ([`rfc/`](../rfc/)), ADR có "Xem lại khi" | — |
 | OPS 4. How do you implement observability in your workload? | OpenTelemetry đủ ba tín hiệu, RUM của web, SLO bằng Sloth ([ADR-0011](../adr/0011-observability-stage3.md), [`observability.md`](observability.md)); trên eks vào AMP, CloudWatch Logs, X-Ray ([ADR-0063](../adr/0063-managed-observability.md)); uptime từ ngoài vào ([ADR-0074](../adr/0074-cost-uptime.md)) | WA-14 |
 | OPS 5. How do you reduce defects, ease remediation, and improve flow into production? | Check `ci-ok`, `images-ok` bắt buộc trên `main`, test `-race` trên Postgres và Redis thật, cổng quét ([`ci-cd.md`](../ci-cd.md), [`delivery.md`](delivery.md)) | WA-6 |
-| OPS 6. How do you mitigate deployment risks? | Build một lần, cùng digest qua `svp-gitops` và Argo CD; canary web, gateway và canary gRPC theo số pod ([ADR-0072](../adr/0072-pod-operations.md)); prd ghim commit stg đã chạy, environment `promote-prd` có người duyệt ([ADR-0048](../adr/0048-prd-aws.md), [ADR-0041](../adr/0041-github-hardening.md)); migration expand/contract ([ADR-0068](../adr/0068-zero-downtime-migrations.md)) | WA-6, WA-7 |
+| OPS 6. How do you mitigate deployment risks? | Build một lần, cùng digest qua `svp-gitops` và Argo CD; canary web, gateway và canary gRPC theo request qua waypoint ([ADR-0072](../adr/0072-pod-operations.md), [ADR-0075](../adr/0075-service-mesh.md)); prd ghim commit stg đã chạy, environment `promote-prd` có người duyệt ([ADR-0048](../adr/0048-prd-aws.md), [ADR-0041](../adr/0041-github-hardening.md)); migration expand/contract ([ADR-0068](../adr/0068-zero-downtime-migrations.md)) | WA-6, WA-7 |
 | OPS 7. How do you know that you are ready to support a workload? | Một runbook cho mỗi cảnh báo page ([`runbooks/README.md`](../runbooks/README.md)); game day có postmortem; kịch bản `verify.yml` trên runner ([`reliability.md`](reliability.md)) | — |
 | OPS 8. How do you utilize workload observability in your organization? | Cảnh báo burn rate đa cửa sổ mang `runbook_url`; dashboard theo service, SLO, chi phí, uptime ([`observability.md`](observability.md)) | — |
 | OPS 9. How do you understand the health of your operations? | Trạng thái deploy của Argo CD về commit status ([ADR-0032](../adr/0032-argocd-deploy-status.md)), runbook khi Application hỏng ([`argocd-application-degraded.md`](../runbooks/argocd-application-degraded.md)); DORA rời đường chính vì env không sống đủ lâu để số có nghĩa ([ADR-0037](../adr/0037-mainpath-standard-tools.md) §1) | — |
@@ -84,15 +84,16 @@ Câu hỏi theo [SEC].
 | SEC 6. How do you protect your compute resources? | Pod Security `restricted`, image distroless nonroot, Kyverno chỉ nhận image đã ký và còn hạn quét ([`delivery.md`](delivery.md)); cổng quét chặn CRITICAL, HIGH có bản vá ([ADR-0070](../adr/0070-scan-gate-high-fixed.md)); Inspector quét repo cache của ECR ([ADR-0062](../adr/0062-ecr-registry-ci-oidc.md)) | WA-8 |
 | SEC 7. How do you classify your data? | Tài sản cần bảo vệ và mức của chúng ở [mục 3 của threat model](../threat-model.md); dữ liệu người dùng chỉ ở database của service sở hữu và bucket `uploads`, `media` | — |
 | SEC 8. How do you protect your data at rest? | RDS mã hoá bằng CMK ([ADR-0057](../adr/0057-postgres17-verify-full.md)); `uploads` SSE-KMS ([ADR-0067](../adr/0067-backup-dr.md) §8); bản backup ở account riêng, vault khoá governance ([`backup-dr.md`](backup-dr.md)) | — |
-| SEC 9. How do you protect your data in transit? | Postgres `sslmode=verify-full`, MSK SCRAM trên TLS, Valkey TLS ([ADR-0057](../adr/0057-postgres17-verify-full.md), [ADR-0053](../adr/0053-msk-elasticache-valkey.md)); cert ACM ở edge ([ADR-0061](../adr/0061-edge-cloudfront-waf-acm.md)); gRPC trong cluster chưa mã hoá ([mục 4.5 của threat model](../threat-model.md#45-mức-tin-cậy-giữa-các-service)) | WA-3 |
+| SEC 9. How do you protect your data in transit? | Postgres `sslmode=verify-full`, MSK SCRAM trên TLS, Valkey TLS ([ADR-0057](../adr/0057-postgres17-verify-full.md), [ADR-0053](../adr/0053-msk-elasticache-valkey.md)); cert ACM ở edge ([ADR-0061](../adr/0061-edge-cloudfront-waf-acm.md)); gRPC trong cluster mã hoá bằng mTLS của mesh Istio ambient ([ADR-0075](../adr/0075-service-mesh.md), [mục 4.5 của threat model](../threat-model.md#45-mức-tin-cậy-giữa-các-service)) | WA-3 |
 | SEC 10. How do you anticipate, respond to, and recover from incidents? | Runbook phân loại cảnh báo bảo mật ([`security-alert.md`](../runbooks/security-alert.md)); break-glass ([`aws-security.md`](aws-security.md)); khôi phục từ account `svp-backup` ([`rds-restore.md`](../runbooks/rds-restore.md), [`s3-restore.md`](../runbooks/s3-restore.md)) | — |
 | SEC 11. How do you incorporate and validate the security properties of applications throughout the design, development, and deployment lifecycle? | Threat model theo bề mặt; gosec, govulncheck, gitleaks, zizmor, Scorecard, dependency review; SBOM, chữ ký keyless và provenance ([ADR-0015](../adr/0015-cicd-devsecops-stage5.md), [ADR-0040](../adr/0040-sigstore-bundle-actions-attest.md), [ADR-0041](../adr/0041-github-hardening.md)) | WA-7 |
 
 Việc đề xuất:
 
-- **WA-3:** dựng Istio ambient như [ADR-0042](../adr/0042-caller-identity-grpc.md) đã chọn: mTLS STRICT giữa mọi workload của namespace ứng
-  dụng, AuthorizationPolicy theo service account đúng các kênh gRPC đang có, NetworkPolicy giữ làm lớp mạng. RAM và độ trễ thêm của mesh: đo ở
-  buổi stg/prd chung.
+- **WA-3:** mesh đã dựng theo [ADR-0042](../adr/0042-caller-identity-grpc.md): mTLS STRICT giữa mọi pod của `svp`,
+  AuthorizationPolicy theo service account đúng các kênh gRPC đang có, NetworkPolicy giữ làm lớp mạng
+  ([`architecture.md`](../architecture.md#65-request-grpc-qua-mesh)). Còn lại là phần chỉ cloud kiểm được: pod `svp` Ready trên
+  EKS (nguồn probe, mục 7 của phụ lục) và độ trễ, RAM thêm của mesh, đo ở buổi stg/prd chung.
 - **WA-8, WA-9:** giữ chấp nhận; điều kiện xem lại của SC-1 và JWT-3 ở [mục 6 của threat model](../threat-model.md#6-rủi-ro-chấp-nhận).
 
 ## Reliability
@@ -107,7 +108,7 @@ Câu hỏi theo [REL].
 | REL 4. How do you design interactions in a distributed system to prevent failures? | Consumer idempotent, `Idempotency-Key` cho `POST /videos` ([ADR-0043](../adr/0043-idempotency-key.md)); hợp đồng gRPC, REST có version (`buf breaking`, `make api-contract-check`); rate limit GCRA ([ADR-0010](../adr/0010-redis-ratelimit-cache-resilience-stage2c.md)) | — |
 | REL 5. How do you design interactions in a distributed system to mitigate or withstand failures? | Deadline mỗi lời gọi, retry có ngân sách, circuit breaker, graceful degradation của feed ([mục 6.2 của `architecture.md`](../architecture.md)); chặn quá tải ở gateway ([ADR-0072](../adr/0072-pod-operations.md)); retry có trần rồi DLQ ([ADR-0045](../adr/0045-bounded-batch-retry.md)) | — |
 | REL 6. How do you monitor workload resources? | SLO và burn rate ([`reliability.md`](reliability.md#slo)); CloudWatch alarm của RDS, MSK, ElastiCache ([ADR-0058](../adr/0058-managed-data-operations.md)); probe từ ngoài vào ([ADR-0074](../adr/0074-cost-uptime.md)) | WA-14 |
-| REL 7. How do you design your workload to adapt to changes in demand? | HPA, KEDA cho pod; Karpenter cho node ([ADR-0056](../adr/0056-eks-platform-ha.md)); ước lượng quy mô ở [`capacity.md`](capacity.md) | WA-4 |
+| REL 7. How do you design your workload to adapt to changes in demand? | HPA, KEDA cho pod; Karpenter cho node ([ADR-0056](../adr/0056-eks-platform-ha.md)); pod gRPC mới nhận lời gọi ngay vì waypoint chia theo request; ước lượng quy mô ở [`capacity.md`](capacity.md) | WA-4 |
 | REL 8. How do you implement change? | GitOps qua `svp-gitops` và Argo CD ([ADR-0025](../adr/0025-gitops-config-repo.md)); canary; migration không downtime ([ADR-0068](../adr/0068-zero-downtime-migrations.md)); output media bất biến theo version ([ADR-0029](../adr/0029-immutable-media-versions.md)) | — |
 | REL 9. How do you back up data? | PITR gốc của RDS, AWS Backup hằng ngày cho RDS và hai bucket, copy sang account `svp-backup`; chỉ dữ liệu không dựng lại được ([ADR-0067](../adr/0067-backup-dr.md) §1, [`backup-dr.md`](backup-dr.md)) | — |
 | REL 10. How do you use fault isolation to protect your workload? | Mỗi env một account; pod và node trải theo zone ([ADR-0056](../adr/0056-eks-platform-ha.md), [ADR-0072](../adr/0072-pod-operations.md)); breaker một cái mỗi service đích | — |
@@ -133,16 +134,16 @@ Câu hỏi theo [PERF].
 | Câu hỏi | Hệ thống trả lời | Rủi ro |
 | --- | --- | --- |
 | PERF 1. How do you select appropriate cloud resources and architecture for your workload? | Ước lượng tải, dữ liệu, băng thông trước khi chọn ([`capacity.md`](capacity.md)); dịch vụ managed cho dữ liệu và transcode ([ADR-0053](../adr/0053-msk-elasticache-valkey.md), [ADR-0057](../adr/0057-postgres17-verify-full.md), [ADR-0066](../adr/0066-mediaconvert-transcode.md)); mỗi ADR so phương án | WA-1 |
-| PERF 2. How do you select and use compute resources in your workload? | Node Graviton do Karpenter chọn theo pod đang chờ ([ADR-0056](../adr/0056-eks-platform-ha.md)); requests, limits bắt buộc; HPA, KEDA | WA-4 |
+| PERF 2. How do you select and use compute resources in your workload? | Node Graviton do Karpenter chọn theo pod đang chờ ([ADR-0056](../adr/0056-eks-platform-ha.md)); requests, limits bắt buộc; HPA, KEDA; waypoint cân tải gRPC theo request ([ADR-0075](../adr/0075-service-mesh.md)) | WA-4 |
 | PERF 3. How do you store, manage, and access data in your workload? | Feed dựng sẵn khi ghi ([ADR-0005](../adr/0005-feed-fan-out-on-write.md)); lượt xem gom theo lô ([ADR-0009](../adr/0009-engagement-feed-stage2b.md)); Valkey cache trang đầu feed khám phá ([ADR-0010](../adr/0010-redis-ratelimit-cache-resilience-stage2c.md)); ngân sách kết nối Postgres ([`capacity.md`](capacity.md)) | WA-13 |
 | PERF 4. How do you select and configure networking resources in your workload? | CDN bắt buộc vì egress là phần lớn tải ([`capacity.md`](capacity.md)); CloudFront cho web, API, media ([ADR-0061](../adr/0061-edge-cloudfront-waf-acm.md), [ADR-0052](../adr/0052-cloudfront-flat-rate-free.md)); segment premium từ CDN qua signed URL ([ADR-0073](../adr/0073-premium-playback.md)) | WA-13 |
 | PERF 5. How do your organizational practices and culture contribute to performance efficiency in your workload? | SLO độ trễ, k6 theo SLO, RUM và Lighthouse làm tín hiệu hồi quy ([`reliability.md`](reliability.md)) | WA-1 |
 
 Việc đề xuất:
 
-- **WA-4:** cân tải gRPC theo request thay `pick_first` qua ClusterIP; hiện trạng và cách `MaxConnectionAge` rải lại kết nối ở
-  [`deployment.md`](deployment.md) và [ADR-0072](../adr/0072-pod-operations.md). Chọn giữa waypoint L7 của mesh và Service headless với client
-  `round_robin` là đề xuất ADR.
+- **WA-4:** waypoint L7 cân tải gRPC theo request; cơ chế và cái gì hỏng khi mesh hỏng ở
+  [`reliability.md`](reliability.md#mesh-cân-tải-và-khi-mesh-hỏng). `MaxConnectionAge` ([`deployment.md`](deployment.md#vòng-đời-pod)) còn
+  cho compose, nơi không có mesh. Đo mức chia đều và độ trễ thêm dưới k6 ở buổi stg/prd chung.
 - **WA-13:** hạn 50 ms của cache khám phá trên ElastiCache (câu hỏi mở ở mục 11 của [`architecture.md`](../architecture.md),
   [`explore-cache-redis-timeout.md`](../runbooks/explore-cache-redis-timeout.md)) và cache hit của segment premium theo
   [ADR-0073](../adr/0073-premium-playback.md) §9. Đo ở buổi stg/prd chung.

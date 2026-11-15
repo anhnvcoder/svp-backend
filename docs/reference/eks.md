@@ -45,6 +45,22 @@ Loại tài liệu (Diátaxis): **reference**, tra cứu khi cần một lệnh 
     `disruptionBudgets` (vào `spec.disruption.budgets`), `terminationGracePeriod`. `platforms/eks/svp-cluster.yaml` giữ giá trị mức prd;
     `envs/stg/svp-cluster.yaml` chỉ ghi đè phần stg giảm (capacity type, `limits`, ngân sách disruption); prd không có overlay. Giá trị và
     lý do: ADR-0056 §2, nhóm của từng khác biệt: [`environments.md`](../explanation/environments.md).
+  - **Service mesh Istio ambient** ([ADR-0075](../adr/0075-service-mesh.md); thành phần, namespace và policy chung với k3d ở [`k8s.md`](k8s.md#cluster-k3d)):
+    chỉ khác k3d ở các điểm dưới, values ở `platforms/eks/` của `svp-gitops` và `ci/eks-example.yaml` của hai chart.
+    - Cổng webhook: control plane EKS gọi webhook của istiod ở cổng 15017 của pod; module `eks` của `svp-infra` thêm rule ingress TCP 15017 từ
+      security group cluster vào security group node (`node_security_group_additional_rules` ở `security-groups.tf`, truyền ở `cluster.tf`), vì
+      rule mặc định của module không có cổng đó. HBONE 15008 và xDS 15012 giữa các node nằm trong rule 1025–65535 sẵn có. Thiếu rule thì lời gọi webhook của istiod
+      từ control plane hết hạn.
+    - Replica: `istiod` 2 replica (PDB `minAvailable: 1`, trải theo zone) ở `platforms/eks/istiod.yaml`; waypoint 2 replica kèm PDB ở khoá
+      `waypoint.replicas` của `platforms/eks/svp-cluster.yaml`.
+    - Node: pod của `svp` chỉ lên node Karpenter (`nodeAffinity` `karpenter.sh/nodepool` Exists ở `platforms/eks/<release>.yaml`); NodePool có
+      `startupTaints` `cni.istio.io/not-ready:NoSchedule`, và `taint.enabled: true` của `istiod` gỡ taint khi istio-cni, ztunnel Ready trên node,
+      nên không pod nào chạy trên node trước khi mesh bắt được lưu lượng của nó. k3d không có Karpenter nên không có taint này.
+    - NetworkPolicy: probe của kubelet vào pod ambient đi từ địa chỉ `169.254.7.127`; mọi policy chứa pod vào mesh mở địa chỉ đó cho cổng probe.
+      Việc VPC CNI thực thi policy với nguồn này chưa kiểm ở EKS: buổi stg xác nhận bằng pod của `svp` Ready sau khi vào mesh. Trần 24 tổ hợp
+      cổng, giao thức cho một dải CIDR của VPC CNI tính cả cổng 15008.
+    - Kiểm trên cluster (người học chạy; `make drill-k8s-mesh` chỉ chạy được trên k3d): các lệnh `kubectl --context svp-<env>` của bước 8
+      mục "Trình tự buổi". Lời gọi bị từ chối: [`mesh-traffic-denied.md`](../runbooks/mesh-traffic-denied.md).
   - **Agent GuardDuty** ([ADR-0060](../adr/0060-org-detection-logging.md) §5): add-on EKS `aws-guardduty-agent` (DaemonSet mọi node, version ghim
     ở `aws/modules/eks/addons.tf` của `svp-infra` như add-on khác) gửi sự kiện runtime qua interface endpoint `guardduty-data` của VPC (module
     `network`, private DNS, security group TCP 443 từ CIDR VPC). Cả hai do Terraform tạo, không do GuardDuty tự quản: endpoint và security
@@ -165,6 +181,9 @@ Lệnh `terraform` và script buổi ở `svp-infra` (`aws/scripts/`); mỗi bư
    `kubectl --context svp-<env> -n argocd wait applications.argoproj.io/svp-observability --for=jsonpath='{.status.health.status}'=Healthy --timeout=30m`.
 6. `AWS_PROFILE=anhnv-<env> make eks-glitchtip-init CONTEXT=svp-<env>`.
 7. `argocd app wait svp-root --sync --health` (CLI `argocd` qua port-forward tới `argocd-server`).
+8. Kiểm mesh (người học chạy, mỗi lệnh `kubectl --context svp-<env>`): `-n istio-system get pods` (istiod, istio-cni và ztunnel mỗi node Ready),
+   `-n svp-mesh get deploy,pdb waypoint` (2 replica sẵn sàng, PDB có), và mọi pod của `svp` có annotation `ambient.istio.io/redirection: enabled`:
+   `-n svp get pod -o custom-columns=NAME:.metadata.name,REDIRECTION:'.metadata.annotations.ambient\.istio\.io/redirection'`.
 
 ## Đổi secret của env đang chạy
 

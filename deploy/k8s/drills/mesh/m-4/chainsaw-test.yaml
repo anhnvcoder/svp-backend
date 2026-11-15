@@ -1,0 +1,56 @@
+# M-4 of the mesh drill: ambient mode captures every pod. Each running pod of namespace svp (but this drill's own) and
+# each proxy pod of Envoy Gateway's Gateway svp carries ambient.istio.io/redirection=enabled, the mark Istio's CNI agent
+# sets once it has handed the pod to ztunnel; a pod without it sends and takes plaintext, out of STRICT mTLS.
+
+# A cluster without a running pod of the gateway, the web client, a gRPC service or Envoy's proxy fails it too: an
+# empty list would pass.
+apiVersion: chainsaw.kyverno.io/v1alpha1
+kind: Test
+metadata:
+  name: mesh-m-4
+  labels:
+    drill: mesh
+spec:
+  description: "M-4: every running pod of svp and every proxy pod of Envoy is captured by ambient mode"
+  # An existing namespace: Chainsaw neither creates nor deletes it.
+  namespace: svp
+  steps:
+  - name: "M-4: every running pod of svp and Envoy's proxy pods carry ambient.istio.io/redirection=enabled"
+    try:
+    - script:
+        shell: bash
+        env:
+        - {name: CALLER_KUBECONFIG, value: (env('KUBECONFIG'))}
+        content: |
+          set -euo pipefail
+          export KUBECONFIG="$CALLER_KUBECONFIG"
+          rows=$(
+            {
+              kubectl --context k3d-svp -n svp get pods --field-selector status.phase=Running -o json
+              kubectl --context k3d-svp -n envoy-gateway-system get pods --field-selector status.phase=Running \
+                -l app.kubernetes.io/name=envoy,gateway.envoyproxy.io/owning-gateway-name=svp -o json
+            } | jq -rs '.[].items[]
+              | select(.metadata.labels["app.kubernetes.io/managed-by"] != "svp-drill-mesh")
+              | [.metadata.namespace, .metadata.name, (.metadata.labels["app.kubernetes.io/name"] // "-"),
+                 (.metadata.annotations["ambient.istio.io/redirection"] // "-")] | @tsv'
+          )
+          bad=0
+          while IFS=$'\t' read -r ns pod name got; do
+            [ -n "$pod" ] || continue
+            if [ "$got" = enabled ]; then
+              echo "ok    M-4: pod $ns/$pod ($name) is captured"
+            else
+              echo "FAIL  M-4: pod $ns/$pod ($name) is captured (ambient.istio.io/redirection is '$got')" >&2
+              bad=$((bad + 1))
+            fi
+          done <<<"$rows"
+          for want in gateway web user-service video-service engagement-service feed-service envoy; do
+            if ! printf '%s\n' "$rows" | awk -F '\t' -v n="$want" '$3 == n { f = 1 } END { exit !f }'; then
+              echo "FAIL  M-4: a running pod of $want is in the list" >&2
+              bad=$((bad + 1))
+            fi
+          done
+          [ "$bad" = 0 ] || exit 1
+          echo "ok    M-4: every running pod of svp and every proxy pod of Envoy is captured"
+        check:
+          ($error): ~

@@ -279,7 +279,7 @@ after_install() {
 # only). The watcher of a service's migrate Job keeps its pid and log in a folder of helmfile's process (the hooks'
 # parent), removed once empty.
 hook() {
-  local event=$1 name=$2 namespace=$3 kind=$4 route=$5 failed=${6:-} dir migrate_log old pid i
+  local event=$1 name=$2 namespace=$3 kind=$4 route=$5 failed=${6:-} dir migrate_log old pid i json route_kind
   dir=${TMPDIR:-/tmp}/svp-helmfile-$PPID
   migrate_log=$dir/$name.log
   case $event in
@@ -316,8 +316,15 @@ hook() {
       rmdir "$dir" 2>/dev/null || true
       ok "$name"
       if [ "$kind" = service ] && [ "$(workload_kind "$namespace" "$name")" = rollout ]; then
-        [ -z "$route" ] || kc -n "$namespace" get httproute "$route" >/dev/null 2>&1 ||
-          fail "canaryRoute '$route' of component $name in argocd/apps/components.json names no HTTPRoute of release $name"
+        # The kind of route whose weights the Rollout's Gateway API plugin moves: HTTPRoute (Envoy) or GRPCRoute (the
+        # waypoint of a gRPC release).
+        json=$(kc -n "$namespace" get rollout "$name" -o json) || fail "read rollout $namespace/$name"
+        route_kind=$(jq -r '.spec.strategy.canary.trafficRouting.plugins["argoproj-labs/gatewayAPI"]
+          | if .grpcRoute then "GRPCRoute" elif .httpRoute then "HTTPRoute" else "HTTPRoute or GRPCRoute" end' <<<"$json")
+        [ -n "$route" ] ||
+          fail "component $name has no canaryRoute in argocd/apps/components.json, the name of its Rollout's $route_kind"
+        kc -n "$namespace" get "$route_kind" "$route" >/dev/null 2>&1 ||
+          fail "canaryRoute '$route' of component $name in argocd/apps/components.json names no $route_kind of release $name"
         wait_rollout "$namespace" "$name"
       fi
       after_install "$name"

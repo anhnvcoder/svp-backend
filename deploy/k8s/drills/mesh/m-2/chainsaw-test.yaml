@@ -1,0 +1,114 @@
+# M-2 of the mesh drill: the waypoint's AuthorizationPolicies. A pod with the gateway's labels in the mesh, under a
+# ServiceAccount the test makes and no policy names, calls each gRPC service's health check through its Service. The
+# waypoint refuses it: grpc-status 7 PERMISSION_DENIED (Envoy's RBAC reply to a gRPC request) or HTTP 403.
+
+# Control: the same call from a pod that differs only by ServiceAccount gateway is answered (grpc-status 0), so the
+# refusal is the identity's, not the network's. "refused" or "silent" (templates/ambient-probe.js) fails either case.
+apiVersion: chainsaw.kyverno.io/v1alpha1
+kind: Test
+metadata:
+  name: mesh-m-2
+  labels:
+    drill: mesh
+spec:
+  description: "M-2: through the waypoint, an identity no policy names is refused; the gateway's is answered"
+  # An existing namespace: Chainsaw neither creates nor deletes it, only what the test and the template apply.
+  namespace: svp
+  bindings:
+  - {name: from, value: drill-mesh-stranger}
+  - {name: mode, value: grpc}
+  - {name: want, value: [dns answered http=200 grpc=7, dns answered http=403 grpc=]}
+  steps:
+  - name: "M-2: setup: ServiceAccount drill-mesh-stranger in svp"
+    try:
+    - script:
+        env:
+        - {name: CALLER_KUBECONFIG, value: (env('KUBECONFIG'))}
+        content: |
+          set -eu
+          export KUBECONFIG="$CALLER_KUBECONFIG"
+          kubectl --context k3d-svp -n svp get serviceaccount drill-mesh-stranger >/dev/null 2>&1 || exit 0
+          owner=$(kubectl --context k3d-svp -n svp get serviceaccount drill-mesh-stranger \
+            -o jsonpath='{.metadata.labels.app\.kubernetes\.io/managed-by}')
+          if [ "$owner" != svp-drill-mesh ]; then
+            echo "FAIL  ServiceAccount svp/drill-mesh-stranger exists without label app.kubernetes.io/managed-by=svp-drill-mesh: not this drill's, delete it yourself" >&2
+            exit 1
+          fi
+          kubectl --context k3d-svp -n svp delete serviceaccount drill-mesh-stranger --ignore-not-found --wait=true >/dev/null
+    - apply:
+        resource:
+          apiVersion: v1
+          kind: ServiceAccount
+          metadata:
+            name: drill-mesh-stranger
+            namespace: svp
+            labels:
+              app.kubernetes.io/managed-by: svp-drill-mesh
+          automountServiceAccountToken: false
+  - name: "M-2: setup: pod drill-mesh-stranger in svp with the gateway's labels, ServiceAccount drill-mesh-stranger"
+    use:
+      template: ../../templates/mesh-client-up.yaml
+      with:
+        bindings:
+        - {name: clientName, value: drill-mesh-stranger}
+        - {name: clientServiceAccount, value: drill-mesh-stranger}
+  - name: "M-2: setup: pod drill-mesh-gateway in svp with the gateway's labels, ServiceAccount gateway"
+    use:
+      template: ../../templates/mesh-client-up.yaml
+
+  - name: "M-2: ServiceAccount drill-mesh-stranger to user-service.svp:9101 refused by the waypoint"
+    bindings:
+    - {name: target, value: user-service.svp.svc.cluster.local:9101}
+    try: &probe
+    - script:
+        env:
+        - {name: CALLER_KUBECONFIG, value: (env('KUBECONFIG'))}
+        - {name: FROM, value: ($from)}
+        - {name: MODE, value: ($mode)}
+        - {name: TARGET, value: ($target)}
+        content: |
+          set -eu
+          export KUBECONFIG="$CALLER_KUBECONFIG"
+          js=$(cat "$(git rev-parse --show-toplevel)/deploy/k8s/drills/templates/ambient-probe.js")
+          kubectl --context k3d-svp -n svp exec "pod/$FROM" -c probe -- /nodejs/bin/node -e "$js" "$MODE" "$TARGET" </dev/null
+        check:
+          ($error): ~
+          (contains($want, trim_space($stdout))): true
+      continueOnError: true
+  - name: "M-2: ServiceAccount drill-mesh-stranger to video-service.svp:9102 refused by the waypoint"
+    bindings:
+    - {name: target, value: video-service.svp.svc.cluster.local:9102}
+    try: *probe
+  - name: "M-2: ServiceAccount drill-mesh-stranger to engagement-service.svp:9103 refused by the waypoint"
+    bindings:
+    - {name: target, value: engagement-service.svp.svc.cluster.local:9103}
+    try: *probe
+  - name: "M-2: ServiceAccount drill-mesh-stranger to feed-service.svp:9104 refused by the waypoint"
+    bindings:
+    - {name: target, value: feed-service.svp.svc.cluster.local:9104}
+    try: *probe
+
+  - name: "M-2: control: ServiceAccount gateway to user-service.svp:9101 answered"
+    bindings:
+    - {name: from, value: drill-mesh-gateway}
+    - {name: want, value: [dns answered http=200 grpc=0]}
+    - {name: target, value: user-service.svp.svc.cluster.local:9101}
+    try: *probe
+  - name: "M-2: control: ServiceAccount gateway to video-service.svp:9102 answered"
+    bindings:
+    - {name: from, value: drill-mesh-gateway}
+    - {name: want, value: [dns answered http=200 grpc=0]}
+    - {name: target, value: video-service.svp.svc.cluster.local:9102}
+    try: *probe
+  - name: "M-2: control: ServiceAccount gateway to engagement-service.svp:9103 answered"
+    bindings:
+    - {name: from, value: drill-mesh-gateway}
+    - {name: want, value: [dns answered http=200 grpc=0]}
+    - {name: target, value: engagement-service.svp.svc.cluster.local:9103}
+    try: *probe
+  - name: "M-2: control: ServiceAccount gateway to feed-service.svp:9104 answered"
+    bindings:
+    - {name: from, value: drill-mesh-gateway}
+    - {name: want, value: [dns answered http=200 grpc=0]}
+    - {name: target, value: feed-service.svp.svc.cluster.local:9104}
+    try: *probe
