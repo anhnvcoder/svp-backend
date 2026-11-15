@@ -148,6 +148,26 @@ func (s *fakeStore) write(key, path, contentType, cacheControl string, create bo
 	return nil
 }
 
+// Copy goes through beforeUpload like a write, with the key it writes, and is listed in uploads.
+func (s *fakeStore) Copy(_ context.Context, src, dst, contentType, cacheControl string) error {
+	if s.beforeUpload != nil {
+		if err := s.beforeUpload(dst); err != nil {
+			return err
+		}
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	data, ok := s.objects[src]
+	if !ok {
+		return fmt.Errorf("copy %s: %w", src, objstore.ErrNotFound)
+	}
+	s.objects[dst] = data
+	s.types[dst] = contentType
+	s.caches[dst] = cacheControl
+	s.uploads = append(s.uploads, dst)
+	return nil
+}
+
 func (s *fakeStore) Exists(_ context.Context, key string) (bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -402,6 +422,9 @@ func checkCompleted(t *testing.T, c *mediav1.TranscodeCompleted, id, prefix, att
 		if !objstore.IsMediaKey(key, id) {
 			t.Errorf("%s is not a media key of %s", key, id)
 		}
+	}
+	if c.GetPreviewPlaylistKey() != "" {
+		t.Errorf("regular video has preview playlist %s", c.GetPreviewPlaylistKey())
 	}
 	if d := c.GetDuration().AsDuration(); d < 1900*time.Millisecond || d > 2100*time.Millisecond {
 		t.Errorf("duration = %v, want about 2 s", d)

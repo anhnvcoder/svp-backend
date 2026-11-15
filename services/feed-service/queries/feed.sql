@@ -32,8 +32,8 @@ WHERE t.user_id = @follower_id AND t.video_id = v.video_id AND v.author_id = @fo
 -- name: InsertVideo :execrows
 -- The first video.ready wins: published_at of a stored video never changes. Returns 0 for a video
 -- already stored.
-INSERT INTO videos (video_id, author_id, title, duration_ms, playlist_key, thumbnail_key, published_at)
-VALUES ($1, $2, $3, $4, $5, $6, $7)
+INSERT INTO videos (video_id, author_id, title, duration_ms, playlist_key, thumbnail_key, published_at, premium)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
 ON CONFLICT (video_id) DO NOTHING;
 
 -- name: FanOutVideo :execrows
@@ -60,7 +60,7 @@ WHERE (user_id, published_at, video_id) IN (
 -- (before_published_at, before_video_id); a NULL before_published_at starts at the newest row.
 -- The row comparison is an index condition on the timeline primary key, so a page costs the same
 -- however deep it is.
-SELECT v.video_id, v.author_id, v.title, v.duration_ms, v.playlist_key, v.thumbnail_key, v.published_at
+SELECT v.video_id, v.author_id, v.title, v.duration_ms, v.playlist_key, v.thumbnail_key, v.published_at, v.premium
 FROM timeline t
 JOIN videos v ON v.video_id = t.video_id
 WHERE t.user_id = @user_id
@@ -72,7 +72,7 @@ LIMIT @row_limit;
 -- name: GetExploreFeed :many
 -- Reads a page of every READY video, newest first, strictly after the cursor, on
 -- videos_published_idx; a NULL before_published_at starts at the newest video.
-SELECT video_id, author_id, title, duration_ms, playlist_key, thumbnail_key, published_at
+SELECT video_id, author_id, title, duration_ms, playlist_key, thumbnail_key, published_at, premium
 FROM videos
 WHERE (published_at, video_id) < (COALESCE(sqlc.narg(before_published_at)::timestamptz, 'infinity'), @before_video_id::uuid)
 ORDER BY published_at DESC, video_id DESC

@@ -131,3 +131,12 @@ Mọi môi trường dùng cùng giao thức và cùng code của client; khác 
   Cả hai lệnh con **drain khi SIGTERM**: ngừng nhận record mới, làm nốt record đang chạy tới 540 s (`worker.DrainTimeout`) rồi commit;
   hết hạn thì huỷ và record được giao lại. Chart đặt `terminationGracePeriodSeconds`, compose `stop_grace_period` 570 s để đủ thời gian
   đó cộng đóng client và flush telemetry.
+- **video-service chọn bộ ký URL media premium bằng `MEDIA_SIGNER`** (bắt buộc, `internal/mediasign`; vì sao và luồng ở
+  [`premium-playback.md`](../explanation/premium-playback.md#bộ-ký-theo-nền-tảng), [ADR-0073](../adr/0073-premium-playback.md) §6):
+  `s3` (compose, k3d: presign SigV4 qua store `S3_*`, URL trên `S3_PUBLIC_ENDPOINT`) hay `cloudfront` (EKS). `cloudfront` bắt buộc
+  thêm `MEDIA_SIGNED_BASE_URL` (origin `https` của CDN media, không path, query, `/` cuối; EKS: `https://<cluster.mediaDomain>` từ
+  `platforms/eks/video-service.values.tpl` của `svp-gitops`), `MEDIA_SIGNING_KEY_ID` (ID của CloudFront public key, chỉ chữ và số),
+  `MEDIA_SIGNING_KEY` (PEM PKCS#8 `BEGIN PRIVATE KEY` của khoá RSA tối thiểu 2048 bit, một khối); hai biến khoá đến từ entry
+  `svp/<env>/media-signing` qua Secret `video-service-env` ([`eks.md`](eks.md)). `s3` từ chối khi một trong ba biến đó có đặt. Thiếu,
+  giá trị lạ, URL hay khoá sai dạng (PKCS#1, ECDSA, khoá ngắn) thì process không khởi động: log ERROR `video-service failed` nêu tên
+  biến, không in giá trị, thoát mã 1.

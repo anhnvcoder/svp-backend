@@ -14,9 +14,11 @@
 // S3_UPLOADS_BUCKET, S3_MEDIA_BUCKET optional; the credential, S3_ACCESS_KEY_ID and
 // S3_SECRET_ACCESS_KEY by default, and S3_PATH_STYLE as objstore.Config.ReadAccessEnv reads them).
 // UPLOAD_ABANDON_AFTER (default 1h) and UPLOAD_SWEEP_INTERVAL (default 5m) set when an upload
-// counts as abandoned and how often they are swept. serve also reads the OTEL_*,
-// PYROSCOPE_SERVER_ADDRESS and SENTRY_* variables; telemetry and error reporting stay off
-// without them.
+// counts as abandoned and how often they are swept. serve also needs MEDIA_SIGNER and, for the
+// cloudfront signer, MEDIA_SIGNED_BASE_URL, MEDIA_SIGNING_KEY_ID and MEDIA_SIGNING_KEY, read and
+// checked by mediasign.ReadEnv; the s3 signer presigns through the S3_* store. serve also reads
+// the OTEL_*, PYROSCOPE_SERVER_ADDRESS and SENTRY_* variables; telemetry and error reporting stay
+// off without them.
 package main
 
 import (
@@ -40,6 +42,7 @@ import (
 	"github.com/anhnvcoder/svp-backend/internal/grpcserver"
 	"github.com/anhnvcoder/svp-backend/internal/kafkax"
 	"github.com/anhnvcoder/svp-backend/internal/logx"
+	"github.com/anhnvcoder/svp-backend/internal/mediasign"
 	"github.com/anhnvcoder/svp-backend/internal/objstore"
 	"github.com/anhnvcoder/svp-backend/internal/outbox"
 	"github.com/anhnvcoder/svp-backend/internal/pgpool"
@@ -133,6 +136,10 @@ func serve(ctx context.Context, logger *slog.Logger) (err error) {
 		return fmt.Errorf("JWT_VERIFY_KEYS: %w", err)
 	}
 	verifier := authtoken.NewVerifier(keys)
+	signerCfg, err := mediasign.ReadEnv()
+	if err != nil {
+		return err
+	}
 
 	// Providers first, so the clients below report to them.
 	shutdownTelemetry, err := telemetry.Setup(ctx, serviceName)
@@ -168,6 +175,10 @@ func serve(ctx context.Context, logger *slog.Logger) (err error) {
 	if err != nil {
 		return err
 	}
+	signer, err := mediasign.New(signerCfg, storage, time.Now)
+	if err != nil {
+		return err
+	}
 	kafka, err := kafkax.NewClient(brokers, serviceName)
 	if err != nil {
 		return fmt.Errorf("KAFKA_BROKERS: %w", err)
@@ -193,7 +204,7 @@ func serve(ctx context.Context, logger *slog.Logger) (err error) {
 		<-relayDone
 	}()
 
-	srv := server.New(pool, storage, logger)
+	srv := server.New(pool, storage, signer, logger)
 	//nolint:contextcheck // the constructor seeds its metric series at startup, with no request
 	newConsumer := func() (runner, error) { return kafkax.NewConsumer(srv.TranscodeConsumerConfig(brokers)) }
 	// The consumer stops with the server; a consumer that cannot be created stops the server

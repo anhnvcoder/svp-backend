@@ -114,6 +114,18 @@ func readyEvent(video, author string, published time.Time) *videov1.VideoReady {
 	}
 }
 
+// premiumReadyEvent returns a valid video.ready of a premium video: its master under premium/,
+// its thumbnail and public preview under preview/.
+func premiumReadyEvent(video, author string, published time.Time) *videov1.VideoReady {
+	e := readyEvent(video, author, published)
+	const version, attempt = "0190a6e4-7b2c-7d3e-9f40-0000000000a1", "0190a6e4-7b2c-7d3e-9f40-0000000000b2"
+	e.Premium = true
+	e.PlaylistKey = "premium/" + video + "/" + version + "/master.m3u8"
+	e.ThumbnailKey = "preview/" + video + "/" + version + "/" + attempt + "/thumbnail.jpg"
+	e.PreviewPlaylistKey = "preview/" + video + "/" + version + "/master.m3u8"
+	return e
+}
+
 func videoRecord(t *testing.T, e *videov1.VideoReady) *kgo.Record {
 	t.Helper()
 	return &kgo.Record{Topic: TopicVideoLifecycle, Key: []byte(e.GetVideoId()), Value: mustMarshal(t, &videov1.VideoEvent{
@@ -697,6 +709,13 @@ func TestInvalidEventsGoToDeadLetter(t *testing.T) {
 			return videoRecord(t, e)
 		}
 	}
+	premium := func(change func(id string, e *videov1.VideoReady)) func(t *testing.T, id string) *kgo.Record {
+		return func(t *testing.T, id string) *kgo.Record {
+			e := premiumReadyEvent(id, author, now())
+			change(id, e)
+			return videoRecord(t, e)
+		}
+	}
 	cases := []struct {
 		name   string
 		record func(t *testing.T, id string) *kgo.Record
@@ -713,6 +732,27 @@ func TestInvalidEventsGoToDeadLetter(t *testing.T) {
 		{"playlist with %2e%2e", ready(func(id string, e *videov1.VideoReady) { e.PlaylistKey = "media/" + id + "/%2e%2e/master.m3u8" })},
 		{"thumbnail with backslash", ready(func(id string, e *videov1.VideoReady) { e.ThumbnailKey = "media/" + id + "/..\\x.jpg" })},
 		{"playlist is the prefix", ready(func(id string, e *videov1.VideoReady) { e.PlaylistKey = "media/" + id + "/" })},
+		{"regular video with a preview", ready(func(id string, e *videov1.VideoReady) {
+			e.PreviewPlaylistKey = premiumReadyEvent(id, author, now()).GetPreviewPlaylistKey()
+		})},
+		{"premium without preview", premium(func(_ string, e *videov1.VideoReady) { e.PreviewPlaylistKey = "" })},
+		{"premium preview under premium/", premium(func(_ string, e *videov1.VideoReady) { e.PreviewPlaylistKey = e.GetPlaylistKey() })},
+		{"premium preview under media/", premium(func(id string, e *videov1.VideoReady) {
+			e.PreviewPlaylistKey = readyEvent(id, author, now()).GetPlaylistKey()
+		})},
+		{"premium preview under another video", premium(func(_ string, e *videov1.VideoReady) {
+			e.PreviewPlaylistKey = "preview/" + ids.New() + "/master.m3u8"
+		})},
+		{"premium preview with ..", premium(func(id string, e *videov1.VideoReady) { e.PreviewPlaylistKey = "preview/" + id + "/../master.m3u8" })},
+		{"premium playlist under media/", premium(func(id string, e *videov1.VideoReady) {
+			e.PlaylistKey = readyEvent(id, author, now()).GetPlaylistKey()
+		})},
+		{"premium thumbnail under premium/", premium(func(id string, e *videov1.VideoReady) {
+			e.ThumbnailKey = "premium/" + id + "/thumbnail.jpg"
+		})},
+		{"premium thumbnail under media/", premium(func(id string, e *videov1.VideoReady) {
+			e.ThumbnailKey = readyEvent(id, author, now()).GetThumbnailKey()
+		})},
 		{"no published_at", ready(func(_ string, e *videov1.VideoReady) { e.PublishedAt = nil })},
 		{"no duration", ready(func(_ string, e *videov1.VideoReady) { e.Duration = nil })},
 		{"zero duration", ready(func(_ string, e *videov1.VideoReady) { e.Duration = durationpb.New(0) })},
@@ -816,6 +856,53 @@ func TestInvalidEventsGoToDeadLetter(t *testing.T) {
 	}
 	if n := count(t, "SELECT count(*) FROM follows WHERE followee_id = $1", author); n != 1 {
 		t.Errorf("got %d follows of the author, want only the valid one", n)
+	}
+}
+
+// storedVideo returns the playlist_key, thumbnail_key and premium flag stored for video.
+func storedVideo(t *testing.T, video string) (playlist, thumbnail string, premium bool) {
+	t.Helper()
+	err := testPool.QueryRow(t.Context(), "SELECT playlist_key, thumbnail_key, premium FROM videos WHERE video_id = $1",
+		video).Scan(&playlist, &thumbnail, &premium)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return playlist, thumbnail, premium
+}
+
+// A video.ready without the premium fields, as the release before sends, stores a regular video
+// with the event's keys.
+func TestRegularVideoReadyStoresItsKeys(t *testing.T) {
+	needDB(t)
+	video := ids.New()
+	e := readyEvent(video, ids.New(), now())
+	handle(t, newProjector(), videoRecord(t, e))
+	playlist, thumbnail, premium := storedVideo(t, video)
+	if playlist != e.GetPlaylistKey() || thumbnail != e.GetThumbnailKey() || premium {
+		t.Errorf("stored (%q, %q, premium %v), want (%q, %q, false)", playlist, thumbnail, premium,
+			e.GetPlaylistKey(), e.GetThumbnailKey())
+	}
+}
+
+// A premium video is stored with its public preview as playlist_key, and fans out like any other:
+// the feed keeps no key under premium/.
+func TestPremiumVideoReadyStoresPreview(t *testing.T) {
+	needDB(t)
+	p := newProjector()
+	video, author, follower := ids.New(), ids.New(), ids.New()
+	e := premiumReadyEvent(video, author, now())
+	handle(t, p, followRecord(t, follower, author), videoRecord(t, e))
+	playlist, thumbnail, premium := storedVideo(t, video)
+	if playlist != e.GetPreviewPlaylistKey() || thumbnail != e.GetThumbnailKey() || !premium {
+		t.Errorf("stored (%q, %q, premium %v), want (%q, %q, true)", playlist, thumbnail, premium,
+			e.GetPreviewPlaylistKey(), e.GetThumbnailKey())
+	}
+	if n := count(t, "SELECT count(*) FROM videos WHERE video_id = $1 AND (playlist_key LIKE 'premium/%' OR "+
+		"thumbnail_key LIKE 'premium/%')", video); n != 0 {
+		t.Error("the feed stored a key under premium/")
+	}
+	if !hasRow(t, follower, video) {
+		t.Error("premium video not fanned out to the author's follower")
 	}
 }
 

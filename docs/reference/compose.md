@@ -14,7 +14,11 @@ Loại tài liệu (Diátaxis): **reference**, tra cứu khi cần một lệnh 
   ([ADR-0029](../adr/0029-immutable-media-versions.md): master ở `media/<id>/<version>/master.m3u8`, version là `event_id` của
   `video.uploaded`, biến thể và thumbnail dưới thư mục lần thử `<version>/<attempt>/`; master, một playlist biến thể, một segment
   và thumbnail mang `Cache-Control: max-age=31536000, immutable`), `GET /public/videos/{id}` không token 200 với video `READY`
-  và một 404 cho video chưa `READY` lẫn id ngẫu nhiên, video vào feed following và explore kèm `author`, like/unlike, lượt
+  và một 404 cho video chưa `READY` lẫn id ngẫu nhiên, luồng premium (hai video premium của cùng clip tới `READY`, tác giả có
+  `entitlement_tier` `fhd`; người khác chỉ nhận `playlist_url`, `thumbnail_url` dưới `preview/`; master, playlist, segment, thumbnail xem thử
+  ẩn danh 200; segment, playlist, master dưới `premium/` ẩn danh 403; master không vé 403 `NOT_ENTITLED`; mua giả lập `sd`: master chỉ còn
+  `360p.m3u8`, segment đã ký 200, playlist 720p 403 `RENDITION_NOT_ENTITLED`, query ký của video này trên segment của video kia 403;
+  [`premium-playback.md`](../explanation/premium-playback.md)), video vào feed following và explore kèm `author`, like/unlike, lượt
   xem, unfollow), rồi gỡ stack (giữ volume). Gateway dùng Valkey db 10 (rate limit), feed-service db 14 (cache feed
   khám phá), web db 9 (session), mỗi client một user riêng qua `rediss://<user>:<mật khẩu>@valkey:6379/<db>` (**Kafka và Valkey** dưới). Object store chỉ nhận CORS từ `http://localhost:3001` và
   `http://localhost:3002`, theo bucket (`s3-init` đặt `PutBucketCors`: `uploads` chỉ `POST`, `media` chỉ `GET`, `HEAD`; danh

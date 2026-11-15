@@ -197,3 +197,4 @@ Phụ lục: [`appendix/0018-web-profiles-public-video-upload.md`](appendix/0018
 ### Chỉnh bởi
 
 - §9: [0022](0022-local-object-store-minio-replacement.md): CORS toàn cục của MinIO bị thay một phần, CORS theo bucket trên RustFS, cùng origin web.
+- §4, §6: [0073](0073-premium-playback.md): với video premium, item của `GET /users/{user_id}/videos`, `GET /me/videos` (§4) và `GetPublicVideo`, `GET /public/videos/{video_id}` (§6) mang `playlist_url` của bản xem thử dưới `preview/` kèm `premium: true`; không route nào trả URL dưới `premium/`.

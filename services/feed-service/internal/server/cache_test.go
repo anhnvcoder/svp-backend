@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"maps"
 	"net"
 	"os"
 	"slices"
@@ -409,6 +410,28 @@ func TestExploreCacheKeys(t *testing.T) {
 	}
 	if keys, err := keysUnder(t.Context(), client, prefix); err != nil || len(keys) != 2 {
 		t.Errorf("keys after later pages = %v, %v; want the same two", keys, err)
+	}
+}
+
+// A first explore page served from the cache keeps each item's premium flag.
+func TestExploreCachedPageKeepsPremium(t *testing.T) {
+	s, _, _, _ := cachedServer(t)
+	emptyVideos(t)
+	regular := insertVideo(t, ids.New(), now().Add(-time.Minute))
+	premium := insertPremiumVideo(t, ids.New(), now())
+	reads := countReads(s, 0)
+	want := map[string]bool{regular.id: false, premium.id: true}
+	for i := range 2 {
+		resp, err := explore(t, s, ids.New(), 0, "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := premiumOf(resp.GetItems()); !maps.Equal(got, want) {
+			t.Errorf("request %d: premium = %v, want %v", i+1, got, want)
+		}
+	}
+	if got := reads(); got != 1 {
+		t.Errorf("reads = %d, want 1: the second page must come from the cache", got)
 	}
 }
 

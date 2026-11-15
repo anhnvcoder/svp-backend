@@ -11,11 +11,14 @@ import "svp/event/v1/event.proto";
 // Consumed by video-service. Dead letters go to `media.transcodes.v1.dlq`.
 //
 // The output of a video.uploaded lives under a version, the event_id of that
-// video.uploaded: `media/<video_id>/<version>/`. Each try writes into a
-// directory of its own below it and the master playlist is created only once,
-// so no object under a published key is ever written again. A redelivered
-// video.uploaded writes nothing and yields the keys of the master already
-// there, with the same duration and renditions.
+// video.uploaded: `media/<video_id>/<version>/`, or for a premium video
+// `premium/<video_id>/<version>/` with its public preview under
+// `preview/<video_id>/<version>/`. Each try writes into a directory of its own
+// below it and each master playlist (the full one, and a premium video's
+// preview one) is created only once, so no object under a published key is
+// ever written again. A redelivered video.uploaded writes nothing and yields
+// the keys of the masters already there, with the same duration and
+// renditions.
 message TranscodeEvent {
   svp.event.v1.EventMeta meta = 1;
 
@@ -28,20 +31,26 @@ message TranscodeEvent {
 }
 
 // TranscodeCompleted: the HLS output of video_id is fully written under
-// `media/<video_id>/<version>/`.
+// `media/<video_id>/<version>/` (`premium/<video_id>/<version>/` for a premium
+// video, whose public preview is under `preview/<video_id>/<version>/`).
 message TranscodeCompleted {
   string video_id = 1;
   // Object key of the HLS master playlist,
   // `media/<video_id>/<version>/master.m3u8` (videos made before versions:
-  // `media/<video_id>/master.m3u8`).
+  // `media/<video_id>/master.m3u8`); `premium/<video_id>/<version>/master.m3u8`
+  // for a premium video.
   string playlist_key = 2;
   // Object key of the thumbnail image under `media/<video_id>/`, in the
-  // directory the master playlist names.
+  // directory the master playlist names; under `preview/<video_id>/` for a
+  // premium video.
   string thumbnail_key = 3;
   // Length of the transcoded video.
   google.protobuf.Duration duration = 4;
   // One entry per HLS variant, lowest bitrate first.
   repeated Rendition renditions = 5;
+  // Object key of the public preview's master playlist of a premium video,
+  // `preview/<video_id>/<version>/master.m3u8`; empty for a regular video.
+  string preview_playlist_key = 6;
 }
 
 // Rendition describes one HLS variant stream.
@@ -80,4 +89,7 @@ enum TranscodeFailureReason {
   TRANSCODE_FAILURE_REASON_DURATION_EXCEEDED = 3;
   // A transient error persisted after every retry.
   TRANSCODE_FAILURE_REASON_RETRIES_EXHAUSTED = 4;
+  // The video is premium and its lowest rendition has a single segment, too
+  // short for a public preview that is not the whole video.
+  TRANSCODE_FAILURE_REASON_PREVIEW_TOO_SHORT = 5;
 }

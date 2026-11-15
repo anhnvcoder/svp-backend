@@ -87,7 +87,7 @@ func TestGetPublicVideoHidesUnpublished(t *testing.T) {
 // database is read: the server has no pool, so a query would panic.
 func TestGetPublicVideoMalformedIDIsNotFound(t *testing.T) {
 	t.Parallel()
-	s := New(nil, newFakeStorage(), slog.New(logx.NewHandler(slog.DiscardHandler)))
+	s := New(nil, newFakeStorage(), nil, slog.New(logx.NewHandler(slog.DiscardHandler)))
 	for _, id := range []string{"", "not-a-uuid", strings.ToUpper(ids.New()), "{" + ids.New() + "}", "urn:uuid:" + ids.New()} {
 		_, err := getPublicVideo(t, s, "", id)
 		wantSameAsMissing(t, "id "+id, err)

@@ -30,7 +30,7 @@ func newSweepEnv(t *testing.T, name string, storage Storage) *sweepEnv {
 	pool := pgtest.New(t, "svp_video_sweep_"+name+"_test", migrations.FS)
 	logs := &logBuffer{}
 	logger := slog.New(logx.NewHandler(slog.NewJSONHandler(logs, nil)))
-	return &sweepEnv{pool: pool, srv: New(pool, storage, logger), logs: logs}
+	return &sweepEnv{pool: pool, srv: New(pool, storage, nil, logger), logs: logs}
 }
 
 func (e *sweepEnv) sweeper() *UploadSweeper {
@@ -277,7 +277,7 @@ func TestSweepRunsOnOneInstanceAtATime(t *testing.T) {
 	<-storage.entered // the first instance holds the lock and the row
 
 	// A second instance on its own server, as another replica would be.
-	second := New(e.pool, storage, slog.New(slog.DiscardHandler)).NewUploadSweeper(testAbandonAfter, time.Hour)
+	second := New(e.pool, storage, nil, slog.New(slog.DiscardHandler)).NewUploadSweeper(testAbandonAfter, time.Hour)
 	if n := second.sweep(t.Context()); n != 0 {
 		t.Errorf("second instance sweep() = %d, want 0", n)
 	}
@@ -395,7 +395,7 @@ func TestSweepRollbackIsBounded(t *testing.T) {
 	e := newSweepEnv(t, "rollback", storage)
 	id := e.insert(t, "UPLOADING", 2*time.Hour)
 	pool, hang := withHangingRollback(t, e.pool)
-	s := New(pool, storage, slog.New(slog.DiscardHandler))
+	s := New(pool, storage, nil, slog.New(slog.DiscardHandler))
 	s.rollbackTimeout = 200 * time.Millisecond
 
 	w := s.NewUploadSweeper(testAbandonAfter, time.Hour)

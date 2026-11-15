@@ -16,9 +16,10 @@ import "google/protobuf/timestamp.proto";
 //
 // All ids are UUIDv7 strings in canonical lowercase form (36 chars). Media
 // locations are object keys (for example
-// `media/<video_id>/<version>/master.m3u8`),
-// never absolute URLs: the gateway builds public URLs from per-environment
-// configuration (the local object store, a CDN in the cloud).
+// `media/<video_id>/<version>/master.m3u8`; a premium video lives under
+// `premium/` and `preview/` instead of `media/`), never absolute URLs: the
+// gateway builds public URLs from per-environment configuration (the local
+// object store, a CDN in the cloud).
 service VideoService {
   // InitUpload creates a video in UPLOADING owned by the caller and returns a
   // presigned POST for the object key `uploads/<video_id>`. The policy limits
@@ -28,8 +29,8 @@ service VideoService {
   // Without request_id each call creates a new video. With request_id
   // (Google AIP-155) a repeated call is answered from the video the first
   // call created: when the caller already has a video with this request_id
-  // and the same title, size_bytes and content_type (compared after the same
-  // normalization as on creation) still UPLOADING, the call returns that
+  // and the same title, size_bytes, content_type and premium (compared after
+  // the same normalization as on creation) still UPLOADING, the call returns that
   // video_id with a newly signed form and creates nothing. The new form
   // expires with the first one, 15 minutes after the video was created.
   // Repeated calls do not count against the open upload limit. Concurrent
@@ -37,11 +38,15 @@ service VideoService {
   // request_id is bound to its video for as long as the video exists: it
   // does not expire.
   //
+  // premium marks the video as premium for good: it is fixed here and never
+  // changes, because the media of a premium video is stored under other
+  // prefixes than a regular one.
+  //
   // Errors:
   // - INVALID_ARGUMENT: empty title, size_bytes not in (0, 500 MB],
   //   content_type not a `video/*` type, request_id not a canonical lowercase
   //   UUID (`INVALID_REQUEST_ID`), or request_id already used by the caller
-  //   with another title, size_bytes or content_type
+  //   with another title, size_bytes, content_type or premium
   //   (`IDEMPOTENCY_KEY_MISMATCH`).
   // - FAILED_PRECONDITION: the first call of request_id cannot be answered
   //   again: its video has left UPLOADING, or its upload window has ended
@@ -68,7 +73,8 @@ service VideoService {
   rpc CompleteUpload(CompleteUploadRequest) returns (CompleteUploadResponse);
 
   // GetVideo returns one video. Videos that are not READY are visible only
-  // to their author, so processing or failed videos do not leak.
+  // to their author, so processing or failed videos do not leak. The response
+  // also tells which tier the caller holds on a premium video.
   //
   // Errors:
   // - INVALID_ARGUMENT: video_id is not a UUID.
@@ -107,6 +113,47 @@ service VideoService {
   //   page_size is negative (`INVALID_PAGE_SIZE`), or page_token cannot be
   //   decoded (`INVALID_PAGE_TOKEN`).
   rpc ListAuthorVideos(ListAuthorVideosRequest) returns (ListAuthorVideosResponse);
+
+  // GrantEntitlement records that the caller bought the premium video at tier
+  // (a simulated purchase: nothing is charged). Idempotent: a repeated call
+  // overwrites the tier of the caller's entitlement, so it can also upgrade or
+  // downgrade it. Requires caller.
+  //
+  // Errors:
+  // - INVALID_ARGUMENT: video_id is not a UUID, or tier is unspecified or
+  //   not a known Tier (`INVALID_TIER`).
+  // - NOT_FOUND: no such video, or it is not READY (`VIDEO_NOT_FOUND`).
+  // - FAILED_PRECONDITION: the video is not premium (`VIDEO_NOT_PREMIUM`), or
+  //   the caller is its author, who already holds TIER_FHD (`ALREADY_ENTITLED`).
+  rpc GrantEntitlement(GrantEntitlementRequest) returns (GrantEntitlementResponse);
+
+  // GetPlaybackPlaylist returns an HLS playlist of a premium video, rewritten
+  // for the caller. With an empty rendition it is the master playlist, cut
+  // down to the renditions of the caller's tier. With a rendition (for example
+  // `720p`) it is that rendition's media playlist, whose segment URIs are
+  // signed absolute URLs valid for that rendition only. Requires caller; the
+  // caller needs an entitlement, or is the video's author (who has TIER_FHD).
+  //
+  // Errors:
+  // - INVALID_ARGUMENT: video_id is not a UUID.
+  // - NOT_FOUND: no such video, or it is not READY (`VIDEO_NOT_FOUND`); the
+  //   video has no such rendition (`RENDITION_NOT_FOUND`).
+  // - FAILED_PRECONDITION: the video is not premium (`VIDEO_NOT_PREMIUM`).
+  // - PERMISSION_DENIED: the caller has no entitlement (`NOT_ENTITLED`), or
+  //   the rendition is above the caller's tier (`RENDITION_NOT_ENTITLED`).
+  rpc GetPlaybackPlaylist(GetPlaybackPlaylistRequest) returns (GetPlaybackPlaylistResponse);
+}
+
+// Tier is the quality level an entitlement unlocks. Each tier includes the
+// renditions of the lower ones.
+enum Tier {
+  TIER_UNSPECIFIED = 0;
+  // Renditions `source` and `360p`.
+  TIER_SD = 1;
+  // The SD renditions and `720p`.
+  TIER_HD = 2;
+  // Every rendition of the ladder.
+  TIER_FHD = 3;
 }
 
 // VideoStatus is the lifecycle state. Transitions only move forward:
@@ -133,15 +180,32 @@ message Video {
   google.protobuf.Duration duration = 5;
   // Object key of the HLS master playlist,
   // `media/<video_id>/<version>/master.m3u8` (videos made before versions:
-  // `media/<video_id>/master.m3u8`). Set once READY.
+  // `media/<video_id>/master.m3u8`); `premium/<video_id>/<version>/master.m3u8`
+  // for a premium video, which clients never fetch directly. Set once READY.
   string playlist_key = 6;
   // Object key of the thumbnail image under `media/<video_id>/`, in the
-  // directory the master playlist names. Set once READY.
+  // directory the master playlist names; under `preview/<video_id>/` for a
+  // premium video. Set once READY.
   string thumbnail_key = 7;
   // When InitUpload created the video.
   google.protobuf.Timestamp created_at = 8;
   // When the video became READY. Set once READY.
   google.protobuf.Timestamp published_at = 9;
+  // True for a premium video: its full playback needs an entitlement.
+  // Fixed at InitUpload.
+  bool premium = 10;
+  // Object key of the public preview's master playlist,
+  // `preview/<video_id>/<version>/master.m3u8`. Set once a premium video is
+  // READY; empty for a regular video.
+  string preview_playlist_key = 11;
+}
+
+// Entitlement is what a user bought on one premium video.
+message Entitlement {
+  string video_id = 1;
+  Tier tier = 2;
+  // When the entitlement was last granted or changed.
+  google.protobuf.Timestamp granted_at = 3;
 }
 
 message InitUploadRequest {
@@ -155,6 +219,8 @@ message InitUploadRequest {
   // every retry of that creation (Google AIP-155). Unique per caller. Empty
   // means no key: the call always creates a video.
   string request_id = 4;
+  // Creates a premium video; see the InitUpload comment. Default false.
+  bool premium = 5;
 }
 
 message InitUploadResponse {
@@ -183,6 +249,10 @@ message GetVideoRequest {
 
 message GetVideoResponse {
   Video video = 1;
+  // The tier the caller holds on this video; the author of a premium video
+  // always holds TIER_FHD. TIER_UNSPECIFIED means no entitlement, which is
+  // every case for a regular video, its author included.
+  Tier entitlement_tier = 2;
 }
 
 message GetPublicVideoRequest {
@@ -203,4 +273,24 @@ message ListAuthorVideosRequest {
 message ListAuthorVideosResponse {
   repeated Video videos = 1;
   string next_page_token = 2;
+}
+
+message GrantEntitlementRequest {
+  string video_id = 1;
+  Tier tier = 2;
+}
+
+message GrantEntitlementResponse {
+  Entitlement entitlement = 1;
+}
+
+message GetPlaybackPlaylistRequest {
+  string video_id = 1;
+  // Ladder name such as `720p`. Empty asks for the master playlist.
+  string rendition = 2;
+}
+
+message GetPlaybackPlaylistResponse {
+  // The playlist text (`application/vnd.apple.mpegurl`).
+  string content = 1;
 }

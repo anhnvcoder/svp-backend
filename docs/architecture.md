@@ -13,7 +13,7 @@ like và để lại lượt xem. Hệ thống chạy được trên máy (compo
 | F1 | Đăng ký, đăng nhập bằng email + mật khẩu, nhận JWT |
 | F2 | Follow, unfollow người dùng khác |
 | F3 | Upload video tối đa 3 phút; hệ thống transcode ra HLS; trạng thái `UPLOADING → PROCESSING → READY` hoặc `FAILED` |
-| F4 | Phát video bằng HLS, tự đổi chất lượng theo mạng |
+| F4 | Phát video bằng HLS, tự đổi chất lượng theo mạng; video premium phát đủ chỉ cho người có vé, tới chất lượng của gói, người khác xem bản xem thử |
 | F5 | Feed "đang theo dõi": video mới nhất của người mình follow, phân trang bằng cursor |
 | F6 | Feed "khám phá": video mới nhất toàn hệ thống, cho người chưa follow ai |
 | F7 | Like, unlike; ghi lượt xem; hiện số lượt xem, số like và mình đã like chưa |
@@ -21,7 +21,7 @@ like và để lại lượt xem. Hệ thống chạy được trên máy (compo
 **Web client** (repo `svp-frontend`, [ADR-0016](adr/0016-web-client.md), [ADR-0018](adr/0018-web-profiles-public-video-upload.md)):
 Next.js phục vụ F1–F7, thêm hồ sơ tối thiểu (handle không đổi, tên hiển thị đổi được), video theo tác giả, "Video của tôi" và
 trang chia sẻ `/v/:id` mở được khi chưa đăng nhập. Web là BFF: trình duyệt chỉ gọi API qua web (file video thì tải lên và phát thẳng
-với object storage), token không tới trình duyệt. k6 và curl gọi thẳng gateway.
+với object storage, trừ playlist của video premium đi qua BFF), token không tới trình duyệt. k6 và curl gọi thẳng gateway.
 
 **Ngoài phạm vi:** app di động, comment, tìm kiếm, gợi ý bằng ML, thông báo, xoá/sửa video, kiểm duyệt nội dung. Thêm thì viết ADR.
 
@@ -115,8 +115,8 @@ flowchart LR
         es["<b>engagement-service</b><br/>[Go, gRPC; Postgres svp_engagement]<br/>Like, view, bộ đếm"]
         fs["<b>feed-service</b><br/>[Go, gRPC; Postgres svp_feed]<br/>Read model feed"]
         bus[["<b>Kafka</b><br/>[Apache Kafka; MSK trên cloud]<br/>SCRAM-SHA-512 trên TLS, 9096"]]
-        obj[("<b>Object storage</b><br/>[RustFS / S3]<br/>bucket uploads, media")]
-        cdn["<b>CDN</b><br/>[CloudFront]<br/>chỉ có trên cloud"]
+        obj[("<b>Object storage</b><br/>[RustFS / S3]<br/>bucket uploads, media (media/, preview/, premium/)")]
+        cdn["<b>CDN</b><br/>[CloudFront]<br/>chỉ có trên cloud; premium/ cần URL đã ký"]
         redis[("<b>Valkey</b><br/>[ElastiCache trên cloud]<br/>TLS, 6379, user ACL theo db")]
     end
 
@@ -134,7 +134,7 @@ flowchart LR
     gw -->|gRPC| es
     gw -->|gRPC| fs
 
-    vs -->|"ký URL, HEAD"| obj
+    vs -->|"ký URL, HEAD, đọc playlist premium"| obj
     mw -->|"đọc file gốc, ghi HLS"| obj
     fs -->|"cache feed khám phá"| redis
 
@@ -193,7 +193,7 @@ sequenceDiagram
     VS-->>C: 202, PROCESSING
     VS--)RP: relay phát video.uploaded
     RP--)MW: video.uploaded
-    MW->>S3: tải file gốc, ffmpeg, ghi HLS vào media/{video_id}/{version}/{attempt}/
+    MW->>S3: tải file gốc, ffmpeg, ghi HLS vào media/{video_id}/{version}/{attempt}/ (video premium: premium/, xem thử preview/)
     MW--)RP: transcode.completed
     RP--)VS: transcode.completed
     VS->>VS: 1 transaction: READY + outbox video.ready
@@ -237,6 +237,11 @@ danh sách video theo tác giả và trang một video ghép cùng cách. Chốn
 - **Retry và circuit breaker** ở gateway, một breaker mỗi service đích: lời gọi idempotent thử lại khi `UNAVAILABLE` trong hạn
   3 s; breaker mở thì lỗi ngay không gọi mạng (feed trả trang không `stats`, like trả 503). `GetStats`, `GetProfiles` không
   retry và `DEADLINE_EXCEEDED` của chúng không mở breaker.
+
+Item của video premium mang `premium: true` và `playlist_url` của bản xem thử; feed không giữ key nào của bản đầy đủ. Phát đủ đi đường
+khác: trình phát hỏi playlist qua BFF tới route phát của gateway, video-service kiểm vé, lọc master theo gói và ký URL từng segment, rồi
+segment đi thẳng từ CDN (local: object store) ([`explanation/premium-playback.md`](explanation/premium-playback.md),
+[ADR-0073](adr/0073-premium-playback.md)).
 
 ### 6.3 Ghi lượt xem
 
@@ -333,7 +338,7 @@ flowchart TB
         end
         s3[("S3 uploads, media")]
         cfe["CloudFront svp-env-web, svp-env-api<br/>[web ACL, cert ACM; VPC origin]"]
-        cf["CloudFront svp-env-media<br/>[web ACL, OAC]"]
+        cf["CloudFront svp-env-media<br/>[web ACL, OAC; key group cho premium/]"]
         q[["SQS + EventBridge<br/>interruption của Karpenter"]]
         mc["MediaConvert queue svp-env<br/>[trạng thái job: EventBridge → SQS svp-env-transcode-events]"]
         alarm["CloudWatch alarm → SNS svp-env-alarms → email"]

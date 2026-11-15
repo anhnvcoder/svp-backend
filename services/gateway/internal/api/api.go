@@ -114,9 +114,12 @@ func New(userConn, videoConn, feedConn, engagementConn grpc.ClientConnInterface,
 	mux.Handle("GET /users/{user_id}/videos", authed(ratelimit.Read, s.userVideos))
 	mux.Handle("PUT /me/following/{user_id}", authed(ratelimit.Write, s.follow))
 	mux.Handle("DELETE /me/following/{user_id}", authed(ratelimit.Write, s.unfollow))
+	mux.Handle("PUT /me/entitlements/{video_id}", authed(ratelimit.Write, s.grantEntitlement))
 	mux.Handle("POST /videos", authed(ratelimit.Upload, s.initUpload))
 	mux.Handle("POST /videos/{video_id}/complete", authed(ratelimit.Write, s.completeUpload))
 	mux.Handle("GET /videos/{video_id}", authed(ratelimit.Read, s.getVideo))
+	// ServeMux wildcards match whole segments only, so playback splits {file} itself.
+	mux.Handle("GET /videos/{video_id}/playback/{file}", authed(ratelimit.Read, s.playback))
 	mux.Handle("PUT /videos/{video_id}/like", authed(ratelimit.Write, s.like))
 	mux.Handle("DELETE /videos/{video_id}/like", authed(ratelimit.Write, s.unlike))
 	mux.Handle("POST /videos/{video_id}/views", authed(ratelimit.Write, s.recordView))
@@ -397,6 +400,7 @@ type initUploadRequest struct {
 	Title       string `json:"title"`
 	SizeBytes   int64  `json:"size_bytes"`
 	ContentType string `json:"content_type"`
+	Premium     bool   `json:"premium"`
 }
 
 type initUploadResponse struct {
@@ -428,6 +432,7 @@ func (s *server) initUpload(w http.ResponseWriter, r *http.Request) {
 		SizeBytes:   req.SizeBytes,
 		ContentType: req.ContentType,
 		RequestId:   key,
+		Premium:     req.Premium,
 	})
 	if err != nil {
 		httpx.WriteGRPCError(w, r, err)
@@ -482,6 +487,10 @@ type videoResponse struct {
 	// PlaylistURL and ThumbnailURL are set once the video has the keys, which is when it is READY.
 	PlaylistURL  string `json:"playlist_url,omitempty"`
 	ThumbnailURL string `json:"thumbnail_url,omitempty"`
+	// Premium is absent, rather than false, for a regular video, so its answer stays as it was.
+	Premium bool `json:"premium,omitempty"`
+	// EntitlementTier is set by GET /videos/{video_id} only, when the caller holds a tier.
+	EntitlementTier string `json:"entitlement_tier,omitempty"`
 	// Author and Stats are added by GET /videos/{video_id} and the video lists (see addExtras);
 	// nil, and the field absent, in POST /videos/{video_id}/complete and when their service did
 	// not answer in time.
@@ -500,6 +509,7 @@ func (s *server) getVideo(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	v := s.toVideoResponse(resp.GetVideo())
+	v.EntitlementTier = tierNames[resp.GetEntitlementTier()]
 	stats, authors := s.addExtras(r, []string{v.VideoID}, []string{v.AuthorID})
 	v.Stats, v.Author = stats[v.VideoID], authors[v.AuthorID]
 	writeJSON(w, http.StatusOK, v)
@@ -515,6 +525,7 @@ type publicVideo struct {
 	PlaylistURL  string            `json:"playlist_url"`
 	ThumbnailURL string            `json:"thumbnail_url"`
 	PublishedAt  time.Time         `json:"published_at"`
+	Premium      bool              `json:"premium,omitempty"`
 	Author       *profile          `json:"author,omitempty"`
 	Stats        *publicVideoStats `json:"stats,omitempty"`
 }
@@ -552,9 +563,10 @@ func (s *server) getPublicVideo(w http.ResponseWriter, r *http.Request) {
 		AuthorID:     pv.GetAuthorId(),
 		Title:        pv.GetTitle(),
 		DurationMs:   pv.GetDuration().AsDuration().Milliseconds(),
-		PlaylistURL:  s.mediaURL(pv.GetPlaylistKey()),
+		PlaylistURL:  s.playlistURL(pv),
 		ThumbnailURL: s.mediaURL(pv.GetThumbnailKey()),
 		PublishedAt:  pv.GetPublishedAt().AsTime(),
+		Premium:      pv.GetPremium(),
 	}
 	stats, authors := s.addExtras(r, []string{out.VideoID}, []string{out.AuthorID})
 	if st := stats[out.VideoID]; st != nil {
@@ -624,12 +636,26 @@ func (s *server) completeUpload(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusAccepted, s.toVideoResponse(resp.GetVideo()))
 }
 
-// mediaURL returns the public URL of an object key, or "" for an empty key.
+// premiumPrefix is objstore.PremiumPrefix: the objects of premium videos, which only signed URLs reach.
+const premiumPrefix = "premium/"
+
+// mediaURL returns the public URL of an object key, or "" for an empty key. A key under
+// premiumPrefix also gives "": no answer carries the URL of a premium object, whichever service
+// sent the key.
 func (s *server) mediaURL(key string) string {
-	if key == "" {
+	if key == "" || strings.HasPrefix(key, premiumPrefix) {
 		return ""
 	}
 	return s.mediaBaseURL + "/" + key
+}
+
+// playlistURL returns the public URL of v's master playlist: for a premium video, the public
+// preview's.
+func (s *server) playlistURL(v *videov1.Video) string {
+	if v.GetPremium() {
+		return s.mediaURL(v.GetPreviewPlaylistKey())
+	}
+	return s.mediaURL(v.GetPlaylistKey())
 }
 
 func (s *server) toVideoResponse(v *videov1.Video) videoResponse {
@@ -639,8 +665,9 @@ func (s *server) toVideoResponse(v *videov1.Video) videoResponse {
 		Title:        v.GetTitle(),
 		Status:       strings.TrimPrefix(v.GetStatus().String(), "VIDEO_STATUS_"),
 		CreatedAt:    v.GetCreatedAt().AsTime(),
-		PlaylistURL:  s.mediaURL(v.GetPlaylistKey()),
+		PlaylistURL:  s.playlistURL(v),
 		ThumbnailURL: s.mediaURL(v.GetThumbnailKey()),
+		Premium:      v.GetPremium(),
 	}
 	if d := v.GetDuration(); d != nil {
 		ms := d.AsDuration().Milliseconds()
@@ -716,6 +743,7 @@ type feedItem struct {
 	PlaylistURL  string    `json:"playlist_url"`
 	ThumbnailURL string    `json:"thumbnail_url"`
 	PublishedAt  time.Time `json:"published_at"`
+	Premium      bool      `json:"premium,omitempty"`
 	// Author is nil, and the field absent, when user-service did not answer in time or has no
 	// profile for author_id.
 	Author *profile `json:"author,omitempty"`
@@ -792,6 +820,7 @@ func (s *server) serveFeed(w http.ResponseWriter, r *http.Request, fetch func(ct
 			PlaylistURL:  s.mediaURL(it.GetPlaylistKey()),
 			ThumbnailURL: s.mediaURL(it.GetThumbnailKey()),
 			PublishedAt:  it.GetPublishedAt().AsTime(),
+			Premium:      it.GetPremium(),
 		})
 		videoIDs = append(videoIDs, it.GetVideoId())
 		authorIDs = append(authorIDs, it.GetAuthorId())

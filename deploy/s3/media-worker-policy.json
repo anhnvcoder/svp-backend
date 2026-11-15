@@ -9,13 +9,13 @@
     {
       "Effect": "Allow",
       "Action": ["s3:PutObject", "s3:GetObject"],
-      "Resource": ["arn:aws:s3:::media/media/*"]
+      "Resource": ["arn:aws:s3:::media/media/*", "arn:aws:s3:::media/premium/*", "arn:aws:s3:::media/preview/*"]
     },
     {
       "Effect": "Allow",
       "Action": ["s3:ListBucket"],
       "Resource": ["arn:aws:s3:::media"],
-      "Condition": { "StringLike": { "s3:prefix": ["media/*"] } }
+      "Condition": { "StringLike": { "s3:prefix": ["media/*", "premium/*", "preview/*"] } }
     }
   ]
 }

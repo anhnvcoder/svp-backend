@@ -32,4 +32,5 @@ type Video struct {
 	ThumbnailKey string
 	PublishedAt  time.Time
 	CreatedAt    time.Time
+	Premium      bool
 }

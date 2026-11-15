@@ -25,17 +25,26 @@ type Outbox struct {
 }
 
 type Video struct {
-	ID           uuid.UUID
-	AuthorID     uuid.UUID
-	Title        string
-	Status       string
-	SizeBytes    int64
-	ContentType  string
-	DurationMs   *int64
-	PlaylistKey  *string
-	ThumbnailKey *string
-	PublishedAt  *time.Time
-	CreatedAt    time.Time
-	ProcessingAt *time.Time
-	RequestID    pgtype.UUID
+	ID                 uuid.UUID
+	AuthorID           uuid.UUID
+	Title              string
+	Status             string
+	SizeBytes          int64
+	ContentType        string
+	DurationMs         *int64
+	PlaylistKey        *string
+	ThumbnailKey       *string
+	PublishedAt        *time.Time
+	CreatedAt          time.Time
+	ProcessingAt       *time.Time
+	RequestID          pgtype.UUID
+	Premium            bool
+	PreviewPlaylistKey *string
+}
+
+type VideoEntitlement struct {
+	UserID    uuid.UUID
+	VideoID   uuid.UUID
+	Tier      string
+	GrantedAt time.Time
 }

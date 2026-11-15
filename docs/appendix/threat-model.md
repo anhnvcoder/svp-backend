@@ -267,6 +267,15 @@ Mục 7 cũ ("Đề xuất xem lại") nguyên văn; việc còn mở chuyển v
   chạy nó, chỉ audit log của control plane EKS (stg, prd) ghi ai `exec` vào pod; (3) đích phát lại theo header `dlq-topic` của record, không
   theo `--from`: service ghi được một DLQ, khi bị chiếm, đưa event giả vào topic gốc qua lượt phát lại (FF-6); (4) timeout của role app chỉ
   là lưới an toàn, service bị chiếm tự đặt lại được; (5) đo giới hạn in-flight dưới tải ở buổi stg.
+- **Video premium (2026-11-15):** bề mặt mới là route phát premium và mua giả lập của gateway, playlist do video-service lọc
+  và ký, URL đã ký của segment dưới tiền tố `premium/` (CloudFront key group ở EKS, presign của object store ở compose, k3d), bản xem thử
+  công khai dưới `preview/` và khoá ký media từ máy người học qua Secrets Manager tới video-service (PRM-1 tới PRM-8 ở mục 4.14, hai tài
+  sản ở mục 3, UP-6, hai dòng mới và hai dòng sửa ở mục 6). Thu hẹp được: video cần giới hạn người xem không còn đọc công khai (UP-6).
+  [ADR-0073](../adr/0073-premium-playback.md) chỉnh ADR-0008, 0009, 0018, 0029, 0048, 0052, 0061, 0066. Đáng xem lại: (1) định dạng chữ
+  ký CloudFront, PRM-8 và wildcard phủ query chỉ kiểm thật ở buổi stg, prd; (2) path mã hoá: `premium%2F…` rơi vào behavior mặc định
+  cần chữ ký (CloudFront chuẩn hoá path trước khi chọn behavior, giữ `%2F`), còn `media/..%2Fpremium/…` khớp `media/*` công khai và chỉ an
+  toàn khi S3 không giải `..` trong key; cả hai chỉ kiểm thật ở ca âm của **Kiểm edge premium** trong buổi; (3) log chuẩn của CloudFront và
+  log WAF giữ query đã ký tới hết hạn của nó.
 - **Đề xuất (không bắt buộc), giai đoạn 2:** thêm `etag` (hoặc checksum) của file gốc vào `VideoUploaded`, lấy từ lần `HEAD`
   ở `CompleteUpload`; worker tải file với điều kiện `If-Match` theo giá trị đó. Đóng được UP-2 (file bị thay giữa lúc kiểm và
   lúc đọc). Đây là thêm field nên không phá contract (quy tắc versioning ở

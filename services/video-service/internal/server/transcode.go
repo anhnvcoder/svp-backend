@@ -60,8 +60,8 @@ func (s *Server) TranscodeConsumerConfig(brokers string) kafkax.ConsumerConfig {
 // processed_events table: READY ignores it, FAILED deletes the files again.
 //
 // The event comes from media-worker, which handles untrusted files: it is only acted on for a
-// PROCESSING video and with keys under media/<video_id>/. Anything else goes to the
-// dead-letter topic.
+// PROCESSING video and with keys under the prefixes of the video's premium flag (checkMediaKeys).
+// Anything else goes to the dead-letter topic.
 func (s *Server) HandleTranscode(ctx context.Context, r *kgo.Record, _ kafkax.Attempt) error {
 	var ev mediav1.TranscodeEvent
 	if err := proto.Unmarshal(r.Value, &ev); err != nil {
@@ -106,15 +106,21 @@ func transcodeContext(ctx context.Context, ev *mediav1.TranscodeEvent, id uuid.U
 }
 
 func (s *Server) transcodeCompleted(ctx context.Context, id uuid.UUID, c *mediav1.TranscodeCompleted) error {
-	prefix := mediaPrefix(id)
-	for _, key := range []string{c.GetPlaylistKey(), c.GetThumbnailKey()} {
-		if !objstore.IsMediaKey(key, id.String()) {
-			return kafkax.Permanent(fmt.Errorf("transcode.completed key %q is not under %s", key, prefix))
-		}
-	}
 	d := c.GetDuration()
 	if d.CheckValid() != nil || d.AsDuration().Milliseconds() < 1 {
 		return kafkax.Permanent(errors.New("transcode.completed duration is not positive"))
+	}
+	// Read outside the transaction of markReady: premium never changes, and markReady settles the
+	// status under the row lock.
+	current, err := s.queries.GetVideo(ctx, id)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return kafkax.Permanent(errors.New("transcode.completed for a video that does not exist"))
+	}
+	if err != nil {
+		return fmt.Errorf("select video: %w", err)
+	}
+	if err := checkMediaKeys(id.String(), current.Premium, c); err != nil {
+		return kafkax.Permanent(err)
 	}
 
 	v, moved, err := s.markReady(ctx, id, c, d.AsDuration().Milliseconds())
@@ -126,6 +132,32 @@ func (s *Server) transcodeCompleted(ctx context.Context, id uuid.UUID, c *mediav
 	}
 	s.recordReadyDuration(ctx, v.ProcessingAt, "ready")
 	s.logger.InfoContext(ctx, "video ready")
+	return nil
+}
+
+// checkMediaKeys checks the keys of c against the prefixes of the video's flag: a regular video's
+// playlist and thumbnail under media/<id>/ and no preview; a premium video's playlist under
+// premium/<id>/, its thumbnail and preview playlist under preview/<id>/. A premium video with keys
+// under media/ would be published in full to anyone, so it is refused like any other wrong key.
+func checkMediaKeys(id string, premium bool, c *mediav1.TranscodeCompleted) error {
+	keys := []struct{ name, prefix, key string }{
+		{"playlist", objstore.MediaPrefix, c.GetPlaylistKey()},
+		{"thumbnail", objstore.MediaPrefix, c.GetThumbnailKey()},
+	}
+	if premium {
+		keys = []struct{ name, prefix, key string }{
+			{"playlist", objstore.PremiumPrefix, c.GetPlaylistKey()},
+			{"thumbnail", objstore.PreviewPrefix, c.GetThumbnailKey()},
+			{"preview playlist", objstore.PreviewPrefix, c.GetPreviewPlaylistKey()},
+		}
+	} else if c.GetPreviewPlaylistKey() != "" {
+		return errors.New("transcode.completed has a preview playlist for a regular video")
+	}
+	for _, k := range keys {
+		if !objstore.IsKeyUnder(k.prefix, k.key, id) {
+			return fmt.Errorf("transcode.completed %s key %q is not under %s%s/", k.name, k.key, k.prefix, id)
+		}
+	}
 	return nil
 }
 
@@ -141,11 +173,16 @@ func (s *Server) markReady(ctx context.Context, id uuid.UUID, c *mediav1.Transco
 	defer rollback(ctx, tx, s.rollbackTimeout)
 
 	playlist, thumbnail := c.GetPlaylistKey(), c.GetThumbnailKey()
+	var preview *string
+	if p := c.GetPreviewPlaylistKey(); p != "" {
+		preview = &p
+	}
 	v, err := s.queries.WithTx(tx).MarkVideoReady(ctx, store.MarkVideoReadyParams{
-		ID:           id,
-		DurationMs:   &durationMs,
-		PlaylistKey:  &playlist,
-		ThumbnailKey: &thumbnail,
+		ID:                 id,
+		DurationMs:         &durationMs,
+		PlaylistKey:        &playlist,
+		ThumbnailKey:       &thumbnail,
+		PreviewPlaylistKey: preview,
 	})
 	if errors.Is(err, pgx.ErrNoRows) {
 		return store.Video{}, false, nil
@@ -163,7 +200,9 @@ func (s *Server) markReady(ctx context.Context, id uuid.UUID, c *mediav1.Transco
 			PlaylistKey:  playlist,
 			ThumbnailKey: thumbnail,
 			// Set by the UPDATE, so the event carries exactly what GetVideo returns.
-			PublishedAt: timestamppb.New(*v.PublishedAt),
+			PublishedAt:        timestamppb.New(*v.PublishedAt),
+			Premium:            v.Premium,
+			PreviewPlaylistKey: c.GetPreviewPlaylistKey(),
 		}},
 	}
 	if err := outbox.Write(ctx, tx, TopicVideoLifecycle, id.String(), ev); err != nil {
@@ -203,7 +242,7 @@ func (s *Server) recordReadyDuration(ctx context.Context, processingAt *time.Tim
 }
 
 func (s *Server) transcodeFailed(ctx context.Context, id uuid.UUID, f *mediav1.TranscodeFailed) error {
-	processingAt, err := s.queries.MarkVideoFailed(ctx, id)
+	failed, err := s.queries.MarkVideoFailed(ctx, id)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return s.notProcessing(ctx, id, "transcode.failed")
 	}
@@ -211,13 +250,13 @@ func (s *Server) transcodeFailed(ctx context.Context, id uuid.UUID, f *mediav1.T
 		return fmt.Errorf("mark video failed: %w", err)
 	}
 	// The UPDATE ran on its own and is committed.
-	s.recordReadyDuration(ctx, processingAt, "failed")
+	s.recordReadyDuration(ctx, failed.ProcessingAt, "failed")
 	// The record was handled, but the trace ends in a failed video. The reason is an enum name;
 	// the free-text detail stays in the log.
 	trace.SpanFromContext(ctx).SetStatus(codes.Error, "transcode failed: "+f.GetReason().String())
 	s.logger.WarnContext(ctx, "video failed",
 		slog.String("reason", f.GetReason().String()), slog.String("detail", f.GetDetail()))
-	return s.deleteFiles(ctx, id)
+	return s.deleteFiles(ctx, id, failed.Premium)
 }
 
 // notProcessing settles a transcode event that moved nothing because the video is not
@@ -236,10 +275,10 @@ func (s *Server) notProcessing(ctx context.Context, id uuid.UUID, event string) 
 		s.logger.InfoContext(ctx, "transcode event ignored", slog.String("event", event), slog.String("status", v.Status))
 		return nil
 	case statusFailed:
-		// A redelivery whose deletes may not have finished, or a worker that wrote
-		// media/<video_id>/ again after the video failed: delete again.
+		// A redelivery whose deletes may not have finished, or a worker that wrote the video's
+		// output again after the video failed: delete again.
 		s.logger.InfoContext(ctx, "transcode event for a failed video", slog.String("event", event))
-		return s.deleteFiles(ctx, id)
+		return s.deleteFiles(ctx, id, v.Premium)
 	case statusUploading:
 		// media-worker only hears of a video once it is PROCESSING: the event is forged or
 		// misrouted, and must not kill an upload in progress.
@@ -250,22 +289,28 @@ func (s *Server) notProcessing(ctx context.Context, id uuid.UUID, event string) 
 	return fmt.Errorf("%s: video became %s meanwhile", event, v.Status)
 }
 
-// deleteFiles removes the source upload and whatever HLS output exists for the video. Both
-// deletes succeed when there is nothing to delete, so running them again is safe; an error is
-// returned for kafkax to retry, and the record is committed only once both are done.
-func (s *Server) deleteFiles(ctx context.Context, id uuid.UUID) error {
+// deleteFiles removes the source upload and whatever HLS output exists for the video. Every
+// delete succeeds when there is nothing to delete, so running them again is safe; an error is
+// returned for kafkax to retry, and the record is committed only once all are done.
+func (s *Server) deleteFiles(ctx context.Context, id uuid.UUID, premium bool) error {
 	if err := s.storage.Delete(ctx, objstore.UploadsPrefix+id.String()); err != nil {
 		return fmt.Errorf("delete source upload: %w", err)
 	}
-	if err := s.storage.DeletePrefix(ctx, mediaPrefix(id)); err != nil {
-		return fmt.Errorf("delete media files: %w", err)
+	for _, prefix := range mediaPrefixes(id, premium) {
+		if err := s.storage.DeletePrefix(ctx, prefix); err != nil {
+			return fmt.Errorf("delete media files: %w", err)
+		}
 	}
 	s.logger.InfoContext(ctx, "video files deleted")
 	return nil
 }
 
-// mediaPrefix returns media/<video_id>/, under which every object of the video's HLS output
-// lives.
-func mediaPrefix(id uuid.UUID) string {
-	return objstore.MediaPrefix + id.String() + "/"
+// mediaPrefixes returns the prefixes under which every object of the video's HLS output lives:
+// media/<video_id>/ for a regular video, premium/<video_id>/ and preview/<video_id>/ for a premium
+// one.
+func mediaPrefixes(id uuid.UUID, premium bool) []string {
+	if premium {
+		return []string{objstore.PremiumPrefix + id.String() + "/", objstore.PreviewPrefix + id.String() + "/"}
+	}
+	return []string{objstore.MediaPrefix + id.String() + "/"}
 }
