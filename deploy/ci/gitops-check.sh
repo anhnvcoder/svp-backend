@@ -328,19 +328,29 @@ pr_login() {
 done | jq -cs 'add // {}' >"$tmp/tree/entries.json" || fail "list the tree $tree"
 
 # Each environment's revision on main of this repository, what that commit derives (charts) and its table of release
-# sources (sources); the working tree's table for every environment with --worktree. A revision that is not 40 hex is
-# the policies' to name.
-charts='{}' sources='{}'
+# sources (sources); the working tree's table for every environment with --worktree. built: the services of the table
+# at the revision, whose image files the environment must hold. A revision that is not 40 hex is the policies' to name.
+charts='{}' sources='{}' built='{}'
 if [ -n "$worktree" ] && ! table=$(release_sources); then
   problem "the release sources of the working tree cannot be read (above)"
 fi
+# built_by ENV REV TABLE: built with ENV's entry, the revision REV and the services of TABLE.
+built_by() {
+  jq -c --arg e "$1" --arg r "$2" --argjson t "$3" '. + {($e): {revision: $r, services: ([$t.sources[].services[]] | unique)}}' \
+    <<<"$built"
+}
 for env in $envs; do
   [ -f "$tree/envs/$env/charts.yaml" ] || continue
+  rev=$(charts_field "$env" revision)
   if [ -n "$worktree" ]; then
     [ -z "${table:-}" ] || sources=$(jq -c --arg e "$env" --argjson t "$table" '. + {($e): ($t + {revision: ""})}' <<<"$sources")
+    if [[ $rev =~ ^[0-9a-f]{40}$ ]] && pinned=$(release_sources "$rev" 2>/dev/null); then
+      built=$(built_by "$env" "$rev" "$pinned")
+    else
+      echo "note  envs/$env/charts.yaml: the release sources at its revision '$rev' cannot be read in this clone, so every service of the working tree needs its image file in $env"
+    fi
     continue
   fi
-  rev=$(charts_field "$env" revision)
   [[ $rev =~ ^[0-9a-f]{40}$ ]] || continue
   if ! git -C "$repo_root" cat-file -e "$rev^{commit}" 2>/dev/null; then
     problem "envs/$env/charts.yaml: revision $rev is no commit of this clone of the code repository (fetch its whole history)"
@@ -351,6 +361,7 @@ for env in $envs; do
     continue
   fi
   sources=$(jq -c --arg e "$env" --arg r "$rev" --argjson t "$table" '. + {($e): ($t + {revision: $r})}' <<<"$sources")
+  built=$(built_by "$env" "$rev" "$table")
   if ! git -C "$repo_root" merge-base --is-ancestor "$rev" "$main" 2>/dev/null; then
     problem "envs/$env/charts.yaml: revision ${rev:0:12} is not on $main of the code repository"
     continue
@@ -418,8 +429,8 @@ pinned_commit() {
 }
 
 jq -n --argjson worktree "$([ -n "$worktree" ] && echo true || echo false)" --slurpfile tree "$tmp/tree/entries.json" \
-  --argjson charts "$charts" --argjson sources "$sources" --argjson pr "$pull_request" \
-  '{worktree: $worktree, tree: $tree[0], charts: $charts, sources: $sources}
+  --argjson charts "$charts" --argjson sources "$sources" --argjson built "$built" --argjson pr "$pull_request" \
+  '{worktree: $worktree, tree: $tree[0], charts: $charts, sources: $sources, built: $built}
     + if $pr == null then {} else {pull_request: $pr} end' >"$tmp/tree/in/input.json" ||
   fail "write the input of the policies on the tree"
 printf '%s\n' "${svp_services[@]}" | jq -cRn --arg envs "$envs" \
@@ -445,17 +456,18 @@ jq -e --arg want "$tree_packages" 'type == "array" and ([.[] | select((.successe
 }
 jq -r '.[].failures[]?.msg' <<<"$out" >"$tmp/tree/broken"
 while IFS= read -r msg; do problem "$msg"; done <"$tmp/tree/broken"
+jq -r '.[].warnings[]?.msg' <<<"$out" | while IFS= read -r msg; do echo "note  $msg"; done
 [ "$rc" -eq 0 ] || [ -s "$tmp/tree/broken" ] || fail "conftest failed on the tree without naming a rule: $(cat "$tmp/tree/err")"
 step "the tree $tree"
 echo "ok    the tree keeps the rules of deploy/ci/gitops-tree-policies/ (layout, environments, platform layer, author of a pull request)"
 for env in $envs; do
   if [ -n "$worktree" ]; then
     echo "ok    envs/$env/charts.yaml: revision, podSecurityVersion and collectorConfigSha256 (their values are svp-gitops's own check)"
-    echo "ok    envs/$env/images/: seven releases, each of a release source the policy admits"
+    echo "ok    envs/$env/images/: one release per service, each of a release source the policy admits"
   else
     rev=$(revision_of "$env")
     echo "ok    envs/$env/charts.yaml: charts of ${rev:0:12} on $main, podSecurityVersion and collectorConfigSha256 as that commit gives them"
-    echo "ok    envs/$env/images/: seven releases, each of a release source the policy of ${rev:0:12} admits"
+    echo "ok    envs/$env/images/: one release per service, each of a release source the policy of ${rev:0:12} admits"
   fi
 done
 for env in $envs; do

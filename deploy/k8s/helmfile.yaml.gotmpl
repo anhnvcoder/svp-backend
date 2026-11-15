@@ -81,12 +81,15 @@ releases:
 {{- $service := eq $path "deploy/helm/svp-service" }}
 {{- $canary := false }}
 {{- if $service }}
-{{- $canary = regexMatch "(?m)^canary: true$" (readFile (printf "%s/%s" $gitops $values)) }}
-{{- if and $canary (not $route) }}
-{{- fail (printf "%s sets canary: true, but component %s has no canaryRoute in argocd/apps/components.json" $values $c.name) }}
+{{- $file := readFile (printf "%s/%s" $gitops $values) }}
+{{- $canary = regexMatch "(?m)^canary: true$" $file }}
+{{- $host := $file | fromYaml | get "httpRoute.host" "" }}
+{{- /* canaryRoute names the HTTPRoute of a canary through Envoy; a gRPC canary splits by pods and has none. */}}
+{{- if and $route (not (and $canary $host)) }}
+{{- fail (printf "component %s has canaryRoute %s in argocd/apps/components.json, but %s does not set both canary: true and httpRoute.host" $c.name $route $values) }}
 {{- end }}
-{{- if and (not $canary) $route }}
-{{- fail (printf "component %s has canaryRoute %s in argocd/apps/components.json, but %s does not set canary: true" $c.name $route $values) }}
+{{- if and $canary $host (not $route) }}
+{{- fail (printf "%s sets canary: true and httpRoute.host, but component %s has no canaryRoute in argocd/apps/components.json" $values $c.name) }}
 {{- end }}
 {{- end }}
   - name: {{ $c.name }}
@@ -172,9 +175,9 @@ cluster would get a Reloader that cannot restart the gateway or the web client. 
         value: {{ .digest | quote }}
 {{- end }}
 {{- if $canary }}
-    # Client-side apply for a release with canary set (the gateway, the web client): Argo Rollouts writes the Services'
-    # selectors and the HTTPRoute's weights, atomic fields that Helm 4's server-side apply sends whole and fails on. A
-    # client-side upgrade patches only what changed, so an unchanged Service or route stays as the controller set it.
+    # Client-side apply for a release with canary set: through a route, Argo Rollouts writes the Services' selectors
+    # and the HTTPRoute's weights, atomic fields that Helm 4's server-side apply sends whole and fails on. A client-side
+    # upgrade patches only what changed, so an unchanged Service or route stays as the controller set it.
     # Helm's --wait never sees the Rollout as ready: the postsync hook waits for it.
     serverSide: "false"
     wait: false

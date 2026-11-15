@@ -97,6 +97,11 @@ Vì sao: [ADR-0020](../adr/0020-reliability-stage6.md), [ADR-0044](../adr/0044-g
   khi database trả lời.
 - Liveness, startup, healthcheck của compose và `/readyz` của gateway giữ health tổng `""`, không phụ thuộc database: restart không
   chữa được database chết.
+- Release `protocol: http` (gateway, web) cũng có `startupProbe` `httpGet /healthz`, cùng nhịp với probe gRPC: kubelet
+  không chạy liveness và readiness tới khi nó qua, nên node bận CPU không làm liveness giết một tiến trình mới chỉ
+  khởi động chậm.
+- Lúc tắt, pod thôi nhận request trước khi tiến trình nhận SIGTERM (`preStop`, drain): cách làm ở
+  [vòng đời pod](deployment.md#vòng-đời-pod).
 
 ## Failover của RDS và Valkey
 
@@ -152,6 +157,150 @@ chạy ở chế độ mặc định của pgx: chuẩn bị câu lệnh một l
 
 Với mỗi round trip 200 ms, kết nối có sẵn trả lời trong 200 đến 600 ms, nằm gọn trong hạn, còn kết nối mới thì không. Khi đó người
 gọi nhận `UNAVAILABLE` sau 1 s, thay vì chờ hết hạn gọi 3 s của gateway.
+
+## Chặn quá tải ở gateway
+
+Vì sao: [ADR-0072](../adr/0072-pod-operations.md). Số request mục tiêu ở
+[`capacity.md`](capacity.md#giới-hạn-in-flight-của-gateway).
+
+Mỗi pod gateway chỉ chạy cùng lúc nhiều nhất `MAX_IN_FLIGHT` request
+([`httpx.LoadShed`](../../services/gateway/internal/httpx/loadshed.go)); request thứ nhiều hơn nhận ngay `503`,
+`Retry-After: 1`, problem+json mã `UNAVAILABLE`, không xếp hàng. Xếp hàng dưới quá tải chỉ cộng thời gian chờ vào mọi
+câu trả lời cho tới khi chúng quá hạn; một `503` ngay để client thử lại ở pod khác hay lúc sau. Gateway tự giữ giới
+hạn vì không phải request nào cũng đi qua proxy có thể giữ nó: BFF của web gọi gateway thẳng trong cluster, không qua
+Envoy. Giới hạn theo pod nên năng lực được bảo vệ tăng theo số replica HPA thêm.
+
+```mermaid
+flowchart LR
+    req["request tới gateway"] --> trace["httpx.Trace: span, http.server.request.duration"]
+    trace --> sec["httpx.SecurityHeaders"]
+    sec --> probe{"/healthz hay /readyz?"}
+    probe -->|"có"| inner
+    probe -->|"không"| slot{"còn chỗ trong MAX_IN_FLIGHT?"}
+    slot -->|"hết"| shed["503 UNAVAILABLE, Retry-After: 1<br/>svp.gateway.requests.shed +1"]
+    slot -->|"còn"| inner["httpx.Recover, AccessLog, ValidUTF8, Routes"]
+    inner --> rl["rate limit theo lớp: 429 khi hết"]
+    rl --> handler["handler: gọi gRPC, hạn callTimeout"]
+```
+
+- **Vị trí trong chuỗi.** Sau `Trace`, nên request bị chặn vẫn có span và một điểm `http.server.request.duration` mang
+  route của nó (`503`), và SLO feed đếm nó là lỗi. Trước rate limit và routes, nên request bị chặn không đọc body,
+  không tốn token rate limit, không gọi gRPC: lúc quá tải không làm thêm việc nào cho nó.
+- **Probe đứng ngoài.** `/healthz` và `/readyz` không bị giới hạn và không được đếm, để pod đang bận không bị restart
+  hay bị lấy khỏi Service chính vì nó đang phục vụ.
+- **Slot trả lại bằng `defer`**, nên handler panic, client huỷ hay kết nối bị hijack cũng trả chỗ; slot bị rò sẽ làm
+  pod trả `503` mãi.
+- **Cấu hình sai thì không khởi động.** `MAX_IN_FLIGHT` phải là số nguyên ≥ 1; giá trị khác làm gateway không khởi
+  động, lỗi nêu tên biến chứ không nêu giá trị. Mặc định `defaultMaxInFlight` ở
+  `services/gateway/cmd/gateway/main.go`; giá trị chạy ở stg, prd là `env.MAX_IN_FLIGHT` của
+  `base/services/gateway.yaml` trong `svp-gitops`.
+- **Không dùng adaptive concurrency của Envoy.** Envoy Gateway không có API cho filter đó (chỉ vá xDS bằng
+  `EnvoyPatchPolicy`) và đường BFF của web không qua Envoy. Mesh chưa dựng
+  ([`architecture.md`](../architecture.md#10-rủi-ro-và-nợ-kỹ-thuật)); nếu dựng, giới hạn theo proxy L7 thay chỗ này.
+
+## Timeout Postgres của role app
+
+Vì sao: [ADR-0072](../adr/0072-pod-operations.md).
+
+Câu lệnh treo giữ một kết nối của pool, và giữ nó tới khi có người giết; một transaction mở mà client quên đóng giữ
+khoá và chặn vacuum. Hai giới hạn nằm ở role chứ không ở client, nên áp cho mọi đường vào, kể cả CLI `svp-pg` của
+`svp-ops` đăng nhập bằng role app:
+
+- `statement_timeout` và `idle_in_transaction_session_timeout` của role app `svp_<svc>_app` trong database
+  `svp_<svc>` của mỗi service có Postgres đặt bằng `ALTER ROLE … IN DATABASE … SET` ở
+  `deploy/postgres/bootstrap.sql`; giá trị do `bootstrap.sh` (compose) và `pg-bootstrap.sh` (k3d, EKS) truyền vào. Database `svp_glitchtip` được `RESET`:
+  GlitchTip là phần mềm ngoài, có câu lệnh dài. Role migrator không đặt: migration có `lock_timeout` của
+  `internal/dbmigrate`.
+- `statement_timeout` lấy bằng deadline dài nhất code đặt cho một câu lệnh theo request (`postgresTimeout` của
+  `internal/outbox/relay.go`; `callTimeout` của gateway ngắn hơn), là lưới an toàn cho đường đọc và ghi theo request.
+  Hai việc nền của feed-service dài hơn và tự nới bằng `set_config('statement_timeout', …, true)` (tương đương
+  `SET LOCAL`) là câu đầu tiên của transaction: projector fan-out theo `handlerTimeout`, mỗi lô prune timeline là một
+  transaction theo `pruneTimeout`.
+- `idle_in_transaction_session_timeout` dài hơn khoảng hở dài nhất trong một transaction của relay (chờ produce Kafka,
+  comment `metadataMinAge` của `internal/kafkax/kafkax.go`), nên relay đúng không bị cắt.
+- `ALTER ROLE` chỉ có tác dụng ở lần đăng nhập sau (tài liệu PostgreSQL 17): kết nối đang mở giữ giá trị cũ cho tới
+  khi pool nối lại. Đổi giá trị vì vậy chỉ tới pod khi pool của nó nối lại.
+
+Số kết nối mỗi pod mở tối đa là `DATABASE_MAX_CONNS`, không theo CPU node; bảng tính theo `max_connections` của từng
+env ở [`capacity.md`](capacity.md#ngân-sách-kết-nối).
+
+## Outbox gặp dòng lỗi vĩnh viễn
+
+Vì sao: [ADR-0072](../adr/0072-pod-operations.md), [ADR-0003](../adr/0003-async-events-outbox.md).
+
+Relay (`internal/outbox`) đọc các dòng `published_at IS NULL AND failed_at IS NULL` theo id, gửi cả lô trong một
+transaction giữ advisory lock. Nếu chỉ thử lại cả lô, một dòng broker từ chối mãi (quá lớn, bị validate từ chối) làm
+lô lỗi ở mỗi lượt và mọi dòng sau nó đứng chờ vĩnh viễn. Vì vậy relay phân biệt lỗi do chính record với lỗi còn chữa
+được:
+
+```mermaid
+flowchart TD
+    read["đọc lô: published_at IS NULL AND failed_at IS NULL"] --> produce["produce cả lô"]
+    produce -->|"thành công"| published["đánh dấu published_at"]
+    produce -->|"lỗi"| perm{"errors.Is khớp permanentErrors?<br/>MESSAGE_TOO_LARGE, INVALID_RECORD"}
+    perm -->|"không: mạng, quyền, timeout"| retry["rollback, chờ retryWait, thử lại cả lô"]
+    perm -->|"có"| single["gửi lại từng dòng một"]
+    single -->|"dòng gửi được"| published
+    single -->|"dòng vẫn lỗi vĩnh viễn"| failed["failed_at = now(), last_error<br/>svp.outbox.rows.failed{topic} +1"]
+    failed --> alert["cảnh báo OutboxRowsFailed (page)"]
+    alert --> runbook["runbooks/outbox-rows-failed.md"]
+```
+
+- **Lỗi vĩnh viễn** là mã `kerr` của franz-go version ghim (`go.mod`) có cờ retriable `false` và do chính record gây
+  ra (`permanentErrors` trong `internal/outbox/relay.go`, nguồn và các mã bị loại ghi ở doc comment của nó). Lỗi
+  quyền, mạng, timeout, và `CORRUPT_MESSAGE` (retriable) vẫn thử lại cả lô, vì sửa nguyên nhân thì cùng các dòng đó đi
+  qua.
+- **Dòng lỗi không chặn hàng đợi.** Dòng được ghi `failed_at` và `last_error` trong cùng transaction với các dòng đã
+  gửi được; relay bỏ qua nó từ đó, gửi tiếp các dòng sau. Index partial `outbox_pending_idx` khớp đúng điều kiện đọc.
+- **Backoff có jitter.** Chờ sau lỗi là giá trị nhân đôi (trần `retryMax`) lấy ngẫu nhiên đều trong [½, 1] của nó,
+  cùng công thức với backoff của `kafkax.ConsumerConfig`: các pod relay của nhiều service không cùng thức dậy khi
+  Kafka vừa hồi phục.
+- Dòng lỗi cần người xem: runbook hướng dẫn tìm nguyên nhân và cách đưa dòng về hàng đợi khi sửa được.
+  Migration của cột theo [`schema-change.md`](../runbooks/schema-change.md).
+
+## Phát lại DLQ
+
+Vì sao: [ADR-0072](../adr/0072-pod-operations.md), [ADR-0045](../adr/0045-bounded-batch-retry.md). Các bước ở
+[`kafka-dlq-records.md`](../runbooks/kafka-dlq-records.md#phát-lại-bằng-lệnh-phát-lại-dlq).
+
+Record vào `<topic>.dlq` mang value protobuf nhị phân và header `dlq-*` ghi nguồn gốc. Công cụ Kafka CLI chép record
+qua dòng văn bản và làm hỏng value, nên phát lại có lệnh riêng: `dlq-replay replay` (`services/dlq-replay`) chép key,
+value và header nguyên byte bằng `internal/kafkax`. Pod `dlq-replay` ở trạng thái `standby` (không nối Kafka, không
+telemetry); người vận hành chạy `replay` trong đó, đăng nhập user Kafka `svp-dlq-replay`, chỉ có quyền đọc bốn topic
+`*.dlq` và ghi bốn topic gốc, không group, không quyền cluster.
+
+```mermaid
+sequenceDiagram
+    participant op as Người vận hành
+    participant rep as dlq-replay
+    participant dlq as Topic X.dlq
+    participant orig as Topic gốc X
+    participant con as Consumer idempotent
+
+    op->>rep: replay --from X.dlq --dry-run (exec vào pod)
+    rep->>dlq: ListOffsets, đọc partition gán trực tiếp
+    dlq-->>rep: record trong khoảng, lọc theo --group
+    rep-->>op: mỗi record một dòng log, dòng tổng
+    op->>rep: replay --from X.dlq (bỏ --dry-run)
+    rep->>orig: produce key, value, header, bỏ header dlq-*
+    orig-->>con: record với event_id cũ, offset mới
+    con->>con: bỏ bản trùng hoặc xử lý lần đầu
+    rep-->>op: dòng tổng: replayed, skipped, offset cuối mỗi partition
+```
+
+- **Không consumer group, không commit.** `replay` đọc DLQ bằng gán partition trực tiếp, nên không đổi offset của
+  group nào và chạy được khi consumer đang chạy; khoảng chọn bằng `--start-offset`/`--end-offset` hay
+  `--since`/`--until`, thêm `--group` để chỉ lấy record của một consumer group. `--dry-run` đọc và lọc, không produce.
+- **Timestamp là lúc phát lại**, nên retention của topic đích tính từ đó; partition do partitioner mặc định theo key,
+  như producer gốc.
+- **Log không có dữ liệu.** Mỗi record một dòng gồm partition và offset nguồn, topic đích, độ dài key, tên header;
+  không bao giờ key, value hay giá trị header, vì chúng có thể chứa dữ liệu cá nhân. Metric `svp.dlq.replay.records`
+  thuộc tính `from`, `to`, `result`.
+- **Lỗi giữa chừng dừng ngay** (thoát 1) và dòng tổng nêu offset kế tiếp để chạy tiếp; sai cờ thoát 2.
+- **Idempotent theo consumer.** Chạy lại cùng khoảng gửi lại mỗi record; video-service, feed-service và media-worker
+  bỏ bản trùng theo trạng thái hay khoá. Ngoại lệ là `engagement.views.v1`: engagement-service khử trùng theo offset,
+  nên bản phát lại có offset mới được đếm lại. Mỗi khoảng chỉ phát lại một lần, và lệnh in cảnh báo khi topic đích là
+  topic đó; lượt xem là số gần đúng, ADR ghi cái giá.
 
 ## Vận hành
 

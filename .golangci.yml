@@ -11,8 +11,8 @@ linters:
     - sloglint
     - revive
     - gocritic
-  # contextcheck stays off: it reports every context derived through a helper (callContext(r) wrapping r.Context(),
-  # middleware closures) as "non-inherited", which is noise rather than a missing trace.
+    - contextcheck
+    - spancheck
   settings:
     sloglint:
       no-mixed-args: true

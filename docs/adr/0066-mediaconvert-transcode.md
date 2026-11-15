@@ -193,4 +193,5 @@ hai đường, nguồn).
 
 ### Chỉnh bởi
 
+- §2: [0072](0072-pod-operations.md): cơ chế nhận service qua ba repo đã có (release mới, release đầu tiên là `dlq-replay`); bridge vẫn là lệnh con của `media-worker`; lệnh `mediaconvert` dừng như `serve`: record Kafka đang xử lý chạy tiếp tới hạn drain 540 s, message SQS đang làm vẫn bỏ ngay.
 - §5, §8, §9: [0073](0073-premium-playback.md): output của video premium dưới `premium/<video_id>/<version>/<attempt>/` cùng bố cục phẳng, bản xem thử chép sang `preview/` (§5); `settle` của video premium làm bản xem thử trước master đầy đủ, video premium một segment → `transcode.failed` `PREVIEW_TOO_SHORT`; module `media` thêm key group và behavior `premium/*` (§8); role `svp-<env>-mediaconvert` thêm `s3:PutObject` trên `premium/*` của `media`; quyền S3 của role media-worker trên `media/*` (cả `ListBucket` theo tiền tố) mở sang `premium/*`, `preview/*` (§9).

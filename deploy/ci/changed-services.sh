@@ -3,13 +3,13 @@
 # the changes from commit BASE to commit HEAD; the reason goes to stderr.
 # Design notes: docs/reference/ci.md.
 
-# The services are the six of built_services (deploy/k8s/lib.sh); web is built by svp-frontend, so no change here builds
+# The services are those of built_services (deploy/k8s/lib.sh); web is built by svp-frontend, so no change here builds
 # it. A service is built when a changed path is in its image_paths or its target of the image table changed; a change of
 # the pipeline that builds, scans and signs (images.yml, the actions image-*, deploy/ci/ but the files no image job
-# reads, deploy/k8s/lib.sh, the tool images pinned in the Makefile, the rest of the image table) builds all six.
+# reads, deploy/k8s/lib.sh, the tool images pinned in the Makefile, the rest of the image table) builds them all.
 
 # So a Renovate bump of trivy or grype builds and scans every image before it merges, not the daily rescan on main
-# first; the cost is a full release on main too. BASE empty, unknown or not comparable with HEAD (force push): all six,
+# first; the cost is a full release on main too. BASE empty, unknown or not comparable with HEAD (force push): all,
 # since a missed change would ship an image without it. HEAD a proper ancestor of BASE (an older run started again):
 # nothing.
 set -euo pipefail

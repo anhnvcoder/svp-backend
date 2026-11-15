@@ -68,8 +68,10 @@ type Attempt struct {
 // skip it. An error wrapped by Permanent sends it to the dead-letter topic at once; any other
 // error is retried with backoff, and sent to the dead-letter topic after the last attempt.
 //
-// ctx is canceled when the consumer stops; a handler that returns an error after that leaves the
-// record uncommitted, so it is delivered again. ctx carries a consumer span extracted from the
+// ctx is canceled when the consumer stops, at once when ConsumerConfig.DrainTimeout is zero, or
+// once the drain time has passed since the stop otherwise; a handler that returns an error after
+// that leaves the record uncommitted, so it is delivered again. During the drain ctx stays live,
+// so a handler that finishes in time settles its record as usual. ctx carries a consumer span extracted from the
 // record's trace headers; logs and Produce use that span's context.
 type Handler func(ctx context.Context, r *kgo.Record, a Attempt) error
 
@@ -116,6 +118,12 @@ type ConsumerConfig struct {
 	// SessionTimeout and RebalanceTimeout are the Kafka group settings of the same names.
 	SessionTimeout   time.Duration
 	RebalanceTimeout time.Duration
+
+	// DrainTimeout is how long the record in progress, retries and backoffs included, may run on after the context
+	// of Run is canceled; polling stops at once and records of the poll not yet started are left for the next member.
+	// Finished in time, the record is committed or sent to the dead-letter topic as usual; still running then, its
+	// context is canceled and it stays uncommitted, to be delivered again. Zero cancels it at once.
+	DrainTimeout time.Duration
 
 	// opts are extra client options for tests.
 	opts []kgo.Opt
@@ -191,11 +199,14 @@ func newConsumer(cfg ConsumerConfig) (*Consumer, error) {
 // uncommitted.
 var errStopped = errors.New("consumer stopped")
 
-// Run consumes until ctx is canceled, then returns nil, or until a record cannot be settled
-// (dead-letter produce or commit failed), then returns that error with the record uncommitted.
-// Either way it leaves the group and closes the client; a Consumer runs once.
+// Run consumes until ctx is canceled, then returns nil once the record in progress is settled or
+// its drain time has passed, or until a record cannot be settled (dead-letter produce or commit
+// failed), then returns that error with the record uncommitted. Either way it leaves the group and
+// closes the client; a Consumer runs once.
 func (c *Consumer) Run(ctx context.Context) error {
 	defer c.cl.CloseAllowingRebalance()
+	wctx, stop := drainContext(ctx, c.cfg.DrainTimeout)
+	defer stop()
 	for {
 		fetches := c.cl.PollRecords(ctx, c.cfg.MaxPollRecords)
 		if ctx.Err() != nil {
@@ -206,7 +217,7 @@ func (c *Consumer) Run(ctx context.Context) error {
 			c.cfg.Logger.LogAttrs(ctx, slog.LevelWarn, "kafka fetch error",
 				slog.String("topic", fe.Topic), slog.Int("partition", int(fe.Partition)), slog.String("error", fe.Err.Error()))
 		}
-		err := c.settleAll(ctx, fetches)
+		err := c.settleAll(ctx, wctx, fetches)
 		if c.cfg.BlockRebalance {
 			c.cl.AllowRebalance()
 		}
@@ -219,9 +230,14 @@ func (c *Consumer) Run(ctx context.Context) error {
 	}
 }
 
-func (c *Consumer) settleAll(ctx context.Context, fetches kgo.Fetches) error {
+// settleAll settles the records of one poll with wctx, the context that outlives ctx while the
+// consumer drains. Once ctx is canceled, a drain only finishes the record already started.
+func (c *Consumer) settleAll(ctx, wctx context.Context, fetches kgo.Fetches) error {
 	for iter := fetches.RecordIter(); !iter.Done(); {
-		if err := c.settle(ctx, iter.Next()); err != nil {
+		if c.cfg.DrainTimeout > 0 && ctx.Err() != nil {
+			return errStopped
+		}
+		if err := c.settle(wctx, iter.Next()); err != nil {
 			return err
 		}
 	}
@@ -270,6 +286,7 @@ func (c *Consumer) settle(ctx context.Context, r *kgo.Record) error {
 }
 
 func (c *Consumer) handle(ctx context.Context, r *kgo.Record, a Attempt) (context.Context, error) {
+	//nolint:spancheck // endAttempt ends the span
 	hctx, span := otel.Tracer(tracerName).Start(handlerContext(ctx, r), "process "+r.Topic,
 		trace.WithSpanKind(trace.SpanKindConsumer), trace.WithAttributes(
 			semconv.MessagingSystemKafka, semconv.MessagingDestinationName(r.Topic),
@@ -278,7 +295,7 @@ func (c *Consumer) handle(ctx context.Context, r *kgo.Record, a Attempt) (contex
 	hctx, cancel := attemptContext(hctx, c.cfg.HandlerTimeout)
 	defer cancel()
 	err := c.cfg.Handler(hctx, r, a)
-	return hctx, endAttempt(span, err)
+	return hctx, endAttempt(span, err) //nolint:spancheck // endAttempt ends the span
 }
 
 // deadLetter writes r, with its key, value and headers, to its dead-letter topic.
@@ -313,6 +330,30 @@ func (c *Consumer) commit(ctx context.Context, r *kgo.Record) error {
 		return fmt.Errorf("commit %s/%d@%d: %w", r.Topic, r.Partition, r.Offset, err)
 	}
 	return nil
+}
+
+// drainContext returns a context that ignores the cancellation of ctx and is canceled d after it,
+// or when stop is called; with d zero it returns ctx itself. Stop ends its goroutine and timer.
+func drainContext(ctx context.Context, d time.Duration) (wctx context.Context, stop context.CancelFunc) {
+	if d <= 0 {
+		return ctx, func() {}
+	}
+	wctx, cancel := context.WithCancel(context.WithoutCancel(ctx))
+	go func() {
+		select {
+		case <-ctx.Done():
+		case <-wctx.Done():
+			return
+		}
+		t := time.NewTimer(d)
+		defer t.Stop()
+		select {
+		case <-t.C:
+			cancel()
+		case <-wctx.Done():
+		}
+	}()
+	return wctx, cancel
 }
 
 // backoff returns the wait after failed attempt n: BackoffBase doubled n-1 times, capped at

@@ -90,3 +90,4 @@ cân nhắc khi số bước và nhánh lỗi tăng tới mức khó theo dõi l
 
 - Quyết định (cách khoá relay outbox): [0008](0008-async-upload-pipeline-stage2a.md): thay `FOR UPDATE SKIP LOCKED` bằng advisory lock để giữ thứ tự theo key; phần còn lại giữ nguyên.
 - Bối cảnh (broker), Hệ quả: [0053](0053-msk-elasticache-valkey.md): broker là Apache Kafka thay Redpanda: Amazon MSK provisioned ở stg, prd, image `apache/kafka` (KRaft) ở compose, k3d; outbox, at-least-once với consumer idempotent và DLQ giữ nguyên.
+- Quyết định (relay outbox, luật 2): [0072](0072-pod-operations.md): dòng outbox mà broker từ chối vĩnh viễn (`MESSAGE_TOO_LARGE`, `INVALID_RECORD`) được đánh dấu `failed_at` và bỏ qua, có cảnh báo page `OutboxRowsFailed`, thay vì chặn mọi dòng sau của service (event đó không gửi tới khi khôi phục bằng migration); relay chờ thử lại có jitter; record DLQ phát lại bằng lệnh `dlq-replay`.

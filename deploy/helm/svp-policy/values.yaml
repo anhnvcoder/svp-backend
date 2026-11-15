@@ -21,7 +21,7 @@ imageVerification:
   maxAttestationAge: 72h
   # Build provenance: true adds four checks after the six of the policy. Off here: the releases signed before CI
   # attested provenance have none, and a cluster checking it would refuse their pods. An environment's overlay
-  # (envs/<env>/svp-policy.yaml of svp-gitops) turns it on once all seven services have a release with provenance; a
+  # (envs/<env>/svp-policy.yaml of svp-gitops) turns it on once every service has a release with provenance; a
   # rollback to one from before must turn it off first. It holds for every source alike.
 
   # deploy/ci/verify-release.sh checks the same whenever a policy turns it on: it reads this line and the overlays, so

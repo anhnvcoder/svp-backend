@@ -147,7 +147,7 @@ func write(ctx context.Context, t *testing.T, pool *pgxpool.Pool, key string) st
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer func() { _ = tx.Rollback(context.Background()) }()
+	defer func() { _ = tx.Rollback(context.WithoutCancel(ctx)) }()
 	ev := newEvent(key)
 	if err := Write(ctx, tx, topic, key, ev); err != nil {
 		t.Fatal(err)
@@ -641,11 +641,24 @@ func TestCleanupDeletesOnlyRowsSentOver24HoursAgo(t *testing.T) {
 func TestRetryWait(t *testing.T) {
 	t.Parallel()
 	r := NewRelay(nil, nil, nil)
-	want := []time.Duration{500 * time.Millisecond, time.Second, 2 * time.Second, 4 * time.Second, 8 * time.Second, 10 * time.Second, 10 * time.Second}
-	for failures, w := range want {
-		if got := r.retryWait(failures); got != w {
-			t.Errorf("retryWait(%d) = %v, want %v", failures, got, w)
+	// Before the jitter: retryBase doubled per failure, capped at retryMax.
+	capped := []time.Duration{500 * time.Millisecond, time.Second, 2 * time.Second, 4 * time.Second, 8 * time.Second, 10 * time.Second, 10 * time.Second}
+	for failures, d := range capped {
+		lowest, highest := d, time.Duration(0)
+		for range 200 {
+			got := r.retryWait(failures)
+			if got < d/2 || got > d {
+				t.Fatalf("retryWait(%d) = %v, want within [%v, %v]", failures, got, d/2, d)
+			}
+			lowest, highest = min(lowest, got), max(highest, got)
 		}
+		// 200 draws spread over the whole range, not one fixed value.
+		if lowest > d*3/5 || highest < d*9/10 {
+			t.Errorf("retryWait(%d) drew only [%v, %v] of [%v, %v]", failures, lowest, highest, d/2, d)
+		}
+	}
+	if got := r.retryWait(1000); got < r.retryMax/2 || got > r.retryMax {
+		t.Errorf("retryWait(1000) = %v, want within the cap [%v, %v]", got, r.retryMax/2, r.retryMax)
 	}
 }
 
@@ -682,7 +695,7 @@ func concurrentWrites(t *testing.T, pool *pgxpool.Pool, lockFirst bool) (commitO
 			if err != nil {
 				return err
 			}
-			defer func() { _ = tx2.Rollback(context.Background()) }()
+			defer func() { _ = tx2.Rollback(context.WithoutCancel(ctx)) }()
 			if !lockFirst {
 				if err := Write(ctx, tx2, topic, video, ev2); err != nil {
 					return err

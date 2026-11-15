@@ -111,6 +111,7 @@ flowchart LR
         us["<b>user-service</b><br/>[Go, gRPC; Postgres svp_user]<br/>Tài khoản, follow, hồ sơ"]
         vs["<b>video-service</b><br/>[Go, gRPC; Postgres svp_video]<br/>Metadata, vòng đời video"]
         mw["<b>media-worker</b><br/>[Go + ffmpeg]<br/>Transcode HLS"]
+        dr["<b>dlq-replay</b><br/>[Go]<br/>Chờ lệnh; phát lại record DLQ"]
         es["<b>engagement-service</b><br/>[Go, gRPC; Postgres svp_engagement]<br/>Like, view, bộ đếm"]
         fs["<b>feed-service</b><br/>[Go, gRPC; Postgres svp_feed]<br/>Read model feed"]
         bus[["<b>Kafka</b><br/>[Apache Kafka; MSK trên cloud]<br/>SCRAM-SHA-512 trên TLS, 9096"]]
@@ -145,6 +146,8 @@ flowchart LR
     es -.->|"view.recorded"| bus
     bus -.->|"view.recorded"| es
     bus -.->|"user.*, video.ready"| fs
+    bus -.->|"record trong *.dlq"| dr
+    dr -.->|"cùng record về topic gốc"| bus
 ```
 
 Mỗi service chỉ đọc ghi database của mình; event về một thực thể chỉ do service sở hữu thực thể đó phát
@@ -225,6 +228,9 @@ engagement-service và `GetProfiles` của user-service, mỗi lời gọi timeo
 vẫn trả về, chỉ thiếu `stats` hay `author` (graceful degradation, [ADR-0018](adr/0018-web-profiles-public-video-upload.md) §5);
 danh sách video theo tác giả và trang một video ghép cùng cách. Chống quá tải và lỗi lan ([ADR-0010](adr/0010-redis-ratelimit-cache-resilience-stage2c.md)):
 
+- **Giới hạn in-flight** mỗi pod gateway (`MAX_IN_FLIGHT`, middleware `httpx.LoadShed` trước rate limit): quá giới hạn
+  trả ngay 503, `Retry-After: 1`, không xếp hàng ([ADR-0072](adr/0072-pod-operations.md),
+  [`explanation/reliability.md`](explanation/reliability.md#chặn-quá-tải-ở-gateway)).
 - **Rate limit** GCRA theo lớp route; Redis lỗi thì lớp `read`, `write` mở, các lớp còn lại đóng mềm bằng bộ đếm trong bộ nhớ
   (ngưỡng từng lớp ở [`reference/contracts.md`](reference/contracts.md#rest-ở-gateway)).
 - **Cache khám phá:** chỉ trang đầu, TTL 5 s, không xoá chủ động; Redis lỗi hay quá 50 ms thì đọc Postgres, không báo lỗi.
@@ -243,7 +249,9 @@ segment đi thẳng từ CDN (local: object store) ([`explanation/premium-playba
 Consumer của nó gom lô tối đa 5.000 record hoặc 1 s, cộng dồn theo `video_id`, ghi cả lô bằng một câu `INSERT ... ON CONFLICT DO
 UPDATE` vào `view_counts`. Bảng `consumer_offsets` giữ offset từng partition, cập nhật trong cùng transaction với bộ đếm, nên lô giao
 lại chỉ cộng phần chưa cộng ([ADR-0009](adr/0009-engagement-feed-stage2b.md)). Lỗi tạm thời thử lại trong ngân sách 5 phút rồi
-chép lô sang `engagement.views.v1.dlq` ([ADR-0045](adr/0045-bounded-batch-retry.md), [runbook](runbooks/kafka-dlq-records.md)).
+chép lô sang `engagement.views.v1.dlq` ([ADR-0045](adr/0045-bounded-batch-retry.md),
+[runbook](runbooks/kafka-dlq-records.md)); phát lại lô đó chỉ bằng `dlq-replay`, mỗi khoảng một lần vì khử trùng lượt
+xem theo offset ([độ tin cậy](explanation/reliability.md#phát-lại-dlq)).
 Like đi đường đồng bộ: bảng `likes` và `like_counts` đổi trong cùng transaction, nên like của chính mình thấy ngay.
 
 ### 6.4 Xác thực
@@ -284,7 +292,10 @@ nhánh `if` theo môi trường.
 - Client Valkey dùng `rediss://<user>:<mật khẩu>@<host>:6379/<db>`; mỗi client một user ACL chỉ được db và tiền tố khoá của mình
   (gateway db 10 `svp:gw:*`, feed-service db 14 `svp:feed:*`, web db 9 `svp:web:*`), user `default` tắt.
 - Script, drill, runbook chạm Kafka và Valkey chỉ qua **CLI vận hành** `/opt/svp/bin/svp-kafka`, `/opt/svp/bin/svp-valkey`: trong container
-  `kafka`, `valkey` của compose, trong Deployment `svp-ops` (namespace `svp-data`) ở k3d và EKS.
+  `kafka`, `valkey` của compose, trong Deployment `svp-ops` (namespace `svp-data`) ở k3d và EKS. Ngoại lệ duy nhất là
+  phát lại record DLQ, chỉ qua release `dlq-replay` (user Kafka `svp-dlq-replay`): `make dlq-replay ARGS=…` ở compose,
+  `kubectl exec deploy/dlq-replay -- /app replay …` ở k3d và EKS
+  ([`explanation/reliability.md`](explanation/reliability.md#phát-lại-dlq), [ADR-0072](adr/0072-pod-operations.md)).
 - RDS và hai bucket của `media` có backup hằng ngày bằng AWS Backup, chép sang account `svp-backup`; RDS thêm PITR gốc. Phạm vi, RTO/RPO và
   diễn tập: [`explanation/backup-dr.md`](explanation/backup-dr.md).
 - Trên AWS, RDS, MSK và ElastiCache nằm ở subnet database, route table không có `0.0.0.0/0`; egress 5432, 9096, 6379 của pod chỉ tới dải
@@ -312,7 +323,7 @@ flowchart TB
                     end
                     subgraph kn["Node của Karpenter, NodePool default<br/>[Graviton; stg Spot, prd on-demand]"]
                         envoy["Envoy Gateway<br/>[HPA từ 2, PDB, trải zone]"]
-                        svc["web, gateway, 4 service gRPC,<br/>media-worker [svp-service]"]
+                        svc["web, gateway, 4 service gRPC,<br/>media-worker, dlq-replay [svp-service]"]
                         obsn["Observability, GlitchTip [svp-obs]"]
                     end
                     kyv["Kyverno<br/>[3 replica, PDB, trải zone]"]

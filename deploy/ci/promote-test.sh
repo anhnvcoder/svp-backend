@@ -69,6 +69,8 @@ g() {
     -c user.email=test@example.invalid -c commit.gpgsign=false -c core.hooksPath=/dev/null "$@"
 }
 g init -q -b main && g add -A && g commit -qm base
+# The services of the image table and web, as the scripts read them.
+read -r -a services <<<"$(bash -c '. "$1/deploy/k8s/lib.sh" && echo "${svp_services[*]}"' _ "$tree")"
 "$real_git" init -q --bare "$work/code-origin.git"
 g remote add origin "$work/code-origin.git"
 c0=$(g rev-parse HEAD)
@@ -94,6 +96,34 @@ refused() {
     same "$name: refused, saying why" "FAIL  $want" "$(cat "$work/guard.out")"
   fi
 }
+
+# --- promote_image_file ENV SERVICE REPOSITORY TAG DIGEST: the image file a promote writes for a new release, opening
+# with the comment of the files of svp-gitops (wrapped where the name is long), or a refusal for an image of no source.
+check "promote_image_file: a new release of stg" guard promote_image_file stg dlq-replay \
+  ghcr.io/anhnvcoder/svp-backend/dlq-replay "${c0:0:12}" "$digest_a"
+same "promote_image_file: the file of a new release of stg" "# The release image of dlq-replay in stg, nothing else: the release on GHCR that CI of
+# https://github.com/anhnvcoder/svp-backend built, scanned and signed (.github/workflows/images.yml there). The tag
+# names the commit for people; the cluster pulls the digest. Its configuration is base/services/dlq-replay.yaml and
+# envs/stg/dlq-replay.yaml when there is one.
+image:
+  repository: ghcr.io/anhnvcoder/svp-backend/dlq-replay
+  tag: \"${c0:0:12}\"
+  digest: \"$digest_a\"" "$(cat "$work/guard.out")"
+check "promote_image_file: a release of web in prd" guard promote_image_file prd web \
+  ghcr.io/anhnvcoder/svp-frontend/web "${c0:0:12}" "$digest_a"
+same "promote_image_file: web's comment names svp-frontend" "# The release image of web in prd, nothing else: the release on GHCR that CI of
+# https://github.com/anhnvcoder/svp-frontend built, scanned and signed (.github/workflows/images.yml there). The tag
+# names the commit for people; the cluster pulls the digest. Its configuration is base/services/web.yaml and
+# envs/prd/web.yaml when there is one." "$(head -n 4 "$work/guard.out")"
+check "promote_image_file: a long service name" guard promote_image_file stg engagement-service \
+  ghcr.io/anhnvcoder/svp-backend/engagement-service "${c0:0:12}" "$digest_a"
+same "promote_image_file: a long service name wraps before its base file" \
+  "# names the commit for people; the cluster pulls the digest. Its configuration is
+# base/services/engagement-service.yaml and envs/stg/engagement-service.yaml when there is one." \
+  "$(sed -n 3,4p "$work/guard.out")"
+refused "promote_image_file: an image under the prefix of another source" \
+  "ghcr.io/anhnvcoder/svp-frontend/dlq-replay is no release of dlq-replay in deploy/helm/svp-policy/files/sources.json" \
+  promote_image_file stg dlq-replay ghcr.io/anhnvcoder/svp-frontend/dlq-replay "${c0:0:12}" "$digest_a"
 
 # --- promote_not_behind COMMIT REVISION.
 refused "promote_not_behind: a run older than stg's charts" \
@@ -125,7 +155,7 @@ echo "replicas: 1" >"$gtree/base/gateway.yaml"
 for env in stg prd; do
   mkdir -p "$gtree/envs/$env/images"
   printf '# The commit whose charts this environment runs.\nrevision: %s\n' "$c0" >"$gtree/envs/$env/charts.yaml"
-  for svc in gateway user-service video-service engagement-service feed-service media-worker web; do
+  for svc in "${services[@]}"; do
     image_file "$env" "$svc" "ghcr.io/anhnvcoder/svp-backend/$svc" "" ""
   done
   image_file "$env" gateway ghcr.io/anhnvcoder/svp-backend/gateway "${c0:0:12}" "$digest_a"
@@ -266,7 +296,8 @@ app_pr='[{"number": 9, "isCrossRepository": false, "author": {"login": "app/svp-
 person_pr='[{"number": 9, "isCrossRepository": false, "author": {"login": "someone"}},
   {"number": 10, "isCrossRepository": true, "author": {"login": "app/svp-gitops-promoter"}}]'
 list "main of svp-gitops" 0
-same "rescan.sh list: fourteen image files of main" 14 "$(grep -c "main of svp-gitops, envs/" "$work/list.out")"
+same "rescan.sh list: every image file of main" $((2 * ${#services[@]})) \
+  "$(grep -c "main of svp-gitops, envs/" "$work/list.out")"
 check "rescan.sh list: the gateway of stg on main" has "$work/list.out" \
   "gateway${tab}ghcr.io/anhnvcoder/svp-backend/gateway${tab}$digest_b${tab}main of svp-gitops, envs/stg/images/gateway.yaml"
 check "rescan.sh list: a service not released, with an empty digest" has "$work/list.out" \
@@ -285,7 +316,7 @@ check "rescan.sh list: theirs not read" lacks "$work/list.out" "bot/promote-stg"
 # The host does not answer pr list (no prs.json): main's releases and values_ref's are still listed, then it fails.
 rm "$work/gh/prs.json"
 list "the pull requests not answered" 1 bot/promote-stg
-same "rescan.sh list: not answered, the fourteen image files of main still listed" 14 \
+same "rescan.sh list: not answered, every image file of main still listed" $((2 * ${#services[@]})) \
   "$(grep -c "main of svp-gitops, envs/" "$work/list.out")"
 check "rescan.sh list: not answered, values_ref still listed" has "$work/list.out" \
   "${tab}$digest_a${tab}bot/promote-stg of svp-gitops, envs/stg/images/user-service.yaml"
@@ -301,7 +332,7 @@ check "rescan.sh list: the releases of that commit" has "$work/list.out" "$older
 # released before the rename, under the former prefix of this repository, which no source has: listed, so the run
 # fails on them.
 mkdir -p "$tree/deploy/k8s/values/services"
-for svc in gateway user-service video-service engagement-service feed-service media-worker web; do
+for svc in "${services[@]}"; do
   printf 'image:\n  repository: ghcr.io/anhnvcoder/short-video-platform/%s\n  tag: ""\n  digest: ""\n' "$svc" \
     >"$tree/deploy/k8s/values/services/$svc.yaml"
 done
@@ -328,7 +359,8 @@ list "backend, web of svp-frontend in stg" 0
 check "rescan.sh list: backend leaves web of svp-frontend out" lacks "$work/list.out" "ghcr.io/anhnvcoder/svp-frontend/web"
 check "rescan.sh list: backend says why" has "$work/list.err" \
   "skip  web in main of svp-gitops, envs/stg/images/web.yaml: ghcr.io/anhnvcoder/svp-frontend/web is a release of source web, which its own CI rescans"
-same "rescan.sh list: backend lists its thirteen others" 13 "$(grep -c "main of svp-gitops, envs/" "$work/list.out")"
+same "rescan.sh list: backend lists every other release of main" $((2 * ${#services[@]} - 1)) \
+  "$(grep -c "main of svp-gitops, envs/" "$work/list.out")"
 web_pr='[{"number": 11, "isCrossRepository": false, "author": {"login": "app/svp-web-promoter"}}]'
 echo "$web_pr" >"$work/gh/prs.json"
 list "web, its pull request open" 0 --source web
@@ -354,6 +386,23 @@ gs commit -qam "stg: the gateway under the former prefix" && gs push -q origin m
 list "backend, a release under the former prefix on main" 0
 check "rescan.sh list: the release under the former prefix is listed" has "$work/list.out" \
   "gateway${tab}ghcr.io/anhnvcoder/short-video-platform/gateway${tab}$digest_a${tab}main of svp-gitops, envs/stg/images/gateway.yaml"
+
+# --- A new release before its first promote: prd on main, and a commit of this repository, have no file of dlq-replay.
+gs rm -q envs/prd/images/dlq-replay.yaml && gs commit -qm "prd: dlq-replay not promoted yet" && gs push -q origin main
+"$real_git" -C "$work/clone" fetch -q origin
+list "a new release with no image file in prd" 0
+check "rescan.sh list: a new release with no file in prd is not listed there" lacks "$work/list.out" \
+  "envs/prd/images/dlq-replay.yaml"
+check "rescan.sh list: the new release is still listed in stg" has "$work/list.out" \
+  "main of svp-gitops, envs/stg/images/dlq-replay.yaml"
+check "rescan.sh list: a missing file of a new release is no failure" lacks "$work/list.err" "FAIL"
+g rm -q deploy/k8s/values/services/dlq-replay.yaml && g commit -qm "the values without dlq-replay"
+newer=$(g rev-parse HEAD)
+list "values_ref a commit of this repository with no file of a new release" 0 "$newer"
+check "rescan.sh list: that commit's missing file is not listed" lacks "$work/list.out" \
+  "deploy/k8s/values/services/dlq-replay.yaml"
+check "rescan.sh list: that commit's other releases are" has "$work/list.out" \
+  "commit ${newer:0:12} of the code repository, deploy/k8s/values/services/gateway.yaml"
 
 if ((failures)); then
   echo "$failures check(s) failed" >&2

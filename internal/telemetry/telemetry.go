@@ -38,8 +38,7 @@ func Setup(ctx context.Context, service string) (shutdown func(context.Context) 
 		return func(context.Context) error { return nil }, nil
 	}
 	otel.SetErrorHandler(newErrorHandler(time.Now))
-	res := resource.NewWithAttributes(semconv.SchemaURL,
-		semconv.ServiceName(service), semconv.ServiceInstanceID(rand.Text()))
+	res := newResource(ctx, service)
 	var stops []func(context.Context) error
 	defer func() {
 		if err != nil {
@@ -94,6 +93,23 @@ func Setup(ctx context.Context, service string) (shutdown func(context.Context) 
 		once.Do(func() { shutdownErr = stopAll(ctx, stops) })
 		return shutdownErr
 	}, nil
+}
+
+// newResource merges the OTEL_RESOURCE_ATTRIBUTES of the environment (the chart puts the pod name
+// there) with the identity the code sets, which wins. Invalid environment values go to the OTel
+// error handler: telemetry attributes never stop a service from starting.
+func newResource(ctx context.Context, service string) *resource.Resource {
+	env, err := resource.New(ctx, resource.WithFromEnv())
+	if err != nil {
+		otel.Handle(err)
+	}
+	code := resource.NewWithAttributes(semconv.SchemaURL,
+		semconv.ServiceName(service), semconv.ServiceInstanceID(rand.Text()))
+	res, err := resource.Merge(env, code)
+	if err != nil {
+		otel.Handle(err)
+	}
+	return res
 }
 
 func newTracerProvider(res *resource.Resource, exporter sdktrace.SpanExporter) *sdktrace.TracerProvider {

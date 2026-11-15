@@ -487,6 +487,40 @@ func TestTrustTraceContext(t *testing.T) {
 	}
 }
 
+func TestMaxInFlight(t *testing.T) {
+	for _, tc := range []struct {
+		value   string
+		want    int
+		wantErr bool
+	}{
+		{value: "", want: 150},
+		{value: "1", want: 1},
+		{value: "400", want: 400},
+		{value: "0", wantErr: true},
+		{value: "-5", wantErr: true},
+		{value: "abc", wantErr: true},
+		{value: "1.5", wantErr: true},
+		{value: " 10", wantErr: true},
+	} {
+		t.Run(tc.value, func(t *testing.T) {
+			t.Setenv("MAX_IN_FLIGHT", tc.value)
+			got, err := maxInFlight()
+			if tc.wantErr {
+				if err == nil || !strings.Contains(err.Error(), "MAX_IN_FLIGHT") {
+					t.Fatalf("error = %v, want one naming MAX_IN_FLIGHT", err)
+				}
+				if len(tc.value) > 1 && strings.Contains(err.Error(), tc.value) {
+					t.Errorf("error %q carries the value %q", err, tc.value)
+				}
+				return
+			}
+			if err != nil || got != tc.want {
+				t.Errorf("maxInFlight() = %v, %v; want %v, nil", got, err, tc.want)
+			}
+		})
+	}
+}
+
 func TestTrustedProxies(t *testing.T) {
 	const viewer = "CloudFront-Viewer-Address"
 	for _, tc := range []struct {

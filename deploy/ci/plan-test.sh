@@ -118,8 +118,9 @@ table_rows=$(jq -r '.group.default.targets[] as $s | .target[$s]
   | "\($s) \(.dockerfile) \(.context) \(if .args.SERVICE then "SERVICE=\(.args.SERVICE)" else "-" end)"' \
   "$tree/deploy/docker-bake.json")
 table_services=$(cut -d' ' -f1 <<<"$table_rows" | paste -sd' ' -)
-same "image table: group default lists the six services, each with its target" \
-  "gateway user-service video-service engagement-service feed-service media-worker" "$table_services"
+same "image table: group default lists the services of release source backend, each with its target" \
+  "$(jq -r '.sources[] | select(.name == "backend") | .services | join(" ")' \
+    "$tree/deploy/helm/svp-policy/files/sources.json")" "$table_services"
 same "image table: lib.sh's built_services and dockerfile are the table's" "$(cut -d' ' -f1,2 <<<"$table_rows")" \
   "$(bash -c '. "$1/deploy/k8s/lib.sh" && for s in "${built_services[@]}"; do echo "$s $(dockerfile "$s")"; done' _ "$tree")"
 fresh
@@ -230,16 +231,16 @@ check "plan.sh in this checkout: a run under the name before the rename: no rele
   "this run is of https://github.com/anhnvcoder/short-video-platform, which is the repository of 0 release sources"
 lacks "$work/output" "images=" && ok "plan.sh in this checkout: a run under the name before the rename: no output" ||
   fail "plan.sh in this checkout: a run under the name before the rename: no output"
-# web is no service of release source backend (svp-frontend publishes it): a dispatch builds the six, never web.
+# web is no service of release source backend (svp-frontend publishes it): a dispatch builds group default, never web.
 plan_own "a dispatch with services all" 0 "${backend_run[@]}" GITHUB_SHA="$base" EVENT_NAME=workflow_dispatch \
   INPUT_SERVICES=all
-same "plan.sh in this checkout: services all builds the six, not web" \
-  'images=["gateway","user-service","video-service","engagement-service","feed-service","media-worker"]' \
+same "plan.sh in this checkout: services all builds group default, not web" \
+  "images=$(jq -c .group.default.targets "$tree/deploy/docker-bake.json")" \
   "$(grep '^images=' "$work/output")"
 plan_own "a dispatch with services web" 1 "${backend_run[@]}" GITHUB_SHA="$base" EVENT_NAME=workflow_dispatch \
   INPUT_SERVICES="gateway web"
-check "plan.sh in this checkout: services web is refused, naming the six" has "$work/plan.err" \
-  "services: 'web' is not an image this repository builds (gateway user-service video-service engagement-service feed-service media-worker)"
+check "plan.sh in this checkout: services web is refused, naming group default" has "$work/plan.err" \
+  "services: 'web' is not an image this repository builds ($(jq -r '.group.default.targets | join(" ")' "$tree/deploy/docker-bake.json"))"
 
 # A push to main that builds no image (the base: the newest successful push run): promote_charts when what the charts
 # read changed (a file under deploy/helm/, or the file a symbolic link there points to), not for docs/.

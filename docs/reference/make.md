@@ -30,13 +30,17 @@ liệt kê target):
   của oasdiff nâng lên `err`), changelog có mục mà chỉ tăng patch. `BASE` toàn số 0 hay không có spec: một dòng summary, exit 0.
   Changelog in ra log và summary. Breaking đi ba bước: thêm cái mới (minor), chuyển client, bỏ cái cũ (major) khi không client nào
   của stg, prd còn dùng. `deploy/ci/contract-test.sh`: test của cả `check` (oasdiff thật) và `publish` (registry, cosign giả).
-- `make check` = `make check-go`. `make check-go`: `gofmt`, `go vet`, `golangci-lint run` (gồm gosec),
+- `make check` = `make check-go`. `make check-go`: `gofmt`, `go vet`, `golangci-lint run` (gồm gosec, contextcheck, spancheck),
   `actionlint` (mọi file của `.github/workflows/`), `buf lint` + `buf build`, `make vulncheck` (govulncheck, dưới đây),
   `go test -race ./...` (có integration test trên Postgres native `127.0.0.1:5432`, không phải container `postgres` của compose, qua
   `SVP_TEST_POSTGRES_URL` và Redis native db 15 qua `SVP_TEST_REDIS_URL`, mặc định `redis://127.0.0.1:6379/15` trong
   `Makefile`). Thu hẹp bằng `make test PKGS=./services/user-service/...`; `TESTFLAGS` thêm cờ cho `go test` của
   `make test`, `make cover`, `make check` (`make test TESTFLAGS=-count=1` chạy lại không dùng cache, như CI), `LINTFLAGS`
   thêm cờ cho golangci-lint của `make lint`.
+- `make dlq-replay ARGS='replay --from <topic>.dlq [--dry-run] …'`: chạy công cụ phát lại DLQ trong container
+  `dlq-replay` của stack compose (`make up` trước); `ARGS` bắt buộc, là đối số của `/app` (`replay` và cờ của nó,
+  `services/dlq-replay/cmd/dlq-replay/main.go`). Quy trình an toàn ở
+  [`kafka-dlq-records.md`](../runbooks/kafka-dlq-records.md), container ở [`compose.md`](compose.md).
 - `make zizmor` ([ADR-0041](../adr/0041-github-hardening.md) (g)): lint bảo mật workflow bằng zizmor `ZIZMOR_IMAGE` (image chính thức ghim `tag@sha256`,
   repo gắn chỉ đọc) với `--persona=regular` trên cả repo; mọi finding làm lệnh thoát khác 0 (mã 11 đến 14). Image đa kiến trúc: cùng một tham chiếu trên máy dev arm64 và runner amd64.
   Có `GH_TOKEN` thì chạy thêm audit online (impostor
@@ -47,7 +51,7 @@ liệt kê target):
   `lychee.toml`; link nội bộ và anchor heading, link ra site khác không kiểm, vì mạng không ổn định và một kiểm tra phụ thuộc mạng đỏ vì lý do nằm ngoài thay đổi). Hai image chính thức ghim `tag@sha256`, chạy
   `--network none`, repo gắn chỉ đọc; link tương đối ra ngoài repo (tới `plans/`) báo lỗi. Cả hai công cụ luôn chạy; lệnh thoát khác 0 khi
   một trong hai báo lỗi. Mặc định là mọi `.md` git theo dõi và file mới chưa theo dõi; `DOCS` thu hẹp (đường dẫn tương đối gốc repo).
-- `make helm-docs`, `make helm-docs-check`: `deploy/helm/svp-service/README.md` (bảng values của chart dùng chung bởi bảy release) sinh bởi
+- `make helm-docs`, `make helm-docs-check`: `deploy/helm/svp-service/README.md` (bảng values của chart dùng chung bởi mọi release dịch vụ) sinh bởi
   helm-docs `HELM_DOCS_IMAGE` (image chính thức ghim `tag@sha256`, không mạng, chạy bằng uid của người gọi) từ `Chart.yaml`, comment `# --` của
   `values.yaml` và `README.md.gotmpl`. `make helm-docs` ghi file; `make helm-docs-check` gắn repo chỉ đọc, in thứ helm-docs sẽ ghi và đỏ khi
   `README.md` lệch (sửa mô tả ở `values.yaml` rồi chạy `make helm-docs`). `make helm-check` chạy `helm-docs-check` trước, nên job CI của nó kiểm luôn.
@@ -114,7 +118,8 @@ liệt kê target):
   `CHAINSAW_VERSION` ở `Makefile` (`# renovate:`), cài bằng `make tools`. Cấu hình chung `deploy/k8s/drills/.chainsaw.yaml` (chạy
   tuần tự, report JUnit vào `.k8s/drills/`; context cluster và tên report là cờ của `chainsaw test`, không đặt được trong file);
   StepTemplate dùng chung ở `deploy/k8s/drills/templates/`: `probe-up.yaml` (namespace `svp-probe` cùng pod `probe`, tự xoá khi test
-  kết thúc) và `port-forward.yaml` (port-forward loopback, dừng theo pid khi test kết thúc). Bước `script` của Chainsaw nhận
+  kết thúc), `media-worker-standin-up.yaml` (pod `drill-media-worker-standin` mang nhãn media-worker, cho diễn tập thử kết nối
+  như media-worker) và `port-forward.yaml` (port-forward loopback, dừng theo pid khi test kết thúc). Bước `script` của Chainsaw nhận
   `KUBECONFIG` là bản chép của cluster nó đang chạy (một context tên `chainsaw`), nên `kubectl` trong template đọc lại kubeconfig của
   người gọi (`env('KUBECONFIG')`) và luôn ghi `--context k3d-svp`; bước `apply`, `wait` dùng client của Chainsaw, nên `probe-up.yaml`
   dừng FAIL khi Chainsaw không chạy trên cùng server với context `k3d-svp` (thiếu `--kube-context k3d-svp`).

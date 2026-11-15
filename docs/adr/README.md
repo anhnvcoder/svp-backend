@@ -161,6 +161,7 @@ Phụ lục: [`appendix/NNNN-<slug>.md`](appendix/NNNN-<slug>.md) (chỉ khi có
 | [0069](0069-auth-hardening.md) | Cứng hoá xác thực: giới hạn đăng nhập theo tài khoản có cặp đã biết, header bảo mật ở gateway, access token 15 phút, chặn mật khẩu phổ biến hay đã lộ | Chấp nhận |
 | [0070](0070-scan-gate-high-fixed.md) | Cổng quét image chặn CRITICAL và HIGH có bản vá | Chấp nhận |
 | [0071](0071-paid-features.md) | Dịch vụ AWS tốn tiền mà hệ thống không cần để chạy có cờ theo account trong file commit `aws/paid-features.json` của `svp-infra`, đọc qua module `paid-features`; prd và bốn account dùng chung bật hết; stg chỉ dựng AMG trong buổi, tắt Inspector ECR, Security Hub CSPM, Config; GuardDuty, CloudTrail, KMS, Backup không có cờ | Chấp nhận |
+| [0072](0072-pod-operations.md) | Vận hành pod: phát lại DLQ bằng release `dlq-replay` với user Kafka riêng; service mới vào ba repo theo luật suy từ bảng nguồn; gateway giới hạn request đồng thời; timeout Postgres theo role app, pool theo ngân sách kết nối; media-worker drain có hạn, image không shell; canary gRPC theo số pod, chuyển sang Rollout bằng `PruneLast`; pod trải theo zone; relay outbox bỏ qua dòng lỗi vĩnh viễn | Chấp nhận |
 | [0073](0073-premium-playback.md) | Video premium: vé giả lập ở video-service, object dưới tiền tố `premium/` riêng, playlist do API kiểm vé và viết lại, segment qua signed URL CloudFront (key group hai khoá), bản xem thử công khai dưới `preview/`; local, k3d ký bằng presign S3 | Chấp nhận |
 
 ## Chuẩn áp dụng

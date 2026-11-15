@@ -184,7 +184,9 @@ func loadBridgeConfig() (bridgeConfig, error) {
 
 // bridge runs the mediaconvert command: the consumer of video.uploaded and the loop over the
 // state changes of jobs, until ctx is canceled or one of them fails. Neither publishes half a
-// result: a record or message in hand when ctx ends is left to be delivered again.
+// result. When ctx ends, the record in hand runs on for up to worker.DrainTimeout and is
+// committed once done, or left to be delivered again past it; the message in hand is left at
+// once, to come back after its visibility timeout.
 func bridge(ctx context.Context, logger *slog.Logger) (err error) {
 	cfg, err := loadBridgeConfig()
 	if err != nil {
@@ -230,6 +232,7 @@ func bridge(ctx context.Context, logger *slog.Logger) (err error) {
 		QueueARN: cfg.queueARN, RoleARN: cfg.roleARN, EventsQueueURL: cfg.eventsQueueURL,
 		UploadsBucket: cfg.store.UploadsBucket, MediaBucket: cfg.store.MediaBucket, WorkDir: cfg.workDir,
 	}, mc, events, store, producer, logger)
+	//nolint:contextcheck // the constructor seeds its metric series at startup, with no request
 	consumer, err := kafkax.NewConsumer(b.ConsumerConfig(cfg.brokers))
 	if err != nil {
 		return err
@@ -246,9 +249,10 @@ func bridge(ctx context.Context, logger *slog.Logger) (err error) {
 	return nil
 }
 
-// serve runs the consumer until ctx is canceled (SIGINT, SIGTERM). The job in hand is then
-// canceled: ffmpeg is killed, nothing is published or committed, and the record is delivered
-// again to whichever worker takes the partition.
+// serve runs the consumer until ctx is canceled (SIGINT, SIGTERM). The job in hand then runs on
+// for up to worker.DrainTimeout: done by then, its result is published and the record committed;
+// past it, ffmpeg is killed, nothing is published or committed, and the record is delivered again
+// to whichever worker takes the partition.
 func serve(ctx context.Context, logger *slog.Logger) (err error) {
 	cfg, err := loadConfig()
 	if err != nil {
@@ -285,6 +289,7 @@ func serve(ctx context.Context, logger *slog.Logger) (err error) {
 	if err := w.CleanWorkDir(); err != nil {
 		return err
 	}
+	//nolint:contextcheck // the constructor seeds its metric series at startup, with no request
 	consumer, err := kafkax.NewConsumer(w.ConsumerConfig(cfg.brokers))
 	if err != nil {
 		return err

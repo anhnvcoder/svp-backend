@@ -71,7 +71,7 @@ Giới hạn RAM, CPU của từng container ở [`deploy/compose/compose.yaml`]
 Vì sao: [ADR-0014](../adr/0014-kubernetes-local-stage4.md), [ADR-0019](../adr/0019-web-k3d-supply-chain-observability.md),
 [ADR-0024](../adr/0024-multi-environment.md), [ADR-0026](../adr/0026-secrets-gitops.md).
 
-Cùng 6 service và web, cùng image và cùng biến môi trường như compose, chạy trên cluster k3d `svp` (1 server + 1 agent, node
+Cùng các release ứng dụng, cùng image và cùng biến môi trường như compose, chạy trên cluster k3d `svp` (1 server + 1 agent, node
 arm64, image k3s theo `K3S_IMAGE_TAG` của [`Makefile`](../../Makefile)). Compose vẫn là đường dev chính; hai đường không chạy cùng
 lúc (máy 16 GB). Cổng chỉ trên `127.0.0.1`: API 6550, HTTPS 8443, registry 5111. Lệnh ở [`reference/k8s.md`](../reference/k8s.md).
 
@@ -122,7 +122,7 @@ flowchart LR
     ui --> prom
 ```
 
-- **Namespace:** `svp` (6 service và web), `svp-data` (Postgres, Valkey, Kafka, object store `s3`, `svp-ops`), `svp-obs` (observability,
+- **Namespace:** `svp` (release ứng dụng), `svp-data` (Postgres, Valkey, Kafka, object store `s3`, `svp-ops`), `svp-obs` (observability,
   GlitchTip), `svp-edge` (`Gateway`, chứng chỉ wildcard); công cụ ở `cert-manager`, `envoy-gateway-system`, `cnpg-system`, `keda`,
   `argo-rollouts`, `kyverno` và `argocd` (chỉ đường GitOps). Mọi namespace trừ `kube-system` chạy Pod Security `restricted`; bốn
   namespace của project có NetworkPolicy chặn mặc định hai chiều, mỗi luồng ở bảng ADR-0014 §3 một policy theo label pod
@@ -156,7 +156,7 @@ flowchart LR
   `make eks-secrets` (EKS), làm theo thứ tự máy chủ, rồi Job init của `svp-data` đặt mật khẩu mới, rồi client; Reloader (component
   `reloader`, mọi nền tảng) restart workload opt in khi Secret nó đọc đổi, không script nào restart
   ([ADR-0050](../adr/0050-bash-to-standard-tools.md) mục 5).
-- **Workload** (ADR-0014 §10): một chart chung `deploy/helm/svp-service` cho 6 service và web (probe, `requests`/`limits`,
+- **Workload** (ADR-0014 §10): một chart chung `deploy/helm/svp-service` cho mọi service Go, `dlq-replay` và web (probe, `requests`/`limits`,
   securityContext `restricted`, không token ServiceAccount); gateway 2 replica có PDB và HPA theo CPU, feed-service luôn 2
   replica (HPA 2–2) có PDB, ưu tiên trải theo zone rồi theo node ([ADR-0031](../adr/0031-chaos-findings-feed-engagement-tempo.md) §1,
   [ADR-0056](../adr/0056-eks-platform-ha.md) §6; node k3d không có nhãn zone nên chỉ trải node có tác dụng), web 2
@@ -164,13 +164,14 @@ flowchart LR
   từ Envoy và chỉ ra gateway, Valkey, Collector, GlitchTip (threat model WEB-13); media-worker 1–2 replica do KEDA scale theo lag
   của group `media-worker` (topic vẫn 3 partition; 3 worker cùng transcode làm Docker VM hết CPU và k3s server chết,
   [ADR-0017](../adr/0017-gitops-capacity-media-worker-max2.md)). Probe của chart có hạn nới để node bão hoà CPU không làm kubelet
-  giết pod còn sống ([khởi động và probe](reliability.md#khởi-động-và-probe)).
+  giết pod còn sống ([khởi động và probe](reliability.md#khởi-động-và-probe)); pod tắt theo [vòng đời
+  pod](#vòng-đời-pod).
 - **Observability** (ADR-0014 §11): tách thành từng thành phần trong `svp-obs`, chi tiết ở
   [`observability.md`](observability.md#k3d).
 - **Cài đặt và GitOps** (ADR-0014 §7, §12; cấu hình ở repo `svp-gitops`, [hai repo](delivery.md#hai-repo-code-và-cấu-hình-triển-khai)):
   `argocd/apps/components.json` của `svp-gitops` liệt kê các thành phần theo wave 0–7 (cert-manager, Envoy Gateway, External
   Secrets Operator (chỉ đường GitOps cài); namespace, CA, policy; operator và Kyverno; backend dữ liệu, observability, plugin
-  Barman Cloud và policy image `svp-policy`; chart dữ liệu; chart observability; Collector; 6 service và web, web đứng sau
+  Barman Cloud và policy image `svp-policy`; chart dữ liệu; chart observability; Collector; release ứng dụng, web đứng sau
   gateway). Đường dev `make k8s-up` cài file đó bằng helmfile (`deploy/k8s/helmfile.yaml.gotmpl`, `needs` theo wave) từ bản clone
   `svp-gitops` cạnh repo (values `base/`), image tag `dev-<image ID>` build từ working tree bằng `docker buildx bake` (bảng
   `deploy/docker-bake.json`) vào registry k3d (môi trường dev); đường GitOps `make k8s-gitops-up` dựng cluster mới
@@ -187,6 +188,7 @@ flowchart LR
   chunk lệch (404, gồm chunk hls.js mà player bắt lỗi) thì một helper dùng chung tải lại trang một lần cho mỗi bản build,
   gọi từ error boundary, `unhandledrejection` và nhánh `catch` của `loadHls()` trong player pool (ADR-0019 §3). Chunk tải
   lười thứ hai, `web-vitals` của RUM, 404 thì lỗi bị nuốt: không tải lại, không báo lỗi, chỉ mất số đo của lần tải đó.
+  Service gRPC có canary theo số pod, không qua Envoy: [canary cho service gRPC](#canary-cho-service-grpc).
 - **Client Kafka** ([ADR-0013](../adr/0013-kafka-metadata-min-age.md)): mọi client franz-go đặt `MetadataMinAge` 1 s, nên
   produce có hạn trả về gần hạn hơn khi kết nối tới broker chết giữa chừng; áp cho cả compose và k3d.
 - **Chi phí:** RAM của cả cluster lúc nghỉ 5,9–6,8 GiB theo `docker stats` (gồm ~1–2 GiB page cache; phần anon ~3,9 GiB),
@@ -196,7 +198,7 @@ flowchart LR
 
 Năm chart ở `deploy/helm/`: `svp-cluster` (nền tảng của cluster: namespace, chứng chỉ, cổng vào, NetworkPolicy, ExternalSecret),
 `svp-data` (tầng dữ liệu), `svp-observability` (phần observability của project ở namespace `svp-obs`), `svp-service` (một chart
-chung cho 6 service và web) và `svp-policy` (policy image, xem [phát hành](delivery.md#cicd-và-chuỗi-cung-ứng)). Lệnh cài và kiểm ở [`reference/k8s.md`](../reference/k8s.md); phần này ghi vì sao
+chung cho service Go, `dlq-replay` và web) và `svp-policy` (policy image, xem [phát hành](delivery.md#cicd-và-chuỗi-cung-ứng)). Lệnh cài và kiểm ở [`reference/k8s.md`](../reference/k8s.md); phần này ghi vì sao
 chart cấu hình như vậy.
 
 ### Cài đặt: namespace và kiểu apply
@@ -250,8 +252,8 @@ chart cấu hình như vậy.
   proxy từ 2 lên tới mức trần theo CPU, PDB `envoyPDB` (`minAvailable: 1`) giữ một pod khi drain node, và pod trải theo zone rồi theo node
   (`ScheduleAnyway`: khi một zone hết chỗ pod vẫn chạy ở zone còn lại). Giống nhau ở mọi nền tảng, không value theo nền tảng; HPA đọc
   metrics-server (add-on ở EKS, có sẵn ở k3s). Mất một node hay một AZ không mất cổng vào.
-- **Namespace và Pod Security.** Namespace theo vai trò: `svp` (sáu service Go và web), `svp-data` (Postgres, Valkey, Kafka, object
-  store `s3`, `svp-ops`), `svp-obs` (observability, GlitchTip), `svp-edge` (Gateway và chứng chỉ của Envoy). Pod Security Admission `enforce`
+- **Namespace và Pod Security.** Namespace theo vai trò: `svp` (các service Go, `dlq-replay` và web), `svp-data` (Postgres, Valkey,
+  Kafka, object store `s3`, `svp-ops`), `svp-obs` (observability, GlitchTip), `svp-edge` (Gateway và chứng chỉ của Envoy). Pod Security Admission `enforce`
   `restricted`: pod phải chạy không phải root, bỏ mọi capability, dùng seccomp `RuntimeDefault` và cấm leo quyền; chart không đạt thì sửa ở
   values của nó, không nới namespace. `warn` và `audit` cùng mức để `kubectl` và audit log nêu tên cái `enforce` từ chối. Namespace nền
   tảng của `values.yaml` nhận cùng nhãn Pod Security và không gì khác. `install.sh` và `gitops.sh` render riêng template này (không
@@ -465,9 +467,11 @@ chart cấu hình như vậy.
   `deploy/k8s/secrets.sh` ghi từ `.env`. Tiến trình chỉ đọc môi trường khi khởi động, nên workload gọi tên các Secret nó đọc
   (`<service>-env`, và `sentry` khi `errorTracking`) trong annotation `secret.reloader.stakater.com/reload`: Reloader restart nó khi dữ
   liệu của một trong chúng đổi (Secret mới tạo không làm restart: xem [Secret và Reloader](#secret-và-reloader)). Gọi theo tên, không `reloader.stakater.com/auto`: Secret mà
-  pod không đọc không bao giờ restart nó. Với `canary` đặt (gateway, web) nó là Rollout của Argo Rollouts: cùng pod template, và revision
-  mới ra như canary sau Envoy thay vì rolling update. ReplicaSet của mỗi revision có nhãn `rollouts-pod-template-hash`, mà controller
-  thêm vào selector của Service `<release>` (stable) và `<release>-canary`. Reloader restart Rollout bằng
+  pod không đọc không bao giờ restart nó. Với `canary` đặt (gateway, web; release gRPC khi `base/` của nó bật, xem
+  [canary gRPC](#canary-cho-service-grpc)) nó là Rollout của Argo Rollouts: cùng pod template, và revision mới ra như
+  canary (sau Envoy ở HTTP, chia theo số pod ở gRPC) thay vì rolling update. ReplicaSet của mỗi revision có nhãn
+  `rollouts-pod-template-hash`, mà controller thêm vào
+  selector của Service `<release>` (stable) và `<release>-canary`. Reloader restart Rollout bằng
   `reloader.stakater.com/rollout-strategy: restart`: nó đặt `spec.restartAt`, và Argo Rollouts evict từng pod cũ hơn thời điểm đó:
   không revision mới, không canary.
 - **Job `migrate`.** Service có database chạy migration bằng một Job `migrate` với role migrator của nó trước mỗi install và upgrade, một
@@ -535,6 +539,114 @@ chart cấu hình như vậy.
     5xx. Histogram bucket mặc định của Envoy thô (100, 250, 500, 1000 ms), nên p99 là nội suy giữa hai bucket và tỉ lệ 5xx là tiêu chí
     chính.
 
+### Vòng đời pod
+
+Vì sao: [ADR-0072](../adr/0072-pod-operations.md), [ADR-0044](../adr/0044-grpc-readiness.md). Probe lúc khởi động ở
+[`reliability.md`](reliability.md#khởi-động-và-probe).
+
+Pod bị xoá khi scale-down, rollout, drain node hay Karpenter gộp node. Kubernetes đặt nó vào Terminating và gỡ nó khỏi
+EndpointSlice, nhưng Envoy, kube-proxy nhận thay đổi đó muộn hơn một chút, nên pod tắt theo thứ tự dưới đây và phải
+xong trước `terminationGracePeriodSeconds`, nếu không kubelet gửi SIGKILL.
+
+```mermaid
+flowchart TD
+    del["pod bị xoá: scale-down, rollout, drain node"] --> term["Terminating, gỡ khỏi EndpointSlice"]
+    term --> pre["gateway, web: preStop sleep, Envoy, kube-proxy bỏ pod khỏi danh sách"]
+    pre --> sig["SIGTERM tới tiến trình"]
+    term -->|"release không đặt preStopSleepSeconds, như media-worker"| sig
+    sig --> gw["gateway: http.Server.Shutdown, chờ request đang chạy"]
+    sig --> mw["media-worker: ngừng poll, job đang chạy tiếp tới DrainTimeout"]
+    gw --> done["tiến trình thoát 0"]
+    mw --> done
+    sig -.->|"hết terminationGracePeriodSeconds"| kill["SIGKILL"]
+```
+
+- **preStop của gateway và web.** `preStopSleepSeconds` của release thành `lifecycle.preStop.sleep` (hành động có sẵn
+  của kubelet, không cần binary trong image, nên chạy được với image distroless và image không shell). Không có nó,
+  server nhận SIGTERM và ngừng nhận khi Envoy vẫn còn gửi request mới tới pod: client thấy kết nối bị đứt. Web cần nó
+  vì Next thoát ngay khi nhận SIGTERM; gateway đặt cùng cách. Tổng thời gian sleep và `shutdownTimeout` của gateway
+  (chờ request đang chạy) phải nhỏ hơn `terminationGracePeriodSeconds`.
+- **Drain của media-worker.** Một job transcode kéo dài hàng chục giây tới vài phút, nên huỷ nó khi scale-down là bỏ
+  phí việc và làm record `video.uploaded` giao lại. Từ SIGTERM consumer ngừng poll, record đang xử lý chạy tiếp bằng
+  context riêng tới khi xong hay hết `worker.DrainTimeout`; xong thì commit offset, hết hạn thì huỷ như trước và
+  record giao lại cho pod khác. Cơ chế nằm ở `kafkax.ConsumerConfig.DrainTimeout` (0 là huỷ ngay, hành vi của mọi
+  consumer khác) và áp cho cả lệnh `serve` lẫn `mediaconvert`; chi tiết ở
+  [`transcode.md`](transcode.md#dừng-pod-và-drain). `terminationGracePeriodSeconds` của release `media-worker`
+  (`base/services/media-worker.yaml`) và `stop_grace_period` của compose bằng `worker.DrainTimeout` cộng một khoảng
+  đóng client Kafka và đẩy telemetry, và nhỏ hơn `terminationGracePeriod` của NodePool Karpenter
+  (`platforms/eks/svp-cluster.yaml`): quá hạn đó Karpenter xoá node dù pod còn chạy.
+- **Tuổi kết nối gRPC.** Server gRPC (`internal/grpcserver`) đóng kết nối sau `maxConnectionAge` và cho RPC đang chạy
+  thêm `maxConnectionAgeGrace` (gửi GOAWAY). Gateway nối tới service qua ClusterIP với `pick_first`, tức một kết nối
+  giữ mãi một pod: nếu không đóng, pod mới do HPA hay rollout thêm không nhận lời gọi nào từ client cũ, và canary theo
+  số pod không nhận tải. Client nối lại đều đặn nên tải trải lên pod mới. Grace dài hơn `callTimeout` của gateway nên
+  RPC đang chạy không bị cắt. Service mesh (chưa dựng) cân tải theo request; giá trị này khi đó vô hại.
+- **Thuộc tính pod trong telemetry.** Chart đặt cho container `SVP_POD_NAME`, `SVP_POD_NAMESPACE` (downward API) rồi
+  `OTEL_RESOURCE_ATTRIBUTES=k8s.pod.name=$(SVP_POD_NAME),k8s.namespace.name=$(SVP_POD_NAMESPACE)`. Hai biến downward
+  API phải đứng trước trong `env` vì Kubernetes chỉ thay `$(…)` bằng biến đã khai báo phía trên; `values` đặt
+  `OTEL_RESOURCE_ATTRIBUTES` thì chart từ chối render. `internal/telemetry` gộp resource từ biến môi trường OTel, còn
+  `service.name` và `service.instance.id` của code thắng. Prometheus đã promote `k8s.pod.name` thành nhãn, và canary
+  gRPC dùng nó để chọn pod ([dưới](#canary-cho-service-grpc)).
+- **Trải pod theo zone.** Release có `spreadAcrossNodes` có thêm ràng buộc theo `topology.kubernetes.io/zone`. Khoá
+  `zoneSpread` (`whenUnsatisfiable`, `minDomains`) chỉnh nó; mặc định `ScheduleAnyway` không `minDomains`, vì node k3d
+  không có nhãn zone. Trên EKS, `platforms/eks/<release>.values.tpl` của `svp-gitops` đặt `DoNotSchedule` và
+  `minDomains` bằng số subnet database (một mỗi AZ, `az_count` của `<env>.tfvars` trong `svp-infra`): kube-scheduler
+  để pod chờ thay vì dồn vào zone có sẵn, và Karpenter mở node ở zone còn thiếu. `minDomains` chỉ hợp lệ với
+  `DoNotSchedule`, và schema của chart chặn tổ hợp khác.
+- **Release `dlq-replay`.** Công cụ phát lại DLQ ([`reliability.md`](reliability.md#phát-lại-dlq)) là một release của
+  chart này với `protocol: none`, một replica, `args: [standby]`: pod không làm gì tới khi người vận hành `exec` vào
+  chạy `replay`. NetworkPolicy chỉ mở egress tới `kafka` và `collector`, không ingress; Secret `dlq-replay-env` mang
+  user Kafka `svp-dlq-replay`, trên EKS vào cluster qua External Secrets từ entry `kafka-users` do Terraform ghi.
+  Compose chạy nó như container trong mạng `worker`; đường vào pod là `make dlq-replay` (compose) hay `kubectl exec`
+  (k3d, EKS). Release mới này vào các repo thế nào: [phát hành](delivery.md#release-mới-và-canary-grpc).
+
+### Canary cho service gRPC
+
+Vì sao: [ADR-0072](../adr/0072-pod-operations.md). Canary của gateway và web ở mục `svp-service` trên; đường phát hành ở
+[`delivery.md`](delivery.md#release-mới-và-canary-grpc).
+
+Service gRPC (`protocol: grpc`) không có Envoy phía trước để chia request, nên release có `canary: true` mà không có
+`httpRoute.host` là Rollout không `trafficRouting`: Argo Rollouts đặt trọng số bằng số pod. Hai thứ cố ý giữ như
+canary HTTP để người vận hành chỉ học một mô hình: các bước, và nhịp đo, `failureLimit`, `inconclusiveLimit`
+(`svp-service.canaryCadence`).
+
+```mermaid
+flowchart TD
+    rev["revision mới của release gRPC"] --> w25["setWeight 25: ReplicaSet canary lên 25 % replica, làm tròn lên"]
+    w25 --> p1["pause 60 s"]
+    p1 --> w50["setWeight 50"]
+    w50 --> p2["pause 60 s"]
+    p2 --> gate["gate: AnalysisRun canary-gate đo một lần"]
+    gate -->|"qua"| full["100 %: canary thành stable"]
+    bg["analysis nền canary: canary-error-ratio, canary-p99-ms"] -.->|"đo xấu"| abort
+    gate -->|"đo xấu"| abort["abort: canary đi, ReplicaSet stable về đủ replica"]
+    gate -->|"dưới 30 lời gọi"| paused["Inconclusive: Rollout dừng chờ người"]
+```
+
+| | Canary HTTP (gateway, web) | Canary gRPC |
+| --- | --- | --- |
+| Điều kiện trong `base/` | `canary: true` và `httpRoute.host` | `canary: true`, `protocol: grpc`, không `httpRoute.host`; kết hợp khác làm chart `fail` |
+| Chia tải | HTTPRoute đổi trọng số hai Service qua plugin Gateway API | Số pod: ReplicaSet canary chiếm phần replica, Service `<release>` chọn pod của cả hai |
+| Service `<release>-canary` | Có | Không |
+| Metric | Envoy của backend canary (`envoy_cluster_upstream_rq_*`) | `rpc_server_call_duration_seconds` của pod canary |
+| Chọn pod canary | Envoy cluster riêng của backend canary | `k8s_pod_name=~"<release>-<hash>-.*"`, hash là `podTemplateHashValue: Latest` truyền qua arg `canary-hash` |
+| Tính là lỗi | Response 5xx | Lời gọi có mã `UNKNOWN`, `INTERNAL`, `UNAVAILABLE`, `DATA_LOSS`, `DEADLINE_EXCEEDED` |
+| Đủ mẫu | 30 response không phải 4xx trong phút gần nhất | 30 lời gọi gRPC trong phút gần nhất |
+| Abort | HTTPRoute về 100/0, pod canary đi sau một lúc | Pod canary đi, ReplicaSet stable về đủ replica |
+| Ngưỡng | `canaryLimits` của release | `canaryLimits` của release |
+
+- **Mã lỗi từ otelgrpc.** Server gRPC ghi `rpc.server.call.duration` (giây) với `rpc.response.status_code` là tên chữ
+  của mã; Prometheus nhận chúng thành `rpc_server_call_duration_seconds` và nhãn `rpc_response_status_code`. Health
+  check bị lọc khỏi số đo, nên probe không làm đủ mẫu giả.
+- **Cái giá và giới hạn.** Trọng số là phần pod, tải tới canary theo kết nối nên chỉ gần đúng, nhờ [tuổi kết nối
+  gRPC](#vòng-đời-pod) mà tải trải lên pod canary. Release một replica có canary một pod trong tổng hai, tức khoảng
+  nửa kết nối. Mesh sẽ chia theo request và thay cơ chế này; không phần nào giả định mesh.
+- **Chuyển sang Rollout.** `canary: true` đổi `kind` của workload cùng tên từ Deployment sang Rollout. Application của
+  chart `svp-service` ở `svp-gitops` đặt `PruneLast=true` nên Deployment cũ chỉ bị xoá khi Rollout mới đã Healthy; xem
+  [phát hành](delivery.md#release-mới-và-canary-grpc). Đường dev `make k8s-up` dựng cụm từ đầu nên không cần.
+- **Release canary** là release có `canary: true` trong file `base/` của nó; `deploy/k8s/install.sh` tìm chúng từ file
+  values, còn `canaryRoute` của `components.json` chỉ còn cho release có HTTPRoute. Hook postsync chờ mọi Rollout
+  (`wait_rollout`).
+
 ## AWS
 
 Vì sao: [ADR-0034](../adr/0034-aws-stage7.md) (nền tảng, lý do và bảng đầy đủ), [ADR-0038](../adr/0038-s3-bucket-names.md),
@@ -594,7 +706,7 @@ flowchart LR
                 ctl["LBC, cert-manager, ESO, KEDA:<br/>node nào còn chỗ"]
                 subgraph karp["node của Karpenter, NodePool default<br/>stg Spot, prd on-demand"]
                     envoy["Envoy Gateway<br/>HPA, PDB, trải zone"]
-                    app["svp: web, gateway,<br/>4 service gRPC, media-worker"]
+                    app["svp: web, gateway,<br/>4 service gRPC, media-worker, dlq-replay"]
                     data["svp-data: Job kafka-init, svp-ops"]
                     obs["svp-obs: Prometheus, Loki,<br/>Tempo, Pyroscope, GlitchTip"]
                 end

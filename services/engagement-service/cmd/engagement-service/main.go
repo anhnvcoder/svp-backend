@@ -28,7 +28,6 @@ import (
 	"log/slog"
 	"os"
 	"os/signal"
-	"strconv"
 	"syscall"
 	"time"
 
@@ -56,9 +55,6 @@ const (
 	// consumerRestartDelay is the wait before a views consumer that stopped on an error is
 	// replaced.
 	consumerRestartDelay = 5 * time.Second
-	// defaultMaxConns is DATABASE_MAX_CONNS when unset: a fixed total, where pgx's own default,
-	// max(4, NumCPU) per pool, would change with the node the pod runs on.
-	defaultMaxConns = 10
 )
 
 func main() {
@@ -168,6 +164,7 @@ func serve(ctx context.Context, logger *slog.Logger) (err error) {
 	}
 
 	srv := server.New(readPool, writePool, kafka, logger)
+	//nolint:contextcheck // the constructor seeds its metric series at startup, with no request
 	newConsumer := func() (runner, error) { return kafkax.NewBatchConsumer(srv.ViewsConsumerConfig(brokers)) }
 	// The consumer stops with the server; a consumer that cannot be created stops the server too.
 	ctx, cancel := context.WithCancel(ctx)
@@ -190,17 +187,12 @@ func serve(ctx context.Context, logger *slog.Logger) (err error) {
 }
 
 // poolSizes reads DATABASE_MAX_CONNS, n, and returns the sizes of the read pool, floor(n/2), and
-// of the write pool, the rest. Unset or empty is defaultMaxConns; anything but an integer of at
-// least 2, which gives each pool a connection, is an error naming the variable.
+// of the write pool, the rest. n must be at least 2, which gives each pool a connection.
 func poolSizes() (read, write int32, err error) {
-	n := int64(defaultMaxConns)
-	if v := envcfg.String("DATABASE_MAX_CONNS", ""); v != "" {
-		n, err = strconv.ParseInt(v, 10, 32)
-		if err != nil || n < 2 {
-			return 0, 0, errors.New("DATABASE_MAX_CONNS: want an integer of at least 2")
-		}
+	total, err := pgpool.MaxConns(2)
+	if err != nil {
+		return 0, 0, err
 	}
-	total := int32(n) //nolint:gosec // n fits in int32: ParseInt was given bitSize 32
 	return total / 2, total - total/2, nil
 }
 

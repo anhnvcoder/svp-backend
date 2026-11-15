@@ -181,8 +181,8 @@ else
 fi
 t=$(copy)
 rm "$t/envs/stg/images/web.yaml"
-check "six image files of seven" "$t" "envs/stg/images/ holds"
-render "six image files of seven (root chart)" "$t" stg "envs/stg/images/web.yaml is missing"
+check "an image file missing" "$t" "envs/stg/images/ holds"
+render "an image file missing (root chart)" "$t" stg "envs/stg/images/web.yaml is missing"
 
 t=$(copy)
 echo 'replicas: 2' >>"$t/envs/stg/images/gateway.yaml"
@@ -682,7 +682,6 @@ fi
 # repository on its branch main: k0 holds the policy's values as they were before the table of release sources, k2
 # the table of the rename (backend and web under their new names, the retired oldbackend and oldweb under the old
 # ones, without promoter), k3 the table of the working tree; origin/main is k3.
-services=(gateway user-service video-service engagement-service feed-service media-worker web)
 code=$work/code
 mkdir -p "$code/deploy/k8s" "$code/deploy/helm/svp-policy/files" "$code/deploy/helm/svp-cluster" \
   "$code/deploy/observability/otelcol"
@@ -760,18 +759,22 @@ cp "$repo_root/deploy/helm/svp-policy/files/sources.json" "$code/deploy/helm/svp
 cg add -A && cg commit -q -m "the table of the working tree"
 k3=$(cg rev-parse HEAD)
 cg update-ref refs/remotes/origin/main "$k3"
-# sources_tree STG_REV PREFIX WEB: a copy of the tree with stg at STG_REV and prd at k3 of the throwaway repository;
-# the six services of stg released under PREFIX, web of stg WEB ("repository"); prd runs the releases of the
-# working tree's sources. A tag is any 12 hex: which commit built a release is step 5's.
+# sources_tree STG_REV PREFIX WEB: a copy of the tree with stg at STG_REV and prd at k3 of the throwaway repository,
+# one image file per service of the table at that commit (the working tree's when it has none); the backend services
+# of stg released under PREFIX, web of stg WEB ("repository"); prd runs the releases of the working tree's sources. A
+# tag is any 12 hex: which commit built a release is step 5's.
 sources_tree() {
-  local t env rev svc repo
+  local t env rev svc repo svcs
   t=$(copy)
   for env in stg prd; do
     rev=$1
     [ "$env" = stg ] || rev=$k3
     printf 'revision: %s\npodSecurityVersion: v1.36\ncollectorConfigSha256: %s\n' "$rev" \
       "$(shasum -a 256 <"$code/deploy/observability/otelcol/k8s-config.yaml" | cut -d' ' -f1)" >"$t/envs/$env/charts.yaml"
-    for svc in "${services[@]}"; do
+    svcs=$(cg show "$rev:deploy/helm/svp-policy/files/sources.json" 2>/dev/null ||
+      cat "$code/deploy/helm/svp-policy/files/sources.json")
+    rm -f "$t"/envs/"$env"/images/*.yaml
+    for svc in $(jq -r '[.sources[].services[]] | unique | .[]' <<<"$svcs"); do
       repo=ghcr.io/anhnvcoder/svp-backend/$svc
       [ "$svc" != web ] || repo=ghcr.io/anhnvcoder/svp-frontend/web
       if [ "$env" = stg ]; then
@@ -801,13 +804,13 @@ tree_check() {
 }
 t=$(sources_tree "$k2" ghcr.io/anhnvcoder/short-video-platform/ ghcr.io/anhnvcoder/svp-web/web)
 tree_check "sources: the charts of the rename with the releases of the two retired sources" 0 \
-  "ok    envs/stg/images/: seven releases, each of a release source the policy of ${k2:0:12} admits" "$t"
+  "ok    envs/stg/images/: one release per service, each of a release source the policy of ${k2:0:12} admits" "$t"
 t=$(sources_tree "$k2" ghcr.io/anhnvcoder/svp-backend/ ghcr.io/anhnvcoder/svp-frontend/web)
 tree_check "sources: the charts of the rename with the releases of the new sources" 0 \
-  "ok    envs/stg/images/: seven releases, each of a release source the policy of ${k2:0:12} admits" "$t"
+  "ok    envs/stg/images/: one release per service, each of a release source the policy of ${k2:0:12} admits" "$t"
 t=$(sources_tree "$k3" ghcr.io/anhnvcoder/svp-backend/ ghcr.io/anhnvcoder/svp-frontend/web)
 tree_check "sources: the charts of the working tree with the releases of the new sources" 0 \
-  "ok    envs/stg/images/: seven releases, each of a release source the policy of ${k3:0:12} admits" "$t"
+  "ok    envs/stg/images/: one release per service, each of a release source the policy of ${k3:0:12} admits" "$t"
 t=$(sources_tree "$k3" ghcr.io/anhnvcoder/svp-backend/ ghcr.io/anhnvcoder/svp-web/web)
 tree_check "sources: the charts of the working tree refuse a release of a retired source" 1 \
   "envs/stg/images/web.yaml: the image must be a release of ghcr.io/anhnvcoder/svp-frontend/web with its tag and digest" "$t"
@@ -816,6 +819,35 @@ tree_check "sources: charts from before the table stop, naming the commit" 1 \
   "FAIL  commit ${k0:0:12} has no deploy/helm/svp-policy/files/sources.json: it is from before the table of release sources" "$t"
 tree_check "sources: charts from before the table: the environment that pins them" 1 \
   "FAIL  envs/stg/charts.yaml: the release sources of ${k0:0:12} cannot be read (above)" "$t"
+# A new release: a service of the working tree's table that k2 does not publish. stg at k2 holds no image file of it,
+# which a check at stg's commit accepts; at k3, which builds it, the file is required. --worktree accepts the missing
+# file with a note, since only the promote of a commit that builds the service writes it (the check goes on to render
+# the charts of the throwaway repository, which has none: only its step 1 is read here).
+nr=$(jq -rn --argjson old "$(cg show "$k2:deploy/helm/svp-policy/files/sources.json")" \
+  --argjson new "$(cat "$code/deploy/helm/svp-policy/files/sources.json")" \
+  '([$new.sources[].services[]] - [$old.sources[].services[]])[0] // ""')
+if [ -z "$nr" ]; then
+  fail "new release: the working tree's table publishes no service that the table of the rename does not"
+else
+  t=$(sources_tree "$k2" ghcr.io/anhnvcoder/svp-backend/ ghcr.io/anhnvcoder/svp-frontend/web)
+  tree_check "new release: stg at a commit that does not build $nr holds no file of it" 0 \
+    "ok    envs/stg/images/: one release per service, each of a release source the policy of ${k2:0:12} admits" "$t"
+  rc=0
+  out=$(env GIT_ALLOW_PROTOCOL=file "$code/deploy/ci/gitops-check.sh" --worktree "$t" 2>&1) || rc=$?
+  want="note  envs/stg/images/ has no $nr.yaml: $nr is a new release, which the commit stg pins (${k2:0:12}) does not build; the promote of one that does writes the file"
+  if [[ $out == *"$want"* ]] && [[ $out == *"ok    the tree keeps the rules of deploy/ci/gitops-tree-policies/"* ]] &&
+    [[ $out != *"FAIL  envs/"* ]]; then
+    ok "new release: --worktree passes the tree with a note naming $nr and stg"
+  else
+    fail "new release: --worktree (exit $rc), want '$want', the tree's rules kept:"$'\n'"$(sed 's/^/      /' <<<"$out")"
+  fi
+  t=$(sources_tree "$k3" ghcr.io/anhnvcoder/svp-backend/ ghcr.io/anhnvcoder/svp-frontend/web)
+  rm "$t/envs/stg/images/$nr.yaml"
+  got=$(cd "$t/envs/stg/images" && ls -A | LC_ALL=C sort | paste -sd' ' -)
+  want=$(cd "$t/envs/stg/images" && { ls -A; echo "$nr.yaml"; } | LC_ALL=C sort | paste -sd' ' -)
+  tree_check "new release: stg at a commit that builds $nr fails without its file" 1 \
+    "FAIL  envs/stg/images/ holds '$got': exactly one file per service, $want" "$t"
+fi
 # A conftest that gives no answer fails the check instead of passing: a policy that does not compile (conftest stops,
 # no result), a package renamed (no result from it). On copies of the throwaway repository.
 t=$(sources_tree "$k3" ghcr.io/anhnvcoder/svp-backend/ ghcr.io/anhnvcoder/svp-frontend/web)
@@ -903,7 +935,8 @@ ag() { git -C "$at" -c user.name=test -c user.email=test@example.invalid -c comm
 ag init -q && ag add -A && ag commit -q -m "the releases of the working tree's sources"
 a0=$(ag rev-parse HEAD)
 web_bot='svp-web-promoter[bot]' backend_bot='svp-gitops-promoter[bot]'
-six=(gateway user-service video-service engagement-service feed-service media-worker)
+read -r -a backend_services <<<"$(jq -r '.sources[] | select(.name == "backend") | .services | join(" ")' \
+  "$code/deploy/helm/svp-policy/files/sources.json")"
 # image FILE REPOSITORY SEED: writes the image block of FILE in the tree, a digest of its own for SEED.
 image() {
   printf 'image:\n  repository: %s\n  tag: "%s"\n  digest: "sha256:%s"\n' "$2" "${k3:0:12}" \
@@ -948,15 +981,17 @@ author_case "the bot of svp-frontend moves web of prd" 0 "ok    the pull request
   SVP_CHANGE_REQUEST_AUTHOR="$web_bot"
 from_a0
 echo '# changed' >>"$at/envs/stg/charts.yaml"
-for svc in "${six[@]}"; do image "envs/stg/images/$svc.yaml" "ghcr.io/anhnvcoder/svp-backend/$svc" "s-$svc"; done
-author_case "the bot of backend promotes charts.yaml and the six services to stg" 0 \
-  "ok    the pull request of $backend_bot, $promoted 7 changed files" SVP_CHANGE_REQUEST_AUTHOR="$backend_bot"
+for svc in "${backend_services[@]}"; do image "envs/stg/images/$svc.yaml" "ghcr.io/anhnvcoder/svp-backend/$svc" "s-$svc"; done
+author_case "the bot of backend promotes charts.yaml and its services to stg" 0 \
+  "ok    the pull request of $backend_bot, $promoted $((${#backend_services[@]} + 1)) changed files" \
+  SVP_CHANGE_REQUEST_AUTHOR="$backend_bot"
 from_a0
 echo '# changed' >>"$at/envs/prd/charts.yaml"
-for svc in "${six[@]}"; do image "envs/prd/images/$svc.yaml" "ghcr.io/anhnvcoder/svp-backend/$svc" "p-$svc"; done
+for svc in "${backend_services[@]}"; do image "envs/prd/images/$svc.yaml" "ghcr.io/anhnvcoder/svp-backend/$svc" "p-$svc"; done
 image envs/prd/images/web.yaml ghcr.io/anhnvcoder/svp-frontend/web p-web
 author_case "the bot of backend promotes the whole set of stg to prd, web's release included" 0 \
-  "ok    the pull request of $backend_bot, $promoted 8 changed files" SVP_CHANGE_REQUEST_AUTHOR="$backend_bot"
+  "ok    the pull request of $backend_bot, $promoted $((${#backend_services[@]} + 2)) changed files" \
+  SVP_CHANGE_REQUEST_AUTHOR="$backend_bot"
 from_a0
 echo '# changed' >>"$at/envs/stg/svp-cluster.yaml"
 echo '# changed' >>"$at/base/tempo.yaml"

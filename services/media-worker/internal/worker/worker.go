@@ -15,6 +15,11 @@
 // killed by a signal or timed out) is answered with transcode.failed at once, so a crafted file
 // runs only once and never blocks its partition through retries; only storage, Kafka and
 // environment errors are retried, and the last try turns them into RETRIES_EXHAUSTED.
+//
+// Stopping (SIGTERM): the consumer polls no more, and the job in hand runs on, retries included,
+// for up to DrainTimeout; finished by then, its result is published and the record committed.
+// Still running then, ffmpeg is killed, nothing is published or committed, and the record is
+// delivered again to whichever worker takes the partition.
 package worker
 
 import (
@@ -71,8 +76,12 @@ const (
 	// rebalanceTimeout covers the whole retry budget of a record: every try with its publish,
 	// plus every backoff (at most backoffMax each). A rebalance waits for the record in hand,
 	// since a commit on a revoked partition would be lost, and a member that does not rejoin
-	// in time is dropped from the group.
+	// in time is dropped from the group. A drain adds nothing: it only cuts that budget short.
 	rebalanceTimeout = MaxAttempts*(tryTimeout+ProduceTimeout) + (MaxAttempts-1)*BackoffMax
+	// DrainTimeout is how long the record in hand runs on after a stop, so a transcode near its
+	// end is not started over elsewhere. It is 30 s short of the termination grace period of the
+	// pod and of the compose service, which closing the clients and flushing telemetry take.
+	DrainTimeout = 540 * time.Second
 )
 
 const (
@@ -150,10 +159,11 @@ func TranscodeDuration() metric.Float64Histogram {
 }
 
 // ConsumerConfig returns the consumer of InputTopic in Group with the worker's retry budget:
-// one record per poll, and rebalances wait for the record in hand. HandlerTimeout stays unset:
-// Handle bounds each try with tryTimeout and the publish of its result with produceTimeout,
-// instead of the 10 s or 30 s of the other consumers, which would cut short a transcode that
-// ffmpeg may run for up to 10 minutes.
+// one record per poll, rebalances wait for the record in hand, and a stop drains it for
+// DrainTimeout. HandlerTimeout stays unset: Handle bounds each try with tryTimeout and the
+// publish of its result with produceTimeout, instead of the 10 s or 30 s of the other consumers,
+// which would cut short a transcode that ffmpeg may run for up to 10 minutes; a drain only ends
+// a try sooner.
 func (w *Worker) ConsumerConfig(brokers string) kafkax.ConsumerConfig {
 	return kafkax.ConsumerConfig{
 		Brokers:          brokers,
@@ -168,6 +178,7 @@ func (w *Worker) ConsumerConfig(brokers string) kafkax.ConsumerConfig {
 		MaxPollRecords:   1,
 		BlockRebalance:   true,
 		RebalanceTimeout: rebalanceTimeout,
+		DrainTimeout:     DrainTimeout,
 	}
 }
 

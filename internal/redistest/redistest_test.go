@@ -92,7 +92,7 @@ func TestNewDeletesOnlyItsOwnKeys(t *testing.T) {
 
 	var innerPrefix string
 	t.Run("inner", func(t *testing.T) {
-		_, prefix := New(t)
+		_, prefix := New(t) //nolint:contextcheck // New registers its own cleanup, which outlives the test context
 		innerPrefix = prefix
 		if prefix == outerPrefix || !strings.HasPrefix(prefix, "svp:test:") {
 			t.Fatalf("prefix %q, outer prefix %q: want a distinct svp:test: prefix", prefix, outerPrefix)

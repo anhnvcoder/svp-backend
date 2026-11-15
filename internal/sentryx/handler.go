@@ -21,14 +21,14 @@ import (
 // These literals come from application ERROR call sites and their internal helpers.
 // TestAllowedMessagesMatchErrorLogs checks the list against the repository source.
 var allowedMessages = []string{
-	"decode explore feed", "engagement-service failed", "feed consumer stopped, restarting",
+	"decode explore feed", "dlq record", "dlq-replay failed", "engagement-service failed", "feed consumer stopped, restarting",
 	"feed-service failed", "filter master playlist", "gateway failed", "grpc call failed", "head uploaded file", "insert video",
-	"internal error", "kafka batch sent to dead-letter topic", "like video", "mark video processing", "marshal ViewEvent", "media-worker failed",
-	"panic in grpc handler", "panic in http handler", "parse master playlist", "premium playlist key", "presign upload form",
-	"produce view.recorded", "prune timeline", "read playlist", "rpc", "select author videos", "select entitlement", "select explore feed",
-	"select following feed", "select stats", "select video", "sign media playlist", "sign rendition",
-	"transcode consumer stopped, restarting", "transcode result undecided", "unlike video", "upsert entitlement", "user-service failed",
-	"video-service failed",
+	"internal error", "kafka batch sent to dead-letter topic", "like video", "mark video processing", "marshal ViewEvent",
+	"media-worker failed", "outbox row failed permanently, skipped", "panic in grpc handler", "panic in http handler",
+	"parse master playlist", "premium playlist key", "presign upload form", "produce view.recorded", "prune timeline",
+	"read playlist", "rpc", "select author videos", "select entitlement", "select explore feed", "select following feed",
+	"select stats", "select video", "sign media playlist", "sign rendition", "transcode consumer stopped, restarting",
+	"transcode result undecided", "unlike video", "upsert entitlement", "user-service failed", "video-service failed",
 	"views consumer stopped, restarting",
 }
 
