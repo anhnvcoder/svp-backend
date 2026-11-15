@@ -20,6 +20,8 @@ type Outbox struct {
 	Headers     []byte
 	CreatedAt   time.Time
 	PublishedAt *time.Time
+	FailedAt    *time.Time
+	LastError   *string
 }
 
 type Video struct {

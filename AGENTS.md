@@ -84,6 +84,8 @@ nó hoặc dựng bản sao từ event.
   `valkey`, `kafka` của compose hay Deployment `svp-ops` của chart `svp-data` (k3d, EKS); `SVP_AS_USER=<user>` đăng nhập user thường để kiểm
   quyền, mật khẩu là dòng đầu của stdin. ACL của `svp-ops` chỉ cho `DEL` đúng hai tiền tố ở dòng dưới. Trên k3d, EKS, `svp-ops` còn container
   `postgres` với `/opt/svp/bin/svp-pg <video|engagement|feed> [--host <tên>] -c '<SQL>'`: đọc Postgres bằng role app, phiên chỉ đọc.
+  Phát lại record DLQ cũng chỉ qua đường định sẵn: release `dlq-replay` (`make dlq-replay ARGS=…` ở compose, `kubectl exec
+  deploy/dlq-replay -- /app replay …` ở k3d, EKS), không `console-producer`, không pod tạm.
 - **Xoá khoá chỉ ở lab local** (LOCAL LAB ONLY, không trỏ script vào stack dùng chung): smoke, e2e, diễn tập, tải, DAST, game day
   chỉ được xoá khoá rate limit đăng ký `svp:gw:rl:register:*` ở db 10 (`SCAN` + `DEL`, không `FLUSHDB`) và cache khám phá
   `svp:feed:explore:*` ở db 14, qua CLI vận hành (user `svp-ops`) ở compose, k3d và EKS; ngoài hai tiền tố đó script chỉ đọc Valkey.

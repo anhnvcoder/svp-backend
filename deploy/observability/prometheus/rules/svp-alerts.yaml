@@ -97,6 +97,19 @@ groups:
           summary: "{{ $labels.service_name }}: consumer group {{ $labels.group }} sent records from {{ $labels.topic }} to its dead-letter topic"
           runbook_url: "https://github.com/anhnvcoder/svp-backend/blob/main/docs/runbooks/kafka-dlq-records.md"
 
+      # Same shape: a service's outbox relay gave up on a row in the last 10 minutes.
+      - alert: OutboxRowsFailed
+        expr: >-
+          sum by (service_name, topic) (increase(svp_outbox_rows_failed_total[10m])) > 0
+          or
+          sum by (service_name, topic) (svp_outbox_rows_failed_total
+              unless svp_outbox_rows_failed_total offset 10m) > 0
+        labels:
+          severity: page
+        annotations:
+          summary: "{{ $labels.service_name }}: the outbox relay gave up on events for {{ $labels.topic }}, they were never sent"
+          runbook_url: "https://github.com/anhnvcoder/svp-backend/blob/main/docs/runbooks/outbox-rows-failed.md"
+
       # Breaker of one gateway instance not closed (1 half-open, 2 open) in every sample of the last
       # minute: 5 samples 15 s apart, all above 0. 2 <-> 1 does not reset it, one 0 does.
       - alert: CircuitBreakerOpen

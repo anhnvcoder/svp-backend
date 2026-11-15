@@ -71,3 +71,51 @@ Vì sao: [ADR-0001](../adr/0001-service-boundaries-and-data-ownership.md), [ADR-
    ([ADR-0001](../adr/0001-service-boundaries-and-data-ownership.md), [triển khai](deployment.md#kubernetes-cục-bộ-k3d)).
 6. **Upload nhỏ về băng thông nhưng mỗi kết nối kéo dài.** Không cho file đi qua service; client đẩy thẳng lên object
    storage ([ADR-0004](../adr/0004-direct-upload-and-hls.md)).
+
+## Ngân sách kết nối
+
+Vì sao: [ADR-0072](../adr/0072-pod-operations.md); bảng tính, nguồn công thức `max_connections` của RDS và số pod mỗi
+service ở [phụ lục](../adr/appendix/0072-pod-operations.md).
+
+Postgres giới hạn số kết nối, và mỗi pod giữ một pool. Pool theo CPU của node (mặc định của pgx) đổi cỡ khi đổi loại
+node và không liên quan gì tới giới hạn của database, nên mỗi pod mở tối đa `DATABASE_MAX_CONNS` kết nối
+(`pgpool.DefaultMaxConns` khi không đặt; engagement-service chia số đó cho pool đọc và pool ghi). Mỗi env phải thoả:
+
+```text
+Σ bốn service Postgres  DATABASE_MAX_CONNS × (replica tối đa + pod thêm khi rollout hay canary)
+  +  dự phòng  ≤  80 % max_connections
+```
+
+- **Replica tối đa** lấy từ `maxReplicas` của HPA hay số replica cố định trong `base/services` và `envs/<env>` của
+  `svp-gitops`. Rollout hay một bước canary thêm pod trong lúc pod cũ còn sống, nên tính cả chúng.
+- **Dự phòng** gồm Job `migrate` của mỗi service, CLI `svp-ops`, GlitchTip khi dùng chung Postgres, kết nối superuser
+  và các kết nối nội bộ của operator hay RDS.
+- **`max_connections`** là của Postgres mà env dùng trên từng nền tảng chạy nó: RDS ở stg, prd tính từ RAM của loại
+  instance (`tfvars` của `svp-infra`); CloudNativePG `svp-pg` của cụm GitOps k3d giữ mặc định của PostgreSQL 17.
+- **80 % chứ không 100 %** để cảnh báo 90 % kết nối của `aws/modules/rds/alarms.tf` còn nghĩa: nó báo khi có thứ ngoài
+  ngân sách chiếm chỗ, không phải lúc nào cũng cháy.
+
+Giá trị mỗi env ở `env.DATABASE_MAX_CONNS` của `envs/stg/`, `envs/prd/` trong `svp-gitops`; compose và đường dev k3d
+dùng mặc định. Thêm replica, đổi `maxReplicas` hay đổi cỡ RDS thì tính lại bảng ở phụ lục. Dashboard `svp-use` vẽ
+`pgxpool_max_connections`, cỡ pool đã cấu hình của từng service.
+
+## Giới hạn in-flight của gateway
+
+Vì sao: [ADR-0072](../adr/0072-pod-operations.md). Cách giới hạn hoạt động:
+[`reliability.md`](reliability.md#chặn-quá-tải-ở-gateway).
+
+`MAX_IN_FLIGHT` là số request một pod gateway chạy cùng lúc trước khi trả `503`. Số request đang xử lý bằng tốc độ
+nhân thời gian xử lý (định luật Little), nên giới hạn mặc định `defaultMaxInFlight`
+(`services/gateway/cmd/gateway/main.go`) tính từ mục tiêu tải:
+
+```text
+⌈ 1 000 req/s (P2) ÷ 4 maxReplicas của HPA gateway × 0,15 s p99 của SLO feed × 4 ⌉  =  150
+```
+
+- Chia cho `maxReplicas` vì giới hạn theo pod và HPA thêm pod khi tải tăng: ở số replica tối đa mỗi pod nhận một phần
+  tư tải mục tiêu.
+- Nhân p99 của SLO feed vì feed là đường nặng nhất: một request feed ở p99 giữ slot lâu nhất.
+- Hệ số 4 chừa chỗ cho đỉnh ngắn và request chậm hơn p99; thấp hơn thì gateway chặn khi chưa quá tải, cao hơn thì chặn
+  quá muộn để bảo vệ pod. Giá trị là điểm khởi đầu: buổi stg đo lại dưới k6 rồi chỉnh `env.MAX_IN_FLIGHT` của gateway
+  ở `base/services/gateway.yaml` (`svp-gitops`).
+- Đổi `maxReplicas` của gateway thì tính lại công thức và đặt lại giá trị.

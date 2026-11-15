@@ -152,8 +152,8 @@ EOF
 chmod +x "$bin/kubectl" "$bin/chainsaw" "$bin/mktemp" "$bin/go"
 export PATH="$bin:$PATH"
 
-# The Secret values: 7 Kafka users, the Valkey password of svp-feed-service (in its REDIS_URL), the Grafana admin, the
-# 3 object store users.
+# The Secret values: some Kafka users, the Valkey password of svp-feed-service (in its REDIS_URL), the Grafana admin,
+# the object store users; 12 in all, the floor run.sh asks for.
 values=$work/values
 mkdir -p "$values"
 for i in 1 2 3 4 5 6 7; do openssl rand -hex 12; done >"$values/svp-data-kafka-users"
@@ -733,6 +733,23 @@ pg-bootstrap j-pg-1 1
 s3-init j-s3-1 0" "$(cat "$work/helper/jobs-before" 2>&1)"
 same "reloader.sh: the revisions of Rollouts gateway and web" "gateway 7
 web 3" "$(cat "$work/helper/revisions-before" 2>&1)"
+# readers_of: a service is the Deployment or the Rollout (release with canary) that has pods in the snapshot.
+helper 'printf "%s\n" "Rollout/svp/user-service u1 ready a" "Deployment/svp/video-service u2 ready b" >"$state/pods-before"
+  printf "%s\n" svp/user-service-env svp/video-service-env svp/feed-service-env | readers_of'
+same "reloader.sh: readers_of takes the kind of a service from its pods, whether Rollout or Deployment" \
+  "Deployment/svp/video-service
+Rollout/svp/user-service
+Workload/svp/feed-service" "$out"
+helper 'printf "%s\n" "Rollout/svp/gateway g1 ready a" "Deployment/svp/user-service u1 ready b" >"$state/pods-before"
+  printf "%s\n" svp/sentry | readers_of'
+same "reloader.sh: the shared sentry Secret reaches both kinds" \
+  "Deployment/svp/user-service
+Rollout/svp/gateway
+Rollout/svp/web
+Workload/svp/engagement-service
+Workload/svp/feed-service
+Workload/svp/video-service" "$out"
+helper "snapshot before"
 job_list j-pg-2 j-kafka-2 j-s3-2
 helper 'init_jobs "$state/jobs-after"; jobs_ran "$state/jobs-before" "$state/jobs-after"'
 same "reloader.sh: init Jobs that ran again and Succeeded pass" 0 "$rc"

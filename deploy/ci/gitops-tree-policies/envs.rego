@@ -115,17 +115,46 @@ deny contains msg if {
 
 images_dir(env) := $"envs/{env}/images"
 
-want_images := concat(" ", sort([$"{svc}.yaml" | some svc in gitops.services]))
+# published(env): the services of the release sources env is checked with (input.sources); those of the checker when
+# that table was not read.
+published(env) := {svc | some s in input.sources[env].sources; some svc in s.services} if input.sources[env]
 
-deny contains $"{images_dir(env)}/ holds '{got}': exactly one file per service, {want_images}" if {
+published(env) := {svc | some svc in gitops.services} if not input.sources[env]
+
+# built(env): the services of the release sources at the commit envs/<env>/charts.yaml pins (input.built); on a
+# working tree that commit may predate a service, whose image file only the promote of a commit that builds it writes.
+built(env) := {svc | some svc in input.built[env].services} if input.built[env]
+
+built(env) := published(env) if not input.built[env]
+
+# new_release(env, svc): svc has no image file in env yet, and the commit env pins does not build it.
+new_release(env, svc) if {
+	svc in published(env)
+	not svc in built(env)
+	not gitops.is_file($"{images_dir(env)}/{svc}.yaml")
+}
+
+want_images(env) := concat(" ", sort([$"{svc}.yaml" | some svc in published(env); not new_release(env, svc)]))
+
+deny contains $"{images_dir(env)}/ holds '{got}': exactly one file per service, {want_images(env)}" if {
 	some env in gitops.environments
 	got := concat(" ", sort(gitops.names(images_dir(env))))
-	got != want_images
+	got != want_images(env)
+}
+
+warn contains msg if {
+	some env in gitops.environments
+	some svc in published(env)
+	new_release(env, svc)
+	msg := concat("", [
+		$"{images_dir(env)}/ has no {svc}.yaml: {svc} is a new release, which the commit {env} pins ",
+		$"({substring(input.built[env].revision, 0, 12)}) does not build; the promote of one that does writes the file",
+	])
 }
 
 image_files contains [env, svc, path] if {
 	some env in gitops.environments
-	some svc in gitops.services
+	some svc in published(env)
 	path := $"{images_dir(env)}/{svc}.yaml"
 	gitops.is_file(path)
 }

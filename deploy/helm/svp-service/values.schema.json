@@ -61,6 +61,18 @@
       }
     },
     "spreadAcrossNodes": {"description": "Spread the replicas over the zones, then over the nodes.", "type": "boolean"},
+    "zoneSpread": {
+      "description": "minDomains only with DoNotSchedule, as Kubernetes requires.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["whenUnsatisfiable"],
+      "properties": {
+        "whenUnsatisfiable": {"type": "string", "enum": ["ScheduleAnyway", "DoNotSchedule"]},
+        "minDomains": {"type": "integer", "minimum": 1}
+      },
+      "if": {"required": ["minDomains"]},
+      "then": {"properties": {"whenUnsatisfiable": {"const": "DoNotSchedule"}}}
+    },
     "keda": {
       "type": "object",
       "additionalProperties": false,

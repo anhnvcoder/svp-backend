@@ -21,9 +21,9 @@ k8s-exclusive:
 # env-required, local-ca: the Secrets come from .env and .local/ca/ (deploy/k8s/secrets.sh, run by install.sh once the
 # namespaces exist); like the clone of svp-gitops (gitops_dir), a missing one stops the target before anything is made.
 # helmfile installs the releases (deploy/k8s/helmfile.yaml.gotmpl, HELMFILE_VERSION of the Makefile: make tools).
-# The six backend services are always built here: IMAGES is make up's alone.
-k8s-up: k8s-exclusive env-required local-ca ## Create (or start) the registry 127.0.0.1:5111 and cluster svp (API 127.0.0.1:6550, HTTPS 127.0.0.1:8443), build and push the six backend images (WEB_FROM=clone: the web client's too, from the clone of svp-frontend, ../frontend or SVP_WEB_DIR; otherwise the web client runs its staging release, or WEB_IMAGE=<ghcr.io/...@sha256:...> with WEB_FROM=image), install argocd/apps/components.json of the clone of svp-gitops (../gitops beside the checkout, or SVP_GITOPS_DIR) with its base/ values through helmfile, with drill traffic while a canary of the gateway or the web client runs; idempotent (LOCAL LAB ONLY: a canary's drill traffic resets register rate limit keys in the cluster's Valkey db 10)
-	@test -z '$(IMAGES)' || { echo "make k8s-up: IMAGES=$(IMAGES) is a setting of make up only; the cluster of the dev path builds the six backend services" >&2; exit 1; }
+# The backend services are always built here: IMAGES is make up's alone.
+k8s-up: k8s-exclusive env-required local-ca ## Create (or start) the registry 127.0.0.1:5111 and cluster svp (API 127.0.0.1:6550, HTTPS 127.0.0.1:8443), build and push the backend images (WEB_FROM=clone: the web client's too, from the clone of svp-frontend, ../frontend or SVP_WEB_DIR; otherwise the web client runs its staging release, or WEB_IMAGE=<ghcr.io/...@sha256:...> with WEB_FROM=image), install argocd/apps/components.json of the clone of svp-gitops (../gitops beside the checkout, or SVP_GITOPS_DIR) with its base/ values through helmfile, with drill traffic while the canary of a release with canary set runs; idempotent (LOCAL LAB ONLY: a canary's drill traffic resets register rate limit keys in the cluster's Valkey db 10)
+	@test -z '$(IMAGES)' || { echo "make k8s-up: IMAGES=$(IMAGES) is a setting of make up only; the cluster of the dev path builds the backend services" >&2; exit 1; }
 	@WEB_FROM='$(WEB_FROM)' WEB_IMAGE='$(WEB_IMAGE)' bash -c '$(K8S_LIB) && gitops_dir >/dev/null && web_source && ensure_registry && ensure_cluster'
 	WEB_FROM='$(WEB_FROM)' WEB_IMAGE='$(WEB_IMAGE)' deploy/k8s/install.sh
 
@@ -51,7 +51,7 @@ web-clone: ## CI: clone svp-frontend anonymously into .web/svp-frontend (gitigno
 # follows: a branch of the clone's origin or a full SHA. Argo CD reads both public repos over HTTPS: no deploy key.
 GITOPS_REV ?= main
 
-k8s-gitops-up: k8s-exclusive env-required local-ca ## Create a new cluster svp that runs as staging (base/ plus envs/stg of svp-gitops), built by Argo CD from GitHub over anonymous HTTPS (no deploy key) [GITOPS_REV=main, a branch of the clone of svp-gitops or a commit]; first checks that the seven release digests of envs/stg/images/ at that revision are on GHCR (anonymous pull), signed, with a clean vuln attestation at most 48 h old; applies the Secrets of .env, installs Argo CD with the plugin of Argo Rollouts for the nodes' architecture, waits until every Application is Synced and Healthy
+k8s-gitops-up: k8s-exclusive env-required local-ca ## Create a new cluster svp that runs as staging (base/ plus envs/stg of svp-gitops), built by Argo CD from GitHub over anonymous HTTPS (no deploy key) [GITOPS_REV=main, a branch of the clone of svp-gitops or a commit]; first checks that the release digests of envs/stg/images/ at that revision are on GHCR (anonymous pull), signed, with a clean vuln attestation at most 48 h old; applies the Secrets of .env, installs Argo CD with the plugin of Argo Rollouts for the nodes' architecture, waits until every Application is Synced and Healthy
 	SVP_KUBE_CONTEXT=k3d-svp GITOPS_REV='$(GITOPS_REV)' deploy/k8s/gitops.sh
 
 k8s-down: ## Delete cluster svp and its registry (compose volumes and the host's Postgres are not touched)
@@ -79,7 +79,7 @@ k8s-ca: ## Write the CA of the cluster's TLS certificates to .k8s/ca.crt (curl -
 
 # The dev tags depend only on the images' content (deploy/k8s/lib.sh, build_dev_images), so this target and the build
 # inside `make k8s-up` give the same tags for the same working tree.
-k8s-images: ## Build the seven service images from the working tree (the web client's from the clone of svp-frontend) and push them to the registry 127.0.0.1:5111 as svp/<service>:dev-<image ID>
+k8s-images: ## Build the service images from the working tree (the web client's from the clone of svp-frontend) and push them to the registry 127.0.0.1:5111 as svp/<service>:dev-<image ID>
 	@bash -c '$(K8S_LIB) && ensure_registry && build_dev_images'
 
 # deploy/compose/smoke.sh through Envoy: curl trusts the cluster's CA for api.svp.localhost and s3.svp.localhost (both
@@ -90,9 +90,9 @@ k8s-smoke: ## Run the end-to-end smoke test against cluster svp at https://api.s
 
 K8S_DRILL_ENV := SVP_STACK=k3d CURL_CA_BUNDLE=$(CURDIR)/.k8s/ca.crt
 
-# The canaries of the gateway and the web client. The drill traffic runs in the background until stopped, for hours
+# The canaries of the releases with canary set. The drill traffic runs in the background until stopped, for hours
 # if need be (through the push of a release on the GitOps cluster); `make k8s-up` starts and stops its own while a
-# canary of either is in progress.
+# canary of one is in progress.
 k8s-traffic-start: ## Start drill traffic in the background: 4 users, ~10 requests/s to GET /feed/explore and /feed/following through https://api.svp.localhost:8443, and ~4 requests/s to the web client at https://svp.localhost:8443 (GET /login, one /_next/static asset), each request logged in .k8s/drills/traffic-<time>.log (LOCAL LAB ONLY: resets register rate limit keys in the cluster's Valkey db 10)
 	@test -s .k8s/ca.crt || { echo "make k8s-traffic-start: .k8s/ca.crt missing; run make k8s-up (or make k8s-ca)" >&2; exit 1; }
 	@$(K8S_DRILL_ENV) deploy/k8s/drills/traffic.sh start

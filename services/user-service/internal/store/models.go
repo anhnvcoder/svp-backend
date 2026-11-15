@@ -26,6 +26,8 @@ type Outbox struct {
 	Headers     []byte
 	CreatedAt   time.Time
 	PublishedAt pgtype.Timestamptz
+	FailedAt    pgtype.Timestamptz
+	LastError   pgtype.Text
 }
 
 type RefreshToken struct {

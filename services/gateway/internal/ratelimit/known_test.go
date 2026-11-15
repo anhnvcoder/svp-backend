@@ -71,11 +71,13 @@ func TestKnownPairGoneRequest(t *testing.T) {
 	for name, ctx := range map[string]context.Context{"cancelled": cancelled, "deadline exceeded": expired} {
 		t.Run(name, func(t *testing.T) {
 			logs := captureLog(t)
+			//nolint:contextcheck // New seeds its metric series with no request
 			l := New(client, prefix, WithStoreTimeout(testStoreTimeout))
 			l.RememberPair(ctx, "192.0.2.1", "a@example.com")
-			if keys := scanKeys(t, client, prefix); len(keys) != 0 {
+			if keys := scanKeys(t, client, prefix); len(keys) != 0 { //nolint:contextcheck // test helper with its own context
 				t.Errorf("keys = %v, want none", keys)
 			}
+			//nolint:contextcheck // the pair is stored for a live request
 			l.RememberPair(t.Context(), "192.0.2.1", "a@example.com")
 			if l.KnownPair(ctx, "192.0.2.1", "a@example.com") {
 				t.Error("pair known to a request that was gone")
@@ -83,7 +85,7 @@ func TestKnownPairGoneRequest(t *testing.T) {
 			if logs.Len() != 0 {
 				t.Errorf("logged for a request that was gone:\n%s", logs)
 			}
-			deleteKeys(t, client, prefix)
+			deleteKeys(t, client, prefix) //nolint:contextcheck // test helper with its own context
 		})
 	}
 }

@@ -138,8 +138,10 @@ func Produce(ctx context.Context, cl *kgo.Client, rs ...*kgo.Record) error {
 	for _, r := range rs {
 		parent := ctx
 		if r.Context != nil {
+			//nolint:contextcheck // the record's context only carries a span
 			parent = trace.ContextWithSpanContext(ctx, trace.SpanContextFromContext(r.Context))
 		}
+		//nolint:spancheck // the span is ended after ProduceSync, from the record's context
 		r.Context, _ = otel.Tracer(tracerName).Start(parent, "send "+r.Topic,
 			trace.WithSpanKind(trace.SpanKindProducer), trace.WithAttributes(
 				semconv.MessagingSystemKafka, semconv.MessagingDestinationName(r.Topic),
@@ -147,11 +149,12 @@ func Produce(ctx context.Context, cl *kgo.Client, rs ...*kgo.Record) error {
 		carrier := recordCarrier{r}
 		carrier.remove("traceparent")
 		carrier.remove("tracestate")
+		//nolint:contextcheck // the record's context carries the send span
 		otel.GetTextMapPropagator().Inject(r.Context, carrier)
 	}
 	results := cl.ProduceSync(ctx, rs...)
 	for _, result := range results {
-		span := trace.SpanFromContext(result.Record.Context)
+		span := trace.SpanFromContext(result.Record.Context) //nolint:contextcheck // the send span lives in the record
 		if result.Err != nil {
 			span.RecordError(result.Err)
 			span.SetStatus(codes.Error, result.Err.Error())

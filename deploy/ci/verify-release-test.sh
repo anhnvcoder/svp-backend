@@ -141,10 +141,11 @@ charts() {
 }
 overlay() { printf 'imageVerification:\n  requireProvenance: %s\n' "$2" >"$cfg/envs/$1/svp-policy.yaml"; }
 mkdir -p "$cfg/envs/stg/images" "$cfg/envs/prd/images" "$cfg/base"
+read -r -a backend_services <<<"$(bash -c '. "$1/deploy/k8s/lib.sh" && echo "${built_services[*]}"' _ "$tree")"
 echo "# The base values" >"$cfg/base/README.md"
 for env in stg prd; do
   charts "$env" "$off_rev"
-  for svc in gateway user-service video-service engagement-service feed-service media-worker; do
+  for svc in "${backend_services[@]}"; do
     printf 'image:\n  repository: ghcr.io/anhnvcoder/svp-backend/%s\n  tag: ""\n  digest: ""\n' "$svc" \
       >"$cfg/envs/$env/images/$svc.yaml"
   done

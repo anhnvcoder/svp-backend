@@ -1,7 +1,7 @@
 # IN-2/IN-4 of the threat model (docs/threat-model.md): a pod no NetworkPolicy lets in reaches no service of the
 # platform.
 
-# Pod probe of namespace svp-probe (PSA restricted, no NetworkPolicy, the image media-worker runs: busybox nc and
+# Pod probe of namespace svp-probe (PSA restricted, no NetworkPolicy, Alpine of templates/probe-up.yaml: busybox nc and
 # nslookup) resolves every name below but connects to none: gRPC 9101-9104, gateway 8080, web 3001, Kafka 9096,
 # Postgres 5432, Valkey 6379, the object store s3 9000. A name that resolves makes a closed port the policy, not a
 # missing service.
@@ -10,14 +10,14 @@
 # user-, video- and feed-service), the explore feed of a drill user with stats on every item in one of up to 3 pages
 # (the gateway reaches engagement-service, which /readyz leaves out on purpose), /healthz (Envoy reaches the gateway).
 
-# Also media-worker reaches Kafka and the object store, Prometheus has kafka_brokers >= 1 from a scrape under 120 s old
-# (the Collector's kafkametrics receiver logs in to 9096), GlitchTip's pod opens 5432, a login leaves its rate limit key
-# in Valkey (the gateway reaches 6379), the object store's /health/live and the web client's /healthz through Envoy
-# (Envoy reaches web:3001).
+# Also a pod with media-worker's labels (templates/media-worker-standin-up.yaml) reaches Kafka and the object store,
+# Prometheus has kafka_brokers >= 1 from a scrape under 120 s old (the Collector's kafkametrics receiver logs in to
+# 9096), GlitchTip's pod opens 5432, a login leaves its rate limit key in Valkey (the gateway reaches 6379), the object
+# store's /health/live and the web client's /healthz through Envoy (Envoy reaches web:3001).
 
-# The cleanup of the templates deletes svp-probe and stops the port-forward. LOCAL LAB ONLY: the test deletes the
-# register rate limit keys svp:gw:rl:register:* in the cluster's Valkey db 10 (SCAN + DEL) before it registers its drill
-# user, and otherwise only reads Valkey (SCAN in db 10).
+# The cleanup of the templates deletes svp-probe and the stand-in pod and stops the port-forward. LOCAL LAB ONLY: the
+# test deletes the register rate limit keys svp:gw:rl:register:* in the cluster's Valkey db 10 (SCAN + DEL) before it
+# registers its drill user, and otherwise only reads Valkey (SCAN in db 10).
 apiVersion: chainsaw.kyverno.io/v1alpha1
 kind: Test
 metadata:
@@ -45,6 +45,9 @@ spec:
   - name: "IN-2/IN-4: setup: namespace svp-probe with pod probe"
     use:
       template: ../../templates/probe-up.yaml
+  - name: "IN-2/IN-4: setup: pod drill-media-worker-standin in svp with media-worker's labels"
+    use:
+      template: ../../templates/media-worker-standin-up.yaml
 
   # One target per step, from pod probe: "<dns|nodns|ip> <open|closed>" as busybox nslookup and nc -z (3 s) see it.
   - name: "IN-2/IN-4: from svp-probe user-service.svp:9101 closed"
@@ -243,20 +246,46 @@ spec:
     - {name: url, value: https://api.svp.localhost:8443/healthz}
     - {name: want, value: "200"}
     try: *status
+  # From the stand-in: "<dns|nodns|ip> <open|closed>" as node's dns.lookup and a TCP connect (3 s) see it.
   - name: "IN-2/IN-4: control: from media-worker kafka.svp-data:9096 open"
     bindings:
-    - {name: fromNamespace, value: svp}
-    - {name: from, value: deploy/media-worker}
     - {name: target, value: kafka.svp-data.svc.cluster.local:9096}
     - {name: want, value: dns open}
-    try: *reach
+    try: &workerReach
+    - script:
+        env:
+        - {name: CALLER_KUBECONFIG, value: (env('KUBECONFIG'))}
+        - {name: TARGET, value: ($target)}
+        content: |
+          set -eu
+          export KUBECONFIG="$CALLER_KUBECONFIG"
+          js='
+          const net = require("node:net");
+          const dns = require("node:dns");
+          const target = process.argv[1];
+          const i = target.lastIndexOf(":");
+          const host = target.slice(0, i);
+          const port = Number(target.slice(i + 1));
+          const connect = (resolved) => {
+            const socket = net.connect({ host, port, timeout: 3000 });
+            const end = (state) => { socket.destroy(); console.log(`${resolved} ${state}`); };
+            socket.once("connect", () => end("open"));
+            socket.once("timeout", () => end("closed"));
+            socket.once("error", () => end("closed"));
+          };
+          if (net.isIP(host) !== 0) connect("ip");
+          else dns.lookup(host, (error) => connect(error ? "nodns" : "dns"));
+          '
+          kubectl --context k3d-svp -n svp exec pod/drill-media-worker-standin -c probe -- /nodejs/bin/node -e "$js" "$TARGET" </dev/null
+        check:
+          ($error): ~
+          (trim_space($stdout)): ($want)
+      continueOnError: true
   - name: "IN-2/IN-4: control: from media-worker s3.svp-data:9000 open"
     bindings:
-    - {name: fromNamespace, value: svp}
-    - {name: from, value: deploy/media-worker}
     - {name: target, value: s3.svp-data.svc.cluster.local:9000}
     - {name: want, value: dns open}
-    try: *reach
+    try: *workerReach
   - name: "IN-2/IN-4: setup: port-forward to Prometheus on 127.0.0.1:19090"
     use:
       template: ../../templates/port-forward.yaml

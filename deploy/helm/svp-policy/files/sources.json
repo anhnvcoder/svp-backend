@@ -4,7 +4,7 @@
       "name": "backend",
       "repository": "https://github.com/anhnvcoder/svp-backend",
       "imagePrefix": "ghcr.io/anhnvcoder/svp-backend/",
-      "services": ["gateway", "user-service", "video-service", "engagement-service", "feed-service", "media-worker"],
+      "services": ["gateway", "user-service", "video-service", "engagement-service", "feed-service", "media-worker", "dlq-replay"],
       "drillImages": ["drill-vulnerable", "drill-unsigned", "drill-no-provenance"],
       "issuer": "https://token.actions.githubusercontent.com",
       "subject": "https://github.com/anhnvcoder/svp-backend/.github/workflows/images.yml@refs/heads/main",

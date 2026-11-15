@@ -18,6 +18,11 @@ export K3D_IMAGE_TOOLS=ghcr.io/k3d-io/k3d-tools:5.9.0@sha256:c57abce697e66feeb82
 # 5000, published on 127.0.0.1:5111 only.
 # renovate: datasource=docker depName=docker.io/library/registry
 registry_image=docker.io/library/registry:3.1.2@sha256:d4032d4cc323c1731c707931ecada07a53076eac38e3b61ae57533f170f2c6c3
+# Pod probe of the drills (deploy/k8s/drills/templates/probe-up.yaml) needs busybox nc, nslookup and sleep: the Alpine
+# of media-worker's rootfs stage, which renovate.json keeps in step. Nodes pull it from Docker Hub; namespace svp-probe
+# is outside the cluster's image policy.
+# renovate: datasource=docker depName=docker.io/library/alpine
+export SVP_PROBE_IMAGE=docker.io/library/alpine:3.24.3@sha256:be2656061b536c1883c4034790e21d0a09c5aaaf51968b89368a3c0371ea2c9a
 # Deadline of `k3d cluster create` and `k3d cluster start`, which otherwise wait forever for a node's "up and running"
 # log line (k3d v5.9.0 sets one only when --timeout > 0). k3d applies it to each step of a create (network, containers
 # with their image pulls, start) on its own, so 300 s covers a first run that still pulls the k3s image on a slow link.
@@ -674,8 +679,8 @@ image_policy_ready() {
         | select((.namespaceSelector.matchLabels // {})["kubernetes.io/metadata.name"] == "svp")] | length > 0' >/dev/null
 }
 
-# workload_kind NAMESPACE NAME: rollout when NAME is an Argo Rollouts Rollout (the gateway, which chart svp-service
-# renders as one for its canary), deployment otherwise. Before Argo Rollouts is
+# workload_kind NAMESPACE NAME: rollout when NAME is an Argo Rollouts Rollout (a release with canary set, which chart
+# svp-service renders as one), deployment otherwise. Before Argo Rollouts is
 # installed the kind does not exist and the answer is deployment.
 workload_kind() {
   if kc -n "$1" get rollouts.argoproj.io "$2" >/dev/null 2>&1; then echo rollout; else echo deployment; fi
@@ -907,7 +912,7 @@ gitops_timeout_report() {
 }
 
 # The image table, deploy/docker-bake.json: the one place that names the images this repository builds from its own
-# tree, the six Go services (web's source and releases are svp-frontend's). A Docker Bake file: group default lists the
+# tree, the Go services (web's source and releases are svp-frontend's). A Docker Bake file: group default lists the
 # services in the order the dev path builds them; target <service> holds its Dockerfile, context and local tag. Every
 # context is the repository root, which image-guard.sh and image_paths assume.
 image_table=deploy/docker-bake.json
@@ -926,9 +931,9 @@ image_rows=$(jq -er '.target as $t | .group.default.targets
 built_services=()
 while read -r image_svc _; do built_services+=("$image_svc"); done <<<"$image_rows"
 unset image_svc
-# The seven services whose images the cluster runs, in the order the dev path builds them: web last (from the clone of
-# svp-frontend, web_dir), since the six Go images share the Go module cache and build fast, so their errors show before
-# the web build, the longest of all. Every release set (stg, prd, the records of stg) names these seven.
+# The services whose images the cluster runs, in the order the dev path builds them: web last (from the clone of
+# svp-frontend, web_dir), since the Go images share the Go module cache and build fast, so their errors show before
+# the web build, the longest of all. Every release set (stg, prd, the records of stg) names these.
 svp_services=("${built_services[@]}" web)
 
 # dockerfile SERVICE: the Dockerfile that builds SERVICE's image (one of built_services), relative to the repository
@@ -1305,7 +1310,7 @@ web_source() {
 }
 
 # compose_images: exports what deploy/compose/compose.yaml reads to pick the images of the application for `make up` and
-# `make compose-config`. IMAGES unset: the six backend services are built from the working tree (compose_up_images, with
+# `make compose-config`. IMAGES unset: the backend services are built from the working tree (compose_up_images, with
 # bake_images, as svp/<service>:dev); IMAGES=stg: they and their migrations run the releases in staging (stg_release),
 # with no Go build. Web as web_source says. Sets compose_bake, compose_releases and compose_notes; prints nothing.
 compose_images() {
@@ -1318,7 +1323,7 @@ compose_images() {
       export "$var=svp/$svc:dev"
     done
     compose_bake=("${built_services[@]}")
-    compose_notes+=("the six backend services built from the working tree (docker buildx bake -f $image_table)")
+    compose_notes+=("the backend services built from the working tree (docker buildx bake -f $image_table)")
     ;;
   stg)
     for svc in "${built_services[@]}"; do
@@ -1328,10 +1333,10 @@ compose_images() {
       compose_releases+=("$ref")
     done
     gitops=$(gitops_dir) || exit 1
-    compose_notes+=("the six backend services and their migrations run the releases of staging, envs/stg/images/ of svp-gitops at $(gitops_at "$gitops")")
+    compose_notes+=("the backend services and their migrations run the releases of staging, envs/stg/images/ of svp-gitops at $(gitops_at "$gitops")")
     ;;
   *)
-    fail "IMAGES='$IMAGES' is not valid: leave it unset (build the six backend services from the working tree) or stg (run their releases in staging)"
+    fail "IMAGES='$IMAGES' is not valid: leave it unset (build the backend services from the working tree) or stg (run their releases in staging)"
     ;;
   esac
   web_source

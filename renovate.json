@@ -153,6 +153,18 @@
       "automerge": false
     },
     {
+      "description": "The probe image of the k3d drills (SVP_PROBE_IMAGE of deploy/k8s/lib.sh) is the Alpine of media-worker's rootfs stage: both move in the pull request of the base images.",
+      "matchDepNames": ["alpine", "docker.io/library/alpine"],
+      "groupName": "go toolchain and base images"
+    },
+    {
+      "description": "Its digest updates merge by themselves, as those of the base images do, so the group still can (deploy/k8s/lib.sh has no Code Owner).",
+      "matchFileNames": ["deploy/k8s/lib.sh"],
+      "matchDepNames": ["alpine", "docker.io/library/alpine"],
+      "matchUpdateTypes": ["digest"],
+      "automerge": true
+    },
+    {
       "description": "cosign of the dev machine (COSIGN_IMAGE) and of CI (cosign-release of sigstore/cosign-installer) are the same version.",
       "matchDepNames": ["ghcr.io/sigstore/cosign/cosign", "sigstore/cosign"],
       "groupName": "cosign",

@@ -64,7 +64,7 @@ const (
 	// completed job the in-place copy of its few dozen objects and the master. Past it the try
 	// fails as temporary.
 	tryTimeout = 2 * time.Minute
-	// rebalanceTimeout covers the retry budget of a record, as in package worker.
+	// rebalanceTimeout covers the retry budget of a record, as in package worker, drain included.
 	rebalanceTimeout = worker.MaxAttempts*(tryTimeout+worker.ProduceTimeout) + (worker.MaxAttempts-1)*worker.BackoffMax
 
 	// receiveWait is the long polling wait of one ReceiveMessage, the most SQS allows.
@@ -144,7 +144,8 @@ func New(cfg Config, mc Client, events Queue, store Storage, producer *kgo.Clien
 }
 
 // ConsumerConfig returns the consumer of worker.InputTopic in worker.Group with the retry budget
-// of package worker.
+// and the drain of package worker: after a stop the record in hand runs on for up to
+// worker.DrainTimeout, then is committed, or left to be delivered again when still running.
 func (b *Bridge) ConsumerConfig(brokers string) kafkax.ConsumerConfig {
 	return kafkax.ConsumerConfig{
 		Brokers:          brokers,
@@ -159,6 +160,7 @@ func (b *Bridge) ConsumerConfig(brokers string) kafkax.ConsumerConfig {
 		MaxPollRecords:   1,
 		BlockRebalance:   true,
 		RebalanceTimeout: rebalanceTimeout,
+		DrainTimeout:     worker.DrainTimeout,
 	}
 }
 

@@ -17,8 +17,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/twmb/franz-go/pkg/kerr"
 	"github.com/twmb/franz-go/pkg/kfake"
 	"github.com/twmb/franz-go/pkg/kgo"
+	"github.com/twmb/franz-go/pkg/kmsg"
 	"go.opentelemetry.io/otel"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -55,6 +57,8 @@ type fakeStore struct {
 	failDownloads int
 	// blockDownloads makes downloads wait until their context ends.
 	blockDownloads bool
+	// holdDownload, when set, runs at the start of each download; an error it returns fails it.
+	holdDownload func(ctx context.Context) error
 	// afterDownload, when set, runs after a successful download.
 	afterDownload func()
 }
@@ -70,6 +74,11 @@ func (s *fakeStore) put(key string, data []byte) {
 }
 
 func (s *fakeStore) Download(ctx context.Context, key, path string, maxBytes int64) error {
+	if s.holdDownload != nil {
+		if err := s.holdDownload(ctx); err != nil {
+			return fmt.Errorf("download %s: %w", key, err)
+		}
+	}
 	s.mu.Lock()
 	s.downloads++
 	s.maxBytes = maxBytes
@@ -94,7 +103,7 @@ func (s *fakeStore) Download(ctx context.Context, key, path string, maxBytes int
 	if int64(len(data)) > maxBytes {
 		return fmt.Errorf("download %s: %w", key, objstore.ErrTooLarge)
 	}
-	if err := os.WriteFile(path, data, 0o600); err != nil {
+	if err := os.WriteFile(path, data, 0o600); err != nil { //nolint:gosec // a file of the job under test
 		return err
 	}
 	if hook != nil {
@@ -904,8 +913,180 @@ func TestRebalanceTimeoutCoversRetryBudget(t *testing.T) {
 	if budget := MaxAttempts*(tryTimeout+ProduceTimeout) + backoffs; rebalanceTimeout < budget {
 		t.Errorf("rebalanceTimeout = %v, retry budget = %v", rebalanceTimeout, budget)
 	}
-	if cfg := New(nil, nil, "", nil).ConsumerConfig(""); cfg.RebalanceTimeout != rebalanceTimeout || !cfg.BlockRebalance {
+	cfg := New(nil, nil, "", nil).ConsumerConfig("")
+	if cfg.RebalanceTimeout != rebalanceTimeout || !cfg.BlockRebalance || cfg.DrainTimeout != DrainTimeout {
 		t.Errorf("consumer config = %+v", cfg)
+	}
+}
+
+// drainingConsumer runs the worker's consumer with millisecond backoff and the drain time
+// drain; the test stops it with the returned cancel and reads Run's result from the channel.
+func (e *env) drainingConsumer(t *testing.T, drain time.Duration) (context.CancelFunc, <-chan error) {
+	t.Helper()
+	cfg := e.w.ConsumerConfig(e.brokers)
+	cfg.BackoffBase, cfg.BackoffMax = time.Millisecond, 5*time.Millisecond
+	cfg.DrainTimeout = drain
+	c, err := kafkax.NewConsumer(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- c.Run(ctx) }()
+	t.Cleanup(cancel)
+	return cancel, done
+}
+
+// stopped waits for the result of a consumer's Run, failing the test past limit.
+func stopped(t *testing.T, done <-chan error, limit time.Duration) {
+	t.Helper()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("consumer: %v", err)
+		}
+	case <-time.After(limit):
+		t.Fatalf("consumer did not stop within %v", limit)
+	}
+}
+
+// committedOffset returns the offset Group committed on InputTopic, -1 when none.
+func (e *env) committedOffset(t *testing.T) int64 {
+	t.Helper()
+	req := kmsg.NewPtrOffsetFetchRequest()
+	req.Group = Group
+	resp, err := req.RequestWith(t.Context(), e.client)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := kerr.ErrorForCode(resp.ErrorCode); err != nil {
+		t.Fatal(err)
+	}
+	for _, tp := range resp.Topics {
+		for _, p := range tp.Partitions {
+			if tp.Topic == InputTopic && p.Offset >= 0 {
+				return p.Offset
+			}
+		}
+	}
+	return -1
+}
+
+// waitStarted waits for started to be closed.
+func waitStarted(t *testing.T, started <-chan struct{}) {
+	t.Helper()
+	select {
+	case <-started:
+	case <-time.After(15 * time.Second):
+		t.Fatal("the job never started")
+	}
+}
+
+// A job in hand when the consumer stops runs on within the drain time: its result is published
+// and its record committed.
+func TestStopDrainsJobInHand(t *testing.T) {
+	t.Parallel()
+	e := newEnv(t)
+	started, release := make(chan struct{}), make(chan struct{})
+	var once sync.Once
+	e.store.holdDownload = func(ctx context.Context) error {
+		once.Do(func() { close(started) })
+		select {
+		case <-release:
+			return nil
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+	// No source stored: once released, the job ends with SOURCE_MISSING.
+	id := ids.New()
+	cancel, done := e.drainingConsumer(t, 10*time.Second)
+	e.produce(t, uploaded(t, id, 10, nil))
+	waitStarted(t, started)
+	cancel()
+	time.Sleep(200 * time.Millisecond)
+	close(release)
+
+	stopped(t, done, 5*time.Second)
+	f := decodeOut(t, e.read(t, OutputTopic, 1)[0]).GetTranscodeFailed()
+	if f.GetReason() != mediav1.TranscodeFailureReason_TRANSCODE_FAILURE_REASON_SOURCE_MISSING || f.GetVideoId() != id {
+		t.Errorf("event = %v, want SOURCE_MISSING for %s", f, id)
+	}
+	if got := e.committedOffset(t); got != 1 {
+		t.Errorf("committed offset = %d, want 1: the drained job's record", got)
+	}
+	e.requireCleanWorkDir(t)
+}
+
+// A job still running when the drain time passes is canceled then, not at the stop: nothing is
+// published or committed, and its directory is gone. tryTimeout stays far longer than the drain.
+func TestStopPastDrainTimeLeavesRecord(t *testing.T) {
+	t.Parallel()
+	e := newEnv(t)
+	const drain = 300 * time.Millisecond
+	started := make(chan struct{})
+	canceled := make(chan time.Time, 1)
+	var once sync.Once
+	e.store.holdDownload = func(ctx context.Context) error {
+		once.Do(func() { close(started) })
+		<-ctx.Done()
+		select {
+		case canceled <- time.Now():
+		default:
+		}
+		return ctx.Err()
+	}
+	cancel, done := e.drainingConsumer(t, drain)
+	e.produce(t, uploaded(t, ids.New(), 10, nil))
+	waitStarted(t, started)
+	stop := time.Now()
+	cancel()
+
+	stopped(t, done, drain+5*time.Second)
+	if after := (<-canceled).Sub(stop); after < drain {
+		t.Errorf("job canceled %v after the stop, want at least the drain time %v", after, drain)
+	}
+	if n := e.count(t, OutputTopic); n != 0 {
+		t.Errorf("%d events published past the drain time", n)
+	}
+	if got := e.committedOffset(t); got != -1 {
+		t.Errorf("committed offset = %d, want none: the record is delivered again", got)
+	}
+	e.requireCleanWorkDir(t)
+}
+
+// tryTimeout still bounds each try while the consumer drains: a try blocked past it fails as
+// temporary and the retries run on, the last one publishing RETRIES_EXHAUSTED, all within the
+// drain time.
+func TestStopKeepsTryTimeout(t *testing.T) {
+	t.Parallel()
+	e := newEnv(t)
+	e.w.tryTimeout = 50 * time.Millisecond
+	started := make(chan struct{})
+	var once sync.Once
+	var tries atomic.Int32
+	e.store.holdDownload = func(ctx context.Context) error {
+		tries.Add(1)
+		once.Do(func() { close(started) })
+		<-ctx.Done()
+		return ctx.Err()
+	}
+	id := ids.New()
+	cancel, done := e.drainingConsumer(t, 30*time.Second)
+	e.produce(t, uploaded(t, id, 10, nil))
+	waitStarted(t, started)
+	cancel()
+
+	stopped(t, done, 10*time.Second)
+	f := decodeOut(t, e.read(t, OutputTopic, 1)[0]).GetTranscodeFailed()
+	if f.GetReason() != mediav1.TranscodeFailureReason_TRANSCODE_FAILURE_REASON_RETRIES_EXHAUSTED || f.GetVideoId() != id {
+		t.Errorf("event = %v, want RETRIES_EXHAUSTED for %s", f, id)
+	}
+	if n := tries.Load(); n != MaxAttempts {
+		t.Errorf("tries = %d, want %d", n, MaxAttempts)
+	}
+	if got := e.committedOffset(t); got != 1 {
+		t.Errorf("committed offset = %d, want 1", got)
 	}
 }
 

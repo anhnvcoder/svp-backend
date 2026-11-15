@@ -258,6 +258,15 @@ Mục 7 cũ ("Đề xuất xem lại") nguyên văn; việc còn mở chuyển v
   dùng chung không đổi. [ADR-0071](../adr/0071-paid-features.md) chỉnh ADR-0055, 0060, 0062, 0063. Đáng xem lại: (1) email finding
   GuardDuty của stg đi đường `us-east-1` là dòng chung của rule `notify`; (2) digest mới ở stg chỉ có quét cơ bản tới khi promote;
   (3) cờ đặt cho prd hay account dùng chung chỉ bị chặn bởi review của PR và `plan`; khi áp chỉ phần Config sinh email.
+- **Vận hành pod (2026-11-14):** bề mặt mới là release `dlq-replay` với user Kafka `svp-dlq-replay`: đọc các topic `*.dlq`, ghi các
+  topic gốc của chúng, pod chờ để người vận hành `exec` (IN-11, ngoại lệ ghi topic ở IN-4, sơ đồ mục 2, một dòng ở mục 6;
+  [ADR-0072](../adr/0072-pod-operations.md)). Thu hẹp được: image media-worker không còn shell hay `apk` (FF-4; CSDL gói giữ cho máy quét,
+  FF-8); gateway trả `503` ngay khi quá giới hạn in-flight mỗi pod (RL-8); role app trong database của mỗi service có `statement_timeout`,
+  `idle_in_transaction_session_timeout` (IN-12); dòng outbox lỗi vĩnh viễn được đánh dấu và bỏ qua thay vì chặn mọi event sau (IN-13, một
+  dòng ở mục 6). Đáng xem lại: (1) ACL của `svp-dlq-replay` trên MSK và `kubectl exec` trên EKS ở buổi stg; (2) lệnh phát lại không ghi ai
+  chạy nó, chỉ audit log của control plane EKS (stg, prd) ghi ai `exec` vào pod; (3) đích phát lại theo header `dlq-topic` của record, không
+  theo `--from`: service ghi được một DLQ, khi bị chiếm, đưa event giả vào topic gốc qua lượt phát lại (FF-6); (4) timeout của role app chỉ
+  là lưới an toàn, service bị chiếm tự đặt lại được; (5) đo giới hạn in-flight dưới tải ở buổi stg.
 - **Đề xuất (không bắt buộc), giai đoạn 2:** thêm `etag` (hoặc checksum) của file gốc vào `VideoUploaded`, lấy từ lần `HEAD`
   ở `CompleteUpload`; worker tải file với điều kiện `If-Match` theo giá trị đó. Đóng được UP-2 (file bị thay giữa lúc kiểm và
   lúc đọc). Đây là thêm field nên không phá contract (quy tắc versioning ở

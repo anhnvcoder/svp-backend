@@ -193,3 +193,7 @@ thích goose, nên test này là nguồn đúng chung cho goose và squawk; nó 
 
 Phụ lục: [`appendix/0068-zero-downtime-migrations.md`](appendix/0068-zero-downtime-migrations.md) (bảng phương án, khoá theo lệnh, version
 squawk đã kiểm, số đo diễn tập, nguồn).
+
+### Chỉnh bởi
+
+- §1: [0072](0072-pod-operations.md): service có database ra bằng canary Argo Rollouts khi `canary: true` ở `base/`, nên N-1 và N chạy cùng lúc suốt các bước canary; Job `migrate` vẫn là hook `pre-upgrade`, chạy trước pod mới.

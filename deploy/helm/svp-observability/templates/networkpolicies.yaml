@@ -51,7 +51,7 @@ podSelector:
 {{- end }}
 {{- /* The three backends are collector.backends; a platform whose Collector sends to AWS's services lists none, and
 policy allow-aws-apis-collector opens their endpoints instead. */}}
-# The Collector: OTLP from the seven releases of svp (services.otlp), out to the three backends, and the Kafka brokers,
+# The Collector: OTLP from the releases of svp (services.otlp), out to the three backends, and the Kafka brokers,
 # where its kafka_metrics receiver reads consumer group lag as user svp-otelcol.
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy

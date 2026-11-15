@@ -188,3 +188,4 @@ Phụ lục: [`appendix/0019-web-k3d-supply-chain-observability.md`](appendix/00
 - §9: [0033](0033-svp-web-repo.md): source map của image CI là image `web-sourcemaps` trên GHCR thay artifact của lượt chạy.
 - §9: [0039](0039-mainpath-drills-scan-gate-sourcemaps.md): source map của image CI và bước tải lên GlitchTip của cluster GitOps bỏ; tải lúc build chờ tracker chạy lâu dài (bị thay một phần).
 - §3, §10: [0063](0063-managed-observability.md): trên `eks` canary của web truy vấn Amazon Managed Service for Prometheus bằng SigV4; span, metric của server Next vào X-Ray, AMP qua Collector thay Tempo, Prometheus trong cluster.
+- §2: [0072](0072-pod-operations.md): release `protocol: http` (web, gateway) có thêm `startupProbe` `httpGet /healthz` (chu kỳ 2 s, timeout 2 s, 30 lần), như nhánh gRPC.

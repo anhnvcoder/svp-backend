@@ -162,8 +162,8 @@ cnpg_ca_injected() {
   [ -n "$bundles" ] && [[ $bundles != *"[]"* ]]
 }
 
-# wait_hpa NAME: waits until HPA svp/NAME reads the CPU of its pods (condition ScalingActive) and its Deployment (the
-# gateway: Rollout) has at least minReplicas ready pods. The chart renders no replicas for such a workload, so it
+# wait_hpa NAME: waits until HPA svp/NAME reads the CPU of its pods (condition ScalingActive) and its Deployment (with
+# canary set: Rollout) has at least minReplicas ready pods. The chart renders no replicas for such a workload, so it
 # starts with one pod and the HPA raises it; a cluster without metrics-server, or with its API not serving, fails here
 # instead of leaving an HPA that never scales.
 wait_hpa() {
@@ -316,7 +316,7 @@ hook() {
       rmdir "$dir" 2>/dev/null || true
       ok "$name"
       if [ "$kind" = service ] && [ "$(workload_kind "$namespace" "$name")" = rollout ]; then
-        [ -n "$route" ] && kc -n "$namespace" get httproute "$route" >/dev/null 2>&1 ||
+        [ -z "$route" ] || kc -n "$namespace" get httproute "$route" >/dev/null 2>&1 ||
           fail "canaryRoute '$route' of component $name in argocd/apps/components.json names no HTTPRoute of release $name"
         wait_rollout "$namespace" "$name"
       fi
@@ -361,10 +361,10 @@ canary_ahead() {
   [ -z "$new" ] || [ "$new" != "$old" ]
 }
 
-# The gateway and the web client are Rollouts: an upgrade that changes the pod template is a new revision, which goes
-# out as a canary only when Envoy has measured enough responses of it. So while a canary is ahead (canary_ahead), drill
-# traffic (deploy/k8s/drills/traffic.sh) runs during each helmfile run of the waves after wave 1 and stops after it, a
-# failure included (also the EXIT trap). Traffic already running (make k8s-traffic-start) is used and left running.
+# A release with canary set is a Rollout: an upgrade that changes the pod template is a new revision, which goes out
+# as a canary only when its analysis has measured enough requests of it. So while a canary is ahead (canary_ahead),
+# drill traffic (deploy/k8s/drills/traffic.sh) runs during each helmfile run of the waves after wave 1 and stops after
+# it, a failure included (also the EXIT trap). Traffic already running (make k8s-traffic-start) is used, left running.
 traffic=$repo_root/deploy/k8s/drills/traffic.sh
 own_traffic=
 start_canary_traffic() {
@@ -404,16 +404,18 @@ image_values() {
 }
 
 # sync_later [WHAT]: helmfile sync of waves 2 and later (WHAT says more of this run in its messages), with drill
-# traffic from before it until it is over, a failure included, while a canary of a Rollout of components.json is ahead
-# (canary_ahead): every run of these waves upgrades the gateway and the web client.
+# traffic from before it until it is over, a failure included, while a canary of a release with canary set (in its
+# values file of base/, as helmfile.yaml.gotmpl reads it) is ahead (canary_ahead): these waves upgrade each of them.
 sync_later() {
-  local what=${1:-} rollouts ns name ahead='' rc=0
-  rollouts=$(jq -r ".components[] | select($dev_path) | select(.canaryRoute) | \"\(.namespace) \(.name)\"" \
-    "$components") || fail "read the components with canaryRoute in $components"
-  while read -r ns name; do
-    [ -n "$name" ] && [ "$(workload_kind "$ns" "$name")" = rollout ] || continue
+  local what=${1:-} services ns name values ahead='' rc=0
+  services=$(jq -r ".components[] | select($dev_path) | select(.path == \"deploy/helm/svp-service\")
+    | \"\(.namespace) \(.name) \(.values)\"" "$components") || fail "read the releases of chart svp-service in $components"
+  while read -r ns name values; do
+    [ -n "$name" ] || continue
+    grep -qx 'canary: true' "$gitops/$values" || continue
+    [ "$(workload_kind "$ns" "$name")" = rollout ] || continue
     if canary_ahead "$ns" "$name"; then ahead="$ahead $name"; fi
-  done <<<"$rollouts"
+  done <<<"$services"
   if [ -n "$ahead" ]; then start_canary_traffic "${ahead# }"; fi
   echo "helmfile sync: waves 2 and later$what"
   dev_helmfile sync -l 'wave!=0,wave!=1' || rc=$?

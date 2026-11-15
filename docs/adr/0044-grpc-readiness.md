@@ -139,3 +139,9 @@ Truy cập 2026-11-02.
   executes an empty sql statement against it").
 - [N7] gRPC: [Connection Backoff Protocol](https://github.com/grpc/grpc/blob/master/doc/connection-backoff.md) (`INITIAL_BACKOFF` 1 s,
   `MULTIPLIER` 1.6, `MAX_BACKOFF` 120 s); grpc-go dùng cùng giá trị trong `backoff.DefaultConfig`.
+
+## Thông tin thêm
+
+### Chỉnh bởi
+
+- Rủi ro: readiness phụ thuộc thứ dùng chung, Rủi ro: pool cạn dưới tải: [0072](0072-pod-operations.md): server gRPC đặt `MaxConnectionAge` 30 s, grace 10 s, nên kết nối đang mở của gateway tới pod NotReady đóng trong tối đa ~40 s (giới hạn thứ nhất); pool mỗi pod là `DATABASE_MAX_CONNS` (mặc định 10, engagement-service chia đôi đọc, ghi) theo ngân sách kết nối của env, không còn `max(4, số CPU)`.

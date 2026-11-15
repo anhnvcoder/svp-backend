@@ -47,7 +47,13 @@ while IFS= read -r file; do
     continue
   fi
   if [ ! -f "$tree/$file" ]; then
-    echo "FAIL  $file was removed: the GitOps path needs the image files of all seven services" >&2
+    rev=$(sed -n 's/^revision: *//p' "$tree/envs/$env/charts.yaml" 2>/dev/null) || rev=
+    if [[ $rev =~ ^[0-9a-f]{40}$ ]] && pinned=$(release_sources "$rev" 2>/dev/null) &&
+      ! jq -e --arg s "$svc" '[.sources[].services[]] | index($s)' <<<"$pinned" >/dev/null; then
+      echo "note  $file is missing: $svc is a new release, which the commit $env pins (${rev:0:12}) does not build"
+      continue
+    fi
+    echo "FAIL  $file was removed: the GitOps path needs the image file of every service the commit $env pins builds" >&2
     failed=1
     continue
   fi

@@ -103,6 +103,10 @@ func serve(ctx context.Context, logger *slog.Logger) (err error) {
 	if err != nil {
 		return err
 	}
+	maxConns, err := pgpool.MaxConns(1)
+	if err != nil {
+		return err
+	}
 	brokers, err := envcfg.Required("KAFKA_BROKERS")
 	if err != nil {
 		return err
@@ -170,7 +174,7 @@ func serve(ctx context.Context, logger *slog.Logger) (err error) {
 	}
 	defer kafka.Close()
 
-	pool, err = pgpool.New(ctx, databaseURL)
+	pool, err = pgpool.New(ctx, databaseURL, pgpool.WithMaxConns(maxConns))
 	if err != nil {
 		return fmt.Errorf("open database pool: %w", err)
 	}
@@ -190,6 +194,7 @@ func serve(ctx context.Context, logger *slog.Logger) (err error) {
 	}()
 
 	srv := server.New(pool, storage, logger)
+	//nolint:contextcheck // the constructor seeds its metric series at startup, with no request
 	newConsumer := func() (runner, error) { return kafkax.NewConsumer(srv.TranscodeConsumerConfig(brokers)) }
 	// The consumer stops with the server; a consumer that cannot be created stops the server
 	// too. Either way the relay above stops after both.

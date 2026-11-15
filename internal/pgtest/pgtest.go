@@ -80,7 +80,7 @@ func Create(ctx context.Context, name string, migrations fs.FS) (pool *pgxpool.P
 		return nil, nil, fmt.Errorf("create database %s: %w", name, err)
 	}
 	drop := func() error {
-		dropCtx, cancel := context.WithTimeout(context.Background(), cleanupTimeout)
+		dropCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), cleanupTimeout)
 		defer cancel()
 		if err := exec(dropCtx, adminURL, "DROP DATABASE IF EXISTS "+quote(name)+" WITH (FORCE)"); err != nil {
 			return fmt.Errorf("drop database %s: %w", name, err)
@@ -130,7 +130,7 @@ func exec(ctx context.Context, adminURL, sql string) error {
 	if err != nil {
 		return fmt.Errorf("connect to admin database: %w", err)
 	}
-	defer func() { _ = conn.Close(context.Background()) }()
+	defer func() { _ = conn.Close(context.WithoutCancel(ctx)) }()
 	_, err = conn.Exec(ctx, sql)
 	return err
 }

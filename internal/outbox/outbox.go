@@ -15,9 +15,11 @@
 //	    payload      bytea       NOT NULL,
 //	    headers      jsonb       NOT NULL DEFAULT '{}',
 //	    created_at   timestamptz NOT NULL DEFAULT now(),
-//	    published_at timestamptz
+//	    published_at timestamptz,
+//	    failed_at    timestamptz,
+//	    last_error   text
 //	);
-//	CREATE INDEX outbox_unpublished_idx ON outbox (id) WHERE published_at IS NULL;
+//	CREATE INDEX outbox_pending_idx ON outbox (id) WHERE published_at IS NULL AND failed_at IS NULL;
 //
 // # Writing
 //
@@ -46,6 +48,11 @@
 //
 // Delivery is at-least-once: a batch produced but not marked as sent (produce error, shutdown,
 // crash) is sent again with the same event_id, so consumers must tolerate duplicates.
+//
+// A row Kafka refuses for good (see permanentErrors in relay.go) gets failed_at and last_error
+// and is never sent; the counter svp.outbox.rows.failed (attribute topic) counts such rows. The
+// relay does not stop for it, so the key's later events go out without that one: consumers see
+// a gap in the key's order rather than a queue stuck behind one row.
 package outbox
 
 import (

@@ -132,7 +132,7 @@ spec:
 ---
 {{- end }}
 {{- if not $kafkaExternal }}
-# Kafka's client listener: the five services with Kafka, KEDA's lag reader, the Collector's kafkametrics receiver, the
+# Kafka's client listener: the services with Kafka, KEDA's lag reader, the Collector's kafkametrics receiver, the
 # init Job and svp-ops. The broker's controller and inter-broker listeners are bound to localhost of its own pod.
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy

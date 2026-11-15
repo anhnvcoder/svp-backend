@@ -69,8 +69,10 @@ type dependency struct {
 // base that media object keys are appended to, without a trailing slash. clientAddr finds the
 // client's address, for the rate limits by IP and the client.address of spans alike. serverName
 // is the gateway's host:port, with a numeric port, named in its HTTP spans and metrics (see
-// httpx.Trace).
-func New(userConn, videoConn, feedConn, engagementConn grpc.ClientConnInterface, verifier *authtoken.Verifier, mediaBaseURL string, limits *ratelimit.Limiter, clientAddr httpx.ClientAddr, serverName string) http.Handler {
+// httpx.Trace). At most maxInFlight requests run at once, probes aside (see httpx.LoadShed): the
+// limit sits inside Trace and SecurityHeaders, so a refused request has its span, metric and
+// headers, and in front of the routes, so it costs no rate limit token and no gRPC call.
+func New(userConn, videoConn, feedConn, engagementConn grpc.ClientConnInterface, verifier *authtoken.Verifier, mediaBaseURL string, limits *ratelimit.Limiter, clientAddr httpx.ClientAddr, serverName string, maxInFlight int) http.Handler {
 	s := &server{
 		mediaBaseURL: mediaBaseURL,
 		limits:       limits,
@@ -122,7 +124,7 @@ func New(userConn, videoConn, feedConn, engagementConn grpc.ClientConnInterface,
 	mux.Handle("GET /feed/explore", authed(ratelimit.Read, s.exploreFeed))
 	mux.HandleFunc("GET /healthz", healthz)
 	mux.HandleFunc("GET /readyz", s.readyz)
-	return httpx.Trace(serverName, clientAddr)(httpx.SecurityHeaders(httpx.Recover(httpx.AccessLog(httpx.ValidUTF8(httpx.Routes(mux))))))
+	return httpx.Trace(serverName, clientAddr)(httpx.SecurityHeaders(httpx.LoadShed(maxInFlight, mux)(httpx.Recover(httpx.AccessLog(httpx.ValidUTF8(httpx.Routes(mux)))))))
 }
 
 // allow counts the request in class c under id and, when the class refuses it, writes the 429
@@ -135,10 +137,10 @@ func (s *server) allow(w http.ResponseWriter, r *http.Request, c ratelimit.Class
 	return ok
 }
 
-// callContext returns the context of a gRPC call made for r: metadata built from scratch by
-// OutgoingContext and the call deadline.
-func callContext(r *http.Request) (context.Context, context.CancelFunc) {
-	return context.WithTimeout(httpx.OutgoingContext(r.Context()), callTimeout)
+// callContext returns the context of a gRPC call made for the request whose context is ctx: metadata
+// built from scratch by OutgoingContext and the call deadline.
+func callContext(ctx context.Context) (context.Context, context.CancelFunc) {
+	return context.WithTimeout(httpx.OutgoingContext(ctx), callTimeout)
 }
 
 // writeJSON writes v as an application/json response with status.
@@ -179,7 +181,7 @@ func (s *server) register(w http.ResponseWriter, r *http.Request) {
 	if !httpx.DecodeJSON(w, r, &req) {
 		return
 	}
-	ctx, cancel := callContext(r)
+	ctx, cancel := callContext(r.Context())
 	defer cancel()
 	resp, err := s.users.Register(ctx, &userv1.RegisterRequest{
 		Email:       req.Email,
@@ -223,7 +225,7 @@ func (s *server) login(w http.ResponseWriter, r *http.Request) {
 		!s.allow(w, r, ratelimit.LoginAccount, ratelimit.EmailHash(req.Email)) {
 		return
 	}
-	ctx, cancel := callContext(r)
+	ctx, cancel := callContext(r.Context())
 	defer cancel()
 	resp, err := s.users.Login(ctx, &userv1.LoginRequest{Email: req.Email, Password: req.Password})
 	if err != nil {
@@ -257,7 +259,7 @@ func (s *server) refresh(w http.ResponseWriter, r *http.Request) {
 	if !s.readRefreshToken(w, r, &req) {
 		return
 	}
-	ctx, cancel := callContext(r)
+	ctx, cancel := callContext(r.Context())
 	defer cancel()
 	resp, err := s.users.Refresh(ctx, &userv1.RefreshRequest{RefreshToken: req.RefreshToken})
 	if err != nil {
@@ -280,7 +282,7 @@ func (s *server) logout(w http.ResponseWriter, r *http.Request) {
 	if !s.readRefreshToken(w, r, &req) {
 		return
 	}
-	ctx, cancel := callContext(r)
+	ctx, cancel := callContext(r.Context())
 	defer cancel()
 	if _, err := s.users.Logout(ctx, &userv1.LogoutRequest{RefreshToken: req.RefreshToken}); err != nil {
 		httpx.WriteGRPCError(w, r, err)
@@ -297,7 +299,7 @@ func (s *server) readRefreshToken(w http.ResponseWriter, r *http.Request, req *r
 
 // follow and unfollow pass user_id on as it is: user-service validates it.
 func (s *server) follow(w http.ResponseWriter, r *http.Request) {
-	ctx, cancel := callContext(r)
+	ctx, cancel := callContext(r.Context())
 	defer cancel()
 	if _, err := s.users.Follow(ctx, &userv1.FollowRequest{FolloweeId: r.PathValue("user_id")}); err != nil {
 		httpx.WriteGRPCError(w, r, err)
@@ -307,7 +309,7 @@ func (s *server) follow(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *server) unfollow(w http.ResponseWriter, r *http.Request) {
-	ctx, cancel := callContext(r)
+	ctx, cancel := callContext(r.Context())
 	defer cancel()
 	if _, err := s.users.Unfollow(ctx, &userv1.UnfollowRequest{FolloweeId: r.PathValue("user_id")}); err != nil {
 		httpx.WriteGRPCError(w, r, err)
@@ -340,7 +342,7 @@ type userProfile struct {
 // gives on the other routes of the caller's own profile.
 func (s *server) getMe(w http.ResponseWriter, r *http.Request) {
 	caller := httpx.UserID(r.Context())
-	ctx, cancel := callContext(r)
+	ctx, cancel := callContext(r.Context())
 	defer cancel()
 	resp, err := s.users.GetProfiles(ctx, &userv1.GetProfilesRequest{UserIds: []string{caller}})
 	if err != nil {
@@ -368,7 +370,7 @@ func (s *server) updateMe(w http.ResponseWriter, r *http.Request) {
 	if !httpx.DecodeJSON(w, r, &req) {
 		return
 	}
-	ctx, cancel := callContext(r)
+	ctx, cancel := callContext(r.Context())
 	defer cancel()
 	resp, err := s.users.UpdateDisplayName(ctx, &userv1.UpdateDisplayNameRequest{DisplayName: req.DisplayName})
 	if err != nil {
@@ -381,7 +383,7 @@ func (s *server) updateMe(w http.ResponseWriter, r *http.Request) {
 // getProfile passes handle on as it is: user-service normalizes it and answers a value that
 // cannot be a handle with the same 404 as an unknown one.
 func (s *server) getProfile(w http.ResponseWriter, r *http.Request) {
-	ctx, cancel := callContext(r)
+	ctx, cancel := callContext(r.Context())
 	defer cancel()
 	resp, err := s.users.GetProfileByHandle(ctx, &userv1.GetProfileByHandleRequest{Handle: r.PathValue("handle")})
 	if err != nil {
@@ -419,7 +421,7 @@ func (s *server) initUpload(w http.ResponseWriter, r *http.Request) {
 	if !httpx.DecodeJSON(w, r, &req) {
 		return
 	}
-	ctx, cancel := callContext(r)
+	ctx, cancel := callContext(r.Context())
 	defer cancel()
 	resp, err := s.videos.InitUpload(ctx, &videov1.InitUploadRequest{
 		Title:       req.Title,
@@ -490,7 +492,7 @@ type videoResponse struct {
 // getVideo reads the video first, then adds its author and stats: the video decides whether
 // there is anything to show, and only its own errors fail the request.
 func (s *server) getVideo(w http.ResponseWriter, r *http.Request) {
-	ctx, cancel := callContext(r)
+	ctx, cancel := callContext(r.Context())
 	defer cancel()
 	resp, err := s.videos.GetVideo(ctx, &videov1.GetVideoRequest{VideoId: r.PathValue("video_id")})
 	if err != nil {
@@ -537,7 +539,7 @@ func (s *server) getPublicVideo(w http.ResponseWriter, r *http.Request) {
 	if !s.allow(w, r, ratelimit.Public, ratelimit.ClientIP(r, s.clientAddr)) {
 		return
 	}
-	ctx, cancel := callContext(r)
+	ctx, cancel := callContext(r.Context())
 	defer cancel()
 	resp, err := s.videos.GetPublicVideo(ctx, &videov1.GetPublicVideoRequest{VideoId: r.PathValue("video_id")})
 	if err != nil {
@@ -586,7 +588,7 @@ func (s *server) serveAuthorVideos(w http.ResponseWriter, r *http.Request, autho
 	if !ok {
 		return
 	}
-	ctx, cancel := callContext(r)
+	ctx, cancel := callContext(r.Context())
 	defer cancel()
 	resp, err := s.videos.ListAuthorVideos(ctx, &videov1.ListAuthorVideosRequest{AuthorId: authorID, PageSize: size, PageToken: token})
 	if err != nil {
@@ -612,7 +614,7 @@ func (s *server) serveAuthorVideos(w http.ResponseWriter, r *http.Request, autho
 // completeUpload answers 202 with the video in whatever state CompleteUpload returns: the RPC is
 // idempotent and the state is in the body. The service validates video_id.
 func (s *server) completeUpload(w http.ResponseWriter, r *http.Request) {
-	ctx, cancel := callContext(r)
+	ctx, cancel := callContext(r.Context())
 	defer cancel()
 	resp, err := s.videos.CompleteUpload(ctx, &videov1.CompleteUploadRequest{VideoId: r.PathValue("video_id")})
 	if err != nil {
@@ -653,7 +655,7 @@ func (s *server) toVideoResponse(v *videov1.Video) videoResponse {
 
 // like, unlike and recordView pass video_id on as it is: engagement-service validates it.
 func (s *server) like(w http.ResponseWriter, r *http.Request) {
-	ctx, cancel := callContext(r)
+	ctx, cancel := callContext(r.Context())
 	defer cancel()
 	if _, err := s.engagement.Like(ctx, &engagementv1.LikeRequest{VideoId: r.PathValue("video_id")}); err != nil {
 		httpx.WriteGRPCError(w, r, err)
@@ -663,7 +665,7 @@ func (s *server) like(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *server) unlike(w http.ResponseWriter, r *http.Request) {
-	ctx, cancel := callContext(r)
+	ctx, cancel := callContext(r.Context())
 	defer cancel()
 	if _, err := s.engagement.Unlike(ctx, &engagementv1.UnlikeRequest{VideoId: r.PathValue("video_id")}); err != nil {
 		httpx.WriteGRPCError(w, r, err)
@@ -689,7 +691,7 @@ func (s *server) recordView(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusAccepted)
 		return
 	}
-	ctx, cancel := callContext(r)
+	ctx, cancel := callContext(r.Context())
 	defer cancel()
 	if _, err := s.engagement.RecordView(ctx, &engagementv1.RecordViewRequest{VideoId: videoID}); err != nil {
 		if claim == ratelimit.ViewClaimed {
@@ -770,7 +772,7 @@ func (s *server) serveFeed(w http.ResponseWriter, r *http.Request, fetch func(ct
 	if !ok {
 		return
 	}
-	ctx, cancel := callContext(r)
+	ctx, cancel := callContext(r.Context())
 	defer cancel()
 	page, err := fetch(ctx, size, token)
 	if err != nil {

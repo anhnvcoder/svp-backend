@@ -349,6 +349,20 @@ promote_image_row() {
     "$1" "$3" "$owner" "$repo" "$3" "$2" "${4:0:19}" "$owner" "$repo" "$repo" "$name"
 }
 
+# promote_image_file ENV SERVICE REPOSITORY TAG DIGEST: prints envs/ENV/images/SERVICE.yaml of svp-gitops for a release
+# the promote writes there first, opening with the comment of the other image files there (lines of at most 118).
+promote_image_file() {
+  local src url
+  src=$(release_source_of "$2" "$3") || fail "$3 is no release of $2 in $release_sources_file"
+  url=$(jq -r .repository <<<"$src")
+  echo "# The release image of $2 in $1, nothing else: the release on GHCR that CI of"
+  echo "$url built, scanned and signed (.github/workflows/images.yml there). The tag names the commit for people; the" \
+    "cluster pulls the digest. Its configuration is base/services/$2.yaml and envs/$1/$2.yaml when there is one." |
+    awk '{ line = "#"; for (i = 1; i <= NF; i++) { if (length(line) + 1 + length($i) > 118) { print line; line = "#" }
+      line = line " " $i } print line }'
+  printf 'image:\n  repository: %s\n  tag: "%s"\n  digest: "%s"\n' "$3" "$4" "$5"
+}
+
 # yq_ [NAME=VALUE...] ARGS...: runs pinned yq without network as calling user with PWD as workdir.
 # Passes NAME=VALUE into container env for strenv(); never run inside loops reading stdin.
 yq_() {

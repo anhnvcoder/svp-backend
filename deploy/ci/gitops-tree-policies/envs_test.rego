@@ -10,6 +10,27 @@ deny(given) := msgs if {
 
 worktree := object.union(object.remove(fx.tree_input, ["charts"]), {"worktree": true})
 
+warn(given) := msgs if {
+	msgs := envs.warn with input as given with data.gitops_check as fx.cfg
+}
+
+# A service the table of stg publishes that the fixture's files and the commit stg pins (built) do not know.
+newcomer := "dlq-replay"
+
+with_newcomer := object.union(fx.backend, {"services": array.concat(fx.backend_services, [newcomer])})
+
+# with_new_release(given, built): given whose stg is checked with a table that publishes newcomer, the commit it pins
+# building built.
+with_new_release(given, built) := object.union(given, {
+	"sources": {"stg": {"revision": fx.revision, "sources": [with_newcomer, fx.web]}},
+	"built": {"stg": {"revision": fx.revision, "services": built}},
+})
+
+new_release_note := concat("", [
+	$"envs/stg/images/ has no {newcomer}.yaml: {newcomer} is a new release, which the commit stg pins (0b4c089951cf) ",
+	"does not build; the promote of one that does writes the file",
+])
+
 # with_image(given, env, svc, text): given with envs/<env>/images/<svc>.yaml holding text.
 with_image(given, env, svc, text) := fx.with_file(given, $"envs/{env}/images/{svc}.yaml", text)
 
@@ -19,6 +40,38 @@ with_charts(given, env, text) := fx.with_file(given, $"envs/{env}/charts.yaml", 
 test_the_fixture_passes if count(deny(fx.tree_input)) == 0
 
 test_the_fixture_passes_with_the_working_tree if count(deny(worktree)) == 0
+
+test_the_fixture_has_no_note if count(warn(fx.tree_input)) == 0
+
+test_a_new_release_on_the_working_tree_passes_with_a_note if {
+	given := with_new_release(worktree, fx.services)
+	count(deny(given)) == 0
+	warn(given) == {new_release_note}
+}
+
+test_a_new_release_the_pinned_commit_builds_needs_its_file if fx.says(
+	deny(with_new_release(fx.tree_input, array.concat(fx.services, [newcomer]))),
+	concat("", [
+		"envs/stg/images/ holds 'engagement-service.yaml feed-service.yaml gateway.yaml media-worker.yaml user-service.yaml ",
+		"video-service.yaml web.yaml': exactly one file per service, dlq-replay.yaml engagement-service.yaml",
+	]),
+)
+
+test_a_new_release_with_its_file_is_checked_as_a_release if {
+	given := with_image(with_new_release(worktree, fx.services), "stg", newcomer, fx.image_text(fx.repository(newcomer)))
+	count(deny(given)) == 0
+	count(warn(given)) == 0
+}
+
+test_a_new_release_with_a_file_of_another_repository if fx.says(
+	deny(with_image(with_new_release(worktree, fx.services), "stg", newcomer, fx.image_text(fx.repository("gateway")))),
+	"envs/stg/images/dlq-replay.yaml: the image must be a release of ghcr.io/anhnvcoder/svp-backend/dlq-replay",
+)
+
+test_an_image_file_of_a_service_the_pinned_commit_does_not_publish if fx.says(
+	deny(with_image(fx.tree_input, "prd", newcomer, fx.image_text(fx.repository(newcomer)))),
+	"envs/prd/images/ holds 'dlq-replay.yaml engagement-service.yaml",
+)
 
 test_an_unknown_environment if fx.says(
 	deny(fx.with_entry(fx.tree_input, "envs/qa", fx.dir)),
@@ -146,7 +199,7 @@ test_derived_values_of_an_environment_off_main_are_not_compared if count(deny(wi
 	"prd", replace(fx.charts_text, "v1.36", "v1.35"),
 ))) == 0
 
-test_six_image_files_of_seven if fx.says(
+test_an_image_file_missing if fx.says(
 	deny(fx.without(fx.tree_input, "envs/stg/images/web.yaml")),
 	concat("", [
 		"envs/stg/images/ holds 'engagement-service.yaml feed-service.yaml gateway.yaml media-worker.yaml user-service.yaml video-service.yaml': ",

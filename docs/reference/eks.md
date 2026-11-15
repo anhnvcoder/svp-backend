@@ -63,6 +63,15 @@ Loại tài liệu (Diátaxis): **reference**, tra cứu khi cần một lệnh 
     `kubectl --context svp-<env> -n svp-data exec deploy/svp-ops -c kafka -- /opt/svp/bin/svp-kafka topics --list`; đọc RDS bằng role app,
     phiên chỉ đọc:
     `kubectl --context svp-<env> -n svp-data exec deploy/svp-ops -c postgres -- /opt/svp/bin/svp-pg feed -c 'SELECT count(*) FROM follows'`.
+  - **Phát lại DLQ** (release `dlq-replay`, chart `svp-service`, namespace `svp`, `protocol: none`, một replica ở lệnh
+    con `standby`): user MSK `svp-dlq-replay` đọc bốn topic `*.dlq` và ghi bốn topic gốc (ACL của `kafka-init`), mật
+    khẩu trong entry `kafka-users`, vào Secret `dlq-replay-env` qua External Secrets như các service; NetworkPolicy chỉ
+    cho egress tới Kafka và Collector. Người học chạy lệnh trong pod (không pod tạm, không `svp-kafka`):
+    `kubectl --context svp-<env> -n svp exec deploy/dlq-replay -- /app replay --from <topic>.dlq --dry-run`; thêm cờ
+    `--group`, khoảng offset hay thời gian khi chạy thật. Quy trình, kiểm và xác nhận:
+    [`kafka-dlq-records.md`](../runbooks/kafka-dlq-records.md). Release có image riêng nên cần file
+    `envs/<env>/images/dlq-replay.yaml` ở env đó (tạo bởi lượt promote) trước khi component của nó vào
+    `argocd/apps/components.json`.
   - Nguồn của mọi Secret trên EKS là AWS Secrets Manager, entry `svp/<env>/<entry>` region `ap-southeast-1` (vỏ entry không giá trị do
     module `external-secrets` của `svp-infra` tạo); `make eks-secrets`, `make eks-glitchtip-init` ghi giá trị với `AWS_PROFILE` của
     account env (biến ở [`environment.md`](environment.md)). Mỗi lệnh `aws` ghi `--profile` và `--region` ngay trong lệnh; trước lần đọc
@@ -152,8 +161,9 @@ Lệnh làm trọn một lượt xoay credential theo cùng thứ tự với `ma
 4. Một sync của Application `svp-data` (hook PostSync `pg-bootstrap` đặt mật khẩu mới trong Postgres, `kafka-init` đăng nhập MSK bằng `svp-admin`
    và đặt lại topic, ACL), chờ đúng lượt sync đó `Succeeded`; `Failed`, `Error` hay quá 600 giây thì dừng, ExternalSecret của client chưa dựng
    lại: client restart trước khi Job đặt mật khẩu mới thì đăng nhập bằng mật khẩu hệ thống chưa có.
-5. `force-sync` mọi ExternalSecret còn lại; Reloader restart workload có Secret đổi: Deployment bằng rolling update, Rollout `gateway`,
-   `web` bằng `spec.restartAt` (không tạo revision, nên không thành canary). Script không chờ bước này.
+5. `force-sync` mọi ExternalSecret còn lại; Reloader restart workload có Secret đổi: Deployment bằng rolling update,
+   Rollout (release `canary: true`) bằng `spec.restartAt` (không tạo revision, nên không thành canary). Script không chờ
+   bước này.
 
 Mật khẩu của user Kafka, Valkey không sinh bằng lệnh này mà ở Terraform: tăng `msk_password_version` (Kafka) hay `valkey_password_version`
 (Valkey) của root env, apply, rồi chạy `aws/scripts/bootstrap.sh <env> secrets` của `svp-infra` (gọi lệnh trên với mật khẩu master RDS). Thiếu

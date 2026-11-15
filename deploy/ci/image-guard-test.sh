@@ -361,8 +361,10 @@ same "leg drill-no-provenance: built as the gateway, no allow-critical" \
   "$tree/deploy/docker/service.Dockerfile SERVICE=gateway false" \
   "$(out_of dockerfile) $(out_of build-arg) $(out_of allow-critical)"
 rm -rf "$work/web-leg"
+backend_images=$(jq -r '.sources[] | select(.name == "backend") | .services + .drillImages | join(" ")' \
+  "$tree/deploy/helm/svp-policy/files/sources.json")
 refused "leg web in this repository" \
-  "web is not an image of release source backend (gateway user-service video-service engagement-service feed-service media-worker drill-vulnerable drill-unsigned drill-no-provenance): nothing is built, pushed or signed under ghcr.io/anhnvcoder/svp-backend/" \
+  "web is not an image of release source backend ($backend_images): nothing is built, pushed or signed under ghcr.io/anhnvcoder/svp-backend/" \
   "${backend_run[@]}" -- leg web amd64 "$work/web-leg"
 check "leg web in this repository: no output folder" test ! -e "$work/web-leg"
 guard github "leg gateway on the other architecture" 1 "${backend_run[@]}" -- leg gateway arm64 "$out"

@@ -13,6 +13,10 @@ set -euo pipefail
 wait_seconds=${SVP_WAIT_SECONDS:?}
 mode=${SVP_PG_MODE:-cluster}
 services=(user video engagement feed glitchtip)
+# Timeouts of the app role of each service in its database, set by bootstrap.sql: requests stay well under them, and a
+# background job that needs longer raises its statement timeout for its own transaction. GlitchTip's are reset.
+app_statement_timeout=5s
+app_idle_in_transaction_timeout=30s
 
 # Read every password before changing anything: a missing one stops the Job with nothing half applied.
 for svc in "${services[@]}"; do
@@ -41,8 +45,14 @@ for svc in "${services[@]}"; do
   upper=$(printf '%s' "$svc" | tr '[:lower:]' '[:upper:]')
   migrator="SVP_${upper}_MIGRATOR_DB_PASSWORD"
   app="SVP_${upper}_APP_DB_PASSWORD"
+  statement_timeout=$app_statement_timeout idle_timeout=$app_idle_in_transaction_timeout
+  if [[ $svc == glitchtip ]]; then
+    statement_timeout='' idle_timeout=''
+  fi
   SVP_MIGRATOR_PASSWORD=${!migrator} SVP_APP_PASSWORD=${!app} \
-    psql -X -q -v db="svp_${svc}" -v migrator="svp_${svc}_migrator" -v app="svp_${svc}_app" -f /init/bootstrap.sql
+    psql -X -q -v db="svp_${svc}" -v migrator="svp_${svc}_migrator" -v app="svp_${svc}_app" \
+    -v statement_timeout="$statement_timeout" -v idle_in_transaction_session_timeout="$idle_timeout" \
+    -f /init/bootstrap.sql
   echo "pg-bootstrap: database svp_${svc} and roles svp_${svc}_migrator, svp_${svc}_app ok"
 done
 

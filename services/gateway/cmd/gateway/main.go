@@ -55,6 +55,9 @@ const (
 	shutdownTimeout = 10 * time.Second
 	// healthcheckTimeout bounds the healthcheck subcommand, which a container runtime calls often.
 	healthcheckTimeout = 3 * time.Second
+	// defaultMaxInFlight is the target load spread over the HPA's most replicas, times the feed's p99
+	// budget (150 ms), times 4 for headroom: requests a pod runs at once when the cluster is at target.
+	defaultMaxInFlight = 150
 )
 
 // backend is a gRPC service the gateway calls.
@@ -268,6 +271,10 @@ func serve(ctx context.Context, logger *slog.Logger) error {
 	if err != nil {
 		return err
 	}
+	inFlightLimit, err := maxInFlight()
+	if err != nil {
+		return err
+	}
 
 	// Like engagement-service's below, this connection is opened at start and never left idle:
 	// GetProfiles adds the authors of every feed page within 100 ms.
@@ -305,7 +312,7 @@ func serve(ctx context.Context, logger *slog.Logger) error {
 		return fmt.Errorf("REDIS_URL: %w", err)
 	}
 	defer func() { _ = redisClient.Close() }()
-	limits := ratelimit.New(redisClient, redisKeyPrefix)
+	limits := ratelimit.New(redisClient, redisKeyPrefix) //nolint:contextcheck // New seeds its metric series at startup
 
 	var lc net.ListenConfig
 	lis, err := lc.Listen(ctx, "tcp", addr)
@@ -315,7 +322,9 @@ func serve(ctx context.Context, logger *slog.Logger) error {
 	// The spans and metrics name the gateway by its service name and the port it listens on, a
 	// number even when LISTEN_ADDR names the port.
 	serverName := net.JoinHostPort(serviceName, strconv.Itoa(lis.Addr().(*net.TCPAddr).Port))
-	handler := api.New(userConn, videoConn, feedConn, engagementConn, authtoken.NewVerifier(keys), mediaBase, limits, clientAddr, serverName)
+	handler := api.New( //nolint:contextcheck // seeds metric series at startup
+		userConn, videoConn, feedConn, engagementConn, authtoken.NewVerifier(keys), mediaBase, limits, clientAddr, serverName,
+		inFlightLimit)
 	if trustTrace {
 		handler = httpx.TrustTraceContext(handler)
 	}
@@ -438,6 +447,18 @@ func trustTraceContext() (bool, error) {
 	default:
 		return false, errors.New("TRUST_TRACE_CONTEXT: want true or false")
 	}
+}
+
+// maxInFlight reads MAX_IN_FLIGHT, the number of requests one gateway runs at once before it
+// answers 503 (see httpx.LoadShed); unset, it is defaultMaxInFlight. Anything but a whole number
+// >= 1 stops the gateway: 0 would refuse every request. The error names the variable and never
+// carries its value.
+func maxInFlight() (int, error) {
+	n, err := strconv.Atoi(envcfg.String("MAX_IN_FLIGHT", strconv.Itoa(defaultMaxInFlight)))
+	if err != nil || n < 1 {
+		return 0, errors.New("MAX_IN_FLIGHT: want a whole number >= 1")
+	}
+	return n, nil
 }
 
 // dial returns a client connection to b at the gRPC address in its variable, with b's dial

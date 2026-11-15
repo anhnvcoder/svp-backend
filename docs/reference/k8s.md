@@ -37,10 +37,28 @@ Loại tài liệu (Diátaxis): **reference**, tra cứu khi cần một lệnh 
   node server khởi động): sửa `k3d.yaml` hay dời repo phải `make k8s-down && make k8s-up`, sửa file đó có hiệu lực ở lần
   khởi động sau; `make k8s-up` từ chối cluster tạo khi chưa có cấu hình này, hay khi nguồn mount không còn là file, khác
   file của repo hiện tại, hay version lệch `podSecurityVersion`. Probe của chart `svp-service` (ADR-0020 §10, cùng cho mọi
-  release): liveness `timeoutSeconds: 5` (chu kỳ 10 s, 3 lần), readiness 2 (chu kỳ 5 s), startup của service gRPC 2 (chu kỳ
-  2 s × 30 lần); media-worker không có probe. Probe gRPC: startup và liveness hỏi health tổng `""` (không phụ thuộc database),
+  release): liveness `timeoutSeconds: 5` (chu kỳ 10 s, 3 lần), readiness 2 (chu kỳ 5 s), startup 2 (chu kỳ 2 s × 30 lần) ở
+  mọi release có probe: HTTP hỏi `/healthz`, gRPC hỏi health tổng; media-worker không có probe. Probe gRPC: startup và liveness hỏi health tổng `""` (không phụ thuộc database),
   readiness hỏi tên health `readiness` (`grpc.service: readiness`), NOT_SERVING khi ping Postgres của service lỗi 3 lần liên tiếp
   ([ADR-0044](../adr/0044-grpc-readiness.md)): database của một service không tới được thì pod của nó NotReady, không restart.
+- Pod spec của chart `svp-service` (cùng cho mọi release): container nhận `SVP_POD_NAME`, `SVP_POD_NAMESPACE` (downward
+  API) và `OTEL_RESOURCE_ATTRIBUTES=k8s.pod.name=…,k8s.namespace.name=…` dựng từ hai biến đó (chúng đứng trước `env` của
+  release, vì Kubernetes chỉ thay `$(VAR)` bằng biến khai báo trước; `env` của release không đặt được
+  `OTEL_RESOURCE_ATTRIBUTES`), nên metric và log mang `k8s_pod_name` (Prometheus đã promote thuộc tính đó).
+  `spreadAcrossNodes` thêm ràng buộc trải theo `kubernetes.io/hostname` và theo `topology.kubernetes.io/zone`; khoá
+  `zoneSpread: {whenUnsatisfiable, minDomains}` chỉnh ràng buộc zone: mặc định `ScheduleAnyway` không `minDomains` (node
+  k3d không có nhãn zone), `minDomains` chỉ hợp lệ với `DoNotSchedule` (schema chặn). Server gRPC của service đặt
+  `MaxConnectionAge` và `MaxConnectionAgeGrace` (`internal/grpcserver`), nên client nối lại đều đặn và tải trải lên pod
+  mới. Media-worker drain khi SIGTERM (làm nốt job đang chạy tối đa 540 s, [`environment.md`](environment.md)):
+  `terminationGracePeriodSeconds` của release phải lớn hơn hạn đó, và dưới `terminationGracePeriod` của NodePool
+  Karpenter.
+- **Canary của service gRPC** (chart `svp-service`, `canary: true` ở `base/services/<release>.yaml` của `svp-gitops`;
+  release có `httpRoute.host`, gateway và web, canary qua Envoy): Rollout không `trafficRouting`, tải chia theo số pod
+  (gần đúng: client `pick_first` qua ClusterIP chỉ lệch về pod canary khi nối lại). Bước như release HTTP (25 %, 60 s,
+  50 %, 60 s, gate) và cùng nhịp đo, `failureLimit` của chart; hai metric trên pod canary (`k8s_pod_name` theo hash pod
+  template của Rollout) từ `rpc_server_call_duration_seconds`: tỉ lệ lỗi server (mã gRPC `UNKNOWN`, `INTERNAL`,
+  `UNAVAILABLE`, `DATA_LOSS`, `DEADLINE_EXCEEDED` trên mọi lời gọi) và p99; dưới 30 lời gọi trong phút gần nhất thì
+  Inconclusive, không promote. Ngưỡng ở `canaryLimits` của release.
 - Nền tảng trên k3d so với EKS ([ADR-0056](../adr/0056-eks-platform-ha.md)): Envoy chạy như EKS (EnvoyProxy `svp` có HPA `envoyHpa` từ 2
   replica, PDB `envoyPDB`, trải zone rồi trải node; node k3d không có nhãn `topology.kubernetes.io/zone` nên chỉ ràng buộc node có tác dụng);
   Kyverno một replica của `base/kyverno.yaml` (ba replica chỉ ở `platforms/eks/kyverno.yaml`); không Karpenter (`karpenter.enabled` của chart
@@ -57,7 +75,7 @@ Loại tài liệu (Diátaxis): **reference**, tra cứu khi cần một lệnh 
   `deploy/helm/svp-policy/files/sources.json` (không ở `values.yaml`, không overlay nào đổi được; đi stg trước prd theo `revision` của
   chart): mỗi nguồn `name`, `repository`, `imagePrefix` (kết thúc `/`), `services`, `drillImages`, `issuer`, `subject`,
   `provenanceRef`, `promoter` (tuỳ chọn). Hiện hai nguồn: `backend` (repo này `anhnvcoder/svp-backend`, prefix
-  `ghcr.io/anhnvcoder/svp-backend/`, sáu service Go, ba image diễn tập `drill-vulnerable`, `drill-unsigned`, `drill-no-provenance`, App
+  `ghcr.io/anhnvcoder/svp-backend/`, các service Go của bảng image, ba image diễn tập `drill-vulnerable`, `drill-unsigned`, `drill-no-provenance`, App
   `svp-gitops-promoter`) và `web` (`anhnvcoder/svp-frontend`, prefix `ghcr.io/anhnvcoder/svp-frontend/`, chỉ `web`, App `svp-web-promoter`);
   mọi nguồn của bảng working tree có `promoter` (`deploy/ci/sources-test.sh`). Hai **nguồn nghỉ hưu** của lượt đổi tên repo
   ([ADR-0036](../adr/0036-repo-rename.md) §3; `oldbackend` dưới tên `short-video-platform`, `oldweb` dưới tên `svp-web`, không `promoter`)
@@ -65,8 +83,8 @@ Loại tài liệu (Diátaxis): **reference**, tra cứu khi cần một lệnh 
   bị phép 1 từ chối (prefix không thuộc nguồn nào), không bot nào tiếp quản file của nguồn nghỉ hưu nữa. `promoter` vẫn tuỳ chọn ở
   template; bảng ở `revision` mà env ghim còn có thể có nguồn không `promoter` (`envs/prd/charts.yaml` còn ở commit merge của PR đổi
   tên, bảng bốn nguồn): template của chính commit đó render nó, script đọc nguồn đó là nguồn nghỉ hưu. `promoter` không trùng giữa các
-  nguồn có nó. Repo này chỉ build, ký, promote sáu image của nó
-  (`built_services` của `deploy/k8s/lib.sh`); `svp_services` vẫn là bảy bản triển khai (gồm `web`), mà rescan, promote prd,
+  nguồn có nó. Repo này chỉ build, ký, promote image của nó
+  (`built_services` của `deploy/k8s/lib.sh`); `svp_services` thêm `web`, mà rescan, promote prd,
   check `svp-gitops`, `k8s/gitops.sh` đọc. Stg chạy web của repo `svp-frontend` từ 2026-10-30, prd từ 2026-10-31 (PR #22, #29 của `svp-gitops`). Policy: một glob mỗi tên được phát hành
   (`<imagePrefix><tên>@*`, `<imagePrefix><tên>:*`; không glob cả prefix: Kyverno kéo từ registry mọi image khớp glob trước mọi phép,
   nên tên lạ dưới một prefix bị từ chối bằng lỗi registry thay vì phép 1, lượt `verify.yml` 41081463084), một attestor mỗi nguồn; phép 1
@@ -104,7 +122,7 @@ Loại tài liệu (Diátaxis): **reference**, tra cứu khi cần một lệnh 
 
 ## Lệnh của cluster
 
-- `make k8s-up` / `make k8s-down` / `make k8s-status`: `k8s-up` tạo (hay khởi động) registry và cluster, build sáu image service Go
+- `make k8s-up` / `make k8s-down` / `make k8s-status`: `k8s-up` tạo (hay khởi động) registry và cluster, build image service Go
   một lượt bằng `docker buildx bake -f deploy/docker-bake.json` (bảng image, [ADR-0050](../adr/0050-bash-to-standard-tools.md)) và push
   tag `dev-<image ID>` (state value của helmfile trong file tạm, không ghi file của repo); web như `make up`: không đặt `WEB_FROM` hay `stg|image`
   [`WEB_IMAGE=…`] thì release `web` chạy bản phát hành đó theo digest (node kéo ẩn danh từ GHCR, policy Audit), `WEB_FROM=clone` thì
@@ -121,7 +139,7 @@ Loại tài liệu (Diátaxis): **reference**, tra cứu khi cần một lệnh 
   chối nâng `svp-data` khi `svp-pg` đang phục hồi (`bootstrap.recovery` có mà chưa Ready) hay đã mất mà còn Backup của nó;
   sau `svp-data` chờ WAL lưu liên tục và thế hệ đang chạy có backup cơ sở (chưa có thì chụp một bản; cluster mới chờ thêm vài
   phút); idempotent, cần `.env` (`make env`), từ chối cluster do Argo CD quản (có Application
-  `svp-root`). Khi pod template của gateway hay web (Argo Rollout) đổi, tức có canary, `k8s-up` tự chạy traffic diễn tập
+  `svp-root`). Khi pod template của một release canary (Argo Rollout: gateway, web, và service gRPC có `canary: true`) đổi, tức có canary, `k8s-up` tự chạy traffic diễn tập
   trong lúc
   canary rồi dừng, chờ Rollout `Healthy` có hạn; abort hay inconclusive thì FAIL kèm lệnh gỡ (**LOCAL LAB ONLY**: traffic
   xoá khoá rate limit đăng ký ở Valkey db 10 của cluster). `k8s-down` xoá cluster và registry (volume compose và Postgres
@@ -161,7 +179,7 @@ Loại tài liệu (Diátaxis): **reference**, tra cứu khi cần một lệnh 
   ExternalSecret đó); `svp/sentry` đổi thì Reloader restart service đọc nó (Secret mới tạo thì không: `reloadOnCreate: false`,
   service nhận ở lần restart sau); idempotent, `k8s-up` tự gọi, không cần `.env`. `k8s-ca` ghi CA của chứng chỉ TLS ra
   `.k8s/ca.crt`.
-- `make k8s-images`: build bảy image (sáu từ working tree bằng `docker buildx bake -f deploy/docker-bake.json`, `web` từ thư mục web
+- `make k8s-images`: build image (service Go từ working tree bằng `docker buildx bake -f deploy/docker-bake.json`, `web` từ thư mục web
   `web_dir` với `SVP_BUILD_ID=dev-<hash nội dung>`) và push lên `127.0.0.1:5111` tag `dev-<image ID>` (đường dev).
   `make k8s-release` **đã bỏ**: image phát hành build, quét, ký trong CI (`images.yml`, [`ci.md`](ci.md)), job
   `promote` ghi khối `image` vào `envs/stg/images/<svc>.yaml` của repo `svp-gitops` (cùng `envs/stg/charts.yaml`) trên nhánh
@@ -205,14 +223,14 @@ Loại tài liệu (Diátaxis): **reference**, tra cứu khi cần một lệnh 
   cũng chạy riêng được: `deploy/k8s/gitops.sh follow <nhánh>`): nhánh không đổi thì chỉ root sync, dòng `ok … follows refs/heads/…,
   still at <sha>`; nhánh đã đi tiếp thì một dòng `note` nêu hai commit, Argo CD triển khai bản mới như mọi lần phát hành (canary của
   gateway, web cần traffic: `make k8s-traffic-start`), script không chờ; `GITOPS_REV` là SHA thì cluster ở yên đó. Đổi credential trên
-  cluster này cũng là `make k8s-secrets` (chế độ GitOps ở trên): không bước tay, Reloader restart. Trước khi tạo gì, kiểm ở đúng revision đó cả 7 file `envs/stg/images/`: repository
+  cluster này cũng là `make k8s-secrets` (chế độ GitOps ở trên): không bước tay, Reloader restart. Trước khi tạo gì, kiểm ở đúng revision đó file `envs/stg/images/` của mọi service mà commit `charts.yaml` của stg build: repository
   `<imagePrefix><svc>` của một nguồn phát hành có `<svc>` trong bảng nguồn ở commit `charts.yaml` của stg, manifest kéo ẩn danh được
   (package GHCR đã public), chữ ký và attestation `vuln` đúng identity của nguồn đó, không CRITICAL, không quá 48 giờ (`deploy/ci/values-check.sh --gitops` trên bản trích `envs/stg` của revision, gọi
   `verify-release.sh --gitops`, bằng `cosign` trên PATH, không có thì `COSIGN_IMAGE`; quá hạn thì in lệnh dispatch rescan), và khi
   `svp-policy` bật provenance cho stg (values của chart ở commit `charts.yaml` rồi `envs/stg/svp-policy.yaml`) thì đúng một
   attestation provenance qua cùng phép kiểm như Kyverno, có `gitCommit` bằng commit trong chứng chỉ của chữ ký
   (`--certificate-github-workflow-sha`; thiếu thì in lệnh dispatch build lại service đó);
-  thiếu một điều là dừng, không tạo gì. Rồi tạo namespace (chart `svp-cluster` ở commit `charts.yaml`; overlay stg bật
+  thiếu một điều là dừng, không tạo gì (cần file image stg của mọi release: `make k8s-gitops-up` đỏ ở release mới cho tới khi package GHCR của nó public và PR promote stg đầu tiên của nó merge). Rồi tạo namespace (chart `svp-cluster` ở commit `charts.yaml`; overlay stg bật
   `externalSecrets` nên có cả `svp-secrets`) và Secret từ `.env` (chế độ của `make k8s-secrets` ở trên), cài Argo CD theo
   `argocd/bootstrap.json` (chart, version, values `base/argo-cd.yaml`, rồi `platforms/<platform>/argo-cd.yaml` khi revision có file
   đó; namespace `argocd`, PSA `restricted`) với plugin Gateway API
@@ -472,8 +490,8 @@ Phần này ghi vì sao các hàm và script ở `deploy/k8s/` làm như vậy; 
     những CRD nào của nó được phục vụ, và không bao giờ khởi động controller của CRD đã thiếu lúc đó (nó log cảnh báo "resource ... not
     installed in the cluster"): một object Prometheus khi đó không bao giờ thành StatefulSet, không có event. Không gì ở đây đọc Secret.
     Mỗi bước không đọc được cluster in lý do và các bước khác vẫn chạy.
-- **Bảng image `deploy/docker-bake.json`** là nơi duy nhất nêu các image mà repo này build từ cây của nó: sáu service Go mà CI của nó build, ký
-  và promote (`web` là một trong bảy bản phát hành, nhưng nguồn và bản phát hành của nó là của `svp-frontend`). Nó là file Docker Bake: nhóm
+- **Bảng image `deploy/docker-bake.json`** là nơi duy nhất nêu các image mà repo này build từ cây của nó: service Go mà CI của nó build, ký
+  và promote (`web` cũng là bản phát hành, nhưng nguồn và bản phát hành của nó là của `svp-frontend`). Nó là file Docker Bake: nhóm
   `default` liệt kê service theo thứ tự đường dev build chúng, và target `<service>` giữ Dockerfile, context, build argument và tag cục bộ
   của image, `svp/<service>:dev` (tên mà compose chạy nó). JSON thay vì HCL để script đọc bằng `jq` mà không cần `docker`; nằm dưới
   `deploy/` để test chép `deploy/` có nó. Nó được đọc một lần, khi `lib.sh` được nạp: `built_services`, `svp_services` và `dockerfile` trả
@@ -481,7 +499,7 @@ Phần này ghi vì sao các hàm và script ở `deploy/k8s/` làm như vậy; 
   context của nó) cũng như cho `make k8s-images`, `make k8s-up` và `make up` (`build_dev_images`, `compose_images`). Mọi context là gốc repo
   (`.`): bản build CI (`image-guard.sh`) và `image_paths` giả định điều đó, nên bảng có context khác dừng ở đây thay vì bị build theo hai
   cách. Bảng thiếu, không là JSON, hay nêu service không có target, Dockerfile hay context đó cũng làm script nạp nó dừng ở đây.
-- **Tag của image dev.** `build_dev_images [SERVICE...]` (mặc định bảy cái của `svp_services`) build image từ working tree, những cái của
+- **Tag của image dev.** `build_dev_images [SERVICE...]` (mặc định mọi service của `svp_services`) build image từ working tree, những cái của
   bảng image bằng `bake_images`, `web` từ bản clone của `svp-frontend` (`build_web_image`), đẩy mỗi cái lên registry dưới dạng
   `127.0.0.1:5111/svp/<service>:dev-<12 hex đầu của image ID>`, và đặt `dev_tag_<service>` (với `-` của tên đổi thành `_`) thành tag đó; chạy sau
   `ensure_registry`. Build cache cho cùng image ID với cùng đầu vào, nên lượt chạy không đổi code cho cùng tag, pod template không đổi, và
@@ -521,8 +539,8 @@ Phần này ghi vì sao các hàm và script ở `deploy/k8s/` làm như vậy; 
   Backup; lần chạy tiếp theo của lịch là 03:00 UTC). Vậy khi primary đã chạy sidecar và không Backup nào của `svp-pg` đang chạy, một thế hệ
   chưa có backup cơ sở thành công trong status của ObjectStore `svp-pg-backup` nhận một bản ở đây. Rồi WAL archiving phải chạy (condition
   `ContinuousArchiving`, mà WAL switch của một backup cơ sở đặt chậm nhất).
-- **Traffic diễn tập lúc cài.** Gateway và web client là Rollout của Argo Rollouts: upgrade đổi pod template (code mới, hay giá trị mà một
-  diễn tập để lại trong release) là revision mới, ra như canary chỉ khi Envoy đã đo đủ response của nó. Nên khi Rollout như vậy tồn tại và
+- **Traffic diễn tập lúc cài.** Release có `canary: true` trong file values của `base/` (gateway, web client và service gRPC nào bật canary) là Rollout của Argo Rollouts: upgrade đổi pod template (code mới, hay giá trị mà một
+  diễn tập để lại trong release) là revision mới, ra như canary chỉ khi analysis đã đo đủ request của nó (Envoy với route, metric `rpc_server_call_duration_seconds` của pod canary với gRPC). Nên khi Rollout như vậy tồn tại và
   có canary phía trước (`canary_ahead`), traffic diễn tập (`deploy/k8s/drills/traffic.sh`, request cả hai) khởi động trước mỗi lượt helmfile
   của các wave sau wave 1 (lượt sau Secret, và trên cluster chưa sẵn sàng cho một lần đổi credential thì lượt trước chúng nữa:
   `sync_later`), mà hook postsync chờ từng Rollout (`wait_rollout`), và dừng khi lượt đó kết thúc, kể cả khi lỗi (cả trap `EXIT`). Upgrade
@@ -584,7 +602,7 @@ Phần này ghi vì sao các hàm và script ở `deploy/k8s/` làm như vậy; 
     (thế hệ archive của Cluster `svp-pg` đang chạy, `pg_backup_sets` của `rotate.sh`; không đặt khi Cluster chưa có, nhận mặc định của
     chart).
   - Hook presync và postsync gọi `deploy/k8s/install.sh hook <event> <release> <namespace> <kind> <canaryRoute> <failed>` (`kind` là `service`
-    cho release của chart `svp-service`, `component` cho phần còn lại; `failed` khi helm lỗi). Hook lỗi, như release lỗi, dừng helmfile trước
+    cho release của chart `svp-service`, `component` cho phần còn lại; `canaryRoute` rỗng với release canary gRPC, không HTTPRoute để kiểm; `failed` khi helm lỗi). Hook lỗi, như release lỗi, dừng helmfile trước
     wave sau, với status khác 0. Cả hai không chạy với `helmfile template`, mà không hỏi cluster nào.
 
 ### Secret
@@ -697,6 +715,14 @@ Phần này ghi vì sao các hàm và script ở `deploy/k8s/` làm như vậy; 
   `svp-pg`; RDS: `postgres.external.cidrs`); ở `mode: cluster` NetworkPolicy `postgres` nhận thêm ingress 5432 từ pod `svp-ops`.
   Đăng nhập user thường (`SVP_AS_USER`): mật khẩu lấy từ Secret của chính client đó (`svp/<service>-env` khoá `KAFKA_SASL_PASSWORD` hay phần mật
   khẩu của `REDIS_URL`, `keda/keda-kafka`, `svp-obs/otelcol-kafka`) và đưa qua stdin của `kubectl exec -i`, không trên dòng lệnh.
+
+- **Phát lại DLQ trên cluster** (release `dlq-replay` của chart `svp-service`, namespace `svp`, `protocol: none`, một
+  replica, chạy lệnh con `standby`; image `svp/dlq-replay`, user Kafka `svp-dlq-replay`, Secret `dlq-replay-env`,
+  NetworkPolicy chỉ cho egress tới Kafka và Collector, không ingress): chạy lệnh trong pod đó, không pod tạm, không công
+  cụ Kafka khác: `kubectl --context k3d-svp -n svp exec deploy/dlq-replay -- /app replay --from <topic>.dlq --dry-run`
+  (k3d; EKS cùng lệnh với context `svp-<env>`, người học chạy). Cờ ở doc comment của
+  `services/dlq-replay/cmd/dlq-replay/main.go`, quy trình ở [`kafka-dlq-records.md`](../runbooks/kafka-dlq-records.md).
+  Mọi nền tảng đặt cùng release; compose ở [`compose.md`](compose.md).
 
 ## Manifest cho cluster đo thật
 

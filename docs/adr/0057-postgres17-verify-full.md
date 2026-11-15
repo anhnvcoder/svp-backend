@@ -138,3 +138,7 @@ instance.
 ## Thông tin thêm
 
 Phụ lục: [`appendix/0057-postgres17-verify-full.md`](appendix/0057-postgres17-verify-full.md) (bảng phương án, version đã tra, nguồn).
+
+### Chỉnh bởi
+
+- §7, Hệ quả: [0072](0072-pod-operations.md): pool mỗi pod đặt bằng `DATABASE_MAX_CONNS` theo ngân sách kết nối của env (tổng ≤ 80 % `max_connections` của mọi Postgres env chạy trên; stg đúng trần trên CloudNativePG của cụm GitOps k3d) thay mặc định theo CPU và mốc xem lại "tổng `max_conns` vượt nửa `max_connections`"; proxy xét lại khi ngân sách không còn chỗ cho pod thêm.

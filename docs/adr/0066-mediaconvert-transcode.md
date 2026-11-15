@@ -190,3 +190,7 @@ prd; $0 lúc không buổi. Bảng: phụ lục, mục "Chi phí".
 Phụ lục: [`appendix/0066-mediaconvert-transcode.md`](appendix/0066-mediaconvert-transcode.md) (phương án, giá trị →
 nguồn, quyết định kết quả từng nhánh, mã lỗi, bảng quyền, chi phí, control FSBP, luồng SCP, RCP, phương pháp và bảng đo
 hai đường, nguồn).
+
+### Chỉnh bởi
+
+- §2: [0072](0072-pod-operations.md): cơ chế nhận service qua ba repo đã có (release mới, release đầu tiên là `dlq-replay`); bridge vẫn là lệnh con của `media-worker`; lệnh `mediaconvert` dừng như `serve`: record Kafka đang xử lý chạy tiếp tới hạn drain 540 s, message SQS đang làm vẫn bỏ ngay.

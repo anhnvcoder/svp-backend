@@ -122,6 +122,84 @@ policy của module `transcode` (bảng "Quyền bridge" ở phụ lục ADR-006
 `iam:PassRole` chỉ cho MediaConvert, ba action SQS trên hàng đợi; không `ListJobs`, `CancelJob`, không
 `s3:DeleteObject`.
 
+## Dừng pod và drain
+
+Vì sao: [ADR-0072](../adr/0072-pod-operations.md). Thứ tự tắt pod nói chung ở
+[`deployment.md`](deployment.md#vòng-đời-pod).
+
+Một job transcode kéo dài hàng chục giây tới vài phút. KEDA scale-down, rollout hay Karpenter gộp node xoá pod bất kỳ
+lúc nào; nếu SIGTERM huỷ job đang chạy thì việc mất và record `video.uploaded` giao lại từ đầu. Vì vậy media-worker
+drain: ngừng nhận việc mới, làm xong việc đang cầm trong hạn.
+
+```mermaid
+sequenceDiagram
+    participant kube as kubelet
+    participant w as media-worker
+    participant k as Kafka
+    participant ff as ffprobe, ffmpeg
+
+    kube->>w: SIGTERM
+    w->>k: ngừng poll, không lấy record kế tiếp
+    alt job xong trong DrainTimeout
+        w->>k: transcode.completed hay transcode.failed
+        w->>k: commit offset của record
+    else hết DrainTimeout
+        w->>ff: huỷ context, dừng tiến trình con
+        w-->>k: không commit, record giao lại cho worker khác
+    end
+    w->>k: rời group, đóng client
+    Note over w: đẩy telemetry tới Collector
+    kube-->>w: SIGKILL nếu hết terminationGracePeriodSeconds
+```
+
+- **Cơ chế ở `kafkax`.** `kafkax.ConsumerConfig.DrainTimeout` cho handler chạy tiếp bằng context riêng sau khi context
+  của `Run` bị huỷ, tới khi xong hay hết hạn; record chưa bắt đầu thì không bắt đầu. Bằng 0 là huỷ ngay, như mọi
+  consumer khác. Handler, backoff, đường DLQ và commit của record đang cầm cùng dùng context drain, nên chúng không bị
+  cắt giữa chừng khi còn trong hạn.
+- **Hạn của media-worker** là `worker.DrainTimeout`, dùng cho cả `serve` (ffmpeg) và `mediaconvert` (bridge:
+  `CreateJob`, ghi bản ghi job). Mỗi lần thử vẫn bị cắt ở `tryTimeout` của package mình. Ở `mediaconvert` nó ngắn
+  hơn hạn drain, nên một lần thử treo còn chừa thời gian cho lần sau; ở `serve` nó dài hơn (một lần thử gồm cả ffmpeg),
+  nên một lượt tải hay ffmpeg treo giữ pod tới hết hạn drain, rồi bị huỷ và record giao lại. Hạn này không kéo dài
+  thời gian xử lý tối đa của một record vì nó chỉ cắt ngắn ngân sách retry.
+- **Message SQS không được chờ.** Vòng đọc `transcode-events` của `mediaconvert` dừng ngay; message chưa xoá hiện lại
+  sau visibility timeout và `settle` cho cùng kết quả (bản ghi job một version một kết quả, mục dưới).
+- **Grace.** `terminationGracePeriodSeconds` của release (`base/services/media-worker.yaml` trong `svp-gitops`) và
+  `stop_grace_period` của compose bằng `worker.DrainTimeout` cộng một khoảng đóng client Kafka và đẩy telemetry, và
+  nhỏ hơn `terminationGracePeriod` của NodePool Karpenter (`platforms/eks/svp-cluster.yaml`). Hết grace, kubelet
+  SIGKILL: thư mục việc mất và record giao lại; master chỉ tạo sau cùng nên lần thử sau không gặp kết quả nửa vời.
+
+## Image không shell
+
+Vì sao: [ADR-0072](../adr/0072-pod-operations.md). Mối đe doạ: FF-1 tới FF-5 ở
+[threat model mục 4.3](../threat-model.md#43-ffmpeg-đọc-file-người-dùng).
+
+Worker chạy ffmpeg trên file người dùng tải lên, tức bề mặt tấn công đáng kể nhất của hệ thống. Nếu tiến trình bị
+chiếm, shell và trình quản lý gói trong image là thứ kẻ tấn công cần tiếp theo. Image của worker
+(`deploy/docker/media-worker.Dockerfile`) vì vậy không có chúng:
+
+```mermaid
+flowchart LR
+    build["stage build: go build ra /app"] --> runtime
+    alp["stage rootfs: Alpine ghim<br/>apk upgrade, apk add ffmpeg"] --> strip["gỡ apk, applet busybox, /bin/sh<br/>tạo /work chủ 65532"]
+    strip --> runtime["stage runtime: FROM scratch<br/>COPY rootfs, /app, USER 65532"]
+```
+
+- **Vì sao Alpine rồi gỡ.** Image distroless không có ffmpeg; Chainguard có nhưng không cho pull ẩn danh và trả phí;
+  ffmpeg tĩnh của bên thứ ba làm máy quét không thấy version ffmpeg. Alpine ghim cài `ffmpeg` bằng `apk`, rồi cùng một
+  `RUN` gỡ `apk`, mọi symlink applet của busybox, `busybox` và `/bin/sh`; stage cuối `FROM scratch` chép nguyên rootfs
+  đó. Không image nền mới nào được thêm.
+- **Máy quét vẫn thấy ffmpeg.** CSDL gói `/lib/apk/db/installed` được giữ, nên trivy và grype đọc được gói và CVE của
+  ffmpeg cùng các thư viện của nó. Cái giá: mục `busybox` còn trong CSDL dù binary đã gỡ, nên máy quét có thể báo CVE
+  của nó; ADR ghi điều này thay vì thêm rule ignore.
+- **Chạy không root.** `USER 65532:65532`, thư mục `/work` thuộc uid đó; `scratch` không có biến môi trường nên
+  Dockerfile đặt `PATH` để worker tìm `ffmpeg`, `ffprobe`.
+- **Không đường vận hành nào cần shell.** Chart dùng `preStop` kiểu `sleep` có sẵn của kubelet, media-worker không có
+  probe, compose không healthcheck, drill không `exec` vào nó; việc cần công cụ chạy ở pod hay image riêng.
+- **Bằng chứng.** Lần kiểm khi chọn image (hai kiến trúc, `ffmpeg`, `ffprobe` chạy, không shell hay `apk`, test
+  transcode chạy trong chính image `--read-only`) ở
+  [phụ lục ADR-0072 §7](../adr/appendix/0072-pod-operations.md#7-bằng-chứng-image). Không check CI hay target `make`
+  nào kiểm lại các điều đó sau mỗi lần nâng Alpine; image chỉ qua cổng quét như mọi image của CI.
+
 ## Bản ghi job: một version, một kết quả
 
 `CreateJob` không có cách chống trùng bền: `ClientRequestToken` chỉ trả lại job cũ trong thời gian ngắn sau request đầu.
@@ -215,7 +293,7 @@ nó; job đầu `ERROR` vì lỗi tạm làm version `FAILED` (không nộp lạ
 ## Liên kết
 
 - Quyết định: [ADR-0066](../adr/0066-mediaconvert-transcode.md), [ADR-0029](../adr/0029-immutable-media-versions.md),
-  [ADR-0004](../adr/0004-direct-upload-and-hls.md).
+  [ADR-0004](../adr/0004-direct-upload-and-hls.md), [ADR-0072](../adr/0072-pod-operations.md) (drain, image).
 - Mối đe doạ: FF-1 tới FF-9 ở [threat model mục 4.3](../threat-model.md#43-ffmpeg-đọc-file-người-dùng).
 - Hạ tầng: module `transcode`, `media`, `network` của
   [`svp-infra`](https://github.com/anhnvcoder/svp-infra/tree/main/aws/modules); stg so với prd ở

@@ -14,6 +14,7 @@ import (
 	"unicode/utf8"
 	"uuid"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/twmb/franz-go/pkg/kgo"
 	"go.opentelemetry.io/otel"
@@ -316,9 +317,25 @@ func (p *Projector) publish(ctx context.Context, v store.InsertVideoParams, occu
 	return nil
 }
 
-// inAuthorTx runs fn in a transaction whose first statement takes the advisory lock of author,
-// so follow, unfollow and fan-out of one author never interleave, across topics and replicas.
+// inAuthorTx runs fn in a transaction that raises its statement timeout to handlerTimeout, then
+// takes the advisory lock of author, so follow, unfollow and fan-out of one author never
+// interleave, across topics and replicas. A fan-out to an author with many followers is one long
+// statement, and the lock may wait on another such fan-out: both may outlast the app role's
+// statement timeout, which is sized for request paths, while the attempt's deadline still bounds
+// them.
 func (p *Projector) inAuthorTx(ctx context.Context, author uuid.UUID, fn func(q *store.Queries) error) error {
+	return p.inTx(ctx, handlerTimeout, func(tx pgx.Tx) error {
+		q := p.queries.WithTx(tx)
+		if err := q.LockAuthor(ctx, author); err != nil {
+			return fmt.Errorf("lock author: %w", err)
+		}
+		return fn(q)
+	})
+}
+
+// inTx runs fn in a transaction whose first statement sets statement_timeout to statementTimeout
+// for that transaction only (the effect of SET LOCAL), and commits it when fn succeeds.
+func (p *Projector) inTx(ctx context.Context, statementTimeout time.Duration, fn func(tx pgx.Tx) error) error {
 	tx, err := p.pool.Begin(ctx)
 	if err != nil {
 		return fmt.Errorf("begin transaction: %w", err)
@@ -331,11 +348,12 @@ func (p *Projector) inAuthorTx(ctx context.Context, author uuid.UUID, fn func(q 
 		_ = tx.Rollback(rctx)
 	}()
 
-	q := p.queries.WithTx(tx)
-	if err := q.LockAuthor(ctx, author); err != nil {
-		return fmt.Errorf("lock author: %w", err)
+	// set_config with is_local true is SET LOCAL with the value as a bound parameter.
+	if _, err := tx.Exec(ctx, "SELECT set_config('statement_timeout', $1, true)",
+		fmt.Sprintf("%dms", statementTimeout.Milliseconds())); err != nil {
+		return fmt.Errorf("set statement timeout: %w", err)
 	}
-	if err := fn(q); err != nil {
+	if err := fn(tx); err != nil {
 		return err
 	}
 	if err := tx.Commit(ctx); err != nil {
@@ -345,22 +363,31 @@ func (p *Projector) inAuthorTx(ctx context.Context, author uuid.UUID, fn func(q 
 }
 
 // PruneTimeline deletes timeline rows older than 30 days, a batch at a time until none is left,
-// and returns how many it deleted. It calls onBatch after every batch deleted, the last one
-// included, even when it deleted nothing, so a run cut short by its deadline still reports the
-// batches it got through. Reads filter those
+// and returns how many it deleted. Each batch is a transaction of its own whose statement timeout
+// is statementTimeout: timeline has no index on published_at, so one DELETE scans the table until
+// it finds a batch, which on a large table outlasts the app role's statement timeout. It calls
+// onBatch after every batch deleted, the last one included, even when it deleted nothing, so a
+// run cut short by its deadline still reports the batches it got through. Reads filter those
 // rows out anyway, so running late, twice or on several replicas at once is harmless.
-func (p *Projector) PruneTimeline(ctx context.Context, onBatch func()) (int64, error) {
-	return p.pruneTimeline(ctx, pruneBatch, onBatch)
+func (p *Projector) PruneTimeline(ctx context.Context, statementTimeout time.Duration, onBatch func()) (int64, error) {
+	return p.pruneTimeline(ctx, statementTimeout, pruneBatch, onBatch)
 }
 
-func (p *Projector) pruneTimeline(ctx context.Context, batch int32, onBatch func()) (int64, error) {
+func (p *Projector) pruneTimeline(ctx context.Context, statementTimeout time.Duration, batch int32,
+	onBatch func(),
+) (int64, error) {
 	var total int64
 	for {
-		n, err := p.queries.DeleteExpiredTimeline(ctx, batch)
-		total += n
+		var n int64
+		err := p.inTx(ctx, statementTimeout, func(tx pgx.Tx) error {
+			var err error
+			n, err = p.queries.WithTx(tx).DeleteExpiredTimeline(ctx, batch)
+			return err
+		})
 		if err != nil {
 			return total, fmt.Errorf("delete expired timeline rows: %w", err)
 		}
+		total += n
 		onBatch()
 		if n < int64(batch) {
 			return total, nil
