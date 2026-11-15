@@ -29,12 +29,12 @@ Thiết kế tổng thể ở [`architecture.md`](../architecture.md), khác bi�
 | WA-3 | SEC 9 | gRPC giữa gateway và service đi plaintext trong cluster, access token chuyển tiếp không mã hoá; NetworkPolicy là lớp chặn duy nhất | High | Dựng Istio ambient theo ADR-0042: mTLS STRICT, AuthorizationPolicy theo service account; đo độ trễ thêm ở buổi stg/prd chung |
 | WA-4 | PERF 2, REL 7 | Gateway gọi service bằng `pick_first` qua ClusterIP: tải chia theo kết nối, không theo request | Medium | Cân tải gRPC theo request (waypoint L7 của mesh hay client `round_robin`), đề xuất ADR |
 | WA-5 | REL 1 | Không có danh mục Service Quotas và cảnh báo theo quota; các giới hạn đã biết nằm rải trong ADR | Medium | Danh mục quota của mỗi account, kiểm trước buổi, alarm theo mức dùng quota; đề xuất ADR |
-| WA-6 | OPS 5, OPS 6 | Thay đổi Terraform không có `plan` trên PR: CI của `svp-infra` chỉ kiểm tĩnh, `plan` chạy tay trong buổi | Medium | `plan` trên PR bằng role OIDC chỉ đọc, đề xuất ADR |
+| WA-6 | OPS 5, OPS 6 | `plan` trên PR ([ADR-0076](../adr/0076-terraform-plan-infracost-pr.md)) chỉ chạy khi role OIDC chỉ đọc đã apply ở account env | Medium | Apply role, bật biến plan ở buổi cloud |
 | WA-7 | OPS 6, SEC 11 | Không có cổng tự động "bộ prd = bộ stg đã kiểm" (GIT-4); provenance đạt SLSA Build L2, không L3 | Medium | Giữ chấp nhận tới điều kiện xem lại của GIT-4 |
 | WA-8 | SEC 6 | Chữ ký của image bên thứ ba chưa kiểm ở admission (SC-1) | Medium | Kiểm chữ ký theo nhà cung cấp khi review bảo mật capstone |
 | WA-9 | SEC 2 | Access token không thu hồi được trước hạn 15 phút (JWT-3) | Medium | Giữ chấp nhận tới khi có đổi mật khẩu hay khoá tài khoản |
 | WA-10 | COST 3, COST 6 | Chi phí theo namespace chỉ gồm compute; số Spot của stg là trần giá on-demand; chi phí thật của một buổi chưa đo | Medium | Đo chi phí theo namespace và đối chiếu Cost Explorer: đo ở buổi stg/prd chung |
-| WA-11 | COST 5 | Chi phí của một thay đổi hạ tầng chỉ ước tay trong mục Chi phí của ADR, không hiện trên PR | Medium | Ước lượng chi phí trên PR Terraform (Infracost), đề xuất ADR |
+| WA-11 | COST 5 | Ước lượng Infracost trên PR ([ADR-0076](../adr/0076-terraform-plan-infracost-pr.md)) cần khoá API của người học; chưa so với hoá đơn thật | Medium | Tạo khoá, so ước lượng với Cost Explorer sau buổi |
 | WA-12 | REL 13 | Mất cả region nằm ngoài phạm vi DR: không có bản nào ở region khác | Medium | Giữ chấp nhận tới điều kiện "Xem lại khi" của ADR-0067 |
 | WA-13 | PERF 3, PERF 4 | Hạn 50 ms của cache khám phá trên Valkey và tỉ lệ cache hit của segment premium ở CloudFront chưa đo trên cloud | Medium | Đo ở buổi stg/prd chung |
 | WA-14 | OPS 4, REL 6 | Độ tươi feed chưa thành SLO; profile (Pyroscope) và lỗi (GlitchTip) mất khi destroy cluster | Medium | SLO độ tươi khi có đủ event; quyết nơi giữ profile, lỗi qua destroy, đề xuất ADR |
@@ -64,8 +64,8 @@ Câu hỏi theo [OPS].
 
 Việc đề xuất:
 
-- **WA-6:** `plan` của Terraform trên mỗi PR `svp-infra` bằng role OIDC chỉ đọc, giới hạn theo repo và sự kiện, không `apply` từ CI, không in
-  giá trị nhạy cảm của plan. Đây là luật an toàn mới (CI đọc account), nên cần đề xuất ADR.
+- **WA-6:** `plan` trên PR theo [ADR-0076](../adr/0076-terraform-plan-infracost-pr.md) (role OIDC chỉ đọc, environment `terraform-plan`, không
+  `apply` từ CI); còn apply role và bật biến plan ở buổi cloud.
 - **WA-14:** SLO độ tươi feed khi stg có đủ event để burn rate có nghĩa (lý do chưa có ở mục 10 của [`architecture.md`](../architecture.md));
   nơi giữ profile và lỗi qua destroy là đề xuất ADR, vì ADR-0063 đã chấp nhận cái giá đó.
 - **WA-15:** khi có người thứ hai: lịch trực, escalation khi page không ai nhận, quyền theo vai trò.
@@ -170,8 +170,8 @@ Việc đề xuất:
 - **WA-10:** đo chi phí theo namespace trong buổi và đối chiếu tổng với Cost Explorer sau buổi, theo mục "Xác nhận" và §11 của
   [ADR-0074](../adr/0074-cost-uptime.md); ADR-0048 xem lại khi chi phí đo lệch ước lượng quá 50 %. Đo ở buổi stg/prd chung. Giá Spot gần
   thật cho stg là điều kiện "Xem lại khi" của ADR-0074.
-- **WA-11:** ước lượng chi phí (Infracost) hiện trên PR Terraform, gồm cờ của `aws/paid-features.json`, so với bảng giá ở phụ lục ADR.
-  Đề xuất ADR.
+- **WA-11:** Infracost trên PR theo [ADR-0076](../adr/0076-terraform-plan-infracost-pr.md), gồm cờ của `aws/paid-features.json`; còn tạo khoá
+  API và so ước lượng với hoá đơn thật sau buổi.
 
 ## Sustainability
 
