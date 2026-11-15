@@ -22,7 +22,7 @@ registry_image=docker.io/library/registry:3.1.2@sha256:d4032d4cc323c1731c707931e
 # of media-worker's rootfs stage, which renovate.json keeps in step. Nodes pull it from Docker Hub; namespace svp-probe
 # is outside the cluster's image policy.
 # renovate: datasource=docker depName=docker.io/library/alpine
-export SVP_PROBE_IMAGE=docker.io/library/alpine:3.24.3@sha256:be2656061b536c1883c4034790e21d0a09c5aaaf51968b89368a3c0371ea2c9a
+export SVP_PROBE_IMAGE=docker.io/library/alpine:3.24.4@sha256:f59abe656b692d901e184be3445e084786602108599d2a51d229c0f5a48c71bf
 # Deadline of `k3d cluster create` and `k3d cluster start`, which otherwise wait forever for a node's "up and running"
 # log line (k3d v5.9.0 sets one only when --timeout > 0). k3d applies it to each step of a create (network, containers
 # with their image pulls, start) on its own, so 300 s covers a first run that still pulls the k3s image on a slow link.
