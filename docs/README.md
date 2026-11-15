@@ -48,6 +48,8 @@ Mục lục theo [Diátaxis](https://diataxis.fr): mỗi tài liệu thuộc m�
 - [`explanation/reliability.md`](explanation/reliability.md): SLO, tải, backup, probe và vận hành.
 - [`explanation/backup-dr.md`](explanation/backup-dr.md): backup và DR của stg, prd: dữ liệu nào chép đi đâu, account `svp-backup`,
   lịch của Backup policy, diễn tập PITR và object S3, xoá cuối buổi.
+- [`explanation/well-architected.md`](explanation/well-architected.md): review hệ thống trên AWS theo sáu trụ cột của AWS Well-Architected
+  Framework: câu hỏi, câu trả lời của hệ thống, rủi ro High/Medium và việc đề xuất.
 - [`threat-model.md`](threat-model.md): mối đe doạ theo bề mặt (STRIDE) và cách kiểm từng mối.
 - [`adr/`](adr/): nhật ký quyết định kiến trúc, mỗi quyết định một file; không bắt buộc đọc để dùng repo. Mục lục, trạng thái và
   quy ước (ADR ngắn, chi tiết và số đo ở phụ lục) ở [`adr/README.md`](adr/README.md).
