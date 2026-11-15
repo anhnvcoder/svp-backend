@@ -2,7 +2,8 @@
 
 - Quy trình làm tay, không có cảnh báo. Mở khi dựng repo hạ tầng `anhnvcoder/svp-infra` lần đầu, khi kiểm lại cài đặt sau
   một thay đổi của GitHub hay của repo, khi PR không merge được vì check bắt buộc, hay khi nghi repo đã lộ thông tin của tài khoản AWS.
-- Mọi thao tác ghi (UI Settings, ruleset qua `apply` của `svp-infra`, cài Renovate, push đầu) do **người học chạy** với quyền admin. Mọi lệnh "Kiểm" ở đây chỉ
+- Mọi thao tác ghi (cài đặt repo và ruleset qua `apply` của `svp-infra`, secret qua target `make` của nó, cài
+  Renovate, push đầu) do **người học chạy** với quyền admin. Mọi lệnh "Kiểm" ở đây chỉ
   `GET`, chạy bằng đăng nhập `gh` của người học (scope `repo` là đủ).
 - Thiết kế và lý do ở [ADR-0034](../adr/0034-aws-stage7.md) §2 (repo, bố cục, CI kiểm tĩnh không credential),
   [ADR-0076](../adr/0076-terraform-plan-infracost-pr.md) (ngoại lệ: plan trên PR bằng role OIDC chỉ đọc, Infracost) và threat model
@@ -150,19 +151,15 @@ không `--add-readme`, `--license`, `--gitignore` (người học chạy, chỉ 
 
 Làm trước khi bất kỳ commit nào có `.github/workflows/` được push.
 
-**Làm gì** (<https://github.com/anhnvcoder/svp-infra/settings>):
+**Làm gì:** cài đặt repo do root Terraform `github/` của `svp-infra` giữ (`repositories.tf`); `plan`, `apply` theo
+[`github/README.md`](https://github.com/anhnvcoder/svp-infra/blob/main/github/README.md), không đặt tay ở trang Settings. Ba cài đặt
+provider không quản (duyệt workflow PR fork của mọi người ngoài, báo lỗ hổng riêng, CodeQL default setup) do `make github-settings` ghi,
+chạy ở gốc `svp-infra`. Đối chiếu giá trị đã đặt:
 
-- **General** → mục **Pull Requests**: bật **Allow squash merging**, ô **Default commit message** chọn **Pull request title and
-  description**; tắt **Allow merge commits** và **Allow rebase merging**; bật **Allow auto-merge**. Mục **Features**: giữ **Issues** bật.
-- **Actions** → **General**:
-  - **Actions permissions**: **Allow anhnvcoder, and select non-anhnvcoder, actions and reusable workflows**; tích **Allow actions created
-    by GitHub**, không tích Marketplace verified creators; ô danh sách action thêm `ossf/scorecard-action@*` ([ADR-0041](../adr/0041-github-hardening.md) (g)); tích **Require actions to be pinned to a
-    full-length commit SHA**. **Save**.
-  - **Approval for running fork pull request workflows from contributors**: **Require approval for all external contributors**. **Save**.
-  - **Workflow permissions**: **Read repository contents and packages permissions**; **bỏ tích** **Allow GitHub Actions to create and
-    approve pull requests**. **Save**.
-- **Advanced Security**: bật **Dependabot alerts**; **Secret Protection** (secret scanning) và **Push protection** bật (repo public thường
-  đã bật sẵn, kiểm lại).
+- Chỉ squash, ô commit message là **Pull request title and description**; tắt merge commit và rebase; bật auto-merge; Issues bật.
+- Actions: chỉ action của GitHub và `ossf/scorecard-action@*` ([ADR-0041](../adr/0041-github-hardening.md) (g)), ghim SHA bắt buộc;
+  `GITHUB_TOKEN` mặc định chỉ đọc, tắt "create and approve pull requests".
+- Duyệt workflow PR fork: mọi người ngoài. Dependabot alerts, secret scanning, push protection: bật.
 
 **Vì sao:**
 
@@ -178,18 +175,23 @@ Làm trước khi bất kỳ commit nào có `.github/workflows/` được push.
 
 **Kiểm:** tám lệnh đầu của "Kiểm tra nhanh" (repo tới `vulnerability-alerts`), output như bảng. Các API này chạy được trên repo rỗng.
 
-**Nếu sai:** sửa ở đúng ô rồi chạy lại lệnh kiểm. `allow_merge_commit`/`allow_rebase_merge` true → người merge tay có thể tạo merge commit hay
+**Nếu sai:** `plan` của `github/` thấy lệch, `apply` đưa về code; rồi chạy lại lệnh kiểm.
+`allow_merge_commit`/`allow_rebase_merge` true → người merge tay có thể tạo merge commit hay
 rebase. `sha_pinning_required` false hay `verified_allowed` true → workflow dùng tag hay action bên thứ ba vẫn chạy. `patterns_allowed` khác ba
 pattern của `github/repositories.tf` → không xoá ở UI: `apply` của `github/` đặt lại theo file, đổi pattern thì sửa file bằng PR rồi `apply`
-(thiếu pattern Scorecard thì `scorecard.yml` bị từ chối). `can_approve_pull_request_reviews` true → tắt ở Workflow permissions. `approval_policy` khác
-`all_external_contributors` → chọn lại ô duyệt PR fork.
+(thiếu pattern Scorecard thì `scorecard.yml` bị từ chối). `can_approve_pull_request_reviews` true → `apply` lại. `approval_policy` khác
+`all_external_contributors` → chạy lại `make github-settings`.
 
 ### A3. Credential CI chỉ ở chỗ đã định
 
 **Làm gì:** không tạo tay gì ở Settings → **Secrets and variables** → **Actions** (cả tab Secrets lẫn Variables) và Settings →
-**Environments**. Environment `terraform-plan` và biến `SVP_TF_PLAN_ENVS` do `apply` của `github/` tạo; secret `INFRACOST_API_KEY` và secret
-của `terraform-plan` do người học đặt theo [`github-setup.md`](https://github.com/anhnvcoder/svp-infra/blob/main/docs/runbooks/github-setup.md) của `svp-infra` (mục "Khoá Infracost", "Environment `terraform-plan`"; secret
-của environment chỉ đặt ở buổi cloud, sau khi role plan của env đã apply). Role IAM duy nhất tin OIDC của repo này là `svp-ci-terraform-plan`
+**Environments**. Environment `terraform-plan` và biến `SVP_TF_PLAN_ENVS` do `apply` của `github/` tạo; secret
+`INFRACOST_API_KEY` (`make infracost-key`) và secret
+của `terraform-plan` (`make github-secrets ENV=<stg|prd>`) do người học chạy ở gốc `svp-infra`, theo
+[`github-setup.md`](https://github.com/anhnvcoder/svp-infra/blob/main/docs/runbooks/github-setup.md) (mục "Khoá
+Infracost", "Environment `terraform-plan`";
+secret của environment chỉ đặt ở buổi cloud, sau khi role plan của env đã apply). Script đọc giá trị từ nguồn của nó
+và đặt qua stdin, không lên dòng lệnh. Role IAM duy nhất tin OIDC của repo này là `svp-ci-terraform-plan`
 (root `aws/accounts/<env>`), trust đúng `sub` của environment `terraform-plan`.
 
 **Vì sao** (ADR-0034 §2, [ADR-0076](../adr/0076-terraform-plan-infracost-pr.md), threat model AWS-6, AWS-11): `check.yml` là cổng và chạy
@@ -229,8 +231,11 @@ bật nên còn push được), chờ lượt xanh trước C1.
 
 ### B2. Renovate
 
-**Làm gì:** <https://github.com/apps/renovate> → **Configure** → `anhnvcoder` → **Only select repositories** → thêm `anhnvcoder/svp-infra`
-(giữ ba repo đã có) → **Save**. Làm sau khi `renovate.json` đã ở `main` (B1), để không có PR onboarding.
+**Làm gì:** giữ tay. Chọn repo cho App Renovate (Mend) qua API là `PUT /user/installations/{id}/repositories/{rid}`, cần PAT classic (token
+của `gh` bị 403 ở đó); tạo PAT chỉ cho việc một lần mỗi repo không đáng. Làm trên trang:
+<https://github.com/apps/renovate> → **Configure** →
+`anhnvcoder` → **Only select repositories** → thêm `anhnvcoder/svp-infra` (giữ ba repo đã có) → **Save**. Làm sau khi
+`renovate.json` đã ở `main` (B1), để không có PR onboarding.
 
 **Vì sao:** `renovate.json` của `svp-infra` nâng provider Terraform, module `terraform-aws-modules` (ghim version chính xác), ruleset tflint,
 image ghim của `Makefile` và SHA của action, cùng lịch sáng thứ Bảy giờ Việt Nam và `minimumReleaseAge` 3 ngày như hai repo kia; không có

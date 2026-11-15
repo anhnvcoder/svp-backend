@@ -128,6 +128,12 @@ Loại tài liệu (Diátaxis): **reference**, tra cứu khi cần một lệnh 
   - `AWS_PROFILE=anhnv-<env> make eks-glitchtip-init CONTEXT=svp-<env>`: như `k8s-glitchtip-init`, đọc DSN và token trong pod GlitchTip,
     ghi vào entry `svp/<env>/glitchtip-runtime` rồi `force-sync` ba ExternalSecret `svp/sentry`, `svp-obs/glitchtip-api`,
     `svp-obs/glitchtip-sourcemaps` và restart service khởi động khi chưa có DSN hiện tại; idempotent.
+  - `make eks-wait CONTEXT=svp-<env> APP=<svp-observability|svp-root>`: `deploy/k8s/eks-wait.sh`, `kubectl wait` chờ Application xuất
+    hiện (`--for=create`: `svp-root` do ApplicationSet `svp-bootstrap` tạo, `svp-observability` do `svp-root` tạo khi các sync wave trước
+    đã Healthy), rồi chờ `status.health.status` = `Healthy` (với `svp-root`, trước đó `status.sync.status` = `Synced`); không cần CLI
+    `argocd` hay port-forward. Một ngân sách 30 phút cho mọi lượt chờ; quá hạn thì exit khác 0 và in trạng thái sync, health cuối.
+    Thiếu ApplicationSet `svp-bootstrap` thì lỗi ngay, nêu bước 4 (apply root `aws/gitops/<env>`). Chỉ đọc, nhưng chạm cluster EKS nên
+    AI không chạy, người học chạy.
   - `make eks-smoke CONTEXT=… DOMAIN=<domain>`: `deploy/compose/smoke.sh https://api.<domain>` với `SVP_STACK=eks`, qua CloudFront với cert
     ACM công khai (bỏ `CURL_CA_BUNDLE`).
   - `make eks-seed CONTEXT=… DOMAIN=<domain>`: `deploy/k8s/eks-seed.sh`, 4 user × 8 video ngắn qua API công khai, chờ mọi video
@@ -177,10 +183,9 @@ Lệnh `terraform` và script buổi ở `svp-infra` (`aws/scripts/`); mỗi bư
 3. Mở tunnel tới API (output `api_tunnel_command`, terminal riêng) và thêm context (output `kubeconfig_command`); chỉ prd: PR promote prd
    đã merge trước bước này.
 4. Apply root `aws/gitops/<env>` (Argo CD, AppProject, cluster Secret, root).
-5. Chờ Application `svp-observability` Healthy:
-   `kubectl --context svp-<env> -n argocd wait applications.argoproj.io/svp-observability --for=jsonpath='{.status.health.status}'=Healthy --timeout=30m`.
+5. `make eks-wait CONTEXT=svp-<env> APP=svp-observability`: chờ Application `svp-observability` Healthy.
 6. `AWS_PROFILE=anhnv-<env> make eks-glitchtip-init CONTEXT=svp-<env>`.
-7. `argocd app wait svp-root --sync --health` (CLI `argocd` qua port-forward tới `argocd-server`).
+7. `make eks-wait CONTEXT=svp-<env> APP=svp-root`: chờ Application `svp-root` Synced rồi Healthy.
 8. Kiểm mesh (người học chạy, mỗi lệnh `kubectl --context svp-<env>`): `-n istio-system get pods` (istiod, istio-cni và ztunnel mỗi node Ready),
    `-n svp-mesh get deploy,pdb waypoint` (2 replica sẵn sàng, PDB có), và mọi pod của `svp` có annotation `ambient.istio.io/redirection: enabled`:
    `-n svp get pod -o custom-columns=NAME:.metadata.name,REDIRECTION:'.metadata.annotations.ambient\.istio\.io/redirection'`.

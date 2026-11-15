@@ -192,8 +192,9 @@ Loại tài liệu (Diátaxis): **reference**, tra cứu khi cần một lệnh 
   `/metrics` trả 404; project publish đúng 6 cổng loopback, gồm web 3001 và `s3` 9000, không 9001), RL-2 (gateway dựng lại với Valkey `.invalid` thì metric
   `store="fallback"` > 0 và cảnh báo `RateLimitFallbackActive` trong 4 phút), WEB-9 (web trên compose: email, token,
   sid, `?next=`, chữ ký presigned từ form của web, `/rum` và `/monitoring` không có trong GlitchTip, Tempo, Loki, Prometheus;
-  đối chứng có dữ liệu của web). **Telegram tuỳ chọn:** người học tự tạo bot
-  và điền `SVP_ALERT_TELEGRAM_BOT_TOKEN`, `SVP_ALERT_TELEGRAM_CHAT_ID` vào `.env`; có đủ cả hai thì Alertmanager gửi cảnh
+  đối chứng có dữ liệu của web). **Telegram tuỳ chọn:** người học tạo bot
+  và điền `SVP_ALERT_TELEGRAM_BOT_TOKEN`, `SVP_ALERT_TELEGRAM_CHAT_ID` vào `.env` theo
+  [`telegram-bot-setup.md`](../runbooks/telegram-bot-setup.md); có đủ cả hai thì Alertmanager gửi cảnh
   báo `severity=page` tới `api.telegram.org` (ngoại lệ hẹp về mạng ngoài của lab); thiếu thì không gửi gì.
 
 ## Tải k6

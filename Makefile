@@ -125,7 +125,7 @@ SVP_TEST_REDIS_URL ?= redis://127.0.0.1:6379/15
 .DEFAULT_GOAL := help
 
 .PHONY: help tools ci-tools generate generate-go generate-check slo otelcol-validate fmt-check vet lint actionlint buf-lint vulncheck test fuzz \
-	cover check check-go helm-check helm-docs helm-docs-check kyverno-test conftest-verify regal-lint regal-fix migration-lint migration-drill chainsaw-lint trivy-config grype renovate-check zizmor api-contract-check hooks web-e2e measure-web measure-upload \
+	cover check check-go helm-check helm-docs helm-docs-check kyverno-test conftest-verify regal-lint regal-fix migration-lint migration-drill chainsaw-lint trivy-config grype renovate-check zizmor api-contract-check jwt-rotate hooks web-e2e measure-web measure-upload \
 	web-lighthouse web-sourcemaps docs-check
 
 help: ## List the targets
@@ -462,6 +462,11 @@ docs-check: ## markdownlint-cli2 + lychee --offline on the Markdown (DOCS='<file
 BASE ?= origin/main
 api-contract-check: ## Check the version rule of the gateway's OpenAPI spec against BASE (default origin/main) with the pinned oasdiff
 	deploy/ci/contract.sh check "$(BASE)"
+
+# The pending key waits in .env.jwt-next from add to drop; the waits between steps stay with the person rotating.
+STEP ?=
+jwt-rotate: ## One step of the JWT key rotation in .env (STEP=add|sign|drop, docs/runbooks/jwt-key-rotation.md); prints kids and the next commands, never a key
+	@go run ./tools/jwtkey rotate '$(STEP)' .env
 
 hooks: ## Point git at .githooks (run once per clone)
 	git config core.hooksPath .githooks
