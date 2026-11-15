@@ -92,10 +92,22 @@ spec:
         variables.texts.map(s, s.findAll('(^|[\\s"\'=,])[a-z0-9-]+(\\.[a-z0-9-]+)+(:[0-9]+)?/[A-Za-z0-9._/-]+(:[A-Za-z0-9._-]+)?(@sha256:[0-9a-f]+)?')).flatten()
         .map(r, r.matches('^[a-z0-9-]') ? r : r.substring(1))
         .filter(r, r.matches('/[A-Za-z0-9._-]+(:[A-Za-z0-9._-]+|@sha256:)'))
+    # istiod starts waypoint pods at run time from this ConfigMap: the Go templates of its data.config
+    # ({{ .ProxyImage }}) are filled from the "image" keys of its JSON data.values, a name without "/" completed from
+    # hub and tag.
+    - name: injector
+      expression: "object.kind == 'ConfigMap' && object.metadata.name == 'istio-sidecar-injector'"
+    - name: jsonRefs
+      expression: >-
+        variables.injector && type(variables.data[?'values'].orValue(0)) == string
+        ? string(variables.data['values']).findAll('"image"[ \\t]*:[ \\t]*"[^"]*"')
+          .map(l, l.substring(l.indexOf(':') + 1).trim().replace('"', ''))
+        : []
     - name: unpinned
       expression: >-
-        (variables.fieldRefs + variables.namedRefs + variables.lineRefs + variables.flagRefs + variables.registryRefs)
-        .filter(r, !r.matches(variables.pinned))
+        (variables.fieldRefs + variables.namedRefs + variables.lineRefs + variables.flagRefs + variables.registryRefs
+          + variables.jsonRefs)
+        .filter(r, !r.matches(variables.pinned) && !(variables.injector && r.contains('{{')))
   validations:
     - expression: size(variables.unpinned) == 0
       messageExpression: "'images without exactly one @sha256:<64 hex>: ' + variables.unpinned.join(' ')"

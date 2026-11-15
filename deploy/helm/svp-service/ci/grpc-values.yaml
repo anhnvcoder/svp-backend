@@ -1,0 +1,11 @@
+# A gRPC release on its own (helm lint or template -f this file, no values of svp-gitops): its Service through the
+# waypoint, its pods open to the waypoint alone, the gateway admitted at the waypoint. Placeholder image.
+image: {repository: ghcr.io/example/user-service, tag: "000000000000"}
+protocol: grpc
+port: 9101
+migrate: true
+resources:
+  requests: {cpu: 100m, memory: 64Mi}
+  limits: {cpu: "1", memory: 384Mi}
+ingressFrom: [gateway]
+egressTo: [postgres, kafka, collector]

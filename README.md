@@ -98,7 +98,7 @@ Compose và k3d không chạy cùng lúc: mỗi bên từ chối khi bên kia đ
 | Nơi | Dùng để | Lệnh vào | Tài liệu |
 | --- | --- | --- | --- |
 | Compose trên máy | Đường dev chính, smoke, diễn tập | `make up`, `make smoke` | [`reference/compose.md`](docs/reference/compose.md) |
-| Cluster k3d | Cùng chart như cloud: Envoy Gateway, NetworkPolicy, canary, Kyverno; `make k8s-gitops-up` chạy như stg qua Argo CD | `make k8s-up`, `make k8s-gitops-up`, `make k8s-smoke` | [`reference/k8s.md`](docs/reference/k8s.md) |
+| Cluster k3d | Cùng chart như cloud: Envoy Gateway, service mesh Istio ambient (mTLS, quyền theo ServiceAccount, waypoint), NetworkPolicy, canary, Kyverno; `make k8s-gitops-up` chạy như stg qua Argo CD | `make k8s-up`, `make k8s-gitops-up`, `make k8s-smoke`, `make drill-k8s-mesh` | [`reference/k8s.md`](docs/reference/k8s.md) |
 | EKS stg, prd trên AWS | Môi trường thật, dựng bằng Terraform của [`svp-infra`](https://github.com/anhnvcoder/svp-infra) (cluster rồi Argo CD và root), dựng và xoá trong mỗi buổi; người học chạy | `make eks-secrets`, `make eks-glitchtip-init`, `make eks-smoke` | [`reference/eks.md`](docs/reference/eks.md) |
 
 ## Bản đồ thư mục
@@ -123,7 +123,7 @@ Compose và k3d không chạy cùng lúc: mỗi bên từ chối khi bên kia đ
 | `deploy/kafka/`, `deploy/valkey/`, `deploy/ops/` | Broker `apache/kafka` (cấu hình, script init topic, user, ACL), aclfile của Valkey, CLI vận hành `svp-kafka`, `svp-valkey`. |
 | `deploy/observability/` | Collector, Prometheus và rule SLO, Alertmanager, Grafana LGTM, GlitchTip, Elastic (so sánh). |
 | `deploy/k8s/` | Cluster k3d: `helmfile.yaml.gotmpl` cùng glue `install.sh` (đường dev), `gitops.sh`, `secrets.sh` và `rotate.sh` (xoay credential, Reloader restart), `k8s.mk`, PSA, `drills/` (Chainsaw), `cloud/` (kiểm tĩnh Job k6). Values, overlay và digest của các môi trường ở `svp-gitops`. |
-| `deploy/helm/` | Chart Helm: `svp-service` (chung cho mọi service), `svp-cluster`, `svp-data`, `svp-observability`, `svp-policy` (Kyverno). |
+| `deploy/helm/` | Chart Helm: `svp-service` (chung cho mọi service), `svp-cluster` (kèm namespace và waypoint của mesh), `svp-data`, `svp-observability`, `svp-policy` (Kyverno). |
 | `deploy/k6/`, `deploy/dast/` | Kịch bản tải k6 theo SLO; DAST của gateway theo `openapi.yaml` bằng Schemathesis (`make dast`). |
 | `deploy/ci/` | Script của pipeline: build, quét, ký, attest, guard promote sang `svp-gitops`, check của `svp-gitops`; `verify/` là trình tự của `verify.yml`. Phần lớn logic CI ở đây, không ở YAML. |
 | `.githooks/` | Git hook `pre-commit` (gofmt, golangci-lint, buf lint, gitleaks); bật bằng `make hooks`. |

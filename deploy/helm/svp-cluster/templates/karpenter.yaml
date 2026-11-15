@@ -68,6 +68,11 @@ spec:
         group: karpenter.k8s.aws
         kind: EC2NodeClass
         name: default
+      # A pod that starts on a node before istio-cni is ready there runs outside the mesh: no pod without a toleration
+      # lands until istiod removes this taint, once istio-cni and ztunnel are Ready on the node.
+      startupTaints:
+        - key: cni.istio.io/not-ready
+          effect: NoSchedule
       # Graviton as the system node group; several families and sizes so that Spot can pick from many pools.
       requirements:
         - key: kubernetes.io/arch

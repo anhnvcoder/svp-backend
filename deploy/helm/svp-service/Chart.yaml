@@ -2,7 +2,7 @@ apiVersion: v2
 name: svp-service
 description: >-
   One service of the short-video platform on k3d, namespace svp: its Deployment, Service, ServiceAccount,
-  NetworkPolicies, the migrate Job of a service with a database, the HTTPRoute of the gateway and, where a release asks
+  NetworkPolicies, the PeerAuthentication (STRICT mTLS) and AuthorizationPolicies of the Istio ambient mesh, the migrate Job of a service with a database, the HTTPRoute of the gateway and, where a release asks
   for them, its HPA, PodDisruptionBudget or KEDA ScaledObject, or an Argo Rollouts canary in place of the Deployment. One chart for the Go services and the web client, one release and one
   values file (base/services/<service>.yaml of svp-gitops) each.
 type: application

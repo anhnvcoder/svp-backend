@@ -9,6 +9,9 @@ namespaces:
   - name: svp
     routes: true
     kubeAPI: false
+    # Value of label istio.io/dataplane-mode: ambient enrols every pod of the namespace in the mesh (the node's
+    # ztunnel carries their traffic in mTLS). Left out, the namespace stays outside the mesh.
+    dataplaneMode: ambient
   - name: svp-data
     routes: true
     kubeAPI: true
@@ -18,12 +21,20 @@ namespaces:
   - name: svp-edge
     routes: false
     kubeAPI: false
+  # Holds only the mesh's waypoint (templates/waypoint.yaml), whose pods stay outside the mesh.
+  - name: svp-mesh
+    routes: false
+    kubeAPI: false
 
 # Namespaces of platform charts made here, before their chart (a later wave), only so that Pod Security "restricted" is
 # enforced on their first pod: no NetworkPolicy, no routes. Without the label, whoever may create pods in such a
 # namespace (its controller, taken over) could start a privileged pod with a hostPath of the node there and read every
 # Secret of the cluster from it. Wave 0's cert-manager and envoy-gateway-system must exist before this chart.
 platformNamespaces:
+  # The Pod Security level, restricted when left out. ztunnel and istio-cni change the network of the node and of
+  # every pod on it (NET_ADMIN, SYS_ADMIN, root, hostPath of the node): only privileged admits them.
+  - name: istio-system
+    podSecurity: privileged
   - name: argo-rollouts
   - name: cnpg-system
   - name: keda
@@ -117,6 +128,10 @@ envoy:
   # (TargetGroupBinding svp-envoy, templates/gateway.yaml); its load balancer and security groups are made outside the
   # cluster. Empty: no TargetGroupBinding.
   targetGroupArn: ""
+  # nodeAffinity of the Envoy pods, as in a pod's spec.affinity.nodeAffinity. Empty: any node. EKS requires
+  # karpenter.sh/nodepool Exists, as for the releases of chart svp-service: nodes of the system group have no startup
+  # taint, so a pod started there before Istio's CNI agent would run outside the mesh.
+  nodeAffinity: {}
   # NetworkPolicy envoy of envoy-gateway-system (templates/networkpolicies.yaml): only the HTTPS port (from httpsFrom),
   # the metrics port (svp-obs, Prometheus) and the load balancer's health check port (from healthCheck) reach the Envoy
   # pods of Gateway svp. Off on k3d: no policy selects those pods, which any pod may reach.
@@ -156,6 +171,21 @@ karpenter:
 # sslmode=verify-full. Empty renders no Secret: Postgres in the cluster chains to the local CA of Secret local-ca.
 rdsCA:
   bundle: ""
+
+# The waypoint of the mesh (templates/waypoint.yaml), the L7 proxy in svp-mesh that the requests to every gRPC Service
+# of svp go through. istiod makes its Deployment; replicas and the requests and limits of its container istio-proxy go
+# there through a ConfigMap. Two replicas or more also get a PodDisruptionBudget, so a drain keeps one serving.
+waypoint:
+  replicas: 1
+  # Istio's defaults (requests 100m and 128Mi, limits 2 CPU and 1Gi) sized down to the Envoy pods of Gateway svp:
+  # the waypoint carries only the calls between the services.
+  resources:
+    requests:
+      cpu: 50m
+      memory: 64Mi
+    limits:
+      cpu: "1"
+      memory: 256Mi
 
 # CloudNativePG (component cloudnative-pg, wave 2) runs Postgres svp-pg in svp-data: its RBAC and the certificate of its
 # webhook are made here (templates/cnpg-rbac.yaml, cnpg-webhook-certificate.yaml). false where Postgres is a managed one

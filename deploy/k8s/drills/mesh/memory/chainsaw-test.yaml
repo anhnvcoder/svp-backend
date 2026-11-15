@@ -1,0 +1,42 @@
+# Evidence of the mesh drill, not a gate: the memory of the mesh's own pods, as kubectl top reads it from the cluster's
+# metrics-server, one line "RESULT mesh-memory <namespace>/<pod> <n>Mi" per pod of istio-system (istiod, istio-cni and
+# ztunnel per node) and svp-mesh (the waypoint), then "RESULT mesh-memory total <n>Mi <count> pods", which CI keeps.
+
+# metrics-server may not have read a pod yet: up to 60 s of tries, then a line "RESULT mesh-memory unavailable" and
+# the test still passes.
+apiVersion: chainsaw.kyverno.io/v1alpha1
+kind: Test
+metadata:
+  name: mesh-memory
+  labels:
+    drill: mesh
+spec:
+  description: "Evidence: memory of the pods of istio-system and svp-mesh (kubectl top), never a failure"
+  # An existing namespace: Chainsaw neither creates nor deletes it.
+  namespace: svp
+  steps:
+  - name: "memory: RESULT mesh-memory of each pod of istio-system and svp-mesh, and their total"
+    try:
+    - script:
+        shell: bash
+        env:
+        - {name: CALLER_KUBECONFIG, value: (env('KUBECONFIG'))}
+        content: |
+          set -uo pipefail
+          export KUBECONFIG="$CALLER_KUBECONFIG"
+          for _ in $(seq 12); do
+            rows=$(for ns in istio-system svp-mesh; do
+              kubectl --context k3d-svp -n "$ns" top pod --no-headers 2>/dev/null | awk -v ns="$ns" '{ print ns "/" $1, $3 }'
+            done)
+            if [ -n "$rows" ] && ! grep -qv ' [0-9]*\(Ki\|Mi\|Gi\)$' <<<"$rows" &&
+              grep -q '^istio-system/' <<<"$rows" && grep -q '^svp-mesh/' <<<"$rows"; then
+              awk '{ v = $2 + 0; if ($2 ~ /Ki$/) v /= 1024; if ($2 ~ /Gi$/) v *= 1024
+                printf "RESULT mesh-memory %s %.0fMi\n", $1, v; t += v; n++ }
+                END { printf "RESULT mesh-memory total %.0fMi %d pods\n", t, n }' <<<"$rows"
+              exit 0
+            fi
+            sleep 5
+          done
+          echo "RESULT mesh-memory unavailable: kubectl top read no figure for both istio-system and svp-mesh within 60 s"
+        check:
+          ($error): ~

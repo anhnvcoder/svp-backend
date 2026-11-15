@@ -3,11 +3,15 @@
 # a closed port with a name that resolves is the policy) the internet, Postgres, Kafka, the object store, the four
 # gRPC services, Pyroscope and the API server are closed; the gateway, Valkey, the Collector and GlitchTip are open.
 
+# The web pods are in the mesh, where ztunnel accepts every connection before it dials, so the probe
+# (templates/ambient-probe.js) holds a socket to judge it: closed says some layer refused (a NetworkPolicy or an
+# AuthorizationPolicy), not which; the mesh drill (deploy/k8s/drills/mesh/) checks those layers apart.
+
 # A pod probe of namespace svp-probe cannot open web:3001; control: Envoy reaches it (/healthz 200).
 
-# Each check and control is one step, which runs its target in every web pod; a failed one marks the test failed and the
-# next steps still run. No running web pod, or namespace svp-probe not made, ends the test; the template's cleanup
-# deletes svp-probe.
+# Each check and control is one step, which runs its target in every web pod at once; a failed one marks the test
+# failed and the next steps still run. No running web pod, or namespace svp-probe not made, ends the test; the
+# template's cleanup deletes svp-probe.
 # Design notes: docs/threat-model.md.
 apiVersion: chainsaw.kyverno.io/v1alpha1
 kind: Test
@@ -37,7 +41,8 @@ spec:
 
   # One target per step, in every running web pod: each pod's answer "<dns|nodns|ip> <open|closed>" goes to stderr as
   # "POD: ANSWER" ("POD: probe failed" when node could not run), and stdout has the answers of all pods, each once. With
-  # every pod giving the expected answer that is exactly it; a pod that differs adds its own line.
+  # every pod giving the expected answer that is exactly it; a pod that differs adds its own line. An http:// target
+  # gets a request, since its server drops a silent connection before the probe's hold ends.
   - name: "WEB-13: from each web pod 1.1.1.1:443 closed"
     bindings:
     - {name: target, value: 1.1.1.1:443}
@@ -50,37 +55,23 @@ spec:
         content: |
           set -eu
           export KUBECONFIG="$CALLER_KUBECONFIG"
-          js='
-          const net = require("node:net");
-          const dns = require("node:dns");
-          const probe = (target) => new Promise((done) => {
-            const i = target.lastIndexOf(":");
-            const host = target.slice(0, i);
-            const port = Number(target.slice(i + 1));
-            const connect = (resolved) => {
-              const socket = net.connect({ host, port, timeout: 3000 });
-              const end = (state) => { socket.destroy(); done(`${resolved} ${state}`); };
-              socket.once("connect", () => end("open"));
-              socket.once("timeout", () => end("closed"));
-              socket.once("error", () => end("closed"));
-            };
-            if (net.isIP(host) !== 0) connect("ip");
-            else dns.lookup(host, (error) => connect(error ? "nodns" : "dns"));
-          });
-          Promise.all(process.argv.slice(1).map(probe)).then((lines) => console.log(lines.join("\n")));
-          '
+          js=$(cat "$(git rev-parse --show-toplevel)/deploy/k8s/drills/templates/ambient-probe.js")
           pods=$(kubectl --context k3d-svp -n svp get pods -l app.kubernetes.io/name=web,app.kubernetes.io/component=server \
             --field-selector status.phase=Running -o jsonpath='{range .items[*]}{.metadata.name}{"\n"}{end}')
           [ -n "$pods" ] || { echo "FAIL  WEB-13: namespace svp has running web pods" >&2; exit 1; }
-          answers=$(mktemp)
-          trap 'rm -f "$answers"' EXIT
+          dir=$(mktemp -d)
+          trap 'rm -rf "$dir"' EXIT
           for pod in $pods; do
-            got=$(kubectl --context k3d-svp -n svp exec "$pod" -c web -- /nodejs/bin/node -e "$js" "$TARGET" </dev/null) ||
-              got="probe failed"
-            echo "$pod: $got" >&2
-            printf '%s\n' "$got" >>"$answers"
+            (kubectl --context k3d-svp -n svp exec "$pod" -c web -- /nodejs/bin/node -e "$js" tcp "$TARGET" </dev/null \
+              >"$dir/$pod" 2>/dev/null || echo "probe failed" >"$dir/$pod") &
           done
-          sort -u "$answers"
+          wait
+          for pod in $pods; do
+            got=$(cat "$dir/$pod")
+            echo "$pod: $got" >&2
+            printf '%s\n' "$got" >>"$dir/answers"
+          done
+          sort -u "$dir/answers"
         check:
           ($error): ~
           # nodns: the name does not resolve, so a closed port proves nothing.
@@ -138,7 +129,7 @@ spec:
     try: *webReach
   - name: "WEB-13: from each web pod gateway.svp:8080 open (control of the closed ones)"
     bindings:
-    - {name: target, value: gateway.svp.svc.cluster.local:8080}
+    - {name: target, value: http://gateway.svp.svc.cluster.local:8080}
     - {name: want, value: dns open}
     try: *webReach
   - name: "WEB-13: from each web pod valkey.svp-data:6379 open (control of the closed ones)"
@@ -153,7 +144,7 @@ spec:
     try: *webReach
   - name: "WEB-13: from each web pod glitchtip.svp-obs:8000 open (control of the closed ones)"
     bindings:
-    - {name: target, value: glitchtip.svp-obs.svc.cluster.local:8000}
+    - {name: target, value: http://glitchtip.svp-obs.svc.cluster.local:8000}
     - {name: want, value: dns open}
     try: *webReach
 

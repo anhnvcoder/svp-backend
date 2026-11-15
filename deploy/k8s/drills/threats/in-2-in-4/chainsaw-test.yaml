@@ -15,6 +15,10 @@
 # 9096), GlitchTip's pod opens 5432, a login leaves its rate limit key in Valkey (the gateway reaches 6379), the object
 # store's /health/live and the web client's /healthz through Envoy (Envoy reaches web:3001).
 
+# The stand-in is in the mesh, where ztunnel accepts every connection before it dials, so its cases go through the
+# probe (templates/ambient-probe.js), which holds a socket to judge it. Pod probe of svp-probe is outside the mesh and
+# its targets are refused by a NetworkPolicy before any pod, so nc -z still judges them.
+
 # The cleanup of the templates deletes svp-probe and the stand-in pod and stops the port-forward. LOCAL LAB ONLY: the
 # test deletes the register rate limit keys svp:gw:rl:register:* in the cluster's Valkey db 10 (SCAN + DEL) before it
 # registers its drill user, and otherwise only reads Valkey (SCAN in db 10).
@@ -246,7 +250,8 @@ spec:
     - {name: url, value: https://api.svp.localhost:8443/healthz}
     - {name: want, value: "200"}
     try: *status
-  # From the stand-in: "<dns|nodns|ip> <open|closed>" as node's dns.lookup and a TCP connect (3 s) see it.
+  # From the stand-in: "<dns|nodns|ip> <open|closed>" as node's dns.lookup and the probe see it. An http:// target gets
+  # a request, since its server may drop a silent connection before the probe's hold ends.
   - name: "IN-2/IN-4: control: from media-worker kafka.svp-data:9096 open"
     bindings:
     - {name: target, value: kafka.svp-data.svc.cluster.local:9096}
@@ -259,31 +264,15 @@ spec:
         content: |
           set -eu
           export KUBECONFIG="$CALLER_KUBECONFIG"
-          js='
-          const net = require("node:net");
-          const dns = require("node:dns");
-          const target = process.argv[1];
-          const i = target.lastIndexOf(":");
-          const host = target.slice(0, i);
-          const port = Number(target.slice(i + 1));
-          const connect = (resolved) => {
-            const socket = net.connect({ host, port, timeout: 3000 });
-            const end = (state) => { socket.destroy(); console.log(`${resolved} ${state}`); };
-            socket.once("connect", () => end("open"));
-            socket.once("timeout", () => end("closed"));
-            socket.once("error", () => end("closed"));
-          };
-          if (net.isIP(host) !== 0) connect("ip");
-          else dns.lookup(host, (error) => connect(error ? "nodns" : "dns"));
-          '
-          kubectl --context k3d-svp -n svp exec pod/drill-media-worker-standin -c probe -- /nodejs/bin/node -e "$js" "$TARGET" </dev/null
+          js=$(cat "$(git rev-parse --show-toplevel)/deploy/k8s/drills/templates/ambient-probe.js")
+          kubectl --context k3d-svp -n svp exec pod/drill-media-worker-standin -c probe -- /nodejs/bin/node -e "$js" tcp "$TARGET" </dev/null
         check:
           ($error): ~
           (trim_space($stdout)): ($want)
       continueOnError: true
   - name: "IN-2/IN-4: control: from media-worker s3.svp-data:9000 open"
     bindings:
-    - {name: target, value: s3.svp-data.svc.cluster.local:9000}
+    - {name: target, value: http://s3.svp-data.svc.cluster.local:9000}
     - {name: want, value: dns open}
     try: *workerReach
   - name: "IN-2/IN-4: setup: port-forward to Prometheus on 127.0.0.1:19090"

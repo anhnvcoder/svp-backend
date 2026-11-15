@@ -1,0 +1,13 @@
+# The gateway's form on its own (helm lint or template -f this file): HTTP behind Envoy and the web client, both
+# admitted in the mesh, egress to the gRPC peers and the waypoint their Services use. Placeholder image.
+image: {repository: ghcr.io/example/gateway, tag: "000000000000"}
+protocol: http
+port: 8080
+resources:
+  requests: {cpu: 100m, memory: 64Mi}
+  limits: {cpu: "1", memory: 256Mi}
+ingressFrom: [envoy, web]
+egressTo: [user-service, video-service, engagement-service, feed-service, valkey, collector]
+httpRoute:
+  host: api.example.test
+  name: api

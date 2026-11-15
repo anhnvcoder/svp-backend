@@ -27,7 +27,7 @@ RUN --mount=type=cache,target=/go/pkg/mod \
 # Root filesystem stage: the tag keeps the 3.24 branch; the ffmpeg package is not pinned, since Alpine drops old builds
 # from its repository once a fix lands. apk add leaves installed packages as they are, so apk upgrade first gives the
 # base packages (zlib, ...) the branch's patches too, before the digest Renovate proposes catches up.
-FROM alpine:3.24.3@sha256:be2656061b536c1883c4034790e21d0a09c5aaaf51968b89368a3c0371ea2c9a AS rootfs
+FROM alpine:3.24.4@sha256:f59abe656b692d901e184be3445e084786602108599d2a51d229c0f5a48c71bf AS rootfs
 # The last rm is one busybox process, so it can remove busybox itself and every applet link, /bin/sh among them. The
 # package database keeps the entries of busybox and apk-tools, so scanners still report them.
 RUN apk upgrade --no-cache \

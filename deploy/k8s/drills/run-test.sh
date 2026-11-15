@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Tests for deploy/k8s/drills/run.sh (make drill-k8s-threats, drill-k8s-supplychain, drill-k8s-gitops,
+# Tests for deploy/k8s/drills/run.sh (make drill-k8s-threats, drill-k8s-mesh, drill-k8s-supplychain, drill-k8s-gitops,
 # drill-k8s-reloader), deploy/k8s/drills/reloader/new-values.sh and the snapshot helpers of
 # deploy/k8s/drills/reloader/rotate/reloader.sh, without a cluster, a network or Docker.
 
@@ -56,6 +56,7 @@ a_test threats in-2-in-4
 a_test threats ops-2
 a_test threats sec-5-6-7 '    requires: external-secrets'
 a_test threats sec-6-reader '    requires: external-secrets'
+a_test mesh m-1
 for c in a b l; do a_test supplychain "case-$c"; done
 a_test reloader rotate
 cat >"$tree/deploy/ci/ghcr-digest.sh" <<'EOF'
@@ -409,6 +410,21 @@ drill gitops
 same "gitops: green run exits 0" 0 "$rc"
 has "gitops: selector drill=gitops" "$(cat "$FAKE_STATE/chainsaw.args")" "drill=gitops"
 lacks "gitops: no Secret search" "$out" "SECRETS"
+
+# --- mesh: the cluster's CA for curl, no Secret value read.
+fresh 1
+drill mesh
+same "mesh: green run exits 0" 0 "$rc"
+has "mesh: selector drill=mesh" "$(cat "$FAKE_STATE/chainsaw.args")" "--selector"$'\n'"drill=mesh"$'\n'
+has "mesh: chainsaw gets the mesh tests" "$(cat "$FAKE_STATE/chainsaw.args")" "--test-dir"$'\n'"deploy/k8s/drills/mesh"
+same "mesh: curl gets the cluster's CA" "$tree/.k8s/ca.crt" "$(cat "$FAKE_STATE/chainsaw.ca")"
+lacks "mesh: no Secret search" "$out" "SECRETS"
+same "mesh: no Secret read" "" "$(grep 'get secret' "$FAKE_STATE/kubectl.log" || true)"
+fresh 1
+rm "$tree/.k8s/ca.crt"
+drill mesh
+red "mesh: no .k8s/ca.crt stops before chainsaw" before
+has "mesh: names the missing CA" "$out" "drill-k8s-mesh: .k8s/ca.crt missing"
 
 # --- supplychain: the values of each row "diễn tập" of the image table.
 digest=@sha256:$(printf '%064d' 0)

@@ -235,8 +235,8 @@ spec:
 ---
 # The Envoy pods of Gateway svp: once a policy selects them, nothing else reaches them. In: 10443 (the listeners' 443
 # in the pod: a port under 1024 gets 10000 added) from httpsFrom; the metrics port from Prometheus in svp-obs (the
-# canary's analysis); the load balancer's health check on a port of its own from its sources. Out: not restricted
-# (Envoy reaches its controller and every backend).
+# canary's analysis); the load balancer's health check on a port of its own from its sources; the kubelet's probes.
+# Out: not restricted (Envoy reaches its controller and every backend).
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
@@ -261,6 +261,16 @@ spec:
       ports:
         - protocol: TCP
           port: 19001
+    # The pods are in the mesh, so istio-cni rewrites the source of the kubelet's probes to this address: Envoy's
+    # /ready on 19003 and the shutdown manager's /healthz (and the preStop hook) on 19002.
+    - from:
+        - ipBlock:
+            cidr: 169.254.7.127/32
+      ports:
+        - protocol: TCP
+          port: 19003
+        - protocol: TCP
+          port: 19002
     {{- if $healthCheckPort }}
     - from:
         {{- toYaml $np.healthCheck.from | nindent 8 }}

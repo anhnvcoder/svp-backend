@@ -93,7 +93,8 @@ type readiness struct {
 //     running on it get 10 s to finish before it closes. A client with the default pick_first policy
 //     that reaches the service through a ClusterIP otherwise holds one connection to one pod for
 //     good, so a new pod or a canary would receive no traffic; reconnecting makes kube-proxy choose
-//     a pod again. A mesh later balances per request, and this setting stays harmless.
+//     a pod again. On the cluster a waypoint balances per request; compose and clients outside
+//     the mesh still rely on this setting.
 //
 // The standard health service reports the overall health "" SERVING from the moment the server
 // listens until shutdown starts, whatever ready returns: liveness must not depend on anything

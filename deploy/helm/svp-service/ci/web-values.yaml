@@ -1,0 +1,15 @@
+# The web client's form on its own (helm lint or template -f this file): HTTP behind Envoy only, with a canary
+# Service beside the stable one. Placeholder image.
+image: {repository: ghcr.io/example/web, tag: "000000000000"}
+protocol: http
+port: 3001
+resources:
+  requests: {cpu: 100m, memory: 128Mi}
+  limits: {cpu: "1", memory: 384Mi}
+ingressFrom: [envoy]
+egressTo: [gateway, valkey, collector]
+httpRoute:
+  host: example.test
+  sectionName: https-apex
+canary: true
+canaryLimits: {p99Ms: 250, errorRatio: 0.01}

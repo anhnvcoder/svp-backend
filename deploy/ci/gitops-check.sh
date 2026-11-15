@@ -165,9 +165,11 @@ image_refs() {
       gsub(/^["'\'']|["'\'',]+$/, "", ref)
       return ref
     }
+    # A value holding a Go template ({{ .ProxyImage }} of the pod templates istiod fills at run time) is no image: the
+    # policy reads the images it is filled from.
     function emit(ref) {
       ref = unquote(ref)
-      if (ref != "") print name "\t" ref
+      if (ref != "" && index(ref, "{{") == 0) print name "\t" ref
     }
     # A setting of an image rather than the image itself: FOO_IMAGE_PULL_POLICY, FOO_IMAGE_TAG, --image-pull-secrets=...
     function image_attribute(key) {

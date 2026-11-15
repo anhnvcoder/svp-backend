@@ -90,6 +90,7 @@ alarm của dịch vụ dữ liệu báo người vận hành qua email, độc 
 | JWT ký ở user-service, kiểm ở gateway và ở mỗi service; refresh token xoay; session BFF ở Redis | [ADR-0016](adr/0016-web-client.md), [ADR-0042](adr/0042-caller-identity-grpc.md), [ADR-0046](adr/0046-web-session-lifetime.md) |
 | Web client Next.js ở repo riêng, hợp đồng REST có version | [ADR-0016](adr/0016-web-client.md), [ADR-0033](adr/0033-svp-web-repo.md) |
 | OpenTelemetry qua Collector tới Grafana LGTM, GlitchTip cho lỗi, SLO bằng Sloth | [ADR-0011](adr/0011-observability-stage3.md), [ADR-0012](adr/0012-elastic-vs-grafana-stage3.md) |
+| Istio ambient trên cluster: mTLS STRICT giữa mọi pod của `svp`, quyền theo ServiceAccount, cân tải và canary gRPC theo request bằng waypoint; compose không có mesh | [ADR-0042](adr/0042-caller-identity-grpc.md), [ADR-0075](adr/0075-service-mesh.md) |
 | Cùng chart chạy trên k3d và EKS, Envoy Gateway, dữ liệu trong cluster (trên AWS: RDS, S3, MSK, ElastiCache managed) | [ADR-0014](adr/0014-kubernetes-local-stage4.md), [ADR-0034](adr/0034-aws-stage7.md) |
 | Kafka và Valkey managed ở stg, prd (Amazon MSK, ElastiCache for Valkey, ở subnet database không route ra Internet); compose, k3d chạy cùng phần mềm, cùng xác thực, TLS, cổng; mỗi client một user ACL | [ADR-0053](adr/0053-msk-elasticache-valkey.md), [ADR-0054](adr/0054-data-subnet-tier.md) |
 | PostgreSQL 17 ở RDS, CloudNativePG, compose; mọi client kiểm cert server bằng `sslmode=verify-full`; RDS lớp production ở prd, CMK riêng, tham số ghi log; không proxy kết nối | [ADR-0057](adr/0057-postgres17-verify-full.md) |
@@ -267,12 +268,66 @@ Access token sống `authtoken.TTL` (15 phút, [ADR-0069](adr/0069-auth-hardenin
 (JWT-3 của [`threat-model.md`](threat-model.md#41-jwt-và-đăng-nhập)), nên BFF làm mới trước khi hết hạn. Refresh không
 rõ kết quả thì BFF giữ session và không thử lại trong request đó.
 
+### 6.5 Request gRPC qua mesh
+
+Cluster (k3d, EKS) chạy Istio ambient ([ADR-0075](adr/0075-service-mesh.md)); compose không có mesh. Bốn thành phần
+nằm ở `istio-system`: `istiod` (cấp chứng chỉ theo ServiceAccount, đẩy cấu hình xuống proxy), `istio-cni` (đặt luật chuyển
+hướng lưu lượng của pod), `ztunnel` (DaemonSet, mã hoá L4 trong network namespace của từng pod) và chart `base` (CRD). Namespace
+`svp` và pod proxy của Envoy Gateway vào mesh bằng nhãn `istio.io/dataplane-mode: ambient`. **Waypoint** là một Envoy chung ở
+namespace `svp-mesh`, chỉ nhận lưu lượng của bốn Service gRPC (nhãn `istio.io/use-waypoint`): nó cân tải theo từng request và
+kiểm quyền L7. Pod của waypoint đứng ngoài mesh (`dataplane-mode: none`), tự nói HBONE, giao thức đường hầm mTLS của ambient
+trên cổng 15008. Postgres, Valkey, Kafka, object store và observability ngoài mesh: ztunnel chuyển nguyên, TLS riêng của chúng giữ.
+
+```mermaid
+sequenceDiagram
+    participant C as Client
+    participant E as Envoy (envoy-gateway-system)
+    participant ZE as ztunnel (pod Envoy)
+    participant ZG as ztunnel (pod gateway)
+    participant G as gateway
+    participant W as waypoint (svp-mesh)
+    participant ZU as ztunnel (pod user-service)
+    participant U as user-service
+
+    C->>E: REST/JSON, TLS kết thúc ở Envoy (chưa vào mesh)
+    E->>ZE: kết nối tới pod gateway, plaintext trong pod
+    ZE->>ZG: HBONE mTLS 15008, danh tính: namespace envoy-gateway-system
+    Note over ZG: AuthorizationPolicy L4 của gateway: chỉ envoy-gateway-system và ServiceAccount web
+    ZG->>G: plaintext trong pod
+    G->>G: JWT, rate limit, chọn lời gọi gRPC
+    G->>ZG: gRPC tới Service user-service, credential insecure, ztunnel của pod bắt
+    ZG->>W: HBONE mTLS 15008, danh tính: ServiceAccount gateway
+    Note over W: AuthorizationPolicy L7 của Service: chỉ ServiceAccount gateway. Chọn pod theo từng request, GRPCRoute chia stable/canary, không retry
+    W->>ZU: HBONE mTLS mới, danh tính: ServiceAccount waypoint
+    Note over ZU: PeerAuthentication STRICT, AuthorizationPolicy L4: chỉ waypoint, chỉ cổng gRPC
+    ZU->>U: plaintext trong pod
+    U-->>G: response gRPC, ngược đường đã đi
+    G-->>E: response REST, ngược đường đã đi
+```
+
+Plaintext chỉ còn trong network namespace của pod, giữa process và ztunnel của nó; trên dây mọi chặng giữa pod của `svp` đi
+mTLS. Quyền kiểm ở ba chỗ, mỗi chỗ theo danh tính SPIFFE `cluster.local/ns/<namespace>/sa/<serviceaccount>`:
+
+- **Pod đích, L4 (ztunnel):** pod gateway chỉ nhận namespace của Envoy và ServiceAccount `web`; pod service gRPC chỉ nhận
+  ServiceAccount của waypoint, nên lời gọi bỏ qua waypoint (tới thẳng IP pod) bị từ chối. Pod không có `ingressFrom`
+  (`media-worker`, `dlq-replay`) không nhận ai. `PeerAuthentication` STRICT từ chối plaintext ở mọi cổng.
+- **Waypoint, L7:** `AuthorizationPolicy` gắn vào Service của release gRPC, chỉ cho ServiceAccount trong `ingressFrom`
+  (gateway). ServiceAccount lạ trong mesh bị từ chối ở đây.
+- **NetworkPolicy** giữ làm lớp mạng, mở thêm 15008 giữa các peer trong mesh và nguồn probe của kubelet
+  (`169.254.7.127/32`, địa chỉ istio-cni ghi lại cho probe).
+
+Service gRPC của `svp` vẫn dựng kết nối `insecure` (không TLS ở lớp ứng dụng): mesh mã hoá trên dây, còn compose không có
+mesh nên ở đó lớp ứng dụng ([ADR-0042](adr/0042-caller-identity-grpc.md) §1) che. Lý do và phương án đã loại: phụ lục
+[ADR-0075](adr/0075-service-mesh.md). Cân tải, canary và cái gì hỏng khi mesh hỏng:
+[`explanation/reliability.md`](explanation/reliability.md#mesh-cân-tải-và-khi-mesh-hỏng),
+[`explanation/delivery.md`](explanation/delivery.md#release-mới-và-canary-grpc).
+
 ## 7. Triển khai
 
 | Nơi | Dùng để | Dữ liệu | Chi tiết |
 | --- | --- | --- | --- |
 | Compose trên máy | Đường dev chính, smoke, diễn tập | Postgres, Kafka, Valkey, RustFS trong compose | [Compose](explanation/deployment.md#compose) |
-| Cluster k3d | Cùng chart như cloud: Envoy Gateway, NetworkPolicy, canary, Kyverno, đường GitOps | CloudNativePG, Kafka, Valkey, RustFS trong cluster | [k3d](explanation/deployment.md#kubernetes-cục-bộ-k3d) |
+| Cluster k3d | Cùng chart như cloud: Envoy Gateway, mesh Istio ambient, NetworkPolicy, canary, Kyverno, đường GitOps | CloudNativePG, Kafka, Valkey, RustFS trong cluster | [k3d](explanation/deployment.md#kubernetes-cục-bộ-k3d) |
 | EKS trên AWS | stg và prd, dựng bằng Terraform của `svp-infra`; khác biệt stg/prd ở [`explanation/environments.md`](explanation/environments.md) | RDS for PostgreSQL, Amazon MSK, ElastiCache for Valkey ở subnet database; S3 + CloudFront | [AWS](explanation/deployment.md#aws) |
 
 **Postgres, Kafka và Valkey ở mọi nơi** ([ADR-0053](adr/0053-msk-elasticache-valkey.md), [ADR-0057](adr/0057-postgres17-verify-full.md)):
@@ -325,6 +380,7 @@ flowchart TB
                         envoy["Envoy Gateway<br/>[HPA từ 2, PDB, trải zone]"]
                         svc["web, gateway, 4 service gRPC,<br/>media-worker, dlq-replay [svp-service]"]
                         obsn["Observability, GlitchTip, OpenCost,<br/>blackbox exporter [svp-obs]"]
+                        mesh["istiod, istio-cni, ztunnel [istio-system];<br/>waypoint [svp-mesh]"]
                     end
                     kyv["Kyverno<br/>[3 replica, PDB, trải zone]"]
                 end
@@ -398,8 +454,9 @@ Danh sách đầy đủ kèm lý do chấp nhận và điều kiện xem lại: 
 
 - **Chưa đo trên cloud:** k6 1.000 req/s, chaos trên EKS, diễn tập phục hồi RDS, hạn 50 ms của Valkey
   ([`explanation/reliability.md`](explanation/reliability.md#chưa-đo-trên-cloud)); NFR độ trễ chưa có số đo ở tải mục tiêu.
-- **Không có mTLS giữa gateway và service gRPC:** token chuyển tiếp đi plaintext trong cluster, NetworkPolicy là lớp chặn duy nhất;
-  Istio ambient là phương án tuỳ chọn, chưa dựng (IN-2, IN-3, [mục 4.5](threat-model.md#45-mức-tin-cậy-giữa-các-service)).
+- **Compose không có mTLS giữa gateway và service gRPC:** token chuyển tiếp đi plaintext trong mạng compose, chỉ lớp ứng dụng
+  ([ADR-0042](adr/0042-caller-identity-grpc.md) §1) che; trên cluster mesh mã hoá và kiểm danh tính (IN-2, IN-3, [mục
+  4.5](threat-model.md#45-mức-tin-cậy-giữa-các-service)). Telemetry (OTLP) ra `svp-obs` ngoài mesh.
 - **Độ tươi feed chưa thành SLO:** local quá ít event để burn rate có nghĩa; chỉ có histogram trên dashboard.
 - **Kyverno một replica ở k3d:** nó chết thì webhook từ chối mọi pod `svp` mới tới khi nó lên lại (SC-1, SC-7); trên EKS ba replica có PDB
   và trải zone ([ADR-0056](adr/0056-eks-platform-ha.md) §5).

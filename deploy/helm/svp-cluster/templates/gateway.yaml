@@ -41,6 +41,15 @@ spec:
         minAvailable: 1
       envoyDeployment:
         pod:
+          # The Envoy pods join the mesh (not Envoy Gateway's controller): their calls to the pods of svp go in mTLS,
+          # with the identity of namespace envoy-gateway-system that those pods' policies let in.
+          labels:
+            istio.io/dataplane-mode: ambient
+          {{- with .Values.envoy.nodeAffinity }}
+          affinity:
+            nodeAffinity:
+              {{- toYaml . | nindent 14 }}
+          {{- end }}
           # Zones first, then nodes. ScheduleAnyway: with a zone or a node short of room the pod still starts
           # elsewhere instead of staying Pending; k3d's nodes have no zone label, so only the second applies there.
           topologySpreadConstraints:

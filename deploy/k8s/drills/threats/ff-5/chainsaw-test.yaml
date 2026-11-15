@@ -3,6 +3,10 @@
 # a name resolved first): the internet (an IP and a name), the gateway, the four gRPC services, Postgres, Valkey and the
 # API server are closed; the object store, Kafka and the Collector open.
 
+# The stand-in is in the mesh, where ztunnel accepts every connection before it dials, so the probe
+# (templates/ambient-probe.js) holds a socket to judge it: closed says some layer refused (a NetworkPolicy or an
+# AuthorizationPolicy), not which; the mesh drill (deploy/k8s/drills/mesh/) checks those layers apart.
+
 # A name that resolves makes a closed port the policy, not a missing service. The controls show each closed target
 # answers a client the policy lets in: /readyz through Envoy (the gateway reaches user-, video- and feed-service), the
 # explore feed of a drill user with stats on every item (the gateway reaches engagement-service), /healthz (Envoy
@@ -46,8 +50,8 @@ spec:
     use:
       template: ../../templates/media-worker-standin-up.yaml
 
-  # One target per step, from the stand-in: "<dns|nodns|ip> <open|closed>" as node's dns.lookup and a TCP connect (3 s)
-  # see it.
+  # One target per step, from the stand-in: "<dns|nodns|ip> <open|closed>" as node's dns.lookup and the probe see it. An
+  # http:// target gets a request, since its server may drop a silent connection before the probe's hold ends.
   - name: "FF-5: from media-worker 1.1.1.1:443 closed"
     bindings:
     - {name: target, value: 1.1.1.1:443}
@@ -60,24 +64,8 @@ spec:
         content: |
           set -eu
           export KUBECONFIG="$CALLER_KUBECONFIG"
-          js='
-          const net = require("node:net");
-          const dns = require("node:dns");
-          const target = process.argv[1];
-          const i = target.lastIndexOf(":");
-          const host = target.slice(0, i);
-          const port = Number(target.slice(i + 1));
-          const connect = (resolved) => {
-            const socket = net.connect({ host, port, timeout: 3000 });
-            const end = (state) => { socket.destroy(); console.log(`${resolved} ${state}`); };
-            socket.once("connect", () => end("open"));
-            socket.once("timeout", () => end("closed"));
-            socket.once("error", () => end("closed"));
-          };
-          if (net.isIP(host) !== 0) connect("ip");
-          else dns.lookup(host, (error) => connect(error ? "nodns" : "dns"));
-          '
-          kubectl --context k3d-svp -n svp exec pod/drill-media-worker-standin -c probe -- /nodejs/bin/node -e "$js" "$TARGET" </dev/null
+          js=$(cat "$(git rev-parse --show-toplevel)/deploy/k8s/drills/templates/ambient-probe.js")
+          kubectl --context k3d-svp -n svp exec pod/drill-media-worker-standin -c probe -- /nodejs/bin/node -e "$js" tcp "$TARGET" </dev/null
         check:
           ($error): ~
           # nodns: the name does not resolve, so a closed port proves nothing.
@@ -130,7 +118,7 @@ spec:
     try: *workerReach
   - name: "FF-5: from media-worker s3.svp-data:9000 open"
     bindings:
-    - {name: target, value: s3.svp-data.svc.cluster.local:9000}
+    - {name: target, value: http://s3.svp-data.svc.cluster.local:9000}
     - {name: want, value: dns open}
     try: *workerReach
   - name: "FF-5: from media-worker kafka.svp-data:9096 open"

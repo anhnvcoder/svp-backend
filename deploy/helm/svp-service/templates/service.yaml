@@ -19,6 +19,12 @@ metadata:
   namespace: {{ .Release.Namespace }}
   labels:
     {{- include "svp-service.labels" . | nindent 4 }}
+    {{- if eq .Values.protocol "grpc" }}
+    # The calls to a gRPC Service go through the waypoint of chart svp-cluster (Gateway waypoint in svp-mesh), which
+    # balances them one by one over the pods: a client's single long HTTP/2 connection would pin it to one pod.
+    istio.io/use-waypoint: waypoint
+    istio.io/use-waypoint-namespace: {{ .Values.peers.waypoint.namespace }}
+    {{- end }}
 spec:
   selector:
     {{- include "svp-service.selectorLabels" . | nindent 4 }}

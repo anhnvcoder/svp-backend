@@ -42,6 +42,9 @@ Loại tài liệu (Diátaxis): **reference**, tra cứu khi cần một lệnh 
   Grafana (3000), Alertmanager (9093), GlitchTip (8000). Cổng gRPC nằm trong mạng compose
   ([threat model](../threat-model.md) IN-2); Collector (4317) và Prometheus (9090), Tempo (3200), Loki (3100), Pyroscope (4040) của LGTM
   cũng vậy, từ host đọc chúng qua datasource proxy của Grafana.
+  Stack compose không có lớp kênh của service mesh (Istio cần Kubernetes): gRPC giữa service là plaintext trong mạng compose, lớp ứng dụng của
+  [ADR-0042](../adr/0042-caller-identity-grpc.md) §1 che phần còn lại, và cân tải theo lời gọi, mTLS, quyền theo ServiceAccount chỉ có trên
+  cluster ([ADR-0075](../adr/0075-service-mesh.md)).
 - Năm mạng. `default` chứa mọi thứ trừ media-worker, dlq-replay, web và `blackbox`. `worker` (internal, không route ra ngoài) chỉ chứa media-worker, dlq-replay, Kafka,
   object store và Collector, nên worker chạy ffmpeg trên file người dùng tải lên không tới được gateway, service gRPC, Postgres,
   LGTM hay internet (threat model FF-4, FF-5); Collector ở đó chỉ nhận telemetry, không làm proxy cho worker. `web` chỉ chứa web,

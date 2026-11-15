@@ -483,6 +483,15 @@ printf '%s\t%s\t%s\n' k8s-gitops-up failure '' k8s-smoke failure '' drill-k8s-gi
   echo "        probe answered: PROBE-BODY-MARKER"
 } >"$out/logs/drill-k8s-threats.log"
 {
+  echo "    | 08:00:00 | mesh-memory | memory: RESULT mesh-memory | SCRIPT | LOG |"
+  echo "        === STDOUT"
+  echo "        RESULT mesh-memory istio-system/istiod-1 52Mi"
+  echo "        RESULT mesh-memory svp-mesh/waypoint-1 40Mi"
+  echo "        RESULT mesh-memory total 92Mi 2 pods"
+  echo "        M-3: user-service pod at MESH-PROBE-MARKER"
+  echo "RESULT mesh-memory-not MESH-NAME-MARKER"
+} >"$out/logs/drill-k8s-mesh.log"
+{
   echo "ok    OPS-1: 8 loopback ports"
   echo "probe answered: PROBE-OBS-MARKER"
   echo 'ok    {"level":"INFO","msg":"OBS-JSON-MARKER"}'
@@ -635,8 +644,8 @@ cmp -s "$mb/want" "$work/mask-small.secrets/cluster.values" &&
 collect k3d "$work/secrets-k3d"
 for src in '$SVP_VERIFY_OUT/results.tsv' '$SVP_VERIFY_OUT/scenario' \
   '$SVP_VERIFY_OUT/logs/drill-obs-threats.log (verdict lines)' '$SVP_VERIFY_OUT/logs/gitops-admission-metrics.log' \
-  '$SVP_VERIFY_OUT/logs/uptime-cost.log' .k8s/drills/canary-drill-1.json .k8s/drills/names-1.json \
-  .k8s/drills/identifiers-1.json .k8s/drills/traffic-1.log \
+  '$SVP_VERIFY_OUT/logs/uptime-cost.log' '$SVP_VERIFY_OUT/logs/drill-k8s-mesh.log (RESULT lines)' \
+  .k8s/drills/canary-drill-1.json .k8s/drills/names-1.json .k8s/drills/identifiers-1.json .k8s/drills/traffic-1.log \
   .k8s/drills/threats-20261105T000000Z.xml .k8s/drills/threats-skips.tsv; do
   expect k3d "$src" kept
 done
@@ -674,11 +683,17 @@ grep -qE '\.k6/|\.web/' "$work/art-k3d/files.txt" || [ -n "$(find "$work/art-k3d
 [ ! -e "$work/art-k3d/ca.crt" ] && ! grep -q 'ca.crt' "$work/art-k3d/files.txt" && ok "k3d: .k8s/ca.crt not a candidate" ||
   fail "k3d: .k8s/ca.crt not a candidate"
 [ -z "$(find "$work/art-k3d" -name '*.log' ! -name 'drill-obs-threats.verdicts.log' \
-  ! -name 'gitops-admission-metrics.log' ! -name 'uptime-cost.log' ! -name 'traffic-1.log')" ] &&
-  ok "k3d: no step's output in the artifact but the verdicts of drill-obs-threats, the admission and uptime figures" ||
-  fail "k3d: no step's output in the artifact but the verdicts of drill-obs-threats, the admission and uptime figures"
+  ! -name 'gitops-admission-metrics.log' ! -name 'uptime-cost.log' ! -name 'traffic-1.log' \
+  ! -name 'drill-k8s-mesh.results.log')" ] &&
+  ok "k3d: no step's output in the artifact but the verdicts of drill-obs-threats, the admission, uptime and mesh figures" ||
+  fail "k3d: no step's output in the artifact but the verdicts of drill-obs-threats, the admission, uptime and mesh figures"
+[ "$(cat "$work/art-k3d/logs/drill-k8s-mesh.results.log" 2>/dev/null)" = "$(printf '%s\n' \
+  "RESULT mesh-memory istio-system/istiod-1 52Mi" "RESULT mesh-memory svp-mesh/waypoint-1 40Mi" \
+  "RESULT mesh-memory total 92Mi 2 pods")" ] &&
+  ok "k3d: drill-k8s-mesh keeps its RESULT mesh-memory lines, unindented, nothing else" ||
+  fail "k3d: drill-k8s-mesh keeps its RESULT mesh-memory lines, unindented, nothing else"
 markers='INFRA-TAIL-MARKER INFRA-MESSAGE-MARKER OPERATOR-PREVIOUS-MARKER APP-FORGED-MARKER ENVOY-MARKER MIGRATE-PANIC-MARKER
-KEDA-TAIL-MARKER PROBE-BODY-MARKER PROBE-OBS-MARKER OBS-JSON-MARKER BASH-ERROR-MARKER'
+KEDA-TAIL-MARKER PROBE-BODY-MARKER PROBE-OBS-MARKER OBS-JSON-MARKER BASH-ERROR-MARKER MESH-PROBE-MARKER MESH-NAME-MARKER'
 for m in $markers; do
   if grep -rqaF -- "$m" "$work/art-k3d"; then fail "k3d: no $m in the artifact"; else ok "k3d: no $m in the artifact"; fi
   lacks k3d "no $m in the job's log" "$m"
@@ -751,7 +766,9 @@ mkdir -p "$ao/logs" && echo gitops >"$ao/scenario"
 printf 'kyverno: %s\n' "$kafka_secret" >"$ao/logs/gitops-admission-metrics.log"
 printf '  probe_success{probe="web"} = 1    %s\n' "$cluster_secret" >"$ao/logs/uptime-cost.log"
 printf 'FAIL  JWT-8: %s\n' "$jwt" >"$ao/logs/drill-obs-threats.log"
+printf '        RESULT mesh-memory istio-system/%s 52Mi\n' "$cluster_secret" >"$ao/logs/drill-k8s-mesh.log"
 collect_out=$ao collect scanned "$work/secrets-k3d"
+expect scanned '$SVP_VERIFY_OUT/logs/drill-k8s-mesh.log (RESULT lines)' secret-value
 expect scanned '$SVP_VERIFY_OUT/logs/gitops-admission-metrics.log' secret-value
 expect scanned '$SVP_VERIFY_OUT/logs/uptime-cost.log' secret-value
 expect scanned '$SVP_VERIFY_OUT/logs/drill-obs-threats.log (verdict lines)' jwt

@@ -282,6 +282,19 @@ Mục 7 cũ ("Đề xuất xem lại") nguyên văn; việc còn mở chuyển v
   một chỗ vượt ranh giới ở mục 2, hai dòng ở mục 6). Thu hẹp được: lỗi của DNS, cert, CloudFront, WAF, ALB nay thành cảnh báo, và mất probe
   là page ở ruler AMP. [ADR-0074](../adr/0074-cost-uptime.md) chỉnh ADR-0011, 0056, 0063. Đáng xem lại: (1) egress công khai của hai pod khi có
   NetworkPolicy theo tên miền; (2) probe k3d không kiểm chuỗi TLS; (3) Bot Control chuyển sang chặn làm probe bị 403.
+- **Service mesh (2026-11-15):** bề mặt mới là mesh Istio ambient ở k3d và EKS: ztunnel, istio-cni chạy root có quyền
+  mạng của node ở `istio-system` PSA `privileged` (IN-14), istiod là CA của mesh với khoá gốc trong cluster, đọc được
+  mọi Secret và ghi được Deployment, Service, ServiceAccount ở mọi namespace (IN-15), một waypoint chung ở namespace
+  `svp-mesh` thấy mọi request gRPC đã giải mã và giữ quyền L7 (IN-16), pod proxy Envoy vào mesh với danh tính theo
+  namespace (IN-17); một chỗ vượt ranh giới ở mục 2 đổi, IN-10 thêm istiod vào những ai đọc mọi Secret, ở mục 6 một
+  dòng sửa (IN-2, IN-3), bảy dòng mới và dòng cert-manager, bốn việc ở mục 7. Thu hẹp được: ở k3d, EKS kênh
+  gateway → service có mTLS STRICT và service xác thực service gọi bằng principal (IN-2, IN-3), trước đây chấp nhận;
+  compose giữ như cũ. Các probe từ pod trong mesh (WEB-13, standin media-worker của IN-2) phán đóng hay mở bằng cách
+  giữ socket, vì ztunnel nhận mọi kết nối trước khi nối đích.
+  [ADR-0075](../adr/0075-service-mesh.md) chỉnh ADR-0042, 0072, 0020. Đáng xem lại: (1) `drill-k8s-mesh` chưa chạy trên
+  runner, EKS chỉ kiểm ở buổi stg, nguồn probe link-local trên VPC CNI chưa kiểm; (2) cổng probe mở cho địa chỉ SNAT
+  không qua ztunnel, `kubectl port-forward` không qua ztunnel; (3) telemetry ra `svp-obs` vẫn plaintext ngoài mesh; (4)
+  istiod và `istio-reader-service-account` đọc mọi Secret của cluster, istiod ghi được workload ở mọi namespace.
 - **Plan, chi phí và phát hành checker (2026-11-15):** bề mặt mới là role OIDC chỉ đọc `svp-ci-terraform-plan` mà `plan.yml` của
   `svp-infra` assume sau lượt duyệt environment `terraform-plan` (AWS-11, AWS-6), khoá API Infracost và dữ liệu gửi Cloud Pricing API
   (SC-16), App `svp-release-please` với `release.yml` và tag `gitops-check-v*` bất biến mà `svp-gitops` ghim cùng version (GIT-7, GIT-5, GIT-6,
