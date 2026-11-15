@@ -22,7 +22,9 @@
 // engagement.views.v1 logs a warning; each range of it is replayed once, its summary line the record.
 //
 // Records are produced one at a time and the first produce error ends the run: the summary then
-// names the offset to start the next run from, and nothing past it was written. Logs carry
+// names the offset to start the next run from, and nothing past it was written. Every summary line
+// also names the end (exclusive) of each partition's range, so a run that stopped resumes with
+// --start-offset and --end-offset alone, even when it selected its range by time. Logs carry
 // offsets, destinations, key lengths and header names, never the bytes of a key, a value or a
 // header value: those hold user data.
 package replay
@@ -152,9 +154,13 @@ func Run(ctx context.Context, cfg Config, logger *slog.Logger) (Summary, error) 
 	if err != nil {
 		sum.Resume = r.next
 	}
+	ends := make(map[int32]int64, len(spans))
+	for p, s := range spans {
+		ends[p] = s.end
+	}
 	attrs := []slog.Attr{slog.String("from", cfg.From), slog.Int("replayed", sum.Replayed),
 		slog.Int("skipped", sum.Skipped), slog.Int("dry_run", sum.DryRun),
-		slog.String("last_replayed", offsets(sum.LastReplayed))}
+		slog.String("last_replayed", offsets(sum.LastReplayed)), slog.String("end", offsets(ends))}
 	if err != nil {
 		attrs = append(attrs, slog.String("resume_from", offsets(sum.Resume)))
 		logger.LogAttrs(ctx, slog.LevelWarn, "dlq replay stopped", attrs...)

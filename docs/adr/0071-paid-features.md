@@ -87,8 +87,9 @@ prd và bốn account dùng chung để mặc định: prd là chuẩn productio
   GuardDuty nhận sự kiện finding của member ở EventBridge [N17], GuardDuty theo region [N20]: rule `svp-security-guardduty-findings` ở hai region của
   `svp-security` lọc `detail.accountId` là các account `off` và `detail.severity` ≥ 7 (HIGH 7,0–8,9, CRITICAL 9,0–10,0 [N18]); ở `us-east-1` đi
   qua bus `svp-security-events` bằng role `svp-security-guardduty-forwarder`. Lần lặp của finding đến theo tần suất xuất, mặc định 6 giờ [N19].
-- Access Analyzer loại `ORGANIZATION` chạy ở `svp-security`, finding của nó mang `AwsAccountId` của account admin [N23], không qua Security Hub của stg. Cái giá: không control FSBP, CIS ở stg;
-  finding cũ của account bị xoá sau 30 ngày (archived), 90 ngày (active) [N6]; email finding GuardDuty qua `us-east-1` là dòng chung của rule `notify`.
+- Access Analyzer loại `ORGANIZATION` chạy ở `svp-security`, finding của nó mang `AwsAccountId` của account admin [N23], không qua
+  Security Hub của stg. Cái giá: không control FSBP, CIS ở stg; finding cũ của account bị xoá sau 30 ngày (archived), 90 ngày (active)
+  [N6]; email finding GuardDuty qua `us-east-1` là dòng chung của rule `notify`.
 - Central configuration là tính năng cũ, AWS khuyên Security Hub CSPM declarative policy của Organizations; hai cách loại trừ nhau [N2], [N4].
 
 ### 6. `config_recording`
@@ -132,10 +133,10 @@ với giá trị stg (tháng đầu; bớt ~$11,1: AMG $9, Security Hub ~$1,8, C
 
 ### 12. Phép kiểm buổi theo cờ
 
-Của `svp-infra` `docs/runbooks/session-stg.md`: `managed_grafana` (`session` chạy được sau bước mở account): bước 9 (token Grafana Operator), bước
-14 (dashboard SLO), "Kafka và Valkey managed" (e), "Phép kiểm nền tảng managed" (Explore, dashboard, Operator); `inspector_ecr`: lệnh Inspector
-`list-coverage`, `list-findings` của "Phép kiểm nền tảng managed"; `security_hub`: cả hai lệnh của "Finding bảo mật của buổi"; `config_recording`:
-không phép kiểm nào đọc Config, control FAILED cần Config đi cùng `security_hub`.
+Của `svp-infra` `docs/runbooks/session-stg.md`: `managed_grafana` (`session` chạy được sau bước mở account): "Giá trị secret" (token
+Grafana Operator), "Đo" (dashboard SLO), "Kafka và Valkey managed" (e), "Phép kiểm nền tảng managed" (Explore, dashboard, Operator);
+`inspector_ecr`: lệnh Inspector `list-coverage`, `list-findings` của "Phép kiểm nền tảng managed"; `security_hub`: cả hai lệnh của
+"Finding bảo mật của buổi"; `config_recording`: không phép kiểm nào đọc Config, control FAILED cần Config đi cùng `security_hub`.
 
 ### 13. ADR cũ
 

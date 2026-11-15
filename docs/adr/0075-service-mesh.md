@@ -155,8 +155,8 @@ chung, không cờ), 0056 (`startupTaints`, `nodeAffinity` thêm vào NodePool v
     health của Argo CD và §11; lời gọi bị từ chối chỉ thấy ở log. compose không có mesh: kênh plaintext, không xác thực service gọi.
   - `GRPCRoute` ở mesh có trong mã Istio 1.32.0 nhưng tài liệu chỉ ghi `HTTPRoute`, không profile conformance mesh gRPC [S19];
     `use-waypoint-namespace` mới Beta [S11].
-  - Lúc chuyển: PR backend merge trước (nhãn PSA của `istio-system`), nâng checker, rồi PR `svp-gitops`; giữa hai lần merge `verify.yml` đỏ.
-    prd chạy chart ghim (cũ: `istio-system` `restricted`, Istio Degraded): chỉ dựng khi `envs/prd/charts.yaml` ở commit có chart mesh.
+  - Lúc chuyển: PR backend merge trước (nhãn PSA `istio-system`), nâng checker, rồi PR `svp-gitops`; giữa hai merge lượt `gitops` theo lịch
+    trên `main` đỏ. prd ghim chart cũ (`istio-system` `restricted`, Istio Degraded): chỉ dựng khi `envs/prd/charts.yaml` có chart mesh.
 - Xem lại khi: RAM đo trên runner vượt ngân sách của 0014 §2 (người học chọn bước cắt); Độ trễ mesh làm p99 của một SLO độ trễ vượt ngưỡng
   dưới k6; Istio đổi hay ghi vào tài liệu hành vi `GRPCRoute` ở mesh; một service gọi service khác (thêm danh tính vào policy L7); cần cảnh
   báo trên mesh (PodMonitor của istiod, ztunnel, waypoint); probe link-local hỏng trên EKS; capability Argo CD được hiện thực.

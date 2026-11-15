@@ -449,10 +449,13 @@ for app in svp-observability svp-root; do
     fi
   fi
 
-  # Never appears within the budget: names svp-root and step 4, no status wait.
+  # Never appears within the budget: names what makes it (svp-root, or ApplicationSet svp-bootstrap for svp-root
+  # itself) and step 4, no status wait.
+  parent=applications.argoproj.io/svp-root
+  [ "$app" != svp-root ] || parent=applicationsets.argoproj.io/svp-bootstrap
   new_wait_state
   wait_run "$work/out" "$app"
-  refused "eks-wait.sh $app, never appears" "$work/out" "Application argocd/$app did not appear in svp-stg in time; read svp-root with kubectl --context svp-stg -n argocd describe applications.argoproj.io/svp-root, and check root aws/gitops/stg is applied (step 4"
+  refused "eks-wait.sh $app, never appears" "$work/out" "Application argocd/$app did not appear in svp-stg in time; read ${parent#*/} with kubectl --context svp-stg -n argocd describe $parent, and check root aws/gitops/stg is applied (step 4"
   if grep -q -- ' wait .*--for=jsonpath' "$FAKE_STATE/kubectl.log"; then
     fail "eks-wait.sh $app: waited for the status of an Application that never appeared"
   else

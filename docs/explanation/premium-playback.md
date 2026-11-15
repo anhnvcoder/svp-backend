@@ -17,7 +17,7 @@ Không có thanh toán: "mua" là một lời gọi ghi vé (**mua giả lập**
 
 - **Video premium**: cờ `premium` của `POST /videos` (vắng là `false`), lưu ở cột `videos.premium` của `svp_video`, không đổi sau upload. Đổi
   cờ phải chuyển mọi object sang tiền tố khác và bỏ cache của bản cũ, nên API không có đường đổi. Chỉ video premium có vé, bản xem thử và
-  route phát premium; video thường phát như trước, công khai.
+  route phát premium; video thường phát công khai.
 - **Gói**: `sd` < `hd` < `fhd` (proto `svp.video.v1.Tier`, REST là chuỗi). Mỗi gói mở một tập rendition, gói cao gồm gói thấp:
 
   | Gói | Rendition phát được |
@@ -267,8 +267,10 @@ Upload premium trong khoảng đó hỏng theo một trong hai cách:
 
 - **Cờ mất trên đường.** Gateway mới gọi pod video-service bản trước: video thành video thường, công khai dưới `media/`, vào feed. Pod
   video-service bản trước phát `video.uploaded`, hay media-worker bản trước nhận nó: trọn thang ghi dưới `media/<id>/`, ai biết key đọc được
-  qua behavior công khai `media/*`; `transcode.completed` sai tiền tố vào `media.transcodes.v1.dlq`, video đứng ở `PROCESSING`. Không lần
-  phát lại nào gỡ được: event mang key sai, cờ không đổi sau upload, API không có đường xoá video.
+  qua behavior công khai `media/*`. Rồi `transcode.completed` sai tiền tố có hai kết cục. Pod video-service bản mới
+  nhận: record vào `media.transcodes.v1.dlq`, video đứng ở `PROCESSING`. Pod video-service bản trước nhận (chỉ kiểm key
+  dưới `media/`): video `READY` công khai, `video.ready` không mang cờ và vào feed. Không lần phát lại nào gỡ được:
+  event mang key sai, cờ không đổi sau upload, API không có đường xoá video.
 - **Người nhận bản trước từ chối key đúng.** Pod video-service bản trước nhận `transcode.completed` của video premium: record vào
   `media.transcodes.v1.dlq`, video đứng ở `PROCESSING`. feed-service bản trước nhận `video.ready` của video premium: record vào
   `video.lifecycle.v1.dlq`, video `READY` vắng khỏi feed. Cả hai mang `dlq-reason: permanent` và bật cảnh báo `KafkaDLQRecords`.

@@ -1814,6 +1814,7 @@ tests:
               instance: "https://media.svp.example/media/uptime-probe.txt"
             exp_annotations:
               summary: "Probe media: the TLS certificate expires in less than 21 days"
+              runbook_url: "https://github.com/anhnvcoder/svp-backend/blob/main/docs/runbooks/tls-cert-expiry-imminent.md"
       - eval_time: 3h
         alertname: TLSCertExpiringSoon
         exp_alerts:
@@ -1823,12 +1824,14 @@ tests:
               instance: "https://api.svp.example/readyz"
             exp_annotations:
               summary: "Probe api: the TLS certificate expires in less than 21 days"
+              runbook_url: "https://github.com/anhnvcoder/svp-backend/blob/main/docs/runbooks/tls-cert-expiry-imminent.md"
           - exp_labels:
               severity: ticket
               probe: media
               instance: "https://media.svp.example/media/uptime-probe.txt"
             exp_annotations:
               summary: "Probe media: the TLS certificate expires in less than 21 days"
+              runbook_url: "https://github.com/anhnvcoder/svp-backend/blob/main/docs/runbooks/tls-cert-expiry-imminent.md"
       - eval_time: 2h10m
         alertname: TLSCertExpiryImminent
         exp_alerts: []

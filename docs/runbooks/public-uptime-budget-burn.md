@@ -35,7 +35,7 @@ Mở dashboard `svp-uptime` (`http://127.0.0.1:3000/d/svp-uptime` ở k3d, trong
 dài (`probe_http_duration_seconds` theo `phase`: `resolve`, `connect`, `tls`, `processing`, `transfer`), mã HTTP, số ngày tới hạn
 cert, probe DNS.
 
-Truy vấn tương đương (k3d: `PROM` từ `make k8s-ui-prometheus`; eks: dán vào Explore):
+Truy vấn tương đương (compose, k3d: `PROM` theo [README](README.md#chuẩn-bị-trong-terminal); eks: dán vào Explore):
 
 ```sh
 curl -sG "$PROM/api/v1/query" --data-urlencode 'query=min by (probe) (probe_success{job="blackbox-http"})' | jq -c '.data.result[] | [.metric.probe, .value[1]]'
@@ -47,7 +47,18 @@ curl -sG "$AM/api/v2/alerts" --data-urlencode 'filter=alertname=~"PublicUptimeBu
 ```
 
 Một probe lần cuối cho blackbox, đọc lý do thật (`debug=true` trả log của lần thử). Module và URL lấy từ nhãn `instance` của
-chuỗi và `Probe` tương ứng:
+chuỗi và `Probe` tương ứng.
+
+Compose (profile `obs`; blackbox không publish cổng nên probe chạy trong container của nó, module `http_compose`, đích
+là nhãn `instance`):
+
+```sh
+make ps
+make logs SVC=blackbox
+dc exec -T blackbox wget -qO- 'http://127.0.0.1:9115/probe?module=http_compose&target=http://gateway:8080/readyz&debug=true' | tail -n 30
+```
+
+k3d:
 
 ```sh
 kubectl --context k3d-svp -n svp-obs get probes.monitoring.coreos.com

@@ -123,16 +123,18 @@ make jwt-rotate STEP=drop
 Output mong đợi: `drop: JWT_VERIFY_KEYS of .env keeps only kid <kid mới> (dropped: <kid cũ>); removed .env.jwt-next`. Áp dụng như
 bước 1, rồi xác nhận theo mục dưới.
 
-**Khi nghi lộ khoá:** chạy `STEP=add`, áp dụng, `STEP=sign`, áp dụng, rồi `STEP=drop` và áp dụng **ngay**, không chờ: mọi access token
-ký bằng khoá cũ (kể cả token giả mạo) bị 401 từ lúc đó. Cái giá là người dùng web **phải đăng nhập lại**: BFF chỉ refresh khi access
-token còn dưới 30 s (`server/session-access.ts` của repo `svp-frontend`), nên phiên có token cũ còn hạn lâu hơn gửi nó đi, gateway trả
-401, và web coi phiên là hỏng (`server/feed.ts`, `server/api-proxy.ts` của `svp-frontend`: `SessionAccess.end`): xoá phiên và thu hồi cả
-họ refresh token; trang feed chuyển về đăng nhập. Client gọi API thẳng và tự giữ refresh token thì gọi `POST /auth/refresh` sau 401 là
-được token mới. Ghi lại thời điểm để đối chiếu log.
+**Khi nghi lộ khoá:** làm bước 1, 2 như trên (kể cả phần chờ rollout và kiểm pod), rồi `STEP=drop` và áp dụng **ngay**,
+không chờ 15 phút 30 giây của bước 3: mọi access token ký bằng khoá cũ (kể cả token giả mạo) bị 401 từ lúc đó. Cái giá
+là người dùng web **phải đăng nhập lại**: BFF chỉ refresh khi access token còn dưới 30 s (`server/session-access.ts` của
+repo `svp-frontend`), nên phiên có token cũ còn hạn lâu hơn gửi nó đi, gateway trả 401, và web coi phiên là hỏng
+(`server/feed.ts`, `server/api-proxy.ts` của `svp-frontend`: `SessionAccess.end`): xoá phiên và thu hồi cả họ refresh
+token; trang feed chuyển về đăng nhập. Client gọi API thẳng và tự giữ refresh token thì gọi `POST /auth/refresh` sau 401
+là được token mới. Ghi lại thời điểm để đối chiếu log.
 
 ### Khi lệnh từ chối
 
-Lệnh in `jwtkey: <lý do>`, exit khác 0 và không ghi file nào. Lý do nêu file, biến, số dòng hay thứ tự mục, không giá trị:
+Lệnh in `jwtkey: <lý do>`, exit khác 0 và không ghi file nào. Lý do bắt đầu bằng tên file (kèm số dòng khi nói về một
+dòng) hay tên biến, và nêu file, biến, số dòng hay thứ tự mục, không bao giờ giá trị:
 
 | Lý do bắt đầu bằng | Nghĩa | Làm gì |
 | --- | --- | --- |
@@ -141,6 +143,9 @@ Lệnh in `jwtkey: <lý do>`, exit khác 0 và không ghi file nào. Lý do nêu
 | `JWT_SIGNING_KID of .env is already <kid>` | `sign` lần hai | Sang bước 3 |
 | `JWT_VERIFY_KEYS of .env lacks the verify key of pending kid` | `.env` bị sửa tay sau `add` | Xoá `.env.jwt-next`, chạy lại `STEP=add` |
 | `JWT_SIGNING_KID of .env is <kid cũ>, not pending kid` | `drop` khi chưa `sign` | Làm bước 2 trước |
+| `.env:<dòng>: <biến> has a blank, quote, \, CR or non-ASCII character in its value` | Giá trị của biến có ký tự lạ | Sửa dòng được nêu rồi chạy lại bước |
+| `.env: JWT_SIGNING_KID and JWT_SIGNING_KEY are not a kid and the standard base64 of a 32-byte seed` | Cặp ký không phải kid và seed base64 32 byte | Sửa hai biến rồi chạy lại bước |
+| `.env.jwt-next is not one key pair of tools/jwtkey` | Khoá chờ không phải một cặp khoá | Xoá `.env.jwt-next`, chạy lại `STEP=add` |
 | `.env lacks <biến> or has it empty`, `entry <n> of JWT_VERIFY_KEYS`, `set again`, `twice` | `.env` thiếu biến hay sai dạng | Sửa dòng được nêu rồi chạy lại bước |
 
 ## Khôi phục và xác nhận

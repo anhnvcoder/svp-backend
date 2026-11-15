@@ -834,7 +834,7 @@
     {
       "type": "stat",
       "title": "Days until certificate expiry",
-      "description": "Earliest certificate in the chain the probe saw. Ticket below 21 days, page below 7: renewal has failed (ACM renews 60 days before, cert-manager at one third of life left). The k3d probe skips chain verification but still reads the date. No data on compose (plain HTTP).",
+      "description": "Earliest certificate in the chain the probe saw. Ticket below 21 days, page below 7: renewal has failed (ACM renews 45 days before expiry, 60 for older 395-day certificates; cert-manager at one third of life left). The k3d probe skips chain verification but still reads the date. No data on compose (plain HTTP).",
       "datasource": {
         "type": "prometheus",
         "uid": "prometheus"

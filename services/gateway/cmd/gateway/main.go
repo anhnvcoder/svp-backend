@@ -91,9 +91,12 @@ var (
 	}
 	videoBackend = backend{
 		name: "video-service", addrVar: "VIDEO_SERVICE_ADDR", addr: defaultVideoServiceAddr,
+		// GrantEntitlement upserts the caller's tier, so a second try writes the same row again.
 		retry: []string{
 			videov1.VideoService_GetVideo_FullMethodName, videov1.VideoService_CompleteUpload_FullMethodName,
 			videov1.VideoService_GetPublicVideo_FullMethodName, videov1.VideoService_ListAuthorVideos_FullMethodName,
+			videov1.VideoService_GetPlaybackPlaylist_FullMethodName,
+			videov1.VideoService_GrantEntitlement_FullMethodName,
 		},
 	}
 	feedBackend = backend{

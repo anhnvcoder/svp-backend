@@ -218,8 +218,13 @@ func TestLoadShedReturnsSlot(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			// returned gets a value after LoadShed itself returned, so its deferred release ran.
 			returned := make(chan struct{}, 2)
+			// entered gets a value once the handler runs, so the client leaves only after that.
+			entered := make(chan struct{}, 1)
 			mux := http.NewServeMux()
-			mux.Handle("GET /end", end)
+			mux.HandleFunc("GET /end", func(w http.ResponseWriter, r *http.Request) {
+				entered <- struct{}{}
+				end(w, r)
+			})
 			mux.HandleFunc("GET /x", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusNoContent) })
 			shed := LoadShed(1, mux)(mux)
 			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -234,7 +239,14 @@ func TestLoadShedReturnsSlot(t *testing.T) {
 				t.Fatal(err)
 			}
 			if name == "client gone" {
-				time.AfterFunc(50*time.Millisecond, cancel)
+				go func() {
+					select {
+					case <-entered:
+					case <-time.After(5 * time.Second):
+						t.Error("handler never ran")
+					}
+					cancel()
+				}()
 			}
 			if resp, err := srv.Client().Do(req); err == nil {
 				_ = resp.Body.Close()

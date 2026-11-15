@@ -320,8 +320,8 @@ spec:
       ports:
         - {protocol: TCP, port: 9090}
 ---
-# Pyroscope: profiles from the five services that push them (not media-worker), queries from Grafana. It calls out to
-# nothing but the API server.
+# Pyroscope: profiles from the five services that push them (not media-worker or dlq-replay), queries from Grafana. It
+# calls out to nothing but the API server.
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
@@ -358,9 +358,9 @@ spec:
       ports:
         - {protocol: TCP, port: 443}
 ---
-# GlitchTip: errors from the releases that report them (services.errors: not media-worker), on 8000; people come in by
-# port-forward only (`make k8s-ui-glitchtip`), and log in (OPS-2). Out: its database on Postgres svp-pg, nothing else
-# (the policy of its init Job is a hook in templates/glitchtip.yaml).
+# GlitchTip: errors from the releases that report them (services.errors: not media-worker or dlq-replay), on 8000;
+# people come in by port-forward only (`make k8s-ui-glitchtip`), and log in (OPS-2). Out: its database on Postgres
+# svp-pg, nothing else (the policy of its init Job is a hook in templates/glitchtip.yaml).
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:

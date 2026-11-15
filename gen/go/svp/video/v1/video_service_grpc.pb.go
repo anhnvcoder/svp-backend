@@ -144,7 +144,10 @@ type VideoServiceClient interface {
 	// Errors:
 	// - INVALID_ARGUMENT: video_id is not a UUID, or tier is unspecified or
 	//   not a known Tier (`INVALID_TIER`).
-	// - NOT_FOUND: no such video, or it is not READY (`VIDEO_NOT_FOUND`).
+	// - NOT_FOUND: no such video, or it is not READY (`VIDEO_NOT_FOUND`). Not
+	//   READY wins over every other reason, even for its author, and returns the
+	//   same reason and message as GetVideo, so the response does not reveal
+	//   that a hidden video exists or is premium.
 	// - FAILED_PRECONDITION: the video is not premium (`VIDEO_NOT_PREMIUM`), or
 	//   the caller is its author, who already holds TIER_FHD (`ALREADY_ENTITLED`).
 	GrantEntitlement(ctx context.Context, in *GrantEntitlementRequest, opts ...grpc.CallOption) (*GrantEntitlementResponse, error)
@@ -158,7 +161,10 @@ type VideoServiceClient interface {
 	// Errors:
 	// - INVALID_ARGUMENT: video_id is not a UUID.
 	// - NOT_FOUND: no such video, or it is not READY (`VIDEO_NOT_FOUND`); the
-	//   video has no such rendition (`RENDITION_NOT_FOUND`).
+	//   video has no such rendition (`RENDITION_NOT_FOUND`). Not READY wins over
+	//   every other reason, even for its author, and returns the same reason and
+	//   message as GetVideo, so the response does not reveal that a hidden video
+	//   exists or is premium.
 	// - FAILED_PRECONDITION: the video is not premium (`VIDEO_NOT_PREMIUM`).
 	// - PERMISSION_DENIED: the caller has no entitlement (`NOT_ENTITLED`), or
 	//   the rendition is above the caller's tier (`RENDITION_NOT_ENTITLED`).
@@ -359,7 +365,10 @@ type VideoServiceServer interface {
 	// Errors:
 	// - INVALID_ARGUMENT: video_id is not a UUID, or tier is unspecified or
 	//   not a known Tier (`INVALID_TIER`).
-	// - NOT_FOUND: no such video, or it is not READY (`VIDEO_NOT_FOUND`).
+	// - NOT_FOUND: no such video, or it is not READY (`VIDEO_NOT_FOUND`). Not
+	//   READY wins over every other reason, even for its author, and returns the
+	//   same reason and message as GetVideo, so the response does not reveal
+	//   that a hidden video exists or is premium.
 	// - FAILED_PRECONDITION: the video is not premium (`VIDEO_NOT_PREMIUM`), or
 	//   the caller is its author, who already holds TIER_FHD (`ALREADY_ENTITLED`).
 	GrantEntitlement(context.Context, *GrantEntitlementRequest) (*GrantEntitlementResponse, error)
@@ -373,7 +382,10 @@ type VideoServiceServer interface {
 	// Errors:
 	// - INVALID_ARGUMENT: video_id is not a UUID.
 	// - NOT_FOUND: no such video, or it is not READY (`VIDEO_NOT_FOUND`); the
-	//   video has no such rendition (`RENDITION_NOT_FOUND`).
+	//   video has no such rendition (`RENDITION_NOT_FOUND`). Not READY wins over
+	//   every other reason, even for its author, and returns the same reason and
+	//   message as GetVideo, so the response does not reveal that a hidden video
+	//   exists or is premium.
 	// - FAILED_PRECONDITION: the video is not premium (`VIDEO_NOT_PREMIUM`).
 	// - PERMISSION_DENIED: the caller has no entitlement (`NOT_ENTITLED`), or
 	//   the rendition is above the caller's tier (`RENDITION_NOT_ENTITLED`).

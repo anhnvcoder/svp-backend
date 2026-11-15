@@ -21,6 +21,10 @@
 //	);
 //	CREATE INDEX outbox_pending_idx ON outbox (id) WHERE published_at IS NULL AND failed_at IS NULL;
 //
+// The databases also still hold the older outbox_unpublished_idx (id WHERE published_at IS NULL):
+// the release before reads through it, so it is dropped only in the contract step, once that
+// release no longer runs.
+//
 // # Writing
 //
 // Lock the entity row first, then write its event, in the same transaction:

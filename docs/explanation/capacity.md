@@ -116,8 +116,8 @@ nhân thời gian xử lý (định luật Little), nên giới hạn mặc đ�
   tư tải mục tiêu.
 - Nhân p99 của SLO feed vì feed là đường nặng nhất: một request feed ở p99 giữ slot lâu nhất.
 - Hệ số 4 chừa chỗ cho đỉnh ngắn và request chậm hơn p99; thấp hơn thì gateway chặn khi chưa quá tải, cao hơn thì chặn
-  quá muộn để bảo vệ pod. Giá trị là điểm khởi đầu: buổi stg đo lại dưới k6 rồi chỉnh `env.MAX_IN_FLIGHT` của gateway
-  ở `base/services/gateway.yaml` (`svp-gitops`).
+  quá muộn để bảo vệ pod. Giá trị đặt ở `env.MAX_IN_FLIGHT` của gateway, `base/services/gateway.yaml`
+  (`svp-gitops`); chưa đo dưới k6 ([chưa đo trên cloud](reliability.md#chưa-đo-trên-cloud)).
 - Đổi `maxReplicas` của gateway thì tính lại công thức và đặt lại giá trị.
 
 ## RAM của mesh trên k3d

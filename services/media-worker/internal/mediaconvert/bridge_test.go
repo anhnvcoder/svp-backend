@@ -933,13 +933,16 @@ func TestConsumerConfigDrains(t *testing.T) {
 // nothing is recorded or committed, so the record is delivered again.
 func TestStopDrainsRecordInHand(t *testing.T) {
 	t.Parallel()
-	const drain = 300 * time.Millisecond
+	// The released case gets a long drain, so a slow runner still finishes the job within it; the
+	// release comes shortDrain/2 after the stop either way.
+	const shortDrain = 300 * time.Millisecond
 	for _, tc := range []struct {
 		name    string
+		drain   time.Duration
 		release bool
 	}{
-		{"finished within the drain time", true},
-		{"past the drain time", false},
+		{"finished within the drain time", 10 * time.Second, true},
+		{"past the drain time", shortDrain, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
@@ -957,6 +960,7 @@ func TestStopDrainsRecordInHand(t *testing.T) {
 				}
 			}}
 			r, id, version := uploadedRecord(t)
+			drain := tc.drain
 			cancel, done := e.drainingConsumer(t, drain)
 			if err := kafkax.Produce(t.Context(), e.client, r); err != nil {
 				t.Fatal(err)
@@ -969,7 +973,7 @@ func TestStopDrainsRecordInHand(t *testing.T) {
 			stop := time.Now()
 			cancel()
 			if tc.release {
-				time.Sleep(drain / 2)
+				time.Sleep(shortDrain / 2)
 				close(release)
 			}
 

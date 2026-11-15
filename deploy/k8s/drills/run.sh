@@ -93,8 +93,12 @@ threats)
   fi
   # The Secret values the tests read, one per line, for the search: only ever in this file.
   secrets=$work/secrets
+  kafka_users=$(kc -n svp-data get secret kafka-users -o json 2>/dev/null) ||
+    fail "SECRETS: read Secret svp-data/kafka-users, whose Kafka passwords the drill searches its output for"
+  # Each Kafka user, Valkey's svp-feed-service, the Grafana admin and three object store keys: one value each.
+  want=$(($(jq '.data | length' <<<"$kafka_users") + 5))
   {
-    kc -n svp-data get secret kafka-users -o json | jq -r '.data[] | @base64d'
+    jq -r '.data[] | @base64d' <<<"$kafka_users"
     kc -n svp get secret feed-service-env -o json |
       jq -r '.data.REDIS_URL | @base64d | capture("^rediss://svp-feed-service:(?<pw>[A-Za-z0-9]+)@").pw'
     kc -n svp-obs get secret grafana-admin -o json | jq -r '.data["admin-password"] | @base64d'
@@ -103,8 +107,8 @@ threats)
       jq -r '.data.SVP_VIDEO_S3_SECRET_KEY, .data.SVP_MEDIA_WORKER_S3_SECRET_KEY | @base64d'
   } 2>/dev/null | grep -v '^$' >"$secrets" || true
   n=$(grep -c . "$secrets" || true)
-  ((n >= 12)) ||
-    fail "SECRETS: read at least 12 of the Secret values the drill uses (Kafka users, Valkey's svp-feed-service, Grafana admin, object store users) to search its output (got $n)"
+  ((n >= want)) ||
+    fail "SECRETS: read all $want of the Secret values the drill uses (Kafka users, Valkey's svp-feed-service, Grafana admin, object store users) to search its output (got $n)"
   searched="the drill read (Kafka users, Valkey's svp-feed-service, Grafana admin, object store users)"
   ;;
 mesh)

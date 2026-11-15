@@ -101,8 +101,8 @@ Vì sao: [ADR-0020](../adr/0020-reliability-stage6.md), [ADR-0044](../adr/0044-g
 - Release `protocol: http` (gateway, web) cũng có `startupProbe` `httpGet /healthz`, cùng nhịp với probe gRPC: kubelet
   không chạy liveness và readiness tới khi nó qua, nên node bận CPU không làm liveness giết một tiến trình mới chỉ
   khởi động chậm.
-- Lúc tắt, pod thôi nhận request trước khi tiến trình nhận SIGTERM (`preStop`, drain): cách làm ở
-  [vòng đời pod](deployment.md#vòng-đời-pod).
+- Lúc tắt, chỉ release đặt `preStopSleepSeconds` (gateway, web) thôi nhận request trước khi tiến trình nhận SIGTERM;
+  service khác nhận SIGTERM ngay và drain chạy sau đó: cách làm ở [vòng đời pod](deployment.md#vòng-đời-pod).
 
 ## Failover của RDS và Valkey
 
@@ -238,9 +238,9 @@ khoá và chặn vacuum. Hai giới hạn nằm ở role chứ không ở client
 
 - `statement_timeout` và `idle_in_transaction_session_timeout` của role app `svp_<svc>_app` trong database
   `svp_<svc>` của mỗi service có Postgres đặt bằng `ALTER ROLE … IN DATABASE … SET` ở
-  `deploy/postgres/bootstrap.sql`; giá trị do `bootstrap.sh` (compose) và `pg-bootstrap.sh` (k3d, EKS) truyền vào. Database `svp_glitchtip` được `RESET`:
-  GlitchTip là phần mềm ngoài, có câu lệnh dài. Role migrator không đặt: migration có `lock_timeout` của
-  `internal/dbmigrate`.
+  `deploy/postgres/bootstrap.sql`; giá trị do `bootstrap.sh` (compose) và `pg-bootstrap.sh` (k3d, EKS) truyền vào.
+  Database `svp_glitchtip` được `RESET`: GlitchTip là phần mềm ngoài, có câu lệnh dài. Role migrator không đặt:
+  migration có `lock_timeout` của `internal/dbmigrate`.
 - `statement_timeout` lấy bằng deadline dài nhất code đặt cho một câu lệnh theo request (`postgresTimeout` của
   `internal/outbox/relay.go`; `callTimeout` của gateway ngắn hơn), là lưới an toàn cho đường đọc và ghi theo request.
   Hai việc nền của feed-service dài hơn và tự nới bằng `set_config('statement_timeout', …, true)` (tương đương
@@ -372,9 +372,10 @@ Kết luận từ các lượt đo, còn áp dụng (số đo và lượt chạy
 
 Vì sao: [ADR-0020](../adr/0020-reliability-stage6.md), [ADR-0034](../adr/0034-aws-stage7.md).
 
-Cần dịch vụ cloud nên chạy ở cluster AWS ([`deployment.md`](deployment.md#aws)): k6 1 000 req/s, độ trễ thêm của waypoint (p99
-client trừ p99 server cùng method), Chaos Mesh trên EKS, diễn tập phục hồi RDS, Velero với S3 và snapshot EBS, hạn 50 ms của
-Valkey trên ElastiCache, khởi động lại một broker MSK khi đang ghi không mất event và failover ElastiCache không làm service lỗi
-quá timeout của nó (buổi prd, ADR-0053 mục Xác nhận), failover RDS Multi-AZ
-và mất một broker MSK với RF, min ISR của prd (kiểm bù của ADR-0055 §4), drain một AZ khi Envoy và Kyverno vẫn trả lời (ADR-0056 mục Xác nhận). Job k6 của phần này kiểm schema bằng
-`make cloud-check` (manifest Chaos Mesh, Velero lấy từ bài lab khi cần).
+Cần dịch vụ cloud nên chạy ở cluster AWS ([`deployment.md`](deployment.md#aws)): k6 1 000 req/s, độ trễ thêm của
+waypoint (p99 client trừ p99 server cùng method), Chaos Mesh trên EKS, diễn tập phục hồi RDS, Velero với S3 và
+snapshot EBS, hạn 50 ms của Valkey trên ElastiCache, giá trị `env.MAX_IN_FLIGHT` của gateway dưới k6, khởi động lại
+một broker MSK khi đang ghi không mất event và failover ElastiCache không làm service lỗi quá timeout của nó (buổi
+prd, ADR-0053 mục Xác nhận), failover RDS Multi-AZ và mất một broker MSK với RF, min ISR của prd (kiểm bù của ADR-0055
+§4), drain một AZ khi Envoy và Kyverno vẫn trả lời (ADR-0056 mục Xác nhận). Job k6 của phần này kiểm schema bằng `make
+cloud-check` (manifest Chaos Mesh, Velero lấy từ bài lab khi cần).

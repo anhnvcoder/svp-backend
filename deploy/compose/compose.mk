@@ -26,7 +26,7 @@ COMPOSE_UP_off := env -u DOCKER_DEFAULT_PLATFORM $(TELEMETRY_OFF) docker compose
 # off has neither (the baselines of the telemetry overhead measurement). These are the long-running services of the
 # profiles `make up OBS=<value>` does not choose, which it refuses to start beside.
 OBS_OTHER_lgtm := elasticsearch kibana apm-server otelcol-elastic
-OBS_OTHER_elastic := otelcol lgtm alertmanager glitchtip
+OBS_OTHER_elastic := otelcol lgtm alertmanager glitchtip blackbox
 OBS_OTHER_ := $(OBS_OTHER_elastic) $(OBS_OTHER_lgtm)
 OBS_OTHER_off := $(OBS_OTHER_)
 SMOKE_URL ?= http://127.0.0.1:8080

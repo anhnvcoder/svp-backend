@@ -240,6 +240,13 @@ func TestTranscodeCompletedWrongPrefixGoesToDeadLetter(t *testing.T) {
 			return ev
 		}},
 		{"regular video with keys under premium/", false, premiumCompletedEvent},
+		// No preview, so only the prefix check of the playlist key can refuse it.
+		{"regular video with its playlist under premium/", false, func(id string) *mediav1.TranscodeEvent {
+			return completedWith(id, func(c *mediav1.TranscodeCompleted) {
+				c.PlaylistKey = premiumPlaylistKeyOf(id)
+				c.PreviewPlaylistKey = ""
+			})
+		}},
 		{"regular video with a preview", false, func(id string) *mediav1.TranscodeEvent {
 			return completedWith(id, func(c *mediav1.TranscodeCompleted) { c.PreviewPlaylistKey = previewPlaylistKeyOf(id) })
 		}},

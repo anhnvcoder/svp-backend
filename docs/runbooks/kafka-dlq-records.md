@@ -109,8 +109,10 @@ bước 2):
    `dlq replay finished` với `replayed`, `skipped` (record thiếu header `dlq-topic` khi không có `--to`),
    `last_replayed` (offset DLQ cuối đã phát lại mỗi partition).
 4. **Lỗi giữa chừng** (produce hay fetch lỗi, SIGTERM): lệnh thoát 1 và dừng ngay; dòng `dlq replay stopped` có
-   `resume_from=<partition>@<offset>`, offset kế tiếp chưa ghi. Sửa nguyên nhân (broker, quyền), rồi chạy lại với
-   `--partition <p> --start-offset <offset>` (và `--end-offset` cũ nếu có). Sai cờ thoát 2, không ghi gì.
+   `resume_from=<partition>@<offset>`, offset kế tiếp chưa ghi, và `end=<partition>@<offset>`, điểm cuối loại trừ của
+   khoảng. Sửa nguyên nhân (broker, quyền), rồi chạy lại với
+   `--partition <p> --start-offset <offset của resume_from> --end-offset <offset của end>`, cả hai lấy từ cùng dòng, kể
+   cả khi lượt đầu chạy bằng `--since/--until`. Sai cờ thoát 2, không ghi gì.
 5. **Xác nhận**: dòng tổng có `replayed` bằng số mong đợi; metric `svp.dlq.replay.records` (Prometheus
    `svp_dlq_replay_records_total`, thuộc tính `from`, `to`, `result`) khớp, khi có `obs`; consumer xử lý xong
    (`TOTAL-LAG` của group về 0:
@@ -201,18 +203,28 @@ while read -r first end <&3; do
   make dlq-replay ARGS="replay --from engagement.views.v1.dlq --partition 0 --start-offset $first \
     --end-offset $end --group engagement-service --dry-run" </dev/null
 done 3< views-replay.spans
-# 5. real run, once per span; stop at the first failure and resume from its resume_from, never rerun a done span
+```
+
+Chỉ khi `wc -l` đúng và tổng `dry_run` của mọi khoảng bằng số dòng `views-replay.list`, chạy thật bước 5, một lần cho
+mỗi khoảng; dừng ở lỗi đầu, không chạy lại khoảng đã xong:
+
+```sh
+# 5. real run, once per span
 while read -r first end <&3; do
   make dlq-replay ARGS="replay --from engagement.views.v1.dlq --partition 0 --start-offset $first \
     --end-offset $end --group engagement-service" </dev/null || break
 done 3< views-replay.spans
 ```
 
+Khoảng `<first>` dừng giữa chừng thì resume nó với `--start-offset` theo `resume_from` và `--end-offset` theo `end` của
+dòng `dlq replay stopped`. Rồi chạy tiếp các khoảng sau nó, đúng như vòng lặp trên nhưng đọc
+`awk -v f=<first> '$1 > f' views-replay.spans`. Kiểm tổng `replayed` sau khi mọi khoảng đã chạy.
+
 Offset trong `views-replay.list` là offset trong DLQ, nên khoảng ở bước 3 chỉ chứa record đã qua cả bốn điều kiện:
-record `permanent` xen giữa làm khoảng đứt, không lọt vào lệnh. Tổng `replayed` của các lượt thật phải bằng số dòng
-`views-replay.list`; khác thì dừng, ghi vào postmortem và không chạy thêm. Bước 1 và 2 đã thử trên một broker
-`apache/kafka` 4.1 tạm với record giả (2026-11-08); bước 3 chỉ gộp số liên tiếp. Giữ `views-replay.list`,
-`views-replay.spans` và các dòng tổng cho postmortem.
+record `permanent` xen giữa làm khoảng đứt, không lọt vào lệnh. Tổng `replayed` của các lượt thật, khi mọi khoảng đã
+chạy, phải bằng số dòng `views-replay.list`; khác thì dừng, ghi vào postmortem và không chạy thêm. Bước 1 và 2 đã thử
+trên một broker `apache/kafka` 4.1 tạm với record giả (2026-11-08); bước 3 chỉ gộp số liên tiếp. Giữ
+`views-replay.list`, `views-replay.spans` và các dòng tổng cho postmortem.
 
 Xác nhận: không có dòng `dead-letter` mới, `TOTAL-LAG` về 0 (tổng cột `LAG` của `consumer-groups --describe`), thực thể bị ảnh hưởng đúng trạng thái (video `READY`, follow có
 trong feed), cảnh báo hết sau 10 phút.

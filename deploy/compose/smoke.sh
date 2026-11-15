@@ -414,7 +414,7 @@ ok "B buys sd: 200"
 
 # The sd tier holds 360p of this 720p clip: the master names it alone, as a playback path.
 status=$(request GET "/videos/$p1_id/playback/master.m3u8" "$work/b.auth")
-renditions=$(grep -v -e '^#' -e '^[[:space:]]*$' "$work/body" | tr -d '\r' | tr '\n' ' ')
+renditions=$({ grep -v -e '^#' -e '^[[:space:]]*$' "$work/body" || true; } | tr -d '\r' | tr '\n' ' ')
 [[ $status == 200 && $(<"$work/type") == application/vnd.apple.mpegurl* && $renditions == "360p.m3u8 " ]] ||
   fail "B's master with sd is 200 HLS naming 360p.m3u8 only (status $status, renditions '$renditions', $(problem_summary))"
 ok "B's master with sd: 360p only"

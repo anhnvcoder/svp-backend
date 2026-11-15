@@ -157,8 +157,9 @@ dashboards:
     region: ""
 
 # CIDRs where the private DNS of AWS's interface endpoints puts the names of AWS APIs (AMP, CloudWatch Logs, X-Ray):
-# the pods that call them (Collector, Prometheus, ACK's controller) get TCP 443 there, and the EKS Pod Identity Agent
-# for their credentials. On EKS the VPC's CIDR; empty where no interface endpoint answers (k3d): no such rule.
+# the pods that call them (Collector, Prometheus, ACK's controller, and OpenCost's SigV4 sidecar when opencost.query is
+# amp) get TCP 443 there, and the EKS Pod Identity Agent for their credentials. On EKS the VPC's CIDR; empty where no
+# interface endpoint answers (k3d): no such rule.
 awsEndpointCidrs: []
 
 # Uptime checks (templates/probes.yaml): a Probe each entry, which Prometheus runs through the blackbox exporter.

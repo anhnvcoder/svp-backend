@@ -27,7 +27,7 @@ func FuzzIsMediaKey(f *testing.F) {
 		prefix + "../x", prefix + "..", prefix + "./master.m3u8", prefix + "%2e%2e/x", prefix + ".%2E/x",
 		prefix + `a\b`, prefix + "/x", prefix + "720p//x", prefix + "720p/", prefix, "media/" + id,
 		"media/0190a6e4-7b2c-7d3e-9f40-123456789abd/master.m3u8", "x" + prefix + "master.m3u8",
-		prefix + "master.m3u8?x=1", prefix + "mäster.m3u8", "",
+		prefix + "master.m3u8?x=1", prefix + "m\u00e4ster.m3u8", "",
 		PremiumPrefix + id + "/v/a/index_360p_00001.ts", PremiumPrefix + id + "/v/../index_360p.m3u8",
 		PreviewPrefix + id + "/v/a/thumbnail.jpg", PreviewPrefix + id + "/%2e%2e/x", "premium//" + id + "/x",
 		UploadsPrefix + id + "/x", JobsPrefix + id + "/x",

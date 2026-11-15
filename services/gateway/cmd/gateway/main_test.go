@@ -122,7 +122,7 @@ func TestServiceConfig(t *testing.T) {
 	t.Parallel()
 	type name struct{ Service, Method string }
 	// Only the methods a second try cannot change are retried: Follow, Unfollow, Logout,
-	// UpdateDisplayName, CompleteUpload, Like, Unlike and the reads. A second try of any other
+	// UpdateDisplayName, CompleteUpload, GrantEntitlement, Like, Unlike and the reads. A second try of any other
 	// would repeat its effect, and GetStats and GetProfiles would overrun their 100 ms budget.
 	want := map[string][]name{
 		"user-service": {
@@ -137,6 +137,8 @@ func TestServiceConfig(t *testing.T) {
 			{"svp.video.v1.VideoService", "CompleteUpload"},
 			{"svp.video.v1.VideoService", "GetPublicVideo"},
 			{"svp.video.v1.VideoService", "ListAuthorVideos"},
+			{"svp.video.v1.VideoService", "GetPlaybackPlaylist"},
+			{"svp.video.v1.VideoService", "GrantEntitlement"},
 		},
 		"feed-service": {
 			{"svp.feed.v1.FeedService", "GetFollowingFeed"},

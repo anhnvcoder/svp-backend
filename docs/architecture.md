@@ -317,8 +317,9 @@ mTLS. Quyền kiểm ở ba chỗ, mỗi chỗ theo danh tính SPIFFE `cluster.l
   (`169.254.7.127/32`, địa chỉ istio-cni ghi lại cho probe).
 
 Service gRPC của `svp` vẫn dựng kết nối `insecure` (không TLS ở lớp ứng dụng): mesh mã hoá trên dây, còn compose không có
-mesh nên ở đó lớp ứng dụng ([ADR-0042](adr/0042-caller-identity-grpc.md) §1) che. Lý do và phương án đã loại: phụ lục
-[ADR-0075](adr/0075-service-mesh.md). Cân tải, canary và cái gì hỏng khi mesh hỏng:
+mesh nên ở đó lớp ứng dụng ([ADR-0042](adr/0042-caller-identity-grpc.md) §1) che. Lý do và phương án đã loại: mục
+[Phương án đã cân nhắc](adr/0075-service-mesh.md#phương-án-đã-cân-nhắc) của ADR-0075. Cân tải, canary và cái gì hỏng khi
+mesh hỏng:
 [`explanation/reliability.md`](explanation/reliability.md#mesh-cân-tải-và-khi-mesh-hỏng),
 [`explanation/delivery.md`](explanation/delivery.md#release-mới-và-canary-grpc).
 

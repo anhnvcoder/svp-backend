@@ -1200,10 +1200,35 @@ func TestTransactionSetsItsStatementTimeout(t *testing.T) {
 	}
 }
 
-// release lets go of holder after a wait longer than shortRoleTimeout, and fails the test when done
-// reports before then: the statement waiting on holder outlived the session's statement timeout.
+// release waits until a statement waits on a lock of holder, then lets go of holder after a wait
+// longer than shortRoleTimeout, and fails the test when done reports before then: the statement
+// waiting on holder outlived the session's statement timeout.
 func release(t *testing.T, holder pgx.Tx, done <-chan error) {
 	t.Helper()
+	var pid int
+	if err := holder.QueryRow(t.Context(), "SELECT pg_backend_pid()").Scan(&pid); err != nil {
+		t.Fatal(err)
+	}
+	// The deadline only bounds a broken test: a statement normally waits within milliseconds.
+	deadline := time.Now().Add(30 * time.Second)
+	for {
+		var waiting int
+		if err := testPool.QueryRow(t.Context(), `SELECT count(*) FROM pg_stat_activity
+			WHERE wait_event_type = 'Lock' AND $1 = ANY(pg_blocking_pids(pid))`, pid).Scan(&waiting); err != nil {
+			t.Fatalf("read pg_stat_activity: %v", err)
+		}
+		if waiting > 0 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("no statement waits on a lock of pid %d after 30s", pid)
+		}
+		select {
+		case err := <-done:
+			t.Fatalf("returned before waiting on the lock: %v", err)
+		case <-time.After(10 * time.Millisecond):
+		}
+	}
 	select {
 	case err := <-done:
 		t.Fatalf("returned while the lock was held: %v", err)
