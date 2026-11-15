@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.1.0](https://github.com/anhnvcoder/svp-backend/compare/gitops-check-v1.0.0...gitops-check-v1.1.0) (2026-11-15)
+
+
+### Features
+
+* Istio ambient mesh with mTLS STRICT and gRPC canary by request ([#146](https://github.com/anhnvcoder/svp-backend/issues/146)) ([bd38c2b](https://github.com/anhnvcoder/svp-backend/commit/bd38c2b264375d7dc37227cfd0f6baf2186a452d))
+
 ## 1.0.0 (2026-11-15)
 
 
