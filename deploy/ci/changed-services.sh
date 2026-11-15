@@ -57,7 +57,7 @@ picked=()
 while IFS= read -r path; do
   [ -n "$path" ] || continue
   case $path in
-  deploy/ci/trivy-config-ignore.yaml | deploy/ci/verify-host.sh | \
+  deploy/ci/CHANGELOG.md | deploy/ci/trivy-config-ignore.yaml | deploy/ci/verify-host.sh | \
     deploy/ci/verify-mask.sh | deploy/ci/verify-collect.sh | deploy/ci/ghcr-digest.sh | \
     deploy/ci/verify-steps/* | deploy/ci/*-test.sh | deploy/ci/testdata/* | \
     deploy/ci/gitops-check.sh | deploy/ci/values-check.sh | deploy/ci/verify-release.sh | \

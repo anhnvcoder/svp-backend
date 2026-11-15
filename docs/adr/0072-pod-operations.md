@@ -177,12 +177,8 @@ lời gọi thì Inconclusive; ngưỡng là `canaryLimits` của release.
 
 ## Hiện thực ở
 
-- §1: `services/dlq-replay/`, `deploy/kafka/kafka-init.sh`, `deploy/compose/`, `deploy/k8s/secrets.sh`,
-  `deploy/helm/svp-cluster/files/external-secrets.yaml`, `deploy/helm/svp-data/templates/networkpolicies.yaml`; §2:
-  `deploy/docker-bake.json`, `deploy/helm/svp-policy/files/sources.json`, `deploy/ci/`, `.github/workflows/images.yml`.
-- §3–§7: `services/gateway/`, `deploy/postgres/`, `deploy/helm/svp-data/files/pg-bootstrap.sh`,
-  `services/feed-service/internal/projector/`, `internal/pgpool/`, `internal/kafkax/consumer.go`, `services/media-worker/internal/`,
-  `deploy/docker/media-worker.Dockerfile`, `deploy/k8s/drills/templates/`.
+- §1: `services/dlq-replay/`, `deploy/kafka/kafka-init.sh`, `deploy/compose/`, `deploy/k8s/secrets.sh`, `deploy/helm/svp-cluster/files/external-secrets.yaml`, `deploy/helm/svp-data/templates/networkpolicies.yaml`; §2: `deploy/docker-bake.json`, `deploy/helm/svp-policy/files/sources.json`, `deploy/ci/`, `.github/workflows/images.yml`.
+- §3–§7: `services/gateway/`, `deploy/postgres/`, `deploy/helm/svp-data/files/pg-bootstrap.sh`, `services/feed-service/internal/projector/`, `internal/pgpool/`, `internal/kafkax/consumer.go`, `services/media-worker/internal/`, `deploy/docker/media-worker.Dockerfile`, `deploy/k8s/drills/templates/`.
 - §8–§11: `deploy/helm/svp-service/`, `deploy/k8s/install.sh`, `deploy/k8s/helmfile.yaml.gotmpl`, `internal/grpcserver/`,
   `internal/telemetry/`, `internal/outbox/`, `services/user-service/migrations/`, `services/video-service/migrations/`,
   `deploy/observability/prometheus/rules/svp-alerts.yaml`, `.golangci.yml`, `docs/runbooks/kafka-dlq-records.md`,
@@ -198,3 +194,7 @@ lời gọi thì Inconclusive; ngưỡng là `canaryLimits` của release.
 ## Thông tin thêm
 
 Phụ lục: [`appendix/0072-pod-operations.md`](appendix/0072-pod-operations.md) (phương án, bảng của §1, §2, §4, §5, §7, §8, §10, nguồn).
+
+### Chỉnh bởi
+
+- §2, Hệ quả: [0077](0077-versioned-gitops-checker.md): release mới không cần bản checker mới; check của `svp-gitops` lấy danh sách service từ bảng nguồn ở commit mà `envs/<env>/charts.yaml` ghim, nên file image của service mới hợp lệ ngay trong PR promote stg đầu tiên, không chờ PR nâng ghim checker.

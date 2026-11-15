@@ -13,6 +13,10 @@ chart_source := "backend"
 # The chart of the releases of the services.
 service_chart := "deploy/helm/svp-service"
 
+# listed(env): the services of the release sources at the commit envs/<env>/charts.yaml pins (input.sources), so a
+# service added there needs no new release of this checker.
+listed(env) := {svc | some s in input.sources[env].sources; some svc in s.services}
+
 is_file(path) if input.tree[path].type == "file"
 
 is_dir(path) if input.tree[path].type == "dir"

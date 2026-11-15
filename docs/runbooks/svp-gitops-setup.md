@@ -204,9 +204,8 @@ Theo thứ tự hay gặp, mỗi cái kèm dấu hiệu trong kết quả của 
    - Release lạ: `gh release delete <tag> --repo anhnvcoder/svp-gitops --cleanup-tag` (xoá cả tag của nó). Tag lạ còn lại:
      `gh api -X DELETE repos/anhnvcoder/svp-gitops/git/refs/tags/<tag>`. Ruleset `tags` chưa có hay không `active` thì `apply`
      `rulesets.tf` của `svp-infra` ngay (phần B).
-   - Bản ghi Deployment: từ khi `CHECKER_COMMIT` của `svp-gitops` ở bản checker rút gọn, không còn gì đọc bản ghi `stg`
-     ([ADR-0037](../adr/0037-mainpath-standard-tools.md) §6), không cần dọn; trước đó (checker cũ, bước 1b) đặt Deployment giả `inactive` rồi xoá; App còn quyền Deployments thì
-     bỏ theo A2.
+   - Bản ghi Deployment: checker không đọc bản ghi `stg` nào ([ADR-0037](../adr/0037-mainpath-standard-tools.md) §6), không cần dọn;
+     App còn quyền Deployments thì bỏ theo A2.
 4. **Unsuspend** (cùng trang, **Unsuspend**) khi secret đã là khoá mới, khoá cũ đã xoá và bước 3 đã dọn xong. Rồi mới kiểm khoá mới
    bằng bước 3 của "Xoay khoá App".
 
@@ -389,8 +388,9 @@ gh api repos/anhnvcoder/svp-backend/environments/promote/secrets/SVP_GITOPS_APP_
 **Làm gì:** <https://github.com/apps/renovate> → **Configure** → `anhnvcoder` → **Only select repositories** → thêm
 `anhnvcoder/svp-gitops` (giữ `svp-backend`) → **Save**.
 
-**Vì sao:** `svp-gitops/renovate.json` đề xuất nâng chart upstream, image ghim digest, action của `check.yml` và commit checker
-(`CHECKER_COMMIT` của `check.yml`); không có thì các ghim đó cũ dần (ADR-0025 §10). Mọi PR của Renovate đổi file có Code Owner, nên
+**Vì sao:** `svp-gitops/renovate.json` đề xuất nâng chart upstream, image ghim digest, action của `check.yml` và bản checker
+(`CHECKER_VERSION` cùng `CHECKER_COMMIT` của `check.yml`, tag `gitops-check-v*` của repo code, C5); không có thì các ghim đó cũ dần
+(ADR-0025 §10). Mọi PR của Renovate đổi file có Code Owner, nên
 người học duyệt từng cái.
 
 **Kiểm** (UI): <https://github.com/settings/installations> → **Renovate** → **Configure**: danh sách repo có `svp-gitops`. Sau commit
@@ -502,8 +502,9 @@ PR đổi file có chủ (mục Leo thang). Job đỏ trước push (nhánh khô
 **Release mới** ([ADR-0072](../adr/0072-pod-operations.md) §2; service vừa vào group `default` của `deploy/docker-bake.json`): lượt `images.yml`
 đầu tạo package GHCR `svp-backend/<svc>` ở trạng thái private, và PR `bot/promote-stg` tạo `envs/stg/images/<svc>.yaml`. Check của PR kéo ẩn
 danh nên đỏ tới khi người học bật public cho package đó, cách làm như
-[`svp-frontend-setup.md`](svp-frontend-setup.md) C1 (không API đổi visibility); không đợi buổi stg. Check còn đỏ tới khi PR nâng
-`CHECKER_COMMIT` (C5) merge. Xong cả hai thì chạy lại check của PR promote: `gh run rerun <id lượt check> --repo anhnvcoder/svp-gitops --failed`.
+[`svp-frontend-setup.md`](svp-frontend-setup.md) C1 (không API đổi visibility); không đợi buổi stg. Danh sách service của check lấy từ bảng nguồn ở revision môi trường ghim,
+không từ bản checker đã ghim, nên service mới không đòi ghim checker mới. Bật public xong thì chạy lại check của PR promote:
+`gh run rerun <id lượt check> --repo anhnvcoder/svp-gitops --failed`.
 
 #### C2. Bản ghi triển khai stg (đã bỏ)
 
@@ -548,8 +549,6 @@ gh pr view <số PR> --repo anhnvcoder/svp-gitops --json files -q '.files[].path
 
 - Job đỏ `stg_ref '…' must be main or a full commit`, `is no commit of svp-gitops` hay `is not on main of svp-gitops` → `stg_ref` là
   nhánh, SHA ngắn hay commit ngoài `main` (nhánh bot): dispatch lại với SHA đủ của `main`; không lệnh `gh` nào đã chạy.
-- `gitops-ok` đỏ ở bước 1b (`records of stg`, `matches no record of stg`) → `CHECKER_COMMIT` còn ghim checker cũ: nâng nó (C5) rồi
-  **Re-run** check.
 - Attestation `vuln` của bộ quá 48 giờ (bước 5 của check) → chạy lệnh rescan mà mô tả PR in sẵn (`values_ref` là `stg_ref`), xong
   thì **Re-run** check của PR.
 
@@ -597,18 +596,20 @@ nếu đang chạy.
 - Check của `svp-gitops` chặn `revision` không trên `main` của repo code và giá trị dẫn xuất sai. Luật "image không mới hơn chart"
   (tag image là tổ tiên của `revision`) đã bỏ ([ADR-0037](../adr/0037-mainpath-standard-tools.md) §6); còn guard ở bước promote stg (C1).
 
-**Commit checker (`CHECKER_COMMIT` của `.github/workflows/check.yml` của `svp-gitops`):**
+**Bản checker (`CHECKER_VERSION`, `CHECKER_COMMIT` của `.github/workflows/check.yml` của `svp-gitops`):**
 
-- **Làm gì:** Renovate (A5, datasource `git-refs` theo `main` của repo code, nhóm `checker commit`) mở PR mỗi khi `main` của repo code
-  tiến; hay người học tự sửa dòng `CHECKER_COMMIT:` thành SHA đầy đủ của một commit trên `main` của repo code, mở PR. Trước khi duyệt,
-  đọc `git log <CHECKER_COMMIT cũ>..<mới> -- deploy/ci deploy/k8s/lib.sh` ở repo code: từ commit mới, chính script đó kiểm cây này.
-  Lần bump lên commit có check rút gọn ([ADR-0037](../adr/0037-mainpath-standard-tools.md) §4–§6: không bước 1b, luật tác giả hẹp, policy Kyverno CLI) cũng bỏ
-  `deployments: read` của job và `GH_TOKEN` của bước `gitops-check.sh` (không bước nào đọc bản ghi stg nữa); trước bump đó, mọi PR prd
-  đỏ ở bước 1b của checker cũ.
+- **Làm gì:** checker là bản phát hành semver của repo code (tag `gitops-check-v<semver>`, release-please,
+  [ADR-0077](../adr/0077-versioned-gitops-checker.md)). Renovate (A5, datasource `github-tags`) mở một PR nâng cả hai dòng sau mỗi tag mới,
+  bản major ở PR riêng. Trước khi duyệt, đọc ghi chú phát hành và lịch sử giữa hai tag, kiểm commit của tag nằm trên `main` của repo code
+  (lệnh ở [`gitops-checker-release.md`](gitops-checker-release.md#nâng-ghim)): từ bản mới, chính checker đó kiểm cây này. Đổi hợp đồng giữa
+  checker và cây theo expand–contract của runbook đó.
 - **Vì sao:** checker chạy từ repo code ở commit ghim, nên PR của `svp-gitops` không đổi được bộ kiểm trừ khi đổi chính file
-  workflow, mà `.github/` có Code Owner và App không có quyền `workflows` (ADR-0025 §5).
-- **Kiểm:** bước `The commit of the checker` trong log lượt `check` của PR in đúng commit mới; `gitops-ok` xanh trước khi merge.
-- **Nếu sai:** check đỏ ngay sau bump trên cây không đổi → checker mới đổi luật mà cây chưa theo: đóng PR, sửa cây (hay checker) trước.
+  workflow, mà `.github/` có Code Owner và App không có quyền `workflows` (ADR-0025 §5). Version nói mức tương thích; tag bất biến (ruleset
+  `gitops-check-tags` của repo code) nên commit đã ghim không dời.
+- **Kiểm:** bước khớp tag của lượt `check` xanh (tag `gitops-check-v<CHECKER_VERSION>` trỏ đúng `CHECKER_COMMIT`); `gitops-ok` xanh trước khi
+  merge.
+- **Nếu sai:** bước khớp tag đỏ → hai dòng lệch nhau (sửa tay một dòng): đặt lại cả hai theo tag. Check đỏ ngay sau khi nâng trên cây không
+  đổi → bản mới đổi hợp đồng mà cây chưa theo: không merge, theo "Giảm thiểu" của [`gitops-checker-release.md`](gitops-checker-release.md).
 
 #### C6. Đổi tên repo code và repo web
 
@@ -616,7 +617,7 @@ Mở khi đổi tên `svp-backend` hay `svp-frontend`. Identity ký (subject key
 nên đổi tên là một lượt chuyển cần **ADR mới** riêng: trình tự của [ADR-0036](../adr/0036-repo-rename.md) ghi lần đổi tên đã xong, dựa vào
 cách promote nhận prefix cũ lúc đó và hạn attestation của lượt đó, nay không dùng lại được (promote hiện từ chối prefix không thuộc nguồn nào).
 Những điều vẫn đúng cho lần sau: bảng nguồn phải có nguồn cho cả tên cũ lẫn tên mới tới khi không còn pod chạy bản cũ; package GHCR theo tên mới
-phải public trước lượt promote đầu; bump `CHECKER_COMMIT` (C5) sau khi gỡ nguồn cũ. Environment `promote`, variable, secret và bản cài App đi theo
+phải public trước lượt promote đầu; nâng ghim checker (C5) lên bản phát hành sau khi gỡ nguồn cũ. Environment `promote`, variable, secret và bản cài App đi theo
 repo khi đổi tên, không phải đặt lại. Không tạo repo nào mang tên cũ (`short-video-platform`, `svp-web`) dưới `anhnvcoder` (ADR-0036 §10).
 
 ### Xoay khoá App
@@ -660,6 +661,6 @@ không làm gián đoạn:
 - Phần A (cài đặt repo, App, environment, luật nhánh `main`, Renovate) và phần B (ba ruleset `main`, `owners`, `tags`, lượt đầu của
   `check` xanh `gitops-ok`) đạt bằng lệnh của "Kiểm tra nhanh" và UI. Kịch bản `gitops` của `verify.yml` xác nhận Argo CD đọc `svp-gitops` ở
   `refs/heads/main` qua HTTPS không credential, chart ở commit ghim, mọi Application Synced/Healthy.
-- Chưa kiểm: PR bot stg đầu tiên tự merge (C1), promote prd (C3), rollback (C4), bump `CHECKER_COMMIT` (C5), bypass `owners` có bản ghi,
+- Chưa kiểm: PR bot stg đầu tiên tự merge (C1), promote prd (C3), rollback (C4), nâng ghim checker lên bản phát hành (C5), bypass `owners` có bản ghi,
   lệnh patch `svp-root` của "Giảm thiểu" bước 3. Xoay khoá, gỡ khẩn cấp: chưa làm. Bước promote `yq` + `gh pr` thay `promote.sh`,
   `promote-prd.sh` (stg, prd, rollback `stg_ref`), thu hẹp quyền Deployments của App (A2): chưa kiểm.

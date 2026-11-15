@@ -11,7 +11,7 @@ Mục lục theo [Diátaxis](https://diataxis.fr): mỗi tài liệu thuộc m�
 ## How-to: làm một việc cụ thể
 
 - [`runbooks/`](runbooks/): một runbook cho mỗi cảnh báo mức page, sự cố đã gặp và quy trình tay (dựng `svp-gitops`, `svp-frontend`,
-  `svp-infra`, đổi khoá JWT, phục hồi Postgres, khôi phục RDS và S3 của stg, prd, đổi schema không downtime, phát lại DLQ, phân loại cảnh báo bảo mật AWS). Mục lục và mẫu ở [`runbooks/README.md`](runbooks/README.md).
+  `svp-infra`, đổi khoá JWT, phục hồi Postgres, khôi phục RDS và S3 của stg, prd, đổi schema không downtime, phát lại DLQ, phân loại cảnh báo bảo mật AWS, phát hành checker của `svp-gitops`). Mục lục và mẫu ở [`runbooks/README.md`](runbooks/README.md).
 
 ## Reference: tra cứu
 
@@ -41,7 +41,7 @@ Mục lục theo [Diátaxis](https://diataxis.fr): mỗi tài liệu thuộc m�
   tự kiểm, giới hạn đăng nhập, mật khẩu chặn, header bảo mật và cái giá.
 - [`explanation/aws-security.md`](explanation/aws-security.md): org AWS theo AWS SRA: account, guardrail, ai đổi được gì, phát hiện, luồng
   log và luồng cảnh báo bảo mật.
-- [`explanation/delivery.md`](explanation/delivery.md): CI/CD, chuỗi cung ứng, ba repo và hợp đồng API.
+- [`explanation/delivery.md`](explanation/delivery.md): CI/CD, chuỗi cung ứng, ba repo, phát hành checker và hợp đồng API.
 - [`explanation/observability.md`](explanation/observability.md): trace, metric, log, lỗi và số đo trình duyệt đi từ đâu tới đâu.
 - [`explanation/cost-and-uptime.md`](explanation/cost-and-uptime.md): chi phí compute theo namespace và service bằng OpenCost, uptime từ
   ngoài vào bằng blackbox exporter: số lấy từ đâu, giới hạn, SLO, cảnh báo và cái giá của nơi probe.
