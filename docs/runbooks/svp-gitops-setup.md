@@ -93,9 +93,12 @@ gh api "$G/tags?per_page=100" -q '.[].name'
 | `rules/branches/main` | `deletion`, `non_fast_forward`, `required_linear_history`, `pull_request` (hai lần: một của mỗi ruleset nhắm nhánh), `required_status_checks` |
 | `tags` | không dòng nào (repo không dùng tag; tag lạ xem "Giảm thiểu") |
 
-Không kiểm được bằng `gh` của người học: **App và bản cài của nó** (bước A2, A3) và **Renovate** (A5). `GET /apps/svp-gitops-promoter`
+Không kiểm được bằng `gh` của người học: **bản cài của App promote** (bước A3) và **Renovate** (A5). `GET /apps/svp-gitops-promoter`
 trả 404 (App chỉ cho tài khoản này, token người dùng không thấy), `GET repos/anhnvcoder/svp-gitops/installation` cần JWT ký bằng khoá
 App (401 `A JSON web token could not be decoded`), `GET user/installations` cần token người dùng do chính một App cấp (403). Kiểm bằng UI ở mục của từng bước, và bằng lượt promote đầu tiên (phần C).
+[`make github-app`](https://github.com/anhnvcoder/svp-infra/blob/main/docs/runbooks/github-setup.md) đọc bản cài ngay sau khi cài
+(JWT ký bằng khoá vừa nhận); `make github-check` ở `svp-infra` đọc lại các cài đặt có API (khoá App đã vào đúng secret, ba cài đặt
+repo của A1).
 
 ## Nguyên nhân thường gặp
 
@@ -221,22 +224,18 @@ phần **C** sau khi repo code chuyển job `promote` sang `svp-gitops`.
 
 ### A1. Cài đặt repo `svp-gitops`
 
-**Làm gì** (<https://github.com/anhnvcoder/svp-gitops/settings>):
+**Làm gì:** cài đặt repo do root Terraform `github/` của `svp-infra` giữ (`repositories.tf`): cách merge, quyền Actions, quyền
+workflow, Dependabot alerts, secret scanning và push protection. `plan`, `apply` theo
+[`github/README.md`](https://github.com/anhnvcoder/svp-infra/blob/main/github/README.md); không đặt tay ở trang Settings. Ba cài đặt
+provider không quản (duyệt workflow PR fork của mọi người ngoài, báo lỗ hổng riêng, CodeQL default setup) do `make github-settings` ghi
+từ `svp-infra`, cho mọi repo một lần. Đối chiếu giá trị đã đặt:
 
-- **General** → mục **Pull Requests**: bật **Allow squash merging**, ô **Default commit message** của nó chọn **Pull request title
-  and description**; tắt **Allow merge commits** và **Allow rebase merging**; bật **Allow auto-merge**; **không** bật
-  **Automatically delete head branches**.
-- **Actions** → **General**:
-  - **Actions permissions**: chọn **Allow anhnvcoder, and select non-anhnvcoder, actions and reusable workflows**, chỉ tích
-    **Allow actions created by GitHub** (không tích Marketplace verified creators, ô danh sách action ghi `ossf/scorecard-action@*` cho `scorecard.yml`,
-    [ADR-0041](../adr/0041-github-hardening.md) (g)); tích **Require
-    actions to be pinned to a full-length commit SHA**. **Save**.
-  - **Approval for running fork pull request workflows from contributors**: **Require approval for all external contributors**.
-    **Save**.
-  - **Workflow permissions**: **Read repository contents and packages permissions**; **bỏ tích** **Allow GitHub Actions to create
-    and approve pull requests**. **Save**.
-- **Advanced Security**: bật **Dependabot alerts**; **Secret Protection** (secret scanning) và **Push protection** bật (repo public
-  thường đã bật sẵn, kiểm lại).
+- Chỉ squash, ô commit message là **Pull request title and description**; tắt merge commit và rebase; bật auto-merge; **không** tự xoá
+  nhánh sau merge.
+- Actions: chỉ action của GitHub và `ossf/scorecard-action@*` (cho `scorecard.yml`, [ADR-0041](../adr/0041-github-hardening.md) (g)),
+  ghim SHA bắt buộc; `GITHUB_TOKEN` mặc định chỉ đọc, tắt "create and approve pull requests".
+- Duyệt workflow PR fork: mọi người ngoài (`all_external_contributors`).
+- Dependabot alerts, secret scanning, push protection: bật.
 
 **Vì sao:**
 
@@ -273,23 +272,29 @@ phần **C** sau khi repo code chuyển job `promote` sang `svp-gitops`.
 **Nếu sai:** `allow_auto_merge` false → PR stg mở nhưng không tự merge (job `promote` đỏ ở bước bật auto-merge). `allow_merge_commit`
 true → người merge tay có thể tạo merge commit, revert một lần promote khó hơn. `sha_pinning_required` false hay `verified_allowed`
 true → workflow dùng tag hay action bên thứ ba vẫn chạy. Thiếu `ossf/scorecard-action@*` trong danh sách action → `scorecard.yml` bị từ
-chối; có pattern khác → xoá dòng đó. `can_approve_pull_request_reviews` true → tắt lại ở Workflow permissions.
-`approval_policy` khác `all_external_contributors` → chọn lại ô duyệt PR fork. Squash khác `PR_TITLE`/`PR_BODY` → chọn lại ô Default
-commit message. Sửa ở đúng ô rồi chạy lại lệnh kiểm.
+chối; có pattern khác → danh sách ở `repositories.tf` đã đúng, `apply` lại. `can_approve_pull_request_reviews` true →
+cùng nguyên nhân: `repositories.tf` đã tắt nó, `apply` lại.
+`approval_policy` khác `all_external_contributors` → chạy lại `make github-settings` ở `svp-infra`. Squash khác `PR_TITLE`/`PR_BODY` hay
+mọi giá trị còn lại lệch → `plan` của `github/` thấy lệch: `apply` đưa về code, không sửa ở trang Settings. Rồi chạy lại lệnh kiểm.
 
 ### A2. Tạo GitHub App `svp-gitops-promoter`
 
-**Làm gì** (<https://github.com/settings/apps/new>; hay Settings → Developer settings → GitHub Apps → **New GitHub App**):
+**Làm gì:** App khai báo bằng manifest `github/apps/svp-gitops-promoter.json` của `svp-infra` (tên, quyền, webhook tắt, chỉ cài trên
+tài khoản này); không điền form ở tay.
 
-- **GitHub App name**: `svp-gitops-promoter`. **Homepage URL**: `https://github.com/anhnvcoder/svp-backend`.
-- **Callback URL** để trống, không tích **Request user authorization (OAuth) during installation**.
-- **Webhook**: **bỏ tích Active**.
-- **Permissions** → **Repository permissions**: **Contents** Read and write, **Pull requests** Read and write; **Metadata** Read-only
-  (tự có, bắt buộc). Mọi quyền khác No access, đặc biệt **Deployments**, **Workflows**, **Actions**, **Administration**, **Checks**,
-  **Commit statuses**. Không quyền nào ở **Organization permissions**, **Account permissions**.
-- **Where can this GitHub App be installed?**: **Only on this account**. **Create GitHub App**.
-- Trên trang App vừa tạo: đọc **Client ID** (mục About, dạng `Iv…`, để dán ở A4); mục **Private keys** → **Generate a private key**:
-  trình duyệt tải một file `.pem`, để ở thư mục tạm ngoài mọi repo. Không bấm **Generate a new client secret**: App không dùng OAuth.
+```sh
+make github-app APP=svp-gitops-promoter   # run at the root of svp-infra
+```
+
+Script mở trang tạo App đã điền sẵn; đọc tên và quyền rồi bấm **Create GitHub App** (bước duy nhất GitHub bắt làm trên trình duyệt). Nó
+đổi mã trả về lấy khoá và Client ID, ghi khoá vào secret `SVP_GITOPS_APP_PRIVATE_KEY` của environment `promote`
+(environment chưa có thì giữ ở
+`github/.keys/`, mode 600, và in lệnh đặt sau), ghi Client ID vào `github/github.auto.tfvars` cho `apply` (A4). Từng bước và cách chạy
+khi trình duyệt không mở được trang loopback:
+[`github-setup.md`](https://github.com/anhnvcoder/svp-infra/blob/main/docs/runbooks/github-setup.md). Quyền đã khai trong manifest:
+**Contents** Read and write, **Pull requests** Read and write, **Metadata** Read-only; mọi quyền khác No access, đặc biệt **Deployments**,
+**Workflows**, **Actions**, **Administration**, **Checks**, **Commit statuses**. Không bấm **Generate a new client secret**: App không dùng
+OAuth.
 
 **Vì sao:**
 
@@ -315,8 +320,9 @@ bản cài chấp nhận khi **thêm** quyền, bớt quyền thì có hiệu l�
 
 ### A3. Cài App chỉ lên `svp-gitops`
 
-**Làm gì:** trang App → **Install App** → dòng `anhnvcoder` → **Install** → **Only select repositories** → chọn
-`anhnvcoder/svp-gitops` → **Install**.
+**Làm gì:** không có API cài App; `make github-app` (A2) mở trang cài sau khi tạo App. Ở đó chọn dòng `anhnvcoder` → **Only select
+repositories** → `anhnvcoder/svp-gitops` → **Install**, rồi quay lại terminal bấm Enter: script đăng nhập bằng chính App và `FAIL` nêu repo
+nếu bản cài khác `svp-gitops`. Cài lại sau này: trang App → **Install App**, cùng các lựa chọn.
 
 **Vì sao:** token của App chỉ tới repo đã cài. Cài cả repo code thì token bị lộ đẩy được nhánh, mở PR ở chính repo build image.
 
@@ -327,22 +333,19 @@ select repositories" với đúng một dòng `anhnvcoder/svp-gitops`; phần qu
 
 ### A4. Environment `promote` và `promote-prd` ở repo code
 
-**Làm gì** (<https://github.com/anhnvcoder/svp-backend/settings/environments> → **New environment**):
+**Làm gì:** `apply` của `github/` (`environments.tf` của `svp-infra`) tạo environment `promote` với luật nhánh chỉ
+`main`, không người duyệt,
+không Wait timer (stg tự động; cổng prd là `promote-prd` bên dưới, rồi Code Owner của PR prd ở `svp-gitops`), và biến
+`SVP_GITOPS_APP_CLIENT_ID` từ `svp_gitops_app_client_id` của `github.auto.tfvars` (A2 đã ghi). Không tạo environment hay biến ở UI.
+Người học chỉ đặt khoá, sau `apply`:
 
-- **Name**: `promote` → **Configure environment**.
-- **Deployment protection rules**: không tích **Required reviewers**, không **Wait timer** (stg tự động; cổng prd là environment `promote-prd`
-  bên dưới, rồi Code Owner của PR prd ở `svp-gitops`).
-- **Deployment branches and tags**: **Selected branches and tags** → **Add deployment branch or tag rule** → Ref type **Branch**, Name
-  pattern `main` → **Add rule**.
-- **Environment variables** → **Add environment variable**: Name `SVP_GITOPS_APP_CLIENT_ID`, Value là Client ID của A2.
-- **Environment secrets** → **Add environment secret**: Name `SVP_GITOPS_APP_PRIVATE_KEY`, Value là **toàn bộ** nội dung file `.pem`
-  (cả dòng `-----BEGIN RSA PRIVATE KEY-----` và `-----END …-----`). Hay từ terminal, không qua clipboard:
+```sh
+make github-app-key APP=svp-gitops-promoter KEY=stg PEM=<file>.pem   # run at the root of svp-infra
+```
 
-  ```sh
-  gh secret set SVP_GITOPS_APP_PRIVATE_KEY --env promote --repo anhnvcoder/svp-backend < /đường/tới/khoá.pem
-  ```
-
-  Rồi xoá file `.pem` (khoá mới tạo lại được bất cứ lúc nào ở trang App; không cần giữ bản sao).
+Script đặt secret `SVP_GITOPS_APP_PRIVATE_KEY` của environment `promote` từ file (không qua clipboard hay dòng lệnh) rồi xoá file `.pem`.
+Khoá giữ ở `github/.keys/` từ A2 (environment chưa có lúc đó) thì `PEM` trỏ vào file đó. Khoá mới tạo lại được bất cứ lúc nào ở trang App;
+không giữ bản sao.
 
 **Environment `promote-prd`** ([ADR-0041](../adr/0041-github-hardening.md) (d)): `apply` của `github/` (`environments.tf` của `svp-infra`)
 tạo environment cùng mọi cài đặt; không tạo environment, người duyệt, luật nhánh hay variable ở UI. Cài đặt `apply` đặt, để đối chiếu:
@@ -352,9 +355,8 @@ tạo environment cùng mọi cài đặt; không tạo environment, người du
 - **Deployment branches and tags**: chỉ `main`. Variable `SVP_GITOPS_APP_CLIENT_ID` cùng giá trị với `promote`.
 
 Người học chỉ đặt khoá: `SVP_GITOPS_APP_PRIVATE_KEY` là **khoá riêng thứ hai** của App `svp-gitops-promoter` (App có tới 25 khoá; thu hồi từng
-khoá): tạo khoá mới ở trang App (**Private keys** → **Generate a private key**), đặt bằng
-`gh secret set SVP_GITOPS_APP_PRIVATE_KEY --env promote-prd --repo anhnvcoder/svp-backend < /đường/tới/khoá.pem` sau `apply`, xoá file `.pem`.
-Không dùng lại khoá của `promote`.
+khoá): tạo khoá mới ở trang App (**Private keys** → **Generate a private key**; GitHub không có API tạo khoá), đặt sau `apply` bằng
+`make github-app-key APP=svp-gitops-promoter KEY=prd PEM=<file>.pem`. Không dùng lại khoá của `promote`.
 
 **Vì sao:**
 
@@ -385,8 +387,9 @@ gh api repos/anhnvcoder/svp-backend/environments/promote/secrets/SVP_GITOPS_APP_
 
 ### A5. Renovate cho `svp-gitops`
 
-**Làm gì:** <https://github.com/apps/renovate> → **Configure** → `anhnvcoder` → **Only select repositories** → thêm
-`anhnvcoder/svp-gitops` (giữ `svp-backend`) → **Save**.
+**Làm gì:** giữ tay. Chọn repo cho App Renovate (Mend) qua API là `PUT /user/installations/{id}/repositories/{rid}`, cần PAT classic
+(token của `gh` bị 403 ở đó); tạo PAT chỉ cho việc một lần mỗi repo không đáng. Làm trên trang: <https://github.com/apps/renovate> →
+**Configure** → `anhnvcoder` → **Only select repositories** → thêm `anhnvcoder/svp-gitops` (giữ các repo đã có) → **Save**.
 
 **Vì sao:** `svp-gitops/renovate.json` đề xuất nâng chart upstream, image ghim digest, action của `check.yml` và bản checker
 (`CHECKER_VERSION` cùng `CHECKER_COMMIT` của `check.yml`, tag `gitops-check-v*` của repo code, C5); không có thì các ghim đó cũ dần
@@ -626,12 +629,14 @@ repo khi đổi tên, không phải đặt lại. Không tạo repo nào mang t�
 không làm gián đoạn:
 
 1. Trang App <https://github.com/settings/apps/svp-gitops-promoter> → **Private keys** → **Generate a private key** (tải `.pem` mới).
-2. Đặt secret bằng khoá mới (lệnh `gh secret set` của A4), xoá file `.pem`. Hai environment có hai khoá riêng (`promote`, `promote-prd`): xoay cả hai
+2. Đặt secret bằng khoá mới (`make github-app-key` của A4, `KEY=stg` hay `KEY=prd`; script xoá file `.pem`). Hai
+   environment có hai khoá riêng (`promote`, `promote-prd`): xoay cả hai
    bằng hai khoá mới, mỗi environment một khoá, hay chỉ cái nghi lộ (xoá đúng khoá cũ của environment đó ở bước 4).
 3. Kiểm `updated_at` của secret là lúc vừa đặt (lệnh ở A4); với lượt promote tiếp theo (hay dispatch `images.yml -f services=<một
    service>` do người học chạy), bước tạo token xanh. Khi nghi lộ, phần lượt promote chỉ làm sau **Unsuspend** (bước 4 của "Giảm
    thiểu"): bản cài còn suspend thì bước tạo token đỏ với mọi khoá.
-4. Trang App → **Private keys** → **Delete** khoá cũ (khoá còn lại có ngày tạo hôm nay). Khi nghi lộ thì xoá khoá cũ **ngay** sau
+4. Trang App → **Private keys** → **Delete** khoá cũ (khoá còn lại có ngày tạo hôm nay); GitHub không có API xoá khoá,
+   nên bước này giữ tay. Khi nghi lộ thì xoá khoá cũ **ngay** sau
    bước 2, không chờ lượt promote.
 
 ## Leo thang

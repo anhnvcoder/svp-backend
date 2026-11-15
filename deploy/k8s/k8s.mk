@@ -214,3 +214,11 @@ eks-premium-check: ## Check premium playback at the edge of the EKS cluster CONT
 eks-rl-reset: ## Delete the register rate limit keys (svp:gw:rl:register:*, SCAN + DEL) in the Valkey db 10 of the EKS cluster CONTEXT=svp-stg|svp-prd, before each level of a load test (LOCAL LAB ONLY)
 	@$(EKS_CONTEXT_CHECK)
 	SVP_STACK=eks SVP_KUBE_CONTEXT='$(CONTEXT)' bash -c '. deploy/compose/lib.sh'
+
+# Read-only: waits on the status of an Argo CD Application of the cluster (steps 5 and 7 of the sequence in
+# docs/reference/eks.md), so no argocd CLI or port-forward is needed.
+.PHONY: eks-wait
+APP ?=
+eks-wait: ## Wait for the Argo CD Application APP=svp-observability (Healthy) or APP=svp-root (Synced, then Healthy) of the EKS cluster CONTEXT=svp-stg|svp-prd, 30 minutes at most, printing its last sync and health status on timeout (kubectl only, no argocd CLI)
+	@$(EKS_CONTEXT_CHECK)
+	SVP_KUBE_CONTEXT='$(CONTEXT)' deploy/k8s/eks-wait.sh '$(APP)'

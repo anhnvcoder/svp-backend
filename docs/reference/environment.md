@@ -22,10 +22,13 @@ Loại tài liệu (Diátaxis): **reference**, tra cứu khi cần một lệnh 
   Valkey, `postgres.crt` cho Postgres (tên `postgres` của compose và Service `svp-pg-rw` của k3d với mọi dạng, cùng `localhost`). Clone
   đã có CA thì chỉ cert, khoá còn thiếu hay hết hạn được sinh lại; CA mất hay hết hạn thì sinh lại CA và cả hai cert.
   Trên EKS các mật khẩu Kafka, Valkey không lấy từ `.env`: Terraform của `svp-infra` sinh và ghi vào Secrets Manager.
-- Người học tự đặt, `make env` không sinh (không tạo được khoá của GitHub App), chỉ cho cluster EKS có Argo CD Notifications
+- Người học tự đặt, `make env` không sinh (khoá của GitHub App do `make github-app APP=svp-argocd-notifier` của `svp-infra` tạo và ghi vào
+  `.env`; xoay khoá bằng `make github-app-key`,
+  [`argocd-notifier-key-rotation.md`](../runbooks/argocd-notifier-key-rotation.md)), chỉ cho cluster EKS có Argo CD
+  Notifications
   ([`eks.md`](eks.md), [ADR-0032](../adr/0032-argocd-deploy-status.md)): `SVP_ARGOCD_NOTIFY_APP_ID`, `SVP_ARGOCD_NOTIFY_INSTALLATION_ID`
   (số của App `svp-argocd-notifier` và bản cài của nó trên `svp-gitops`), `SVP_ARGOCD_NOTIFY_PRIVATE_KEY_B64` (khoá riêng của App,
-  `base64 < key.pem | tr -d '\n'`: `.env` không nhận giá trị nhiều dòng). `deploy/k8s/aws-secrets.sh` (`make eks-secrets`) đọc để ghi
+  base64 một dòng của file `.pem`: `.env` không nhận giá trị nhiều dòng). `deploy/k8s/aws-secrets.sh` (`make eks-secrets`) đọc để ghi
   entry `argocd-notifications` của Secrets Manager, `deploy/k8s/secrets.sh` chỉ đọc khi chart `svp-cluster` của cluster k3d bật
   `externalSecrets.argocdNotifications`; compose không đọc.
 - Không ở `.env`, đặt trong terminal của buổi AWS (không commit), cho `make eks-secrets` và `make eks-glitchtip-init`

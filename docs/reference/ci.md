@@ -322,6 +322,10 @@ Loại tài liệu (Diátaxis): **reference**, tra cứu khi cần một lệnh 
     thông tin, ngoài cổng PR. Quyết định ở [ADR-0076](../adr/0076-terraform-plan-infracost-pr.md); luồng, lý do bỏ qua, cách đọc comment và
     duyệt lượt chờ ở mục "Plan trên PR", "Chi phí trên PR" của
     [`README.md`](https://github.com/anhnvcoder/svp-infra/blob/main/README.md#plan-trên-pr) của `svp-infra`.
+    Secret của repo mà Terraform không quản (`SVP_AWS_STG_ACCOUNT_ID`, `SVP_AWS_PRD_ACCOUNT_ID` của repo code,
+    `INFRACOST_API_KEY`, secret của
+    environment `terraform-plan`) do `make github-secrets`, `make infracost-key` của `svp-infra` đặt; lệnh và thứ tự ở
+    [`github-setup.md`](https://github.com/anhnvcoder/svp-infra/blob/main/docs/runbooks/github-setup.md) của nó.
   - Cài đặt GitHub của repo là code ở `github/` của `svp-infra` ([ADR-0041](../adr/0041-github-hardening.md)). Ruleset `main`: PR (0 approval: tác
     giả không tự duyệt PR của mình, lab một người), check bắt buộc `ci-ok`, `images-ok` chỉ nhận từ app GitHub Actions (`pr-title` thêm vào sau khi
     xanh trên một PR người và một PR bot), chỉ squash (`allowed_merge_methods = ["squash"]`, chặn cả khi cài đặt repo bị mở lại; commit lấy

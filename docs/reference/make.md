@@ -41,6 +41,11 @@ liệt kê target):
   `dlq-replay` của stack compose (`make up` trước); `ARGS` bắt buộc, là đối số của `/app` (`replay` và cờ của nó,
   `services/dlq-replay/cmd/dlq-replay/main.go`). Quy trình an toàn ở
   [`kafka-dlq-records.md`](../runbooks/kafka-dlq-records.md), container ở [`compose.md`](compose.md).
+- `make jwt-rotate STEP=<add|sign|drop>`: một bước đổi khoá ký JWT trong `.env` ở gốc repo (`go run ./tools/jwtkey rotate`). `add`
+  sinh cặp khoá mới vào khoá chờ `.env.jwt-next` (mode 600) và nối khoá công khai của nó vào `JWT_VERIFY_KEYS`; `sign` đặt
+  `JWT_SIGNING_KID`, `JWT_SIGNING_KEY` theo khoá chờ; `drop` bỏ mọi khoá xác minh khác `kid` đang ký rồi xoá khoá chờ. Bước sai thứ tự
+  hay `.env` thiếu biến, sai dạng thì lệnh từ chối và không ghi gì; chỉ in `kid` và lệnh áp dụng, không in khoá. Trình tự, lệnh áp dụng
+  và các lần chờ giữa các bước ở [`jwt-key-rotation.md`](../runbooks/jwt-key-rotation.md).
 - `make zizmor` ([ADR-0041](../adr/0041-github-hardening.md) (g)): lint bảo mật workflow bằng zizmor `ZIZMOR_IMAGE` (image chính thức ghim `tag@sha256`,
   repo gắn chỉ đọc) với `--persona=regular` trên cả repo; mọi finding làm lệnh thoát khác 0 (mã 11 đến 14). Image đa kiến trúc: cùng một tham chiếu trên máy dev arm64 và runner amd64.
   Có `GH_TOKEN` thì chạy thêm audit online (impostor
