@@ -276,6 +276,12 @@ Mục 7 cũ ("Đề xuất xem lại") nguyên văn; việc còn mở chuyển v
   cần chữ ký (CloudFront chuẩn hoá path trước khi chọn behavior, giữ `%2F`), còn `media/..%2Fpremium/…` khớp `media/*` công khai và chỉ an
   toàn khi S3 không giải `..` trong key; cả hai chỉ kiểm thật ở ca âm của **Kiểm edge premium** trong buổi; (3) log chuẩn của CloudFront và
   log WAF giữ query đã ký tới hết hạn của nó.
+- **Chi phí và uptime (2026-11-15):** bề mặt mới là blackbox exporter ở `svp-obs` (cổng 9115 nhận URL tuỳ ý, egress TCP 443 công khai trên
+  EKS; ở compose hai mạng internal `probe`, `probe-web`), OpenCost (ClusterRole đọc cluster-wide gồm ConfigMap, credential Pod Identity đọc AMP
+  của sidecar `sigv4proxy`, egress TCP 443 công khai cho bảng giá trên EKS) và object `media/uptime-probe.txt` đọc ẩn danh (OPS-5, OPS-6, WEB-13,
+  một chỗ vượt ranh giới ở mục 2, hai dòng ở mục 6). Thu hẹp được: lỗi của DNS, cert, CloudFront, WAF, ALB nay thành cảnh báo, và mất probe
+  là page ở ruler AMP. [ADR-0074](../adr/0074-cost-uptime.md) chỉnh ADR-0011, 0056, 0063. Đáng xem lại: (1) egress công khai của hai pod khi có
+  NetworkPolicy theo tên miền; (2) probe k3d không kiểm chuỗi TLS; (3) Bot Control chuyển sang chặn làm probe bị 403.
 - **Đề xuất (không bắt buộc), giai đoạn 2:** thêm `etag` (hoặc checksum) của file gốc vào `VideoUploaded`, lấy từ lần `HEAD`
   ở `CompleteUpload`; worker tải file với điều kiện `If-Match` theo giá trị đó. Đóng được UP-2 (file bị thay giữa lúc kiểm và
   lúc đọc). Đây là thêm field nên không phá contract (quy tắc versioning ở

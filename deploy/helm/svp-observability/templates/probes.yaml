@@ -1,0 +1,41 @@
+{{- /* The uptime checks: a Probe each entry of probes.http and probes.dns. Prometheus asks the blackbox exporter to
+probe the target and records probe_success and the probe's metrics, labelled probe=<name>. */}}
+{{- $p := .Values.probes }}
+{{- if not (has (toString $p.egress) (list "envoy" "internet")) }}
+{{- fail (printf "probes.egress is %q: envoy (Gateway svp in the cluster) or internet (the public domain)" (toString $p.egress)) }}
+{{- end }}
+{{- $kinds := list (dict "key" "http" "prefix" "uptime-" "job" "blackbox-http" "target" "url")
+  (dict "key" "dns" "prefix" "uptime-dns-" "job" "blackbox-dns" "target" "server") }}
+{{- $seen := dict }}
+{{- range $kind := $kinds }}
+{{- range $i, $e := index $p $kind.key }}
+{{- $where := printf "probes.%s[%d]" $kind.key $i }}
+{{- range $field := list "name" "module" $kind.target }}
+{{- if not (index $e $field) }}
+{{- fail (printf "%s.%s is empty: every probe needs name, module and %s" $where $field $kind.target) }}
+{{- end }}
+{{- end }}
+{{- $name := printf "%s%s" $kind.prefix $e.name }}
+{{- if hasKey $seen $name }}
+{{- fail (printf "%s makes Probe %s, as %s does: probe names must be unique" $where $name (get $seen $name)) }}
+{{- end }}
+{{- $_ := set $seen $name $where }}
+---
+apiVersion: monitoring.coreos.com/v1
+kind: Probe
+metadata:
+  name: {{ $name }}
+  namespace: {{ $.Release.Namespace }}
+spec:
+  jobName: {{ $kind.job }}
+  module: {{ $e.module }}
+  interval: {{ $p.interval }}
+  prober:
+    url: {{ $p.prober }}
+  targets:
+    staticConfig:
+      static: [{{ index $e $kind.target | quote }}]
+      labels:
+        probe: {{ $e.name | quote }}
+{{- end }}
+{{- end }}

@@ -49,6 +49,19 @@ podSelector:
   ports:
     - {protocol: TCP, port: {{ .Values.kafka.port }}}
 {{- end }}
+{{- define "svp-observability.probing" -}}
+{{- if or .Values.probes.http .Values.probes.dns }}true{{ end }}
+{{- end }}
+{{- define "svp-observability.opencostQuery" -}}
+{{- $q := toString .Values.opencost.query }}
+{{- if not (has $q (list "prometheus" "amp")) }}
+{{- fail (printf "opencost.query is %q: prometheus (the Prometheus in svp-obs) or amp (the managed workspace)" $q) }}
+{{- end }}
+{{- if and (eq $q "amp") (not .Values.awsEndpointCidrs) }}
+{{- fail "opencost.query amp needs awsEndpointCidrs, where its SigV4 proxy reaches the workspace's endpoint" }}
+{{- end }}
+{{- $q }}
+{{- end }}
 {{- /* The three backends are collector.backends; a platform whose Collector sends to AWS's services lists none, and
 policy allow-aws-apis-collector opens their endpoints instead. */}}
 # The Collector: OTLP from the releases of svp (services.otlp), out to the three backends, and the Kafka brokers,
@@ -81,10 +94,10 @@ spec:
     {{- end }}
     {{- include "svp-observability.kafkaPeer" . | nindent 4 }}
 ---
-# Prometheus: OTLP from the Collector, remote write from Tempo's metrics-generator, queries from Grafana and from the
-# Argo Rollouts controller (the AnalysisRuns of the gateway's canary). Out: alerts to Alertmanager and the scrapes of
-# the stack, kubelets, Envoy, svp-pg's exporter and Argo CD's application controller. envoy-gateway-system admits these
-# scrapes itself when its policy is on (EKS); svp-data's chart opens 9187.
+# Prometheus: OTLP from the Collector, remote write from Tempo's metrics-generator, queries from Grafana, OpenCost and
+# the Argo Rollouts controller (the AnalysisRuns of the gateway's canary). Out: alerts to Alertmanager, the scrapes of
+# the stack, kubelets, Envoy, svp-pg's exporter, Argo CD's application controller and OpenCost, and the uptime probes
+# through the blackbox exporter. envoy-gateway-system admits Envoy's scrape itself when its policy is on (EKS).
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
@@ -98,6 +111,9 @@ spec:
         {{- include "svp-observability.peer" (dict "root" . "name" "collector") | nindent 8 }}
         {{- include "svp-observability.peer" (dict "root" . "name" "tempo") | nindent 8 }}
         {{- include "svp-observability.peer" (dict "root" . "name" "grafana") | nindent 8 }}
+        {{- if eq (include "svp-observability.opencostQuery" .) "prometheus" }}
+        {{- include "svp-observability.peer" (dict "root" . "name" "opencost") | nindent 8 }}
+        {{- end }}
         - namespaceSelector:
             matchLabels:
               kubernetes.io/metadata.name: {{ .Values.rolloutsController.namespace }}
@@ -155,6 +171,16 @@ spec:
               {{- toYaml .Values.argocd.labels | nindent 14 }}
       ports:
         - {protocol: TCP, port: {{ .Values.argocd.metricsPort }}}
+    - to:
+        {{- include "svp-observability.peer" (dict "root" . "name" "opencost") | nindent 8 }}
+      ports:
+        - {protocol: TCP, port: 9003}
+    {{- if include "svp-observability.probing" . }}
+    - to:
+        {{- include "svp-observability.peer" (dict "root" . "name" "blackbox") | nindent 8 }}
+      ports:
+        - {protocol: TCP, port: 9115}
+    {{- end }}
     {{- if .Values.collector.podMonitor }}
     - to:
         {{- include "svp-observability.peer" (dict "root" . "name" "collector") | nindent 8 }}
@@ -350,6 +376,87 @@ spec:
         - {protocol: TCP, port: 8000}
   egress:
     {{- include "svp-observability.postgresPeer" . | nindent 4 }}
+---
+# The blackbox exporter: probe requests from Prometheus on 9115, none when no probe is set. Out: the HTTP probes'
+# targets (probes.egress); the DNS probes ask kube-dns, open to every pod. internet takes TCP 443 to every public IPv4
+# address, as allow-alertmanager-telegram: the public domain's CloudFront addresses change without notice. The price:
+# a compromised exporter can reach any public address on 443.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: blackbox-exporter
+  namespace: {{ .Release.Namespace }}
+spec:
+  {{- include "svp-observability.selector" (dict "root" . "name" "blackbox") | nindent 2 }}
+  policyTypes: [Ingress, Egress]
+  {{- if include "svp-observability.probing" . }}
+  ingress:
+    - from:
+        {{- include "svp-observability.peer" (dict "root" . "name" "prometheus") | nindent 8 }}
+      ports:
+        - {protocol: TCP, port: 9115}
+  {{- else }}
+  ingress: []
+  {{- end }}
+  {{- if not .Values.probes.http }}
+  egress: []
+  {{- else if eq (toString .Values.probes.egress) "envoy" }}
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ .Values.envoy.namespace }}
+          podSelector:
+            matchLabels:
+              {{- toYaml .Values.envoy.labels | nindent 14 }}
+      ports:
+        - {protocol: TCP, port: 10443}
+  {{- else }}
+  egress:
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            except: [10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 169.254.0.0/16, 100.64.0.0/10]
+      ports:
+        - {protocol: TCP, port: 443}
+  {{- end }}
+---
+# OpenCost: Prometheus scrapes its metrics on 9003. Out: its metrics source (opencost.query: Prometheus here, or the
+# workspace through policy allow-aws-apis-opencost) and, with opencost.publicPricing, the public price list on 443 (see
+# that value for the price). The API server through label svp-kube-api=allow, set by the opencost chart's values.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: opencost
+  namespace: {{ .Release.Namespace }}
+spec:
+  {{- include "svp-observability.selector" (dict "root" . "name" "opencost") | nindent 2 }}
+  policyTypes: [Ingress, Egress]
+  ingress:
+    - from:
+        {{- include "svp-observability.peer" (dict "root" . "name" "prometheus") | nindent 8 }}
+      ports:
+        - {protocol: TCP, port: 9003}
+  {{- $prometheus := eq (include "svp-observability.opencostQuery" .) "prometheus" }}
+  {{- if not (or $prometheus .Values.opencost.publicPricing) }}
+  egress: []
+  {{- else }}
+  egress:
+    {{- if $prometheus }}
+    - to:
+        {{- include "svp-observability.peer" (dict "root" . "name" "prometheus") | nindent 8 }}
+      ports:
+        - {protocol: TCP, port: 9090}
+    {{- end }}
+    {{- if .Values.opencost.publicPricing }}
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            except: [10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 169.254.0.0/16, 100.64.0.0/10]
+      ports:
+        - {protocol: TCP, port: 443}
+    {{- end }}
+  {{- end }}
 {{- if eq (toString .Values.rules.target) "amp" }}
 ---
 # ACK's controller for Amazon Managed Service for Prometheus: it serves no pod (nothing scrapes it, no webhook). Its
@@ -390,10 +497,14 @@ spec:
 {{- if .Values.awsEndpointCidrs }}
 {{- /* The pods that call AWS APIs reach them where the interface endpoints' private DNS puts their names, inside the
 VPC, and get their credentials from the EKS Pod Identity Agent on the node: the Collector and Prometheus write to
-the workspace (and the Collector to CloudWatch Logs and X-Ray), ACK's controller manages its rules. */}}
+the workspace (and the Collector to CloudWatch Logs and X-Ray), ACK's controller manages its rules, OpenCost queries
+it. */}}
 {{- $callers := list "collector" "prometheus" }}
 {{- if eq (toString .Values.rules.target) "amp" }}
 {{- $callers = append $callers "ack" }}
+{{- end }}
+{{- if eq (include "svp-observability.opencostQuery" .) "amp" }}
+{{- $callers = append $callers "opencost" }}
 {{- end }}
 {{- range $callers }}
 ---

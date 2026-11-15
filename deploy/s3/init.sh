@@ -108,6 +108,10 @@ cors uploads '<AllowedMethod>POST</AllowedMethod><AllowedHeader>*</AllowedHeader
 # segments with XHR; HEAD answers like GET.
 must "bucket policy of media" "200 204" PUT /media?policy --data-binary "@$dir/media-anonymous.json"
 cors media '<AllowedMethod>GET</AllowedMethod><AllowedMethod>HEAD</AllowedMethod><AllowedHeader>*</AllowedHeader>'
+# The object the uptime probe of the media host reads (same key, body and headers as the AWS one): small, never cached.
+printf 'ok\n' > "$tmp/uptime-probe.txt"
+must "uptime probe object" "200 204" PUT /media/media/uptime-probe.txt --data-binary "@$tmp/uptime-probe.txt" \
+  -H 'Content-Type: text/plain' -H 'Cache-Control: no-store'
 echo "s3-init: buckets uploads, media ok"
 
 # user NAME POLICY_FILE SECRET_KEY: creates or overwrites the policy NAME, creates the user NAME or

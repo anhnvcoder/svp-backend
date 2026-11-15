@@ -43,6 +43,8 @@ Mục lục theo [Diátaxis](https://diataxis.fr): mỗi tài liệu thuộc m�
   log và luồng cảnh báo bảo mật.
 - [`explanation/delivery.md`](explanation/delivery.md): CI/CD, chuỗi cung ứng, ba repo và hợp đồng API.
 - [`explanation/observability.md`](explanation/observability.md): trace, metric, log, lỗi và số đo trình duyệt đi từ đâu tới đâu.
+- [`explanation/cost-and-uptime.md`](explanation/cost-and-uptime.md): chi phí compute theo namespace và service bằng OpenCost, uptime từ
+  ngoài vào bằng blackbox exporter: số lấy từ đâu, giới hạn, SLO, cảnh báo và cái giá của nơi probe.
 - [`explanation/reliability.md`](explanation/reliability.md): SLO, tải, backup, probe và vận hành.
 - [`explanation/backup-dr.md`](explanation/backup-dr.md): backup và DR của stg, prd: dữ liệu nào chép đi đâu, account `svp-backup`,
   lịch của Backup policy, diễn tập PITR và object S3, xoá cuối buổi.

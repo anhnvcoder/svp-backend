@@ -213,6 +213,11 @@
       "groupName": "opentelemetry-collector chart"
     },
     {
+      "description": "The blackbox exporter image of compose stays the same as the cluster's (base/blackbox-exporter.yaml and base/blackbox-exporter-public.yaml of svp-gitops, which its own Renovate updates).",
+      "matchDepNames": ["quay.io/prometheus/blackbox-exporter"],
+      "groupName": "prometheus-blackbox-exporter chart"
+    },
+    {
       "description": "Elasticsearch, Kibana and APM Server of compose (profile obs-elastic) are the same version in one pull request: Kibana and APM Server refuse an older Elasticsearch, and CI only checks compose config, so a lone Kibana bump would pass CI and break make up OBS=elastic.",
       "matchDepNames": [
         "docker.elastic.co/elasticsearch/elasticsearch",

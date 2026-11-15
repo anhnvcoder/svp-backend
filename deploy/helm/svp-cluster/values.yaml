@@ -110,8 +110,9 @@ envoy:
     # Type of the Service: "" keeps Envoy Gateway's LoadBalancer. ClusterIP where a load balancer outside the cluster
     # sends to the Envoy pods' addresses through targetGroupArn below, and no load balancer is made for the Service.
     type: ""
-    # Name of the Service: "" keeps the name Envoy Gateway generates; targetGroupArn needs a fixed one to point at.
-    name: ""
+    # Name of the Service, fixed instead of the one Envoy Gateway generates: the uptime probes of chart
+    # svp-observability and the TargetGroupBinding of targetGroupArn below point at it.
+    name: svp-envoy
   # A target group of type ip (HTTPS 443) that AWS Load Balancer Controller fills with the Envoy pods' addresses
   # (TargetGroupBinding svp-envoy, templates/gateway.yaml); its load balancer and security groups are made outside the
   # cluster. Empty: no TargetGroupBinding.

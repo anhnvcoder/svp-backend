@@ -13,8 +13,9 @@ CI ([kiểm chứng trên runner](#kiểm-chứng-trên-runner)); phần cần d
 
 Vì sao: [ADR-0011](../adr/0011-observability-stage3.md), [ADR-0020](../adr/0020-reliability-stage6.md).
 
-Sáu SLO bằng Sloth ([`deploy/observability/slo/svp-slos.yaml`](../../deploy/observability/slo/svp-slos.yaml)): bốn của backend
-(`feed-availability`, `feed-latency`, `upload-init-availability`, `video-ready-latency`) và hai của web.
+SLO bằng Sloth, danh sách ở [`deploy/observability/slo/svp-slos.yaml`](../../deploy/observability/slo/svp-slos.yaml): bốn của backend
+(`feed-availability`, `feed-latency`, `upload-init-availability`, `video-ready-latency`), của web (dưới) và uptime từ ngoài vào
+(`public-uptime`, [chi phí và uptime](cost-and-uptime.md)).
 
 - `web-availability`: 99,9% response của server web không 5xx, trên histogram
   `http_server_request_duration_seconds{service_name="web"}` (mọi response, kể cả probe và asset, vì histogram không có nhãn route

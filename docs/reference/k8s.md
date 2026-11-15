@@ -63,6 +63,13 @@ Loại tài liệu (Diátaxis): **reference**, tra cứu khi cần một lệnh 
   replica, PDB `envoyPDB`, trải zone rồi trải node; node k3d không có nhãn `topology.kubernetes.io/zone` nên chỉ ràng buộc node có tác dụng);
   Kyverno một replica của `base/kyverno.yaml` (ba replica chỉ ở `platforms/eks/kyverno.yaml`); không Karpenter (`karpenter.enabled` của chart
   `svp-cluster` tắt, node là hai node của k3d).
+- Chi phí và uptime ([ADR-0074](../adr/0074-cost-uptime.md), giải thích ở [`cost-and-uptime.md`](../explanation/cost-and-uptime.md)): component
+  `opencost` (`svp-obs`, Service `opencost` cổng 9003, đọc `kps-prometheus` cổng 9090, giá mặc định của OpenCost, cluster id `svp-k3d`) và
+  `blackbox-exporter` (`svp-obs`, chỉ nền tảng `k3d`, Service `blackbox-exporter` cổng 9115, module `http_local_web`, `http_local_api`,
+  `http_local_media`) của `argocd/apps/components.json`; ba CR `Probe` `uptime-web`, `uptime-api`, `uptime-media` (job `blackbox-http`) của chart
+  `svp-observability` gọi `https://svp-envoy.envoy-gateway-system.svc.cluster.local` với `Host`, SNI của từng listener. Service của đội Envoy
+  tên cố định `svp-envoy` (`envoy.service.name`, mặc định của chart `svp-cluster`, cùng tên trên EKS), không phải tên Envoy Gateway tự sinh;
+  drill OPS-2 khớp Service theo namespace, kiểu và nhãn `owning-gateway-name`. Dashboard `svp-cost`, `svp-uptime` ở Grafana của cluster.
 
 ## Kyverno và nguồn phát hành
 

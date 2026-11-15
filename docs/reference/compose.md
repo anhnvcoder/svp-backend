@@ -42,7 +42,7 @@ Loại tài liệu (Diátaxis): **reference**, tra cứu khi cần một lệnh 
   Grafana (3000), Alertmanager (9093), GlitchTip (8000). Cổng gRPC nằm trong mạng compose
   ([threat model](../threat-model.md) IN-2); Collector (4317) và Prometheus (9090), Tempo (3200), Loki (3100), Pyroscope (4040) của LGTM
   cũng vậy, từ host đọc chúng qua datasource proxy của Grafana.
-- Ba mạng. `default` chứa mọi thứ trừ media-worker, dlq-replay và web. `worker` (internal, không route ra ngoài) chỉ chứa media-worker, dlq-replay, Kafka,
+- Năm mạng. `default` chứa mọi thứ trừ media-worker, dlq-replay, web và `blackbox`. `worker` (internal, không route ra ngoài) chỉ chứa media-worker, dlq-replay, Kafka,
   object store và Collector, nên worker chạy ffmpeg trên file người dùng tải lên không tới được gateway, service gRPC, Postgres,
   LGTM hay internet (threat model FF-4, FF-5); Collector ở đó chỉ nhận telemetry, không làm proxy cho worker. `web` chỉ chứa web,
   gateway và, khi có `obs`, GlitchTip và Collector: server Next render mọi trang thay cho trình duyệt, nên code chạy được trong đó
@@ -53,7 +53,15 @@ Loại tài liệu (Diátaxis): **reference**, tra cứu khi cần một lệnh 
   tên compose; Valkey thì tới được, nhưng user `svp-web` của nó chỉ chạm db 9 và `svp:web:*`. Mạng `web` không internal vì Docker không
   publish cổng của container chỉ gắn vào mạng internal. Docker Desktop phân giải `host.docker.internal` ở mọi container, nên code chạy
   trong web vẫn tới được cổng loopback của host (cổng 9000 của object store, khi có `obs` Grafana, Alertmanager, GlitchTip, và mọi thứ
-  khác nghe ở đó). Chấp nhận ở lab compose (threat model WEB-13); bản k3d đóng bằng NetworkPolicy.
+  khác nghe ở đó). Chấp nhận ở lab compose (threat model WEB-13); bản k3d đóng bằng NetworkPolicy. `probe` và `probe-web` (cả hai
+  internal) là mạng của probe uptime ([`cost-and-uptime.md`](../explanation/cost-and-uptime.md)): `probe` chứa gateway, object store và,
+  khi có `obs`, `blackbox`, `lgtm`; `probe-web` chứa web và, khi có `obs`, `blackbox`. `blackbox` không ở mạng nào khác nên chỉ tới
+  Prometheus và ba đích, không ra internet. Qua `probe-web`, code chạy trong web tới được cổng 9115 của `blackbox` và nhờ nó GET một
+  URL của gateway, object store hay LGTM rồi đọc mã trả về (WEB-13, chấp nhận như trên).
+- Service `blackbox` (profile `obs`, blackbox exporter, cùng image và digest với component của `svp-gitops`, không publish cổng): module
+  `http_compose` ở [`deploy/observability/blackbox/blackbox.yaml`](../../deploy/observability/blackbox/blackbox.yaml), scrape job
+  `blackbox-http` của Prometheus trong `lgtm` (`deploy/observability/prometheus/prometheus.yaml`, mỗi 30 s, nhãn `probe` là `web`, `api`,
+  `media`); object probe `media/uptime-probe.txt` do `s3-init` ghi. Không có OpenCost ở compose: dashboard `svp-cost` trống.
 - Web client mở bằng `http://localhost:3001`, là `APP_ORIGIN` mà redirect sau đăng nhập và form của cookie dựa theo.
   `http://127.0.0.1:3001` cũng đăng nhập được, với cookie phiên riêng (trình duyệt gửi `Sec-Fetch-Site: same-origin` ở đó, kiểm CSRF
   chấp nhận trước khi so `Origin`), nhưng không phát và không tải video lên được vì CORS của bucket chỉ cho origin `localhost`.

@@ -22,6 +22,10 @@ pods:
   # (chart prometheusservice-chart, release ack-prometheusservice) and Grafana Operator (release grafana-operator).
   ack: {app.kubernetes.io/name: prometheusservice-chart, app.kubernetes.io/instance: ack-prometheusservice}
   grafanaOperator: {app.kubernetes.io/name: grafana-operator, app.kubernetes.io/instance: grafana-operator}
+  # The uptime probes' exporter (chart prometheus-blackbox-exporter, one release per platform: only the name label is
+  # the same in both) and OpenCost (chart opencost, release opencost).
+  blackbox: {app.kubernetes.io/name: prometheus-blackbox-exporter}
+  opencost: {app.kubernetes.io/name: opencost, app.kubernetes.io/instance: opencost}
 
 # The releases in svp that send telemetry: all send OTLP to the Collector; the Go services but media-worker and
 # dlq-replay push profiles to Pyroscope, as in compose (neither has a profiler, the web client pushes no profile).
@@ -156,3 +160,39 @@ dashboards:
 # the pods that call them (Collector, Prometheus, ACK's controller) get TCP 443 there, and the EKS Pod Identity Agent
 # for their credentials. On EKS the VPC's CIDR; empty where no interface endpoint answers (k3d): no such rule.
 awsEndpointCidrs: []
+
+# Uptime checks (templates/probes.yaml): a Probe each entry, which Prometheus runs through the blackbox exporter.
+probes:
+  # -- host:port of the blackbox exporter's Service.
+  prober: blackbox-exporter.svp-obs.svc:9115
+  # -- How often each target is probed.
+  interval: 30s
+  # -- Where the HTTP probes may go (policy blackbox-exporter): envoy, the Envoy pods of Gateway svp in envoy.namespace
+  # on 10443, the pods' port of the listeners' 443; internet, TCP 443 to every public IPv4 address, for probes of the
+  # public domain through CloudFront. The DNS probes ask kube-dns, which policy allow-dns of chart svp-cluster opens.
+  egress: envoy
+  # -- HTTP probes, `{name, module, url}`: Probe uptime-<name>, job blackbox-http, label probe=<name>; module is one of
+  # the exporter's config. The default probes the three hosts of Gateway svp on k3d, through Service svp-envoy.
+  http:
+    - name: web
+      module: http_local_web
+      url: https://svp-envoy.envoy-gateway-system.svc.cluster.local/healthz
+    - name: api
+      module: http_local_api
+      url: https://svp-envoy.envoy-gateway-system.svc.cluster.local/readyz
+    - name: media
+      module: http_local_media
+      url: https://svp-envoy.envoy-gateway-system.svc.cluster.local/media/media/uptime-probe.txt
+  # -- DNS probes, `{name, module, server}`: Probe uptime-dns-<name>, job blackbox-dns, label probe=<name>; the module
+  # holds the name to resolve, server is the resolver's host:port.
+  dns: []
+
+# OpenCost's flows (policy opencost). It reads the API server through label svp-kube-api=allow, which the opencost
+# chart's values put on its pod, not this chart.
+opencost:
+  # -- Where it queries metrics: prometheus, the Prometheus in svp-obs on 9090; amp, the workspace through its
+  # SigV4 proxy sidecar, which then joins the allow-aws-apis policies (needs awsEndpointCidrs).
+  query: prometheus
+  # -- TCP 443 to every public IPv4 address, for the AWS price list it downloads on EKS (no interface endpoint serves
+  # it). The price: a compromised OpenCost can reach any public address on 443.
+  publicPricing: false

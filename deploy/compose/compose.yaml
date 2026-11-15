@@ -3,8 +3,8 @@
 # container, and the web client `web`. Run it through `make up` / `make down` (deploy/compose/compose.mk), which pass
 # --env-file .env.
 
-# Profiles: `core` is the application. `obs` (`make up OBS=lgtm`) adds otelcol, lgtm, alertmanager and glitchtip
-# with its one-shot glitchtip-init; no core service depends on an obs service. Every Go service sends OTLP to
+# Profiles: `core` is the application. `obs` (`make up OBS=lgtm`) adds otelcol, lgtm, alertmanager, blackbox and
+# glitchtip with its one-shot glitchtip-init; no core service depends on an obs service. Every Go service sends OTLP to
 # otelcol:4317 whether or not `obs` runs: without it export fails with a rate-limited WARN and the services work as
 # before.
 
@@ -32,8 +32,12 @@
 
 # `web` holds web, the gateway, Valkey and, with `obs`, GlitchTip and the Collector only: code run in the Next server
 # (CVE-2025-55182) reaches the gateway's HTTP API, Valkey (where its user may touch only db 9 and svp:web:*), the error
-# tracker and the Collector and nothing else in the stack: not the gRPC services, which check the caller's access token
-# but not which container calls them, nor Kafka or the object store by their compose names.
+# tracker, the Collector and, with `obs`, the blackbox exporter on `probe-web`, and nothing else in the stack: not the
+# gRPC services, which check the caller's access token but not which container calls them, nor Kafka or the store.
+
+# `probe` holds blackbox, LGTM, the gateway and the object store, `probe-web` blackbox and web, both internal: the
+# exporter reaches Prometheus and its targets only, never the internet. Code in web can still have it GET a URL of the
+# gateway, the object store or LGTM and read the status back; accepted for the compose lab (threat model WEB-13).
 
 # `web` is not internal: Docker publishes no port of a container attached to internal networks only. Docker Desktop
 # resolves host.docker.internal in every container, which opens the host's loopback ports to web (the object store's
@@ -366,7 +370,8 @@ services:
       # root would refuse.
       RUSTFS_OBS_LOG_DIRECTORY: ""
     mem_limit: 512m
-    networks: [default, worker]
+    # `probe` only for the uptime probe of the media host.
+    networks: [default, worker, probe]
     volumes:
       - s3-data:/data
     ports:
@@ -632,8 +637,8 @@ services:
       - *ca-volume
     ports:
       - "127.0.0.1:8080:8080"
-    # `web` only for the web client's BFF calls.
-    networks: [default, web]
+    # `web` only for the web client's BFF calls, `probe` only for the uptime probe.
+    networks: [default, web, probe]
     healthcheck: *healthcheck
     restart: unless-stopped
     depends_on:
@@ -699,8 +704,9 @@ services:
       - *ca-volume
     ports:
       - "127.0.0.1:3001:3001"
-    # Only the network it shares with the gateway, Valkey and, with `obs`, GlitchTip and the Collector.
-    networks: [web]
+    # `web`, shared with the gateway, Valkey and, with `obs`, GlitchTip and the Collector; `probe-web` for the uptime
+    # probe.
+    networks: [web, probe-web]
     # The same lockdown as media-worker, although the distroless image has no shell or package
     # manager to take away: read-only root (the server writes no file: every route is rendered per
     # request and images are not optimized, so .next/cache stays empty), no capabilities, no
@@ -848,6 +854,8 @@ services:
       # (Grafana's datasource, the image's healthcheck, OTLP and remote write) still reaches Prometheus at the root.
       PROMETHEUS_EXTRA_ARGS: --web.external-url=http://127.0.0.1:3000/api/datasources/proxy/uid/prometheus --web.route-prefix=/
     mem_limit: 1536m
+    # `probe` to scrape the blackbox exporter.
+    networks: [default, probe]
     volumes:
       - lgtm-data:/data
       # Config files mounted over the ones the image's run scripts read, so the bundled Loki, Prometheus and Grafana pick
@@ -868,6 +876,23 @@ services:
       retries: 3
       start_period: 120s
       start_interval: 2s
+    restart: unless-stopped
+
+  # The uptime probes of LGTM's Prometheus (scrape job blackbox-http): web, gateway and the object store over plain
+  # HTTP, as the cluster probes its hosts. Internal networks only, so it reaches Prometheus and its targets and nothing
+  # else: `probe` for Prometheus, the gateway and the store, `probe-web` for web. Same image and digest as the blackbox
+  # exporter of the platform layer: keep in step.
+  blackbox:
+    profiles: [obs]
+    image: quay.io/prometheus/blackbox-exporter:v0.29.1@sha256:ea1c7aa3ef3f307cd03e85f34abb604478ccb90b567fc690da0cd9776da76b13
+    command: ["--config.file=/etc/blackbox/blackbox.yaml"]
+    volumes:
+      - ../observability/blackbox/blackbox.yaml:/etc/blackbox/blackbox.yaml:ro
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    mem_limit: 64m
+    networks: [probe, probe-web]
     restart: unless-stopped
 
   # Routes the alerts of LGTM's Prometheus. The entry point writes the config: severity="page" goes to Telegram only
@@ -1056,6 +1081,10 @@ networks:
   worker:
     internal: true
   web:
+  probe:
+    internal: true
+  probe-web:
+    internal: true
 
 volumes:
   # Postgres' data directory; created owned by postgres from the image's /var/lib/postgresql/data.

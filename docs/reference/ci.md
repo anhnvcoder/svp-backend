@@ -31,7 +31,7 @@ Loại tài liệu (Diátaxis): **reference**, tra cứu khi cần một lệnh 
     `verify-release-test.sh` cùng `values-check.sh`, `changed-services-test.sh`), `deploy/ci/promote-test.sh`
     (guard của hai job promote, danh sách bản phát hành của rescan),
     `deploy/ci/verify-collect-test.sh`, test các bước của `verify.yml` (`deploy/ci/verify-steps/steps-test.sh`, `supplychain-test.sh`,
-    `admission-metrics-test.sh`, `objstore-test.sh`), `deploy/k8s/drills/run-test.sh` (cùng `new-values.sh` của diễn tập `reloader`), `deploy/k8s/rotate-test.sh`, `make chainsaw-lint`,
+    `admission-metrics-test.sh`, `objstore-test.sh`, `uptime-cost-test.sh`), `deploy/k8s/drills/run-test.sh` (cùng `new-values.sh` của diễn tập `reloader`), `deploy/k8s/rotate-test.sh`, `make chainsaw-lint`,
     `deploy/k8s/drills/gitops/gitops-test.sh`, `deploy/helm/svp-data/files/kafka-init-test.sh` và `deploy/ops/ops-test.sh` (script init Kafka và hai wrapper CLI vận hành với công cụ giả, không broker), `make slo-check`, `make otelcol-validate`, `make env`
     rồi `make compose-config`, `deploy/observability/glitchtip/dotenv-test.sh`,
     `make helm-check`, `deploy/ci/sources-test.sh`, `deploy/ci/gitops-check-test.sh "$SVP_GITOPS_DIR"`, `make k6-check`,
@@ -177,10 +177,11 @@ Loại tài liệu (Diátaxis): **reference**, tra cứu khi cần một lệnh 
     những gì máy 16 GB không chạy nổi, bằng đúng target `make` như trên máy. Trigger: `workflow_dispatch` (chỉ người có quyền ghi; ref
     `main` hay `feat/stage6b-*`, ref khác dừng ở bước đầu) và lịch hằng tuần trên `main` (00:37 UTC thứ Bảy, 07:37 giờ Việt Nam; cả hai kịch bản
     song song, mọi bước). Ba kịch bản, mỗi kịch bản một job (`dev-k3d` chỉ dispatch); lượt lịch đầu sau khi thu gọn: **kiểm sau push**.
-    - `compose-obs` (job `compose`, hạn 155 phút; không service container, Postgres là container của stack): `make up OBS=lgtm`, `make smoke`, `make drill-obs-threats`, rồi `test-stack-objstore`
+    - `compose-obs` (job `compose`, hạn 170 phút; không service container, Postgres là container của stack): `make up OBS=lgtm`, `make smoke`,
+      `uptime-cost` (`deploy/ci/verify-steps/uptime-cost.sh compose`, mục của nó bên dưới; trước diễn tập, vì diễn tập dừng service), `make drill-obs-threats`, rồi `test-stack-objstore`
       (`deploy/ci/verify-steps/objstore.sh`: `make test-stack PKGS=./internal/objstore/...`, một ca SKIP là đỏ, gồm ba test của output bất
       biến): nơi duy nhất test `internal/objstore` chạy thật thay vì SKIP.
-    - `gitops` (job `gitops`, hạn 250 phút): `make k8s-gitops-up` (vai stg; `make gitops-clone` trước; `GITOPS_REV` là SHA của `origin/main` trong
+    - `gitops` (job `gitops`, hạn 265 phút): `make k8s-gitops-up` (vai stg; `make gitops-clone` trước; `GITOPS_REV` là SHA của `origin/main` trong
       bản clone, nên cluster ở yên commit đó suốt các bước kiểm, PR promote merge giữa chừng không đổi gì), `make drill-k8s-gitops` (ba test
       Chainsaw ở `deploy/k8s/drills/gitops/`: `gitops-env` (overlay stg có trong Application `gateway` và trên mọi pod gateway đang chạy, kiểm khai
       báo), `gitops-external-secrets` (ExternalSecret của cluster đúng bằng danh sách `files/external-secrets.yaml` của chart `svp-cluster` ở
@@ -192,7 +193,8 @@ Loại tài liệu (Diátaxis): **reference**, tra cứu khi cần một lệnh 
       `gitops-admission-metrics` (`deploy/ci/verify-steps/admission-metrics.sh`: số đo thời gian admission của lượt sync đầu, chạy trước smoke và
       diễn tập để histogram chỉ chứa lượt sync đầu; điều kiện của
       [ADR-0040](../adr/0040-sigstore-bundle-actions-attest.md) mục 6: 20 s lần không cache, hạn webhook 30 s. Các histogram và cách đọc ở mục `verify-steps/admission-metrics.sh` bên dưới; thiếu metric thì dòng `NOTE`, bước không đỏ),
-      `make k8s-smoke` (chặt, không biến chuyển tiếp), `make drill-k8s-reloader` (xoay credential qua External Secrets, mục của nó ở
+      `make k8s-smoke` (chặt, không biến chuyển tiếp), `uptime-cost` (`deploy/ci/verify-steps/uptime-cost.sh k8s`, trước các diễn tập vì chúng
+      restart và chặn service có chủ đích), `make drill-k8s-reloader` (xoay credential qua External Secrets, mục của nó ở
       [`k8s.md`](k8s.md); các bước sau chạy trên credential mới), `drill-k8s-supplychain` (`deploy/ci/verify-steps/supplychain.sh` gọi
       `make drill-k8s-supplychain`; ảnh chưa ký của ca (b), (h), (i) là digest mới nhất của
       `drill-unsigned` (không chữ ký, không attestation nên không có hạn 72 giờ); ca (l) là digest mới nhất của `drill-no-provenance` dưới
@@ -476,7 +478,8 @@ Các script này chạy trong job của `verify.yml` (kịch bản, bước và 
     (`$SVP_VERIFY_OUT`, mặc định `verify` trong `$RUNNER_TEMP`, không bao giờ tải cả thư mục): file ghi ngay trên runner là `results.tsv` (bảng bước, `steps.sh`), `scenario`,
     `df-before.txt` (`verify-host.sh`); file đọc từ stack hay cluster là `logs/drill-obs-threats.log`, trong đó chỉ dòng kết luận (`ok`, `PASS`, `FAIL`, `SKIP`, `WARN` và dòng đóng
     "drill-obs-threats: all checks passed"; không dòng log JSON hay trích access log) vào artifact, dưới tên `logs/drill-obs-threats.verdicts.log`, `logs/gitops-admission-metrics.log`
-    (các dòng tóm tắt của `admission-metrics.sh`) và `k8s-state.json` (`verify-k8s-state.sh`). Mọi file khác ở đó (output của mọi bước khác) được liệt kê trong `files.txt` là `not-allowed`.
+    (các dòng tóm tắt của `admission-metrics.sh`), `logs/uptime-cost.log` (bảng điều kiện và giá trị đọc của `uptime-cost.sh`) và `k8s-state.json`
+    (`verify-k8s-state.sh`). Mọi file khác ở đó (output của mọi bước khác) được liệt kê trong `files.txt` là `not-allowed`.
   - Từ checkout (đều đọc từ stack hay cluster): `.k8s/drills/*.xml` (report JUnit của mỗi diễn tập Chainsaw), `*-skips.tsv` (danh sách ca SKIP và lý do: report JUnit tính SKIP là qua),
     `*.json` và `traffic-*.log` (mỗi dòng một thời điểm, user, route, status, độ trễ). Mọi thứ khác dưới chỗ đó được liệt kê `not-allowed`: log của mỗi diễn tập Chainsaw và mọi log service không bao giờ
     vào; file ẩn bị bỏ bằng luật riêng kèm cảnh báo. Phần còn lại của checkout (`.env`, kubeconfig, `.k8s/ca.*`, `.k8s/helm/`) không được nhìn tới.
@@ -518,6 +521,17 @@ Các script này chạy trong job của `verify.yml` (kịch bản, bước và 
   (port-forward Service `kyverno-svc-metrics` ra một cổng trống của `127.0.0.1` trong khoảng 19100–19120, vì `NetworkPolicy` default-deny của namespace chặn proxy của apiserver) `kyverno_admission_review_duration_seconds` và, cho policy `svp-images`,
   `kyverno_image_validating_policy_execution_duration_seconds` (nhãn `policy_name`; `svp-policy` là tên chart và webhook). Mỗi histogram cộng qua mọi tập nhãn của series được hỏi, vì nó được tách theo nhãn mà câu hỏi không hỏi. Thiếu metric, bucket hay cổng là dòng `NOTE`: phép đo là bằng chứng chứ không phải cổng, bước
   không bao giờ đỏ. `kubectl`, `curl`, `nc` là các lệnh trên `PATH`; `kubectl` luôn trên context `k3d-svp`.
+- **`verify-steps/uptime-cost.sh k8s|compose`** (bước `uptime-cost`, [`cost-and-uptime.md`](../explanation/cost-and-uptime.md)) chờ tối đa
+  10 phút (vòng cách 15 s) tới khi mọi điều kiện cùng đúng trong một vòng, đọc Prometheus như các bước khác: `k8s` qua port-forward tới Service
+  `kps-prometheus` của context `k3d-svp`, `compose` qua proxy data source `prometheus` của Grafana ở `127.0.0.1:3000`. Điều kiện:
+  `probe_success{job="blackbox-http"}` bằng 1 cho `web`, `api`, `media`; chỉ `k8s`: hạn cert của từng probe còn hơn 21 ngày,
+  `cluster:svp_node_cost_usd_per_hour:sum` và `namespace:svp_compute_cost_usd_per_hour:sum{namespace="svp"}` lớn hơn 0; cả hai:
+  `slo:sli_error:ratio_rate5m{sloth_slo="public-uptime"}` bằng 0, mọi rule của nhóm `sloth-slo-alerts-svp-public-uptime` và `svp-uptime` ở
+  `/api/v1/rules` có `health` `ok` (nhóm vắng là `none`; rule chưa đánh giá là `unknown`, bước chờ), không `UptimeProbesAbsent` nào `firing`
+  (`pending` chỉ in). Trạng thái `PublicUptimeBudgetBurn` chỉ in vào bảng, không làm bước đỏ: probe lỗi lúc dựng stack còn trong cửa sổ của
+  cảnh báo suốt đời ngắn của stack. Xanh thì in bảng của vòng đạt; hết hạn thì in bảng của vòng cuối và mỗi điều kiện sai một dòng
+  `FAIL  uptime-cost: <điều kiện>: last read <giá trị>`, thoát 1. Output vào `logs/uptime-cost.log`, không vào log job. Test:
+  `uptime-cost-test.sh` (lệnh giả trên `PATH`).
 - **`verify-steps/objstore.sh`** (bước `test-stack-objstore` của job `compose`) chạy test của object store trên object store của stack (`make test-stack PKGS=./internal/objstore/...`, `go test -race -count=1 -v`): nơi duy nhất chúng chạy thay vì skip. Output của nó được đếm: bước đỏ khi `make test-stack` thoát khác 0, khi `go test` báo `FAIL`,
   khi bất kỳ test hay subtest nào `SKIP` (một ca bị skip không chứng minh gì về store), hay khi một trong các test tích hợp (presigned POST, quyền của worker và của video-service, `DeletePrefix`, multipart với CRC32, `Cache-Control` đọc lại ẩn danh, tạo một lần duy nhất, worker liệt kê và đọc `media/`) không `PASS`, mỗi cái được nêu tên. `make` là cái trên `PATH`; chạy từ gốc repo, stack đang lên.
 

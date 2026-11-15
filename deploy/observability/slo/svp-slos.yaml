@@ -5,7 +5,8 @@
 
 # HTTP totals count the `_count` series of the gateway histogram; `http_route` holds the path pattern without the
 # method. An error query that may have no series yet ends in `or vector(0)`; a total query never does, so no traffic
-# gives no ratio rather than a fake good one.
+# gives no ratio rather than a fake good one. The `raw` SLI of public-uptime is a ratio already; with no probe series
+# it has none either.
 version: "prometheus/v1"
 service: "svp"
 # Sloth's default plugins, in their default order, with one setting changed: the 30-day SLI
@@ -173,6 +174,28 @@ slos:
       # ratio above 100%: they can never fire. Only the ticket alerts (3x and 1x) can, and nobody is woken for INP.
       page_alert:
         disable: true
+      ticket_alert:
+        labels:
+          severity: ticket
+
+  - name: "public-uptime"
+    objective: 99.9
+    description: "The blackbox probes of web, api and media through the public path answer as expected."
+    sli:
+      raw:
+        # probe_success is 1 or 0 per probe; the mean over the window is the share of good probes, so the error
+        # ratio is its complement. DNS probes use another job and stay out: they explain a failure, they do not add one.
+        error_ratio_query: >-
+          1 - avg(avg_over_time(probe_success{job="blackbox-http"}[{{.window}}]))
+    alerting:
+      name: PublicUptimeBudgetBurn
+      annotations:
+        summary: "blackbox: probes of web, api and media burn the 99.9% uptime budget"
+      page_alert:
+        labels:
+          severity: page
+        annotations:
+          runbook_url: "https://github.com/anhnvcoder/svp-backend/blob/main/docs/runbooks/public-uptime-budget-burn.md"
       ticket_alert:
         labels:
           severity: ticket

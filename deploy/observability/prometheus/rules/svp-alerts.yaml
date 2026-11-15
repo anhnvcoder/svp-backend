@@ -1,7 +1,7 @@
 # Hand-written alerts; the SLO burn-rate alerts are in slo-generated.yaml. Evaluated every 15 s. Tested by
-# svp-alerts.test.yaml (`make slo-check`). Every alert pages but PostgresBackupTooOld, RateLimitFallbackElevated and
-# ArgoCDApplicationNotConverged (ticket); annotations name the service, target or pod, never a user value, and
-# runbook_url points to the runbook of the alert name in docs/runbooks/ on main.
+# svp-alerts.test.yaml (`make slo-check`). Every alert pages but PostgresBackupTooOld, RateLimitFallbackElevated,
+# ArgoCDApplicationNotConverged and TLSCertExpiringSoon (ticket); annotations name the service, target or pod, never a
+# user value, and runbook_url points to the runbook of the alert name in docs/runbooks/ on main.
 
 # Gauges pushed over OTLP get no staleness marker when a process stops, so a stopped instance's last sample stays
 # visible for the 5 m lookback, and every restart brings a new service_instance_id. The gauge rules therefore keep only
@@ -294,3 +294,60 @@ groups:
         annotations:
           summary: "Argo CD Application {{ $labels.name }} ({{ $labels.dest_namespace }}): not Synced and Healthy for 30 minutes"
           runbook_url: "https://github.com/anhnvcoder/svp-backend/blob/main/docs/runbooks/argocd-application-degraded.md"
+
+  # Black-box probes of the public path (job blackbox-http, one series per probe target). Scraped, so a probe that
+  # stops gets staleness markers. On eks the ruler of AMP runs these, outside the cluster, so they still fire when the
+  # cluster or its agent is gone; the SLO public-uptime is in slo-generated.yaml.
+  - name: svp-uptime
+    rules:
+      # absent_over_time covers a dead cluster, agent or blackbox pod. It also fires for a few minutes while a session
+      # builds or tears down: the rules in AMP exist before the probes do and outlive them until pre-destroy.
+      - alert: UptimeProbesAbsent
+        expr: >-
+          absent_over_time(probe_success{job="blackbox-http"}[5m])
+        for: 5m
+        labels:
+          severity: page
+        annotations:
+          summary: "No probe_success series from the black-box probes for 5 minutes, uptime is not measured"
+          runbook_url: "https://github.com/anhnvcoder/svp-backend/blob/main/docs/runbooks/uptime-probes-absent.md"
+
+      # 21 days is below where ACM (60 days before expiry) and cert-manager (a third of the lifetime left) renew, so
+      # firing means the renewal broke. `min by` takes the nearest expiry when a target presents several certificates.
+      - alert: TLSCertExpiringSoon
+        expr: >-
+          min by (probe, instance) (probe_ssl_earliest_cert_expiry{job="blackbox-http"}) - time() < 21 * 86400
+        for: 1h
+        labels:
+          severity: ticket
+        annotations:
+          summary: "Probe {{ $labels.probe }}: the TLS certificate expires in less than 21 days"
+      - alert: TLSCertExpiryImminent
+        expr: >-
+          min by (probe, instance) (probe_ssl_earliest_cert_expiry{job="blackbox-http"}) - time() < 7 * 86400
+        for: 15m
+        labels:
+          severity: page
+        annotations:
+          summary: "Probe {{ $labels.probe }}: the TLS certificate expires in less than 7 days"
+          runbook_url: "https://github.com/anhnvcoder/svp-backend/blob/main/docs/runbooks/tls-cert-expiry-imminent.md"
+
+  # Compute cost from OpenCost, USD per hour: the CPU and memory allocated to containers, no disks, network or managed
+  # services (Cost Explorer has those). `max by (node)` keeps one price per node whatever extra labels the series carry.
+  # Idle cost is the cluster total minus the namespaces' sum; the dashboard computes it.
+  - name: svp-cost
+    rules:
+      - record: namespace:svp_compute_cost_usd_per_hour:sum
+        expr: >-
+          sum by (namespace) (container_cpu_allocation * on (node) group_left () max by (node) (node_cpu_hourly_cost))
+          + sum by (namespace) (container_memory_allocation_bytes / 1073741824 * on (node) group_left () max by (node) (node_ram_hourly_cost))
+      # The chart svp-service names a container after its release, so the container is the service.
+      - record: service:svp_compute_cost_usd_per_hour:sum
+        expr: >-
+          sum by (service) (label_replace(container_cpu_allocation{namespace="svp"}, "service", "$1", "container", "(.+)")
+              * on (node) group_left () max by (node) (node_cpu_hourly_cost))
+          + sum by (service) (label_replace(container_memory_allocation_bytes{namespace="svp"}, "service", "$1", "container", "(.+)")
+              / 1073741824 * on (node) group_left () max by (node) (node_ram_hourly_cost))
+      - record: cluster:svp_node_cost_usd_per_hour:sum
+        expr: >-
+          sum(node_total_hourly_cost)

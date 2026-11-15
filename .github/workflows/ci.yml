@@ -309,6 +309,7 @@ jobs:
       - run: deploy/ci/verify-steps/supplychain-test.sh
       - run: deploy/ci/verify-steps/admission-metrics-test.sh
       - run: deploy/ci/verify-steps/objstore-test.sh
+      - run: deploy/ci/verify-steps/uptime-cost-test.sh
       # Drills and credential rotation tested without a cluster: no network.
       - run: deploy/k8s/drills/run-test.sh
       - run: deploy/k8s/rotate-test.sh
