@@ -1,0 +1,33 @@
+{{- /*
+With canary set, a gRPC release's GRPCRoute <release>: its parent is the release's own Service (GAMMA), so the waypoint
+that Service sends its calls to splits every call, whatever its method, between the stable and the canary Service.
+*/}}
+
+{{- /*
+The weights start at 100 and 0, and are written because a backendRef without one weighs 1, which would split every call
+half and half. The Gateway API plugin of Argo Rollouts moves them during a canary and puts them back when it ends (Argo
+CD ignores the weights, argocd/apps of svp-gitops).
+*/}}
+{{- if and .Values.canary (eq (include "svp-service.canaryRoute" .) "GRPCRoute") }}
+apiVersion: gateway.networking.k8s.io/v1
+kind: GRPCRoute
+metadata:
+  name: {{ .Release.Name }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "svp-service.labels" . | nindent 4 }}
+spec:
+  parentRefs:
+    - group: ""
+      kind: Service
+      name: {{ .Release.Name }}
+      port: {{ .Values.port }}
+  rules:
+    - backendRefs:
+        - name: {{ .Release.Name }}
+          port: {{ .Values.port }}
+          weight: 100
+        - name: {{ .Release.Name }}-canary
+          port: {{ .Values.port }}
+          weight: 0
+{{- end }}

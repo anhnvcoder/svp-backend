@@ -1,0 +1,27 @@
+# Control of the mesh drill: the real gateway still gets through. /readyz through Envoy answers 200 once the gateway
+# reaches user-, video- and feed-service: Envoy's proxy to the gateway and the gateway to each service through the
+# waypoint, every call in mTLS and admitted by the AuthorizationPolicies the other cases refuse.
+apiVersion: chainsaw.kyverno.io/v1alpha1
+kind: Test
+metadata:
+  name: mesh-control
+  labels:
+    drill: mesh
+spec:
+  description: "Control: /readyz through Envoy is 200, so the gateway's calls cross the mesh"
+  # An existing namespace: Chainsaw neither creates nor deletes it.
+  namespace: svp
+  steps:
+  - name: "control: /readyz through Envoy (https://api.svp.localhost:8443) 200 within 60 s"
+    try:
+    - script:
+        content: |
+          set -eu
+          deadline=$(( $(date +%s) + 60 ))
+          until [ "$(curl -s --max-time 5 -o /dev/null -w '%{http_code}' https://api.svp.localhost:8443/readyz || true)" = 200 ]; do
+            [ "$(date +%s)" -lt "$deadline" ] || { echo "FAIL  control: /readyz through Envoy 200 within 60 s" >&2; exit 1; }
+            sleep 1
+          done
+          echo "ok    control: /readyz through Envoy 200"
+        check:
+          ($error): ~

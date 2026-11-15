@@ -175,13 +175,13 @@ Loại tài liệu (Diátaxis): **reference**, tra cứu khi cần một lệnh 
   - `.github/workflows/verify.yml` ([ADR-0021](../adr/0021-deferred-verification-stage6b.md), thu gọn ở
     [ADR-0039](../adr/0039-mainpath-drills-scan-gate-sourcemaps.md) §1; không check bắt buộc nào, không chạy ở PR): kiểm trên runner `ubuntu-24.04`
     những gì máy 16 GB không chạy nổi, bằng đúng target `make` như trên máy. Trigger: `workflow_dispatch` (chỉ người có quyền ghi; ref
-    `main` hay `feat/stage6b-*`, ref khác dừng ở bước đầu) và lịch hằng tuần trên `main` (00:37 UTC thứ Bảy, 07:37 giờ Việt Nam; cả hai kịch bản
+    `main` hay `feat/*`, ref khác dừng ở bước đầu) và lịch hằng tuần trên `main` (00:37 UTC thứ Bảy, 07:37 giờ Việt Nam; cả hai kịch bản
     song song, mọi bước). Ba kịch bản, mỗi kịch bản một job (`dev-k3d` chỉ dispatch); lượt lịch đầu sau khi thu gọn: **kiểm sau push**.
     - `compose-obs` (job `compose`, hạn 170 phút; không service container, Postgres là container của stack): `make up OBS=lgtm`, `make smoke`,
       `uptime-cost` (`deploy/ci/verify-steps/uptime-cost.sh compose`, mục của nó bên dưới; trước diễn tập, vì diễn tập dừng service), `make drill-obs-threats`, rồi `test-stack-objstore`
       (`deploy/ci/verify-steps/objstore.sh`: `make test-stack PKGS=./internal/objstore/...`, một ca SKIP là đỏ, gồm ba test của output bất
       biến): nơi duy nhất test `internal/objstore` chạy thật thay vì SKIP.
-    - `gitops` (job `gitops`, hạn 265 phút): `make k8s-gitops-up` (vai stg; `make gitops-clone` trước; `GITOPS_REV` là SHA của `origin/main` trong
+    - `gitops` (job `gitops`, hạn 285 phút): `make k8s-gitops-up` (vai stg; `make gitops-clone` trước; `GITOPS_REV` là SHA của `origin/main` trong
       bản clone, nên cluster ở yên commit đó suốt các bước kiểm, PR promote merge giữa chừng không đổi gì), `make drill-k8s-gitops` (ba test
       Chainsaw ở `deploy/k8s/drills/gitops/`: `gitops-env` (overlay stg có trong Application `gateway` và trên mọi pod gateway đang chạy, kiểm khai
       báo), `gitops-external-secrets` (ExternalSecret của cluster đúng bằng danh sách `files/external-secrets.yaml` của chart `svp-cluster` ở
@@ -193,7 +193,8 @@ Loại tài liệu (Diátaxis): **reference**, tra cứu khi cần một lệnh 
       `gitops-admission-metrics` (`deploy/ci/verify-steps/admission-metrics.sh`: số đo thời gian admission của lượt sync đầu, chạy trước smoke và
       diễn tập để histogram chỉ chứa lượt sync đầu; điều kiện của
       [ADR-0040](../adr/0040-sigstore-bundle-actions-attest.md) mục 6: 20 s lần không cache, hạn webhook 30 s. Các histogram và cách đọc ở mục `verify-steps/admission-metrics.sh` bên dưới; thiếu metric thì dòng `NOTE`, bước không đỏ),
-      `make k8s-smoke` (chặt, không biến chuyển tiếp), `uptime-cost` (`deploy/ci/verify-steps/uptime-cost.sh k8s`, trước các diễn tập vì chúng
+      `make k8s-smoke` (chặt, không biến chuyển tiếp), `make drill-k8s-mesh` (các lớp của mesh khi mọi service chạy, trước các diễn tập
+      restart và chặn service; ca và dòng `RESULT mesh-memory` ở [`k8s.md`](k8s.md); hạn 15 phút), `uptime-cost` (`deploy/ci/verify-steps/uptime-cost.sh k8s`, trước các diễn tập vì chúng
       restart và chặn service có chủ đích), `make drill-k8s-reloader` (xoay credential qua External Secrets, mục của nó ở
       [`k8s.md`](k8s.md); các bước sau chạy trên credential mới), `drill-k8s-supplychain` (`deploy/ci/verify-steps/supplychain.sh` gọi
       `make drill-k8s-supplychain`; ảnh chưa ký của ca (b), (h), (i) là digest mới nhất của
@@ -202,16 +203,16 @@ Loại tài liệu (Diátaxis): **reference**, tra cứu khi cần một lệnh 
       image của ca (c) hay (l) có attestation `vuln` quá 72 giờ thì không đưa cho drill: ca đó SKIP kèm dòng `NOTE` nêu tuổi và lệnh dispatch
       dựng lại image diễn tập (`-f drill=true`), mọi ca khác vẫn phải PASS; lượt dispatch quá hạn là đỏ, nên (c), (l) chỉ được chứng minh ở lượt
       dispatch sau lượt đó), `make drill-k8s-threats`.
-    - `dev-k3d` (job `dev-k3d`, hạn 210 phút, chỉ dispatch, [ADR-0050](../adr/0050-bash-to-standard-tools.md) mục 6): đường dev như trên
+    - `dev-k3d` (job `dev-k3d`, hạn 225 phút, chỉ dispatch, [ADR-0050](../adr/0050-bash-to-standard-tools.md) mục 6): đường dev như trên
       máy, `make k8s-up` (mọi image Go build trên runner bằng bake, web là bản phát hành stg, `make gitops-clone GITOPS_REF=<gitops_ref>`
-      trước), `make k8s-smoke`, `make drill-k8s-reloader`, `drill-k8s-supplychain` (như kịch bản `gitops`, với `SUPPLYCHAIN_ENFORCE_TMP=1`:
+      trước), `make k8s-smoke`, `make drill-k8s-mesh` (như kịch bản `gitops`), `make drill-k8s-reloader`, `drill-k8s-supplychain` (như kịch bản `gitops`, với `SUPPLYCHAIN_ENFORCE_TMP=1`:
       policy Audit của đường dev sang Enforce cho từng ca rồi trả lại, và ca (k), ca chỉ đường dev chạy được). Input `gitops_ref`: `main`
       (mặc định) hay SHA đủ 40 hex của `svp-gitops`, để chạy với nhánh chưa merge; khác thì job đỏ trước khi dựng gì, không in lại giá trị.
     - Đã rời `verify.yml`, nay là bài lab `drills/` của `svp-labs` (cả script diễn tập compose, [ADR-0050](../adr/0050-bash-to-standard-tools.md)): bản đo một lần của kịch bản `dev-k3d` (RAM, KEDA, PDB, canary, backup), các kịch bản `web-canary`, `k6-cloud-mini`, `chaos`, `velero`, phần còn lại của `compose-obs` (load-local,
       Lighthouse, `drill-duplicates`, `drill-kill-worker`, `drill-upload-cleanup`, `measure-upload`, `drill-alert-to-sentry`, đường quay lại
       `object-store-roundtrip`), bước chờ phát hành và `measure-gitops`, `verify-sample.sh`, `verify-tempo.sh`. Số đo và id lượt chạy ở các ADR 0014, 0017, 0019, 0020, 0021, 0022, 0031. Bản clone
       `svp-frontend`, Node, pnpm, Playwright và image source map không còn trong workflow; `web_ref` không còn là input.
-    Dispatch và đọc kết quả (AI được chạy, chỉ khi người học giao): `gh workflow run verify.yml --ref <main|feat/stage6b-…>
+    Dispatch và đọc kết quả (AI được chạy, chỉ khi người học giao): `gh workflow run verify.yml --ref <main|feat/…>
     -f scenario=<compose-obs|gitops|dev-k3d> [-f targets='<bước> …'] [-f gitops_ref=<main|SHA>]` (`targets` rỗng là mọi bước, bước dựng luôn chạy; tên bước là
     `SVP_VERIFY_STEP_NAMES` của job và cột đầu của `results.tsv`, ví dụ `targets='k8s-smoke drill-k8s-supplychain'`; tên lạ hay ký tự ngoài
     `a-z`, `0-9`, `-`, khoảng trắng thì job đỏ trước khi dựng gì; chỉ lọc, không tự thêm bước: `drill-k8s-threats`, `drill-k8s-reloader` cần
@@ -478,7 +479,8 @@ Các script này chạy trong job của `verify.yml` (kịch bản, bước và 
     (`$SVP_VERIFY_OUT`, mặc định `verify` trong `$RUNNER_TEMP`, không bao giờ tải cả thư mục): file ghi ngay trên runner là `results.tsv` (bảng bước, `steps.sh`), `scenario`,
     `df-before.txt` (`verify-host.sh`); file đọc từ stack hay cluster là `logs/drill-obs-threats.log`, trong đó chỉ dòng kết luận (`ok`, `PASS`, `FAIL`, `SKIP`, `WARN` và dòng đóng
     "drill-obs-threats: all checks passed"; không dòng log JSON hay trích access log) vào artifact, dưới tên `logs/drill-obs-threats.verdicts.log`, `logs/gitops-admission-metrics.log`
-    (các dòng tóm tắt của `admission-metrics.sh`), `logs/uptime-cost.log` (bảng điều kiện và giá trị đọc của `uptime-cost.sh`) và `k8s-state.json`
+    (các dòng tóm tắt của `admission-metrics.sh`), `logs/uptime-cost.log` (bảng điều kiện và giá trị đọc của `uptime-cost.sh`), `logs/drill-k8s-mesh.results.log` (chỉ các dòng `RESULT mesh-memory`
+    của `drill-k8s-mesh`: RAM của từng pod `istio-system`, `svp-mesh` và tổng, bằng chứng chứ không cổng) và `k8s-state.json`
     (`verify-k8s-state.sh`). Mọi file khác ở đó (output của mọi bước khác) được liệt kê trong `files.txt` là `not-allowed`.
   - Từ checkout (đều đọc từ stack hay cluster): `.k8s/drills/*.xml` (report JUnit của mỗi diễn tập Chainsaw), `*-skips.tsv` (danh sách ca SKIP và lý do: report JUnit tính SKIP là qua),
     `*.json` và `traffic-*.log` (mỗi dòng một thời điểm, user, route, status, độ trễ). Mọi thứ khác dưới chỗ đó được liệt kê `not-allowed`: log của mỗi diễn tập Chainsaw và mọi log service không bao giờ

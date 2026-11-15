@@ -196,8 +196,37 @@ flowchart LR
   `services/gateway/cmd/gateway/main.go`; giá trị chạy ở stg, prd là `env.MAX_IN_FLIGHT` của
   `base/services/gateway.yaml` trong `svp-gitops`.
 - **Không dùng adaptive concurrency của Envoy.** Envoy Gateway không có API cho filter đó (chỉ vá xDS bằng
-  `EnvoyPatchPolicy`) và đường BFF của web không qua Envoy. Mesh chưa dựng
-  ([`architecture.md`](../architecture.md#10-rủi-ro-và-nợ-kỹ-thuật)); nếu dựng, giới hạn theo proxy L7 thay chỗ này.
+  `EnvoyPatchPolicy`) và đường BFF của web không qua Envoy. Waypoint của mesh ([bên dưới](#mesh-cân-tải-và-khi-mesh-hỏng)) chỉ
+  đứng trước service gRPC, không trước gateway, nên giới hạn in-flight vẫn ở gateway.
+
+## Mesh: cân tải và khi mesh hỏng
+
+Vì sao: [ADR-0075](../adr/0075-service-mesh.md). Đường một request:
+[`architecture.md`](../architecture.md#65-request-grpc-qua-mesh). Compose không có mesh, nên mục này chỉ nói về cluster.
+
+- **Cân tải theo request.** Client gRPC của gateway nối tới service qua ClusterIP với `pick_first`: một kết nối HTTP/2 dài giữ
+  một pod. Trên cluster, ztunnel của gateway chuyển kết nối đó tới waypoint, và waypoint chọn pod cho từng request. Pod mới do HPA
+  hay rollout nhận tải ngay, không đợi `MaxConnectionAge` đóng kết nối ([vòng đời pod](deployment.md#vòng-đời-pod)).
+- **Không retry ở waypoint.** `meshConfig` đặt `defaultHttpRetryPolicy.attempts: 0`; mặc định của Istio thử lại hai lần. Retry chỉ
+  ở client gRPC của gateway, theo method idempotent trong hạn 3 s (xem [mục 6.2 của kiến trúc](../architecture.md#62-đọc-feed)):
+  hai tầng retry sẽ nhân số lời gọi của một request.
+- **Waypoint hai replica có PDB trên EKS.** Mọi lời gọi gRPC đi qua nó, nên một replica là điểm hỏng đơn. Hai replica, PDB
+  `minAvailable: 1` giữ một pod khi drain node. PDB chỉ che drain, không che mất zone: replica không có ràng buộc trải zone riêng
+  nên có thể cùng một node. k3d một replica.
+- **istiod hỏng.** Lưu lượng đang chạy không đổi: ztunnel và waypoint giữ cấu hình và chứng chỉ đã nhận. Mất: pod mới không có
+  chứng chỉ nên chưa vào mesh được, thay đổi policy và route (kể cả bước canary) không tới proxy, chứng chỉ hết hạn không được
+  gia hạn. istiod chạy hai replica có PDB trên EKS.
+- **ztunnel của một node hỏng.** Pod trên node đó mất lưu lượng vào và ra: ztunnel là đường duy nhất ra khỏi pod, và
+  `PeerAuthentication` STRICT nghĩa là không có đường vòng plaintext. Kubelet vẫn probe được (qua đường riêng), nên pod còn Ready
+  mà không có lưu lượng; client của pod khác thấy lỗi kết nối và lỗi vào breaker của gateway. DaemonSet chạy lại ztunnel và
+  istio-cni nạp lại các pod đang chạy cho nó.
+- **istio-cni hỏng trên node mới.** Pod tạo sau lúc đó chạy ngoài mesh. Trên EKS taint `cni.istio.io/not-ready` giữ pod khỏi node tới
+  khi istio-cni và ztunnel Ready ([triển khai](deployment.md#mesh-istio-ambient)); pod ngoài mesh gửi plaintext vào pod STRICT bị từ chối.
+- **Waypoint không có địa chỉ.** Service dùng waypoint mà waypoint chưa có pod Ready thì ztunnel gửi thẳng tới pod đích, không báo
+  lỗi; policy L4 của pod chỉ nhận danh tính waypoint nên lời gọi bị từ chối. Lỗi hiện thành `UNAVAILABLE` ở gateway, không phải
+  lời gọi lọt qua không kiểm quyền.
+- **Chưa đo.** Độ trễ thêm của waypoint và RAM của mesh đo ở buổi cloud và CI, không trên laptop
+  ([`capacity.md`](capacity.md#ram-của-mesh-trên-k3d), [chưa đo trên cloud](#chưa-đo-trên-cloud)).
 
 ## Timeout Postgres của role app
 
@@ -343,8 +372,9 @@ Kết luận từ các lượt đo, còn áp dụng (số đo và lượt chạy
 
 Vì sao: [ADR-0020](../adr/0020-reliability-stage6.md), [ADR-0034](../adr/0034-aws-stage7.md).
 
-Cần dịch vụ cloud nên chạy ở cluster AWS ([`deployment.md`](deployment.md#aws)): k6 1 000 req/s, Chaos Mesh trên EKS, diễn tập
-phục hồi RDS, Velero với S3 và snapshot EBS, hạn 50 ms của Valkey trên ElastiCache, khởi động lại một broker MSK khi đang ghi
-không mất event và failover ElastiCache không làm service lỗi quá timeout của nó (buổi prd, ADR-0053 mục Xác nhận), failover RDS Multi-AZ
+Cần dịch vụ cloud nên chạy ở cluster AWS ([`deployment.md`](deployment.md#aws)): k6 1 000 req/s, độ trễ thêm của waypoint (p99
+client trừ p99 server cùng method), Chaos Mesh trên EKS, diễn tập phục hồi RDS, Velero với S3 và snapshot EBS, hạn 50 ms của
+Valkey trên ElastiCache, khởi động lại một broker MSK khi đang ghi không mất event và failover ElastiCache không làm service lỗi
+quá timeout của nó (buổi prd, ADR-0053 mục Xác nhận), failover RDS Multi-AZ
 và mất một broker MSK với RF, min ISR của prd (kiểm bù của ADR-0055 §4), drain một AZ khi Envoy và Kyverno vẫn trả lời (ADR-0056 mục Xác nhận). Job k6 của phần này kiểm schema bằng
 `make cloud-check` (manifest Chaos Mesh, Velero lấy từ bài lab khi cần).

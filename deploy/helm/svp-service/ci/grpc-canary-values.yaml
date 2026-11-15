@@ -1,0 +1,12 @@
+# A gRPC release with canary set on its own (helm lint or template -f this file): a Rollout whose canary the waypoint
+# splits call by call through its GRPCRoute, analysed on the canary pods' own metrics. Placeholder image.
+image: {repository: ghcr.io/example/feed-service, tag: "000000000000"}
+protocol: grpc
+port: 9104
+resources:
+  requests: {cpu: 100m, memory: 64Mi}
+  limits: {cpu: "1", memory: 384Mi}
+ingressFrom: [gateway]
+egressTo: [collector]
+canary: true
+canaryLimits: {p99Ms: 100, errorRatio: 0.01}

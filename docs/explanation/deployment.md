@@ -124,9 +124,10 @@ flowchart LR
 
 - **Namespace:** `svp` (release ứng dụng), `svp-data` (Postgres, Valkey, Kafka, object store `s3`, `svp-ops`), `svp-obs` (observability,
   GlitchTip), `svp-edge` (`Gateway`, chứng chỉ wildcard); công cụ ở `cert-manager`, `envoy-gateway-system`, `cnpg-system`, `keda`,
-  `argo-rollouts`, `kyverno` và `argocd` (chỉ đường GitOps). Mọi namespace trừ `kube-system` chạy Pod Security `restricted`; bốn
-  namespace của project có NetworkPolicy chặn mặc định hai chiều, mỗi luồng ở bảng ADR-0014 §3 một policy theo label pod
-  (threat model FF-5, IN-2).
+  `argo-rollouts`, `kyverno` và `argocd` (chỉ đường GitOps); mesh ở `istio-system`, riêng waypoint ở `svp-mesh`
+  ([mesh](#mesh-istio-ambient)). Mọi namespace trừ `kube-system` và `istio-system` chạy Pod Security `restricted`; năm
+  namespace của project (kể cả `svp-mesh`) có NetworkPolicy chặn mặc định hai chiều, mỗi luồng ở bảng ADR-0014 §3 một policy theo
+  label pod (threat model FF-5, IN-2).
 - **Luồng vào:** client gọi `https://api.svp.localhost:8443` (tên `*.localhost` phân giải về loopback), qua load balancer
   của k3d và `svclb` tới Envoy proxy do Envoy Gateway dựng từ `Gateway` `svp`; TLS dùng chứng chỉ wildcard do cert-manager
   ký bằng CA local (`make k8s-ca` xuất CA ra `.k8s/ca.crt`). HTTPRoute `api` chia traffic giữa Service `gateway` và
@@ -168,17 +169,17 @@ flowchart LR
   pod](#vòng-đời-pod).
 - **Observability** (ADR-0014 §11): tách thành từng thành phần trong `svp-obs`, chi tiết ở
   [`observability.md`](observability.md#k3d).
-- **Cài đặt và GitOps** (ADR-0014 §7, §12; cấu hình ở repo `svp-gitops`, [hai repo](delivery.md#hai-repo-code-và-cấu-hình-triển-khai)):
-  `argocd/apps/components.json` của `svp-gitops` liệt kê các thành phần theo wave 0–7 (cert-manager, Envoy Gateway, External
-  Secrets Operator (chỉ đường GitOps cài); namespace, CA, policy; operator và Kyverno; backend dữ liệu, observability, plugin
-  Barman Cloud và policy image `svp-policy`; chart dữ liệu; chart observability; Collector; release ứng dụng, web đứng sau
-  gateway). Đường dev `make k8s-up` cài file đó bằng helmfile (`deploy/k8s/helmfile.yaml.gotmpl`, `needs` theo wave) từ bản clone
-  `svp-gitops` cạnh repo (values `base/`), image tag `dev-<image ID>` build từ working tree bằng `docker buildx bake` (bảng
-  `deploy/docker-bake.json`) vào registry k3d (môi trường dev); đường GitOps `make k8s-gitops-up` dựng cluster mới
-  đóng vai stg (`base/` cộng overlay `envs/stg/`, [ADR-0024](../adr/0024-multi-environment.md)) mà Argo CD (app-of-apps, root
-  `svp-root` với giá trị `env`, AppProject `svp`) đồng bộ từ GitHub qua HTTPS ẩn danh (không deploy key), image kéo từ GHCR theo
-  digest mà PR promote ghi vào `envs/stg/images/` ([CI/CD](delivery.md#cicd-và-chuỗi-cung-ứng)); overlay prd chỉ render và kiểm
-  tĩnh ở k3d.
+- **Cài đặt và GitOps** (ADR-0014 §7, §12; cấu hình ở repo `svp-gitops`, [hai
+  repo](delivery.md#hai-repo-code-và-cấu-hình-triển-khai)): `argocd/apps/components.json` của `svp-gitops` liệt kê các thành phần
+  theo wave 0–7 (cert-manager, Envoy Gateway, External Secrets Operator (chỉ đường GitOps cài); namespace, CA, policy; operator,
+  Kyverno và CRD của Istio; backend dữ liệu, observability, plugin Barman Cloud, policy image `svp-policy` và istiod; chart dữ
+  liệu, istio-cni, ztunnel; chart observability; Collector; release ứng dụng, web đứng sau gateway). Đường dev `make k8s-up` cài
+  file đó bằng helmfile (`deploy/k8s/helmfile.yaml.gotmpl`, `needs` theo wave) từ bản clone `svp-gitops` cạnh repo (values
+  `base/`), image tag `dev-<image ID>` build từ working tree bằng `docker buildx bake` (bảng `deploy/docker-bake.json`) vào
+  registry k3d (môi trường dev); đường GitOps `make k8s-gitops-up` dựng cluster mới đóng vai stg (`base/` cộng overlay
+  `envs/stg/`, [ADR-0024](../adr/0024-multi-environment.md)) mà Argo CD (app-of-apps, root `svp-root` với giá trị `env`,
+  AppProject `svp`) đồng bộ từ GitHub qua HTTPS ẩn danh (không deploy key), image kéo từ GHCR theo digest mà PR promote ghi vào
+  `envs/stg/images/` ([CI/CD](delivery.md#cicd-và-chuỗi-cung-ứng)); overlay prd chỉ render và kiểm tĩnh ở k3d.
 - **Canary của gateway** (ADR-0014 §13): Argo Rollouts đổi trọng số HTTPRoute `api` qua plugin Gateway API: 25% → 60 s →
   50% → 60 s → bước phân tích chặn → 100%. Phân tích đọc metric Envoy của backend canary trong Prometheus: tỉ lệ 5xx < 1%
   và p99 < 150 ms (SLO feed), cần ít nhất 30 response không phải 4xx mỗi phút; hỏng hay Prometheus không trả lời thì
@@ -188,11 +189,48 @@ flowchart LR
   chunk lệch (404, gồm chunk hls.js mà player bắt lỗi) thì một helper dùng chung tải lại trang một lần cho mỗi bản build,
   gọi từ error boundary, `unhandledrejection` và nhánh `catch` của `loadHls()` trong player pool (ADR-0019 §3). Chunk tải
   lười thứ hai, `web-vitals` của RUM, 404 thì lỗi bị nuốt: không tải lại, không báo lỗi, chỉ mất số đo của lần tải đó.
-  Service gRPC có canary theo số pod, không qua Envoy: [canary cho service gRPC](#canary-cho-service-grpc).
+  Service gRPC có canary theo request qua waypoint, không qua Envoy: [canary cho service gRPC](#canary-cho-service-grpc).
 - **Client Kafka** ([ADR-0013](../adr/0013-kafka-metadata-min-age.md)): mọi client franz-go đặt `MetadataMinAge` 1 s, nên
   produce có hạn trả về gần hạn hơn khi kết nối tới broker chết giữa chừng; áp cho cả compose và k3d.
 - **Chi phí:** RAM của cả cluster lúc nghỉ 5,9–6,8 GiB theo `docker stats` (gồm ~1–2 GiB page cache; phần anon ~3,9 GiB),
-  đỉnh ~8 GiB khi media-worker scale lên, so với 1,7–2,6 GiB của compose `core` + `obs`; cách đo ở ADR-0014 §2.
+  đỉnh ~8 GiB khi media-worker scale lên, so với 1,7–2,6 GiB của compose `core` + `obs`; cách đo ở ADR-0014 §2. Số đó
+  chưa gồm mesh: [RAM của mesh](capacity.md#ram-của-mesh-trên-k3d).
+
+### Mesh: Istio ambient
+
+Vì sao chọn Istio ambient, phương án đã loại và sự thật đã kiểm theo version:
+[ADR-0075](../adr/0075-service-mesh.md) và phụ lục của nó. Đường một request qua mesh:
+[`architecture.md`](../architecture.md#65-request-grpc-qua-mesh).
+
+Mesh là bốn component của `argocd/apps/components.json` (`svp-gitops`), cùng một version Istio, cùng namespace `istio-system`.
+Đường dev (`make k8s-up`, helmfile) và đường GitOps cài cùng danh sách, nên không có cờ bật tắt mesh trong chart. Thứ tự theo wave:
+
+| Wave | Component | Việc |
+| --- | --- | --- |
+| 1 | `svp-cluster` (có sẵn) | Namespace `istio-system`, `svp-mesh`, nhãn ambient của `svp`, Gateway `waypoint` |
+| 2 | `istio-base` | CRD của Istio |
+| 3 | `istiod` | Control plane: cấp chứng chỉ, đẩy cấu hình xuống ztunnel và waypoint |
+| 4 | `istio-cni`, `ztunnel` | DaemonSet: luật chuyển hướng lưu lượng của pod, mã hoá L4 |
+| 7 | release ứng dụng | `PeerAuthentication`, `AuthorizationPolicy`, nhãn waypoint của Service gRPC |
+
+Wave của `svp-cluster` đứng trước Istio nên chart đó không có object nào của CRD Istio: Gateway `waypoint` là Gateway API, còn
+istiod mới tạo Deployment của nó. Gateway mang annotation `argocd.argoproj.io/ignore-healthcheck`: health của Gateway ở Argo CD
+chờ `Programmed=True` mà chỉ istiod đặt (wave sau), nên thiếu annotation thì `svp-cluster` không bao giờ Healthy và các wave sau
+không bắt đầu. Sức khoẻ waypoint đọc ở Deployment của nó và ở drill `drill-k8s-mesh`.
+
+- **`istio-system` là namespace nền tảng duy nhất ngoài `kube-system` không chạy `restricted`.** Pod `ztunnel` và `istio-cni` cần
+  `NET_ADMIN`, chạy root và gắn `hostPath` của node để đặt luật mạng cho pod khác, nên chỉ Pod Security `privileged` nhận chúng.
+  Namespace không giữ dữ liệu của project và không bị chặn mặc định.
+- **Image ghim theo digest** ở `base/*.yaml` của `svp-gitops`, kể cả `proxyv2` mà istiod dùng cho waypoint: pod waypoint do istiod
+  tạo lúc chạy nên render không thấy, và `images-pinned` của checker đọc ref đó trong ConfigMap `istio-sidecar-injector`. Image
+  chạy ở `istio-system` đi qua registry mirror như mọi image khác của EKS.
+- **Thứ tự trên node mới.** Pod khởi động trước khi `istio-cni` sẵn sàng thì chạy ngoài mesh, mà `PeerAuthentication` STRICT của pod
+  khác từ chối nó. Trên EKS NodePool của Karpenter đặt `startupTaints` `cni.istio.io/not-ready`, istiod (`taint.enabled`) gỡ khi
+  `istio-cni` và `ztunnel` Ready trên node, và pod của `svp` có `nodeAffinity` chỉ lên node Karpenter, không lên nhóm node hệ thống
+  (không taint). k3d không cần: node có trước mesh.
+- **EKS khác k3d** ở `platforms/eks/` của `svp-gitops`: istiod hai replica có PDB, waypoint hai replica có PDB của `svp-cluster`;
+  security group của node mở cổng webhook của istiod cho control plane EKS (Terraform của `svp-infra`). k3d chạy một replica mỗi
+  thứ. Request, limit ở values của từng component; số đo RAM ở [`capacity.md`](capacity.md#ram-của-mesh-trên-k3d).
 
 ## Chart Helm của project
 
@@ -211,13 +249,13 @@ chart cấu hình như vậy.
   và Helm không tạo được Role trong namespace chưa có. `svp-cluster` tiếp quản các namespace đó (`takeOwnership` trong
   `helmfile.yaml.gotmpl`), vì Helm từ chối một object có sẵn mà thiếu annotation của release trừ khi được bảo tiếp quản. Mọi object
   `svp-cluster` render là của project, dưới tên không chart nào khác dùng.
-- **Release có canary (gateway, web) apply phía client.** Argo Rollouts ghi vào hai object của chart: selector của Service `<release>` và
-  `<release>-canary` (`rollouts-pod-template-hash`) và trọng số trong HTTPRoute của release. Apply server-side của Helm 4 gửi cả
-  selector và `rules` của chart, hai field atomic do controller và plugin của nó quản, nên upgrade lỗi vì xung đột (với
-  `--force-conflicts` thì selector bị xoá, mọi request đi tới cả pod stable lẫn canary cho tới khi controller nhận ra). Upgrade phía client
-  chỉ patch phần khác nhau giữa manifest của release trước và release này, nên Service hay route không đổi giữ nguyên như controller
-  đặt. `--wait` của Helm không bao giờ thấy Rollout sẵn sàng: Helm chỉ chờ hook (không `--wait` là `hookOnly` của Helm 4), và hook
-  postsync chờ Rollout (`wait_rollout` của `install.sh`).
+- **Release có canary (gateway, web) apply phía client.** Argo Rollouts ghi vào hai object của chart: selector của Service
+  `<release>` và `<release>-canary` (`rollouts-pod-template-hash`) và trọng số trong HTTPRoute hay GRPCRoute của release. Apply
+  server-side của Helm 4 gửi cả selector và `rules` của chart, hai field atomic do controller và plugin của nó quản, nên upgrade
+  lỗi vì xung đột (với `--force-conflicts` thì selector bị xoá, mọi request đi tới cả pod stable lẫn canary cho tới khi controller
+  nhận ra). Upgrade phía client chỉ patch phần khác nhau giữa manifest của release trước và release này, nên Service hay route
+  không đổi giữ nguyên như controller đặt. `--wait` của Helm không bao giờ thấy Rollout sẵn sàng: Helm chỉ chờ hook (không
+  `--wait` là `hookOnly` của Helm 4), và hook postsync chờ Rollout (`wait_rollout` của `install.sh`).
 
 ### Secret và Reloader
 
@@ -252,16 +290,18 @@ chart cấu hình như vậy.
   proxy từ 2 lên tới mức trần theo CPU, PDB `envoyPDB` (`minAvailable: 1`) giữ một pod khi drain node, và pod trải theo zone rồi theo node
   (`ScheduleAnyway`: khi một zone hết chỗ pod vẫn chạy ở zone còn lại). Giống nhau ở mọi nền tảng, không value theo nền tảng; HPA đọc
   metrics-server (add-on ở EKS, có sẵn ở k3s). Mất một node hay một AZ không mất cổng vào.
-- **Namespace và Pod Security.** Namespace theo vai trò: `svp` (các service Go, `dlq-replay` và web), `svp-data` (Postgres, Valkey,
-  Kafka, object store `s3`, `svp-ops`), `svp-obs` (observability, GlitchTip), `svp-edge` (Gateway và chứng chỉ của Envoy). Pod Security Admission `enforce`
-  `restricted`: pod phải chạy không phải root, bỏ mọi capability, dùng seccomp `RuntimeDefault` và cấm leo quyền; chart không đạt thì sửa ở
-  values của nó, không nới namespace. `warn` và `audit` cùng mức để `kubectl` và audit log nêu tên cái `enforce` từ chối. Namespace nền
-  tảng của `values.yaml` nhận cùng nhãn Pod Security và không gì khác. `install.sh` và `gitops.sh` render riêng template này (không
-  release) cho các namespace chúng tạo trước chart, nên chúng mang cùng nhãn: cả hai tạo namespace của project trước wave 0, vì Envoy
-  Gateway bind một Role ở mỗi namespace nó theo dõi; `install.sh` tạo thêm namespace của wave 0 (`platformNamespaces` đặt bằng chúng),
-  `gitops.sh` tạo `argocd`. Chart này sau đó tiếp quản namespace của project. Khi `externalSecrets` bật với store `kubernetes` (stg của
-  đường GitOps) thêm namespace `externalSecrets.sourceNamespace`: Secret nguồn của `templates/external-secrets.yaml`, không pod;
-  `gitops.sh` render template với overlay đó nên nó có trước khi `secrets.sh` điền.
+- **Namespace và Pod Security.** Namespace theo vai trò: `svp` (các service Go, `dlq-replay` và web), `svp-data` (Postgres,
+  Valkey, Kafka, object store `s3`, `svp-ops`), `svp-obs` (observability, GlitchTip), `svp-edge` (Gateway và chứng chỉ của Envoy),
+  `svp-mesh` (waypoint, [mesh](#mesh-istio-ambient)). `svp` mang nhãn `istio.io/dataplane-mode: ambient`, nên mọi pod của nó vào
+  mesh. Pod Security Admission `enforce` `restricted`: pod phải chạy không phải root, bỏ mọi capability, dùng seccomp
+  `RuntimeDefault` và cấm leo quyền; chart không đạt thì sửa ở values của nó, không nới namespace. `warn` và `audit` cùng mức để
+  `kubectl` và audit log nêu tên cái `enforce` từ chối. Namespace nền tảng của `values.yaml` nhận cùng nhãn Pod Security và không
+  gì khác, trừ `istio-system` nhận mức `privileged` (khoá `podSecurity`). `install.sh` và `gitops.sh` render riêng template này
+  (không release) cho các namespace chúng tạo trước chart, nên chúng mang cùng nhãn: cả hai tạo namespace của project trước wave
+  0, vì Envoy Gateway bind một Role ở mỗi namespace nó theo dõi; `install.sh` tạo thêm namespace của wave 0 (`platformNamespaces`
+  đặt bằng chúng), `gitops.sh` tạo `argocd`. Chart này sau đó tiếp quản namespace của project. Khi `externalSecrets` bật với store
+  `kubernetes` (stg của đường GitOps) thêm namespace `externalSecrets.sourceNamespace`: Secret nguồn của
+  `templates/external-secrets.yaml`, không pod; `gitops.sh` render template với overlay đó nên nó có trước khi `secrets.sh` điền.
 - **Namespace của chart nền tảng** (`values.yaml`) được tạo ở đây, trước chart của chúng (wave sau), chỉ để Pod Security `restricted` có
   hiệu lực từ pod đầu tiên: không NetworkPolicy, không route. Thiếu nhãn thì ai tạo được pod trong namespace đó (controller của nó, nếu bị
   chiếm) khởi động được pod đặc quyền có `hostPath` của node và đọc mọi Secret của cluster từ đó. `argo-rollouts`: Role riêng của chart ở
@@ -271,16 +311,17 @@ chart cấu hình như vậy.
   `svp`. `reloader`: Reloader được patch pod template của mọi workload ở namespace nó theo dõi. Namespace của wave 0 (`cert-manager`,
   `envoy-gateway-system`) phải có trước chart này (chart cần CRD của chúng): `install.sh` và Application Argo CD của chúng gán nhãn;
   `gitops.sh` gán nhãn `argocd`. Cả hai script cũng tạo namespace của project nêu trên.
-- **NetworkPolicy mặc định chặn** hai chiều cho mọi pod của namespace project (IN-2, FF-5): pod không tới được và không được tới bởi gì
-  cho tới khi policy của chart riêng của nó mở đúng luồng đó, nên pod bị chiếm không quét được cluster hay gọi ra internet. Namespace nền
-  tảng (`cert-manager`, `envoy-gateway-system`...) không bị chặn mặc định: chart của chúng không kèm policy, webhook của chúng được API
-  server gọi từ mạng của node, và chúng không giữ dữ liệu của project. Không cần mở dù có chặn: probe của kubelet và `kubectl
-  port-forward` đến từ node mà pod chạy, mà NetworkPolicy không chặn được. Namespace `kyverno` nhận cùng ba policy (pod gọi API server
-  mang `svp-kube-api=allow`) và hai policy nữa ở cuối file; namespace `reloader` cũng vậy mà không gì thêm (controller, nhãn
-  `svp-kube-api=allow`, chỉ nói chuyện với API server, không gì đi vào); với `externalSecrets` bật (đường GitOps) namespace
-  `external-secrets` cũng vậy (controller chỉ nói chuyện với API server, không gì đi vào: không webhook, không gì scrape metrics), và với
-  store `aws` thêm TCP 443 ra địa chỉ công khai (Secrets Manager, STS) và TCP 80 tới EKS Pod Identity Agent. Namespace nguồn của store
-  `kubernetes` không có pod và vẫn bị chặn.
+- **NetworkPolicy mặc định chặn** hai chiều cho mọi pod của namespace project (IN-2, FF-5): pod không tới được và không được tới
+  bởi gì cho tới khi policy của chart riêng của nó mở đúng luồng đó, nên pod bị chiếm không quét được cluster hay gọi ra internet.
+  Namespace nền tảng (`cert-manager`, `envoy-gateway-system`...) không bị chặn mặc định: chart của chúng không kèm policy, webhook
+  của chúng được API server gọi từ mạng của node, và chúng không giữ dữ liệu của project. Không cần mở dù có chặn: `kubectl
+  port-forward` và probe của kubelet tới pod ngoài mesh đến từ node mà pod chạy, mà NetworkPolicy không chặn được (pod trong mesh
+  nhận probe từ `169.254.7.127`, chart của nó mở cổng probe cho địa chỉ đó). Namespace `kyverno` nhận cùng ba policy (pod gọi API
+  server mang `svp-kube-api=allow`) và hai policy nữa ở cuối file; namespace `reloader` cũng vậy mà không gì thêm (controller,
+  nhãn `svp-kube-api=allow`, chỉ nói chuyện với API server, không gì đi vào); với `externalSecrets` bật (đường GitOps) namespace
+  `external-secrets` cũng vậy (controller chỉ nói chuyện với API server, không gì đi vào: không webhook, không gì scrape metrics),
+  và với store `aws` thêm TCP 443 ra địa chỉ công khai (Secrets Manager, STS) và TCP 80 tới EKS Pod Identity Agent. Namespace
+  nguồn của store `kubernetes` không có pod và vẫn bị chặn.
   - **Admission controller của Kyverno.** Vào: lời gọi admission của API server tới cổng webhook. API server chạy trên node server: lời
     gọi tới pod trên node đó đến từ chính node, lời gọi tới pod trên node agent đi ra qua interface VXLAN của server
     (`kyverno.vxlanAddresses`), nên chỉ các địa chỉ đó và mạng của các node được vào, không pod nào. Trên EKS `nodeSubnet` là CIDR của
@@ -297,9 +338,10 @@ chart cấu hình như vậy.
     pod của cluster không tới được Envoy. Vào: 10443, cổng Envoy Gateway cấp cho 443 của listener trong pod (cổng dưới 1024 được cộng 10000
     để Envoy bind không cần đặc quyền), từ nguồn `httpsFrom` (EKS: dải subnet edge, nơi chỉ ALB có địa chỉ, và namespace `svp-load` của Job
     k6); cổng metrics từ Prometheus ở `svp-obs` (phân tích canary đọc chúng); cổng health check `healthCheck.port` (EKS: 19003, `/ready` của
-    Envoy) từ nguồn `healthCheck.from` (EKS: dải subnet edge). Gateway tin `CloudFront-Viewer-Address` chỉ vì không gì ngoài ALB và Job k6 tới
-    được Envoy (threat model RL-1). Probe của kubelet đến từ node, mà NetworkPolicy không chặn được. Ra: không hạn chế (Envoy tới controller
-    của nó và mọi backend).
+    Envoy) từ nguồn `healthCheck.from` (EKS: dải subnet edge). Pod Envoy vào mesh (nhãn ambient ở `EnvoyProxy`), nên probe của
+    kubelet tới nó đến từ `169.254.7.127`, không phải từ node: policy mở thêm 19003 và 19002 (shutdown manager) cho `/32` đó.
+    Gateway tin `CloudFront-Viewer-Address` chỉ vì không gì ngoài ALB và Job k6 tới được Envoy (threat model RL-1). Ra: không hạn
+    chế (Envoy tới controller của nó và mọi backend).
 - **RBAC của operator CloudNativePG** (ServiceAccount `cnpg-system/cloudnative-pg`, chart `cloudnative-pg` 0.29.1 ở wave 2) được render
   ở chart này vì `base/cloudnative-pg.yaml` của `svp-gitops` tắt RBAC của chính chart: chart bind rule theo namespace hoặc toàn cluster
   hoặc chỉ ở namespace release, mà Cluster duy nhất của project, `svp-pg`, ở `svp-data`. Rule là của chart (`templates/_helpers.tpl` của
@@ -376,7 +418,12 @@ chart cấu hình như vậy.
   [ADR-0056](../adr/0056-eks-platform-ha.md) §2). Một NodePool `default` và một EC2NodeClass `default`: Graviton arm64, họ, thế hệ và cỡ
   instance, IMDSv2 hop 1, đĩa gốc gp3 mã hoá, tag `Project=svp` ghim trong template (cùng ở hai env); role node, subnet và security group
   suy từ `karpenter.clusterName` (role `<tên>-karpenter-node`, tag discovery `karpenter.sh/discovery`); AMI, capacity type, `limits`, ngân
-  sách disruption, `terminationGracePeriod` là value bắt buộc khi bật. Luồng co giãn ở [Karpenter](#karpenter-node-theo-pod-đang-chờ).
+  sách disruption, `terminationGracePeriod` là value bắt buộc khi bật. NodePool đặt `startupTaints` `cni.istio.io/not-ready` để không pod
+  nào lên node trước khi `istio-cni` sẵn sàng (istiod gỡ taint). Luồng co giãn ở [Karpenter](#karpenter-node-theo-pod-đang-chờ).
+- **Waypoint** (`templates/waypoint.yaml`): Gateway `waypoint` (class `istio-waypoint`) ở `svp-mesh`, ConfigMap chỉnh Deployment do
+  istiod tạo (số replica, requests, limits, seccomp `RuntimeDefault` để đạt `restricted`, PDB khi từ hai replica) và NetworkPolicy:
+  vào 15008 từ pod của `svp`; ra 15008 tới pod của `svp` và 15012 tới istiod. Listener HBONE chỉ nhận Service của `svp`. Replica: một
+  ở k3d, hai ở EKS (`platforms/eks/svp-cluster.yaml`).
 - **Secret `rds-ca`** (`templates/rds-ca.yaml`, [ADR-0057](../adr/0057-postgres17-verify-full.md) §2): bundle CA của RDS cho region, từ value
   `rdsCA.bundle`, thành Secret thường (cert công khai) khoá `ca.crt` ở `svp`, `svp-obs`, `svp-data`, ba namespace có client Postgres; không
   render khi value rỗng (k3d). Cùng chart giữ chuỗi kết nối Postgres của mọi client (`files/external-secrets.yaml`, host từ
@@ -469,7 +516,7 @@ chart cấu hình như vậy.
   liệu của một trong chúng đổi (Secret mới tạo không làm restart: xem [Secret và Reloader](#secret-và-reloader)). Gọi theo tên, không `reloader.stakater.com/auto`: Secret mà
   pod không đọc không bao giờ restart nó. Với `canary` đặt (gateway, web; release gRPC khi `base/` của nó bật, xem
   [canary gRPC](#canary-cho-service-grpc)) nó là Rollout của Argo Rollouts: cùng pod template, và revision mới ra như
-  canary (sau Envoy ở HTTP, chia theo số pod ở gRPC) thay vì rolling update. ReplicaSet của mỗi revision có nhãn
+  canary (sau Envoy ở HTTP, sau waypoint ở gRPC) thay vì rolling update. ReplicaSet của mỗi revision có nhãn
   `rollouts-pod-template-hash`, mà controller thêm vào
   selector của Service `<release>` (stable) và `<release>-canary`. Reloader restart Rollout bằng
   `reloader.stakater.com/rollout-strategy: restart`: nó đặt `spec.restartAt`, và Argo Rollouts evict từng pod cũ hơn thời điểm đó:
@@ -577,9 +624,9 @@ flowchart TD
   (`platforms/eks/svp-cluster.yaml`): quá hạn đó Karpenter xoá node dù pod còn chạy.
 - **Tuổi kết nối gRPC.** Server gRPC (`internal/grpcserver`) đóng kết nối sau `maxConnectionAge` và cho RPC đang chạy
   thêm `maxConnectionAgeGrace` (gửi GOAWAY). Gateway nối tới service qua ClusterIP với `pick_first`, tức một kết nối
-  giữ mãi một pod: nếu không đóng, pod mới do HPA hay rollout thêm không nhận lời gọi nào từ client cũ, và canary theo
-  số pod không nhận tải. Client nối lại đều đặn nên tải trải lên pod mới. Grace dài hơn `callTimeout` của gateway nên
-  RPC đang chạy không bị cắt. Service mesh (chưa dựng) cân tải theo request; giá trị này khi đó vô hại.
+  giữ mãi một pod: nếu không đóng, pod mới do HPA hay rollout thêm không nhận lời gọi nào từ client cũ. Client nối lại đều đặn
+  nên tải trải lên pod mới. Grace dài hơn `callTimeout` của gateway nên RPC đang chạy không bị cắt. Trên cluster waypoint cân
+  tải theo từng request và nhận kết nối của gateway thay các pod, nên giá trị này vô hại ở đó; compose không có mesh và vẫn dựa vào nó.
 - **Thuộc tính pod trong telemetry.** Chart đặt cho container `SVP_POD_NAME`, `SVP_POD_NAMESPACE` (downward API) rồi
   `OTEL_RESOURCE_ATTRIBUTES=k8s.pod.name=$(SVP_POD_NAME),k8s.namespace.name=$(SVP_POD_NAMESPACE)`. Hai biến downward
   API phải đứng trước trong `env` vì Kubernetes chỉ thay `$(…)` bằng biến đã khai báo phía trên; `values` đặt
@@ -592,6 +639,14 @@ flowchart TD
   `minDomains` bằng số subnet database (một mỗi AZ, `az_count` của `<env>.tfvars` trong `svp-infra`): kube-scheduler
   để pod chờ thay vì dồn vào zone có sẵn, và Karpenter mở node ở zone còn thiếu. `minDomains` chỉ hợp lệ với
   `DoNotSchedule`, và schema của chart chặn tổ hợp khác.
+- **Mesh** (`templates/mesh-policy.yaml`, `networkpolicy.yaml`, `service.yaml`). Mỗi release có `PeerAuthentication` `STRICT` chọn
+  pod của nó và `AuthorizationPolicy` `ALLOW` theo `ingressFrom`: release không có `ingressFrom` (`media-worker`, `dlq-replay`)
+  không nhận ai. Release `protocol: grpc` có thêm nhãn `istio.io/use-waypoint` ở Service, nên pod của nó chỉ nhận danh tính của
+  waypoint và chính waypoint kiểm người gọi bằng policy thứ hai gắn vào Service. NetworkPolicy giữ nguyên theo nhãn và thêm 15008
+  (HBONE) giữa các peer trong mesh, cổng probe cho `169.254.7.127/32` và, với release gRPC, đường tới waypoint; cổng của service
+  vẫn mở cho peer để plaintext của họ gặp STRICT thay vì bị chặn trước. Peer ngoài mesh (Postgres, Valkey, Kafka, object store,
+  Collector) vào `ingressFrom` thì chart từ chối render. Trên EKS release có `nodeAffinity` `karpenter.sh/nodepool` (xem
+  [mesh](#mesh-istio-ambient)).
 - **Release `dlq-replay`.** Công cụ phát lại DLQ ([`reliability.md`](reliability.md#phát-lại-dlq)) là một release của
   chart này với `protocol: none`, một replica, `args: [standby]`: pod không làm gì tới khi người vận hành `exec` vào
   chạy `replay`. NetworkPolicy chỉ mở egress tới `kafka` và `collector`, không ingress; Secret `dlq-replay-env` mang
@@ -601,51 +656,60 @@ flowchart TD
 
 ### Canary cho service gRPC
 
-Vì sao: [ADR-0072](../adr/0072-pod-operations.md). Canary của gateway và web ở mục `svp-service` trên; đường phát hành ở
-[`delivery.md`](delivery.md#release-mới-và-canary-grpc).
+Vì sao: [ADR-0072](../adr/0072-pod-operations.md) (canary), [ADR-0075](../adr/0075-service-mesh.md) (chia theo request).
+Canary của gateway và web ở mục `svp-service` trên; đường phát hành ở [`delivery.md`](delivery.md#release-mới-và-canary-grpc).
 
-Service gRPC (`protocol: grpc`) không có Envoy phía trước để chia request, nên release có `canary: true` mà không có
-`httpRoute.host` là Rollout không `trafficRouting`: Argo Rollouts đặt trọng số bằng số pod. Hai thứ cố ý giữ như
-canary HTTP để người vận hành chỉ học một mô hình: các bước, và nhịp đo, `failureLimit`, `inconclusiveLimit`
-(`svp-service.canaryCadence`).
+Service gRPC (`protocol: grpc`) không có Envoy phía trước, nhưng có waypoint: mọi lời gọi tới Service của nó đi qua đó. Release có
+`canary: true` mà không có `httpRoute.host` là Rollout có `trafficRouting` qua plugin Gateway API của Argo Rollouts, trên
+`GRPCRoute` tên release. Route gắn vào chính Service `<release>` (`parentRefs` kind Service, mô hình GAMMA của Gateway API) nên waypoint
+thực thi nó, với hai `backendRefs`: Service `<release>` (stable) và `<release>-canary`. Các bước giữ như canary HTTP để người vận hành
+chỉ học một mô hình: bước, nhịp đo, `failureLimit`, `inconclusiveLimit` (`svp-service.canaryCadence`).
 
 ```mermaid
 flowchart TD
-    rev["revision mới của release gRPC"] --> w25["setWeight 25: ReplicaSet canary lên 25 % replica, làm tròn lên"]
+    rev["revision mới của release gRPC"] --> w25["setWeight 25: GRPCRoute chuyển 25 % lời gọi sang Service canary"]
     w25 --> p1["pause 60 s"]
     p1 --> w50["setWeight 50"]
     w50 --> p2["pause 60 s"]
     p2 --> gate["gate: AnalysisRun canary-gate đo một lần"]
     gate -->|"qua"| full["100 %: canary thành stable"]
     bg["analysis nền canary: canary-error-ratio, canary-p99-ms"] -.->|"đo xấu"| abort
-    gate -->|"đo xấu"| abort["abort: canary đi, ReplicaSet stable về đủ replica"]
+    gate -->|"đo xấu"| abort["abort: GRPCRoute về 100/0, pod canary đi sau một lúc"]
     gate -->|"dưới 30 lời gọi"| paused["Inconclusive: Rollout dừng chờ người"]
 ```
 
 | | Canary HTTP (gateway, web) | Canary gRPC |
 | --- | --- | --- |
 | Điều kiện trong `base/` | `canary: true` và `httpRoute.host` | `canary: true`, `protocol: grpc`, không `httpRoute.host`; kết hợp khác làm chart `fail` |
-| Chia tải | HTTPRoute đổi trọng số hai Service qua plugin Gateway API | Số pod: ReplicaSet canary chiếm phần replica, Service `<release>` chọn pod của cả hai |
-| Service `<release>-canary` | Có | Không |
+| Route | HTTPRoute `api` hay `web`, Envoy thực thi | GRPCRoute `<release>`, waypoint thực thi |
+| Chia tải | Trọng số hai Service theo request | Trọng số hai Service theo lời gọi, không phụ thuộc số pod |
+| Service `<release>-canary` | Có | Có |
 | Metric | Envoy của backend canary (`envoy_cluster_upstream_rq_*`) | `rpc_server_call_duration_seconds` của pod canary |
 | Chọn pod canary | Envoy cluster riêng của backend canary | `k8s_pod_name=~"<release>-<hash>-.*"`, hash là `podTemplateHashValue: Latest` truyền qua arg `canary-hash` |
 | Tính là lỗi | Response 5xx | Lời gọi có mã `UNKNOWN`, `INTERNAL`, `UNAVAILABLE`, `DATA_LOSS`, `DEADLINE_EXCEEDED` |
 | Đủ mẫu | 30 response không phải 4xx trong phút gần nhất | 30 lời gọi gRPC trong phút gần nhất |
-| Abort | HTTPRoute về 100/0, pod canary đi sau một lúc | Pod canary đi, ReplicaSet stable về đủ replica |
+| Abort | HTTPRoute về 100/0, pod canary đi sau một lúc | GRPCRoute về 100/0, pod canary đi sau một lúc |
 | Ngưỡng | `canaryLimits` của release | `canaryLimits` của release |
 
+- **Đo theo pod canary, không theo route.** Không metric nào mang tên Service mà lời gọi đi qua (waypoint không được scrape, metric
+  đi OTLP từ service), nên phân tích tìm pod bằng hash đầu tên pod.
 - **Mã lỗi từ otelgrpc.** Server gRPC ghi `rpc.server.call.duration` (giây) với `rpc.response.status_code` là tên chữ
   của mã; Prometheus nhận chúng thành `rpc_server_call_duration_seconds` và nhãn `rpc_response_status_code`. Health
   check bị lọc khỏi số đo, nên probe không làm đủ mẫu giả.
-- **Cái giá và giới hạn.** Trọng số là phần pod, tải tới canary theo kết nối nên chỉ gần đúng, nhờ [tuổi kết nối
-  gRPC](#vòng-đời-pod) mà tải trải lên pod canary. Release một replica có canary một pod trong tổng hai, tức khoảng
-  nửa kết nối. Mesh sẽ chia theo request và thay cơ chế này; không phần nào giả định mesh.
+- **Cái giá và giới hạn.** Waypoint là một chặng Envoy thêm vào mọi lời gọi gRPC (độ trễ thêm đo ở buổi cloud, xem
+  [ADR-0075](../adr/0075-service-mesh.md)). Trọng số là phần lời gọi chứ không phần pod, nên release một replica có
+  canary một pod vẫn nhận đúng phần đó: pod canary nhận 25 % tải của cả release ở bước đầu. Service ít được gọi vẫn có thể dưới 30 lời
+  gọi mỗi phút và dừng ở Inconclusive.
+- **Quyền của plugin.** Role `argo-rollouts` ở namespace `svp` (`base/argo-rollouts.yaml` của `svp-gitops`) cho plugin `get` và
+  `update` trên `grpcroutes` của bốn release gRPC, như `httproutes` `api`, `web`; Application của chart `svp-service` bỏ qua trọng số
+  của hai kind route để Argo CD không đặt lại chúng giữa chừng.
 - **Chuyển sang Rollout.** `canary: true` đổi `kind` của workload cùng tên từ Deployment sang Rollout. Application của
   chart `svp-service` ở `svp-gitops` đặt `PruneLast=true` nên Deployment cũ chỉ bị xoá khi Rollout mới đã Healthy; xem
   [phát hành](delivery.md#release-mới-và-canary-grpc). Đường dev `make k8s-up` dựng cụm từ đầu nên không cần.
-- **Release canary** là release có `canary: true` trong file `base/` của nó; `deploy/k8s/install.sh` tìm chúng từ file
-  values, còn `canaryRoute` của `components.json` chỉ còn cho release có HTTPRoute. Hook postsync chờ mọi Rollout
-  (`wait_rollout`).
+- **Release canary** là release có `canary: true` trong file `base/` của nó. Khoá `canaryRoute` của component trong `components.json`
+  là tên route của mọi release canary (HTTPRoute `api`, `web` hay GRPCRoute `<release>`); helmfile của đường dev đòi nó khi và chỉ khi
+  `canary: true`. Hook postsync của `install.sh` đọc loại route từ plugin của Rollout, chờ mọi Rollout (`wait_rollout`) và từ chối
+  route rỗng.
 
 ## AWS
 
@@ -762,6 +826,7 @@ Alarm nằm ngoài cluster: khi cluster chết, alarm của RDS, MSK, ElastiCach
 | Vào hệ thống | Loopback, Envoy với CA tự ký | CloudFront với WAF và cert ACM, VPC origin tới ALB internal ở subnet edge, Envoy (HPA, PDB, trải zone) với cert CA nội bộ; IP client từ `CloudFront-Viewer-Address`; bản ghi Route 53 do Terraform ghi |
 | API Kubernetes | `127.0.0.1:6550` | Endpoint private, tunnel SSM qua bastion, cổng local theo env |
 | Admission (Kyverno) | Một replica | Ba replica, PDB, trải zone (`platforms/eks/kyverno.yaml`) |
+| Mesh (Istio ambient) | Không có (compose); k3d: istiod và waypoint một replica | istiod và waypoint hai replica có PDB, `startupTaints` ở NodePool, pod `svp` chỉ lên node Karpenter, security group của node mở cổng webhook istiod ([mesh](#mesh-istio-ambient)) |
 | NetworkPolicy | network policy controller của k3s | Network policy agent của VPC CNI |
 | StorageClass, metrics-server | `local-path`, metrics-server của k3s | `gp3` do chart `svp-cluster` tạo, addon `metrics-server` |
 | Secret | `.env` (compose), ESO provider `kubernetes` (k3d GitOps) | ESO provider `aws`: Secrets Manager + Pod Identity, giá trị từ `make eks-secrets`; mật khẩu Kafka, Valkey do Terraform sinh và ghi write-only (không vào plan, state) |

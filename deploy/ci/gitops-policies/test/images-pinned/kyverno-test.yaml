@@ -79,6 +79,10 @@ results:
     resources:
       - fail-configmap-data-image-key
       - fail-configmap-data-image-line
+      - fail-configmap-data-template
+      - fail-injector-tag/istio-sidecar-injector
+      - fail-injector-hub-tag/istio-sidecar-injector
+      - fail-injector-template-image/istio-sidecar-injector
   - policy: images-pinned
     isValidatingPolicy: true
     kind: Deployment
@@ -103,3 +107,4 @@ results:
     result: pass
     resources:
       - pass-configmap
+      - pass-injector/istio-sidecar-injector

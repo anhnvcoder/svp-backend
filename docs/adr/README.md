@@ -164,6 +164,7 @@ Phụ lục: [`appendix/NNNN-<slug>.md`](appendix/NNNN-<slug>.md) (chỉ khi có
 | [0072](0072-pod-operations.md) | Vận hành pod: phát lại DLQ bằng release `dlq-replay` với user Kafka riêng; service mới vào ba repo theo luật suy từ bảng nguồn; gateway giới hạn request đồng thời; timeout Postgres theo role app, pool theo ngân sách kết nối; media-worker drain có hạn, image không shell; canary gRPC theo số pod, chuyển sang Rollout bằng `PruneLast`; pod trải theo zone; relay outbox bỏ qua dòng lỗi vĩnh viễn | Chấp nhận |
 | [0073](0073-premium-playback.md) | Video premium: vé giả lập ở video-service, object dưới tiền tố `premium/` riêng, playlist do API kiểm vé và viết lại, segment qua signed URL CloudFront (key group hai khoá), bản xem thử công khai dưới `preview/`; local, k3d ký bằng presign S3 | Chấp nhận |
 | [0074](0074-cost-uptime.md) | Chi phí compute theo namespace, service bằng OpenCost (giá on-demand công khai, đọc Prometheus của k3d hay AMP qua sidecar SigV4 với Pod Identity chỉ đọc); uptime từ ngoài vào bằng blackbox exporter trong cluster probe qua DNS công khai, CloudFront, hạn cert; SLO `public-uptime` và cảnh báo mất probe ở ruler AMP; không dịch vụ AWS tính tiền mới | Chấp nhận |
+| [0075](0075-service-mesh.md) | Service mesh Istio ambient ở k3d và EKS: mTLS STRICT giữa mọi pod của `svp`, quyền theo ServiceAccount, cân tải và canary gRPC theo request qua một waypoint chung ở namespace `svp-mesh`; compose không có mesh | Chấp nhận |
 
 ## Chuẩn áp dụng
 

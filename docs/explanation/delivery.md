@@ -266,7 +266,7 @@ sequenceDiagram
     Learner->>Gitops: Code Owner duyệt, merge PR prd
     Note over Gitops: component của service chỉ vào argocd/apps/components.json<br/>khi mọi env của nền tảng đã có file image
     Gitops->>Argo: root, values: envs/env/images và base
-    Argo->>Rollout: Rollout của release có canary (gRPC: chia theo số pod)
+    Argo->>Rollout: Rollout của release có canary (gRPC: GRPCRoute qua waypoint)
     Rollout->>Rollout: 25%, chờ, 50%, chờ, gate, AnalysisRun đọc Prometheus
 ```
 
@@ -283,6 +283,9 @@ sequenceDiagram
   chưa bật thì PR promote đỏ dù `CHECKER_COMMIT` đã nâng, và mọi bump stg dồn trong PR đó.
 - **prd do người học kéo.** Job `promote` chỉ ghi stg. Người học dispatch `images.yml` với `promote_prd` và `stg_ref`, duyệt
   environment `promote-prd`; job `promote-prd` mở PR `bot/promote-prd` không auto-merge, Code Owner duyệt rồi merge.
+  prd đọc component của `svp-gitops` ở `main` nhưng chạy chart ở revision `envs/prd/charts.yaml` ghim, nên khi một PR đưa lớp nền
+  tảng mới vào `svp-gitops` cùng chart tương ứng của repo code (mesh: namespace `istio-system` cần nhãn PSA `privileged` từ chart),
+  prd chỉ dựng sau khi `promote-prd` đã nâng `revision` lên commit có chart đó và PR `bot/promote-prd` đã merge.
 - **Promote tạo file.** `promote` ghi file image của mỗi service vừa ký; file chưa có thì `promote_image_file` (`deploy/ci/common.sh`)
   viết khối comment đầu file như các file khác rồi khối `image`. `promote-prd` chép file của stg ở `stg_ref`, bỏ qua service mà stg
   ở commit đó chưa có file, và tạo file prd của service đã có. Lượt không build service mới thì không tạo file.
@@ -291,19 +294,22 @@ sequenceDiagram
 - **Component.** Chart `svp-policy` liệt kê nguồn phát hành của service ngay từ PR backend (`files/sources.json`), để Kyverno nhận
   chữ ký. Component của release vào `argocd/apps/components.json` chỉ khi mọi env của nền tảng có file image, ở PR `svp-gitops` sau.
 
-Canary của release gRPC đi theo cùng đường phát hành, không có Envoy phía trước để chia request. Chart `svp-service` bật Rollout cho
-release `protocol: grpc` có `canary: true` và không `httpRoute.host`; Rollout không có `trafficRouting`, nên Argo Rollouts đặt trọng số
-bằng số pod: ReplicaSet canary chiếm phần trọng số của replica (làm tròn lên, ít nhất một pod), ReplicaSet stable giữ phần còn lại,
-Service `<release>` chọn pod của cả hai. Các bước như HTTP: 25 %, chờ, 50 %, chờ, bước phân tích chặn rồi 100 %.
+Canary của release gRPC đi theo cùng đường phát hành và chia theo request như canary HTTP, qua waypoint của mesh thay cho Envoy
+([ADR-0075](../adr/0075-service-mesh.md)). Chart `svp-service` bật Rollout cho release `protocol: grpc` có `canary: true` và
+không `httpRoute.host`; Rollout có `trafficRouting` qua plugin Gateway API trên `GRPCRoute` tên release, gắn vào chính Service của
+release. Waypoint thực thi route, và plugin đặt trọng số giữa Service `<release>` (stable) và `<release>-canary`. Các bước như HTTP:
+25 %, chờ, 50 %, chờ, bước phân tích chặn rồi 100 %.
 
+- **`canaryRoute`.** Khoá của component trong `argocd/apps/components.json` (`svp-gitops`) là tên route mà Rollout đổi trọng số:
+  HTTPRoute `api`, `web` hay GRPCRoute `<release>`. Release thêm `canary: true` ở `base/` thì thêm `canaryRoute` cùng PR; thiếu thì
+  helmfile của đường dev dừng với lỗi nêu release, và hook postsync của `install.sh` từ chối Rollout không có route đúng loại.
 - **Đo ở pod canary.** AnalysisTemplate lấy hash của ReplicaSet canary (`podTemplateHashValue: Latest`) và hỏi Prometheus về
   `rpc_server_call_duration_seconds` của đúng pod đó (`k8s_pod_name=~"<release>-<hash>-.*"`, thuộc tính pod do chart đặt qua downward
   API): tỉ lệ lời gọi lỗi phía server (mã `UNKNOWN`, `INTERNAL`, `UNAVAILABLE`, `DATA_LOSS`, `DEADLINE_EXCEEDED`) và p99. Dưới 30 lời gọi
   trong phút gần nhất thì kết quả là Inconclusive: canary dừng chờ người, không được thăng cấp. Ngưỡng là `canaryLimits` của release.
-- **Cái giá của chia theo pod.** Client gRPC giữ kết nối, nên tải tới canary theo kết nối chứ không theo request: phần tải gần đúng
-  trọng số nhờ server đóng kết nối định kỳ (`MaxConnectionAge`), client nối lại và rải lên pod mới. Một service ít được gọi sẽ ít lời
-  gọi hơn ngưỡng và dừng ở Inconclusive. Service mesh (chưa dựng; lựa chọn ở [ADR-0042](../adr/0042-caller-identity-grpc.md)) chia
-  theo request và thay cơ chế này.
+- **Chia theo lời gọi, không theo kết nối.** Waypoint chọn Service cho từng lời gọi, nên phần tải tới canary là trọng số dù client
+  giữ một kết nối dài và dù canary chỉ có một pod. Cái giá: một chặng Envoy trong đường gọi, và pod canary nhận đúng phần đó của cả
+  release. Một service ít được gọi vẫn có thể dưới 30 lời gọi mỗi phút và dừng ở Inconclusive.
 - **Chuyển sang Rollout.** `canary: true` đổi `kind` của workload cùng tên từ Deployment sang Rollout. Mọi Application của chart
   `svp-service` trong `svp-gitops` đặt `PruneLast=true`: Argo CD xoá Deployment cũ sau cùng, khi Rollout mới đã Healthy, nên release
   luôn có pod sẵn sàng trong lúc chuyển. Đường dev (`make k8s-up`) dựng cụm từ đầu và không cần cơ chế này.

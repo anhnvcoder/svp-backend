@@ -1,7 +1,7 @@
-# Example values of an EKS cluster (Postgres on Amazon RDS, objects on Amazon S3, metrics in Amazon Managed Service for
-# Prometheus, three zones), to check the egress by address, the canary's signed queries and the hard zone spread (helm
-# template -f this file, over a release's own values). Placeholders only: the real CIDRs, workspace and zone count come
-# from the cluster's Terraform outputs; the S3 CIDRs here are documentation addresses.
+# Example values of an EKS cluster (RDS, S3, Amazon Managed Service for Prometheus, three zones, Karpenter's nodes), to
+# check the egress by address, the canary's signed queries, the hard zone spread and the node affinity (helm template -f
+# this file, over a release's own values). Placeholders only: the real CIDRs, workspace and zone count come from the
+# cluster's Terraform outputs; the S3 CIDRs here are documentation addresses.
 externalPeers:
   postgres:
     - {cidr: 10.0.48.0/24, ports: [5432]}
@@ -16,3 +16,8 @@ canaryPrometheus:
 zoneSpread:
   whenUnsatisfiable: DoNotSchedule
   minDomains: 3
+nodeAffinity:
+  requiredDuringSchedulingIgnoredDuringExecution:
+    nodeSelectorTerms:
+      - matchExpressions:
+          - {key: karpenter.sh/nodepool, operator: Exists}

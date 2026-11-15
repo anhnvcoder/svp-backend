@@ -1,13 +1,15 @@
 #!/usr/bin/env bash
-# The drills on the local cluster svp (make drill-k8s-threats, drill-k8s-supplychain, drill-k8s-gitops,
-# drill-k8s-reloader): the Chainsaw tests of deploy/k8s/drills/<drill>/ (label drill=<drill>, configuration
-# deploy/k8s/drills/.chainsaw.yaml), one at a time, in one call of chainsaw per drill, so two drills never run together.
-# Usage: run.sh threats|supplychain|gitops|reloader
+# The drills on the local cluster svp (make drill-k8s-threats, drill-k8s-mesh, drill-k8s-supplychain,
+# drill-k8s-gitops, drill-k8s-reloader): the Chainsaw tests of deploy/k8s/drills/<drill>/ (label drill=<drill>,
+# configuration deploy/k8s/drills/.chainsaw.yaml), one at a time, in one call of chainsaw per drill, so two drills never
+# run together. Usage: run.sh threats|mesh|supplychain|gitops|reloader
 
 # threats needs .k8s/ca.crt, given to curl as CURL_CA_BUNDLE, and a video READY and the drill users of make k8s-smoke
 # run before on the same cluster. On a cluster without External Secrets Operator (no CRD
 # externalsecrets.external-secrets.io: the dev path, whose Secrets come from .env) the tests labelled
 # requires=external-secrets are left out, each with a skip line.
+
+# mesh needs .k8s/ca.crt, given to curl as CURL_CA_BUNDLE, and reads no Secret value.
 
 # supplychain takes the Chainsaw values unsigned, vulnerable, noProvenance and enforceTmp from SUPPLYCHAIN_UNSIGNED,
 # SUPPLYCHAIN_VULNERABLE, SUPPLYCHAIN_NO_PROVENANCE and SUPPLYCHAIN_ENFORCE_TMP. An image not given is looked up here
@@ -45,10 +47,10 @@ set -euo pipefail
 
 drill=${1:-}
 case $drill in
-threats | supplychain | gitops | reloader) ;;
-*) fail "usage: deploy/k8s/drills/run.sh threats|supplychain|gitops|reloader (got '$drill')" ;;
+threats | mesh | supplychain | gitops | reloader) ;;
+*) fail "usage: deploy/k8s/drills/run.sh threats|mesh|supplychain|gitops|reloader (got '$drill')" ;;
 esac
-[ $# = 1 ] || fail "usage: deploy/k8s/drills/run.sh threats|supplychain|gitops|reloader (one drill per call)"
+[ $# = 1 ] || fail "usage: deploy/k8s/drills/run.sh threats|mesh|supplychain|gitops|reloader (one drill per call)"
 
 umask 077
 work=$(mktemp -d)
@@ -104,6 +106,10 @@ threats)
   ((n >= 12)) ||
     fail "SECRETS: read at least 12 of the Secret values the drill uses (Kafka users, Valkey's svp-feed-service, Grafana admin, object store users) to search its output (got $n)"
   searched="the drill read (Kafka users, Valkey's svp-feed-service, Grafana admin, object store users)"
+  ;;
+mesh)
+  [ -s .k8s/ca.crt ] || fail "drill-k8s-mesh: .k8s/ca.crt missing; run make k8s-up (or make k8s-ca)"
+  export CURL_CA_BUNDLE=$repo_root/.k8s/ca.crt
   ;;
 reloader)
   [ -s .k8s/ca.crt ] || fail "drill-k8s-reloader: .k8s/ca.crt missing; run make k8s-up (or make k8s-ca)"

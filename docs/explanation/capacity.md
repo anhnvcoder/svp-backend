@@ -119,3 +119,18 @@ nhân thời gian xử lý (định luật Little), nên giới hạn mặc đ�
   quá muộn để bảo vệ pod. Giá trị là điểm khởi đầu: buổi stg đo lại dưới k6 rồi chỉnh `env.MAX_IN_FLIGHT` của gateway
   ở `base/services/gateway.yaml` (`svp-gitops`).
 - Đổi `maxReplicas` của gateway thì tính lại công thức và đặt lại giá trị.
+
+## RAM của mesh trên k3d
+
+Vì sao: [ADR-0075](../adr/0075-service-mesh.md). Trần RAM của k3d: [triển khai](deployment.md#kubernetes-cục-bộ-k3d).
+
+Mesh thêm bốn thứ chạy thường trực: istiod, istio-cni và ztunnel (mỗi node) ở `istio-system`, waypoint ở `svp-mesh`. Số cụ thể
+không chép ở đây, để đổi ở một chỗ: request và limit của istiod, istio-cni, ztunnel nằm ở `base/<component>.yaml` của
+`svp-gitops`; của waypoint ở khoá `waypoint` của `deploy/helm/svp-cluster/values.yaml` (repo này), EKS chỉ đổi số replica ở
+`platforms/eks/svp-cluster.yaml` của `svp-gitops`.
+
+- **Chưa đo.** Máy 16 GB không chạy phép đo (k3d dựng lại cả cụm), nên RAM thật của mesh đo trên runner của `verify.yml`: bước
+  `drill-k8s-mesh` in dòng `RESULT mesh-memory` (`kubectl top` của từng pod `istio-system`, `svp-mesh` và tổng). Số đo ghi vào
+  phụ lục của ADR-0075 khi có lượt `dev-k3d` đầu tiên.
+- **Tiêu chí.** Số đo cộng vào RAM lúc nghỉ ở mục chi phí của [triển khai](deployment.md#kubernetes-cục-bộ-k3d) vẫn phải nằm
+  trong ngân sách của ADR-0014 §2; vượt thì người học chọn bước cắt và ADR ghi lại.

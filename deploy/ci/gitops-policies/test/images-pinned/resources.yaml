@@ -334,3 +334,90 @@ data:
             image: docker.io/envoyproxy/ratelimit:0482748e@sha256:5fdd8e3ae335ab6d64316f8d2fd9a886830075cbbb40a1d8065c869275909162
             imagePullPolicy: IfNotPresent
     endpoint: https://otel.example.com/v1/traces:4318
+---
+# istiod reads this ConfigMap by its name, so the cases below share it: each one's namespace says fail-… or pass-….
+# Proxy images pinned in the JSON values, beside the Go templates istiod fills from them at run time.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: istio-sidecar-injector
+  namespace: pass-injector
+data:
+  values: |-
+    {
+      "global": {
+        "hub": "docker.io/istio",
+        "proxy": {
+          "image": "docker.io/istio/proxyv2:1.32.0-distroless@sha256:9cd1f1cc261f3fe250ab483543e7256c39d5871eae5f1817c0809eff09e365d4"
+        },
+        "proxy_init": {
+          "image": "docker.io/istio/proxyv2:1.32.0-distroless@sha256:9cd1f1cc261f3fe250ab483543e7256c39d5871eae5f1817c0809eff09e365d4"
+        },
+        "tag": "1.32.0"
+      }
+    }
+  config: |-
+    templates:
+      waypoint: |
+        spec:
+          containers:
+          - name: istio-proxy
+            {{- if contains "/" (annotation .ObjectMeta `sidecar.istio.io/proxyImage` .Values.global.proxy.image) }}
+            image: {{ annotation .ObjectMeta `sidecar.istio.io/proxyImage` .Values.global.proxy.image | quote }}
+            {{- else }}
+            image: "{{ .ProxyImage }}"
+            {{- end }}
+      grpc-simple: ""
+---
+# A bare tag in the JSON values, without the dotted registry the registry shape reads.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: istio-sidecar-injector
+  namespace: fail-injector-tag
+data:
+  values: |-
+    {"global": {"proxy": {"image": "istio/proxyv2:1.32.0-distroless"}}}
+  config: |-
+    templates:
+      waypoint: |
+        image: "{{ .ProxyImage }}"
+---
+# A name without "/", which istiod completes from hub and tag: no digest.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: istio-sidecar-injector
+  namespace: fail-injector-hub-tag
+data:
+  values: |-
+    {"global": {"hub": "docker.io/istio", "tag": "1.32.0", "proxy": {"image": "proxyv2"}}}
+---
+# A template's own unpinned image beside the Go templates (grpc-simple of the chart, not overridden).
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: istio-sidecar-injector
+  namespace: fail-injector-template-image
+data:
+  values: |-
+    {"global": {"proxy": {"image": "docker.io/istio/proxyv2:1.32.0-distroless@sha256:9cd1f1cc261f3fe250ab483543e7256c39d5871eae5f1817c0809eff09e365d4"}}}
+  config: |-
+    templates:
+      grpc-simple: |
+        initContainers:
+          - name: grpc-bootstrap-init
+            image: busybox:1.28
+        containers:
+          - name: app
+            image: "{{ .ProxyImage }}"
+---
+# Go templates are left out in istiod's ConfigMap alone.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: fail-configmap-data-template
+  namespace: t
+data:
+  pod.yaml: |
+    image: "{{ .ProxyImage }}"

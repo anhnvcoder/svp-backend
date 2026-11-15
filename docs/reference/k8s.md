@@ -49,20 +49,50 @@ Loại tài liệu (Diátaxis): **reference**, tra cứu khi cần một lệnh 
   `zoneSpread: {whenUnsatisfiable, minDomains}` chỉnh ràng buộc zone: mặc định `ScheduleAnyway` không `minDomains` (node
   k3d không có nhãn zone), `minDomains` chỉ hợp lệ với `DoNotSchedule` (schema chặn). Server gRPC của service đặt
   `MaxConnectionAge` và `MaxConnectionAgeGrace` (`internal/grpcserver`), nên client nối lại đều đặn và tải trải lên pod
-  mới. Media-worker drain khi SIGTERM (làm nốt job đang chạy tối đa 540 s, [`environment.md`](environment.md)):
+  mới (trên cluster waypoint đã cân theo lời gọi; compose và client ngoài mesh dựa vào đây). Media-worker drain khi SIGTERM
+  (làm nốt job đang chạy tối đa 540 s, [`environment.md`](environment.md)):
   `terminationGracePeriodSeconds` của release phải lớn hơn hạn đó, và dưới `terminationGracePeriod` của NodePool
   Karpenter.
-- **Canary của service gRPC** (chart `svp-service`, `canary: true` ở `base/services/<release>.yaml` của `svp-gitops`;
-  release có `httpRoute.host`, gateway và web, canary qua Envoy): Rollout không `trafficRouting`, tải chia theo số pod
-  (gần đúng: client `pick_first` qua ClusterIP chỉ lệch về pod canary khi nối lại). Bước như release HTTP (25 %, 60 s,
-  50 %, 60 s, gate) và cùng nhịp đo, `failureLimit` của chart; hai metric trên pod canary (`k8s_pod_name` theo hash pod
-  template của Rollout) từ `rpc_server_call_duration_seconds`: tỉ lệ lỗi server (mã gRPC `UNKNOWN`, `INTERNAL`,
-  `UNAVAILABLE`, `DATA_LOSS`, `DEADLINE_EXCEEDED` trên mọi lời gọi) và p99; dưới 30 lời gọi trong phút gần nhất thì
-  Inconclusive, không promote. Ngưỡng ở `canaryLimits` của release.
+- **Canary của service gRPC** (chart `svp-service`, `canary: true` ở `base/services/<release>.yaml` của `svp-gitops`, `canaryRoute` của
+  component ở `argocd/apps/components.json` là tên GRPCRoute; release có `httpRoute.host`, gateway và web, canary qua Envoy):
+  Rollout có `trafficRouting` qua plugin Gateway API của Argo Rollouts, trên
+  `GRPCRoute` tên release (`templates/grpcroute.yaml`; `parentRefs` là Service của release, waypoint thực thi, hai `backendRefs` là
+  Service `<release>` và `<release>-canary`). Waypoint chia theo từng lời gọi, không theo kết nối của client, nên phần của canary là trọng
+  số của bước dù canary có bao nhiêu pod. Bước như release HTTP (25 %, 60 s, 50 %, 60 s, gate) và cùng nhịp đo, `failureLimit` của chart; hai
+  metric trên pod canary (`k8s_pod_name` theo hash pod template của Rollout, vì plugin chỉ đổi trọng số, metric không mang Service) từ
+  `rpc_server_call_duration_seconds`: tỉ lệ lỗi server (mã gRPC `UNKNOWN`, `INTERNAL`, `UNAVAILABLE`, `DATA_LOSS`, `DEADLINE_EXCEEDED` trên mọi
+  lời gọi) và p99; dưới 30 lời gọi trong phút gần nhất thì Inconclusive, không promote. Ngưỡng ở `canaryLimits` của release. Hook postsync của
+  `install.sh` từ chối release canary không có route đúng kind (`canaryRoute` rỗng, hay route không tồn tại).
 - Nền tảng trên k3d so với EKS ([ADR-0056](../adr/0056-eks-platform-ha.md)): Envoy chạy như EKS (EnvoyProxy `svp` có HPA `envoyHpa` từ 2
   replica, PDB `envoyPDB`, trải zone rồi trải node; node k3d không có nhãn `topology.kubernetes.io/zone` nên chỉ ràng buộc node có tác dụng);
   Kyverno một replica của `base/kyverno.yaml` (ba replica chỉ ở `platforms/eks/kyverno.yaml`); không Karpenter (`karpenter.enabled` của chart
   `svp-cluster` tắt, node là hai node của k3d).
+- **Service mesh Istio ambient** ([ADR-0075](../adr/0075-service-mesh.md), giải thích ở [`architecture.md`](../architecture.md); sự thật về cổng,
+  nhãn, giá trị chart ở [phụ lục](../adr/appendix/0075-service-mesh.md)): bốn component của `argocd/apps/components.json` ở namespace
+  `istio-system`, cùng một version Istio, chạy ở cả hai nền tảng và cả đường dev lẫn đường GitOps: `istio-base` (CRD), `istiod`, `istio-cni`,
+  `ztunnel` (DaemonSet), values ở `base/<component>.yaml` và `platforms/eks/<component>.yaml` của `svp-gitops`. Namespace do chart `svp-cluster`
+  tạo: `istio-system` (PSA `privileged`, vì ztunnel và istio-cni cần quyền mạng của node), `svp` có nhãn `istio.io/dataplane-mode: ambient`
+  (mọi pod của nó vào mesh), `svp-mesh` (PSA `restricted`, default-deny) chỉ giữ **waypoint**. Pod proxy của Envoy Gateway vào mesh bằng nhãn
+  pod ở `EnvoyProxy`; `svp-data`, `svp-obs`, `svp-edge` không vào. istio-cni gắn annotation `ambient.istio.io/redirection: enabled` lên pod đã được
+  bắt. Mỗi release của chart `svp-service` có `PeerAuthentication` STRICT (không nhận plaintext ở cổng nào) và `AuthorizationPolicy`
+  `<release>` (L4, ztunnel, theo `ingressFrom` của release); release gRPC chỉ nhận danh tính của waypoint và có thêm
+  `AuthorizationPolicy` `<release>-waypoint` (L7, `targetRefs` Service) chỉ nhận peer `ingressFrom`. NetworkPolicy giữ làm lớp mạng, thêm
+  cổng HBONE 15008 và nguồn probe của kubelet. Waypoint là Gateway `waypoint` (class `istio-waypoint`) ở `svp-mesh`, Deployment và Service
+  cùng tên do istiod tạo; bốn Service gRPC có nhãn `istio.io/use-waypoint: waypoint` nên gateway gọi chúng qua nó và cân tải theo từng lời gọi.
+  Khoá `waypoint.replicas`, `waypoint.resources` của chart `svp-cluster` (1 replica ở k3d, 2 kèm PDB ở EKS). Code gRPC vẫn nói plaintext
+  với ztunnel trong chính pod (`insecure.NewCredentials()`), mesh mã hoá trên dây; compose không có mesh. **Cách đọc log và trạng thái** (chỉ
+  `kubectl`, không `istioctl`): `kubectl --context k3d-svp -n istio-system logs -l app=ztunnel --prefix --since=15m --tail=-1` (mọi
+  pod ztunnel, mỗi node một pod; `ds/ztunnel` chỉ đọc một pod do kubectl chọn; kết nối bị policy từ chối: ztunnel đích trả 401 cho
+  CONNECT của HBONE, ztunnel nguồn đóng socket của app),
+  `kubectl --context k3d-svp -n svp-mesh logs deploy/waypoint`, `kubectl --context k3d-svp -n svp get pod -o custom-columns=NAME:.metadata.name,\
+REDIRECTION:'.metadata.annotations.ambient\.istio\.io/redirection'`; quy trình khi lời gọi bị từ chối:
+  [`mesh-traffic-denied.md`](../runbooks/mesh-traffic-denied.md).
+- **Đóng và mở trong ambient** (probe của diễn tập, `deploy/k8s/drills/templates/ambient-probe.js`): với pod mà ambient bắt, ztunnel nhận mọi kết
+  nối TCP ngay trong network namespace của pod rồi mới nối tới đích, nên "connect thành công" không còn nghĩa là "mở". Probe phán **closed**
+  khi connect lỗi hay hết hạn, hay connect xong mà socket bị đóng hay reset trước hạn giữ W (15 s, lớn hơn hạn nối upstream 10 s của ztunnel);
+  **open** khi socket còn mở tới W hay đã nhận dữ liệu. `web-13`, `ff-5` và hai ca từ pod giả media-worker của `in-2-in-4` dùng chế độ `tcp` của probe này;
+  ca từ pod ngoài mesh (`svp-probe`) giữ `nc -z`. Ca closed không cho biết lớp nào chặn (NetworkPolicy hay AuthorizationPolicy): lớp mTLS và
+  quyền có ca riêng ở `drill-k8s-mesh`.
 - Chi phí và uptime ([ADR-0074](../adr/0074-cost-uptime.md), giải thích ở [`cost-and-uptime.md`](../explanation/cost-and-uptime.md)): component
   `opencost` (`svp-obs`, Service `opencost` cổng 9003, đọc `kps-prometheus` cổng 9090, giá mặc định của OpenCost, cluster id `svp-k3d`) và
   `blackbox-exporter` (`svp-obs`, chỉ nền tảng `k3d`, Service `blackbox-exporter` cổng 9115, module `http_local_web`, `http_local_api`,
@@ -274,7 +304,7 @@ Loại tài liệu (Diátaxis): **reference**, tra cứu khi cần một lệnh 
   đúng pid đã ghi và in số request theo status. **LOCAL LAB ONLY:** đăng ký user mới và xoá khoá rate limit đăng ký ở
   Valkey db 10 của cluster.
 - Diễn tập trên cluster là test Chainsaw ở `deploy/k8s/drills/<diễn tập>/` (nhãn `drill=<diễn tập>`, config chung `.chainsaw.yaml`,
-  StepTemplate chung ở `templates/`). `make drill-k8s-threats`, `drill-k8s-supplychain`, `drill-k8s-gitops`, `drill-k8s-reloader` gọi
+  StepTemplate chung ở `templates/`). `make drill-k8s-threats`, `drill-k8s-mesh`, `drill-k8s-supplychain`, `drill-k8s-gitops`, `drill-k8s-reloader` gọi
   `deploy/k8s/drills/run.sh <diễn tập>`: kiểm context trước (`SVP_KUBE_CONTEXT` trống hay `k3d-svp`, kubeconfig có context `k3d-svp`, API
   trả lời; sai thì dừng, không gọi cluster nào khác), rồi một lần `chainsaw test --kube-context k3d-svp --parallel 1` cho đúng một diễn tập
   (hai diễn tập không bao giờ chạy cùng lúc). Output vào `.k8s/drills/<diễn tập>-<UTC>.log`, report JUnit `.k8s/drills/<diễn tập>-<UTC>.xml`;
@@ -350,6 +380,17 @@ Loại tài liệu (Diátaxis): **reference**, tra cứu khi cần một lệnh 
   a–i và (l) PASS, (l) đúng message của phép provenance, (k) SKIP như thiết kế. Khi kết thúc mỗi test trả Kyverno, Argo CD sync, Audit về như cũ, xoá policy tạm, `svp-probe`, và so
   webhook với ảnh chụp đầu của nó; log và report JUnit `.k8s/drills/supplychain-<UTC>.log`, `.xml`. Không gọi API của gateway, không xoá
   khoá rate limit nào.
+- `make drill-k8s-mesh`: các lớp của mesh trên cluster dev hay GitOps đang chạy (sau `make k8s-smoke`), mỗi ca một test ở
+  `deploy/k8s/drills/mesh/<ca>/` (nhãn `drill=mesh`); thiếu `.k8s/ca.crt` thì chạy `make k8s-ca`. Pod diễn tập ở namespace `svp`, nhãn
+  `app.kubernetes.io/managed-by: svp-drill-mesh`, mang nhãn của gateway, chạy image của một pod web đang chạy, xoá khi xong. Ca: `m-1` pod
+  nhãn gateway ngoài mesh (`istio.io/dataplane-mode: none`) gọi plaintext tới bốn service gRPC bị từ chối (closed, mục "Đóng và mở trong
+  ambient"); `m-2` ServiceAccount lạ trong mesh gọi gRPC qua Service bị waypoint từ chối (`PERMISSION_DENIED` hay 403), đối chứng ServiceAccount
+  `gateway` được trả lời; `m-3` danh tính `gateway` gọi thẳng IP pod, bỏ qua waypoint, bị ztunnel từ chối, đối chứng mạng tới `<IP pod>:15008`
+  thông; `m-4` mọi pod đang chạy của `svp` và pod proxy Envoy có annotation `ambient.istio.io/redirection: enabled`; `control` gateway thật
+  gọi được (`/readyz` qua Envoy); `memory` không phải cổng, in dòng `RESULT mesh-memory <namespace>/<pod> <n>Mi` cho từng pod của `istio-system`
+  và `svp-mesh` (`kubectl top`) rồi dòng tổng. Log `.k8s/drills/mesh-<UTC>.log`, report JUnit `.xml`; ở CI, `verify-collect.sh` giữ riêng các
+  dòng `RESULT mesh-memory` ở `logs/drill-k8s-mesh.results.log` của artifact. Đọc kết quả đỏ: ca nào đỏ nêu pod và đích; tra lớp chặn theo
+  [`mesh-traffic-denied.md`](../runbooks/mesh-traffic-denied.md).
 - `make drill-k8s-gitops`: các kiểm của cluster GitOps (`make k8s-gitops-up`), mỗi kiểm một test ở `deploy/k8s/drills/gitops/`; log và
   report JUnit `.k8s/drills/gitops-<UTC>.log`, `.xml`.
 - `make drill-k8s-reloader`: xoay credential thật trên cluster dev hay GitOps (test `deploy/k8s/drills/reloader/rotate/`, cần
@@ -609,7 +650,8 @@ Phần này ghi vì sao các hàm và script ở `deploy/k8s/` làm như vậy; 
     (thế hệ archive của Cluster `svp-pg` đang chạy, `pg_backup_sets` của `rotate.sh`; không đặt khi Cluster chưa có, nhận mặc định của
     chart).
   - Hook presync và postsync gọi `deploy/k8s/install.sh hook <event> <release> <namespace> <kind> <canaryRoute> <failed>` (`kind` là `service`
-    cho release của chart `svp-service`, `component` cho phần còn lại; `canaryRoute` rỗng với release canary gRPC, không HTTPRoute để kiểm; `failed` khi helm lỗi). Hook lỗi, như release lỗi, dừng helmfile trước
+    cho release của chart `svp-service`, `component` cho phần còn lại; `canaryRoute` là tên HTTPRoute hay GRPCRoute của release
+    canary, hook postsync kiểm route đó có; `failed` khi helm lỗi). Hook lỗi, như release lỗi, dừng helmfile trước
     wave sau, với status khác 0. Cả hai không chạy với `helmfile template`, mà không hỏi cluster nào.
 
 ### Secret

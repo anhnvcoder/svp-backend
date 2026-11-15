@@ -24,6 +24,8 @@ service_log_re='"(msg|level)"[[:space:]]*:|access log of trace'
 # Only fixed verdict lines without probe output reach the artifact.
 verdict_re='^(ok|PASS|FAIL|SKIP|WARN)[[:space:]]'
 drill_end_re='^drill-obs-threats: all checks passed$'
+# Evidence lines of drill-k8s-mesh (pod names, memory figures), which Chainsaw prints indented in a script's output.
+result_re='^[[:space:]]*RESULT mesh-memory '
 
 scenario=$(cat "$out/scenario" 2>/dev/null) || scenario=unknown
 rm -rf "$art" && mkdir -p "$art" || {
@@ -127,6 +129,9 @@ if [ -d "$out" ]; then
       logs/drill-obs-threats.log)
         grep -aE -e "$verdict_re" -e "$drill_end_re" "$file" | grep -avE -- "$service_log_re" >"$work/verdicts" || :
         consider "$work/verdicts" "$src (verdict lines)" logs/drill-obs-threats.verdicts.log verdicts ;;
+      logs/drill-k8s-mesh.log)
+        grep -aE -- "$result_re" "$file" | sed -E 's/^[[:space:]]+//' >"$work/results" || :
+        consider "$work/results" "$src (RESULT lines)" logs/drill-k8s-mesh.results.log stack ;;
       logs/gitops-admission-metrics.log | logs/uptime-cost.log | k8s-state.json)
         consider "$file" "$src" "$sub" stack ;;
       *) drop "$src" not-allowed ;;

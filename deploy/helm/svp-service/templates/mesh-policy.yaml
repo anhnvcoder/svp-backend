@@ -1,0 +1,96 @@
+{{- /*
+Istio ambient mesh: the release's pods take mTLS only (STRICT), and admit by identity only the callers of ingressFrom.
+ztunnel enforces both on the pods (selector); a release with no ingressFrom admits no one. The migrate Job has no port
+and no policy.
+*/}}
+
+{{- /*
+A gRPC release's callers reach it through the waypoint, which ztunnel sees in place of the caller: its pods admit the
+waypoint alone, so a call that skips the waypoint (to a pod's address) is refused. The waypoint checks the callers
+against the policy on the Service (targetRefs), which must sit in the Service's namespace.
+*/}}
+{{- $sources := list }}
+{{- range .Values.ingressFrom }}
+{{- if not (hasKey $.Values.peers .) }}{{ fail (printf "ingressFrom: unknown peer %q" .) }}{{ end }}
+{{- $mesh := (index $.Values.peers .).mesh }}
+{{- if not $mesh }}
+{{- fail (printf "ingressFrom: peer %q is outside the mesh, and STRICT mTLS refuses its plaintext" .) }}
+{{- end }}
+{{- if $mesh.principal }}
+{{- $sources = append $sources (dict "principals" $mesh.principal) }}
+{{- else }}
+{{- $sources = append $sources (dict "namespaces" $mesh.namespace) }}
+{{- end }}
+{{- end }}
+{{- $grpc := eq .Values.protocol "grpc" }}
+apiVersion: security.istio.io/v1
+kind: PeerAuthentication
+metadata:
+  name: {{ .Release.Name }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "svp-service.labels" . | nindent 4 }}
+spec:
+  selector:
+    matchLabels:
+      {{- include "svp-service.selectorLabels" . | nindent 6 }}
+  mtls:
+    mode: STRICT
+---
+apiVersion: security.istio.io/v1
+kind: AuthorizationPolicy
+metadata:
+  name: {{ .Release.Name }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "svp-service.labels" . | nindent 4 }}
+spec:
+  selector:
+    matchLabels:
+      {{- include "svp-service.selectorLabels" . | nindent 6 }}
+  action: ALLOW
+  {{- if $sources }}
+  rules:
+    - from:
+        {{- if $grpc }}
+        - source:
+            principals: [{{ .Values.peers.waypoint.mesh.principal | quote }}]
+        {{- else }}
+        {{- range $sources }}
+        - source:
+            {{- range $key, $value := . }}
+            {{ $key }}: [{{ $value | quote }}]
+            {{- end }}
+        {{- end }}
+        {{- end }}
+      # HBONE carries any port of the pod past the NetworkPolicy's 15008: only the service's own is reached.
+      to:
+        - operation:
+            ports: [{{ .Values.port | quote }}]
+  {{- end }}
+{{- if $grpc }}
+---
+apiVersion: security.istio.io/v1
+kind: AuthorizationPolicy
+metadata:
+  name: {{ .Release.Name }}-waypoint
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "svp-service.labels" . | nindent 4 }}
+spec:
+  targetRefs:
+    - kind: Service
+      group: ""
+      name: {{ .Release.Name }}
+  action: ALLOW
+  {{- if $sources }}
+  rules:
+    - from:
+        {{- range $sources }}
+        - source:
+            {{- range $key, $value := . }}
+            {{ $key }}: [{{ $value | quote }}]
+            {{- end }}
+        {{- end }}
+  {{- end }}
+{{- end }}

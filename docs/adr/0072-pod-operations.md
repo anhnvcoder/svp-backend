@@ -180,16 +180,12 @@ lời gọi thì Inconclusive; ngưỡng là `canaryLimits` của release.
 - §1: `services/dlq-replay/`, `deploy/kafka/kafka-init.sh`, `deploy/compose/`, `deploy/k8s/secrets.sh`,
   `deploy/helm/svp-cluster/files/external-secrets.yaml`, `deploy/helm/svp-data/templates/networkpolicies.yaml`; §2:
   `deploy/docker-bake.json`, `deploy/helm/svp-policy/files/sources.json`, `deploy/ci/`, `.github/workflows/images.yml`.
-- §3–§7: `services/gateway/`, `deploy/postgres/`, `deploy/helm/svp-data/files/pg-bootstrap.sh`,
-  `services/feed-service/internal/projector/`, `internal/pgpool/`, `internal/kafkax/consumer.go`, `services/media-worker/internal/`,
-  `deploy/docker/media-worker.Dockerfile`, `deploy/k8s/drills/templates/`.
-- §8–§11: `deploy/helm/svp-service/`, `deploy/k8s/install.sh`, `deploy/k8s/helmfile.yaml.gotmpl`, `internal/grpcserver/`,
-  `internal/telemetry/`, `internal/outbox/`, `services/user-service/migrations/`, `services/video-service/migrations/`,
-  `deploy/observability/prometheus/rules/svp-alerts.yaml`, `.golangci.yml`, `docs/runbooks/kafka-dlq-records.md`,
-  `docs/runbooks/outbox-rows-failed.md`.
-- `svp-gitops`: `base/services/`, `envs/stg/`, `envs/prd/` (`DATABASE_MAX_CONNS`), `argocd/apps/templates/applications.yaml`
-  (`PruneLast`), `platforms/eks/` (`zoneSpread`). `svp-infra`: `aws/modules/msk/main.tf`, `aws/modules/registry/main.tf`,
-  `github/scripts/github-app.py` (user MSK, repo ECR, package GHCR `dlq-replay`).
+- §3–§7: `services/gateway/`, `deploy/postgres/`, `deploy/helm/svp-data/files/pg-bootstrap.sh`, `services/feed-service/internal/projector/`, `internal/pgpool/`,
+  `internal/kafkax/consumer.go`, `services/media-worker/internal/`, `deploy/docker/media-worker.Dockerfile`, `deploy/k8s/drills/templates/`.
+- §8–§11: `deploy/helm/svp-service/`, `deploy/k8s/install.sh`, `deploy/k8s/helmfile.yaml.gotmpl`, `internal/grpcserver/`, `internal/telemetry/`, `internal/outbox/`, `services/user-service/migrations/`,
+  `services/video-service/migrations/`, `deploy/observability/prometheus/rules/svp-alerts.yaml`, `.golangci.yml`, `docs/runbooks/kafka-dlq-records.md`, `docs/runbooks/outbox-rows-failed.md`.
+- `svp-gitops`: `base/services/`, `envs/stg/`, `envs/prd/` (`DATABASE_MAX_CONNS`), `argocd/apps/templates/applications.yaml` (`PruneLast`), `platforms/eks/`
+  (`zoneSpread`). `svp-infra`: `aws/modules/msk/main.tf`, `aws/modules/registry/main.tf`, `github/scripts/github-app.py` (user MSK, repo ECR, package GHCR `dlq-replay`).
 
 ## Nguồn
 
@@ -198,3 +194,7 @@ lời gọi thì Inconclusive; ngưỡng là `canaryLimits` của release.
 ## Thông tin thêm
 
 Phụ lục: [`appendix/0072-pod-operations.md`](appendix/0072-pod-operations.md) (phương án, bảng của §1, §2, §4, §5, §7, §8, §10, nguồn).
+
+### Chỉnh bởi
+
+- §8: [0075](0075-service-mesh.md): release `protocol: grpc` có `canary: true` là Rollout có `trafficRouting` qua plugin Gateway API trên `GRPCRoute` tên release (parent là Service của release, waypoint của mesh thực thi), chia theo request thay theo số pod; bước, analysis trên pod canary, giới hạn giữ; Tuổi kết nối gRPC giữ (vô hại sau waypoint, vẫn chia tải ở compose và cho client ngoài mesh).

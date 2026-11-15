@@ -1,7 +1,7 @@
 # Example values of an EKS cluster, to render and check what only such a cluster turns on (helm template -f this file):
 # Postgres on Amazon RDS, objects on Amazon S3 (no CloudNativePG, no in-cluster object store, StorageClass gp3), an
-# internal ALB in front of Envoy. Placeholders only: real CIDRs, ARNs, names come from the cluster's Terraform outputs
-# and the learner's own variables, never from git; .example never resolves.
+# internal ALB in front of Envoy, Karpenter's nodes, two waypoint replicas. Placeholders only: real CIDRs, ARNs, names
+# come from the cluster's Terraform outputs and the learner's own variables, never from git; .example never resolves.
 cloudnativePG:
   enabled: false
 s3:
@@ -59,6 +59,11 @@ envoy:
     name: svp-envoy
   # The ALB's target group of type ip; the ALB sits in the edge subnets of edgeCidrs below.
   targetGroupArn: arn:aws:elasticloadbalancing:ap-southeast-1:000000000000:targetgroup/svp-stg-envoy/0000000000000000
+  nodeAffinity:
+    requiredDuringSchedulingIgnoredDuringExecution:
+      nodeSelectorTerms:
+        - matchExpressions:
+            - {key: karpenter.sh/nodepool, operator: Exists}
   networkPolicy:
     enabled: true
     # The ALB in two zones' edge subnets, and the k6 Job of namespace svp-load that measures inside the cluster.
@@ -78,3 +83,20 @@ envoy:
             cidr: 10.0.240.0/23
         - ipBlock:
             cidr: 10.0.242.0/23
+
+# Two waypoint replicas, so a drain keeps one: renders the waypoint's PodDisruptionBudget.
+waypoint:
+  replicas: 2
+
+# NodePool and EC2NodeClass default, with the startup taint that keeps pods off a node until the mesh is ready there.
+karpenter:
+  enabled: true
+  clusterName: svp-stg
+  amiAlias: al2023@v20261107
+  capacityTypes: [spot]
+  limits:
+    cpu: 16
+    memory: 64Gi
+  disruptionBudgets:
+    - nodes: "1"
+  terminationGracePeriod: 10m

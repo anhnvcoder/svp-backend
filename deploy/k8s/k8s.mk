@@ -7,7 +7,7 @@ K8S_LIB := . deploy/k8s/lib.sh
 
 .PHONY: k8s-exclusive k8s-up k8s-down k8s-status k8s-ca k8s-secrets k8s-images k8s-smoke \
 	k8s-glitchtip-init k8s-ui-grafana k8s-ui-prometheus k8s-ui-alertmanager k8s-ui-glitchtip k8s-gitops-up \
-	k8s-ui-argocd k8s-traffic-start k8s-traffic-stop drill-k8s-threats \
+	k8s-ui-argocd k8s-traffic-start k8s-traffic-stop drill-k8s-threats drill-k8s-mesh \
 	drill-k8s-supplychain drill-k8s-gitops drill-k8s-reloader k8s-web-sourcemaps k8s-web-e2e cloud-check \
 	gitops-clone web-clone eks-secrets eks-glitchtip-init eks-smoke eks-seed \
 	eks-transcode-timing eks-rl-reset eks-premium-check
@@ -105,6 +105,11 @@ k8s-traffic-stop: ## Stop the drill traffic started by k8s-traffic-start (the pi
 # what each test checks is written in the test. threats needs .k8s/ca.crt (run.sh checks it) and the gateway.
 drill-k8s-threats: ## Check the threat model rows on cluster svp, each with a control case: a probe pod in namespace svp-probe (created, then deleted) and media-worker reach only what the NetworkPolicies allow, Kafka ACLs per user, pod security and PSA, no trust in pg_hba, login rate limit ignores forged X-Forwarded-For, no pprof/metrics, no exposed UI, Grafana 401, no ServiceAccount reads secrets or pods; web client: no token or JWT in pages, RSC or /api JSON and /api/ outside the BFF list 400/404 (WEB-7), cross-site or same-site POSTs 403 CSRF_REJECTED (WEB-2), the object store's CORS per bucket for https://svp.localhost:8443 only, POST to uploads and GET at media only (WEB-10), web pods reach only gateway, Valkey, Collector, GlitchTip (WEB-13), login rate limit through the /login form counts the address Envoy wrote (WEB-8); object store user svp-pg-backup reads only bucket pg-backups and no service's user reads it (BAK-1); on a cluster with External Secrets Operator: each store's ServiceAccount gets only its namespace's source Secrets by name (SEC-6), the controller writes Secrets only where its ExternalSecrets are and makes tokens only for the stores (SEC-5, its read of every Secret printed as an exception), no ServiceAccount of svp creates ExternalSecrets or SecretStores (SEC-7); one Chainsaw test per row (deploy/k8s/drills/threats/), log and JUnit report in .k8s/drills/threats-<UTC>.log and .xml, both searched for the Secret values read; needs make k8s-smoke run before (LOCAL LAB ONLY: resets register rate limit keys in the cluster's Valkey db 10)
 	deploy/k8s/drills/run.sh threats
+
+# The mesh's own layers, each case apart from the NetworkPolicies: its pods carry the gateway's labels, so the network
+# lets them through. Needs .k8s/ca.crt (run.sh checks it) for the control through Envoy; touches no Valkey key.
+drill-k8s-mesh: ## Check the service mesh (Istio ambient) on cluster svp, dev path or GitOps: plaintext from a pod with the gateway's labels outside the mesh refused by STRICT mTLS (M-1), an unknown ServiceAccount refused by the waypoint while the gateway's is answered (M-2), the gateway's identity calling a gRPC pod's address past the waypoint refused by ztunnel (M-3), every running pod of svp and Envoy's proxy pods captured by ambient mode (M-4), /readyz through Envoy 200 (control), and the memory of the pods of istio-system and svp-mesh as RESULT mesh-memory lines (kubectl top, no gate); the drill pods (namespace svp, label managed-by=svp-drill-mesh) run the image of a running web pod and are deleted at the end; one Chainsaw test per case (deploy/k8s/drills/mesh/), log and JUnit report in .k8s/drills/mesh-<UTC>.log and .xml
+	deploy/k8s/drills/run.sh mesh
 
 # The image policy of namespace svp. It talks to the cluster's API, to GHCR (anonymous) for the newest drill images,
 # and for the CRITICAL case and the case without provenance to GHCR and Sigstore through cosign (anonymous, COSIGN_IMAGE when cosign is not installed), so it needs
