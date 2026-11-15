@@ -927,7 +927,7 @@ func TestTranscodeConsumerBoundsEachAttempt(t *testing.T) {
 func TestTranscodeRollbackIsBounded(t *testing.T) {
 	needDB(t)
 	pool, hang := withHangingRollback(t, testPool)
-	s := New(pool, newFakeStorage(), slog.New(slog.DiscardHandler))
+	s := New(pool, newFakeStorage(), nil, slog.New(slog.DiscardHandler))
 	s.rollbackTimeout = 200 * time.Millisecond
 	id := newVideo(t, "PROCESSING")
 

@@ -192,3 +192,4 @@ Phụ lục: [`appendix/0009-engagement-feed-stage2b.md`](appendix/0009-engageme
 - §4: [0045](0045-bounded-batch-retry.md): retry lượt xem: ngân sách 5 phút rồi DLQ thay thử lại không giới hạn.
 - §7: [0053](0053-msk-elasticache-valkey.md): phát lại bằng `svp-kafka` (Apache Kafka) của CLI vận hành, không `rpk group seek`.
 - §11: [0053](0053-msk-elasticache-valkey.md): topic tạo bằng script init của Apache Kafka (`deploy/kafka/`), không `deploy/redpanda/create-topics.sh`.
+- §6, §7, §9: [0073](0073-premium-playback.md): `videos` của `svp_feed` thêm `premium`, video premium giữ key xem thử trong `playlist_key` (§6); `video.ready` kiểm key theo cờ bằng `objstore.IsKeyUnder` (thường `media/<id>/`, premium `preview/<id>/`), feed không giữ key `premium/` (§7); item feed thêm `premium`, `playlist_url` của video premium là bản xem thử (§9).

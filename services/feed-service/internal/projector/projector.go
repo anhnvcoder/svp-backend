@@ -236,7 +236,8 @@ func (p *Projector) handleVideo(ctx context.Context, r *kgo.Record) error {
 // checkVideoReady checks every field the feed stores or serves, so a forged or broken event goes
 // to the dead-letter topic instead of failing every retry and stalling both topics. The
 // keys end up in URLs the gateway builds, so they get the same check as video-service gives
-// media-worker's; the title gets video-service's own title rule.
+// media-worker's (checkMediaKeys); the title gets video-service's own title rule. A premium
+// video is stored with its public preview as playlist_key: the feed holds no key under premium/.
 func checkVideoReady(e *videov1.VideoReady) (store.InsertVideoParams, error) {
 	videoID, err := ids.Parse(e.GetVideoId())
 	if err != nil {
@@ -249,11 +250,12 @@ func checkVideoReady(e *videov1.VideoReady) (store.InsertVideoParams, error) {
 	if !validTitle(e.GetTitle()) {
 		return store.InsertVideoParams{}, kafkax.Permanent(errors.New("video.ready title is not 1 to 200 characters of valid UTF-8 text"))
 	}
-	prefix := objstore.MediaPrefix + videoID.String() + "/"
-	for _, key := range []string{e.GetPlaylistKey(), e.GetThumbnailKey()} {
-		if !objstore.IsMediaKey(key, videoID.String()) {
-			return store.InsertVideoParams{}, kafkax.Permanent(fmt.Errorf("video.ready key %q is not under %s", key, prefix))
-		}
+	if err := checkMediaKeys(videoID.String(), e); err != nil {
+		return store.InsertVideoParams{}, kafkax.Permanent(err)
+	}
+	playlist := e.GetPlaylistKey()
+	if e.GetPremium() {
+		playlist = e.GetPreviewPlaylistKey()
 	}
 	d := e.GetDuration()
 	if d.CheckValid() != nil || d.AsDuration().Milliseconds() < 1 {
@@ -267,10 +269,37 @@ func checkVideoReady(e *videov1.VideoReady) (store.InsertVideoParams, error) {
 		AuthorID:     authorID,
 		Title:        strings.TrimSpace(e.GetTitle()),
 		DurationMs:   d.AsDuration().Milliseconds(),
-		PlaylistKey:  e.GetPlaylistKey(),
+		PlaylistKey:  playlist,
 		ThumbnailKey: e.GetThumbnailKey(),
 		PublishedAt:  e.GetPublishedAt().AsTime(),
+		Premium:      e.GetPremium(),
 	}, nil
+}
+
+// checkMediaKeys checks the keys of e against the prefixes of its premium flag: a regular video's
+// playlist and thumbnail under media/<id>/ and no preview; a premium video's playlist under
+// premium/<id>/, its thumbnail and preview playlist under preview/<id>/. A video.ready without the
+// flag, as the release before sends, is a regular video.
+func checkMediaKeys(id string, e *videov1.VideoReady) error {
+	keys := []struct{ name, prefix, key string }{
+		{"playlist", objstore.MediaPrefix, e.GetPlaylistKey()},
+		{"thumbnail", objstore.MediaPrefix, e.GetThumbnailKey()},
+	}
+	if e.GetPremium() {
+		keys = []struct{ name, prefix, key string }{
+			{"playlist", objstore.PremiumPrefix, e.GetPlaylistKey()},
+			{"thumbnail", objstore.PreviewPrefix, e.GetThumbnailKey()},
+			{"preview playlist", objstore.PreviewPrefix, e.GetPreviewPlaylistKey()},
+		}
+	} else if e.GetPreviewPlaylistKey() != "" {
+		return errors.New("video.ready has a preview playlist for a regular video")
+	}
+	for _, k := range keys {
+		if !objstore.IsKeyUnder(k.prefix, k.key, id) {
+			return fmt.Errorf("video.ready %s key %q is not under %s%s/", k.name, k.key, k.prefix, id)
+		}
+	}
+	return nil
 }
 
 // validTitle applies video-service's checkTitle rule: after trimming, 1 to maxTitleRunes

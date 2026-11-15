@@ -354,6 +354,8 @@ jobs:
       - run: deploy/k8s/eks-context-test.sh
       # AWS Secrets Manager scripts tested with fake tools (no secret leaks in args/output): no cloud account.
       - run: deploy/k8s/aws-secrets-test.sh
+      # Premium edge check of an EKS cluster tested with fake curl, date and sleep: no network, no cloud account.
+      - run: deploy/k8s/premium-edge-check-test.sh
       # Kafka init (topics, users, ACLs) and the svp-kafka, svp-valkey wrappers tested with fake tools: no network, no
       # broker.
       - run: deploy/helm/svp-data/files/kafka-init-test.sh

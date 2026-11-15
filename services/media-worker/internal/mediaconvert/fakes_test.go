@@ -57,6 +57,10 @@ type fakeStore struct {
 	afterCreate func(key string)
 	// beforeCopy, when set, runs before each Copy.
 	beforeCopy func()
+	// failCopyTo, when set, fails Copy to keys it returns true for, without writing.
+	failCopyTo func(dst string) bool
+	// writes lists every key written by Upload, Create or Copy, in call order.
+	writes []string
 }
 
 func newFakeStore() *fakeStore {
@@ -131,12 +135,35 @@ func (s *fakeStore) Create(ctx context.Context, key, path, contentType, cacheCon
 		return fmt.Errorf("upload %s: %w", key, objstore.ErrExists)
 	}
 	s.objects[key], s.types[key], s.caches[key] = data, contentType, cacheControl
+	s.writes = append(s.writes, key)
 	hook := s.afterCreate
 	s.mu.Unlock()
 	if hook != nil {
 		hook(key)
 	}
 	return nil
+}
+
+func (s *fakeStore) Upload(ctx context.Context, key, path, contentType, cacheControl string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	data, err := os.ReadFile(path) //nolint:gosec // a file of the try under test
+	if err != nil {
+		return err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.objects[key], s.types[key], s.caches[key] = data, contentType, cacheControl
+	s.writes = append(s.writes, key)
+	return nil
+}
+
+// written returns the keys written so far, in call order.
+func (s *fakeStore) written() []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return slices.Clone(s.writes)
 }
 
 func (s *fakeStore) Exists(ctx context.Context, key string) (bool, error) {
@@ -157,7 +184,7 @@ func (s *fakeStore) Copy(ctx context.Context, src, dst, contentType, cacheContro
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.copies++
-	if s.copies == s.failCopy {
+	if s.copies == s.failCopy || (s.failCopyTo != nil && s.failCopyTo(dst)) {
 		return errors.New("objstore: copy " + src + ": 503 Service Unavailable")
 	}
 	data, ok := s.objects[src]
@@ -165,6 +192,7 @@ func (s *fakeStore) Copy(ctx context.Context, src, dst, contentType, cacheContro
 		return fmt.Errorf("copy %s: %w", src, objstore.ErrNotFound)
 	}
 	s.objects[dst], s.types[dst], s.caches[dst] = data, contentType, cacheControl
+	s.writes = append(s.writes, dst)
 	return nil
 }
 
@@ -183,10 +211,12 @@ type fakeMC struct {
 	lose int
 	// beforeCreate, when set, runs at the start of each CreateJob.
 	beforeCreate func()
+	// segments are the #EXTINF values of every rendition playlist complete writes.
+	segments []string
 }
 
 func newFakeMC(store *fakeStore) *fakeMC {
-	return &fakeMC{store: store, jobs: map[string]*types.Job{}, probe: probeOf(1080, 1920, 0, 60, true)}
+	return &fakeMC{store: store, jobs: map[string]*types.Job{}, probe: probeOf(1080, 1920, 0, 60, true), segments: segmentLengths}
 }
 
 func (m *fakeMC) Probe(context.Context, *mediaconvert.ProbeInput, ...func(*mediaconvert.Options)) (*mediaconvert.ProbeOutput, error) {
@@ -262,8 +292,8 @@ func (m *fakeMC) calls() (probes, creates int) {
 	return m.probes, m.creates
 }
 
-// segmentLengths are the #EXTINF values of every rendition playlist the fake writes: 6.02 s in
-// all, while the job reports 6000 ms, so a result read from the event would differ.
+// segmentLengths are the #EXTINF values of every rendition playlist the fake writes by default:
+// 6.02 s in all, while the job reports 6000 ms, so a result read from the event would differ.
 var segmentLengths = []string{"4.000000", "2.020000"}
 
 // complete ends job id as MediaConvert does: its outputs written under its destinations, without
@@ -289,9 +319,9 @@ func (m *fakeMC) complete(t *testing.T, id string) {
 			for _, o := range g.Outputs {
 				name := base + aws.ToString(o.NameModifier)
 				playlist := "#EXTM3U\n#EXT-X-VERSION:3\n#EXT-X-TARGETDURATION:4\n"
-				for i, l := range segmentLengths {
+				for i, l := range m.segments {
 					seg := fmt.Sprintf("%s_%05d.ts", name, i+1)
-					m.store.put(seg, []byte("segment"))
+					m.store.put(seg, []byte("segment "+seg))
 					playlist += "#EXTINF:" + l + ",\n" + seg[strings.LastIndex(seg, "/")+1:] + "\n"
 				}
 				m.store.put(name+".m3u8", []byte(playlist+"#EXT-X-ENDLIST\n"))

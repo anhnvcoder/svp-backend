@@ -258,6 +258,15 @@ Mục 7 cũ ("Đề xuất xem lại") nguyên văn; việc còn mở chuyển v
   dùng chung không đổi. [ADR-0071](../adr/0071-paid-features.md) chỉnh ADR-0055, 0060, 0062, 0063. Đáng xem lại: (1) email finding
   GuardDuty của stg đi đường `us-east-1` là dòng chung của rule `notify`; (2) digest mới ở stg chỉ có quét cơ bản tới khi promote;
   (3) cờ đặt cho prd hay account dùng chung chỉ bị chặn bởi review của PR và `plan`; khi áp chỉ phần Config sinh email.
+- **Video premium (2026-11-15):** bề mặt mới là route phát premium và mua giả lập của gateway, playlist do video-service lọc
+  và ký, URL đã ký của segment dưới tiền tố `premium/` (CloudFront key group ở EKS, presign của object store ở compose, k3d), bản xem thử
+  công khai dưới `preview/` và khoá ký media từ máy người học qua Secrets Manager tới video-service (PRM-1 tới PRM-8 ở mục 4.14, hai tài
+  sản ở mục 3, UP-6, hai dòng mới và hai dòng sửa ở mục 6). Thu hẹp được: video cần giới hạn người xem không còn đọc công khai (UP-6).
+  [ADR-0073](../adr/0073-premium-playback.md) chỉnh ADR-0008, 0009, 0018, 0029, 0048, 0052, 0061, 0066. Đáng xem lại: (1) định dạng chữ
+  ký CloudFront, PRM-8 và wildcard phủ query chỉ kiểm thật ở buổi stg, prd; (2) path mã hoá: `premium%2F…` rơi vào behavior mặc định
+  cần chữ ký (CloudFront chuẩn hoá path trước khi chọn behavior, giữ `%2F`), còn `media/..%2Fpremium/…` khớp `media/*` công khai và chỉ an
+  toàn khi S3 không giải `..` trong key; cả hai chỉ kiểm thật ở ca âm của **Kiểm edge premium** trong buổi; (3) log chuẩn của CloudFront và
+  log WAF giữ query đã ký tới hết hạn của nó.
 - **Đề xuất (không bắt buộc), giai đoạn 2:** thêm `etag` (hoặc checksum) của file gốc vào `VideoUploaded`, lấy từ lần `HEAD`
   ở `CompleteUpload`; worker tải file với điều kiện `If-Match` theo giá trị đó. Đóng được UP-2 (file bị thay giữa lúc kiểm và
   lúc đọc). Đây là thêm field nên không phá contract (quy tắc versioning ở

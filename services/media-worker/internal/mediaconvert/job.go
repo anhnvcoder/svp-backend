@@ -21,6 +21,7 @@ import (
 	"github.com/anhnvcoder/svp-backend/internal/ids"
 	"github.com/anhnvcoder/svp-backend/internal/objstore"
 	"github.com/anhnvcoder/svp-backend/services/media-worker/internal/transcode"
+	"github.com/anhnvcoder/svp-backend/services/media-worker/internal/worker"
 )
 
 // Keys of the job's UserMetadata.
@@ -29,6 +30,8 @@ const (
 	metaVersion     = "version"
 	metaAttempt     = "attempt"
 	metaTraceparent = "traceparent"
+	// metaPremium is "true" for a premium video and absent otherwise.
+	metaPremium = "premium"
 )
 
 // Settings of the job that are not in package transcode.
@@ -136,11 +139,13 @@ func endTimecode(src Source) string {
 type jobRef struct {
 	videoID, version, attempt string
 	traceparent               string
+	premium                   bool
 }
 
 // attemptDir is the S3 URL of the directory every object of the job goes to.
 func (b *Bridge) attemptDir(r jobRef) string {
-	return "s3://" + b.cfg.MediaBucket + "/" + objstore.MediaPrefix + r.videoID + "/" + r.version + "/" + r.attempt + "/"
+	prefix, _ := worker.Prefixes(r.videoID, r.version, r.premium)
+	return "s3://" + b.cfg.MediaBucket + "/" + prefix + r.attempt + "/"
 }
 
 // BuildJob returns the CreateJob request for ref's attempt at src: one HLS output group with the
@@ -192,6 +197,9 @@ func (b *Bridge) BuildJob(ref jobRef, src Source) *mediaconvert.CreateJobInput {
 	metadata := map[string]string{metaVideoID: ref.videoID, metaVersion: ref.version, metaAttempt: ref.attempt}
 	if ref.traceparent != "" {
 		metadata[metaTraceparent] = ref.traceparent
+	}
+	if ref.premium {
+		metadata[metaPremium] = "true"
 	}
 	return &mediaconvert.CreateJobInput{
 		Queue:              aws.String(b.cfg.QueueARN),
@@ -258,7 +266,7 @@ func traceContext(ctx context.Context, traceparent string) context.Context {
 
 // checkJob returns what job's metadata says it is, or an error when the job is not one the
 // bridge can vouch for: another queue, metadata missing or not canonical UUIDs, or an output
-// group writing outside the attempt directory.
+// group writing outside the attempt directory, which is under premium/ when the metadata says so.
 func (b *Bridge) checkJob(job *types.Job) (jobRef, error) {
 	if aws.ToString(job.Queue) != b.cfg.QueueARN {
 		return jobRef{}, errors.New("job is not in the queue of this environment")
@@ -266,6 +274,10 @@ func (b *Bridge) checkJob(job *types.Job) (jobRef, error) {
 	ref := jobRef{
 		videoID: job.UserMetadata[metaVideoID], version: job.UserMetadata[metaVersion],
 		attempt: job.UserMetadata[metaAttempt], traceparent: job.UserMetadata[metaTraceparent],
+		premium: job.UserMetadata[metaPremium] == "true",
+	}
+	if p, ok := job.UserMetadata[metaPremium]; ok && p != "true" {
+		return jobRef{}, errors.New("job metadata has a premium flag other than true")
 	}
 	for _, v := range []string{ref.videoID, ref.version, ref.attempt} {
 		if _, err := ids.Parse(v); err != nil {
@@ -276,6 +288,10 @@ func (b *Bridge) checkJob(job *types.Job) (jobRef, error) {
 		return jobRef{}, errors.New("job has no output group")
 	}
 	dir := b.attemptDir(ref)
+	prefix := objstore.MediaPrefix
+	if ref.premium {
+		prefix = objstore.PremiumPrefix
+	}
 	for _, g := range job.Settings.OutputGroups {
 		var dest string
 		if s := g.OutputGroupSettings; s != nil && s.HlsGroupSettings != nil && s.FileGroupSettings == nil {
@@ -284,7 +300,7 @@ func (b *Bridge) checkJob(job *types.Job) (jobRef, error) {
 			dest = aws.ToString(s.FileGroupSettings.Destination)
 		}
 		name, ok := strings.CutPrefix(dest, dir)
-		if !ok || !objstore.IsMediaKey(objstore.MediaPrefix+ref.videoID+"/"+name, ref.videoID) || strings.Contains(name, "/") {
+		if !ok || !objstore.IsKeyUnder(prefix, prefix+ref.videoID+"/"+name, ref.videoID) || strings.Contains(name, "/") {
 			return jobRef{}, errors.New("job writes outside its attempt directory")
 		}
 	}

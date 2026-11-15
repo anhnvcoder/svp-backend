@@ -32,15 +32,18 @@ type FeedItem struct {
 	AuthorId string                 `protobuf:"bytes,2,opt,name=author_id,json=authorId,proto3" json:"author_id,omitempty"`
 	Title    string                 `protobuf:"bytes,3,opt,name=title,proto3" json:"title,omitempty"`
 	Duration *durationpb.Duration   `protobuf:"bytes,4,opt,name=duration,proto3" json:"duration,omitempty"`
-	// Object key of the HLS master playlist,
-	// `media/<video_id>/<version>/master.m3u8` (videos made before versions:
-	// `media/<video_id>/master.m3u8`).
+	// Object key of the HLS master playlist, `media/<video_id>/<version>/master.m3u8` (before versions:
+	// `media/<video_id>/master.m3u8`). A premium video holds the public preview,
+	// `preview/<video_id>/<version>/master.m3u8`, never a key under `premium/`.
 	// The gateway turns it into a public URL.
 	PlaylistKey string `protobuf:"bytes,5,opt,name=playlist_key,json=playlistKey,proto3" json:"playlist_key,omitempty"`
 	// Object key of the thumbnail image under `media/<video_id>/`, in the
-	// directory the master playlist names.
-	ThumbnailKey  string                 `protobuf:"bytes,6,opt,name=thumbnail_key,json=thumbnailKey,proto3" json:"thumbnail_key,omitempty"`
-	PublishedAt   *timestamppb.Timestamp `protobuf:"bytes,7,opt,name=published_at,json=publishedAt,proto3" json:"published_at,omitempty"`
+	// directory the master playlist names; under `preview/<video_id>/` for a
+	// premium video.
+	ThumbnailKey string                 `protobuf:"bytes,6,opt,name=thumbnail_key,json=thumbnailKey,proto3" json:"thumbnail_key,omitempty"`
+	PublishedAt  *timestamppb.Timestamp `protobuf:"bytes,7,opt,name=published_at,json=publishedAt,proto3" json:"published_at,omitempty"`
+	// The video is premium; playing it in full needs an entitlement.
+	Premium       bool `protobuf:"varint,8,opt,name=premium,proto3" json:"premium,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -122,6 +125,13 @@ func (x *FeedItem) GetPublishedAt() *timestamppb.Timestamp {
 		return x.PublishedAt
 	}
 	return nil
+}
+
+func (x *FeedItem) GetPremium() bool {
+	if x != nil {
+		return x.Premium
+	}
+	return false
 }
 
 type GetFollowingFeedRequest struct {
@@ -336,7 +346,7 @@ var File_svp_feed_v1_feed_service_proto protoreflect.FileDescriptor
 
 const file_svp_feed_v1_feed_service_proto_rawDesc = "" +
 	"\n" +
-	"\x1esvp/feed/v1/feed_service.proto\x12\vsvp.feed.v1\x1a\x1egoogle/protobuf/duration.proto\x1a\x1fgoogle/protobuf/timestamp.proto\"\x96\x02\n" +
+	"\x1esvp/feed/v1/feed_service.proto\x12\vsvp.feed.v1\x1a\x1egoogle/protobuf/duration.proto\x1a\x1fgoogle/protobuf/timestamp.proto\"\xb0\x02\n" +
 	"\bFeedItem\x12\x19\n" +
 	"\bvideo_id\x18\x01 \x01(\tR\avideoId\x12\x1b\n" +
 	"\tauthor_id\x18\x02 \x01(\tR\bauthorId\x12\x14\n" +
@@ -344,7 +354,8 @@ const file_svp_feed_v1_feed_service_proto_rawDesc = "" +
 	"\bduration\x18\x04 \x01(\v2\x19.google.protobuf.DurationR\bduration\x12!\n" +
 	"\fplaylist_key\x18\x05 \x01(\tR\vplaylistKey\x12#\n" +
 	"\rthumbnail_key\x18\x06 \x01(\tR\fthumbnailKey\x12=\n" +
-	"\fpublished_at\x18\a \x01(\v2\x1a.google.protobuf.TimestampR\vpublishedAt\"U\n" +
+	"\fpublished_at\x18\a \x01(\v2\x1a.google.protobuf.TimestampR\vpublishedAt\x12\x18\n" +
+	"\apremium\x18\b \x01(\bR\apremium\"U\n" +
 	"\x17GetFollowingFeedRequest\x12\x1b\n" +
 	"\tpage_size\x18\x01 \x01(\x05R\bpageSize\x12\x1d\n" +
 	"\n" +

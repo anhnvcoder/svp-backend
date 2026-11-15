@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"maps"
 	"os"
 	"slices"
 	"strings"
@@ -195,6 +196,30 @@ func insertVideo(t *testing.T, author string, published time.Time) video {
 		t.Fatal(err)
 	}
 	return video{id: id, author: author, published: published}
+}
+
+// insertPremiumVideo stores a READY premium video as the projector does, with its public preview
+// as playlist_key, and returns it.
+func insertPremiumVideo(t *testing.T, author string, published time.Time) video {
+	t.Helper()
+	id := ids.New()
+	_, err := testPool.Exec(t.Context(), `
+		INSERT INTO videos (video_id, author_id, title, duration_ms, playlist_key, thumbnail_key, published_at, premium)
+		VALUES ($1, $2, $3, 83250, $4, $5, $6, true)`,
+		id, author, "title of "+id, "preview/"+id+"/master.m3u8", "preview/"+id+"/thumbnail.jpg", published)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return video{id: id, author: author, published: published}
+}
+
+// premiumOf returns, per video id of items, its premium flag.
+func premiumOf(items []*feedv1.FeedItem) map[string]bool {
+	out := make(map[string]bool, len(items))
+	for _, it := range items {
+		out[it.GetVideoId()] = it.GetPremium()
+	}
+	return out
 }
 
 // addToTimeline puts videos into user's timeline, as fan-out does.
@@ -488,6 +513,37 @@ func TestFeedItemFields(t *testing.T) {
 		it.GetPlaylistKey() != "media/"+v.id+"/master.m3u8" || it.GetThumbnailKey() != "media/"+v.id+"/thumbnail.jpg" ||
 		!it.GetPublishedAt().AsTime().Equal(v.published) {
 		t.Errorf("item = %v, want the stored %+v", it, v)
+	}
+}
+
+// Both feeds mark a premium video premium, with its preview key, and a regular video not.
+func TestPremiumFlagInBothFeeds(t *testing.T) {
+	needDB(t)
+	emptyVideos(t)
+	s := newServer()
+	user, author := ids.New(), ids.New()
+	regular := insertVideo(t, author, now().Add(-time.Minute))
+	premium := insertPremiumVideo(t, author, now())
+	addToTimeline(t, user, regular, premium)
+	want := map[string]bool{regular.id: false, premium.id: true}
+
+	fol, err := following(t, s, user, 0, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	exp, err := explore(t, s, ids.New(), 0, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, items := range map[string][]*feedv1.FeedItem{"following": fol.GetItems(), "explore": exp.GetItems()} {
+		if got := premiumOf(items); !maps.Equal(got, want) {
+			t.Errorf("%s: premium = %v, want %v", name, got, want)
+		}
+		for _, it := range items {
+			if it.GetVideoId() == premium.id && it.GetPlaylistKey() != "preview/"+premium.id+"/master.m3u8" {
+				t.Errorf("%s: premium playlist_key = %q, want its preview", name, it.GetPlaylistKey())
+			}
+		}
 	}
 }
 

@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -72,7 +73,12 @@ func TestBucketByPrefix(t *testing.T) {
 		{"uploads/0192", "up-bucket"},
 		{"media/0192/master.m3u8", "media-bucket"},
 		{"media/0192/", "media-bucket"},
+		{"premium/0192/v/a/index_360p_00001.ts", "media-bucket"},
+		{"preview/0192/v/master.m3u8", "media-bucket"},
 		{"transcode-jobs/0192/0193.json", "media-bucket"},
+		{"premium/", ""},
+		{"preview/", ""},
+		{"premium0192", ""},
 		{"transcode-jobs/", ""},
 		{"transcode-jobs0192", ""},
 		{"uploads/", ""},
@@ -384,6 +390,165 @@ func TestIsMediaKey(t *testing.T) {
 	for _, tt := range tests {
 		if got := IsMediaKey(tt.key, id); got != tt.want {
 			t.Errorf("IsMediaKey(%q, %q) = %v, want %v", tt.key, id, got, tt.want)
+		}
+	}
+}
+
+// IsKeyUnder applies the rule of IsMediaKey under each media prefix it is given, and only under it;
+// any other prefix is refused whatever the key.
+func TestIsKeyUnder(t *testing.T) {
+	t.Parallel()
+	const id = "0190a6e4-7b2c-7d3e-9f40-123456789abc"
+	const other = "0190a6e4-7b2c-7d3e-9f40-123456789abd"
+	const dir = id + "/0190a6e4-7b2c-7d3e-9f40-0000000000a1/0190a6e4-7b2c-7d3e-9f40-0000000000b2/"
+	tests := []struct {
+		prefix, key string
+		want        bool
+	}{
+		{PremiumPrefix, PremiumPrefix + dir + "index_360p_00001.ts", true},
+		{PremiumPrefix, PremiumPrefix + id + "/0190a6e4-7b2c-7d3e-9f40-0000000000a1/master.m3u8", true},
+		{PreviewPrefix, PreviewPrefix + dir + "thumbnail.jpg", true},
+		{MediaPrefix, MediaPrefix + dir + "index_720p.m3u8", true},
+		// The prefix of the key must be the one asked for.
+		{PremiumPrefix, MediaPrefix + dir + "index_360p_00001.ts", false},
+		{PremiumPrefix, PreviewPrefix + dir + "index_360p_00001.ts", false},
+		{PreviewPrefix, PremiumPrefix + dir + "index_360p_00001.ts", false},
+		{MediaPrefix, PremiumPrefix + dir + "index_360p_00001.ts", false},
+		// Prefixes outside the three media ones are refused, even when the key matches them.
+		{UploadsPrefix, UploadsPrefix + id + "/x", false},
+		{JobsPrefix, JobsPrefix + id + "/x", false},
+		{"", id + "/x", false},
+		{"premium", "premium" + id + "/x", false},
+		{"premium//", "premium//" + id + "/x", false},
+		// Another video, and paths that climb out or that a URL parser reads differently.
+		{PremiumPrefix, PremiumPrefix + other + "/v/a/index_360p_00001.ts", false},
+		{PremiumPrefix, PremiumPrefix + id + "x/v/a/index_360p_00001.ts", false},
+		{PremiumPrefix, PremiumPrefix + dir + "../index_360p_00001.ts", false},
+		{PremiumPrefix, PremiumPrefix + id + "/../" + other + "/v/a/x.ts", false},
+		{PremiumPrefix, PremiumPrefix + dir + "%2e%2e/x.ts", false},
+		{PremiumPrefix, PremiumPrefix + dir + "%2E%2E/x.ts", false},
+		{PreviewPrefix, PreviewPrefix + id + "/./x", false},
+		{PreviewPrefix, PreviewPrefix + id + "/a//x", false},
+		{PreviewPrefix, PreviewPrefix + id + `/a\x`, false},
+		{PremiumPrefix, PremiumPrefix + id + "/", false},
+		{PremiumPrefix, PremiumPrefix + id, false},
+	}
+	for _, tt := range tests {
+		if got := IsKeyUnder(tt.prefix, tt.key, id); got != tt.want {
+			t.Errorf("IsKeyUnder(%q, %q, %q) = %v, want %v", tt.prefix, tt.key, id, got, tt.want)
+		}
+	}
+}
+
+// PresignGet signs a GET of one premium key on the public endpoint, for exactly ttl, without
+// sending anything; other prefixes and out-of-range ttls are refused.
+func TestPresignGet(t *testing.T) {
+	t.Parallel()
+	cfg := testConfig("http://svp-unreachable.invalid:9000")
+	cfg.PublicEndpoint = "http://127.0.0.1:9000"
+	s := newTestStore(t, cfg)
+	const key = "premium/0190a6e4-7b2c-7d3e-9f40-123456789abc/v/a/index_360p_00001.ts"
+
+	for _, ttl := range []time.Duration{time.Second, 1234 * time.Second, time.Hour} {
+		raw, err := s.PresignGet(t.Context(), key, ttl)
+		if err != nil {
+			t.Fatalf("PresignGet(ttl %v) error = %v", ttl, err)
+		}
+		u, err := url.Parse(raw)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if u.Scheme+"://"+u.Host != cfg.PublicEndpoint || u.Path != "/media/"+key {
+			t.Errorf("URL = %s, want the public endpoint, the media bucket and the key", raw)
+		}
+		q := u.Query()
+		if got, want := q.Get("X-Amz-Expires"), strconv.Itoa(int(ttl/time.Second)); got != want {
+			t.Errorf("X-Amz-Expires = %q, want %q", got, want)
+		}
+		if q.Get("X-Amz-Algorithm") != "AWS4-HMAC-SHA256" || q.Get("X-Amz-Signature") == "" ||
+			!strings.HasPrefix(q.Get("X-Amz-Credential"), "svp-test/") || q.Get("X-Amz-SignedHeaders") != "host" {
+			t.Errorf("query = %v, want a SigV4 query signature of the host only", q)
+		}
+	}
+
+	tests := []struct {
+		name, key string
+		ttl       time.Duration
+	}{
+		{"media key", "media/0190/v/a/index_360p_00001.ts", time.Minute},
+		{"preview key", "preview/0190/v/a/index_360p_00001.ts", time.Minute},
+		{"upload key", "uploads/0190", time.Minute},
+		{"bare prefix", "premium/", time.Minute},
+		{"no ttl", key, 0},
+		{"under a second", key, time.Second - time.Nanosecond},
+		{"over an hour", key, time.Hour + time.Second},
+	}
+	for _, tt := range tests {
+		if raw, err := s.PresignGet(t.Context(), tt.key, tt.ttl); err == nil || raw != "" {
+			t.Errorf("%s: PresignGet() = %q, %v; want an error", tt.name, raw, err)
+		}
+	}
+}
+
+// Read returns a small object whole, refuses one over the limit whether or not the length is
+// sent, and classifies errors as Head does.
+func TestRead(t *testing.T) {
+	t.Parallel()
+	const key = "premium/v1/e1/master.m3u8"
+	tests := []struct {
+		name    string
+		status  int
+		chunked bool
+		max     int64
+		wantErr error
+	}{
+		{"within limit", http.StatusOK, false, 10, nil},
+		{"exactly the limit, chunked", http.StatusOK, true, 10, nil},
+		{"over the limit by length", http.StatusOK, false, 9, ErrTooLarge},
+		{"over the limit while streaming", http.StatusOK, true, 9, ErrTooLarge},
+		{"not found", http.StatusNotFound, false, 10, ErrNotFound},
+		{"denied", http.StatusForbidden, false, 10, ErrAccessDenied},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.Method != http.MethodGet || r.URL.Path != "/media/"+key {
+					t.Errorf("request %s %s, want GET of the key in the media bucket", r.Method, r.URL.Path)
+				}
+				if tt.status != http.StatusOK {
+					w.Header().Set("Content-Type", "application/xml")
+					w.WriteHeader(tt.status)
+					_, _ = w.Write([]byte(`<Error><Code>X</Code></Error>`))
+					return
+				}
+				const body = "0123456789"
+				if tt.chunked {
+					_, _ = w.Write([]byte(body[:1]))
+					w.(http.Flusher).Flush()
+					_, _ = w.Write([]byte(body[1:]))
+					return
+				}
+				_, _ = w.Write([]byte(body))
+			}))
+			defer srv.Close()
+			got, err := newTestStore(t, testConfig(srv.URL)).Read(t.Context(), key, tt.max)
+			if !errors.Is(err, tt.wantErr) || (tt.wantErr == nil) != (err == nil) {
+				t.Fatalf("Read() error = %v, want %v", err, tt.wantErr)
+			}
+			if tt.wantErr == nil && string(got) != "0123456789" {
+				t.Errorf("Read() = %q", got)
+			}
+			if tt.wantErr != nil && got != nil {
+				t.Errorf("Read() = %q with an error, want nil", got)
+			}
+		})
+	}
+
+	s := newTestStore(t, testConfig("http://svp-unreachable.invalid:9000"))
+	for _, k := range []string{"other/v1", "premium/", ""} {
+		if _, err := s.Read(t.Context(), k, 10); !errors.Is(err, ErrInvalidKey) {
+			t.Errorf("Read(%q) error = %v, want ErrInvalidKey", k, err)
 		}
 	}
 }
