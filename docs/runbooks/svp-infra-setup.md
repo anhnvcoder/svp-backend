@@ -4,11 +4,14 @@
   một thay đổi của GitHub hay của repo, khi PR không merge được vì check bắt buộc, hay khi nghi repo đã lộ thông tin của tài khoản AWS.
 - Mọi thao tác ghi (UI Settings, ruleset qua `apply` của `svp-infra`, cài Renovate, push đầu) do **người học chạy** với quyền admin. Mọi lệnh "Kiểm" ở đây chỉ
   `GET`, chạy bằng đăng nhập `gh` của người học (scope `repo` là đủ).
-- Thiết kế và lý do ở [ADR-0034](../adr/0034-aws-stage7.md) §2 (repo, bố cục, CI không credential) và threat model
-  [AWS-6](../threat-model.md#411-biên-aws); cài đặt theo cùng mẫu với [svp-frontend-setup.md](svp-frontend-setup.md) và
+- Thiết kế và lý do ở [ADR-0034](../adr/0034-aws-stage7.md) §2 (repo, bố cục, CI kiểm tĩnh không credential),
+  [ADR-0076](../adr/0076-terraform-plan-infracost-pr.md) (ngoại lệ: plan trên PR bằng role OIDC chỉ đọc, Infracost) và threat model
+  [AWS-6, AWS-11](../threat-model.md#411-biên-aws); cài đặt theo cùng mẫu với [svp-frontend-setup.md](svp-frontend-setup.md) và
   [svp-gitops-setup.md](svp-gitops-setup.md). Trang này chỉ nói làm gì, vì sao từng ô, kiểm thế nào.
-- **Repo không có** secret, variable, environment, GitHub App hay role OIDC nào: CI chỉ kiểm tĩnh, mọi lệnh chạm tài khoản
-  AWS do người học chạy từ máy. **Không ghi** account ID, IP, email, tên miền thật vào repo, issue, PR hay chat: repo public.
+- `check.yml` (cổng `infra-ok`) không có secret, environment hay credential AWS: chỉ kiểm tĩnh. Credential của CI chỉ ở hai chỗ do
+  Terraform `github/` và người học đặt: environment `terraform-plan` (secret của `plan.yml`; role OIDC chỉ đọc `svp-ci-terraform-plan`,
+  người học duyệt từng lượt) và secret repo `INFRACOST_API_KEY` (`cost.yml`), cùng biến `SVP_TF_PLAN_ENVS` (A3). Không GitHub App nào; CI không
+  `apply`, mọi lệnh ghi vào tài khoản AWS do người học chạy từ máy. **Không ghi** account ID, IP, email, tên miền thật vào repo, issue, PR hay chat: repo public.
 
 ## Ý nghĩa và tác động tới người dùng
 
@@ -21,7 +24,9 @@ flowchart LR
   subgraph infra["repo anhnvcoder/svp-infra"]
     tf["aws/bootstrap, aws/modules, aws/envs/stg<br/>aws/scripts, docs/runbooks"]
     ci["check.yml: make check<br/>(fmt, validate, tflint, trivy, shellcheck)<br/>chỉ contents: read, không secret"]
+    plan["plan.yml: plan bằng role chỉ đọc<br/>(environment terraform-plan, người học duyệt);<br/>cost.yml: Infracost từ HCL"]
     tf --> ci
+    tf --> plan
   end
   human["Người học, trên máy<br/>SSO, plan / apply / destroy"]
   aws["Tài khoản AWS sandbox"]
@@ -29,6 +34,7 @@ flowchart LR
   tf -- "script buổi, runbook" --> human
   human -- "AWS_PROFILE=… --region …" --> aws
   ci --> rules
+  plan -- "OIDC, chỉ đọc, comment tóm tắt" --> aws
 ```
 
 Cài sai thì người dùng của nền tảng không thấy gì (repo không triển khai gì tự động), nhưng repo yếu đi mà không ai biết: workflow dùng
@@ -51,10 +57,11 @@ gh api $I/actions/permissions/workflow -q .
 gh api $I/actions/permissions/fork-pr-contributor-approval -q .
 gh api $I -q '.security_and_analysis | {secret_scanning: .secret_scanning.status, push_protection: .secret_scanning_push_protection.status}'
 gh api -i $I/vulnerability-alerts | head -1
-# A3. Không credential nào
-gh api $I/actions/secrets -q .total_count
-gh api $I/actions/variables -q .total_count
-gh api $I/environments -q .total_count
+# A3. CI credentials only in the planned places
+gh api $I/actions/secrets -q '[.secrets[].name]'
+gh api $I/actions/variables -q '[.variables[] | .name]'
+gh api $I/environments -q '[.environments[].name]'
+gh api $I/environments/terraform-plan/secrets -q '[.secrets[].name]'
 # B1. Nhánh mặc định và lượt CI đầu
 gh run list --repo anhnvcoder/svp-infra --workflow check.yml --branch main --limit 1 --json conclusion,headSha
 # C1. Ruleset (sau `apply`)
@@ -72,7 +79,7 @@ gh api $I/rules/branches/main -q '.[] | .type'
 | `fork-pr-contributor-approval` | `{"approval_policy":"all_external_contributors"}` |
 | `security_and_analysis` | `{"push_protection":"enabled","secret_scanning":"enabled"}` |
 | `vulnerability-alerts` | `HTTP/2.0 204 No Content` (Dependabot alerts bật; `404` là tắt) |
-| `actions/secrets`, `actions/variables`, `environments` | `0`, `0`, `0` |
+| A3 | Secret repo chỉ `INFRACOST_API_KEY`; biến chỉ `SVP_TF_PLAN_ENVS`; environment chỉ `terraform-plan`; secret của nó đúng tên ở mục "Environment `terraform-plan`" của [`github-setup.md`](https://github.com/anhnvcoder/svp-infra/blob/main/docs/runbooks/github-setup.md#environment-terraform-plan) của `svp-infra` cho mỗi env trong `SVP_TF_PLAN_ENVS` (`[]` thì không secret nào cần). Trước `apply` của `github/` cả bốn là `[]` |
 | `gh run list` | một dòng `"conclusion":"success"` |
 | rulesets | hai dòng: `main`, `owners`, cả hai `"target":"branch"`, `"enforcement":"active"` |
 | `rules/branches/main` | `deletion`, `non_fast_forward`, `required_linear_history`, `pull_request` (hai lần: một của mỗi ruleset nhắm nhánh), `required_status_checks` (một dòng: khi `pr-title` thành check bắt buộc, nó nằm trong danh sách check của chính luật này, không thêm dòng) |
@@ -93,7 +100,7 @@ nhanh":
    thấy. Sửa ở A2.
 4. **Check bắt buộc mang tên khác tên job tổng của `check.yml`**: PR đứng ở "Expected — Waiting for status to be reported", không merge được.
    Tên đúng là `infra-ok`; sửa ruleset hay tên job cho khớp (C1).
-5. **Ai đó thêm secret, variable hay environment** (`total_count` khác 0): không gì đỏ, nhưng repo public có credential. Xoá và xem
+5. **Ai đó thêm secret, variable hay environment ngoài danh sách của A3**: không gì đỏ, nhưng repo public có thêm credential. Xoá và xem
    "Giảm thiểu".
 6. **`patterns_allowed` khác ba pattern của `github/repositories.tf`** (`ossf/scorecard-action@*` cho `scorecard.yml`,
    `hashicorp/setup-terraform@*`, `terraform-linters/setup-tflint@*` như GitHub có lúc nhận repo; vd. thêm `sigstore/cosign-installer@*` chép
@@ -120,7 +127,7 @@ ruleset `main` và force push, là bước nặng (xem "Leo thang").
 
 Dựng từ đầu theo thứ tự:
 
-- **A. Trước commit đầu**: repo rỗng (đã có), cài đặt repo, không credential.
+- **A. Trước commit đầu**: repo rỗng (đã có), cài đặt repo, credential CI chỉ ở chỗ đã định.
 - **B. Commit đầu và CI**: push đầu lên `main`, lượt `check.yml` đầu xanh, Renovate.
 - **C. Sau lượt CI đầu xanh trên `main`**: ruleset.
 
@@ -177,18 +184,23 @@ pattern của `github/repositories.tf` → không xoá ở UI: `apply` của `gi
 (thiếu pattern Scorecard thì `scorecard.yml` bị từ chối). `can_approve_pull_request_reviews` true → tắt ở Workflow permissions. `approval_policy` khác
 `all_external_contributors` → chọn lại ô duyệt PR fork.
 
-### A3. Không credential
+### A3. Credential CI chỉ ở chỗ đã định
 
-**Làm gì:** không tạo gì ở Settings → **Secrets and variables** → **Actions** (cả tab Secrets lẫn Variables) và Settings → **Environments**;
-không tạo role IAM nào tin OIDC của GitHub cho repo này.
+**Làm gì:** không tạo tay gì ở Settings → **Secrets and variables** → **Actions** (cả tab Secrets lẫn Variables) và Settings →
+**Environments**. Environment `terraform-plan` và biến `SVP_TF_PLAN_ENVS` do `apply` của `github/` tạo; secret `INFRACOST_API_KEY` và secret
+của `terraform-plan` do người học đặt theo [`github-setup.md`](https://github.com/anhnvcoder/svp-infra/blob/main/docs/runbooks/github-setup.md) của `svp-infra` (mục "Khoá Infracost", "Environment `terraform-plan`"; secret
+của environment chỉ đặt ở buổi cloud, sau khi role plan của env đã apply). Role IAM duy nhất tin OIDC của repo này là `svp-ci-terraform-plan`
+(root `aws/accounts/<env>`), trust đúng `sub` của environment `terraform-plan`.
 
-**Vì sao** (ADR-0034 §2, threat model AWS-6): CI chỉ kiểm tĩnh (`make check` không gọi `plan`, `apply` hay `aws`), nên không job nào
-cần quyền vào tài khoản; repo public với một credential trong CI là một đường vào tài khoản qua code của PR hay action bị chiếm. `plan`,
-`apply` chạy từ máy người học bằng SSO. Đăng nhập CI vào AWS bằng OIDC (không khoá dài hạn) chỉ thêm khi có ADR cho nó (xem "Leo thang").
+**Vì sao** (ADR-0034 §2, [ADR-0076](../adr/0076-terraform-plan-infracost-pr.md), threat model AWS-6, AWS-11): `check.yml` là cổng và chạy
+mọi PR, kể cả PR từ fork, nên giữ không credential. Đọc tài khoản chỉ ở `plan.yml`, bằng role chỉ đọc có tập Deny, mỗi lượt người học duyệt
+environment sau khi đọc diff của PR; repo public với một credential khác trong CI là một đường vào tài khoản qua code của PR hay action bị
+chiếm. `apply` chạy từ máy người học bằng SSO. Khoá Infracost chỉ gọi Cloud Pricing API, không chạm AWS.
 
-**Kiểm:** ba lệnh "A3" của "Kiểm tra nhanh" in `0`.
+**Kiểm:** bốn lệnh "A3" của "Kiểm tra nhanh" in đúng danh sách ở bảng.
 
-**Nếu sai:** xoá secret, variable, environment thừa ở đúng trang trên; secret là khoá AWS thì làm "Giảm thiểu" trước.
+**Nếu sai:** xoá secret, variable, environment thừa ở đúng trang trên (environment, biến do Terraform giữ thì sửa `github/` bằng PR rồi
+`apply`); secret là khoá AWS thì làm "Giảm thiểu" trước.
 
 ### B1. Push đầu lên `main`
 
@@ -280,12 +292,15 @@ check (nguyên nhân 4) → so tên job tổng của `check.yml` với `context`
   mở postmortem ([mẫu](../postmortems/README.md)); xét đóng tài khoản sandbox nếu không chắc đã dọn hết.
 - Cần viết lại lịch sử để gỡ email, IP hay tên miền: bước nặng (tắt ruleset, `git filter-repo`, force push, mọi bản clone phải clone lại);
   chỉ làm khi người học quyết, ghi lý do vào postmortem. Account ID không phải bí mật theo nghĩa credential: thường gỡ khỏi cây là đủ.
-- `check.yml` cần quyền hay secret mới (ví dụ OIDC vào AWS): không thêm tay; viết ADR rồi mới đổi cài đặt và threat model.
+- `check.yml` cần quyền hay secret, hay `plan.yml`, `cost.yml` cần quyền, secret, role mới: không thêm tay; viết ADR rồi mới đổi cài đặt và
+  threat model.
 
 ## Liên kết
 
-- [ADR-0034](../adr/0034-aws-stage7.md) §2 (repo, bố cục, state, CI không credential), §14 (buổi AWS); threat model
-  [AWS-6](../threat-model.md#411-biên-aws).
+- [ADR-0034](../adr/0034-aws-stage7.md) §2 (repo, bố cục, state, CI kiểm tĩnh không credential), §14 (buổi AWS);
+  [ADR-0076](../adr/0076-terraform-plan-infracost-pr.md) (plan trên PR, Infracost); threat model [AWS-6, AWS-11](../threat-model.md#411-biên-aws).
+- Mục "Plan trên PR", "Chi phí trên PR" của [`README.md`](https://github.com/anhnvcoder/svp-infra/blob/main/README.md#plan-trên-pr) của
+  `svp-infra`: luồng, cách đọc comment, cách duyệt lượt chờ.
 - [svp-frontend-setup.md](svp-frontend-setup.md), [svp-gitops-setup.md](svp-gitops-setup.md): cùng mẫu cài đặt, ruleset, Renovate.
 - Trình tự buổi AWS và gỡ tài nguyên: `docs/runbooks/session-stg.md` của repo `svp-infra`.
 - Không có diễn tập; phép kiểm là lượt `check.yml` đầu (B1) và ruleset (C1).

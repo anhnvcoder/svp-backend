@@ -5,7 +5,7 @@ và đọc kết quả ở đâu. Luồng kể bằng khái niệm chung của m
 tên workflow và job của GitHub ghi kèm. Bảng tương ứng với GitLab ở
 [ADR-0023](adr/0023-ci-platform-neutral.md) (mục "Bảng ánh xạ CI: GitHub Actions ↔ GitLab CI"), không chép lại ở đây.
 
-Repo có năm workflow, mỗi file nối các bước, logic nằm ở `Makefile` và `deploy/ci/*.sh` (chạy được cả trên máy):
+Repo có sáu workflow, mỗi file nối các bước, logic nằm ở `Makefile` và `deploy/ci/*.sh` (chạy được cả trên máy):
 
 | Workflow | Việc | Quyết định |
 | --- | --- | --- |
@@ -13,11 +13,12 @@ Repo có năm workflow, mỗi file nối các bước, logic nằm ở `Makefile
 | `.github/workflows/images.yml` | Image của các service Go (image web ở CI của [`svp-frontend`](https://github.com/anhnvcoder/svp-frontend)): build, quét (trivy trên image, grype trên SBOM), push GHCR, ký, attestation, PR promote stg và prd sang repo `svp-gitops`, quét lại hằng ngày; phát hành hợp đồng REST của gateway có chữ ký | ADR-0015 §3–§9; ADR-0030 §6 (grype); [ADR-0025](adr/0025-gitops-config-repo.md) §2 (promote bằng GitHub App); [ADR-0037](adr/0037-mainpath-standard-tools.md) §6 (bước promote `yq` + `gh pr`); [ADR-0033](adr/0033-svp-web-repo.md) §1, §2, §4 (job `contract`, nguồn phát hành) |
 | `.github/workflows/scorecard.yml` | OpenSSF Scorecard khi push `main`, hằng tuần: đo cả repo (ruleset, ghim, quyền), kết quả công khai và SARIF lên code scanning; không phải check của PR | [ADR-0041](adr/0041-github-hardening.md) (g) |
 | `.github/workflows/pr-title.yml` | Job `pr-title`: tiêu đề PR theo Conventional Commits, vì tiêu đề thành tiêu đề commit squash | [ADR-0041](adr/0041-github-hardening.md) (h) |
+| `.github/workflows/release.yml` | Phát hành checker của `svp-gitops` (package `deploy/ci`): mở PR phát hành từ Conventional Commits bằng release-please, tạo tag `gitops-check-v<semver>` và GitHub Release khi PR đó merge; chỉ push `main` | [ADR-0077](adr/0077-versioned-gitops-checker.md) §2, §3 |
 | `.github/workflows/verify.yml` | Kiểm chứng trên runner những gì máy 16 GB không chạy nổi (stack có observability, cluster GitOps do Argo CD dựng, cluster của đường dev): ba kịch bản `compose-obs`, `gitops`, `dev-k3d` (chỉ dispatch) | [ADR-0021](adr/0021-deferred-verification-stage6b.md); [ADR-0037](adr/0037-mainpath-standard-tools.md) §6 (bỏ bản ghi stg); [ADR-0039](adr/0039-mainpath-drills-scan-gate-sourcemaps.md) §1 (thu gọn); [ADR-0050](adr/0050-bash-to-standard-tools.md) mục 6 (`dev-k3d`) |
 
 Cấu hình triển khai (values, overlay, digest của mỗi môi trường, Argo CD) nằm ở repo public riêng
 [`svp-gitops`](https://github.com/anhnvcoder/svp-gitops) ([ADR-0025](adr/0025-gitops-config-repo.md)); repo đó có một workflow
-`check.yml` với check tổng `gitops-ok`, chạy `deploy/ci/gitops-check.sh` của repo này ở một commit ghim ([mục 1.5](#15-repo-cấu-hình-svp-gitops)).
+`check.yml` với check tổng `gitops-ok`, chạy `deploy/ci/gitops-check.sh` của repo này ở một bản phát hành ghim ([mục 1.5](#15-repo-cấu-hình-svp-gitops)).
 
 Script của `deploy/ci/` đọc thẳng biến của GitHub Actions (`$GITHUB_OUTPUT`, `$GITHUB_STEP_SUMMARY`, `$RUNNER_TEMP`, repo, commit,
 workflow của lượt) và gọi `gh` trực tiếp ([ADR-0037](adr/0037-mainpath-standard-tools.md) §2). DORA không còn workflow ở đây: là bài lab `dora/` của
@@ -103,12 +104,35 @@ flowchart LR
   `envs/<env>/images/<svc>.yaml` của service đó và in một dòng `note` thay `FAIL`; các thiếu sót khác vẫn đỏ. Thêm service
   đổi group `default` của bảng image, phần ngoài target của từng service (`changed-services.sh`), nên lượt `main` kế build mọi
   service, `promote` tạo file thiếu (khối comment đầu file như các file khác, `promote_image_file` của `deploy/ci/common.sh`).
-  PR `bot/promote-stg` đó đỏ `gitops-ok` tới khi `CHECKER_COMMIT` của `svp-gitops` lên commit có service: checker cũ không biết
-  service mới, nên file vừa tạo "is not the image file of a service" (`values-check.sh`). PR nâng `CHECKER_COMMIT` (Renovate hay
-  tay, cần Code Owner) merge trước. Check kéo ẩn danh mà package GHCR của service mới còn private sau lượt `images.yml` đầu, nên người học
+  PR `bot/promote-stg` đó không chờ bản checker mới: `values-check.sh` lấy danh sách service từ bảng nguồn ở commit mà
+  `envs/<env>/charts.yaml` ghim (`release_sources`), không từ `deploy/docker-bake.json` của bản checker đang ghim, nên file vừa tạo
+  là file image của một service. Check kéo ẩn danh mà package GHCR của service mới còn private sau lượt `images.yml` đầu, nên người học
   bật public cho package ngay sau lượt đó. Rồi chạy lại check của PR promote; auto-merge còn bật nên PR tự merge khi xanh.
   `promote-prd` bỏ qua service mà stg ở `stg_ref` chưa có file (dòng `skip`) và tạo file prd của service đã có. Luồng đầy đủ:
   [`explanation/delivery.md`](explanation/delivery.md#release-mới-và-canary-grpc).
+- Cùng push, `release.yml` chạy release-please ([ADR-0077](adr/0077-versioned-gitops-checker.md)): khi `main` có commit `feat`, `fix`,
+  `perf` đổi `deploy/ci` chưa phát hành, nó mở hay cập nhật PR `chore(main): release gitops-check <semver>` (chỉ đổi `deploy/ci/CHANGELOG.md`
+  và `.release-please-manifest.json`). PR đó do token của App `svp-release-please` mở nên chạy `ci-ok`, `images-ok` như mọi PR, không build image,
+  cần Code Owner. Push merge nó thì lượt `release.yml` kế tạo tag `gitops-check-v<semver>` (bất biến, ruleset `gitops-check-tags`) và GitHub
+  Release; Renovate của `svp-gitops` mở PR nâng ghim checker ([mục 1.5](#15-repo-cấu-hình-svp-gitops)). Lượt không có gì để phát hành thì
+  xanh, không làm gì. Quy trình: [`runbooks/gitops-checker-release.md`](runbooks/gitops-checker-release.md).
+
+```mermaid
+sequenceDiagram
+    participant Main as main
+    participant Release as release.yml
+    participant PR as PR phát hành
+    actor Learner as người học
+    participant Renovate as Renovate của svp-gitops
+    Main->>Release: push có commit feat, fix dưới deploy/ci
+    Release->>PR: mở hay cập nhật (token App): CHANGELOG, manifest
+    PR->>PR: ci-ok, images-ok
+    Learner->>PR: Code Owner duyệt, squash merge
+    PR->>Release: push main
+    Release->>Main: tag gitops-check-v semver, GitHub Release
+    Renovate->>Renovate: lượt Mend kế: PR nâng CHECKER_VERSION, CHECKER_COMMIT
+```
+
 - Rollback stg là PR revert trong `svp-gitops`; lượt promote sau đó ghi bản của lượt đó (mới hơn), không ghi lại bản đã revert.
   Rollback prd về revision trước một release mới là PR của người học có xoá `envs/prd/images/<svc>.yaml`, vì bot không xoá file.
   Quy trình ở [`runbooks/svp-gitops-setup.md`](runbooks/svp-gitops-setup.md).
@@ -174,7 +198,7 @@ flowchart LR
     bot["PR của bot App<br/>chỉ đổi envs/stg/"]
     prd["PR của bot App<br/>đổi envs/prd/"]
     own["PR của người học<br/>đổi file chung"]
-    check["check.yml: gitops-ok<br/>(gitops-check.sh của repo code<br/>ở CHECKER_COMMIT)"]
+    check["check.yml: gitops-ok<br/>(gitops-check.sh của repo code<br/>ở bản checker ghim)"]
     m{"merge vào main<br/>của svp-gitops"}
     bot --> check -->|"auto-merge, không ai duyệt"| m
     prd --> check
@@ -199,8 +223,11 @@ flowchart LR
 - Luật tác giả hẹp: PR của bot một nguồn (`<promoter>[bot]`, đọc thẳng từ sự kiện PR) chỉ được đổi `envs/{stg,prd}/images/` của service
   thuộc nguồn đó (bot `backend` thêm hai `charts.yaml` và mọi file image prd, vì promote prd chép cả bộ); không bot nào xoá file; bot khác
   không đổi gì dưới `envs/`; PR của người không bị giới hạn ở bước này. Giữ vì `envs/stg/` không có Code Owner: PR bot tự merge.
-- `CHECKER_COMMIT` (commit của repo này mà check chạy) đổi bằng PR ở `svp-gitops`; PR thêm hay sửa `check.yml` tự chạy bản sửa của
-  chính nó (đặc tính của `pull_request`), nên `.github/` có Code Owner.
+- Bản checker mà check chạy là ghim trong `check.yml`: `CHECKER_VERSION` (semver, tag `gitops-check-v<CHECKER_VERSION>` của repo này) và
+  `CHECKER_COMMIT` (commit của tag đó); một bước đỏ khi tag không trỏ đúng commit đó. Renovate nâng cả hai trong một PR ở `svp-gitops` (major
+  ở PR riêng); đổi hợp đồng giữa checker và cây theo expand–contract ([ADR-0077](adr/0077-versioned-gitops-checker.md) §5, §6,
+  [`runbooks/gitops-checker-release.md`](runbooks/gitops-checker-release.md)). PR thêm hay sửa `check.yml` tự chạy bản sửa của chính nó (đặc
+  tính của `pull_request`), nên `.github/` có Code Owner.
 - Ruleset `owners` đòi duyệt của Code Owner cho mọi file trừ `envs/stg/`; ruleset `tags` cấm tạo tag (Argo CD có thể phân giải tên
   ngắn sang tag cùng tên). Lượt `check` đầu trên `main`: [40902199532](https://github.com/anhnvcoder/svp-gitops/actions/runs/40902199532)
   (2026-10-29), token chỉ `Contents: read`. Kiểm ngày 2026-10-30: người học là Code Owner duy nhất kiêm tác giả PR nên GitHub coi
@@ -254,6 +281,14 @@ Trigger: `pull_request`, `push` vào `main`, `schedule` hằng ngày, `workflow_
 | `drill-build`, `drill-merge`, `drill-sign` | Ba image diễn tập `drill-vulnerable` (có CRITICAL, ký), `drill-unsigned` (không ký) và `drill-no-provenance` (sạch, ký và attest `vuln`, không provenance), cùng các bước của bản phát hành | Chế độ `drill`, trên `main` | Mọi chế độ khác, nên luôn skip ở PR và push | Có |
 | `sarif` | Tải SARIF của build (`trivy.sarif`, `grype.sarif` mỗi chân) và rescan trên `main` | Trên `main`, chế độ `rescan` hay `build` có image | PR, nhánh khác, không image | Không |
 | `images-ok` | Xanh khi mỗi job `success`, hay `skipped` vì đúng lý do mà job này tính lại từ sự kiện, ref, output của `plan` | `always()` | Không bao giờ | Là check bắt buộc |
+
+### `release.yml`
+
+Trigger: `push` vào `main`. Không chạy ở PR, nên không phải check của PR; PR phát hành nó mở đi qua `ci-ok`, `images-ok` như mọi PR.
+
+| Job | Làm gì | Chạy khi | Skip khi |
+| --- | --- | --- | --- |
+| `release-please` | Environment `release`; token App `svp-release-please` 1 giờ (`actions/create-github-app-token`, chỉ repo này, `contents`, `pull_requests` write); `googleapis/release-please-action` với `release-please-config.json`, `.release-please-manifest.json`: mở hay cập nhật PR phát hành, hay tạo tag và GitHub Release cho PR phát hành vừa merge; không checkout | Mọi push `main` (nhóm `concurrency` `release-please`, lượt đang chạy không bị huỷ) | Không bao giờ; không có gì để phát hành thì xanh, không ghi gì |
 
 ### `verify.yml`
 
@@ -452,6 +487,13 @@ và không còn ở workflow: bản đo một lần của `dev-k3d`, `web-canary
   Renovate), và cả nút Revert của GitHub (`Revert "<tiêu đề>"`). Cùng mẫu và bộ test chạy ở bốn repo có CI (`svp-backend`, `svp-frontend`, `svp-gitops`,
   `svp-infra`). Là workflow riêng, không phải job của `ci.yml`: sửa tiêu đề chạy riêng nó chứ không chạy cả CI. Không quyền, không checkout, không code của PR: tiêu đề
   tới script chỉ qua `env`.
+- **`release.yml`: token App, chỉ `main`, không checkout.** PR mở bằng `GITHUB_TOKEN` không chạy workflow nào, nên PR phát hành sẽ không bao giờ
+  có `ci-ok`, `images-ok`; token của App `svp-release-please` làm PR đó chạy CI như mọi PR. Khoá App là secret của environment `release`, chỉ
+  nhánh `main` dùng được, nên không job `pull_request` nào đọc được; workflow không có trigger `pull_request` vì release-please chỉ có việc khi
+  `main` đổi, và lượt PR không bao giờ cần token ghi. Job không checkout và không chạy code của repo: action đọc cấu hình và lịch sử qua API,
+  nên code của một PR chưa merge không tới được token. `permissions: {}` cho `GITHUB_TOKEN`; `concurrency` không huỷ lượt đang chạy, vì lượt bị
+  cắt giữa lúc tạo GitHub Release và lúc đổi nhãn để PR phát hành treo ở `autorelease: pending`. Tag bất biến (ruleset `gitops-check-tags`):
+  `svp-gitops` ghim cả version lẫn commit của tag, bản lỗi sửa bằng bản mới ([ADR-0077](adr/0077-versioned-gitops-checker.md) §3, §4).
 - **`scorecard.yml`.** OpenSSF Scorecard của repo: ghim, quyền của token, ruleset, mẫu workflow nguy hiểm và các check khác (danh sách ở tài liệu của
   Scorecard), chạy mỗi push `main`, hằng tuần và khi một luật branch protection cổ điển đổi. Kết quả công khai ở API Scorecard (`publish_results: true`, huy hiệu và trang
   xem) và tải lên code scanning. Không trigger `pull_request`: đây không phải check của PR. Branch-Protection đọc ruleset bằng `GITHUB_TOKEN`
@@ -477,9 +519,9 @@ Trang một lượt chạy (Actions → chọn lượt) có đồ thị job, dan
   ([ADR-0023](adr/0023-ci-platform-neutral.md)). Playwright, k6 không ghi summary: kết quả ở
   log của bước tương ứng (`make web-e2e`, `make load-ci`); `promote`, `promote-prd` cũng không: bản phát hành nhánh bot mang nằm ở tiêu
   đề và mô tả của PR trong `svp-gitops`, link PR ở log bước.
-- **Dòng `note`:** `gitops-check.sh` và `values-check.sh` in `note  …` (không `FAIL`) khi env thiếu file image của một service mà revision
-  nó ghim không build: đó là **Release mới** (mục 1.2), đợi PR promote tạo file; dòng `note` về bảng nguồn không đọc được thì
-  mọi service của working tree phải có file.
+- **Dòng `note`:** `gitops-check.sh` in `note  …` (không `FAIL`) khi env thiếu file image của một service mà revision nó ghim
+  không build: đó là **Release mới** (mục 1.2), đợi PR promote tạo file; `values-check.sh` in nó khi PR xoá file như vậy (rollback,
+  service nghỉ hưu); dòng `note` về bảng nguồn không đọc được thì mọi service của working tree phải có file.
 - **Annotation:** dòng `::warning::`/`::error::` của script hiện ở đầu trang, kèm job. Ví dụ: `last-success` cảnh báo khi API
   không trả lời (lượt build mọi service), `verify-collect.sh` cảnh báo khi bỏ một file khỏi artifact vì nghi có bí mật (không in đoạn
   khớp), `images-ok` báo job skip sai.

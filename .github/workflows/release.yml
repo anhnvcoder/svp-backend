@@ -1,0 +1,40 @@
+# Opens and updates the release pull request of the gitops checker (package deploy/ci), and tags it once merged.
+# A GitHub App token, not GITHUB_TOKEN: a pull request opened with GITHUB_TOKEN runs no workflow, so the release
+# pull request would never get ci-ok and images-ok; the token is scoped to this repository and lives one hour.
+# The App key is a secret of environment release, which only main can use, so no pull request job can read it.
+# No checkout and no repository code runs here: the action reads the config and history through the API.
+# Design notes: docs/ci-cd.md.
+name: release
+
+on:
+  push:
+    branches: [main]
+
+permissions: {}
+
+# The running one is never cancelled: a run cut after it creates the GitHub Release but before it relabels the
+# release pull request (autorelease: pending to tagged) leaves that pull request pending.
+concurrency:
+  group: release-please
+  cancel-in-progress: false
+
+jobs:
+  release-please:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    environment: release
+    steps:
+      - id: app
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          client-id: ${{ vars.SVP_RELEASE_APP_CLIENT_ID }}
+          private-key: ${{ secrets.SVP_RELEASE_APP_PRIVATE_KEY }}
+          owner: anhnvcoder
+          repositories: svp-backend
+          permission-contents: write
+          permission-pull-requests: write
+      - uses: googleapis/release-please-action@45996ed1f6d02564a971a2fa1b5860e934307cf7 # v5.0.0
+        with:
+          token: ${{ steps.app.outputs.token }}
+          config-file: release-please-config.json
+          manifest-file: .release-please-manifest.json
