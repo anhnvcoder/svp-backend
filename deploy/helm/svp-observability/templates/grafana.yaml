@@ -7,8 +7,8 @@ Grafana keeps no state of its own (no volume), so this is all of its configurati
 {{- fail "files/dashboards/*.json matches nothing: the symlink into deploy/observability/grafana/dashboards/ is broken?" }}
 {{- end }}
 {{- $target := toString .Values.dashboards.target }}
-{{- if not (has $target (list "sidecar" "grafana-operator")) }}
-{{- fail (printf "dashboards.target is %q: sidecar (Grafana in the cluster) or grafana-operator (a Grafana outside it)" $target) }}
+{{- if not (has $target (list "sidecar" "grafana-operator" "none")) }}
+{{- fail (printf "dashboards.target is %q: sidecar (Grafana in the cluster), grafana-operator (a Grafana outside it) or none (no Grafana)" $target) }}
 {{- end }}
 {{- if eq $target "sidecar" }}
 # Every dashboard of files/dashboards (a symlink to the files compose provisions), in folder svp as there. They are
@@ -107,7 +107,7 @@ data:
         jsonData:
           handleGrafanaManagedAlerts: false
           implementation: prometheus
-{{- else }}
+{{- else if eq $target "grafana-operator" }}
 {{- range $key := list "url" "ampEndpoint" "region" }}
 {{- if not (index $.Values.dashboards.grafana $key) }}
 {{- fail (printf "dashboards.target grafana-operator needs dashboards.grafana.%s" $key) }}

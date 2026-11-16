@@ -148,7 +148,8 @@ rules:
 
 # The dashboards of files/dashboards/ and their data sources: sidecar, ConfigMaps Grafana of kube-prometheus-stack
 # loads; grafana-operator, a Grafana outside the cluster (grafana.url, its API token in Secret grafana-operator, key
-# token) where Grafana Operator writes them, reading workspace grafana.ampEndpoint and CloudWatch in grafana.region.
+# token) where Grafana Operator writes them, reading workspace grafana.ampEndpoint and CloudWatch in grafana.region;
+# none, an env without a Grafana: no dashboard, data source or egress to one, alerts still reach the alert manager.
 dashboards:
   target: sidecar
   grafana:
