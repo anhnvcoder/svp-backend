@@ -42,7 +42,7 @@ Giá trị đang dùng là nội dung của `aws/paid-features.json`: mỗi acco
 
 | Cờ | Giá trị rẻ điều khiển gì | Đường thay thế | Cái giá |
 | --- | --- | --- | --- |
-| `managed_grafana` (`always`, `session`) | `session`: workspace AMG `svp-<env>`, role `svp-<env>-grafana`, gán nhóm, service account `svp-grafana-operator` và SSM parameter `/svp/<env>/grafana-workspace-id` chỉ có trong buổi | Workspace dựng lại ở bước mở của mỗi buổi; workspace AMP, key `alias/svp-<env>-observability`, log group, X-Ray luôn có | Không xem dashboard giữa các buổi; dữ liệu AMP, CloudWatch vẫn giữ, đọc bằng lệnh AMP của runbook buổi và console CloudWatch; mỗi buổi trả một workspace mới |
+| `managed_grafana` (`always`, `session`, `off`) | `off`: không workspace AMG `svp-<env>`, role `svp-<env>-grafana`, gán nhóm, service account `svp-grafana-operator`, SSM parameter `/svp/<env>/grafana-workspace-id`, entry `svp/<env>/grafana-operator`; `grafanaUrl` của cluster là `""`. `session` (chọn bật cho buổi cần dashboard): bảy tài nguyên AMG chỉ có trong buổi | Cảnh báo đi AMP → SNS, không qua AMG; workspace AMP, key `alias/svp-<env>-observability`, log group, X-Ray luôn có; dữ liệu đọc bằng lệnh AMP của runbook buổi và console CloudWatch | Không dashboard nào ở buổi mặc định; phép kiểm cần dashboard là phép `chuẩn ngành`, cần `session` (mỗi buổi trả một workspace mới) |
 | `inspector_ecr` (`always`, `off`) | `off`: `aws/security` không đưa account vào Inspector; registry dùng quét cơ bản của ECR (`BASIC`, `SCAN_ON_PUSH`, cùng filter repo cache) | Quét cơ bản khi push; image của repo code vẫn qua cổng quét của CI và attestation `vuln` mà Kyverno đòi; Inspector quét digest bên thứ ba ghim ở `svp-gitops` trong buổi prd, khi prd ở giá trị production | Digest bên thứ ba ngoài buổi prd chỉ có quét cơ bản; tắt quét xoá finding Inspector của account |
 | `security_hub` (`always`, `off`) | `off`: account gắn configuration policy `svp-security-off` (`service_enabled = false`); `svp-security` không đặt được `off` | Giữa các buổi posture chỉ được chấm ở `svp-security`; prd được chấm trong buổi prd; CloudTrail org ghi mọi lệnh ở mọi account; finding GuardDuty mức HIGH, CRITICAL của mọi account `off` tới email qua rule `svp-security-guardduty-findings` | Không control FSBP, CIS ở account `off`; finding cũ của account bị xoá theo hạn của Security Hub |
 | `config_recording` (`always`, `off`) | `off`: module `security-baseline` của account không tạo recorder, delivery channel, recorder status ở hai region | CloudTrail org ghi mọi lệnh; prd ghi lịch sử cấu hình trong buổi prd | Không lịch sử cấu hình của tài nguyên ở account `off`; thông tin đã ghi và bản đã giao vào Log Archive giữ |
@@ -51,9 +51,10 @@ Hai luật giữa các cờ: `security_hub` = `always` cần `config_recording` 
 của Config; `managed_grafana` không phụ thuộc cờ nào, vì AMP luôn có. Một mục thành cờ khi chi phí ở một account qua
 ngưỡng, chức năng lõi và an toàn cơ bản không cần nó, và có đường chạy không có nó bằng code (ADR-0071 §7, ADR-0078 §4).
 
-Không có `off` cho AMG với Grafana trong cluster thay vào: Grafana từ bản 12 đọc AMP qua plugin Amazon Managed Service for Prometheus, image
-ghim không có plugin đó, và hardening của `kube-prometheus-stack` cấm tải plugin lúc chạy. `session` giữ hợp đồng cluster: trong buổi
-`cluster_values` gửi sang `svp-gitops` đủ mọi khoá như khi workspace sống lâu.
+`off` của AMG không chạy Grafana nào, cũng không Grafana trong cluster thay vào: Grafana từ bản 12 đọc AMP qua plugin
+Amazon Managed Service for Prometheus, image ghim không có plugin đó, và hardening của `kube-prometheus-stack` cấm tải
+plugin lúc chạy. Mọi giá trị giữ hợp đồng cluster: `cluster_values` gửi sang `svp-gitops` đủ mọi khoá, `grafanaUrl` rỗng
+đúng khi cờ là `off`; chart bỏ đích dashboard, ExternalSecret và egress tới Grafana khi nó rỗng.
 
 `session` của AMG chỉ lợi ở tháng không buổi stg: AMG tính mỗi user mỗi workspace mỗi tháng, và mỗi buổi dựng một workspace mới. Tháng một
 buổi thì bằng `always`, từ buổi thứ hai thì đắt hơn; tháng có từ hai buổi stg trở lên thì đặt `always` trước buổi đầu (số ở phụ lục).
@@ -98,13 +99,16 @@ flowchart LR
   mức ≥ 7; ở `us-east-1` nó gửi qua bus `svp-security-events` bằng role `svp-security-guardduty-forwarder`, vì rule không nhắm được topic SNS
   của region khác. Luồng đủ ở [`aws-security.md`](aws-security.md#luồng-phát-hiện-tới-cảnh-báo).
 - `aws/baseline` truyền giá trị `config_recording` của từng account vào module `security-baseline` của account đó.
-- `aws/accounts/<env>` truyền `inspector_ecr` vào module `registry` (`enhanced_scanning`) và bật AMG khi `managed_grafana` là `always` hay
-  biến `session_open` là `true`. Workspace AMG không tra được theo tên, nên module `observability` ghi id của nó vào SSM parameter; root env
-  đọc parameter đó và dừng plan khi không có.
+- `aws/accounts/<env>` truyền `inspector_ecr` vào module `registry` (`enhanced_scanning`) và bật AMG khi
+  `managed_grafana` là `always` hay (`session` và biến `session_open` là `true`). Workspace AMG không tra được theo tên,
+  nên module `observability` ghi id của nó vào SSM parameter; root env đọc parameter đó khi cờ khác `off` và dừng plan
+  khi không có; với `off` nó không đọc gì, `grafanaUrl` rỗng.
 
 ## Một buổi với AMG theo buổi
 
-`session.sh` đặt hai bước account quanh root env; `tf.sh` giữ thứ tự bằng timeline của buổi.
+Buổi bật `managed_grafana` `session` cho phép kiểm cần dashboard đi như dưới. Với giá trị của file (`off`) hai bước
+account in `ok no session feature …` và không chạy gì. `session.sh` đặt hai bước account quanh root env; `tf.sh` giữ thứ
+tự bằng timeline của buổi.
 
 ```mermaid
 sequenceDiagram
@@ -137,15 +141,25 @@ sequenceDiagram
 - `account plan --close` bị từ chối khi root env còn đứng trong buổi: workspace phải sống tới khi cluster đã gỡ.
 - `session_open` không nằm trong file nào: chỉ `plan --open`, `plan --close` của `tf.sh` đặt nó, nên không file nào để quên workspace
   sống qua buổi.
-- Giữa các buổi prd cũng theo `session`, không có workspace. Buổi prd chạy sau khi prd về giá trị production (`always`),
+- Giữa các buổi prd cũng `off`, không có workspace. Buổi prd chạy sau khi prd về giá trị production (`always`),
   nên trong buổi đó mọi lệnh account của prd in `ok no session feature of prd …` và thoát 0; workspace sống tới khi prd
   về lại giá trị rẻ.
 
 ## Phép kiểm buổi theo cờ
 
-Phép kiểm nào của runbook buổi đọc dịch vụ có cờ ở ADR-0071 §12. Với `managed_grafana` = `session`, phép kiểm cần Grafana (token Grafana
-Operator, dashboard, Explore) chạy được sau bước mở. Phép kiểm đọc Inspector hay finding Security Hub không có gì để đọc ở account có cờ đó
-`off`; chúng chạy ở buổi prd. Không phép kiểm nào đọc Config riêng: control FAILED cần Config đi cùng Security Hub.
+Runbook buổi `session-stg.md`, `session-prd.md` của `svp-infra` đánh dấu mỗi phép kiểm `lõi` hay `chuẩn ngành` (ADR-0078
+§6). `lõi` chứng minh upload, transcode, feed, phát, xác thực, triển khai qua Argo CD và đường cảnh báo, cùng các bước
+dựng, gỡ env và phép đọc finding GuardDuty; không phép nào cần cờ, nên đường mặc định của buổi chạy với giá trị của
+file. Phép `chuẩn ngành` chọn bật từng buổi; phép cần dịch vụ có cờ (ADR-0071 §12) cần đổi cờ trước buổi:
+
+| Phép kiểm `chuẩn ngành` | Giá trị cần ở buổi stg |
+| --- | --- |
+| Dashboard, Explore, token Grafana Operator | `managed_grafana` `session` (hay `always`) |
+| Inspector quét repo cache | `inspector_ecr` `always` |
+| Control Security Hub của buổi | `security_hub` và `config_recording` `always` |
+
+Không phép kiểm nào đọc Config riêng: control FAILED cần Config đi cùng Security Hub. Buổi prd chạy với giá trị
+production, nên mọi phép `chuẩn ngành` của nó chạy được không cần đổi thêm cờ.
 
 ## Đổi một cờ
 
