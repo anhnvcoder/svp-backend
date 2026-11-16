@@ -304,6 +304,14 @@ Mục 7 cũ ("Đề xuất xem lại") nguyên văn; việc còn mở chuyển v
   chỉnh ADR-0025, 0041, 0072. Đáng xem lại: (1) lượt đã duyệt chạy mọi code của PR với role, kể cả HCL và provider của lock trong PR, nên
   phạm vi người học đọc trước khi duyệt là cả diff; (2) refresh với tập Deny và token 300 s trong lượt dài chỉ kiểm được ở buổi cloud;
   (3) bước khớp tag chưa kiểm commit của tag nằm trên `main`; (4) lượt đầu của release-please với quyền App đã chốt (không `issues: write`).
+- **Cờ chi phí mặc định rẻ ở mọi account (2026-11-16):** management, `svp-log-archive`, `svp-backup`, prd cũng tắt
+  Security Hub CSPM, Config giữa các buổi; prd tắt Inspector ECR, chỉ dựng AMG trong buổi, và về giá trị production
+  trước buổi prd duy nhất theo `aws/paid-features.json` của `svp-infra` (ORG-6; câu Security Hub, Config của BAK-3,
+  ORG-2, ORG-3 sửa; một dòng ở mục 6). Bề mặt mới:
+  association `svp-security-off` và mục của rule `svp-security-guardduty-findings` cho bốn account đó, bước đổi cờ prd
+  trước và sau buổi prd. [ADR-0078](../adr/0078-paid-features-lean-defaults.md) chỉnh ADR-0055, 0060, 0062, 0063, 0067,
+  0071. Đáng xem lại: (1) quên đổi cờ trước buổi prd thì buổi đó chạy không chấm posture; (2) finding cũ của các account
+  đó hết hạn theo Security Hub; (3) digest bên thứ ba chỉ có quét cơ bản tới buổi prd.
 - **Đề xuất (không bắt buộc), giai đoạn 2:** thêm `etag` (hoặc checksum) của file gốc vào `VideoUploaded`, lấy từ lần `HEAD`
   ở `CompleteUpload`; worker tải file với điều kiện `If-Match` theo giá trị đó. Đóng được UP-2 (file bị thay giữa lúc kiểm và
   lúc đọc). Đây là thêm field nên không phá contract (quy tắc versioning ở

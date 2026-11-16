@@ -22,8 +22,10 @@ Trang không chép số. Giá trị nằm ở:
   giám sát. Khác là lỗi.
 - **Được giảm:** số AZ, cỡ, số lượng, retention, bảo vệ xoá. Chỉ vì chi phí; stg không mất hành vi cần kiểm.
 - **Giảm có điều kiện:** stg mất một hành vi (thường là failover); cột "Mất gì → kiểm bù" ghi chỗ kiểm hành vi đó.
-- **Theo cờ:** dịch vụ tốn tiền mà hệ thống không cần để chạy; giá trị mỗi account ở `aws/paid-features.json`, prd để mặc định `always`; đường
-  thay thế khi stg tắt và cái giá ở [`paid-features.md`](paid-features.md) ([ADR-0071](../adr/0071-paid-features.md)).
+- **Theo cờ:** dịch vụ tốn tiền mà hệ thống không cần để chạy; giá trị mỗi account ở `aws/paid-features.json`: giữa các
+  buổi stg và prd cùng giá trị rẻ nhất hợp lệ, prd về `always` (giá trị production) trong buổi prd; đường thay thế và
+  cái giá ở [`paid-features.md`](paid-features.md) ([ADR-0071](../adr/0071-paid-features.md),
+  [ADR-0078](../adr/0078-paid-features-lean-defaults.md)).
 - **Định danh:** tên, account, zone, cổng tunnel, bản phát hành. Khác vì là env khác, không phải mức khác (ADR-0055 §5).
 
 Cột "stg so với prd" nói hướng khác biệt; số ở file của cột "Giá trị ở".
@@ -42,7 +44,7 @@ trong cùng thay đổi (ADR-0055 §1).
 | Bốn tầng subnet: public (chỉ NAT), private, database, edge | module `network` | phải giống | như nhau | Subnet database không có route ra Internet ([ADR-0054](../adr/0054-data-subnet-tier.md)); subnet edge chỉ có ALB, không pod ([ADR-0061](../adr/0061-edge-cloudfront-waf-acm.md) §3) | — | [EKSSUB] |
 | VPC flow log và đích của nó | module `network` (`flow_log_bucket_arn` do root suy từ id account log) | phải giống | cả hai ghi vào bucket `svp-flowlogs-…` của `svp-log-archive`, cùng định dạng ([ADR-0060](../adr/0060-org-detection-logging.md) §9) | Log nằm ngoài tầm admin của env và còn sau khi env bị gỡ; đường ghi chéo account chạy ở stg trước | — | [FL], [SRA] |
 | Retention flow log | root `aws/log-archive` (lifecycle theo tiền tố account) | được giảm | stg ngắn hơn ([ADR-0060](../adr/0060-org-detection-logging.md) §7) | Log của stg chỉ phủ một buổi vài giờ | — | [COST] |
-| NACL không mở 22, 3389 từ Internet | module `network` | phải giống | như nhau ([ADR-0059](../adr/0059-org-structure-guardrails.md) §10) | Cùng luật mạng; Security Hub đánh giá control EC2.21 ở prd (stg theo cờ `security_hub`) | — | [CIS] |
+| NACL không mở 22, 3389 từ Internet | module `network` | phải giống | như nhau ([ADR-0059](../adr/0059-org-structure-guardrails.md) §10) | Cùng luật mạng; Security Hub đánh giá control EC2.21 trong buổi prd (stg và prd giữa các buổi theo cờ `security_hub`) | — | [CIS] |
 | Policy S3 gateway endpoint | `s3_endpoint_restricted` (`<env>.tfvars`) | phải giống | bật ở cả hai | Policy chỉ cho bucket trong danh sách: image kéo từ bucket thiếu sẽ lỗi, stg gặp lỗi đó trước prd | — | [S3EP] |
 | Bucket thêm của endpoint | `s3_endpoint_extra_buckets` (`<env>.tfvars`) | phải giống | cùng danh sách | Bucket mà `registry.k8s.io` chuyển hướng client trong AWS tới | — | [S3EP] |
 | NetworkPolicy | add-on `vpc-cni` của module `eks` (network policy agent), chart | phải giống | như nhau | Chính sách mạng của chart áp như nhau mọi nơi | — | [EKSNET] |
@@ -85,9 +87,9 @@ trong cùng thay đổi (ADR-0055 §1).
 | Kyverno HA (ba replica, PDB, trải zone) | `platforms/eks/kyverno.yaml` | phải giống | như nhau | Admission webhook chết thì không tạo được pod | — | [EKSAPP] |
 | Trải theo zone | chart `svp-service` (`spreadAcrossNodes`) | phải giống | như nhau | Mất một AZ không mất mọi replica | — | [EKSAPP] |
 | Kiểm image (chữ ký, báo cáo lỗ hổng, provenance) | `envs/<env>/svp-policy.yaml` | phải giống | như nhau | prd chỉ chạy image đã qua cùng cổng ở stg | — | [12F] |
-| Amazon Inspector quét image ECR | `inspector_ecr` (`aws/paid-features.json`), root `aws/security`, module `registry` | theo cờ | stg quét cơ bản của ECR khi push, prd Inspector quét liên tục | Image chạy ở prd là bộ stg đã chạy; digest bên thứ ba được Inspector của prd quét | Digest bên thứ ba mới trước promote → quét cơ bản ở stg; cổng quét của CI và attestation `vuln` mà Kyverno đòi chỉ chạy với image của repo code, digest bên thứ ba dựa vào Inspector của prd ([`paid-features.md`](paid-features.md)) | — |
+| Amazon Inspector quét image ECR | `inspector_ecr` (`aws/paid-features.json`), root `aws/security`, module `registry` | theo cờ | stg quét cơ bản của ECR khi push; prd cũng vậy giữa các buổi, Inspector quét liên tục trong buổi prd | Image chạy ở prd là bộ stg đã chạy; digest bên thứ ba được Inspector quét trong buổi prd | Digest bên thứ ba mới ngoài buổi prd → quét cơ bản; cổng quét của CI và attestation `vuln` mà Kyverno đòi chỉ chạy với image của repo code, digest bên thứ ba dựa vào Inspector của buổi prd ([`paid-features.md`](paid-features.md)) | — |
 | Observability trong cluster, Argo CD | `platforms/eks/` | phải giống | như nhau | Cùng cách quan sát và triển khai | — | [12F] |
-| Workspace Amazon Managed Grafana `svp-<env>` | `managed_grafana` (`aws/paid-features.json`), root `aws/accounts/<env>` | theo cờ | stg chỉ có trong buổi (`session`), prd sống giữa các buổi | Phí AMG tính theo user mỗi workspace mỗi tháng, cả tháng không buổi; AMP, log, trace luôn có | Dashboard stg giữa buổi → dữ liệu AMP, CloudWatch giữ, xem lại ở buổi sau ([`paid-features.md`](paid-features.md)) | — |
+| Workspace Amazon Managed Grafana `svp-<env>` | `managed_grafana` (`aws/paid-features.json`), root `aws/accounts/<env>` | theo cờ | stg, prd chỉ có trong buổi (`session`); prd ở `always` từ bước đổi cờ trước buổi prd tới bước đổi lại sau buổi | Phí AMG tính theo user mỗi workspace mỗi tháng, cả tháng không buổi; AMP, log, trace luôn có | Dashboard giữa các buổi → dữ liệu AMP, CloudWatch giữ, xem lại ở buổi sau ([`paid-features.md`](paid-features.md)) | — |
 
 ## RDS PostgreSQL
 
@@ -178,8 +180,8 @@ trong cùng thay đổi (ADR-0055 §1).
 | Entry Secrets Manager, role SecretStore theo namespace | module `external-secrets` | phải giống | như nhau; tên entry theo env | Cùng đường Secret vào cluster | — | [EKSENC] |
 | Alarm CloudWatch của RDS, MSK, ElastiCache và SNS mã hoá CMK | module `alarms` và alarm trong module dịch vụ | phải giống | cùng bộ alarm ([ADR-0058](../adr/0058-managed-data-operations.md)) | Alarm phải sống khi cluster chết; stg kiểm ngưỡng và runbook | — | [CWALARM] |
 | Email nhận alarm | `alarm_email` (`*.auto.tfvars` không commit) | định danh | theo env | Giá trị cá nhân | — | — |
-| Security Hub CSPM (FSBP, CIS) | `security_hub` (`aws/paid-features.json`), root `aws/security` | theo cờ | stg tắt (policy `svp-security-off`), prd bật | Chấm posture không cần để chạy; prd chạy cùng module | Control của tài nguyên stg → chấm ở buổi prd; finding GuardDuty của stg tới email qua rule `svp-security-guardduty-findings` ([`aws-security.md`](aws-security.md#luồng-phát-hiện-tới-cảnh-báo)) | — |
-| Config recorder | `config_recording` (`aws/paid-features.json`), root `aws/baseline` | theo cờ | stg không recorder, prd ghi liên tục | Lịch sử cấu hình không cần để chạy; CloudTrail org ghi mọi lệnh ở stg | Lịch sử cấu hình của tài nguyên stg → CloudTrail org ([`paid-features.md`](paid-features.md)) | — |
+| Security Hub CSPM (FSBP, CIS) | `security_hub` (`aws/paid-features.json`), root `aws/security` | theo cờ | stg tắt (policy `svp-security-off`); prd tắt giữa các buổi, bật trong buổi prd | Chấm posture không cần để chạy; prd chạy cùng module | Control của tài nguyên stg → chấm ở buổi prd; finding GuardDuty của stg, của prd giữa các buổi tới email qua rule `svp-security-guardduty-findings` ([`aws-security.md`](aws-security.md#luồng-phát-hiện-tới-cảnh-báo)) | — |
+| Config recorder | `config_recording` (`aws/paid-features.json`), root `aws/baseline` | theo cờ | stg không recorder; prd không recorder giữa các buổi, ghi liên tục trong buổi prd | Lịch sử cấu hình không cần để chạy; CloudTrail org ghi mọi lệnh ở stg | Lịch sử cấu hình của tài nguyên stg → CloudTrail org ([`paid-features.md`](paid-features.md)) | — |
 
 ## Workload và phát hành
 
