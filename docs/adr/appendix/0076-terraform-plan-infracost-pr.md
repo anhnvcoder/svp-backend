@@ -24,6 +24,8 @@ ghi khác. Account ID trong ví dụ là `111111111111`.
 
 ### Chi phí
 
+Tài liệu hiện hành tả CLI v2 [N29]; v0.10 vẫn phát hành, giữ khoá API và lệnh `comment` [N19].
+
 | Phương án | Trạng thái ngành | Được | Mất | Nguồn |
 | --- | --- | --- | --- | --- |
 | **Infracost CLI v0.10** | Cũ, vẫn phát hành: v0.10.49 (2026-11-10, Apache-2.0); v0.10.45 đã chuẩn bị chuyển sang v2 | Đọc HCL không credential AWS; comment PR, diff base/PR bằng chính CLI; khoá API; image Docker Hub ghim được theo digest | Khoá API (secret); gói Free 1 000 run mỗi tháng; HCL không thấy giá trị `*.auto.tfvars`; dòng đang chuyển dần sang v2 (§10) | [N14], [N15], [N18], [N30] |
@@ -122,6 +124,8 @@ ARN alias `arn:aws:kms:ap-southeast-1:<account>:alias/svp-tfstate`: IAM chỉ nh
 
 - `ReadOnlyAccess` v192 cho mọi hành động của `DenyWorkloadData` trừ `secretsmanager:GetSecretValue`, `BatchGetSecretValue` và `kms:Decrypt`
   (đối chiếu bằng wildcard của chính policy). Hai hành động secret vẫn Deny: phòng khi policy managed hay resource policy của secret mở thêm.
+- Giá trị `SecureString` của SSM cần `kms:Decrypt` [N20], nên nhóm Giải mã chặn mọi lần đọc có giải mã.
+  Tham số `String` (`/svp/<env>/grafana-workspace-id`, tham số công khai của AWS) vẫn đọc được, không phải secret theo kiểu.
 - `sqs:ReceiveMessage` không chỉ đọc: message nhận bị ẩn khỏi consumer khác trong visibility timeout, lần nhận không xoá tính là một lần nhận lỗi
   [N25]; với hàng đợi trạng thái MediaConvert, một lượt đọc làm chậm và có thể đẩy message vào DLQ.
 - Hai object ngoại lệ ngoài state: `media/uptime-probe.txt` là object công khai qua CloudFront (nội dung `ok`), refresh của nó cần
@@ -154,6 +158,11 @@ Cách làm (2026-11-15):
 Mọi loại khác (EC2, EKS, IAM, RDS, MSK, ElastiCache, CloudFront, ACM, Route 53, WAF, ECR, AMP, X-Ray, Backup, SNS, SQS, EventBridge, Application
 Auto Scaling, MediaConvert, GuardDuty, Budgets, CloudWatch, CloudWatch Logs) đọc bằng `Describe*`, `Get*`, `List*` mà `ReadOnlyAccess` có và tập Deny
 không chứa.
+
+- Mọi khoá KMS của hai root có statement của account principal với `Describe*`, `Get*`, `List*` (hay key policy mặc định):
+  `GetKeyPolicy` qua IAM.
+- `tls_certificate` (EKS), `aws_ip_ranges` gọi HTTPS ngoài API AWS; hai root không có bảng DynamoDB, log event, `SecureString`,
+  `data "aws_s3_object"`.
 
 ## 10. Infracost
 

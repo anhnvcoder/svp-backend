@@ -102,9 +102,7 @@ Explicit Deny thắng mọi Allow [N21]. Bốn nhóm, statement đủ ở [phụ
 | Giải mã | `kms:Decrypt` | mọi khoá trừ khoá state; khoá state khi không qua S3 |
 | Ghi state | mọi hành động S3 trừ `s3:Get*`, `s3:List*` | **Bucket state** và mọi object của nó (cả `.tflock`) |
 
-- Giá trị `SecureString` của SSM cần `kms:Decrypt` [N20], nên nhóm Giải mã chặn mọi lần đọc có giải mã.
-  Tham số `String` (`/svp/<env>/grafana-workspace-id`, tham số công khai của AWS) vẫn đọc được, không phải secret theo kiểu.
-- Không Deny nào chạm refresh của root plan được: §6.
+- Không Deny nào chạm refresh của root plan được: §6; tham số SSM: [phụ lục](appendix/0076-terraform-plan-infracost-pr.md#5-tập-deny).
 
 ### 6. Refresh đọc gì
 
@@ -116,8 +114,7 @@ provider AWS ở version của lock (6.71.0 ở `aws/envs/<env>`, 6.72.0 ở `aw
 - `aws_s3_object.uptime_probe` (module `media`): `HeadObject` cần `s3:GetObject` [N9], thêm tag object: ngoại lệ đúng ARN object đó.
 - `aws_grafana_workspace_service_account` (module `observability`) cần `grafana:ListWorkspaceServiceAccounts`; `aws_pricingplanmanager_subscription`
   (module `media`) cần `pricingplanmanager:GetSubscription`; `ReadOnlyAccess` v192 không có cả hai [N27]: inline `Allow` hai hành động đó.
-- Mọi khoá KMS của hai root có statement của account principal với `Describe*`, `Get*`, `List*` (hay key policy mặc định): `GetKeyPolicy` qua IAM.
-- `tls_certificate` (EKS), `aws_ip_ranges` gọi HTTPS ngoài API AWS; hai root không có bảng DynamoDB, log event, `SecureString`, `data "aws_s3_object"`.
+- Khoá KMS, lệnh HTTPS ngoài API AWS: [phụ lục](appendix/0076-terraform-plan-infracost-pr.md#6-kiểm-kê-refresh).
 
 ### 7. Root plan được
 
@@ -150,8 +147,7 @@ provider AWS ở version của lock (6.71.0 ở `aws/envs/<env>`, 6.72.0 ở `aw
 - Job `infracost` (`contents: read`, secret repo `INFRACOST_API_KEY`) tính bản base và bản PR, `diff`; job `infracost-comment`
   (`pull-requests: write`) đăng bằng `infracost comment github --behavior update` [N19]; bảng tổng mỗi project vào job summary. Bỏ qua có
   notice khi PR từ fork hay khoá rỗng.
-- Mức dùng: khoá API miễn phí; trang giá ghi gói Free 1 000 run mỗi tháng [N15], không nói bản CLI nào. Tài liệu hiện hành tả CLI v2 [N29];
-  v0.10 vẫn phát hành, giữ khoá API và lệnh `comment` [N19]; vì sao chưa chọn v2:
+- Mức dùng: khoá API miễn phí; trang giá ghi gói Free 1 000 run mỗi tháng [N15], không nói bản CLI nào; vì sao chưa chọn v2:
   [phụ lục](appendix/0076-terraform-plan-infracost-pr.md#chi-phí).
 - `infracost.yml`: mỗi root plan được của hai env một project; `aws/envs/<env>` với `<env>.tfvars`; `aws/accounts/<env>` không file tfvars
   (chỉ có `*.auto.tfvars` bị gitignore, `var_files` không bắt buộc [N28]); `aws/accounts/stg` thêm project `session_open=true`. Giả định mức dùng
@@ -198,3 +194,7 @@ Chỉnh: 0034 §2; 0059 §12; 0062 §5; 0041 (d).
 ## Thông tin thêm
 
 Phụ lục: [`appendix/0076-terraform-plan-infracost-pr.md`](appendix/0076-terraform-plan-infracost-pr.md) (phương án, IAM, refresh, nguồn).
+
+### Chỉnh bởi
+
+- §10: [0078](0078-paid-features-lean-defaults.md): `aws/accounts/<env>` có project `session_open=true` chỉ khi env có cờ `session`.
