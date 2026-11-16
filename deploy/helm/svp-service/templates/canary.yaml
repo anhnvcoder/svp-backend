@@ -1,7 +1,21 @@
 {{- /*
-Canary of a release with canary set: the Rollout's strategy, Service <release>-canary, and AnalysisTemplates
-<release>-canary (background) and <release>-canary-gate (before 100%) deciding from Envoy's metrics to promote or abort.
+Canary of a release with canary set: the Rollout's strategy, Service <release>-canary beside the stable one, and
+AnalysisTemplates <release>-canary (background) and <release>-canary-gate (before 100%) deciding to promote or abort.
+The weights of a route split the requests: the HTTPRoute (Envoy) of a release with httpRoute.host, measured on Envoy's
+metrics of the canary backend; the GRPCRoute (the mesh's waypoint) of a gRPC release, measured on its canary's pods.
 */}}
+
+{{- /*
+The waypoint splits a gRPC release's calls one by one, not its clients' connections, so the canary's share of the calls
+is the weight whatever the number of its pods, as through Envoy.
+*/}}
+
+{{- /* Kind of the route the release's canary goes through: HTTPRoute (Envoy), or GRPCRoute (the waypoint). */}}
+{{- define "svp-service.canaryRoute" -}}
+{{- if .Values.httpRoute.host }}HTTPRoute{{ else if eq .Values.protocol "grpc" }}GRPCRoute{{ else }}
+{{- fail (printf "release %s sets canary without an httpRoute.host and is not gRPC: its canary has nothing to measure" .Release.Name) }}
+{{- end }}
+{{- end }}
 
 {{- /*
 The canary backend has an Envoy cluster of its own only because each backendRef of the route carries a filter (otherwise
@@ -23,14 +37,20 @@ run is Successful, so 100% follows a valid measurement of each metric.
 
 {{- /*
 A failed or errored AnalysisRun aborts the Rollout: the route goes back to 100/0 at once, the canary pods go 30 s later,
-the stable pods are never touched. An inconclusive one pauses it until someone resumes or aborts it; it never promotes.
+the stable pods are never touched.
+An inconclusive one pauses it until someone resumes or aborts it; it never promotes.
 */}}
 
 {{- /*
 A step that cannot complete (a canary pod never ready) aborts the Rollout after 600 s (progressDeadlineAbort); the
 deadline does not run while paused or during the gate (an analysis step is indefinite), and the gate ends within 50 s.
 */}}
+{{- /*
+With trafficRouting Argo Rollouts sizes the canary ReplicaSet from the weight, keeps the stable one whole, and adds each
+one's pod-template-hash to the selector of its Service. A gRPC release's analyses get the canary's hash.
+*/}}
 {{- define "svp-service.canaryStrategy" -}}
+{{- $grpc := eq (include "svp-service.canaryRoute" .) "GRPCRoute" -}}
 progressDeadlineSeconds: 600
 progressDeadlineAbort: true
 strategy:
@@ -40,11 +60,18 @@ strategy:
     trafficRouting:
       plugins:
         argoproj-labs/gatewayAPI:
+          {{- if $grpc }}
+          grpcRoute: {{ .Release.Name }}
+          {{- else }}
           httpRoute: {{ include "svp-service.routeName" . }}
+          {{- end }}
           namespace: {{ .Release.Namespace }}
     analysis:
       templates:
         - templateName: {{ .Release.Name }}-canary
+      {{- if $grpc }}
+      {{- include "svp-service.canaryHashArg" . | nindent 6 }}
+      {{- end }}
       startingStep: 0
     steps:
       - setWeight: 25
@@ -54,6 +81,16 @@ strategy:
       - analysis:
           templates:
             - templateName: {{ .Release.Name }}-canary-gate
+          {{- if $grpc }}
+          {{- include "svp-service.canaryHashArg" . | nindent 10 }}
+          {{- end }}
+{{- end }}
+
+{{- define "svp-service.canaryHashArg" -}}
+args:
+  - name: canary-hash
+    valueFrom:
+      podTemplateHashValue: Latest
 {{- end }}
 
 {{- /*
@@ -67,8 +104,8 @@ single measurement has no stray one to let pass. inconclusiveLimit 0 in both: th
 */}}
 
 {{- /*
-Each query answers -1 while the canary has had fewer than 30 responses that are not 4xx in the window: Inconclusive, so
-the canary is not promoted. 4xx stay out of the ratio's denominator so they do not dilute the 5xx.
+Each query answers -1 while the canary has had fewer than 30 responses that are not 4xx (gRPC: 30 calls) in the window:
+Inconclusive, so the canary is not promoted. 4xx stay out of the ratio's denominator so they do not dilute the 5xx.
 */}}
 
 {{- /*
@@ -104,13 +141,24 @@ failureLimit: 1
 consecutiveErrorLimit: 2
 {{- end }}
 
+{{- /*
+A gRPC canary is measured on rpc.server.call.duration of its own pods (resource attribute k8s.pod.name, which the
+chart sets): the server errors are the status codes a fault of the server gives, not those of a bad request.
+*/}}
+
+{{- /*
+Its pods are found by the hash that starts their names: the plugin labels only the route, and no metric carries the
+Service a call came through (nothing scrapes the waypoint).
+*/}}
+
 {{- /* The metrics of both AnalysisTemplates; dict "ctx" (the chart's root context) and "gate" (true for the gate). */}}
 {{- define "svp-service.canaryMetrics" -}}
-{{- $c := include "svp-service.canaryCluster" .ctx }}
 {{- $limits := .ctx.Values.canaryLimits }}
 {{- $ratio := required (printf "canaryLimits.errorRatio is empty for release %s" .ctx.Release.Name) $limits.errorRatio }}
 {{- $p99 := required (printf "canaryLimits.p99Ms is empty for release %s" .ctx.Release.Name) $limits.p99Ms }}
 {{- $prom := .ctx.Values.canaryPrometheus }}
+{{- if eq (include "svp-service.canaryRoute" .ctx) "HTTPRoute" }}
+{{- $c := include "svp-service.canaryCluster" .ctx }}
 # 5xx among the canary's responses that are not 4xx.
 - name: canary-5xx-ratio
   {{- include "svp-service.canaryCadence" .gate | nindent 2 }}
@@ -150,9 +198,53 @@ consecutiveErrorLimit: 2
         histogram_quantile(0.99, sum by (le) (rate(envoy_cluster_upstream_rq_time_bucket{envoy_cluster_name="{{ $c }}"}[1m])))
         and on() (sum(increase(envoy_cluster_upstream_rq_xx{envoy_cluster_name="{{ $c }}",envoy_response_code_class!="4"}[1m])) >= 30)
         or on() vector(-1)
+{{- else }}
+{{- $pods := printf "k8s_namespace_name=\"%s\",k8s_pod_name=~\"%s-{{args.canary-hash}}-.*\"" .ctx.Release.Namespace .ctx.Release.Name }}
+{{- $errors := "UNKNOWN|INTERNAL|UNAVAILABLE|DATA_LOSS|DEADLINE_EXCEEDED" }}
+# Server errors among the canary pods' calls.
+- name: canary-error-ratio
+  {{- include "svp-service.canaryCadence" .gate | nindent 2 }}
+  successCondition: result[0] >= 0 && result[0] < {{ $ratio }}
+  failureCondition: result[0] >= {{ $ratio }}
+  provider:
+    prometheus:
+      address: {{ $prom.address }}
+      {{- with $prom.sigv4Region }}
+      authentication:
+        sigv4:
+          region: {{ . }}
+      {{- end }}
+      timeout: 10
+      query: |
+        (
+          (sum(increase(rpc_server_call_duration_seconds_count{ {{- $pods }},rpc_response_status_code=~"{{ $errors }}"}[1m])) or on() vector(0))
+          / sum(increase(rpc_server_call_duration_seconds_count{ {{- $pods }}}[1m]))
+        )
+        and on() (sum(increase(rpc_server_call_duration_seconds_count{ {{- $pods }}}[1m])) >= 30)
+        or on() vector(-1)
+# p99 of the canary pods' calls as their server measured it, in ms.
+- name: canary-p99-ms
+  {{- include "svp-service.canaryCadence" .gate | nindent 2 }}
+  successCondition: result[0] >= 0 && result[0] < {{ $p99 }}
+  failureCondition: result[0] >= {{ $p99 }}
+  provider:
+    prometheus:
+      address: {{ $prom.address }}
+      {{- with $prom.sigv4Region }}
+      authentication:
+        sigv4:
+          region: {{ . }}
+      {{- end }}
+      timeout: 10
+      query: |
+        histogram_quantile(0.99, sum by (le) (rate(rpc_server_call_duration_seconds_bucket{ {{- $pods }}}[1m]))) * 1000
+        and on() (sum(increase(rpc_server_call_duration_seconds_count{ {{- $pods }}}[1m])) >= 30)
+        or on() vector(-1)
+{{- end }}
 {{- end }}
 
 {{- if .Values.canary }}
+{{- $grpc := eq (include "svp-service.canaryRoute" .) "GRPCRoute" }}
 apiVersion: v1
 kind: Service
 metadata:
@@ -177,6 +269,10 @@ metadata:
   labels:
     {{- include "svp-service.labels" $ | nindent 4 }}
 spec:
+  {{- if $grpc }}
+  args:
+    - name: canary-hash
+  {{- end }}
   metrics:
     {{- include "svp-service.canaryMetrics" (dict "ctx" $ "gate" $gate) | nindent 4 }}
 {{- end }}

@@ -153,6 +153,18 @@
       "automerge": false
     },
     {
+      "description": "The probe image of the k3d drills (SVP_PROBE_IMAGE of deploy/k8s/lib.sh) is the Alpine of media-worker's rootfs stage: both move in the pull request of the base images.",
+      "matchDepNames": ["alpine", "docker.io/library/alpine"],
+      "groupName": "go toolchain and base images"
+    },
+    {
+      "description": "Its digest updates merge by themselves, as those of the base images do, so the group still can (deploy/k8s/lib.sh has no Code Owner).",
+      "matchFileNames": ["deploy/k8s/lib.sh"],
+      "matchDepNames": ["alpine", "docker.io/library/alpine"],
+      "matchUpdateTypes": ["digest"],
+      "automerge": true
+    },
+    {
       "description": "cosign of the dev machine (COSIGN_IMAGE) and of CI (cosign-release of sigstore/cosign-installer) are the same version.",
       "matchDepNames": ["ghcr.io/sigstore/cosign/cosign", "sigstore/cosign"],
       "groupName": "cosign",
@@ -199,6 +211,11 @@
       "description": "The Collector image of compose (otelcol, otelcol-elastic) and of make otelcol-validate (OTELCOL_IMAGE) stays the same in all three places, and the same as the cluster's (base/otel-collector.yaml of svp-gitops, which its own Renovate updates).",
       "matchDepNames": ["otel/opentelemetry-collector-contrib"],
       "groupName": "opentelemetry-collector chart"
+    },
+    {
+      "description": "The blackbox exporter image of compose stays the same as the cluster's (base/blackbox-exporter.yaml and base/blackbox-exporter-public.yaml of svp-gitops, which its own Renovate updates).",
+      "matchDepNames": ["quay.io/prometheus/blackbox-exporter"],
+      "groupName": "prometheus-blackbox-exporter chart"
     },
     {
       "description": "Elasticsearch, Kibana and APM Server of compose (profile obs-elastic) are the same version in one pull request: Kibana and APM Server refuse an older Elasticsearch, and CI only checks compose config, so a lone Kibana bump would pass CI and break make up OBS=elastic.",

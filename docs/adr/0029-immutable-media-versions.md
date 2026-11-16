@@ -109,3 +109,9 @@ Giữ MPEG-TS bây giờ: ladder chỉ H.264 + AAC, phát được ở mọi đ�
 ## Thông tin thêm
 
 Phụ lục: [`appendix/0029-immutable-media-versions.md`](appendix/0029-immutable-media-versions.md) (tiêu đề và trạng thái gốc, bối cảnh đầy đủ, mọi phương án, toàn văn các §, bảng CMAF, "Kiểm chứng sau", hệ quả, hiện thực ở, nguồn).
+
+### Chỉnh bởi
+
+- §1, §2 (bố cục thư mục của lần thử): [0066](0066-mediaconvert-transcode.md): mọi object của lần thử phẳng trong `media/<video_id>/<V>/<A>/`, playlist rendition `index_<rendition>.m3u8`, URI biến thể trong master `<A>/index_<rendition>.m3u8` ở cả `serve` và MediaConvert; version, lần thử, master tạo một lần bằng `If-None-Match: *` giữ nguyên.
+- §2, §3 (trình tự lần thử và header trên stg, prd): [0066](0066-mediaconvert-transcode.md): kết quả mỗi version do bản ghi job `transcode-jobs/<video_id>/<version>.json` quyết; `Cache-Control` đặt bằng `CopyObject` tại chỗ sau khi job `COMPLETE`, trước master; compose, k3d giữ trình tự §2.
+- §1, §2 (bố cục thư mục), §4: [0073](0073-premium-playback.md): `<tiền tố><video_id>/<version>/…` với ba tiền tố của bucket media: `media/` (video thường, công khai), `premium/` (video premium, riêng), `preview/` (bản xem thử và thumbnail của video premium, công khai); version, lần thử, master tạo một lần giữ nguyên, master xem thử tạo một lần trước master đầy đủ; người nhận event kiểm key theo cờ premium bằng `objstore.IsKeyUnder`, dọn video premium xoá `premium/<id>/` và `preview/<id>/` thay `media/<id>/` (§4).

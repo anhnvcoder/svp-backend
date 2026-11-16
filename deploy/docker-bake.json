@@ -7,7 +7,8 @@
         "video-service",
         "engagement-service",
         "feed-service",
-        "media-worker"
+        "media-worker",
+        "dlq-replay"
       ]
     }
   },
@@ -67,6 +68,16 @@
       "dockerfile": "deploy/docker/media-worker.Dockerfile",
       "tags": [
         "svp/media-worker:dev"
+      ]
+    },
+    "dlq-replay": {
+      "context": ".",
+      "dockerfile": "deploy/docker/service.Dockerfile",
+      "args": {
+        "SERVICE": "dlq-replay"
+      },
+      "tags": [
+        "svp/dlq-replay:dev"
       ]
     }
   }

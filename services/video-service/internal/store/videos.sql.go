@@ -46,8 +46,8 @@ func (q *Queries) CountOpenUploads(ctx context.Context, arg CountOpenUploadsPara
 }
 
 const createVideo = `-- name: CreateVideo :exec
-INSERT INTO videos (id, author_id, title, status, size_bytes, content_type, request_id)
-VALUES ($1, $2, $3, 'UPLOADING', $4, $5, $6)
+INSERT INTO videos (id, author_id, title, status, size_bytes, content_type, premium, request_id)
+VALUES ($1, $2, $3, 'UPLOADING', $4, $5, $6, $7)
 `
 
 type CreateVideoParams struct {
@@ -56,6 +56,7 @@ type CreateVideoParams struct {
 	Title       string
 	SizeBytes   int64
 	ContentType string
+	Premium     bool
 	RequestID   pgtype.UUID
 }
 
@@ -67,13 +68,31 @@ func (q *Queries) CreateVideo(ctx context.Context, arg CreateVideoParams) error 
 		arg.Title,
 		arg.SizeBytes,
 		arg.ContentType,
+		arg.Premium,
 		arg.RequestID,
 	)
 	return err
 }
 
+const getEntitlementTier = `-- name: GetEntitlementTier :one
+SELECT tier FROM video_entitlements
+WHERE user_id = $1 AND video_id = $2
+`
+
+type GetEntitlementTierParams struct {
+	UserID  uuid.UUID
+	VideoID uuid.UUID
+}
+
+func (q *Queries) GetEntitlementTier(ctx context.Context, arg GetEntitlementTierParams) (string, error) {
+	row := q.db.QueryRow(ctx, getEntitlementTier, arg.UserID, arg.VideoID)
+	var tier string
+	err := row.Scan(&tier)
+	return tier, err
+}
+
 const getVideo = `-- name: GetVideo :one
-SELECT id, author_id, title, status, size_bytes, content_type, duration_ms, playlist_key, thumbnail_key, published_at, created_at, processing_at, request_id FROM videos
+SELECT id, author_id, title, status, size_bytes, content_type, duration_ms, playlist_key, thumbnail_key, published_at, created_at, processing_at, request_id, premium, preview_playlist_key FROM videos
 WHERE id = $1
 `
 
@@ -94,12 +113,14 @@ func (q *Queries) GetVideo(ctx context.Context, id uuid.UUID) (Video, error) {
 		&i.CreatedAt,
 		&i.ProcessingAt,
 		&i.RequestID,
+		&i.Premium,
+		&i.PreviewPlaylistKey,
 	)
 	return i, err
 }
 
 const getVideoByRequestID = `-- name: GetVideoByRequestID :one
-SELECT id, author_id, title, status, size_bytes, content_type, duration_ms, playlist_key, thumbnail_key, published_at, created_at, processing_at, request_id FROM videos
+SELECT id, author_id, title, status, size_bytes, content_type, duration_ms, playlist_key, thumbnail_key, published_at, created_at, processing_at, request_id, premium, preview_playlist_key FROM videos
 WHERE author_id = $1 AND request_id = $2
 `
 
@@ -127,6 +148,8 @@ func (q *Queries) GetVideoByRequestID(ctx context.Context, arg GetVideoByRequest
 		&i.CreatedAt,
 		&i.ProcessingAt,
 		&i.RequestID,
+		&i.Premium,
+		&i.PreviewPlaylistKey,
 	)
 	return i, err
 }
@@ -172,7 +195,7 @@ func (q *Queries) ListAbandonedUploads(ctx context.Context, arg ListAbandonedUpl
 }
 
 const listAuthorVideos = `-- name: ListAuthorVideos :many
-SELECT id, author_id, title, status, size_bytes, content_type, duration_ms, playlist_key, thumbnail_key, published_at, created_at, processing_at, request_id FROM videos
+SELECT id, author_id, title, status, size_bytes, content_type, duration_ms, playlist_key, thumbnail_key, published_at, created_at, processing_at, request_id, premium, preview_playlist_key FROM videos
 WHERE author_id = $1
   AND ($2::boolean OR status = 'READY')
   AND (created_at, id) < (COALESCE($3::timestamptz, 'infinity'), $4::uuid)
@@ -221,6 +244,8 @@ func (q *Queries) ListAuthorVideos(ctx context.Context, arg ListAuthorVideosPara
 			&i.CreatedAt,
 			&i.ProcessingAt,
 			&i.RequestID,
+			&i.Premium,
+			&i.PreviewPlaylistKey,
 		); err != nil {
 			return nil, err
 		}
@@ -277,21 +302,26 @@ func (q *Queries) MarkUploadsFailed(ctx context.Context, ids []uuid.UUID) ([]Mar
 const markVideoFailed = `-- name: MarkVideoFailed :one
 UPDATE videos SET status = 'FAILED'
 WHERE id = $1 AND status = 'PROCESSING'
-RETURNING processing_at
+RETURNING processing_at, premium
 `
 
+type MarkVideoFailedRow struct {
+	ProcessingAt *time.Time
+	Premium      bool
+}
+
 // Only a PROCESSING video moves: READY stays READY, and a redelivery finds FAILED already.
-func (q *Queries) MarkVideoFailed(ctx context.Context, id uuid.UUID) (*time.Time, error) {
+func (q *Queries) MarkVideoFailed(ctx context.Context, id uuid.UUID) (MarkVideoFailedRow, error) {
 	row := q.db.QueryRow(ctx, markVideoFailed, id)
-	var processing_at *time.Time
-	err := row.Scan(&processing_at)
-	return processing_at, err
+	var i MarkVideoFailedRow
+	err := row.Scan(&i.ProcessingAt, &i.Premium)
+	return i, err
 }
 
 const markVideoProcessing = `-- name: MarkVideoProcessing :one
 UPDATE videos SET status = 'PROCESSING', processing_at = now()
 WHERE id = $1 AND status = 'UPLOADING'
-RETURNING id, author_id, title, status, size_bytes, content_type, duration_ms, playlist_key, thumbnail_key, published_at, created_at, processing_at, request_id
+RETURNING id, author_id, title, status, size_bytes, content_type, duration_ms, playlist_key, thumbnail_key, published_at, created_at, processing_at, request_id, premium, preview_playlist_key
 `
 
 // Locks the row; only an UPLOADING video moves, so a concurrent call updates nothing.
@@ -312,22 +342,26 @@ func (q *Queries) MarkVideoProcessing(ctx context.Context, id uuid.UUID) (Video,
 		&i.CreatedAt,
 		&i.ProcessingAt,
 		&i.RequestID,
+		&i.Premium,
+		&i.PreviewPlaylistKey,
 	)
 	return i, err
 }
 
 const markVideoReady = `-- name: MarkVideoReady :one
 UPDATE videos
-SET status = 'READY', duration_ms = $2, playlist_key = $3, thumbnail_key = $4, published_at = now()
+SET status = 'READY', duration_ms = $2, playlist_key = $3, thumbnail_key = $4, preview_playlist_key = $5,
+    published_at = now()
 WHERE id = $1 AND status = 'PROCESSING'
-RETURNING id, author_id, title, status, size_bytes, content_type, duration_ms, playlist_key, thumbnail_key, published_at, created_at, processing_at, request_id
+RETURNING id, author_id, title, status, size_bytes, content_type, duration_ms, playlist_key, thumbnail_key, published_at, created_at, processing_at, request_id, premium, preview_playlist_key
 `
 
 type MarkVideoReadyParams struct {
-	ID           uuid.UUID
-	DurationMs   *int64
-	PlaylistKey  *string
-	ThumbnailKey *string
+	ID                 uuid.UUID
+	DurationMs         *int64
+	PlaylistKey        *string
+	ThumbnailKey       *string
+	PreviewPlaylistKey *string
 }
 
 // Locks the row; only a PROCESSING video moves, so a redelivered transcode.completed, or one for
@@ -338,6 +372,7 @@ func (q *Queries) MarkVideoReady(ctx context.Context, arg MarkVideoReadyParams) 
 		arg.DurationMs,
 		arg.PlaylistKey,
 		arg.ThumbnailKey,
+		arg.PreviewPlaylistKey,
 	)
 	var i Video
 	err := row.Scan(
@@ -354,6 +389,8 @@ func (q *Queries) MarkVideoReady(ctx context.Context, arg MarkVideoReadyParams) 
 		&i.CreatedAt,
 		&i.ProcessingAt,
 		&i.RequestID,
+		&i.Premium,
+		&i.PreviewPlaylistKey,
 	)
 	return i, err
 }
@@ -369,4 +406,31 @@ func (q *Queries) TryLockUploadSweep(ctx context.Context, lockID int64) (bool, e
 	var locked bool
 	err := row.Scan(&locked)
 	return locked, err
+}
+
+const upsertEntitlement = `-- name: UpsertEntitlement :one
+INSERT INTO video_entitlements (user_id, video_id, tier)
+VALUES ($1, $2, $3)
+ON CONFLICT (user_id, video_id) DO UPDATE SET tier = EXCLUDED.tier, granted_at = now()
+RETURNING user_id, video_id, tier, granted_at
+`
+
+type UpsertEntitlementParams struct {
+	UserID  uuid.UUID
+	VideoID uuid.UUID
+	Tier    string
+}
+
+// The primary key settles concurrent purchases of one user and video: one row, holding the tier of
+// the write that commits last.
+func (q *Queries) UpsertEntitlement(ctx context.Context, arg UpsertEntitlementParams) (VideoEntitlement, error) {
+	row := q.db.QueryRow(ctx, upsertEntitlement, arg.UserID, arg.VideoID, arg.Tier)
+	var i VideoEntitlement
+	err := row.Scan(
+		&i.UserID,
+		&i.VideoID,
+		&i.Tier,
+		&i.GrantedAt,
+	)
+	return i, err
 }

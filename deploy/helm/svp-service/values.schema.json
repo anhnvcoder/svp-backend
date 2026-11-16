@@ -40,6 +40,7 @@
         "digest": {"type": "string"}
       }
     },
+    "args": {"type": "array", "items": {"type": "string"}},
     "protocol": {"type": "string", "enum": ["http", "grpc", "none"]},
     "port": {"type": "integer"},
     "replicas": {"type": "integer"},
@@ -60,6 +61,19 @@
       }
     },
     "spreadAcrossNodes": {"description": "Spread the replicas over the zones, then over the nodes.", "type": "boolean"},
+    "zoneSpread": {
+      "description": "minDomains only with DoNotSchedule, as Kubernetes requires.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["whenUnsatisfiable"],
+      "properties": {
+        "whenUnsatisfiable": {"type": "string", "enum": ["ScheduleAnyway", "DoNotSchedule"]},
+        "minDomains": {"type": "integer", "minimum": 1}
+      },
+      "if": {"required": ["minDomains"]},
+      "then": {"properties": {"whenUnsatisfiable": {"const": "DoNotSchedule"}}}
+    },
+    "nodeAffinity": {"description": "As in a pod's spec.affinity.nodeAffinity.", "type": "object"},
     "keda": {
       "type": "object",
       "additionalProperties": false,
@@ -77,7 +91,7 @@
         }
       }
     },
-    "canary": {"type": "boolean"},
+    "canary": {"description": "With httpRoute.host or protocol grpc, the two kinds of route a canary goes through.", "type": "boolean"},
     "canaryLimits": {
       "type": "object",
       "additionalProperties": false,
@@ -131,7 +145,18 @@
         "properties": {
           "namespace": {"type": "string"},
           "labels": {"$ref": "#/definitions/stringMap"},
-          "ports": {"$ref": "#/definitions/ports"}
+          "ports": {"$ref": "#/definitions/ports"},
+          "mesh": {
+            "description": "A peer in the mesh and its identity in the AuthorizationPolicies: a principal, or a namespace for pods whose ServiceAccount has no fixed name; never both.",
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "principal": {"type": "string", "pattern": "^cluster\\.local/ns/[a-z0-9-]+/sa/[a-z0-9-]+$"},
+              "namespace": {"type": "string", "minLength": 1},
+              "viaWaypoint": {"type": "boolean"}
+            },
+            "oneOf": [{"required": ["principal"]}, {"required": ["namespace"]}]
+          }
         }
       }
     },

@@ -59,13 +59,15 @@ kubectl --context k3d-svp -n svp get rollouts.argoproj.io,analysisruns.argoproj.
   Cảnh báo nêu `svp-root`: message health của nó (`kubectl … get applications.argoproj.io svp-root -o
   jsonpath='{.status.health.message}'`) và Application con `Degraded` cho biết Application nào sync lỗi; đọc tiếp lệnh trên
   với tên đó.
-- Job `<svc>-migrate` lỗi hay chạy mãi → migration lỗi hay chờ khoá (Application `Progressing`/`OutOfSync`).
+- Job `<svc>-migrate` lỗi hay chạy mãi → migration lỗi hay chờ khoá (Application `Progressing`/`OutOfSync`). Log Job có `SQLSTATE 55P03`
+  (`lock_not_available`) thì một transaction đang giữ khoá bảng quá `lock_timeout` của runner: xử lý ở [schema-change.md](schema-change.md).
 
 ## Nguyên nhân thường gặp
 
 1. **Bản phát hành mới lỗi** (crash, probe, phân tích canary trượt): bản cũ vẫn chạy, Application `Degraded`.
 2. **Bản phát hành bị policy từ chối**: attestation `vuln` quá hạn, image chưa ký; pod mới không tạo được.
-3. **Migration lỗi hay treo**: hook PreSync không xong, sync không đi tiếp.
+3. **Migration lỗi hay treo**: hook PreSync không xong, sync không đi tiếp; hay migration hết hạn chờ khoá (`55P03`,
+   [schema-change.md](schema-change.md)).
 4. **Canary không đủ traffic**: AnalysisRun `Inconclusive`, Rollout dừng (`NotConverged`).
 5. **Cấu hình trong `svp-gitops` sai**: values hay overlay render ra manifest API server từ chối (check `gitops-ok` lẽ ra đã bắt;
    xem lại check của commit đó).

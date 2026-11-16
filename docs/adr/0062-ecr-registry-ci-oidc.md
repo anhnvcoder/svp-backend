@@ -180,21 +180,21 @@ cluster** khớp dạng host của tài liệu ECR [N27]. ADR cũ chỉnh: 0034 
 
 ## Nguồn
 
-Đọc 2026-11-13; tên đủ, trích dẫn và [N4], [N22], [N29], [N30] ở phụ lục.
+Đọc 2026-11-13; tên đủ, trích dẫn và mọi nguồn khác ở phụ lục.
 
 - ECR: [N1] <https://aws.amazon.com/about-aws/whats-new/2024/06/amazon-ecr-oci-image-distribution-version-1-1>, [N2] <https://docs.aws.amazon.com/AmazonECR/latest/APIReference/API_ListImageReferrers.html>,
   [N3] <https://docs.aws.amazon.com/AmazonECR/latest/userguide/LifecyclePolicies.html>, [N5] <https://docs.aws.amazon.com/AmazonECR/latest/userguide/encryption-at-rest.html>,
   [N6] <https://docs.aws.amazon.com/AmazonECR/latest/userguide/pull-through-cache.html>, [N27] <https://docs.aws.amazon.com/AmazonECR/latest/userguide/Registries.html>,
   [N7] <https://docs.aws.amazon.com/AmazonECR/latest/userguide/repository-creation-templates.html>, [N9] <https://github.com/aws/containers-roadmap/issues/2837>,
   [N10] <https://github.com/aws/containers-roadmap/issues/2783>, [N31] <https://github.com/aws/containers-roadmap/issues/2728>, [N8] <https://aws.amazon.com/blogs/containers/announcing-pull-through-cache-for-registry-k8s-io-in-amazon-elastic-container-registry/>
-- GitHub, IAM: [N11] <https://docs.github.com/en/actions/reference/security/oidc>, [N14] <https://github.com/aws-actions/configure-aws-credentials>,
-  [N26] <https://docs.github.com/en/packages/working-with-a-github-packages-registry/working-with-the-container-registry>,
-  [N12] <https://github.blog/changelog/2026-04-23-immutable-subject-claims-for-github-actions-oidc-tokens>, [N13] <https://docs.aws.amazon.com/IAM/latest/UserGuide/id_roles_providers_create_oidc_verify-thumbprint.html>
-- Kyverno, Sigstore, ORAS: [N15] <https://kyverno.io/blog/2026/08/20/announcing-kyverno-release-1.19/>, [N16] <https://kyverno.io/docs/policy-types/cel-libraries/>, [N17] <https://kyverno.io/docs/policy-types/image-validating-policy/>,
-  [N18] <https://raw.githubusercontent.com/kyverno/kyverno/v1.19.1/go.mod>, [N19] <https://github.com/kyverno/kyverno/issues/16664>, [N20] <https://docs.sigstore.dev/cosign/system_config/registry_support/>, [N21] <https://oras.land/docs/commands/oras_cp>
-- Quét, control, giá, SRA: [N23] <https://docs.aws.amazon.com/inspector/latest/user/scanning-ecr.html>, [N25] <https://aws.amazon.com/inspector/pricing/>,
-  [N24] <https://docs.aws.amazon.com/securityhub/latest/userguide/ecr-controls.html>, [N28] <https://docs.aws.amazon.com/prescriptive-guidance/latest/security-reference-architecture/shared-services.html>
+- GitHub, IAM: [N11] <https://docs.github.com/en/actions/reference/security/oidc>, [N14] <https://github.com/aws-actions/configure-aws-credentials>, [N12] <https://github.blog/changelog/2026-04-23-immutable-subject-claims-for-github-actions-oidc-tokens>,
+  [N26] <https://docs.github.com/en/packages/working-with-a-github-packages-registry/working-with-the-container-registry>, [N13] <https://docs.aws.amazon.com/IAM/latest/UserGuide/id_roles_providers_create_oidc_verify-thumbprint.html>
 
 ## Thông tin thêm
 
 Phụ lục: [`appendix/0062-ecr-registry-ci-oidc.md`](appendix/0062-ecr-registry-ci-oidc.md) (phương án, giá trị đủ từng §, control, luồng, chi phí).
+
+### Chỉnh bởi
+
+- §10: [0071](0071-paid-features.md): Inspector ECR của account env theo cờ `inspector_ecr`: stg `off` (không member association, registry `BASIC` với một rule `SCAN_ON_PUSH` cùng filter repo cache), prd giữ `ENHANCED`, `CONTINUOUS_SCAN`.
+- §5: [0076](0076-terraform-plan-infracost-pr.md): `svp-infra` cũng có role OIDC: `plan.yml` nhận `svp-ci-terraform-plan` (`ReadOnlyAccess`, Deny đọc dữ liệu workload và ghi state, phiên 1 giờ) qua OIDC provider của module `registry` (output `github_oidc_provider_arn`), `sub` `...:environment:terraform-plan`; câu "`svp-infra` vẫn không" không còn đúng.

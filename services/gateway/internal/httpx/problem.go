@@ -161,10 +161,13 @@ var grpcToHTTP = map[codes.Code]grpcMapping{
 // reasonToHTTP gives the status of the reasons that need a finer one than their gRPC code maps
 // to. An idempotency key reused with another request is 422 and one whose resource has moved on
 // is 409 (draft-ietf-httpapi-idempotency-key-header §2.7, RFC 9110 §15.5.10); both are 400 by
-// their code alone.
+// their code alone. A premium route on a video that is not premium, or a purchase by the video's
+// author, is 409 too: the request is valid but conflicts with the video (RFC 9110 §15.5.10).
 var reasonToHTTP = map[string]int{
 	"IDEMPOTENCY_KEY_MISMATCH": http.StatusUnprocessableEntity,
 	"VIDEO_NOT_UPLOADING":      http.StatusConflict,
+	"VIDEO_NOT_PREMIUM":        http.StatusConflict,
+	"ALREADY_ENTITLED":         http.StatusConflict,
 }
 
 // WriteGRPCError writes the problem response for err, an error returned by a gRPC call, mapped

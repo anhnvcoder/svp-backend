@@ -1,6 +1,6 @@
 # Đổi khoá ký JWT theo `kid`
 
-- Quy trình làm tay, không có cảnh báo. Làm định kỳ, hay **ngay** khi nghi khoá ký bị lộ (SEC-4, JWT-10 của
+- Quy trình theo lệnh `make jwt-rotate`, không có cảnh báo. Làm định kỳ, hay **ngay** khi nghi khoá ký bị lộ (SEC-4, JWT-10 của
   [threat model](../threat-model.md)).
 - Trạng thái: viết theo mã, chưa chạy thử; diễn tập đổi khoá khi có Secrets Manager
   ([ADR-0020](../adr/0020-reliability-stage6.md) §12). Bước 1 trên k3d (thêm một khoá verify, token của khoá đang ký vẫn hợp lệ) là
@@ -8,7 +8,7 @@
 
 ## Ý nghĩa và tác động tới người dùng
 
-Access token là JWT Ed25519, hạn **1 giờ** (`TTL` của `internal/authtoken`), header mang `kid`. user-service ký bằng
+Access token là JWT Ed25519, hạn **15 phút** (`TTL` của `internal/authtoken`), header mang `kid`. user-service ký bằng
 `JWT_SIGNING_KID` + `JWT_SIGNING_KEY`; gateway và bốn service gRPC (user, video, engagement, feed) kiểm bằng `JWT_VERIFY_KEYS`,
 danh sách `kid:<public key base64>` cách nhau dấu phẩy, nên cả năm nhận được nhiều khoá cùng lúc. Gateway kiểm token của client,
 mỗi service kiểm lại token gateway chuyển tiếp ([ADR-0042](../adr/0042-caller-identity-grpc.md)): khoá công khai mới phải tới
@@ -52,18 +52,25 @@ Lý do đổi khoá:
 
 ## Giảm thiểu
 
-Đổi định kỳ, ba bước; mỗi bước sửa `.env` bằng trình soạn thảo rồi áp dụng.
+Đổi định kỳ, ba bước. Mỗi bước là một lệnh `make jwt-rotate STEP=<add|sign|drop>` sửa `.env` (`tools/jwtkey rotate`), rồi lệnh áp
+dụng, rồi một lần chờ:
 
-**Bước 0. Sinh cặp khoá mới vào file tạm** (mode 600, ngoài repo, không in ra màn hình):
+- Lệnh chỉ thay dòng của ba biến JWT, mọi dòng khác của `.env` giữ nguyên; ghi qua file tạm cùng thư mục rồi đổi tên, mode 600.
+- Lệnh in `kid` liên quan và lệnh áp dụng tiếp theo, không in khoá, kể cả trong thông báo lỗi.
+- **Khoá chờ** là file `.env.jwt-next` ở gốc repo (mode 600, git bỏ qua theo dòng `.env.*` của `.gitignore`): ba dòng của
+  `tools/jwtkey` cho cặp khoá mới, giữ từ bước 1 tới bước 3.
+- Phần chờ (pod Ready, rollout xong, 15 phút 30 giây) giữ tay: cần người đọc trạng thái pod và đồng hồ của token, lệnh không biết
+  pod nào còn phục vụ hay token cuối cùng ký lúc nào.
+
+**Bước 1. Gateway và bốn service gRPC nhận cả hai khoá.** Sinh cặp khoá mới vào khoá chờ, nối khoá công khai của nó vào sau
+`JWT_VERIFY_KEYS`:
 
 ```sh
-umask 077; jwtnew=$(mktemp); go run ./tools/jwtkey > "$jwtnew"
-cut -d= -f1 "$jwtnew"           # chỉ in tên ba biến: JWT_SIGNING_KID, JWT_SIGNING_KEY, JWT_VERIFY_KEYS
+make jwt-rotate STEP=add
 ```
 
-**Bước 1. Gateway và bốn service gRPC nhận cả hai khoá.** Trong `.env`, nối giá trị `JWT_VERIFY_KEYS` của file tạm vào sau giá
-trị cũ, cách bằng dấu phẩy: `JWT_VERIFY_KEYS=<kid cũ>:<base64 cũ>,<kid mới>:<base64 mới>`. Áp dụng trên compose (chỉ container có
-biến đổi, gateway và bốn service gRPC, được tạo lại):
+Output mong đợi: `add: JWT_VERIFY_KEYS of .env now also has kid <kid mới> (kids before: <kid cũ>); its signing key waits in
+.env.jwt-next`, rồi lệnh áp dụng. Áp dụng trên compose (chỉ container có biến đổi, gateway và bốn service gRPC, được tạo lại):
 
 ```sh
 make up OBS=lgtm
@@ -90,9 +97,14 @@ kubectl --context k3d-svp -n svp get pods \
   -o custom-columns='NAME:.metadata.name,START:.status.startTime,READY:.status.containerStatuses[*].ready'
 ```
 
-**Bước 2. user-service ký bằng khoá mới.** Trong `.env`, thay `JWT_SIGNING_KID` và `JWT_SIGNING_KEY` bằng hai dòng của file tạm.
-Áp dụng như bước 1 (compose tạo lại user-service; k3d và EKS: Reloader restart user-service vì Secret `user-service-env` đổi), rồi
-chờ rollout của nó xong:
+**Bước 2. user-service ký bằng khoá mới.** Thay `JWT_SIGNING_KID`, `JWT_SIGNING_KEY` bằng hai dòng của khoá chờ:
+
+```sh
+make jwt-rotate STEP=sign
+```
+
+Output mong đợi: `sign: user-service of .env now signs with kid <kid mới> instead of <kid cũ>`. Áp dụng như bước 1 (compose tạo lại
+user-service; k3d và EKS: Reloader restart user-service vì Secret `user-service-env` đổi), rồi chờ rollout của nó xong:
 
 ```sh
 kubectl --context k3d-svp -n svp rollout status deployment/user-service --timeout=300s
@@ -100,19 +112,41 @@ kubectl --context k3d-svp -n svp rollout status deployment/user-service --timeou
 
 Token mới mang `kid` mới, gateway và bốn service đã nhận nó từ bước 1; token cũ còn hợp lệ tới khi hết hạn.
 
-**Bước 3. Bỏ khoá cũ**, sau khi user-service cuối cùng còn khoá cũ đã dừng ít nhất **1 giờ** (hạn access token) cộng vài phút dư
-cho lệch đồng hồ: xoá mục `<kid cũ>:<base64 cũ>,` khỏi `JWT_VERIFY_KEYS`, áp dụng như bước 1. Rồi xoá file tạm:
+**Bước 3. Bỏ khoá cũ**, sau khi user-service cuối cùng còn khoá cũ đã dừng ít nhất **15 phút 30 giây** (`TTL` cộng
+`Leeway` của `internal/authtoken`: token còn được nhận tới lúc đó) cộng vài phút dư cho lệch đồng hồ. Lệnh bỏ mọi mục của
+`JWT_VERIFY_KEYS` khác `kid` đang ký, rồi xoá khoá chờ:
 
 ```sh
-rm -f "$jwtnew"; ls -l .env        # .env vẫn mode 600 (-rw-------)
+make jwt-rotate STEP=drop
 ```
 
-**Khi nghi lộ khoá:** làm bước 0, 1, 2 rồi bước 3 **ngay**, không chờ 1 giờ: mọi access token ký bằng khoá cũ (kể cả token giả
-mạo) bị 401 từ lúc đó. Cái giá là người dùng web **phải đăng nhập lại**: BFF chỉ refresh khi access token còn dưới 30 s
-(`server/session-access.ts` của repo `svp-frontend`), nên phiên có token cũ còn hạn lâu hơn gửi nó đi, gateway trả 401, và web coi phiên là hỏng
-(`server/feed.ts`, `server/api-proxy.ts` của `svp-frontend`: `SessionAccess.end`): xoá phiên và thu hồi cả họ refresh token; trang feed
-chuyển về đăng nhập. Client gọi API thẳng và tự giữ refresh token thì gọi `POST /auth/refresh` sau 401 là được token mới. Ghi
-lại thời điểm để đối chiếu log.
+Output mong đợi: `drop: JWT_VERIFY_KEYS of .env keeps only kid <kid mới> (dropped: <kid cũ>); removed .env.jwt-next`. Áp dụng như
+bước 1, rồi xác nhận theo mục dưới.
+
+**Khi nghi lộ khoá:** làm bước 1, 2 như trên (kể cả phần chờ rollout và kiểm pod), rồi `STEP=drop` và áp dụng **ngay**,
+không chờ 15 phút 30 giây của bước 3: mọi access token ký bằng khoá cũ (kể cả token giả mạo) bị 401 từ lúc đó. Cái giá
+là người dùng web **phải đăng nhập lại**: BFF chỉ refresh khi access token còn dưới 30 s (`server/session-access.ts` của
+repo `svp-frontend`), nên phiên có token cũ còn hạn lâu hơn gửi nó đi, gateway trả 401, và web coi phiên là hỏng
+(`server/feed.ts`, `server/api-proxy.ts` của `svp-frontend`: `SessionAccess.end`): xoá phiên và thu hồi cả họ refresh
+token; trang feed chuyển về đăng nhập. Client gọi API thẳng và tự giữ refresh token thì gọi `POST /auth/refresh` sau 401
+là được token mới. Ghi lại thời điểm để đối chiếu log.
+
+### Khi lệnh từ chối
+
+Lệnh in `jwtkey: <lý do>`, exit khác 0 và không ghi file nào. Lý do bắt đầu bằng tên file (kèm số dòng khi nói về một
+dòng) hay tên biến, và nêu file, biến, số dòng hay thứ tự mục, không bao giờ giá trị:
+
+| Lý do bắt đầu bằng | Nghĩa | Làm gì |
+| --- | --- | --- |
+| `.env.jwt-next exists: a rotation is under way` | `add` khi khoá chờ đã có | Xoay dở: chạy tiếp `STEP=sign`, `STEP=drop` |
+| `.env.jwt-next does not exist: no rotation under way` | `sign` hay `drop` khi chưa `add` | Bắt đầu bằng `STEP=add` |
+| `JWT_SIGNING_KID of .env is already <kid>` | `sign` lần hai | Sang bước 3 |
+| `JWT_VERIFY_KEYS of .env lacks the verify key of pending kid` | `.env` bị sửa tay sau `add` | Xoá `.env.jwt-next`, chạy lại `STEP=add` |
+| `JWT_SIGNING_KID of .env is <kid cũ>, not pending kid` | `drop` khi chưa `sign` | Làm bước 2 trước |
+| `.env:<dòng>: <biến> has a blank, quote, \, CR or non-ASCII character in its value` | Giá trị của biến có ký tự lạ | Sửa dòng được nêu rồi chạy lại bước |
+| `.env: JWT_SIGNING_KID and JWT_SIGNING_KEY are not a kid and the standard base64 of a 32-byte seed` | Cặp ký không phải kid và seed base64 32 byte | Sửa hai biến rồi chạy lại bước |
+| `.env.jwt-next is not one key pair of tools/jwtkey` | Khoá chờ không phải một cặp khoá | Xoá `.env.jwt-next`, chạy lại `STEP=add` |
+| `.env lacks <biến> or has it empty`, `entry <n> of JWT_VERIFY_KEYS`, `set again`, `twice` | `.env` thiếu biến hay sai dạng | Sửa dòng được nêu rồi chạy lại bước |
 
 ## Khôi phục và xác nhận
 
@@ -127,8 +161,8 @@ refresh); ở service đó là dòng INFO `caller token rejected`.
 
 ## Leo thang
 
-- Gateway hay một service gRPC không khởi động sau bước 1: trả `JWT_VERIFY_KEYS` về giá trị cũ, áp dụng lại; kiểm dấu phẩy, `kid`
-  trùng, khoảng trắng.
+- Gateway hay một service gRPC không khởi động sau bước 1: bỏ mục `<kid mới>:…` khỏi `JWT_VERIFY_KEYS` bằng trình soạn thảo (lệnh
+  không có bước lùi), xoá `.env.jwt-next`, áp dụng lại; đọc log của process về lỗi đọc khoá.
 - Người dùng bị 401 hàng loạt sau bước 2: gateway hay một trong bốn service chưa có khoá mới (bước 1 chưa áp dụng ở đó, hay pod
   cũ còn phục vụ; service có dòng `caller token rejected`); đưa khoá mới tới workload đó trước, không quay lại khoá ký cũ khi
   đang nghi lộ.

@@ -3,7 +3,9 @@
 - Severity: `page`. Rule: `deploy/observability/prometheus/rules/svp-alerts.yaml`, nhãn `service_name`, `group`, `topic`.
 - Chuẩn bị biến `PROM`, `AM`, hàm `dc`: [README](README.md#chuẩn-bị-trong-terminal). Lệnh Kafka đi qua `svp-kafka` (Kafka CLI
   của image `apache/kafka`, đăng nhập `svp-admin`, [ADR-0053](../adr/0053-msk-elasticache-valkey.md) §13): compose trong container
-  `kafka`, k3d và EKS trong Deployment `svp-ops` của namespace `svp-data`.
+  `kafka`, k3d và EKS trong Deployment `svp-ops` của namespace `svp-data`. Phát lại record DLQ chỉ qua **lệnh phát lại DLQ**
+  (`dlq-replay`, user Kafka `svp-dlq-replay`; compose `make dlq-replay ARGS='…'`, k3d và EKS `kubectl exec deploy/dlq-replay`), không bằng
+  `console-producer` (làm hỏng value protobuf) hay `svp-kafka`.
 
 ## Ý nghĩa và tác động tới người dùng
 
@@ -63,18 +65,71 @@ Dòng log có `trace_id`: mở trace đó trong Grafana Explore → Tempo để 
 ## Giảm thiểu
 
 - Nguyên nhân 1: khôi phục phụ thuộc; record mới sẽ không vào DLQ nữa.
-- Nguyên nhân 2: sửa code hay giảm cỡ lô rồi deploy; lô đã vào DLQ **chưa phát lại được bằng CLI**: mục "Phát lại DLQ lượt xem" chỉ
-  lập danh sách để ghi vào postmortem.
+- Nguyên nhân 2: sửa code hay giảm cỡ lô rồi deploy; lô đã vào DLQ phát lại theo mục "Phát lại DLQ lượt xem" (mỗi khoảng
+  một lần).
 - Nguyên nhân 3: dừng deploy, quay về bản trước (compose: checkout bản trước rồi `make up OBS=lgtm`; GitOps: PR revert của
   commit promote, theo ruleset `main`).
 - Record đã vào DLQ không tự chạy lại; dữ liệu gốc còn trong topic gốc (giữ 7 ngày, DLQ giữ 14 ngày, `deploy/kafka/kafka-init.sh`).
 
 ## Khôi phục và xác nhận
 
-Xử lý lại record đã bỏ qua, **sau khi đã sửa nguyên nhân** và chỉ khi người trực quyết: handler của dự án idempotent (diễn
-tập `drill-duplicates`, `drill-duplicates-feed` của bài lab `drills/` của `svp-labs` phát lại event mà không gì đổi), nên có thể đưa offset của group về
-offset gốc ghi trong header/log (`dlq-topic`, `dlq-partition`, `dlq-offset`). `consumer-groups --reset-offsets` chỉ chạy khi group
-không có member (`--state` báo `Empty`), và phát lại **mọi** record từ offset đó trên partition đó:
+Xử lý lại record đã bỏ qua **sau khi đã sửa nguyên nhân** và chỉ khi người trực quyết. Handler của dự án idempotent
+(diễn tập `drill-duplicates`, `drill-duplicates-feed` của bài lab `drills/` của `svp-labs` phát lại event mà không gì
+đổi), nên record phát lại cùng `event_id` không đổi gì lần hai; **ngoại lệ là lượt xem** (`engagement.views.v1`, mục
+dưới). Có hai cách; cách thứ nhất là cách mặc định.
+
+### Phát lại bằng lệnh phát lại DLQ
+
+Lệnh `dlq-replay replay` chép key, value và header **nguyên byte** của record trong `<topic>.dlq` về topic gốc (header
+`dlq-topic` của từng record; `--to` chỉ định topic khác), bỏ các header `dlq-*`; record phát lại có timestamp của lúc
+phát lại. Nó đọc DLQ bằng gán partition trực tiếp: không consumer group, không commit, không đổi offset của group nào,
+nên chạy được khi consumer đang chạy và lặp lại được trên mọi khoảng. Log mỗi record chỉ có partition, offset, topic
+đích, độ dài key và tên header; không bao giờ có key, value hay giá trị header. Cờ: `--from <topic>.dlq` (bắt buộc),
+`--to`, `--partition`, `--start-offset` (tính) và `--end-offset` (không tính), `--since` và `--until` (RFC 3339, không
+dùng chung với cờ offset), `--group`, `--dry-run`.
+
+Các bước, ví dụ cảnh báo `KafkaDLQRecords` với `group=feed-service`, `topic=user.follows.v1` (compose; k3d và EKS ở dưới
+bước 2):
+
+1. **Chọn phạm vi từ cảnh báo và log.** `--from` là `<topic>.dlq` của cảnh báo; `--group` là nhãn `group` của nó (chỉ
+   record có header `dlq-group` bằng giá trị đó được chọn). Khoảng thu hẹp bằng offset trong DLQ
+   (`svp-kafka get-offsets --topic <topic>.dlq` ở mục kiểm tra nhanh cho high watermark) hay bằng giờ: dòng log
+   `kafka record sent to dead-letter topic` có giờ ghi DLQ của record, ghép thành `--since` và `--until`.
+2. **Dry-run trước.** Không ghi gì, in từng record sẽ phát lại và dòng tổng; so số `dry_run` với số record mong đợi
+   (cảnh báo, log); khác nhiều thì thu hẹp phạm vi, không chạy thật.
+
+   ```sh
+   make dlq-replay ARGS='replay --from user.follows.v1.dlq --group feed-service --since <RFC 3339> --until <RFC 3339> --dry-run'
+   ```
+
+   k3d:
+   `kubectl --context k3d-svp -n svp exec deploy/dlq-replay -- /app replay --from user.follows.v1.dlq --group feed-service --dry-run`.
+   EKS (người học chạy): cùng lệnh với `--context svp-<env>`.
+3. **Chạy thật**: cùng lệnh, bỏ `--dry-run`. Mỗi record một dòng `dlq record` (`result=replayed`), cuối cùng một dòng
+   `dlq replay finished` với `replayed`, `skipped` (record thiếu header `dlq-topic` khi không có `--to`),
+   `last_replayed` (offset DLQ cuối đã phát lại mỗi partition).
+4. **Lỗi giữa chừng** (produce hay fetch lỗi, SIGTERM): lệnh thoát 1 và dừng ngay; dòng `dlq replay stopped` có
+   `resume_from=<partition>@<offset>`, offset kế tiếp chưa ghi, và `end=<partition>@<offset>`, điểm cuối loại trừ của
+   khoảng. Sửa nguyên nhân (broker, quyền), rồi chạy lại với
+   `--partition <p> --start-offset <offset của resume_from> --end-offset <offset của end>`, cả hai lấy từ cùng dòng, kể
+   cả khi lượt đầu chạy bằng `--since/--until`. Sai cờ thoát 2, không ghi gì.
+5. **Xác nhận**: dòng tổng có `replayed` bằng số mong đợi; metric `svp.dlq.replay.records` (Prometheus
+   `svp_dlq_replay_records_total`, thuộc tính `from`, `to`, `result`) khớp, khi có `obs`; consumer xử lý xong
+   (`TOTAL-LAG` của group về 0:
+   `dc exec -T kafka /opt/svp/bin/svp-kafka consumer-groups --describe --group feed-service`), thực thể bị ảnh hưởng
+   đúng trạng thái (video `READY`, follow có trong feed), không dòng `dead-letter` mới (record phát lại mà lỗi lại thì
+   vào DLQ với header mới), cảnh báo hết sau 10 phút.
+
+Chạy lại cùng khoảng thì mỗi record được gửi lại và consumer bỏ bản trùng: video-service (`media.transcodes.v1`),
+feed-service (`user.follows.v1`, `video.lifecycle.v1`), media-worker (`video.lifecycle.v1`) idempotent theo trạng thái
+hay khoá của dữ liệu. Không lệnh nào ở đây xoá dữ liệu hay đổi offset của group.
+
+### Đặt lại offset của group (phương án khác)
+
+Khi record gốc còn trong topic gốc (giữ 7 ngày) và cần xử lý lại **mọi** record từ một offset, đưa offset của group về
+offset gốc ghi trong header/log (`dlq-topic`, `dlq-partition`, `dlq-offset`). `consumer-groups --reset-offsets` chỉ chạy
+khi group không có member (`--state` báo `Empty`), nên phải dừng consumer trước, và phát lại mọi record từ offset đó
+trên partition đó, cả record đã xử lý đúng:
 
 ```sh
 # compose, ví dụ group feed-service, record gốc user.follows.v1 partition 2 offset 1234 (lấy từ log ở trên)
@@ -95,21 +150,23 @@ reset offset trên k3d chưa chạy thử; `--reset-offsets --dry-run` đã th�
 **Không seek group `engagement-service`** (topic `engagement.views.v1`): handler đếm lượt xem bỏ qua mọi record dưới `next_offset`
 đã lưu trong `svp_engagement` (bảng `consumer_offsets`, cùng transaction với bộ đếm), nên seek group về trước không đếm lại gì. Record
 `permanent` của nó là payload không giải mã được: chạy lại cũng lỗi, lượt xem đó mất; ghi số record và `video_id` (nếu đọc được) vào
-postmortem. Record `retries-exhausted` thì lập danh sách ở mục dưới đây (chưa phát lại được bằng CLI).
+postmortem. Record `retries-exhausted` thì phát lại theo mục dưới đây.
 
 ### Phát lại DLQ lượt xem
-
-**Chưa phát lại được bằng CLI của dự án:** bước chép về topic gốc (bước 3 dưới đây) chưa có công cụ, nên mục này dừng ở danh sách
-record cần phát lại (giữ file, ghi vào postmortem). Phần còn lại tả cách lập danh sách đó và điều kiện để phát lại khi có công cụ.
 
 Ý định: chép record `retries-exhausted` của `engagement.views.v1.dlq` về `engagement.views.v1`. Record phát lại có offset mới, lớn hơn
 `next_offset` đã lưu (offset không tiến khi lô lỗi), nên mỗi lượt xem được cộng đúng một lần
 ([ADR-0045](../adr/0045-bounded-batch-retry.md) §3). Thứ tự không quan trọng: lượt xem là phép cộng.
 
+**Mỗi khoảng chỉ phát lại một lần.** Engagement-service khử trùng theo offset, không theo `event_id`: chạy lại cùng
+khoảng đếm lại mọi lượt xem trong đó. Lệnh in cảnh báo `dlq replay counts views again` khi đích là `engagement.views.v1`
+(cả `--dry-run`); dòng tổng `dlq replay finished` của lượt thật là bằng chứng khoảng đã phát lại, ghi nó vào postmortem.
+Không phát lại khi không chắc một khoảng đã chạy.
+
 Chỉ phát lại khi đủ cả bốn điều kiện, thiếu một thì **không** phát lại (thiếu lượt xem còn hơn đếm hai lần), ghi vào postmortem:
 
 - nguyên nhân đã hết: lô mới đếm được, không dòng `kafka batch sent to dead-letter topic` mới;
-- record có `dlq-reason=retries-exhausted` (record `permanent` không bao giờ phát lại);
+- record có `dlq-reason=retries-exhausted` (record `permanent` không bao giờ phát lại: chúng lỗi lại và vào DLQ lần nữa);
 - offset gốc (`dlq-partition`, `dlq-offset`) nằm trong khoảng `offsets` của một dòng log ERROR `kafka batch sent to dead-letter
   topic`. Dòng log chỉ ghi **sau** commit: lô đã chép DLQ mà commit hỏng hay pod chết trước commit thì được giao lại, có thể đã được
   cộng ở lần giao sau, và không có dòng log. Log cũ hơn pod: Grafana Explore → Loki,
@@ -138,13 +195,36 @@ dc exec -T kafka /opt/svp/bin/svp-kafka console-consumer --topic engagement.view
       if (ok && !seen[part " " off]++) print substr($1, 8) "\t" part "\t" off
     }' views-replay.ranges - > views-replay.list
 wc -l views-replay.list   # tối đa tổng (last - first + 1) của các khoảng; nhiều hơn là sai, dừng lại
+# 3. consecutive DLQ offsets become spans "first end-exclusive", one replay command each
+awk -F '\t' 'NR==1 { s=p=$1; next } $1==p+1 { p=$1; next } { print s, p+1; s=p=$1 } END { if (NR) print s, p+1 }' views-replay.list > views-replay.spans
+# 4. dry-run each span: dry_run must equal its size. The file is read on fd 3 because compose exec -T still
+#    forwards stdin to the container, which would swallow the remaining spans.
+while read -r first end <&3; do
+  make dlq-replay ARGS="replay --from engagement.views.v1.dlq --partition 0 --start-offset $first \
+    --end-offset $end --group engagement-service --dry-run" </dev/null
+done 3< views-replay.spans
 ```
 
-Bước 1 và 2 đã thử trên một broker `apache/kafka` 4.1 tạm với record giả (2026-11-08). **Bước 3, chép key và value nguyên byte về topic
-gốc, chưa có cách làm:** value là protobuf (thường bắt đầu bằng byte `0x0A`, tức xuống dòng), mà `console-consumer` và
-`console-producer` của Kafka CLI đọc, ghi theo dòng văn bản, không có định dạng giữ nguyên byte; chép qua chúng làm hỏng record. Cho tới
-khi dự án có công cụ chép byte: **không** phát lại, giữ `views-replay.list` (số record, offset trong DLQ) và ghi vào postmortem; DLQ giữ
-record 14 ngày.
+Chỉ khi `wc -l` đúng và tổng `dry_run` của mọi khoảng bằng số dòng `views-replay.list`, chạy thật bước 5, một lần cho
+mỗi khoảng; dừng ở lỗi đầu, không chạy lại khoảng đã xong:
+
+```sh
+# 5. real run, once per span
+while read -r first end <&3; do
+  make dlq-replay ARGS="replay --from engagement.views.v1.dlq --partition 0 --start-offset $first \
+    --end-offset $end --group engagement-service" </dev/null || break
+done 3< views-replay.spans
+```
+
+Khoảng `<first>` dừng giữa chừng thì resume nó với `--start-offset` theo `resume_from` và `--end-offset` theo `end` của
+dòng `dlq replay stopped`. Rồi chạy tiếp các khoảng sau nó, đúng như vòng lặp trên nhưng đọc
+`awk -v f=<first> '$1 > f' views-replay.spans`. Kiểm tổng `replayed` sau khi mọi khoảng đã chạy.
+
+Offset trong `views-replay.list` là offset trong DLQ, nên khoảng ở bước 3 chỉ chứa record đã qua cả bốn điều kiện:
+record `permanent` xen giữa làm khoảng đứt, không lọt vào lệnh. Tổng `replayed` của các lượt thật, khi mọi khoảng đã
+chạy, phải bằng số dòng `views-replay.list`; khác thì dừng, ghi vào postmortem và không chạy thêm. Bước 1 và 2 đã thử
+trên một broker `apache/kafka` 4.1 tạm với record giả (2026-11-08); bước 3 chỉ gộp số liên tiếp. Giữ
+`views-replay.list`, `views-replay.spans` và các dòng tổng cho postmortem.
 
 Xác nhận: không có dòng `dead-letter` mới, `TOTAL-LAG` về 0 (tổng cột `LAG` của `consumer-groups --describe`), thực thể bị ảnh hưởng đúng trạng thái (video `READY`, follow có
 trong feed), cảnh báo hết sau 10 phút.
@@ -152,7 +232,8 @@ trong feed), cảnh báo hết sau 10 phút.
 ## Leo thang
 
 - Record `permanent` do code: sửa handler hay producer, thêm test bằng chính payload đó (lấy từ DLQ, bỏ dữ liệu người dùng).
-- Không chắc phát lại có an toàn (handler mới, chưa có diễn tập trùng lặp): không seek, ghi các id bị ảnh hưởng vào postmortem.
+- Không chắc phát lại có an toàn (handler mới, chưa có diễn tập trùng lặp): không phát lại, không seek, ghi các id bị
+  ảnh hưởng vào postmortem.
 - Hơn vài record, hay ảnh hưởng tới video của người dùng: mở postmortem.
 
 ## Liên kết

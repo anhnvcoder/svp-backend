@@ -1,0 +1,268 @@
+{
+    "Job": {
+        "AccelerationSettings": {
+            "Mode": "DISABLED"
+        },
+        "AccelerationStatus": "NOT_APPLICABLE",
+        "Arn": "arn:aws:mediaconvert:ap-southeast-1:000000000000:jobs/1794573181044-13ykvw",
+        "BillingTagsSource": "JOB",
+        "ClientRequestToken": "0190a6e4-7b2c-7d3e-9f40-000000000003",
+        "CreatedAt": "2026-11-13T19:33:01+07:00",
+        "Id": "1794573181044-13ykvw",
+        "Messages": {
+            "Info": [],
+            "Warning": []
+        },
+        "OutputGroupDetails": [
+            {
+                "OutputDetails": [
+                    {
+                        "DurationInMs": 60000,
+                        "VideoDetails": {
+                            "HeightInPx": 640,
+                            "WidthInPx": 360
+                        }
+                    },
+                    {
+                        "DurationInMs": 60000,
+                        "VideoDetails": {
+                            "HeightInPx": 1280,
+                            "WidthInPx": 720
+                        }
+                    },
+                    {
+                        "DurationInMs": 60000,
+                        "VideoDetails": {
+                            "HeightInPx": 1920,
+                            "WidthInPx": 1080
+                        }
+                    }
+                ]
+            },
+            {
+                "OutputDetails": [
+                    {
+                        "DurationInMs": 1000,
+                        "VideoDetails": {
+                            "HeightInPx": 1280,
+                            "WidthInPx": 720
+                        }
+                    }
+                ]
+            }
+        ],
+        "Priority": 0,
+        "Queue": "arn:aws:mediaconvert:ap-southeast-1:000000000000:queues/svp-stg",
+        "Role": "arn:aws:iam::000000000000:role/svp-stg-mediaconvert",
+        "Settings": {
+            "Inputs": [
+                {
+                    "AudioSelectors": {
+                        "Audio Selector 1": {
+                            "DefaultSelection": "DEFAULT"
+                        }
+                    },
+                    "FileInput": "s3://svp-stg-uploads-000000000000-ap-southeast-1/uploads/0190a6e4-7b2c-7d3e-9f40-000000000001",
+                    "InputClippings": [
+                        {
+                            "EndTimecode": "00:00:59:29"
+                        }
+                    ],
+                    "TimecodeSource": "ZEROBASED",
+                    "VideoSelector": {
+                        "Rotate": "AUTO"
+                    }
+                }
+            ],
+            "OutputGroups": [
+                {
+                    "Name": "HLS",
+                    "OutputGroupSettings": {
+                        "HlsGroupSettings": {
+                            "Destination": "s3://svp-stg-media-000000000000-ap-southeast-1/media/0190a6e4-7b2c-7d3e-9f40-000000000001/0190a6e4-7b2c-7d3e-9f40-000000000002/0190a6e4-7b2c-7d3e-9f40-000000000003/index",
+                            "DirectoryStructure": "SINGLE_DIRECTORY",
+                            "ManifestDurationFormat": "FLOATING_POINT",
+                            "MinSegmentLength": 0,
+                            "OutputSelection": "MANIFESTS_AND_SEGMENTS",
+                            "SegmentControl": "SEGMENTED_FILES",
+                            "SegmentLength": 4
+                        },
+                        "Type": "HLS_GROUP_SETTINGS"
+                    },
+                    "Outputs": [
+                        {
+                            "AudioDescriptions": [
+                                {
+                                    "AudioSourceName": "Audio Selector 1",
+                                    "CodecSettings": {
+                                        "AacSettings": {
+                                            "Bitrate": 128000,
+                                            "CodingMode": "CODING_MODE_2_0",
+                                            "SampleRate": 48000
+                                        },
+                                        "Codec": "AAC"
+                                    }
+                                }
+                            ],
+                            "ContainerSettings": {
+                                "Container": "M3U8"
+                            },
+                            "NameModifier": "_360p",
+                            "VideoDescription": {
+                                "CodecSettings": {
+                                    "Codec": "H_264",
+                                    "H264Settings": {
+                                        "Bitrate": 800000,
+                                        "CodecLevel": "AUTO",
+                                        "CodecProfile": "HIGH",
+                                        "GopSize": 2.0,
+                                        "GopSizeUnits": "SECONDS",
+                                        "HrdBufferSize": 1200000,
+                                        "InterlaceMode": "PROGRESSIVE",
+                                        "MaxBitrate": 856000,
+                                        "QualityTuningLevel": "SINGLE_PASS",
+                                        "RateControlMode": "VBR",
+                                        "SceneChangeDetect": "DISABLED"
+                                    }
+                                },
+                                "Height": 640,
+                                "Width": 360
+                            }
+                        },
+                        {
+                            "AudioDescriptions": [
+                                {
+                                    "AudioSourceName": "Audio Selector 1",
+                                    "CodecSettings": {
+                                        "AacSettings": {
+                                            "Bitrate": 128000,
+                                            "CodingMode": "CODING_MODE_2_0",
+                                            "SampleRate": 48000
+                                        },
+                                        "Codec": "AAC"
+                                    }
+                                }
+                            ],
+                            "ContainerSettings": {
+                                "Container": "M3U8"
+                            },
+                            "NameModifier": "_720p",
+                            "VideoDescription": {
+                                "CodecSettings": {
+                                    "Codec": "H_264",
+                                    "H264Settings": {
+                                        "Bitrate": 2500000,
+                                        "CodecLevel": "AUTO",
+                                        "CodecProfile": "HIGH",
+                                        "GopSize": 2.0,
+                                        "GopSizeUnits": "SECONDS",
+                                        "HrdBufferSize": 3750000,
+                                        "InterlaceMode": "PROGRESSIVE",
+                                        "MaxBitrate": 2675000,
+                                        "QualityTuningLevel": "SINGLE_PASS",
+                                        "RateControlMode": "VBR",
+                                        "SceneChangeDetect": "DISABLED"
+                                    }
+                                },
+                                "Height": 1280,
+                                "Width": 720
+                            }
+                        },
+                        {
+                            "AudioDescriptions": [
+                                {
+                                    "AudioSourceName": "Audio Selector 1",
+                                    "CodecSettings": {
+                                        "AacSettings": {
+                                            "Bitrate": 128000,
+                                            "CodingMode": "CODING_MODE_2_0",
+                                            "SampleRate": 48000
+                                        },
+                                        "Codec": "AAC"
+                                    }
+                                }
+                            ],
+                            "ContainerSettings": {
+                                "Container": "M3U8"
+                            },
+                            "NameModifier": "_1080p",
+                            "VideoDescription": {
+                                "CodecSettings": {
+                                    "Codec": "H_264",
+                                    "H264Settings": {
+                                        "Bitrate": 5000000,
+                                        "CodecLevel": "AUTO",
+                                        "CodecProfile": "HIGH",
+                                        "GopSize": 2.0,
+                                        "GopSizeUnits": "SECONDS",
+                                        "HrdBufferSize": 7500000,
+                                        "InterlaceMode": "PROGRESSIVE",
+                                        "MaxBitrate": 5350000,
+                                        "QualityTuningLevel": "SINGLE_PASS",
+                                        "RateControlMode": "VBR",
+                                        "SceneChangeDetect": "DISABLED"
+                                    }
+                                },
+                                "Height": 1920,
+                                "Width": 1080
+                            }
+                        }
+                    ]
+                },
+                {
+                    "Name": "Thumbnail",
+                    "OutputGroupSettings": {
+                        "FileGroupSettings": {
+                            "Destination": "s3://svp-stg-media-000000000000-ap-southeast-1/media/0190a6e4-7b2c-7d3e-9f40-000000000001/0190a6e4-7b2c-7d3e-9f40-000000000002/0190a6e4-7b2c-7d3e-9f40-000000000003/thumb"
+                        },
+                        "Type": "FILE_GROUP_SETTINGS"
+                    },
+                    "Outputs": [
+                        {
+                            "ContainerSettings": {
+                                "Container": "RAW"
+                            },
+                            "VideoDescription": {
+                                "CodecSettings": {
+                                    "Codec": "FRAME_CAPTURE",
+                                    "FrameCaptureSettings": {
+                                        "FramerateDenominator": 1,
+                                        "FramerateNumerator": 1,
+                                        "MaxCaptures": 1,
+                                        "Quality": 80
+                                    }
+                                },
+                                "Height": 1280,
+                                "Width": 720
+                            }
+                        }
+                    ]
+                }
+            ]
+        },
+        "ShareStatus": "NOT_SHARED",
+        "Status": "COMPLETE",
+        "StatusUpdateInterval": "SECONDS_60",
+        "Timing": {
+            "FinishTime": "2026-11-13T19:33:23+07:00",
+            "StartTime": "2026-11-13T19:33:01+07:00",
+            "SubmitTime": "2026-11-13T19:33:01+07:00"
+        },
+        "UserMetadata": {
+            "attempt": "0190a6e4-7b2c-7d3e-9f40-000000000003",
+            "traceparent": "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01",
+            "version": "0190a6e4-7b2c-7d3e-9f40-000000000002",
+            "video_id": "0190a6e4-7b2c-7d3e-9f40-000000000001"
+        },
+        "Warnings": [
+            {
+                "Code": 230001,
+                "Count": 1
+            },
+            {
+                "Code": 230005,
+                "Count": 1
+            }
+        ]
+    }
+}

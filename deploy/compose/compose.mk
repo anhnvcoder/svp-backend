@@ -26,12 +26,12 @@ COMPOSE_UP_off := env -u DOCKER_DEFAULT_PLATFORM $(TELEMETRY_OFF) docker compose
 # off has neither (the baselines of the telemetry overhead measurement). These are the long-running services of the
 # profiles `make up OBS=<value>` does not choose, which it refuses to start beside.
 OBS_OTHER_lgtm := elasticsearch kibana apm-server otelcol-elastic
-OBS_OTHER_elastic := otelcol lgtm alertmanager glitchtip
+OBS_OTHER_elastic := otelcol lgtm alertmanager glitchtip blackbox
 OBS_OTHER_ := $(OBS_OTHER_elastic) $(OBS_OTHER_lgtm)
 OBS_OTHER_off := $(OBS_OTHER_)
 SMOKE_URL ?= http://127.0.0.1:8080
 # Which images `make up` runs (compose_images of deploy/k8s/lib.sh exports what compose.yaml reads). IMAGES: unset
-# builds the six backend services from the working tree (docker buildx bake -f deploy/docker-bake.json); stg runs
+# builds the backend services from the working tree (docker buildx bake -f deploy/docker-bake.json); stg runs
 # their releases in staging (envs/stg/images/ of the svp-gitops clone), with no Go build.
 
 # WEB_FROM: stg (unset) runs the web client's staging release; clone builds it from the svp-frontend clone (SVP_WEB_DIR,
@@ -43,7 +43,7 @@ WEB_IMAGE ?=
 # Runs the command after it with the variables compose_images exports; $(1) is compose_images or compose_up_images.
 WITH_IMAGES = IMAGES='$(IMAGES)' WEB_FROM='$(WEB_FROM)' WEB_IMAGE='$(WEB_IMAGE)' \
 	bash -c '. deploy/k8s/lib.sh && $(1) && exec "$$@"' with-images
-# Only the web client has a build section: the six backend services run images built before compose starts
+# Only the web client has a build section: the backend services run images built before compose starts
 # (compose_up_images) or pulled releases. --build rebuilds the web client when WEB_FROM=clone builds it from its source;
 # a web release runs as pulled, and --build would build it under the name of the release. WEB_FROM unset is stg.
 UP_BUILD = $(if $(filter stg image,$(or $(WEB_FROM),stg)),,--build)
@@ -72,14 +72,14 @@ K8S_SECRET_VARS := SVP_PG_SUPERUSER_PASSWORD SVP_GRAFANA_ADMIN_PASSWORD SVP_PG_B
 # file. A value already in .env is kept, whatever its length.
 KAFKA_VALKEY_PASSWORD_VARS := SVP_KAFKA_ADMIN_PASSWORD SVP_KAFKA_KEDA_PASSWORD SVP_KAFKA_OTELCOL_PASSWORD \
 	SVP_KAFKA_USER_SERVICE_PASSWORD SVP_KAFKA_VIDEO_SERVICE_PASSWORD SVP_KAFKA_ENGAGEMENT_SERVICE_PASSWORD \
-	SVP_KAFKA_FEED_SERVICE_PASSWORD SVP_KAFKA_MEDIA_WORKER_PASSWORD \
+	SVP_KAFKA_FEED_SERVICE_PASSWORD SVP_KAFKA_MEDIA_WORKER_PASSWORD SVP_KAFKA_DLQ_REPLAY_PASSWORD \
 	SVP_VALKEY_GATEWAY_PASSWORD SVP_VALKEY_FEED_SERVICE_PASSWORD SVP_VALKEY_WEB_PASSWORD SVP_VALKEY_OPS_PASSWORD
 # The web client's Server Action key, set at run time so that the key in use is never in the public image (the one Next
 # writes at build time is): an AES-256 key, which Next takes as the base64 of 32 bytes. Every replica shares it. The
 # cluster gives it to the web pods in Secret svp/web-env (deploy/k8s/secrets.sh).
 WEB_KEY_VARS := NEXT_SERVER_ACTIONS_ENCRYPTION_KEY
 
-.PHONY: env env-required local-ca local-files obs-valid obs-exclusive k3d-exclusive db-bootstrap glitchtip-init up down clean-data ps logs compose-config compose-hash slo-check smoke test-stack drill-obs-threats
+.PHONY: env env-required local-ca local-files obs-valid obs-exclusive k3d-exclusive db-bootstrap glitchtip-init up down clean-data ps logs compose-config compose-hash dlq-replay slo-check smoke transcode-timing test-stack drill-obs-threats
 
 # .env is read with the strict rule of deploy/observability/glitchtip/dotenv.sh, the same as glitchtip-init: a line it
 # refuses stops make env, naming the variable, before anything is written.
@@ -162,7 +162,7 @@ GLITCHTIP_INIT = COMPOSE='$(COMPOSE_UP_lgtm)' deploy/observability/glitchtip/ini
 glitchtip-init: env-required db-bootstrap ## Migrate and bootstrap GlitchTip (admin, org/project svp, drill token, source map upload token), add SENTRY_* to .env; idempotent, never changes a set value
 	$(GLITCHTIP_INIT)
 
-up: k3d-exclusive env-required local-files obs-valid obs-exclusive db-bootstrap ## Start Postgres and bootstrap its roles, build, migrate and start the core stack (web client at http://localhost:3001); OBS=lgtm adds Grafana LGTM (127.0.0.1:3000) and GlitchTip (127.0.0.1:8000), OBS=elastic adds Elasticsearch, Kibana (127.0.0.1:5601) and APM Server instead, OBS=off turns telemetry off (drills keep it off); IMAGES=stg runs the staging releases of the six backend services instead of building them; the web client runs its staging release, WEB_FROM=clone builds it from the clone of svp-frontend (../frontend, or SVP_WEB_DIR), WEB_FROM=image (WEB_IMAGE=<ghcr.io/...@sha256:...>) runs that release; refuses while a container of a profile not chosen runs (make down first)
+up: k3d-exclusive env-required local-files obs-valid obs-exclusive db-bootstrap ## Start Postgres and bootstrap its roles, build, migrate and start the core stack (web client at http://localhost:3001); OBS=lgtm adds Grafana LGTM (127.0.0.1:3000) and GlitchTip (127.0.0.1:8000), OBS=elastic adds Elasticsearch, Kibana (127.0.0.1:5601) and APM Server instead, OBS=off turns telemetry off (drills keep it off); IMAGES=stg runs the staging releases of the backend services instead of building them; the web client runs its staging release, WEB_FROM=clone builds it from the clone of svp-frontend (../frontend, or SVP_WEB_DIR), WEB_FROM=image (WEB_IMAGE=<ghcr.io/...@sha256:...>) runs that release; refuses while a container of a profile not chosen runs (make down first)
 	$(if $(filter lgtm,$(OBS)),$(GLITCHTIP_INIT))
 	$(call WITH_IMAGES,compose_up_images) $(COMPOSE_UP_$(OBS)) up -d $(UP_BUILD) --wait
 
@@ -190,10 +190,16 @@ logs: ## Show recent logs of every profile; narrow with SVC=<service>
 
 # Validation only: `config` without --quiet would print the file with the passwords, S3 secrets and JWT signing key from
 # .env filled in. compose_images runs once for the four configs: it asks GHCR about every release (the web client's
-# unless WEB_FROM=clone, the six services' with IMAGES=stg), the same set each time.
+# unless WEB_FROM=clone, the backend services' with IMAGES=stg), the same set each time.
 compose-config: env-required ## Check the compose file is valid for core, core + obs, core + obs-elastic and OBS=off, with the images IMAGES, WEB_FROM, WEB_IMAGE choose as for make up (prints nothing on success)
 	@$(call WITH_IMAGES,compose_images) sh -c '$(COMPOSE_UP_) config --quiet && $(COMPOSE_UP_lgtm) config --quiet && \
 	  $(COMPOSE_UP_elastic) config --quiet && $(COMPOSE_UP_off) config --quiet'
+
+# The tool's container idles in standby; the replay runs in it, logged in as svp-dlq-replay. Without ARGS the tool
+# would run standby in the foreground until stopped, so ARGS is required.
+dlq-replay: env-required ## Replay a dead-letter topic in the compose stack (make up): ARGS='replay --from <topic>.dlq [--dry-run] ...', the flags of services/dlq-replay/cmd/dlq-replay; logs no key, value or header value
+	$(if $(ARGS),,$(error ARGS is empty: make dlq-replay ARGS='replay --from <topic>.dlq --dry-run'))
+	$(COMPOSE) exec -T dlq-replay /app $(ARGS)
 
 # One line per service with the config hash compose computes from .env (`config --hash`): a sha256 of the service's
 # whole resolved config, never a value. OBS= picks the profiles as for make up.
@@ -217,6 +223,12 @@ slo-check: ## promtool: check the Prometheus config and alert rules, run the rul
 
 smoke: ## Through the gateway at SMOKE_URL: register, log in, follow, upload to READY, play HLS, feed, like and view, unfollow
 	deploy/compose/smoke.sh $(SMOKE_URL)
+
+# Like smoke, it deletes the per-IP register rate limit keys in Valkey db 10 first: lab only.
+CLIP ?=
+N ?=
+transcode-timing: ## Through the gateway at SMOKE_URL: upload the video CLIP=<file> N=<n> times, print seconds from complete to READY per upload, then p50 and max (LOCAL LAB ONLY: deletes the register rate limit keys in Valkey db 10)
+	deploy/compose/transcode-timing.sh $(SMOKE_URL) '$(CLIP)' '$(N)'
 
 # The observability drill on the running stack of `make up OBS=lgtm` (deploy/compose/drills/). It stops user-service
 # and recreates the gateway with a drill-only setting, and every service runs again with its defaults when it ends,

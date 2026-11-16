@@ -1,0 +1,144 @@
+# M-3 of the mesh drill: a call that skips the waypoint. A pod with the gateway's labels and ServiceAccount gateway, in
+# the mesh, calls the address of a running pod of each gRPC service, read when the step runs: the pods admit the
+# waypoint's identity alone, so the target's ztunnel refuses it and closes the call before any answer ("refused").
+
+# Its "refused" alone does not tell which layer closed it (templates/ambient-probe.js), so two controls per service:
+# a pod with the same labels outside the mesh opens a TCP connection to that pod's 15008 (the NetworkPolicies let
+# HBONE in), and the pod in the mesh is answered through the Service (the waypoint's way).
+apiVersion: chainsaw.kyverno.io/v1alpha1
+kind: Test
+metadata:
+  name: mesh-m-3
+  labels:
+    drill: mesh
+spec:
+  description: "M-3: the gateway's identity calling a gRPC pod's address, past the waypoint, is refused by ztunnel"
+  # An existing namespace: Chainsaw neither creates nor deletes it, only the pods the template applies.
+  namespace: svp
+  bindings:
+  - {name: from, value: drill-mesh-gateway}
+  - {name: mode, value: grpc}
+  - {name: want, value: [ip refused]}
+  steps:
+  - name: "M-3: setup: pod drill-mesh-gateway in svp with the gateway's labels, ServiceAccount gateway"
+    use:
+      template: ../../templates/mesh-client-up.yaml
+  - name: "M-3: setup: pod drill-mesh-plain in svp with the gateway's labels, outside the mesh"
+    use:
+      template: ../../templates/mesh-client-up.yaml
+      with:
+        bindings:
+        - {name: clientName, value: drill-mesh-plain}
+        - {name: clientServiceAccount, value: default}
+        - {name: clientDataplaneMode, value: none}
+
+  # One target per step: the address of the first running pod of the release, port given apart.
+  - name: "M-3: ServiceAccount gateway to a user-service pod's address on 9101 refused"
+    bindings:
+    - {name: release, value: user-service}
+    - {name: port, value: "9101"}
+    try: &podProbe
+    - script:
+        env:
+        - {name: CALLER_KUBECONFIG, value: (env('KUBECONFIG'))}
+        - {name: FROM, value: ($from)}
+        - {name: MODE, value: ($mode)}
+        - {name: RELEASE, value: ($release)}
+        - {name: PORT, value: ($port)}
+        content: |
+          set -eu
+          export KUBECONFIG="$CALLER_KUBECONFIG"
+          ip=$(kubectl --context k3d-svp -n svp get pods -l "app.kubernetes.io/name=$RELEASE,app.kubernetes.io/component=server" \
+            --field-selector status.phase=Running -o jsonpath='{.items[0].status.podIP}')
+          [ -n "$ip" ] || { echo "FAIL  M-3: namespace svp has a running pod of $RELEASE with an address" >&2; exit 1; }
+          echo "M-3: $RELEASE pod at $ip" >&2
+          js=$(cat "$(git rev-parse --show-toplevel)/deploy/k8s/drills/templates/ambient-probe.js")
+          kubectl --context k3d-svp -n svp exec "pod/$FROM" -c probe -- /nodejs/bin/node -e "$js" "$MODE" "$ip:$PORT" </dev/null
+        check:
+          ($error): ~
+          (contains($want, trim_space($stdout))): true
+      continueOnError: true
+  - name: "M-3: ServiceAccount gateway to a video-service pod's address on 9102 refused"
+    bindings:
+    - {name: release, value: video-service}
+    - {name: port, value: "9102"}
+    try: *podProbe
+  - name: "M-3: ServiceAccount gateway to an engagement-service pod's address on 9103 refused"
+    bindings:
+    - {name: release, value: engagement-service}
+    - {name: port, value: "9103"}
+    try: *podProbe
+  - name: "M-3: ServiceAccount gateway to a feed-service pod's address on 9104 refused"
+    bindings:
+    - {name: release, value: feed-service}
+    - {name: port, value: "9104"}
+    try: *podProbe
+
+  - name: "M-3: control: from outside the mesh, a user-service pod's 15008 (HBONE) connects"
+    bindings:
+    - {name: from, value: drill-mesh-plain}
+    - {name: mode, value: connect}
+    - {name: want, value: [ip connected]}
+    - {name: release, value: user-service}
+    - {name: port, value: "15008"}
+    try: *podProbe
+  - name: "M-3: control: from outside the mesh, a video-service pod's 15008 (HBONE) connects"
+    bindings:
+    - {name: from, value: drill-mesh-plain}
+    - {name: mode, value: connect}
+    - {name: want, value: [ip connected]}
+    - {name: release, value: video-service}
+    - {name: port, value: "15008"}
+    try: *podProbe
+  - name: "M-3: control: from outside the mesh, an engagement-service pod's 15008 (HBONE) connects"
+    bindings:
+    - {name: from, value: drill-mesh-plain}
+    - {name: mode, value: connect}
+    - {name: want, value: [ip connected]}
+    - {name: release, value: engagement-service}
+    - {name: port, value: "15008"}
+    try: *podProbe
+  - name: "M-3: control: from outside the mesh, a feed-service pod's 15008 (HBONE) connects"
+    bindings:
+    - {name: from, value: drill-mesh-plain}
+    - {name: mode, value: connect}
+    - {name: want, value: [ip connected]}
+    - {name: release, value: feed-service}
+    - {name: port, value: "15008"}
+    try: *podProbe
+
+  - name: "M-3: control: ServiceAccount gateway to user-service.svp:9101, through the waypoint, answered"
+    bindings:
+    - {name: want, value: [dns answered http=200 grpc=0]}
+    - {name: target, value: user-service.svp.svc.cluster.local:9101}
+    try: &serviceProbe
+    - script:
+        env:
+        - {name: CALLER_KUBECONFIG, value: (env('KUBECONFIG'))}
+        - {name: FROM, value: ($from)}
+        - {name: MODE, value: ($mode)}
+        - {name: TARGET, value: ($target)}
+        content: |
+          set -eu
+          export KUBECONFIG="$CALLER_KUBECONFIG"
+          js=$(cat "$(git rev-parse --show-toplevel)/deploy/k8s/drills/templates/ambient-probe.js")
+          kubectl --context k3d-svp -n svp exec "pod/$FROM" -c probe -- /nodejs/bin/node -e "$js" "$MODE" "$TARGET" </dev/null
+        check:
+          ($error): ~
+          (contains($want, trim_space($stdout))): true
+      continueOnError: true
+  - name: "M-3: control: ServiceAccount gateway to video-service.svp:9102, through the waypoint, answered"
+    bindings:
+    - {name: want, value: [dns answered http=200 grpc=0]}
+    - {name: target, value: video-service.svp.svc.cluster.local:9102}
+    try: *serviceProbe
+  - name: "M-3: control: ServiceAccount gateway to engagement-service.svp:9103, through the waypoint, answered"
+    bindings:
+    - {name: want, value: [dns answered http=200 grpc=0]}
+    - {name: target, value: engagement-service.svp.svc.cluster.local:9103}
+    try: *serviceProbe
+  - name: "M-3: control: ServiceAccount gateway to feed-service.svp:9104, through the waypoint, answered"
+    bindings:
+    - {name: want, value: [dns answered http=200 grpc=0]}
+    - {name: target, value: feed-service.svp.svc.cluster.local:9104}
+    try: *serviceProbe

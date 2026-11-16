@@ -1,4 +1,4 @@
-# Defaults shared by the seven releases of svp-service (the six Go services and the web client). Each release's own
+# Defaults shared by the releases of svp-service (the Go services and the web client). Each release's own
 # values are base/services/<service>.yaml of svp-gitops; the release name is the service name, which names the pods'
 # label app.kubernetes.io/name, the Service, the ServiceAccount and the Secrets.
 
@@ -14,8 +14,15 @@ image:
   # -- Signed index digest of the image the pod runs; see `image.tag`.
   digest: ""
 
+# -- Arguments of the service's container, after the image's entrypoint: empty runs the binary's default command.
+# media-worker on EKS sets [mediaconvert], the command that hands transcoding to AWS Elemental MediaConvert instead of
+# running ffmpeg in the pod (`serve`). The migrate Job never takes them: it runs `migrate`.
+args: []
+
 # -- http: the gateway and the web client (probes on /healthz). grpc: the four gRPC services (Kubernetes' own grpc probe
-# on the standard health service). none: media-worker (no port, no probe, no Service).
+# on the standard health service), whose Service sends its traffic through the mesh's waypoint (peer waypoint), the L7
+# proxy that balances the calls one by one and admits only the callers of ingressFrom; its pods admit the waypoint
+# alone. none: media-worker (no port, no probe, no Service).
 protocol: none
 # -- Port the process listens on (LISTEN_ADDR) and the Service exposes; unused with protocol none.
 port: 0
@@ -34,9 +41,21 @@ hpa: {}
 # drain for good (minAvailable: 1) or allows everything (0), so a single-replica service has none.
 pdb: {}
 # -- Spread the replicas over the zones, then over the nodes (topologySpreadConstraints on topology.kubernetes.io/zone,
-# then kubernetes.io/hostname, both ScheduleAnyway): with two replicas, losing one zone or one node leaves one serving.
-# Soft, so a cluster with one zone or one node still schedules them; k3d's nodes have no zone label.
+# as `zoneSpread` says, then kubernetes.io/hostname, ScheduleAnyway): with two replicas, losing one zone or one node
+# leaves one serving. Soft by default, so a cluster with one zone or one node still schedules them; k3d's nodes have no
+# zone label.
 spreadAcrossNodes: false
+# -- The zone constraint of `spreadAcrossNodes`. whenUnsatisfiable: ScheduleAnyway or DoNotSchedule, under which a pod
+# waits rather than land in a zone that has more replicas than another, and no node without a zone label (k3d's) takes
+# it. minDomains, DoNotSchedule only: the zones counted even while one has no node, so a pod waits for that zone and
+# Karpenter opens a node there instead of the scheduler filling the zones that have nodes.
+zoneSpread:
+  whenUnsatisfiable: ScheduleAnyway
+# -- nodeAffinity of the pods (the release's and its migrate Job's), as in a pod's spec.affinity.nodeAffinity. Empty:
+# any node. EKS requires karpenter.sh/nodepool Exists, so the pods land only on nodes Karpenter makes, which start
+# with a taint until Istio's CNI agent runs there: a pod started on a node before it would run outside the mesh. The
+# system node group has no such taint and takes none of these pods.
+nodeAffinity: {}
 # -- KEDA ScaledObject on the consumer lag of a Kafka group, logged in through ClusterTriggerAuthentication keda-kafka
 # (chart svp-data; Kafka user svp-keda): {minReplicas, maxReplicas, kafka: {topic, consumerGroup, lagThreshold}}.
 # The broker is env.KAFKA_BROKERS, the one the service consumes from (kafka.svp-data.svc.cluster.local:9096 on k3d,
@@ -44,13 +63,16 @@ spreadAcrossNodes: false
 keda: {}
 
 # -- Run the service as an Argo Rollouts Rollout with an analysed canary instead of a Deployment: Service
-# <release>-canary beside the stable one, the release's HTTPRoute split between the two, AnalysisTemplate
-# <release>-canary on Envoy's metrics of the canary backend. Only a release with an HTTPRoute can set it (the gateway,
-# the web client): Envoy measures the canary on that route.
+# <release>-canary beside the stable one, the requests split between the two by the weights of a route. With
+# httpRoute.host: its HTTPRoute (Envoy), analysis on Envoy's metrics of the canary backend. A gRPC release: GRPCRoute
+# <release> on its Service, applied call by call by the mesh's waypoint, analysis on rpc.server.call.duration of the
+# canary's pods. canaryRoute of the release's component in argocd/apps/components.json of svp-gitops names that route.
+# Any other release fails the render: nothing measures its canary.
 canary: false
 # -- Limits of the canary's analysis, per release since what a good response time is depends on the service: p99Ms, the
-# p99 in ms the canary must stay under; errorRatio, the share of 5xx among its responses that are not 4xx it must stay
-# under. Required with canary set; the release's values file says why its numbers.
+# p99 in ms the canary must stay under; errorRatio, the share it must stay under of 5xx among its responses that are not
+# 4xx (gRPC: of the server-error status codes UNKNOWN, INTERNAL, UNAVAILABLE, DATA_LOSS, DEADLINE_EXCEEDED among all its
+# calls). Required with canary set; the release's values file says why its numbers.
 canaryLimits: {}
 # -- Prometheus the canary's analysis queries. address: its HTTP API, no trailing slash (Argo Rollouts appends
 # /api/v1/query); on EKS the query endpoint of the env's Amazon Managed Service for Prometheus workspace. sigv4Region:
@@ -75,7 +97,9 @@ migrateResources:
   limits: {cpu: 500m, memory: 128Mi}
 
 # -- Environment of every service; a values file adds its own. Secrets are never here: they come from Secret
-# <service>-env (deploy/k8s/secrets.sh, from .env).
+# <service>-env (deploy/k8s/secrets.sh, from .env). The chart sets OTEL_RESOURCE_ATTRIBUTES itself (k8s.pod.name and
+# k8s.namespace.name, from SVP_POD_NAME and SVP_POD_NAMESPACE of the downward API), so a values file that sets it fails
+# the render.
 env:
   # -- Traces, metrics and logs go to the Collector in svp-obs; until it runs, export fails with a rate-limited WARN and
   # the service works as before.
@@ -109,44 +133,63 @@ preStopSleepSeconds: null
 
 # -- Pods each release may be reached from (ingressFrom) and may reach (egressTo), by name of the peers below; DNS is
 # open to every pod of svp already (chart svp-cluster). The namespace denies everything else in both directions, so
-# the lists are the whole of a service's traffic. Ingress is opened on the service's own port only.
+# the lists are the whole of a service's traffic. Ingress is opened on the service's own port, and on 15008 (HBONE of
+# the mesh) beside it; a gRPC release also admits peer waypoint on 15008. Every peer of ingressFrom must be in the mesh.
 ingressFrom: []
 # -- Peers each release may reach, by name; see `ingressFrom`.
 egressTo: []
 
 # -- The pods of each peer, by namespace and labels, and the pod ports a client reaches them on (NetworkPolicy sees the
 # packet after a Service has been translated to a pod). The labels of svp-data are the ones its chart sets; those of
-# svp-obs are the labels of the pinned upstream charts there (helm template).
+# svp-obs are the labels of the pinned upstream charts there (helm template). `mesh` marks a peer in the Istio ambient
+# mesh: its traffic to a pod of the mesh is HBONE on 15008, so the NetworkPolicies open 15008 to and from it beside its
+# ports, and mesh.principal (or mesh.namespace, for pods whose ServiceAccount has no fixed name) is the identity the
+# AuthorizationPolicies admit it by. mesh.viaWaypoint: the peer's Service sends its traffic through peer waypoint, so a
+# client reaches the waypoint's pods on 15008 too. A peer without `mesh` (svp-data, svp-obs) is outside the mesh:
+# ztunnel passes its traffic through as it is, and no release may name it in ingressFrom (STRICT mTLS refuses it).
 peers:
   envoy:
     namespace: envoy-gateway-system
     labels:
       app.kubernetes.io/name: envoy
       gateway.envoyproxy.io/owning-gateway-name: svp
+    # The proxy pods' ServiceAccount name ends in a hash: the namespace is their identity.
+    mesh: {namespace: envoy-gateway-system}
+  # The waypoint of chart svp-cluster in svp-mesh (Gateway waypoint), which istiod runs with ServiceAccount waypoint.
+  waypoint:
+    namespace: svp-mesh
+    labels: {gateway.networking.k8s.io/gateway-name: waypoint}
+    mesh: {principal: cluster.local/ns/svp-mesh/sa/waypoint}
   gateway:
     namespace: svp
     labels: {app.kubernetes.io/name: gateway, app.kubernetes.io/component: server}
     ports: [8080]
+    mesh: {principal: cluster.local/ns/svp/sa/gateway}
   web:
     namespace: svp
     labels: {app.kubernetes.io/name: web, app.kubernetes.io/component: server}
     ports: [3001]
+    mesh: {principal: cluster.local/ns/svp/sa/web}
   user-service:
     namespace: svp
     labels: {app.kubernetes.io/name: user-service, app.kubernetes.io/component: server}
     ports: [9101]
+    mesh: {principal: cluster.local/ns/svp/sa/user-service, viaWaypoint: true}
   video-service:
     namespace: svp
     labels: {app.kubernetes.io/name: video-service, app.kubernetes.io/component: server}
     ports: [9102]
+    mesh: {principal: cluster.local/ns/svp/sa/video-service, viaWaypoint: true}
   engagement-service:
     namespace: svp
     labels: {app.kubernetes.io/name: engagement-service, app.kubernetes.io/component: server}
     ports: [9103]
+    mesh: {principal: cluster.local/ns/svp/sa/engagement-service, viaWaypoint: true}
   feed-service:
     namespace: svp
     labels: {app.kubernetes.io/name: feed-service, app.kubernetes.io/component: server}
     ports: [9104]
+    mesh: {principal: cluster.local/ns/svp/sa/feed-service, viaWaypoint: true}
   postgres:
     namespace: svp-data
     labels: {cnpg.io/cluster: svp-pg}

@@ -1,0 +1,95 @@
+{
+    "ProbeResults": [
+        {
+            "Container": {
+                "BitRate": 6723724,
+                "Duration": 200.0,
+                "Format": "mp4",
+                "Tracks": [
+                    {
+                        "Codec": "AVC",
+                        "Duration": 200.0,
+                        "Index": 1,
+                        "TrackType": "video",
+                        "VideoProperties": {
+                            "BitDepth": 8,
+                            "BitRate": 6646223,
+                            "CodecMetadata": {
+                                "BitDepth": 8,
+                                "ChromaSubsampling": "420",
+                                "CodedFrameRate": {
+                                    "Denominator": 2,
+                                    "Numerator": 60
+                                },
+                                "ColorPrimaries": "UNSPECIFIED",
+                                "DisplayAspectRatio": {
+                                    "Denominator": 16,
+                                    "Numerator": 9
+                                },
+                                "Height": 1920,
+                                "Level": "4.0",
+                                "MatrixCoefficients": "UNSPECIFIED",
+                                "Profile": "High",
+                                "SampleAspectRatio": {
+                                    "Denominator": 1,
+                                    "Numerator": 1
+                                },
+                                "ScanType": "Progressive",
+                                "TransferCharacteristics": "UNSPECIFIED",
+                                "Width": 1080
+                            },
+                            "DisplayAspectRatio": {
+                                "Denominator": 16,
+                                "Numerator": 9
+                            },
+                            "FrameRate": {
+                                "Denominator": 1,
+                                "Numerator": 30
+                            },
+                            "Height": 1920,
+                            "SampleAspectRatio": {
+                                "Denominator": 1,
+                                "Numerator": 1
+                            },
+                            "Width": 1080
+                        }
+                    },
+                    {
+                        "AudioProperties": {
+                            "BitDepth": 16,
+                            "BitRate": 69279,
+                            "ChannelLayout": "mono",
+                            "Channels": 1,
+                            "FrameRate": {
+                                "Denominator": 256,
+                                "Numerator": 11025
+                            },
+                            "LanguageCode": "und",
+                            "SampleRate": 44100
+                        },
+                        "Codec": "AAC",
+                        "Duration": 200.0,
+                        "Index": 2,
+                        "TrackType": "audio"
+                    }
+                ]
+            },
+            "Metadata": {
+                "ETag": "\"68ebb46f42f5c8cdb027bc72099bd32d-21\"",
+                "FileSize": 168093090,
+                "LastModified": "2026-11-13T19:32:24+07:00",
+                "MimeType": "video/mp4"
+            },
+            "TrackMappings": [
+                {
+                    "AudioTrackIndexes": [
+                        2
+                    ],
+                    "VideoTrackIndexes": [
+                        1
+                    ]
+                }
+            ]
+        }
+    ]
+}

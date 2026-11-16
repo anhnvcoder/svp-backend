@@ -11,7 +11,7 @@ Mục lục theo [Diátaxis](https://diataxis.fr): mỗi tài liệu thuộc m�
 ## How-to: làm một việc cụ thể
 
 - [`runbooks/`](runbooks/): một runbook cho mỗi cảnh báo mức page, sự cố đã gặp và quy trình tay (dựng `svp-gitops`, `svp-frontend`,
-  `svp-infra`, đổi khoá JWT, phục hồi Postgres, phân loại cảnh báo bảo mật AWS). Mục lục và mẫu ở [`runbooks/README.md`](runbooks/README.md).
+  `svp-infra`, đổi khoá JWT, phục hồi Postgres, khôi phục RDS và S3 của stg, prd, đổi schema không downtime, phát lại DLQ, lời gọi bị mesh từ chối, phân loại cảnh báo bảo mật AWS, phát hành checker của `svp-gitops`). Mục lục và mẫu ở [`runbooks/README.md`](runbooks/README.md).
 
 ## Reference: tra cứu
 
@@ -29,16 +29,30 @@ Mục lục theo [Diátaxis](https://diataxis.fr): mỗi tài liệu thuộc m�
 - [`explanation/deployment.md`](explanation/deployment.md): compose, k3d và EKS: mỗi nơi gồm gì, vì sao khác nhau.
 - [`explanation/environments.md`](explanation/environments.md): stg và prd: thành phần nào phải giống, được giảm hay giảm có
   điều kiện, vì sao, và khi giảm thì kiểm bù ở đâu.
+- [`explanation/paid-features.md`](explanation/paid-features.md): dịch vụ AWS tốn tiền theo cờ của từng account: cờ nào, stg tắt gì
+  và thay bằng gì, cái gì không bao giờ tắt, một buổi stg mở và đóng AMG.
+- [`explanation/transcode.md`](explanation/transcode.md): transcode bằng ffmpeg ở local và MediaConvert ở stg, prd: hai
+  đường cùng hợp đồng event, bản ghi job quyết kết quả mỗi version, bố cục output, lỗi và cách nhận ra.
 - [`explanation/edge.md`](explanation/edge.md): đường vào công khai trên AWS: CloudFront, WAF, ALB internal, Envoy; IP client, chứng chỉ, DNS
   và log của edge.
+- [`explanation/premium-playback.md`](explanation/premium-playback.md): video premium: vé và mua giả lập, ba tiền tố media, bản xem thử,
+  playlist do API lọc và ký, signed URL CloudFront ở stg, prd và presign ở local, khoá ký, cách kiểm.
+- [`explanation/authentication.md`](explanation/authentication.md): đăng ký, đăng nhập, làm mới phiên, đăng xuất: thứ
+  tự kiểm, giới hạn đăng nhập, mật khẩu chặn, header bảo mật và cái giá.
 - [`explanation/aws-security.md`](explanation/aws-security.md): org AWS theo AWS SRA: account, guardrail, ai đổi được
   gì, phát hiện, registry ECR và credential AWS của CI, endpoint interface, đăng nhập công cụ vận hành, luồng log và
   luồng cảnh báo bảo mật.
 - [`explanation/delivery.md`](explanation/delivery.md): CI/CD, chuỗi cung ứng, phát hành sang ECR và image bên thứ ba
-  trên EKS, ba repo và hợp đồng API.
+  trên EKS, ba repo, phát hành checker và hợp đồng API.
 - [`explanation/observability.md`](explanation/observability.md): trace, metric, log, lỗi và số đo trình duyệt đi từ đâu
   tới đâu ở compose, k3d và EKS (dịch vụ managed của AWS).
+- [`explanation/cost-and-uptime.md`](explanation/cost-and-uptime.md): chi phí compute theo namespace và service bằng OpenCost, uptime từ
+  ngoài vào bằng blackbox exporter: số lấy từ đâu, giới hạn, SLO, cảnh báo và cái giá của nơi probe.
 - [`explanation/reliability.md`](explanation/reliability.md): SLO, tải, backup, probe và vận hành.
+- [`explanation/backup-dr.md`](explanation/backup-dr.md): backup và DR của stg, prd: dữ liệu nào chép đi đâu, account `svp-backup`,
+  lịch của Backup policy, diễn tập PITR và object S3, xoá cuối buổi.
+- [`explanation/well-architected.md`](explanation/well-architected.md): review hệ thống trên AWS theo sáu trụ cột của AWS Well-Architected
+  Framework: câu hỏi, câu trả lời của hệ thống, rủi ro High/Medium và việc đề xuất.
 - [`threat-model.md`](threat-model.md): mối đe doạ theo bề mặt (STRIDE) và cách kiểm từng mối.
 - [`adr/`](adr/): nhật ký quyết định kiến trúc, mỗi quyết định một file; không bắt buộc đọc để dùng repo. Mục lục, trạng thái và
   quy ước (ADR ngắn, chi tiết và số đo ở phụ lục) ở [`adr/README.md`](adr/README.md).

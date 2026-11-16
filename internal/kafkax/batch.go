@@ -321,7 +321,7 @@ func (b *BatchConsumer) handle(ctx context.Context, batch *Batch) (context.Conte
 		}
 	}
 	topic := batch.Records[0].Topic
-	hctx, span := otel.Tracer(tracerName).Start(ctx, "process "+topic,
+	hctx, span := otel.Tracer(tracerName).Start(ctx, "process "+topic, //nolint:spancheck // endAttempt ends the span
 		trace.WithNewRoot(), trace.WithSpanKind(trace.SpanKindConsumer), trace.WithLinks(links...),
 		trace.WithAttributes(semconv.MessagingSystemKafka, semconv.MessagingDestinationName(topic),
 			semconv.MessagingConsumerGroupName(b.cfg.Group), semconv.MessagingOperationName("process"),
@@ -329,7 +329,7 @@ func (b *BatchConsumer) handle(ctx context.Context, batch *Batch) (context.Conte
 	hctx, cancel := attemptContext(hctx, b.cfg.HandlerTimeout)
 	defer cancel()
 	rejected, err := b.cfg.Handler(hctx, batch)
-	return hctx, rejected, endAttempt(span, err)
+	return hctx, rejected, endAttempt(span, err) //nolint:spancheck // endAttempt ends the span
 }
 
 // commit commits the highest offset of every partition in batch, and no other partition.

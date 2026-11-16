@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
-# Tests for the wrappers svp-kafka and svp-valkey of this directory, without a broker or a server: fake kafka-*.sh tools
-# and a fake valkey-cli first on PATH record their command line, the client properties file svp-kafka hands over (and
-# its mode), REDISCLI_AUTH and their stdin. Covers the default login (svp-admin, svp-ops), SVP_AS_USER with the password
-# on the first line of stdin, the trust store with and without SVP_CA_FILE, and the refusals.
+# Tests for the wrappers svp-kafka, svp-valkey and svp-pg of this directory, without a server: fake kafka-*.sh tools,
+# valkey-cli and psql first on PATH record their command line, the client properties file of svp-kafka (and its mode),
+# REDISCLI_AUTH, psql's PG* variables and their stdin. Covers the default logins, SVP_AS_USER with the password on the
+# first line of stdin, the trust store with and without SVP_CA_FILE, svp-pg's host, and the refusals.
 
 # Usage, from anywhere: deploy/ops/ops-test.sh
 set -euo pipefail
@@ -20,6 +20,7 @@ fail() {
 
 admin_pw=Adm1nPw
 ops_pw=0psPw
+pg_pw='Pg#Pw 1'
 mkdir -p "$work/bin"
 # The fake Kafka tool, under every name used here: $FAKE_STATE/argv (one argument per line, the properties file as
 # PROPS), $FAKE_STATE/props (the file's content), $FAKE_STATE/mode, $FAKE_STATE/stdin. Exits FAKE_RC.
@@ -56,12 +57,24 @@ printf '%s' "${REDISCLI_AUTH-<unset>}" >"$s/auth"
 cat >"$s/stdin"
 EOF
 chmod +x "$work/bin/valkey-cli"
+# The fake psql: $FAKE_STATE/argv, $FAKE_STATE/pgenv (each PG* variable but PGPASSWORD, sorted), $FAKE_STATE/auth.
+cat >"$work/bin/psql" <<'EOF'
+#!/usr/bin/env bash
+set -eo pipefail
+s=$FAKE_STATE
+printf '%s\n' "$@" >"$s/argv"
+env | grep '^PG' | grep -v '^PGPASSWORD=' | LC_ALL=C sort >"$s/pgenv"
+printf '%s' "${PGPASSWORD-<unset>}" >"$s/auth"
+EOF
+chmod +x "$work/bin/psql"
 
 # The variables the wrappers and fakes read: each case sets its own, none comes from the caller's environment.
 wrapper_vars=(KAFKA_BROKERS SVP_KAFKA_ADMIN_PASSWORD SVP_CA_FILE SVP_AS_USER VALKEY_HOST SVP_VALKEY_OPS_PASSWORD
-  REDISCLI_AUTH FAKE_RC)
+  REDISCLI_AUTH FAKE_RC SVP_PG_HOST SVP_PG_PASSWORD_DIR PGHOST PGPORT PGDATABASE PGUSER PGPASSWORD PGSSLMODE
+  PGSSLROOTCERT PGCONNECT_TIMEOUT PGAPPNAME PGOPTIONS)
+# Any PG* the shell already has (PGSERVICE, PGPASSFILE...) would reach the fake psql, so unset them all too.
 unset_vars=()
-for v in "${wrapper_vars[@]}"; do unset_vars+=(-u "$v"); done
+for v in "${wrapper_vars[@]}" $(env | sed -n 's/^\(PG[A-Za-z_]*\)=.*/\1/p'); do unset_vars+=(-u "$v"); done
 
 # run CASE STDIN WRAPPER [ARGS...]: runs WRAPPER with ARGS and STDIN in a fresh state folder $work/CASE, with only the
 # variables of CASE_ENV (an array) of those above set. Output in $work/CASE/out, status in rc.
@@ -78,7 +91,8 @@ run() {
 rc() { cat "$work/$1/rc"; }
 argv() { tr '\n' ' ' <"$work/$1/argv"; }
 no_secret() {
-  if grep -rq -e "$admin_pw" -e "$ops_pw" -e Us3rPw "$work/$1/out" "$work/$1/argv" 2>/dev/null; then
+  if grep -rq -e "$admin_pw" -e "$ops_pw" -e Us3rPw -e "$pg_pw" "$work/$1/out" "$work/$1/argv" "$work/$1/pgenv" \
+    2>/dev/null; then
     fail "$1: a password in the output or on the command line"
     return 1
   fi
@@ -222,8 +236,91 @@ refuse valkey-as-user-no-pw "" "the first line of stdin must be the password of 
 case_env=(VALKEY_HOST=valkey SVP_VALKEY_OPS_PASSWORD="$ops_pw" SVP_AS_USER=default)
 refuse valkey-bad-user "Us3rPw"$'\n' "SVP_AS_USER is a Valkey user" svp-valkey PING
 
+# svp-pg: the password files of the mounted Secret, one per service, with no trailing newline as Kubernetes writes them.
+mkdir -p "$work/pg-roles"
+for svc in video engagement feed; do printf '%s' "$pg_pw-$svc" >"$work/pg-roles/$svc"; done
+pg_env() {
+  printf '%s\n' PGAPPNAME=svp-pg PGCONNECT_TIMEOUT=10 PGDATABASE="svp_$1" PGHOST="$2" \
+    'PGOPTIONS=-c default_transaction_read_only=on' PGPORT=5432 PGSSLMODE=verify-full PGSSLROOTCERT=/etc/svp-ca/ca.crt \
+    PGUSER="svp_$1_app"
+}
+pg_argv=$'-X -q -A -t -F \t -v ON_ERROR_STOP=1 -v VERBOSITY=terse -c '
+
+# Defaults: SVP_PG_HOST, the service's database and app role, verify-full against SVP_CA_FILE, a read-only session. A
+# PG* variable of the caller (another server, sslmode) is replaced, not kept.
+case_env=(SVP_PG_HOST=svp-pg-rw SVP_PG_PASSWORD_DIR="$work/pg-roles" SVP_CA_FILE=/etc/svp-ca/ca.crt PGHOST=elsewhere
+  PGSSLMODE=disable PGOPTIONS=)
+run pg-default "" svp-pg feed -c 'SELECT count(*) FROM follows'
+if [[ $(rc pg-default) != 0 ]]; then
+  cat "$work/pg-default/out" >&2
+  fail "pg-default: exit $(rc pg-default)"
+elif [[ $(argv pg-default) != "${pg_argv}SELECT count(*) FROM follows " ]]; then
+  fail "pg-default: command line '$(argv pg-default)'"
+elif [[ $(<"$work/pg-default/pgenv") != "$(pg_env feed svp-pg-rw)" ]]; then
+  fail "pg-default: PG* variables are $(tr '\n' ' ' <"$work/pg-default/pgenv")"
+elif [[ $(<"$work/pg-default/auth") != "$pg_pw-feed" ]]; then
+  fail "pg-default: PGPASSWORD is not the content of file feed of SVP_PG_PASSWORD_DIR"
+elif no_secret pg-default; then
+  ok "svp-pg feed: psql -c as svp_feed_app on svp_feed at SVP_PG_HOST:5432, verify-full with SVP_CA_FILE, read-only session, password in PGPASSWORD only"
+fi
+
+# --host: another server (a restored instance), every other setting the same.
+run pg-host "" svp-pg video --host svp-stg-pitr.rds.example -c 'SELECT 1'
+if [[ $(rc pg-host) != 0 ]] || [[ $(argv pg-host) != "${pg_argv}SELECT 1 " ]] ||
+  [[ $(<"$work/pg-host/pgenv") != "$(pg_env video svp-stg-pitr.rds.example)" ]] ||
+  [[ $(<"$work/pg-host/auth") != "$pg_pw-video" ]]; then
+  fail "pg-host: exit $(rc pg-host), PG* variables $(tr '\n' ' ' <"$work/pg-host/pgenv" 2>/dev/null)"
+elif no_secret pg-host; then
+  ok "svp-pg video --host: the host given instead of SVP_PG_HOST, svp_video_app's password, nothing else changed"
+fi
+
+# --host after -c, without SVP_PG_HOST; engagement.
+case_env=(SVP_PG_PASSWORD_DIR="$work/pg-roles" SVP_CA_FILE=/etc/svp-ca/ca.crt)
+run pg-host-only "" svp-pg engagement -c 'SELECT 2' --host svp-pg-rw
+if [[ $(rc pg-host-only) != 0 ]] || [[ $(<"$work/pg-host-only/pgenv") != "$(pg_env engagement svp-pg-rw)" ]] ||
+  [[ $(<"$work/pg-host-only/auth") != "$pg_pw-engagement" ]]; then
+  fail "pg-host-only: exit $(rc pg-host-only): $(head -c 200 "$work/pg-host-only/out")"
+else
+  ok "svp-pg engagement -c SQL --host: options in any order, --host alone names the server"
+fi
+
+# psql's exit status is the wrapper's.
+case_env=(SVP_PG_HOST=svp-pg-rw SVP_PG_PASSWORD_DIR="$work/pg-roles" SVP_CA_FILE=/etc/svp-ca/ca.crt FAKE_RC=3)
+cp "$work/bin/psql" "$work/bin/psql.ok"
+printf 'exit "${FAKE_RC:-0}"\n' >>"$work/bin/psql"
+run pg-rc "" svp-pg feed -c 'SELECT 1'
+mv "$work/bin/psql.ok" "$work/bin/psql"
+if [[ $(rc pg-rc) != 3 ]]; then
+  fail "pg-rc: exit $(rc pg-rc), want psql's 3"
+else
+  ok "svp-pg: exits with psql's status"
+fi
+
+case_env=(SVP_PG_HOST=svp-pg-rw SVP_PG_PASSWORD_DIR="$work/pg-roles" SVP_CA_FILE=/etc/svp-ca/ca.crt)
+refuse pg-no-args "" "usage: svp-pg" svp-pg
+refuse pg-user-service "" "the service is video, engagement or feed (got 'user')" svp-pg user -c 'SELECT 1'
+refuse pg-glitchtip "" "the service is video, engagement or feed (got 'glitchtip')" svp-pg glitchtip -c 'SELECT 1'
+refuse pg-no-sql "" "-c SQL is missing" svp-pg video
+refuse pg-host-no-sql "" "-c SQL is missing" svp-pg video --host svp-pg-rw
+refuse pg-empty-sql "" "one -c SQL, not empty" svp-pg video -c ''
+refuse pg-two-sql "" "one -c SQL, not empty" svp-pg video -c 'SELECT 1' -c 'SELECT 2'
+refuse pg-other-arg "" "unknown argument '-f'" svp-pg video -f /tmp/x.sql
+refuse pg-host-no-value "" "--host needs a host name" svp-pg video -c 'SELECT 1' --host
+refuse pg-bad-host "" "HOST is a DNS name" svp-pg video --host 'h dbname=svp_feed' -c 'SELECT 1'
+case_env=(SVP_PG_PASSWORD_DIR="$work/pg-roles" SVP_CA_FILE=/etc/svp-ca/ca.crt)
+refuse pg-no-host "" "SVP_PG_HOST is not set and no --host given" svp-pg video -c 'SELECT 1'
+case_env=(SVP_PG_HOST=svp-pg-rw SVP_PG_PASSWORD_DIR="$work/pg-roles")
+refuse pg-no-ca "" "SVP_CA_FILE is not set" svp-pg video -c 'SELECT 1'
+case_env=(SVP_PG_HOST=svp-pg-rw SVP_CA_FILE=/etc/svp-ca/ca.crt)
+refuse pg-no-dir "" "SVP_PG_PASSWORD_DIR is not set" svp-pg video -c 'SELECT 1'
+mkdir -p "$work/pg-empty"
+: >"$work/pg-empty/video"
+case_env=(SVP_PG_HOST=svp-pg-rw SVP_PG_PASSWORD_DIR="$work/pg-empty" SVP_CA_FILE=/etc/svp-ca/ca.crt)
+refuse pg-empty-pw "" "the password file of svp_video_app is empty" svp-pg video -c 'SELECT 1'
+refuse pg-no-pw-file "" "no readable password file" svp-pg feed -c 'SELECT 1'
+
 if ((failures)); then
   echo "$failures failure(s)" >&2
   exit 1
 fi
-echo "all svp-kafka and svp-valkey tests passed"
+echo "all svp-kafka, svp-valkey and svp-pg tests passed"

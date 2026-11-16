@@ -45,12 +45,39 @@ Loại tài liệu (Diátaxis): **reference**, tra cứu khi cần một lệnh 
     `disruptionBudgets` (vào `spec.disruption.budgets`), `terminationGracePeriod`. `platforms/eks/svp-cluster.yaml` giữ giá trị mức prd;
     `envs/stg/svp-cluster.yaml` chỉ ghi đè phần stg giảm (capacity type, `limits`, ngân sách disruption); prd không có overlay. Giá trị và
     lý do: ADR-0056 §2, nhóm của từng khác biệt: [`environments.md`](../explanation/environments.md).
+  - **Service mesh Istio ambient** ([ADR-0075](../adr/0075-service-mesh.md); thành phần, namespace và policy chung với k3d ở [`k8s.md`](k8s.md#cluster-k3d)):
+    chỉ khác k3d ở các điểm dưới, values ở `platforms/eks/` của `svp-gitops` và `ci/eks-example.yaml` của hai chart.
+    - Cổng webhook: control plane EKS gọi webhook của istiod ở cổng 15017 của pod; module `eks` của `svp-infra` thêm rule ingress TCP 15017 từ
+      security group cluster vào security group node (`node_security_group_additional_rules` ở `security-groups.tf`, truyền ở `cluster.tf`), vì
+      rule mặc định của module không có cổng đó. HBONE 15008 và xDS 15012 giữa các node nằm trong rule 1025–65535 sẵn có. Thiếu rule thì lời gọi webhook của istiod
+      từ control plane hết hạn.
+    - Replica: `istiod` 2 replica (PDB `minAvailable: 1`, trải theo zone) ở `platforms/eks/istiod.yaml`; waypoint 2 replica kèm PDB ở khoá
+      `waypoint.replicas` của `platforms/eks/svp-cluster.yaml`.
+    - Node: pod của `svp` chỉ lên node Karpenter (`nodeAffinity` `karpenter.sh/nodepool` Exists ở `platforms/eks/<release>.yaml`); NodePool có
+      `startupTaints` `cni.istio.io/not-ready:NoSchedule`, và `taint.enabled: true` của `istiod` gỡ taint khi istio-cni, ztunnel Ready trên node,
+      nên không pod nào chạy trên node trước khi mesh bắt được lưu lượng của nó. k3d không có Karpenter nên không có taint này.
+    - NetworkPolicy: probe của kubelet vào pod ambient đi từ địa chỉ `169.254.7.127`; mọi policy chứa pod vào mesh mở địa chỉ đó cho cổng probe.
+      Việc VPC CNI thực thi policy với nguồn này chưa kiểm ở EKS: buổi stg xác nhận bằng pod của `svp` Ready sau khi vào mesh. Trần 24 tổ hợp
+      cổng, giao thức cho một dải CIDR của VPC CNI tính cả cổng 15008.
+    - Kiểm trên cluster (người học chạy; `make drill-k8s-mesh` chỉ chạy được trên k3d): các lệnh `kubectl --context svp-<env>` của bước 9
+      mục "Trình tự buổi". Lời gọi bị từ chối: [`mesh-traffic-denied.md`](../runbooks/mesh-traffic-denied.md).
   - **Agent GuardDuty** ([ADR-0060](../adr/0060-org-detection-logging.md) §5): add-on EKS `aws-guardduty-agent` (DaemonSet mọi node, version ghim
     ở `aws/modules/eks/addons.tf` của `svp-infra` như add-on khác) gửi sự kiện runtime qua interface endpoint `guardduty-data` của VPC (module
     `network`, private DNS, security group TCP 443 từ CIDR VPC). Cả hai do Terraform tạo, không do GuardDuty tự quản: endpoint và security
     group GuardDuty tự tạo nằm ngoài state và chặn destroy VPC cuối buổi. Add-on chỉ `ACTIVE` khi node đã có; coverage của cluster đọc ở
     GuardDuty của account `svp-security` (Runtime Monitoring → EKS clusters), finding tới email theo
     [`security-alert.md`](../runbooks/security-alert.md).
+  - **Chi phí và uptime** ([ADR-0074](../adr/0074-cost-uptime.md), [`cost-and-uptime.md`](../explanation/cost-and-uptime.md)): component
+    `opencost` ở chế độ AMP (`platforms/eks/opencost.yaml`, `opencost.values.tpl`): Prometheus trong cluster tắt, OpenCost hỏi workspace
+    `cluster.ampWorkspaceId` qua sidecar `sigv4proxy` (`localhost:8005`, ký cho `aps-workspaces.<cluster.region>.amazonaws.com`, không `role_arn`),
+    cluster id `cluster.name`, giá on-demand công khai của AWS tải qua NAT. Credential của sidecar là EKS Pod Identity của ServiceAccount
+    `svp-obs/opencost`: khoá `opencost` của `local.pod_identity` (`aws/modules/eks/pod-identity.tf` của `svp-infra`), role `<cluster>-opencost` chỉ
+    `aps:QueryMetrics`, `aps:GetSeries`, `aps:GetLabels`, `aps:GetMetricMetadata` trên workspace của env. Chart `svp-observability` đặt
+    `opencost.query: amp`, `opencost.publicPricing: true`, `probes.egress: internet` (`platforms/eks/svp-observability.yaml`); URL probe
+    `https://<cluster.domain>/healthz`, `https://api.<cluster.domain>/readyz`, `https://<cluster.mediaDomain>/media/uptime-probe.txt` và ba probe DNS
+    tới `kube-dns.kube-system.svc.cluster.local:53` ở `svp-observability.values.tpl`. blackbox là component `blackbox-exporter-public` (chỉ nền tảng
+    `eks`, module `http_public` kiểm TLS bằng CA hệ thống, `dns_*` ở `blackbox-exporter-public.values.tpl`). Log sidecar:
+    `kubectl --context svp-<env> -n svp-obs logs deploy/opencost -c sigv4proxy`.
   - Kafka là Amazon MSK và Valkey là Amazon ElastiCache ([ADR-0053](../adr/0053-msk-elasticache-valkey.md)); cả hai do Terraform của `svp-infra`
     tạo (module `msk`, `elasticache`), không có broker hay Valkey chạy trong cluster. Client nói với chúng như với `kafka` và `valkey` của compose
     và k3d: SASL_SSL SCRAM-SHA-512 cổng 9096 và `rediss://` cổng 6379, chỉ khác địa chỉ (hợp đồng `cluster` bên dưới) và CA: cert của MSK, ElastiCache
@@ -59,8 +86,19 @@ Loại tài liệu (Diátaxis): **reference**, tra cứu khi cần một lệnh 
     và ghi một lần cho cả MSK/ElastiCache lẫn entry Secrets Manager `svp/<env>/kafka-admin`, `kafka-users`, `valkey-users`; `make eks-secrets`
     không ghi ba entry này, chỉ kiểm chúng tồn tại. Chart `svp-data` chạy ở `kafka.mode: external`, `valkey.mode: external`: Job `kafka-init`
     (PostSync) tạo topic và ACL trên MSK, Deployment `svp-ops` là CLI vận hành; NetworkPolicy của hai pod đó chỉ mở tới `cluster.dbCidrs` (subnet
-    database) cổng 9096, 6379. Lệnh vận hành mẫu:
-    `kubectl --context svp-<env> -n svp-data exec deploy/svp-ops -c kafka -- /opt/svp/bin/svp-kafka topics --list`.
+    database) cổng 9096, 6379 (`svp-ops` thêm 5432 tới RDS). Lệnh vận hành mẫu:
+    `kubectl --context svp-<env> -n svp-data exec deploy/svp-ops -c kafka -- /opt/svp/bin/svp-kafka topics --list`; đọc RDS bằng role app,
+    phiên chỉ đọc:
+    `kubectl --context svp-<env> -n svp-data exec deploy/svp-ops -c postgres -- /opt/svp/bin/svp-pg feed -c 'SELECT count(*) FROM follows'`.
+  - **Phát lại DLQ** (release `dlq-replay`, chart `svp-service`, namespace `svp`, `protocol: none`, một replica ở lệnh
+    con `standby`): user MSK `svp-dlq-replay` đọc bốn topic `*.dlq` và ghi bốn topic gốc (ACL của `kafka-init`), mật
+    khẩu trong entry `kafka-users`, vào Secret `dlq-replay-env` qua External Secrets như các service; NetworkPolicy chỉ
+    cho egress tới Kafka và Collector. Người học chạy lệnh trong pod (không pod tạm, không `svp-kafka`):
+    `kubectl --context svp-<env> -n svp exec deploy/dlq-replay -- /app replay --from <topic>.dlq --dry-run`; thêm cờ
+    `--group`, khoảng offset hay thời gian khi chạy thật. Quy trình, kiểm và xác nhận:
+    [`kafka-dlq-records.md`](../runbooks/kafka-dlq-records.md). Release có image riêng nên cần file
+    `envs/<env>/images/dlq-replay.yaml` ở env đó (tạo bởi lượt promote) trước khi component của nó vào
+    `argocd/apps/components.json`.
   - Nguồn của mọi Secret trên EKS là AWS Secrets Manager, entry `svp/<env>/<entry>` region `ap-southeast-1` (vỏ entry không giá trị do
     module `external-secrets` của `svp-infra` tạo); `make eks-secrets`, `make eks-glitchtip-init` ghi giá trị với `AWS_PROFILE` của
     account env (biến ở [`environment.md`](environment.md)). Mỗi lệnh `aws` ghi `--profile` và `--region` ngay trong lệnh; trước lần đọc
@@ -68,11 +106,13 @@ Loại tài liệu (Diátaxis): **reference**, tra cứu khi cần một lệnh 
     `SVP_AWS_PRD_ACCOUNT_ID` của env, không thì dừng. Mỗi entry một `put-secret-value --secret-string file://<file>`, file JSON trong
     thư mục `mktemp -d` mode 700 xoá khi thoát: giá trị không qua đối số, stdout, stderr.
   - `AWS_PROFILE=anhnv-<env> make eks-secrets CONTEXT=svp-<env>` (`deploy/k8s/aws-secrets.sh`): entry và key đọc từ render
-    ExternalSecret của chart `svp-cluster` (`files/external-secrets.yaml`, object store managed, `externalSecrets.argocdNotifications`
-    bật): `pg-superuser` (`SVP_PG_SUPERUSER_PASSWORD` từ biến môi trường `SVP_RDS_MASTER_PASSWORD`, bắt buộc, không đọc `.env`),
-    `pg-roles`, `jwt-signing`, `jwt-verify`, `web`, `obs`, `argocd-notifications` (key đặt tên như `.env`,
+    ExternalSecret của chart `svp-cluster` (`files/external-secrets.yaml`, object store managed, `externalSecrets.argocdNotifications`,
+    `externalSecrets.mediaSigning` bật): `pg-superuser` (`SVP_PG_SUPERUSER_PASSWORD` từ biến môi trường `SVP_RDS_MASTER_PASSWORD`,
+    bắt buộc, không đọc `.env`), `pg-roles`, `jwt-signing`, `jwt-verify`, `web`, `obs`, `argocd-notifications` (key đặt tên như `.env`,
     giá trị từ `.env`; hai biến Telegram tuỳ chọn, rỗng thì ghi rỗng), không `s3-root`, `s3-users`, và không `kafka-admin`, `kafka-users`,
-    `valkey-users` (của Terraform; chỉ kiểm chúng đã có, nên apply root `aws/envs/<env>` trước); `glitchtip-runtime` ghi ba key
+    `valkey-users` (của Terraform; chỉ kiểm chúng đã có, nên apply root `aws/envs/<env>` trước), không `media-signing` (khoá ký URL
+    media premium, chỉ `aws/scripts/media-signing-key.sh <env> activate <a|b>` của `svp-infra` ghi; chỉ kiểm entry có version
+    `AWSCURRENT`, chưa có thì dừng trước mọi lệnh ghi, nêu lệnh `activate`); `glitchtip-runtime` ghi ba key
     rỗng chỉ khi entry chưa có version `AWSCURRENT`, không bao giờ ghi đè. Thiếu biến bắt buộc, khoá Server Action hay khoá GitHub App
     sai dạng (kiểm như `k8s-secrets`), entry chưa có (chưa apply root env) thì dừng trước mọi lệnh ghi. Lần đầu (`glitchtip-runtime`
     chưa có version) không hỏi cluster; lần sau là đổi secret của env đang chạy, xem dưới.
@@ -88,10 +128,29 @@ Loại tài liệu (Diátaxis): **reference**, tra cứu khi cần một lệnh 
   - `AWS_PROFILE=anhnv-<env> make eks-glitchtip-init CONTEXT=svp-<env>`: như `k8s-glitchtip-init`, đọc DSN và token trong pod GlitchTip,
     ghi vào entry `svp/<env>/glitchtip-runtime` rồi `force-sync` ba ExternalSecret `svp/sentry`, `svp-obs/glitchtip-api`,
     `svp-obs/glitchtip-sourcemaps` và restart service khởi động khi chưa có DSN hiện tại; idempotent.
+  - `make eks-wait CONTEXT=svp-<env> APP=<svp-observability|svp-root>`: `deploy/k8s/eks-wait.sh`, `kubectl wait` chờ
+    Application xuất hiện (`--for=create`: `svp-root` do ApplicationSet `svp-bootstrap` tạo, `svp-observability` do
+    `svp-root` tạo khi các sync wave trước đã Healthy), rồi chờ `status.health.status` = `Healthy` (với `svp-root`,
+    trước đó `status.sync.status` = `Synced`); không cần CLI `argocd` hay port-forward. Một ngân sách cho mọi lượt chờ
+    (`deploy/k8s/eks-wait.sh`); quá hạn thì exit khác 0 và in trạng thái sync, health cuối. Thiếu ApplicationSet
+    `svp-bootstrap` thì lỗi ngay, nêu bước 5 (apply root `aws/gitops/<env>`). Chỉ đọc, nhưng chạm cluster EKS nên AI
+    không chạy, người học chạy.
   - `make eks-smoke CONTEXT=… DOMAIN=<domain>`: `deploy/compose/smoke.sh https://api.<domain>` với `SVP_STACK=eks`, qua CloudFront với cert
     ACM công khai (bỏ `CURL_CA_BUNDLE`).
   - `make eks-seed CONTEXT=… DOMAIN=<domain>`: `deploy/k8s/eks-seed.sh`, 4 user × 8 video ngắn qua API công khai, chờ mọi video
     `READY`, `GET /feed/explore` phải có ≥ 30 (dữ liệu cho k6 profile `cloud`).
+  - `make eks-transcode-timing CONTEXT=… DOMAIN=<domain> CLIP=<file> N=<n>`:
+    `deploy/compose/transcode-timing.sh https://api.<domain>` với `SVP_STACK=eks` (script và output ở
+    [`compose.md`](compose.md)): đo giây từ complete tới `READY` của từng lần upload qua MediaConvert; xoá khoá rate
+    limit đăng ký như `eks-smoke`.
+  - `make eks-premium-check CONTEXT=… DOMAIN=<domain> [WAIT_EXPIRY=1]`: `deploy/k8s/premium-edge-check.sh https://api.<domain>` (bỏ
+    `CURL_CA_BUNDLE`), **Kiểm edge premium** của buổi: chỉ `curl` tới API và CDN qua HTTPS, không API AWS, không `kubectl`, không xoá khoá
+    rate limit (hai user nằm trong burst đăng ký). Tạo user A, B, video thường V0 và hai video premium V1, V2 của A, B mua giả lập `sd` của V1,
+    rồi in mỗi phép một dòng có mốc UTC: ca âm của CloudFront (cả path mã hoá `premium%2F`, `%70remium/`, `media/..%2Fpremium/`,
+    `preview/..%2Fpremium/`) và route phát, bản xem thử không ký 200, tỉ lệ trúng cache của lượt 2–3 cho segment công khai (V0) và đã ký
+    (V1), không đỏ theo tỉ lệ; `WAIT_EXPIRY=1` chờ qua `DateLessThan` của một policy (tới khoảng 20 phút) rồi đòi 403. Token, mật khẩu, query
+    ký chỉ ở file riêng của thư mục tạm, xoá khi thoát. Thoát khác 0 khi một phép trượt. Đọc kết quả:
+    [`premium-playback.md`](../explanation/premium-playback.md#kiểm-bằng-gì); self-test `deploy/k8s/premium-edge-check-test.sh` chạy trong CI.
   - `make eks-rl-reset CONTEXT=…`: chỉ xoá khoá rate limit đăng ký như trên, chạy trước mỗi bậc k6 (pod sau có thể nhận lại IP của
     pod trước).
   - `S3_CREDENTIALS` của video-service, media-worker: `static` (mặc định, `S3_ACCESS_KEY_ID`, `S3_SECRET_ACCESS_KEY`) hay `container`
@@ -104,7 +163,10 @@ Loại tài liệu (Diátaxis): **reference**, tra cứu khi cần một lệnh 
     CIDR của subnet edge); hai khoá của MSK, ElastiCache: `kafkaBrokers`, chuỗi `host:9096,host:9096,…` là output
     `bootstrap_brokers` của module `msk`, và `valkeyHost`, host không cổng là `primary_endpoint_address` của module
     `elasticache`, mà `platforms/eks/*.values.tpl` đọc để đặt `KAFKA_BROKERS`, host của Valkey trong `REDIS_URL`,
-    `kafka.brokers` và `valkey.host` của `svp-data`, `SVP_OTELCOL_KAFKA_BROKERS` của Collector; sáu khoá của registry và
+    `kafka.brokers` và `valkey.host` của `svp-data`, `SVP_OTELCOL_KAFKA_BROKERS` của Collector; ba khoá của transcode:
+    `mediaconvertQueueArn`, `mediaconvertRoleArn`, `transcodeEventsQueueUrl`, output `queue_arn`, `role_arn`,
+    `events_queue_url` của module `transcode`, mà `platforms/eks/media-worker.values.tpl` đọc để đặt ba biến của lệnh con
+    `mediaconvert` ([`environment.md`](environment.md#biến-và-hành-vi-khởi-động-của-service)); sáu khoá của registry và
     telemetry managed, từ tài nguyên sống lâu của root `aws/accounts/<env>` mà root `aws/envs/<env>` đọc bằng data
     source: `ecrRegistry` (host ECR của account, đích của `svp-registry-mirror`, `releaseRegistry` của `svp-policy`),
     `ampWorkspaceId` (luật, Alertmanager của AMP qua ACK), `ampEndpoint` (base URL của workspace, kết thúc `/`: remote
@@ -128,7 +190,9 @@ Root `aws/accounts/<env>` (registry ECR, role CI, workspace AMP, log group, Mana
 mọi buổi; buổi không áp lại nó.
 
 1. Apply root `aws/envs/<env>` (cluster, endpoint interface, RDS, MSK, ElastiCache, vỏ entry Secrets Manager; mật khẩu
-   Kafka, Valkey được sinh và ghi trong cùng apply).
+   Kafka, Valkey được sinh và ghi trong cùng apply). Khoá ký media: `media-signing-key.sh <env> new a` trước `plan` của
+   root, `activate a` sau `apply` (bước 7 và 10 của runbook buổi `docs/runbooks/session-<env>.md` ở `svp-infra`), nên
+   entry `media-signing` có giá trị trước bước 3.
 2. Làm nóng pull-through cache ([image bên thứ ba](../explanation/delivery.md#image-bên-thứ-ba-trên-eks)): ở repo này
    `deploy/ci/image-list.sh ../gitops <env> > <file>` (không chạm AWS), rồi `aws/scripts/ecr-warm.sh <env> <file>` của
    `svp-infra`. Chạy lại khi một PR đổi digest bên thứ ba merge giữa buổi.
@@ -138,10 +202,12 @@ mọi buổi; buổi không áp lại nó.
 4. Mở tunnel tới API (output `api_tunnel_command`, terminal riêng) và thêm context (output `kubeconfig_command`); chỉ
    prd: PR promote prd đã merge trước bước này.
 5. Apply root `aws/gitops/<env>` (Argo CD, AppProject, cluster Secret, root).
-6. Chờ Application `svp-observability` Healthy:
-   `kubectl --context svp-<env> -n argocd wait applications.argoproj.io/svp-observability --for=jsonpath='{.status.health.status}'=Healthy --timeout=30m`.
+6. `make eks-wait CONTEXT=svp-<env> APP=svp-observability`: chờ Application `svp-observability` Healthy.
 7. `AWS_PROFILE=anhnv-<env> make eks-glitchtip-init CONTEXT=svp-<env>`.
-8. `argocd app wait svp-root --sync --health` (CLI `argocd` qua port-forward tới `argocd-server`).
+8. `make eks-wait CONTEXT=svp-<env> APP=svp-root`: chờ Application `svp-root` Synced rồi Healthy.
+9. Kiểm mesh (người học chạy, mỗi lệnh `kubectl --context svp-<env>`): `-n istio-system get pods` (istiod, istio-cni và ztunnel mỗi node Ready),
+   `-n svp-mesh get deploy,pdb waypoint` (2 replica sẵn sàng, PDB có), và mọi pod của `svp` có annotation `ambient.istio.io/redirection: enabled`:
+   `-n svp get pod -o custom-columns=NAME:.metadata.name,REDIRECTION:'.metadata.annotations.ambient\.istio\.io/redirection'`.
 
 Cuối buổi, `aws/scripts/pre-destroy.sh` xoá các CR `RuleGroupsNamespace`, `AlertManagerDefinition` khi ACK còn chạy
 (luật trong AMP đi theo) trước `destroy`; dữ liệu ở AMP, CloudWatch Logs, `aws/spans` và image ở ECR ở lại.
@@ -159,18 +225,25 @@ Lệnh làm trọn một lượt xoay credential theo cùng thứ tự với `ma
 
 1. Cluster phải chạy Reloader (và workload opt in theo tên Secret của chúng), không thì dừng trước mọi lệnh ghi
    (`FAIL  cluster svp-<env> is not ready for a change of credentials: <lý do>`).
-2. Ghi mọi entry của `.env` (trừ `glitchtip-runtime`, đã có giá trị; trừ ba entry Kafka, Valkey của Terraform).
+2. Ghi mọi entry của `.env` (trừ `glitchtip-runtime`, đã có giá trị; trừ ba entry Kafka, Valkey của Terraform và entry
+   `media-signing`).
 3. `force-sync` các ExternalSecret của `svp-data`.
 4. Một sync của Application `svp-data` (hook PostSync `pg-bootstrap` đặt mật khẩu mới trong Postgres, `kafka-init` đăng nhập MSK bằng `svp-admin`
    và đặt lại topic, ACL), chờ đúng lượt sync đó `Succeeded`; `Failed`, `Error` hay quá 600 giây thì dừng, ExternalSecret của client chưa dựng
    lại: client restart trước khi Job đặt mật khẩu mới thì đăng nhập bằng mật khẩu hệ thống chưa có.
-5. `force-sync` mọi ExternalSecret còn lại; Reloader restart workload có Secret đổi: Deployment bằng rolling update, Rollout `gateway`,
-   `web` bằng `spec.restartAt` (không tạo revision, nên không thành canary). Script không chờ bước này.
+5. `force-sync` mọi ExternalSecret còn lại; Reloader restart workload có Secret đổi: Deployment bằng rolling update,
+   Rollout (release `canary: true`) bằng `spec.restartAt` (không tạo revision, nên không thành canary). Script không chờ
+   bước này.
 
 Mật khẩu của user Kafka, Valkey không sinh bằng lệnh này mà ở Terraform: tăng `msk_password_version` (Kafka) hay `valkey_password_version`
 (Valkey) của root env, apply, rồi chạy `aws/scripts/bootstrap.sh <env> secrets` của `svp-infra` (gọi lệnh trên với mật khẩu master RDS). Thiếu
 lượt này thì cluster giữ mật khẩu cũ: ExternalSecret có `refreshPolicy: OnChange`, không tự đọc lại entry. MSK áp secret mới tới broker trong
 tối đa 10 phút, và kết nối mới của pod chưa restart có thể bị từ chối trong khoảng đó (ADR-0053 §12).
+
+Khoá ký URL media premium (entry `media-signing`) cũng không do lệnh này ghi: chạy
+`aws/scripts/media-signing-key.sh <env> activate <a|b>` của `svp-infra`, rồi `aws/scripts/bootstrap.sh <env> secrets`.
+Các phép kiểm sau khi đổi khoá ở
+[`media-signing-keys.md`](https://github.com/anhnvcoder/svp-infra/blob/main/docs/runbooks/media-signing-keys.md).
 
 Dòng cần thấy, theo thứ tự: `ok    ExternalSecrets of the server built again from their source`, `ok    init Jobs of svp-data done (sync of Application svp-data Succeeded)`,
 `ok    ExternalSecrets of the clients built again from their source`, `ok    Reloader restarts each workload whose Secret changed`. Một

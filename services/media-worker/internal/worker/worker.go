@@ -7,11 +7,19 @@
 // may already hold is ever written again and every object can be cached for a year. A try that
 // finds the master already there transcodes nothing and publishes the stored result again.
 //
+// A premium video's objects live under premium/<video_id>/<version>/ instead, and before its
+// master the try publishes a public preview under preview/<video_id>/<version>/ (WritePreview).
+//
 // Error classes: a bad event goes to the dead-letter topic; a file that
 // is not a usable video (whitelist refusal, corrupt data, limits, ffprobe or ffmpeg failing,
 // killed by a signal or timed out) is answered with transcode.failed at once, so a crafted file
 // runs only once and never blocks its partition through retries; only storage, Kafka and
 // environment errors are retried, and the last try turns them into RETRIES_EXHAUSTED.
+//
+// Stopping (SIGTERM): the consumer polls no more, and the job in hand runs on, retries included,
+// for up to DrainTimeout; finished by then, its result is published and the record committed.
+// Still running then, ffmpeg is killed, nothing is published or committed, and the record is
+// delivered again to whichever worker takes the partition.
 package worker
 
 import (
@@ -22,6 +30,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 
@@ -58,32 +67,36 @@ const (
 // minute or two does not turn into RETRIES_EXHAUSTED, which makes video-service delete the
 // user's upload.
 const (
-	maxAttempts = 10
-	backoffBase = time.Second
-	backoffMax  = time.Minute
+	MaxAttempts = 10
+	BackoffBase = time.Second
+	BackoffMax  = time.Minute
 	// tryTimeout bounds one try: the download, ffprobe and ffmpeg (cut at 30 s and 10 minutes by
 	// transcode) and the uploads. Past it the try fails as temporary, not blamed on the file.
 	tryTimeout = 15 * time.Minute
 	// rebalanceTimeout covers the whole retry budget of a record: every try with its publish,
 	// plus every backoff (at most backoffMax each). A rebalance waits for the record in hand,
 	// since a commit on a revoked partition would be lost, and a member that does not rejoin
-	// in time is dropped from the group.
-	rebalanceTimeout = maxAttempts*(tryTimeout+produceTimeout) + (maxAttempts-1)*backoffMax
+	// in time is dropped from the group. A drain adds nothing: it only cuts that budget short.
+	rebalanceTimeout = MaxAttempts*(tryTimeout+ProduceTimeout) + (MaxAttempts-1)*BackoffMax
+	// DrainTimeout is how long the record in hand runs on after a stop, so a transcode near its
+	// end is not started over elsewhere. It is 30 s short of the termination grace period of the
+	// pod and of the compose service, which closing the clients and flushing telemetry take.
+	DrainTimeout = 540 * time.Second
 )
 
 const (
 	// maxSourceBytes caps a download whatever the event says, at the 500 MiB upload limit.
 	maxSourceBytes = 500 << 20
-	// produceTimeout bounds publishing the result; past it the try fails and is retried.
-	produceTimeout = 30 * time.Second
+	// ProduceTimeout bounds publishing the result; past it the try fails and is retried.
+	ProduceTimeout = 30 * time.Second
 	// maxDetail caps the diagnostic carried by transcode.failed.
 	maxDetail = 512
 
 	sourceName = "source"
 	outName    = "out"
 
-	// cacheControl goes on every object of a version: its keys never get other bytes.
-	cacheControl = "max-age=31536000, immutable"
+	// CacheControl goes on every object of a version: its keys never get other bytes.
+	CacheControl = "max-age=31536000, immutable"
 	// maxPlaylistBytes caps a stored playlist read back: a 3-minute video at 4 s segments has a
 	// few KB.
 	maxPlaylistBytes = 1 << 20
@@ -105,6 +118,8 @@ type Storage interface {
 	Create(ctx context.Context, key, path, contentType, cacheControl string) error
 	// Exists lists key: false only when storage answered that it holds no such object.
 	Exists(ctx context.Context, key string) (bool, error)
+	// Copy copies src to dst in the same bucket with new metadata.
+	Copy(ctx context.Context, src, dst, contentType, cacheControl string) error
 }
 
 // Worker handles one video.uploaded at a time in its own directory under WorkDir.
@@ -123,25 +138,32 @@ type Worker struct {
 // New returns a Worker that reads and writes objects through store, publishes with producer and
 // keeps job files under workDir. Its spans and metrics go to the global providers.
 func New(store Storage, producer *kgo.Client, workDir string, logger *slog.Logger) *Worker {
-	transcodeDuration, err := otel.Meter(instrumentationName).Float64Histogram("svp.transcode.duration",
-		metric.WithUnit("s"), metric.WithDescription("Time ffprobe and ffmpeg took on a try that ended with a result"),
+	return &Worker{
+		store: store, producer: producer, workDir: workDir, logger: logger, tryTimeout: tryTimeout,
+		transcodeDuration: TranscodeDuration(),
+	}
+}
+
+// TranscodeDuration returns svp.transcode.duration from the global meter provider: the time the
+// transcode step of a version took, with an outcome of ready or failed.
+func TranscodeDuration() metric.Float64Histogram {
+	h, err := otel.Meter(instrumentationName).Float64Histogram("svp.transcode.duration",
+		metric.WithUnit("s"), metric.WithDescription("Time the transcode step took on a try that ended with a result"),
 		metric.WithExplicitBucketBoundaries(transcodeBuckets...))
 	if err != nil {
 		// A metric never stops the worker: report the error and record nothing.
 		otel.Handle(err)
-		transcodeDuration = noop.Float64Histogram{}
+		return noop.Float64Histogram{}
 	}
-	return &Worker{
-		store: store, producer: producer, workDir: workDir, logger: logger, tryTimeout: tryTimeout,
-		transcodeDuration: transcodeDuration,
-	}
+	return h
 }
 
 // ConsumerConfig returns the consumer of InputTopic in Group with the worker's retry budget:
-// one record per poll, and rebalances wait for the record in hand. HandlerTimeout stays unset:
-// Handle bounds each try with tryTimeout and the publish of its result with produceTimeout,
-// instead of the 10 s or 30 s of the other consumers, which would cut short a transcode that
-// ffmpeg may run for up to 10 minutes.
+// one record per poll, rebalances wait for the record in hand, and a stop drains it for
+// DrainTimeout. HandlerTimeout stays unset: Handle bounds each try with tryTimeout and the
+// publish of its result with produceTimeout, instead of the 10 s or 30 s of the other consumers,
+// which would cut short a transcode that ffmpeg may run for up to 10 minutes; a drain only ends
+// a try sooner.
 func (w *Worker) ConsumerConfig(brokers string) kafkax.ConsumerConfig {
 	return kafkax.ConsumerConfig{
 		Brokers:          brokers,
@@ -150,12 +172,13 @@ func (w *Worker) ConsumerConfig(brokers string) kafkax.ConsumerConfig {
 		Topics:           []string{InputTopic},
 		Handler:          w.Handle,
 		Logger:           w.logger,
-		MaxAttempts:      maxAttempts,
-		BackoffBase:      backoffBase,
-		BackoffMax:       backoffMax,
+		MaxAttempts:      MaxAttempts,
+		BackoffBase:      BackoffBase,
+		BackoffMax:       BackoffMax,
 		MaxPollRecords:   1,
 		BlockRebalance:   true,
 		RebalanceTimeout: rebalanceTimeout,
+		DrainTimeout:     DrainTimeout,
 	}
 }
 
@@ -164,10 +187,16 @@ func (w *Worker) ConsumerConfig(brokers string) kafkax.ConsumerConfig {
 // go: other entries stay, so a WORK_DIR shared with other files (such as /tmp) loses nothing
 // else. The directory itself stays too: it is a mount point.
 func (w *Worker) CleanWorkDir() error {
-	if err := os.MkdirAll(w.workDir, 0o750); err != nil {
+	return CleanWorkDir(w.workDir)
+}
+
+// CleanWorkDir is Worker.CleanWorkDir for the work directory dir, whose job directories are named
+// by a canonical UUID.
+func CleanWorkDir(dir string) error {
+	if err := os.MkdirAll(dir, 0o750); err != nil {
 		return fmt.Errorf("create work directory: %w", err)
 	}
-	entries, err := os.ReadDir(w.workDir)
+	entries, err := os.ReadDir(dir)
 	if err != nil {
 		return fmt.Errorf("read work directory: %w", err)
 	}
@@ -175,7 +204,7 @@ func (w *Worker) CleanWorkDir() error {
 		if !e.IsDir() || !isID(e.Name()) {
 			continue
 		}
-		if err := os.RemoveAll(filepath.Join(w.workDir, e.Name())); err != nil {
+		if err := os.RemoveAll(filepath.Join(dir, e.Name())); err != nil {
 			return fmt.Errorf("clean work directory: %w", err)
 		}
 	}
@@ -184,7 +213,7 @@ func (w *Worker) CleanWorkDir() error {
 
 // Handle is the kafkax.Handler of InputTopic.
 func (w *Worker) Handle(ctx context.Context, r *kgo.Record, a kafkax.Attempt) error {
-	up, version, err := decode(r)
+	up, version, err := Decode(r)
 	if err != nil || up == nil {
 		return err
 	}
@@ -219,10 +248,10 @@ func (w *Worker) Handle(ctx context.Context, r *kgo.Record, a kafkax.Attempt) er
 	return nil
 }
 
-// decode returns the video.uploaded carried by r with the version of its output (its event_id),
+// Decode returns the video.uploaded carried by r with the version of its output (its event_id),
 // nil for any other event (the topic carries the whole video lifecycle; skipped and committed),
 // or a permanent error for a record that breaks the contract.
-func decode(r *kgo.Record) (*videov1.VideoUploaded, string, error) {
+func Decode(r *kgo.Record) (*videov1.VideoUploaded, string, error) {
 	var ev videov1.VideoEvent
 	if err := proto.Unmarshal(r.Value, &ev); err != nil {
 		return nil, "", kafkax.Permanent(fmt.Errorf("decode VideoEvent: %w", err))
@@ -280,8 +309,8 @@ type job struct {
 // master. It returns the event to publish, transcode.failed for a permanent failure included, or
 // a temporary error. The job directory is removed on return.
 func (j *job) run(ctx context.Context) (*mediav1.TranscodeEvent, error) {
-	id := j.up.GetVideoId()
-	prefix := objstore.MediaPrefix + id + "/" + j.version + "/"
+	id, premium := j.up.GetVideoId(), j.up.GetPremium()
+	prefix, previewPrefix := Prefixes(id, j.version, premium)
 	dir := filepath.Join(j.w.workDir, id)
 	// A redelivery after a crash finds the previous try's files: start clean.
 	if err := os.RemoveAll(dir); err != nil {
@@ -303,7 +332,7 @@ func (j *job) run(ctx context.Context) (*mediav1.TranscodeEvent, error) {
 		return nil, err
 	}
 	if exists {
-		return j.stored(ctx, dir, prefix)
+		return j.stored(ctx, dir)
 	}
 
 	src := filepath.Join(dir, sourceName)
@@ -344,18 +373,41 @@ func (j *job) run(ctx context.Context) (*mediav1.TranscodeEvent, error) {
 		}
 		return nil, err
 	}
+	var preview transcode.Preview
+	if premium {
+		// Before any upload: a video too short for a preview is refused with nothing written.
+		lowest := filepath.Join(out, transcode.PlaylistName(res.Renditions[0].Name))
+		data, err := os.ReadFile(lowest) //nolint:gosec // written by transcode.Run
+		if err == nil {
+			preview, err = transcode.CutPreview(data)
+		}
+		if errors.Is(err, transcode.ErrPreviewTooShort) {
+			return j.w.failed(j.up, mediav1.TranscodeFailureReason_TRANSCODE_FAILURE_REASON_PREVIEW_TOO_SHORT, err), nil
+		}
+		if err != nil {
+			return nil, err
+		}
+	}
 
 	start = time.Now()
+	thumbnailKey := prefix + attempt + "/" + transcode.Thumbnail
 	err = j.step(ctx, "upload output", func(ctx context.Context) error {
 		// Files come segments first and master.m3u8 last: no playlist is visible before its parts,
 		// and the master, the only object of the version outside the attempt directory, is
-		// created only once everything it names is stored.
+		// created only once everything it names is stored, a premium video's preview included.
 		for _, f := range res.Files {
 			path := filepath.Join(out, filepath.FromSlash(f.Path))
 			if f.Path == transcode.MasterPlaylist {
-				return j.w.store.Create(ctx, prefix+f.Path, path, f.ContentType, cacheControl)
+				if premium {
+					previewAttempt, err := WritePreview(ctx, j.w.store, dir, id, j.version, attempt, res.Renditions[0], preview)
+					if err != nil {
+						return err
+					}
+					thumbnailKey = previewPrefix + previewAttempt + "/" + transcode.Thumbnail
+				}
+				return j.w.store.Create(ctx, prefix+f.Path, path, f.ContentType, CacheControl)
 			}
-			if err := j.w.store.Upload(ctx, prefix+attempt+"/"+f.Path, path, f.ContentType, cacheControl); err != nil {
+			if err := j.w.store.Upload(ctx, prefix+attempt+"/"+f.Path, path, f.ContentType, CacheControl); err != nil {
 				return err
 			}
 		}
@@ -365,53 +417,171 @@ func (j *job) run(ctx context.Context) (*mediav1.TranscodeEvent, error) {
 	switch {
 	case errors.Is(err, objstore.ErrExists):
 		// Another try created the master first; this try's directory stays unreferenced.
-		return j.stored(ctx, dir, prefix)
+		return j.stored(ctx, dir)
 	case err != nil:
 		return nil, err
 	}
-	return completed(j.up, prefix, attempt, res.Duration, res.Renditions), nil
+	previewKey := ""
+	if premium {
+		previewKey = previewPrefix + transcode.MasterPlaylist
+	}
+	return completed(id, prefix+transcode.MasterPlaylist, thumbnailKey, previewKey, res.Duration, res.Renditions), nil
 }
 
-// stored reads back the master of the version under prefix and the playlist of its lowest
-// rendition, and returns the transcode.completed they describe, as the try that created the
-// master published it. It writes nothing; every error is temporary, as the result is there.
-func (j *job) stored(ctx context.Context, dir, prefix string) (*mediav1.TranscodeEvent, error) {
+// stored reads back the stored result of the version with ReadStored.
+func (j *job) stored(ctx context.Context, dir string) (*mediav1.TranscodeEvent, error) {
 	var ev *mediav1.TranscodeEvent
 	err := j.step(ctx, "read output", func(ctx context.Context) error {
-		path := filepath.Join(dir, transcode.MasterPlaylist)
-		if err := j.w.store.Download(ctx, prefix+transcode.MasterPlaylist, path, maxPlaylistBytes); err != nil {
-			return err
-		}
-		data, err := os.ReadFile(path) //nolint:gosec // the file just downloaded into the job directory
-		if err != nil {
-			return err
-		}
-		m, err := transcode.ParseMaster(data)
-		if err != nil {
-			return err
-		}
-		path = filepath.Join(dir, "lowest.m3u8")
-		if err := j.w.store.Download(ctx, prefix+m.LowestPlaylist(), path, maxPlaylistBytes); err != nil {
-			return err
-		}
-		if data, err = os.ReadFile(path); err != nil { //nolint:gosec // the file just downloaded into the job directory
-			return err
-		}
-		duration, err := transcode.PlaylistDuration(data)
-		if err != nil {
-			return err
-		}
-		if duration <= 0 {
-			return errors.New("stored rendition playlist has no duration")
-		}
-		ev = completed(j.up, prefix, m.Attempt, duration, m.Renditions)
-		return nil
+		var err error
+		ev, err = ReadStored(ctx, j.w.store, dir, j.up.GetVideoId(), j.version, j.up.GetPremium())
+		return err
 	})
 	if err != nil {
 		return nil, err
 	}
 	j.w.logger.LogAttrs(ctx, slog.LevelInfo, "transcode output exists")
 	return ev, nil
+}
+
+// Downloader is the part of objstore.Store ReadStored uses.
+type Downloader interface {
+	Download(ctx context.Context, key, path string, maxBytes int64) error
+}
+
+// Prefixes returns where the objects of video videoID's version go: output under media/, or
+// under premium/ for a premium video, and for a premium video only, preview under preview/ for
+// its public preview.
+func Prefixes(videoID, version string, premium bool) (output, preview string) {
+	if !premium {
+		return objstore.MediaPrefix + videoID + "/" + version + "/", ""
+	}
+	return objstore.PremiumPrefix + videoID + "/" + version + "/", objstore.PreviewPrefix + videoID + "/" + version + "/"
+}
+
+// ReadStored reads back the master of video videoID's version and the playlist of its lowest
+// rendition, through files in dir, and returns the transcode.completed they describe, as the try
+// that created the master published it. For a premium video it also reads the preview master,
+// whose attempt directory holds the thumbnail. It writes nothing to storage; every error is
+// temporary, as the result is there.
+func ReadStored(ctx context.Context, store Downloader, dir, videoID, version string, premium bool) (*mediav1.TranscodeEvent, error) {
+	prefix, previewPrefix := Prefixes(videoID, version, premium)
+	m, err := readMaster(ctx, store, dir, prefix)
+	if err != nil {
+		return nil, err
+	}
+	path := filepath.Join(dir, "lowest.m3u8")
+	if err := store.Download(ctx, prefix+m.LowestPlaylist(), path, maxPlaylistBytes); err != nil {
+		return nil, err
+	}
+	data, err := os.ReadFile(path) //nolint:gosec // the file just downloaded into the job directory
+	if err != nil {
+		return nil, err
+	}
+	duration, err := transcode.PlaylistDuration(data)
+	if err != nil {
+		return nil, err
+	}
+	if duration <= 0 {
+		return nil, errors.New("stored rendition playlist has no duration")
+	}
+	thumbnailKey, previewKey := prefix+m.Attempt+"/"+transcode.Thumbnail, ""
+	if premium {
+		pm, err := readPreviewMaster(ctx, store, dir, previewPrefix, m.Renditions[0].Name)
+		if err != nil {
+			return nil, err
+		}
+		thumbnailKey, previewKey = previewPrefix+pm.Attempt+"/"+transcode.Thumbnail, previewPrefix+transcode.MasterPlaylist
+	}
+	return completed(videoID, prefix+transcode.MasterPlaylist, thumbnailKey, previewKey, duration, m.Renditions), nil
+}
+
+// readMaster downloads and parses the master playlist under prefix, through a file in dir.
+func readMaster(ctx context.Context, store Downloader, dir, prefix string) (transcode.Master, error) {
+	path := filepath.Join(dir, "stored-"+transcode.MasterPlaylist)
+	if err := store.Download(ctx, prefix+transcode.MasterPlaylist, path, maxPlaylistBytes); err != nil {
+		return transcode.Master{}, err
+	}
+	data, err := os.ReadFile(path) //nolint:gosec // the file just downloaded into the job directory
+	if err != nil {
+		return transcode.Master{}, err
+	}
+	return transcode.ParseMaster(data)
+}
+
+// readPreviewMaster is readMaster of a preview master, which must name lowest and nothing else.
+func readPreviewMaster(ctx context.Context, store Downloader, dir, previewPrefix, lowest string) (transcode.Master, error) {
+	m, err := readMaster(ctx, store, dir, previewPrefix)
+	if err != nil {
+		return transcode.Master{}, err
+	}
+	if len(m.Renditions) != 1 || m.Renditions[0].Name != lowest {
+		return transcode.Master{}, fmt.Errorf("stored preview master does not name only rendition %s", lowest)
+	}
+	return m, nil
+}
+
+// PreviewStore is the part of objstore.Store WritePreview uses.
+type PreviewStore interface {
+	Downloader
+	Upload(ctx context.Context, key, path, contentType, cacheControl string) error
+	Create(ctx context.Context, key, path, contentType, cacheControl string) error
+	Copy(ctx context.Context, src, dst, contentType, cacheControl string) error
+}
+
+// WritePreview publishes p, the public preview of premium video videoID's version, from the
+// objects attempt stored under premium/: into preview/<videoID>/<version>/<attempt>/ it copies
+// p's segments, then the thumbnail, then uploads p's playlist, and last it creates the preview
+// master naming lowest, unless a try created it before. Files go through dir. It returns the
+// attempt the stored preview master names: attempt, or that of the try that created it first.
+// The caller creates the full master only after it, so a published premium video has a preview.
+func WritePreview(ctx context.Context, store PreviewStore, dir, videoID, version, attempt string,
+	lowest transcode.Rendition, p transcode.Preview,
+) (string, error) {
+	prefix, previewPrefix := Prefixes(videoID, version, true)
+	src, dst := prefix+attempt+"/", previewPrefix+attempt+"/"
+	contentType := func(name string) (string, error) {
+		typ, ok := transcode.ContentType(name)
+		if !ok || !objstore.IsKeyUnder(objstore.PreviewPrefix, dst+name, videoID) {
+			return "", fmt.Errorf("preview object %q is not a media key of the video", name)
+		}
+		return typ, nil
+	}
+	for _, name := range append(slices.Clone(p.Segments), transcode.Thumbnail) {
+		typ, err := contentType(name)
+		if err != nil {
+			return "", err
+		}
+		if err := store.Copy(ctx, src+name, dst+name, typ, CacheControl); err != nil {
+			return "", err
+		}
+	}
+	name := transcode.PlaylistName(lowest.Name)
+	typ, err := contentType(name)
+	if err != nil {
+		return "", err
+	}
+	path := filepath.Join(dir, "preview-"+name)
+	if err := os.WriteFile(path, p.Playlist, 0o600); err != nil {
+		return "", fmt.Errorf("write preview playlist: %w", err)
+	}
+	if err := store.Upload(ctx, dst+name, path, typ, CacheControl); err != nil {
+		return "", err
+	}
+	path = filepath.Join(dir, "preview-"+transcode.MasterPlaylist)
+	if err := os.WriteFile(path, transcode.BuildMaster(attempt, []transcode.Rendition{lowest}), 0o600); err != nil {
+		return "", fmt.Errorf("write preview master: %w", err)
+	}
+	typ, _ = transcode.ContentType(transcode.MasterPlaylist)
+	err = store.Create(ctx, previewPrefix+transcode.MasterPlaylist, path, typ, CacheControl)
+	switch {
+	case err == nil:
+		return attempt, nil
+	case !errors.Is(err, objstore.ErrExists):
+		return "", err
+	}
+	// An earlier try created it: it stays, as the master does, and names that try's preview.
+	m, err := readPreviewMaster(ctx, store, dir, previewPrefix, lowest.Name)
+	return m.Attempt, err
 }
 
 // step runs fn in a child span of ctx named name. The span carries the video id and nothing
@@ -446,8 +616,9 @@ func permanentReason(err error) (mediav1.TranscodeFailureReason, bool) {
 	return mediav1.TranscodeFailureReason_TRANSCODE_FAILURE_REASON_UNSPECIFIED, false
 }
 
-// completed is the transcode.completed of the version under prefix whose master names attempt.
-func completed(up *videov1.VideoUploaded, prefix, attempt string, duration time.Duration, rs []transcode.Rendition) *mediav1.TranscodeEvent {
+// completed is the transcode.completed of video videoID with these keys; previewKey is empty for
+// a regular video.
+func completed(videoID, playlistKey, thumbnailKey, previewKey string, duration time.Duration, rs []transcode.Rendition) *mediav1.TranscodeEvent {
 	renditions := make([]*mediav1.Rendition, 0, len(rs))
 	for _, r := range rs {
 		renditions = append(renditions, &mediav1.Rendition{
@@ -459,42 +630,57 @@ func completed(up *videov1.VideoUploaded, prefix, attempt string, duration time.
 	}
 	return &mediav1.TranscodeEvent{Event: &mediav1.TranscodeEvent_TranscodeCompleted{
 		TranscodeCompleted: &mediav1.TranscodeCompleted{
-			VideoId:      up.GetVideoId(),
-			PlaylistKey:  prefix + transcode.MasterPlaylist,
-			ThumbnailKey: prefix + attempt + "/" + transcode.Thumbnail,
-			Duration:     durationpb.New(duration),
-			Renditions:   renditions,
+			VideoId:            videoID,
+			PlaylistKey:        playlistKey,
+			ThumbnailKey:       thumbnailKey,
+			Duration:           durationpb.New(duration),
+			Renditions:         renditions,
+			PreviewPlaylistKey: previewKey,
 		},
 	}}
 }
 
 func (w *Worker) failed(up *videov1.VideoUploaded, reason mediav1.TranscodeFailureReason, cause error) *mediav1.TranscodeEvent {
+	return Failed(up.GetVideoId(), reason, w.scrub(cause.Error()))
+}
+
+// Failed is the transcode.failed of video videoID, detail bounded as Scrub bounds it.
+func Failed(videoID string, reason mediav1.TranscodeFailureReason, detail string) *mediav1.TranscodeEvent {
 	return &mediav1.TranscodeEvent{Event: &mediav1.TranscodeEvent_TranscodeFailed{
-		TranscodeFailed: &mediav1.TranscodeFailed{VideoId: up.GetVideoId(), Reason: reason, Detail: w.scrub(cause.Error())},
+		TranscodeFailed: &mediav1.TranscodeFailed{VideoId: videoID, Reason: reason, Detail: Scrub("", detail)},
 	}}
 }
 
-// scrub turns an error into an operator diagnostic: job paths cut out, bounded, valid UTF-8.
-// Errors carry no credential: objstore and the SDK never put one in a message.
-func (w *Worker) scrub(s string) string {
-	s = strings.ReplaceAll(s, w.workDir+string(filepath.Separator), "")
+func (w *Worker) scrub(s string) string { return Scrub(w.workDir, s) }
+
+// Scrub turns an error into an operator diagnostic: paths under workDir (unless empty) cut out,
+// bounded, valid UTF-8. Errors carry no credential: objstore and the SDK never put one in a
+// message.
+func Scrub(workDir, s string) string {
+	if workDir != "" {
+		s = strings.ReplaceAll(s, workDir+string(filepath.Separator), "")
+	}
 	if len(s) > maxDetail {
 		s = s[:maxDetail]
 	}
 	return strings.ToValidUTF8(s, "")
 }
 
-// publish stamps ev with a new envelope and produces it keyed by videoID. The traceparent of
-// the incoming record travels in ctx.
 func (w *Worker) publish(ctx context.Context, videoID string, ev *mediav1.TranscodeEvent) error {
+	return Publish(ctx, w.producer, videoID, ev)
+}
+
+// Publish stamps ev with a new envelope and produces it to OutputTopic keyed by videoID, within
+// ProduceTimeout. The traceparent of the incoming record or message travels in ctx.
+func Publish(ctx context.Context, producer *kgo.Client, videoID string, ev *mediav1.TranscodeEvent) error {
 	ev.Meta = &eventv1.EventMeta{EventId: ids.New(), OccurredAt: timestamppb.Now()}
 	value, err := proto.Marshal(ev)
 	if err != nil {
 		return fmt.Errorf("marshal TranscodeEvent: %w", err)
 	}
-	ctx, cancel := context.WithTimeout(ctx, produceTimeout)
+	ctx, cancel := context.WithTimeout(ctx, ProduceTimeout)
 	defer cancel()
-	return kafkax.Produce(ctx, w.producer, &kgo.Record{Topic: OutputTopic, Key: []byte(videoID), Value: value})
+	return kafkax.Produce(ctx, producer, &kgo.Record{Topic: OutputTopic, Key: []byte(videoID), Value: value})
 }
 
 func (j *job) log(ctx context.Context, level slog.Level, msg string, a kafkax.Attempt, extra ...slog.Attr) {

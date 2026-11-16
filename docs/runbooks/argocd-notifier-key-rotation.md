@@ -1,6 +1,6 @@
 # Xoay khoá GitHub App `svp-argocd-notifier`
 
-- Quy trình làm tay, không có cảnh báo. Làm định kỳ, hay **ngay** khi nghi khoá riêng của App bị lộ (SEC-8 của
+- Quy trình do người học chạy, không có cảnh báo. Làm định kỳ, hay **ngay** khi nghi khoá riêng của App bị lộ (SEC-8 của
   [threat model](../threat-model.md)).
 - Trạng thái: viết theo mã, chưa chạy thử; chạy lần đầu ở buổi EKS cùng phép kiểm của
   [ADR-0032](../adr/0032-argocd-deploy-status.md) (mục Kiểm chứng sau).
@@ -31,9 +31,8 @@ grep -c '^SVP_ARGOCD_NOTIFY_[A-Z_]*=.' .env                                     
 # entry có version hiện tại (chỉ metadata, không giá trị)
 AWS_PROFILE=anhnv-<env> aws secretsmanager describe-secret --secret-id svp/<env>/argocd-notifications \
   --region ap-southeast-1 --query '{changed: LastChangedDate, versions: VersionIdsToStages}'
-# App chỉ cài trên svp-gitops
-gh api /user/installations --jq '.installations[]|select(.app_slug=="svp-argocd-notifier")|.id'
-gh api /user/installations/<installation id>/repositories --jq '.repositories[].full_name'   # chỉ anhnvcoder/svp-gitops
+# run at the root of svp-infra; the App's installation line must list only anhnvcoder/svp-gitops
+make github-check WITH_APP_KEYS=1
 # ExternalSecret Ready, Secret đủ bốn khoá (tên khoá, không giá trị)
 kubectl --context <ctx> -n argocd get externalsecrets.external-secrets.io argocd-notifications-secret
 kubectl --context <ctx> -n argocd get secret argocd-notifications-secret -o json | jq -r '.data | keys[]'
@@ -41,7 +40,9 @@ kubectl --context <ctx> -n argocd get secret argocd-notifications-secret -o json
 kubectl --context <ctx> -n argocd logs deploy/argocd-notifications-controller --since=30m | grep -i -E 'github|401|403' | tail
 ```
 
-Trang App <https://github.com/settings/apps/svp-argocd-notifier>, mục **Private keys**, cho biết có mấy khoá và ngày tạo từng khoá.
+`gh api /user/installations` không dùng được ở đây: token của `gh` bị 403 ở đường đó; `make github-check` đăng nhập bằng chính App (JWT ký
+bằng khoá trong `.env`) nên đọc được bản cài. Trang App <https://github.com/settings/apps/svp-argocd-notifier>, mục **Private keys**, cho
+biết có mấy khoá và ngày tạo từng khoá.
 
 ## Nguyên nhân thường gặp
 
@@ -61,9 +62,17 @@ cài đặt trên `anhnvcoder` → **Suspend** (mọi token của App ngừng ch
 
 **Xoay định kỳ** (khoá mới chạy trước khi bỏ khoá cũ, không gián đoạn):
 
-1. Trang App → **Private keys** → **Generate a private key**; GitHub tải file `.pem` xuống. Nghi lộ thì xoá luôn khoá cũ ở đây.
-2. Ghi vào `.env` (mode 600) bằng trình soạn, thay giá trị `SVP_ARGOCD_NOTIFY_PRIVATE_KEY_B64` bằng output của
-   `base64 < <file>.pem | tr -d '\n'` (`.env` không nhận giá trị nhiều dòng); xoá file `.pem`.
+1. Trang App → **Private keys** → **Generate a private key**; GitHub tải file `.pem` xuống. Việc này và xoá khoá cũ giữ tay vì GitHub không
+   có API cho khoá của App. Nghi lộ thì xoá luôn khoá cũ ở đây.
+2. Ghi khoá vào `.env`, từ gốc `svp-infra`:
+
+   ```sh
+   make github-app-key APP=svp-argocd-notifier KEY=local PEM=<file>.pem
+   ```
+
+   Script kiểm file là khoá PEM, thay `SVP_ARGOCD_NOTIFY_PRIVATE_KEY_B64` trong `.env` (mode 600, một dòng base64 của
+   file, ghi qua file tạm)
+   và xoá file `.pem`; không in giá trị. Mở `.env` bằng trình soạn rồi tự `base64` không còn cần.
 3. `AWS_PROFILE=anhnv-<env> make eks-secrets CONTEXT=<ctx>` (prd: tunnel tới API mở): kiểm account của profile và khoá (base64 chuẩn,
    PEM đọc được, không passphrase; sai thì dừng, không ghi entry nào), rồi làm trọn một lượt xoay credential: ghi mọi entry, dựng
    lại ExternalSecret và chạy Job init của `svp-data` ([`eks.md`](../reference/eks.md), mục "Đổi secret của env đang chạy"). Chỉ khoá
@@ -82,8 +91,10 @@ cài đặt trên `anhnvcoder` → **Suspend** (mọi token của App ngừng ch
 
 - Status sai mà không rõ ai ghi (dòng `argocd/<env>` lạ trong lệnh `statuses`, `creator` là App): coi như khoá lộ, Suspend, mở
   postmortem ([mẫu](../postmortems/README.md)).
-- `make eks-secrets` dừng ở kiểm khoá dù đã làm đúng bước 2: tạo khoá mới, không sửa tay base64.
-- Gỡ hẳn: trang App → **Install App** → **Uninstall**, rồi **Advanced** → **Delete GitHub App**; tắt
+- `make eks-secrets` dừng ở kiểm khoá dù đã làm đúng bước 2: tạo khoá mới và đặt lại bằng `make github-app-key`, không sửa tay base64.
+- Dựng lại từ đầu (App bị xoá hay khoá mất hết): `make github-app APP=svp-argocd-notifier` ở gốc `svp-infra` tạo App từ manifest, ghi
+  khoá và ID vào `.env`, mở trang cài và kiểm bản cài; sau đó `make eks-secrets` như bước 3.
+- Gỡ hẳn (không có API): trang App → **Install App** → **Uninstall**, rồi **Advanced** → **Delete GitHub App**; tắt
   `externalSecrets.argocdNotifications` ở `svp-gitops` để chart không đòi Secret.
 
 ## Liên kết

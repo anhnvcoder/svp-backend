@@ -13,10 +13,21 @@ tree=$(cd "$2" 2>/dev/null && pwd -P) || fail "$2 is not a directory"
 base=$3
 envs=$(cd "$tree/envs" 2>/dev/null && for e in */; do [ -d "$e" ] && echo "${e%/}"; done) || envs=
 [ -n "$envs" ] || fail "$tree/envs holds no environment"
+# services_of ENV: the services ENV may hold an image file of: those of the release sources at the commit its
+# charts.yaml pins, so a new service needs no new release of this checker; this checker's list when it cannot be read.
+services_of() {
+  local rev pinned
+  rev=$(sed -n 's/^revision: *//p' "$tree/envs/$1/charts.yaml" 2>/dev/null) || rev=
+  if [[ $rev =~ ^[0-9a-f]{40}$ ]] && pinned=$(release_sources "$rev" 2>/dev/null); then
+    jq -r '[.sources[].services[]] | unique | .[]' <<<"$pinned"
+  else
+    printf '%s\n' "${svp_services[@]}"
+  fi
+}
 # all_of ENV...: the image files of the environments ENV.
 all_of() {
   local e svc
-  for e in "$@"; do for svc in "${svp_services[@]}"; do echo "envs/$e/images/$svc.yaml"; done; done
+  for e in "$@"; do for svc in $(services_of "$e"); do echo "envs/$e/images/$svc.yaml"; done; done
 }
 if [ -n "$base" ]; then
   [ "$(git -C "$tree" rev-parse --show-toplevel 2>/dev/null)" = "$tree" ] ||
@@ -41,13 +52,18 @@ while IFS= read -r file; do
   [ -n "$file" ] || continue
   svc=$(basename "$file" .yaml)
   env=$(sed -n 's|^envs/\([^/]*\)/images/[^/]*$|\1|p' <<<"$file")
-  if ! printf '%s\n' "${svp_services[@]}" | grep -qxF -- "$svc" || [ -z "$env" ]; then
+  if [ -z "$env" ] || ! services_of "$env" | grep -qxF -- "$svc"; then
+    # A rollback to a commit that does not build the service, or its retirement, removes the file: nothing to check.
+    if [ -n "$env" ] && [ ! -f "$tree/$file" ]; then
+      echo "note  $file was removed: the commit $env pins does not build $svc"
+      continue
+    fi
     echo "FAIL  $file is not the image file of a service" >&2
     failed=1
     continue
   fi
   if [ ! -f "$tree/$file" ]; then
-    echo "FAIL  $file was removed: the GitOps path needs the image files of all seven services" >&2
+    echo "FAIL  $file was removed: the GitOps path needs the image file of every service the commit $env pins builds" >&2
     failed=1
     continue
   fi

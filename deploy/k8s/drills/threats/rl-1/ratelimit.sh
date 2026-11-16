@@ -40,7 +40,7 @@ valkey() { kc -n svp-data exec deploy/svp-ops -c valkey -- /opt/svp/bin/svp-valk
 # gateway's and Prometheus' included.
 valkey_now() { valkey TIME | sed -n 1p; }
 
-# email_hash EMAIL: the part of the login-email key the gateway derives from EMAIL (ratelimit.LoginEmailID: first 32
+# email_hash EMAIL: the part of the login-email key the gateway derives from EMAIL (ratelimit.EmailHash: first 32
 # hex characters of the SHA-256 of the lower-cased email).
 email_hash() { printf '%s' "$1" | tr 'A-Z' 'a-z' | shasum -a 256 | cut -c1-32; }
 

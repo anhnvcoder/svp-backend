@@ -13,14 +13,17 @@ Trang không chép số. Giá trị nằm ở:
 | module `<tên>` | [`aws/modules/<tên>/`](https://github.com/anhnvcoder/svp-infra/tree/main/aws/modules) của `svp-infra`: giá trị chung hai env |
 | root `aws/<tên>` | [`aws/<tên>/`](https://github.com/anhnvcoder/svp-infra/tree/main/aws) của `svp-infra`: root cấp org (`org`, `log-archive`, `baseline`), sống giữa các buổi, chung hai env |
 | root `aws/accounts/<env>` | [`aws/accounts/<env>/main.tf`](https://github.com/anhnvcoder/svp-infra/tree/main/aws/accounts) của `svp-infra`: baseline của account env (zone, budget, registry ECR, nơi nhận telemetry), sống giữa các buổi; giá trị theo env ở khối `locals` cạnh `env` |
+| `aws/paid-features.json` | [`aws/paid-features.json`](https://github.com/anhnvcoder/svp-infra/blob/main/aws/paid-features.json) của `svp-infra`: cờ của dịch vụ tốn tiền theo account, vắng là `always` ([`paid-features.md`](paid-features.md)) |
 | `envs/<env>/`, `platforms/eks/`, `base/` | thư mục cùng tên của [`svp-gitops`](https://github.com/anhnvcoder/svp-gitops); `platforms/eks/` dùng chung hai env |
 
-## Ba nhóm
+## Các nhóm
 
 - **Phải giống:** dịch vụ, version, cấu hình, xác thực và TLS, IAM, mạng, đường tới API, mã hoá, edge, HA của workload nền tảng, loại log và
   giám sát. Khác là lỗi.
-- **Được giảm:** số AZ, cỡ, số lượng, retention, bảo vệ xoá, versioning. Chỉ vì chi phí; stg không mất hành vi cần kiểm.
+- **Được giảm:** số AZ, cỡ, số lượng, retention, bảo vệ xoá. Chỉ vì chi phí; stg không mất hành vi cần kiểm.
 - **Giảm có điều kiện:** stg mất một hành vi (thường là failover); cột "Mất gì → kiểm bù" ghi chỗ kiểm hành vi đó.
+- **Theo cờ:** dịch vụ tốn tiền mà hệ thống không cần để chạy; giá trị mỗi account ở `aws/paid-features.json`, prd để mặc định `always`; đường
+  thay thế khi stg tắt và cái giá ở [`paid-features.md`](paid-features.md) ([ADR-0071](../adr/0071-paid-features.md)).
 - **Định danh:** tên, account, zone, cổng tunnel, bản phát hành. Khác vì là env khác, không phải mức khác (ADR-0055 §5).
 
 Cột "stg so với prd" nói hướng khác biệt; số ở file của cột "Giá trị ở". [ADR-0056](../adr/0056-eks-platform-ha.md),
@@ -41,7 +44,7 @@ bỏ biến thì sửa bảng trong cùng thay đổi (ADR-0055 §1).
 | Bốn tầng subnet: public (chỉ NAT), private, database, edge | module `network` | phải giống | như nhau | Subnet database không có route ra Internet ([ADR-0054](../adr/0054-data-subnet-tier.md)); subnet edge chỉ có ALB, không pod ([ADR-0061](../adr/0061-edge-cloudfront-waf-acm.md) §3) | — | [EKSSUB] |
 | VPC flow log và đích của nó | module `network` (`flow_log_bucket_arn` do root suy từ id account log) | phải giống | cả hai ghi vào bucket `svp-flowlogs-…` của `svp-log-archive`, cùng định dạng ([ADR-0060](../adr/0060-org-detection-logging.md) §9) | Log nằm ngoài tầm admin của env và còn sau khi env bị gỡ; đường ghi chéo account chạy ở stg trước | — | [FL], [SRA] |
 | Retention flow log | root `aws/log-archive` (lifecycle theo tiền tố account) | được giảm | stg ngắn hơn ([ADR-0060](../adr/0060-org-detection-logging.md) §7) | Log của stg chỉ phủ một buổi vài giờ | — | [COST] |
-| NACL không mở 22, 3389 từ Internet | module `network` | phải giống | như nhau ([ADR-0059](../adr/0059-org-structure-guardrails.md) §10) | Cùng luật mạng; Security Hub đánh giá control EC2.21 trên cả hai | — | [CIS] |
+| NACL không mở 22, 3389 từ Internet | module `network` | phải giống | như nhau ([ADR-0059](../adr/0059-org-structure-guardrails.md) §10) | Cùng luật mạng; Security Hub đánh giá control EC2.21 ở prd (stg theo cờ `security_hub`) | — | [CIS] |
 | Policy S3 gateway endpoint | `s3_endpoint_restricted` (`<env>.tfvars`) | phải giống | bật ở cả hai | Policy chỉ cho bucket trong danh sách: image kéo từ bucket thiếu sẽ lỗi, stg gặp lỗi đó trước prd | — | [S3EP] |
 | Bucket thêm của endpoint | `s3_endpoint_extra_buckets` (`<env>.tfvars`) | phải giống | cùng danh sách | Bucket mà `registry.k8s.io` chuyển hướng client trong AWS tới | — | [S3EP] |
 | NetworkPolicy | add-on `vpc-cni` của module `eks` (network policy agent), chart | phải giống | như nhau | Chính sách mạng của chart áp như nhau mọi nơi | — | [EKSNET] |
@@ -93,7 +96,7 @@ bỏ biến thì sửa bảng trong cùng thay đổi (ADR-0055 §1).
 | Thành phần | Giá trị ở | Nhóm | stg so với prd | Lý do | Mất gì → kiểm bù | Nguồn |
 | --- | --- | --- | --- | --- | --- | --- |
 | Registry ECR, repo phát hành (KMS, tag bất biến, không lifecycle), pull-through cache, template repo cache | module `registry`, root `aws/accounts/<env>` | phải giống | như nhau ([ADR-0062](../adr/0062-ecr-registry-ci-oidc.md)) | Pod kéo image từ registry trong account của nó; chép, xác minh và cache chạy ở stg trước | — | [ECRPTC], [ECRBP] |
-| Quét Inspector trên repo cache | module `registry`, root `aws/security` | phải giống | như nhau | Image bên thứ ba được quét ở cả hai account; finding vào Security Hub | — | [INSPECR] |
+| Amazon Inspector quét image ECR | `inspector_ecr` (`aws/paid-features.json`), root `aws/security`, module `registry` | theo cờ | stg quét cơ bản của ECR khi push, prd Inspector quét liên tục | Image chạy ở prd là bộ stg đã chạy; digest bên thứ ba được Inspector của prd quét | Digest bên thứ ba mới trước promote → quét cơ bản ở stg; cổng quét của CI và attestation `vuln` mà Kyverno đòi chỉ chạy với image của repo code, digest bên thứ ba dựa vào Inspector của prd ([`paid-features.md`](paid-features.md)) | [INSPECR] |
 | Chuyển hướng image (`svp-registry-mirror`), `releaseRegistry`, credential ECR của Kyverno | `platforms/eks/svp-policy.values.tpl` | phải giống | như nhau; host là registry của env | Cùng policy đổi tham chiếu và xác minh ở ECR | — | [ECRPTC] |
 | Bộ role CI ECR | `ci_roles` (khối `locals` của root `aws/accounts/<env>`) | định danh | stg nhận bản phát hành từ `main` (role release mỗi repo code), prd chỉ qua `promote-prd` (role promote); cả hai có role rescan | Đường vào image theo env, không phải mức khác: prd chỉ nhận cái stg đã chạy, qua người duyệt ([ADR-0062](../adr/0062-ecr-registry-ci-oidc.md) §5) | — | [GHOIDC] |
 
@@ -101,7 +104,8 @@ bỏ biến thì sửa bảng trong cùng thay đổi (ADR-0055 §1).
 
 | Thành phần | Giá trị ở | Nhóm | stg so với prd | Lý do | Mất gì → kiểm bù | Nguồn |
 | --- | --- | --- | --- | --- | --- | --- |
-| Nơi nhận telemetry (workspace AMP, log group ứng dụng, X-Ray qua Transaction Search, Amazon Managed Grafana), khoá KMS | module `observability`, root `aws/accounts/<env>` | phải giống | như nhau ([ADR-0063](../adr/0063-managed-observability.md)) | Cùng đích, cùng tên metric, luật, dashboard; dữ liệu sống qua destroy ở cả hai | — | [EKSOBS] |
+| Nơi nhận telemetry (workspace AMP, log group ứng dụng, X-Ray qua Transaction Search), khoá KMS | module `observability`, root `aws/accounts/<env>` | phải giống | như nhau ([ADR-0063](../adr/0063-managed-observability.md)) | Cùng đích, cùng tên metric, luật, dashboard; dữ liệu sống qua destroy ở cả hai | — | [EKSOBS] |
+| Workspace Amazon Managed Grafana `svp-<env>` | `managed_grafana` (`aws/paid-features.json`), root `aws/accounts/<env>` | theo cờ | stg chỉ có trong buổi (`session`), prd sống giữa các buổi | Phí AMG tính theo user mỗi workspace mỗi tháng, cả tháng không buổi; AMP, log, trace luôn có | Dashboard stg giữa buổi → dữ liệu AMP, CloudWatch giữ, xem lại ở buổi sau ([`paid-features.md`](paid-features.md)) | — |
 | Prometheus agent HA, luật và Alertmanager trên AMP, dashboard qua Grafana Operator | `platforms/eks/`, chart `svp-observability` | phải giống | như nhau | Cảnh báo, dashboard và canary đọc cùng dữ liệu ở hai env | — | [EKSOBS] |
 | Retention của workspace AMP | `amp_retention_days` (`locals` của root `aws/accounts/<env>`) | được giảm | stg ngắn hơn, vẫn phủ cửa sổ SLO dài nhất | Lưu trữ tính theo dung lượng giữ | — | [COST] |
 | Retention của log group ứng dụng | `log_retention_days` (`locals` của root `aws/accounts/<env>`) | được giảm | stg ngắn hơn | Log của stg chỉ phủ một buổi vài giờ | — | [COST] |
@@ -121,6 +125,8 @@ bỏ biến thì sửa bảng trong cùng thay đổi (ADR-0055 §1).
 | Giữ backup tự động sau khi xoá | `rds_delete_automated_backups` (`<env>.tfvars`) | được giảm | stg xoá cùng instance | Bảo vệ xoá; stg không còn gì sau buổi | — | [RDSDEL] |
 | Deletion protection | `rds_deletion_protection` (`<env>.tfvars`; prd nhấc ở `teardown.tfvars`) | được giảm | stg tắt | Bảo vệ xoá | — | [RDSDEL] |
 | Final snapshot | `rds_skip_final_snapshot` (`<env>.tfvars`) | được giảm | stg bỏ qua | Bảo vệ xoá | — | [RDSDEL] |
+| AWS Backup của RDS, `uploads`, `media`: lịch, selection theo tag, role, vault env, copy sang account `svp-backup` | Backup policy `svp-backup-<env>` (module `org-policies`), `aws/accounts/<env>/backup.tf`, root `aws/backup` | phải giống | như nhau, khác OU gắn policy ([ADR-0067](../adr/0067-backup-dr.md) §4) | Cùng plan, role và đường copy chéo account: diễn tập khôi phục chạy ở stg trước prd | — | [BACKUP] |
+| Retention recovery point, vault lock của bản copy | module `org-policies`, root `aws/backup` | được giảm | stg ngắn hơn, lock hẹp hơn | Retention | — | [BACKUP] |
 | Performance Insights, Database Insights | `rds_performance_insights_enabled` (`<env>.tfvars`) | phải giống | bật ở cả hai | Cùng công cụ đọc tải database | — | [RDSDI] |
 | Retention Performance Insights | `rds_performance_insights_retention_period` (`<env>.tfvars`) | được giảm | cả hai ở mức miễn phí | Retention | — | [RDSDI] |
 | Enhanced monitoring | `rds_monitoring_interval` (`<env>.tfvars`) | phải giống | bật ở cả hai, cùng chu kỳ | Cùng metric hệ điều hành, cùng role IAM | — | [RDSEM] |
@@ -183,8 +189,9 @@ bỏ biến thì sửa bảng trong cùng thay đổi (ADR-0055 §1).
 | Malware Protection for S3 trên `uploads` | module `media` (`malware-protection.tf`) | phải giống | như nhau ([ADR-0060](../adr/0060-org-detection-logging.md) §6) | Cùng plan, cùng role, cùng tag kết quả trên object | — | [GDMS3] |
 | Data event S3 của trail org | trail `svp-audit` (root `aws/org`) | giảm có điều kiện | chỉ `uploads` (đọc, ghi) và `media` (ghi) của prd | Data event tính theo event; stg không có dữ liệu người dùng thật | Truy vết đọc, ghi object ở stg → không có ở stg; buổi prd kiểm data event có trong bucket trail | [CTDATA] |
 | Xoá bucket còn object | `media_force_destroy` (`<env>.tfvars`; prd nhấc ở `teardown.tfvars`) | được giảm | stg xoá được ngay | Bảo vệ xoá | — | [S3SEC] |
-| Versioning | `media_versioning_enabled` (`<env>.tfvars`) | được giảm | stg tắt | Media stg dựng lại được; bản cũ chỉ tốn chỗ | — | [S3VER] |
+| Versioning | `media_versioning_enabled` (`<env>.tfvars`) | phải giống | bật ở cả hai ([ADR-0067](../adr/0067-backup-dr.md) §4) | AWS Backup chỉ backup bucket có versioning | — | [S3VER] |
 | S3 access log | `media_access_logging_enabled` (`<env>.tfvars`) | phải giống | bật ở cả hai | Cùng log truy cập, cùng bucket log và quyền ghi | — | [S3LOG] |
+| Transcode bằng MediaConvert: queue, tier, giới hạn, role, rule EventBridge, hàng đợi SQS và DLQ, alarm; endpoint `mediaconvert`; lifecycle `transcode-jobs/` | module `transcode`, module `network`, module `media` | phải giống | như nhau ([ADR-0066](../adr/0066-mediaconvert-transcode.md)); compose, k3d chạy ffmpeg ([`transcode.md`](transcode.md)) | Cùng job, quyền, đường trạng thái và alarm: phép kiểm FF-9 và runbook DLQ chạy ở stg trước prd; số AZ đặt ENI của endpoint theo [ADR-0064](../adr/0064-interface-endpoints.md) | — | [MC] |
 
 ## Secret, IAM và alarm
 
@@ -193,6 +200,8 @@ bỏ biến thì sửa bảng trong cùng thay đổi (ADR-0055 §1).
 | Entry Secrets Manager, role SecretStore theo namespace | module `external-secrets` | phải giống | như nhau; tên entry theo env | Cùng đường Secret vào cluster | — | [EKSENC] |
 | Alarm CloudWatch của RDS, MSK, ElastiCache và SNS mã hoá CMK | module `alarms` và alarm trong module dịch vụ | phải giống | cùng bộ alarm ([ADR-0058](../adr/0058-managed-data-operations.md)) | Alarm phải sống khi cluster chết; stg kiểm ngưỡng và runbook | — | [CWALARM] |
 | Email nhận alarm | `alarm_email` (`*.auto.tfvars` không commit) | định danh | theo env | Giá trị cá nhân | — | — |
+| Security Hub CSPM (FSBP, CIS) | `security_hub` (`aws/paid-features.json`), root `aws/security` | theo cờ | stg tắt (policy `svp-security-off`), prd bật | Chấm posture không cần để chạy; prd chạy cùng module | Control của tài nguyên stg → chấm ở buổi prd; finding GuardDuty của stg tới email qua rule `svp-security-guardduty-findings` ([`aws-security.md`](aws-security.md#luồng-phát-hiện-tới-cảnh-báo)) | — |
+| Config recorder | `config_recording` (`aws/paid-features.json`), root `aws/baseline` | theo cờ | stg không recorder, prd ghi liên tục | Lịch sử cấu hình không cần để chạy; CloudTrail org ghi mọi lệnh ở stg | Lịch sử cấu hình của tài nguyên stg → CloudTrail org ([`paid-features.md`](paid-features.md)) | — |
 
 ## Workload và phát hành
 
@@ -253,6 +262,8 @@ bỏ biến thì sửa bảng trong cùng thay đổi (ADR-0055 §1).
 | [S3SEC] | Security best practices for Amazon S3: <https://docs.aws.amazon.com/AmazonS3/latest/userguide/security-best-practices.html> |
 | [S3LOG] | S3 server access logging: <https://docs.aws.amazon.com/AmazonS3/latest/userguide/ServerLogs.html> |
 | [S3VER] | S3 versioning: <https://docs.aws.amazon.com/AmazonS3/latest/userguide/Versioning.html> |
+| [BACKUP] | AWS Backup, Managing AWS Backup resources across multiple AWS accounts: <https://docs.aws.amazon.com/aws-backup/latest/devguide/manage-cross-account.html> |
+| [MC] | AWS Elemental MediaConvert, Working with on-demand queues: <https://docs.aws.amazon.com/mediaconvert/latest/ug/working-with-on-demand-queues.html> |
 | [SRA] | AWS Security Reference Architecture, Log Archive account: <https://docs.aws.amazon.com/prescriptive-guidance/latest/security-reference-architecture/log-archive.html> |
 | [CIS] | Security Hub control EC2.21 (CIS AWS Foundations Benchmark): <https://docs.aws.amazon.com/securityhub/latest/userguide/ec2-controls.html#ec2-21> |
 | [GDRT] | GuardDuty Runtime Monitoring, EKS: <https://docs.aws.amazon.com/guardduty/latest/ug/how-runtime-monitoring-works-eks.html> |

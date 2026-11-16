@@ -113,7 +113,7 @@ spec:
         check:
           ($error): ~
           (json_parse($stdout).count): 1
-          (wildcard('envoy-gateway-system/envoy-svp-edge-svp-* LoadBalancer svp', json_parse($stdout).services)): true
+          (wildcard('envoy-gateway-system/* LoadBalancer svp', json_parse($stdout).services)): true
     - description: "OPS-2: no pod outside kube-system uses the host network or a hostPort"
       continueOnError: true
       script:

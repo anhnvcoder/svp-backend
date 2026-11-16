@@ -1,0 +1,97 @@
+# Pod drill-media-worker-standin of namespace svp, for the drills that try a connection as media-worker: it carries the
+# labels media-worker's NetworkPolicy and its peers' ingress policies select (app.kubernetes.io/name=media-worker,
+# component=server), so its connections meet the rules media-worker's pods meet. Use it after probe-up.yaml, whose first
+# step checks Chainsaw runs on context k3d-svp: `- use: {template: ../../templates/media-worker-standin-up.yaml}`.
+
+# media-worker's own image has no shell or network tool, and in svp the image policy admits only the signed releases, so
+# the pod runs the image of a running web pod (container web) and connects with its node. Chainsaw deletes the pod when
+# the test ends; one a killed run left (label managed-by=standinOwner) is deleted first, one without it fails the step.
+
+# Nothing else of media-worker selects it: the release has no Service and no budget, KEDA's HPA scales on Kafka lag from
+# the Deployment's replica count, and the ReplicaSets select on pod-template-hash too, which the pod lacks.
+apiVersion: chainsaw.kyverno.io/v1alpha1
+kind: StepTemplate
+metadata:
+  name: media-worker-standin-up
+spec:
+  bindings:
+  - name: standinName
+    value: drill-media-worker-standin
+  - name: standinOwner
+    value: svp-drill-threats
+  try:
+  - script:
+      env:
+      - name: STANDIN
+        value: ($standinName)
+      - name: STANDIN_OWNER
+        value: ($standinOwner)
+      - name: CALLER_KUBECONFIG
+        value: (env('KUBECONFIG'))
+      content: |
+        set -eu
+        export KUBECONFIG="$CALLER_KUBECONFIG"
+        kubectl --context k3d-svp -n svp get pod "$STANDIN" >/dev/null 2>&1 || exit 0
+        owner=$(kubectl --context k3d-svp -n svp get pod "$STANDIN" -o jsonpath='{.metadata.labels.app\.kubernetes\.io/managed-by}')
+        if [ "$owner" != "$STANDIN_OWNER" ]; then
+          echo "FAIL  pod svp/$STANDIN exists without label app.kubernetes.io/managed-by=$STANDIN_OWNER: not this drill's, delete it yourself" >&2
+          exit 1
+        fi
+        kubectl --context k3d-svp -n svp delete pod "$STANDIN" --ignore-not-found --wait=true --timeout=60s >/dev/null
+  - script:
+      env:
+      - name: CALLER_KUBECONFIG
+        value: (env('KUBECONFIG'))
+      outputs:
+      - name: webImage
+        value: ($stdout)
+      content: |
+        set -eu
+        export KUBECONFIG="$CALLER_KUBECONFIG"
+        image=$(kubectl --context k3d-svp -n svp get pods -l app.kubernetes.io/name=web,app.kubernetes.io/component=server \
+          --field-selector status.phase=Running -o jsonpath='{.items[0].spec.containers[?(@.name=="web")].image}')
+        [ -n "$image" ] || { echo "FAIL  read the image of container web of a running web pod in svp" >&2; exit 1; }
+        printf %s "$image"
+  - apply:
+      resource:
+        apiVersion: v1
+        kind: Pod
+        metadata:
+          name: ($standinName)
+          namespace: svp
+          labels:
+            app.kubernetes.io/name: media-worker
+            app.kubernetes.io/component: server
+            app.kubernetes.io/managed-by: ($standinOwner)
+        spec:
+          automountServiceAccountToken: false
+          restartPolicy: Never
+          terminationGracePeriodSeconds: 1
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 65532
+            runAsGroup: 65532
+            seccompProfile:
+              type: RuntimeDefault
+          containers:
+          - name: probe
+            image: ($webImage)
+            # Exits after 900 s, as probe-up.yaml's sleep: a pod a killed run leaves behind does not run on.
+            command: [/nodejs/bin/node, -e, "setTimeout(() => {}, 900000)"]
+            securityContext:
+              allowPrivilegeEscalation: false
+              readOnlyRootFilesystem: true
+              capabilities:
+                drop: [ALL]
+            resources:
+              requests: {cpu: 10m, memory: 32Mi}
+              limits: {cpu: 200m, memory: 128Mi}
+  - wait:
+      apiVersion: v1
+      kind: Pod
+      name: ($standinName)
+      namespace: svp
+      timeout: 120s
+      for:
+        condition:
+          name: Ready

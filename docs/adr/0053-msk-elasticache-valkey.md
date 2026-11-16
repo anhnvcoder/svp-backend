@@ -183,8 +183,7 @@ không TLS, không user.
   `.env.example`, `Makefile` (§3, §8, §11, §13); `deploy/helm/svp-data/` (§3, §5, §6, §8, §13); `deploy/helm/svp-cluster/`, `deploy/k8s/` (§11–§13);
   `deploy/helm/svp-service/`, `deploy/ci/cluster-values.example.yaml` (§10, §14, §15); `deploy/observability/`, `deploy/helm/svp-observability/` (§15).
 - `svp-infra`: `aws/modules/msk/` (§2, §5, §6), `aws/modules/elasticache/` (§7, §9), `aws/envs/stg/`, `aws/envs/prd/`, `aws/modules/external-secrets/`,
-  `aws/modules/gitops-bridge/` (§6, §12, §14), `aws/scripts/`, `docs/runbooks/session-stg.md`, `session-prd.md` (§16). `svp-frontend`: `e2e/`,
-  `Makefile`, CI (§8).
+  `aws/modules/gitops-bridge/` (§6, §12, §14), `aws/scripts/`, `docs/runbooks/session-stg.md`, `session-prd.md` (§16). `svp-frontend`: `e2e/`, `Makefile`, CI (§8).
 - `svp-gitops`: `argocd/apps/components.json`, `argocd/apps/templates/`, `base/`, `platforms/eks/`, `envs/prd/` (§2, §7, §12, §14, §15).
 
 ## Nguồn
@@ -198,3 +197,4 @@ Phụ lục: [`appendix/0053-msk-elasticache-valkey.md`](appendix/0053-msk-elast
 ### Chỉnh bởi
 
 - §2, §7: [0054](0054-data-subnet-tier.md): broker MSK và ElastiCache ở subnet database của VPC (cùng RDS, route table không `0.0.0.0/0`) thay private subnet của node.
+- §5, §13: [0072](0072-pod-operations.md): thêm user `svp-dlq-replay` (SCRAM; MSK secret `AmazonMSK_*` của module `msk`): `Read` bốn topic `*.dlq`, `Write` bốn topic gốc, không group, không quyền cluster (§5); phát lại record DLQ đi qua release `dlq-replay` (`make dlq-replay`, `kubectl exec deploy/dlq-replay`), không qua `svp-kafka` (§13).

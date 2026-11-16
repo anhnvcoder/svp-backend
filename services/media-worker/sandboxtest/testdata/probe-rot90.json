@@ -1,0 +1,75 @@
+{
+    "ProbeResults": [
+        {
+            "Container": {
+                "BitRate": 6124416,
+                "Duration": 10.0,
+                "Format": "mp4",
+                "Tracks": [
+                    {
+                        "Codec": "AVC",
+                        "Duration": 10.0,
+                        "Index": 1,
+                        "TrackType": "video",
+                        "VideoProperties": {
+                            "BitDepth": 8,
+                            "BitRate": 6121017,
+                            "CodecMetadata": {
+                                "BitDepth": 8,
+                                "ChromaSubsampling": "420",
+                                "CodedFrameRate": {
+                                    "Denominator": 2,
+                                    "Numerator": 60
+                                },
+                                "ColorPrimaries": "UNSPECIFIED",
+                                "DisplayAspectRatio": {
+                                    "Denominator": 9,
+                                    "Numerator": 16
+                                },
+                                "Height": 1080,
+                                "Level": "4.0",
+                                "MatrixCoefficients": "UNSPECIFIED",
+                                "Profile": "High",
+                                "SampleAspectRatio": {
+                                    "Denominator": 1,
+                                    "Numerator": 1
+                                },
+                                "ScanType": "Progressive",
+                                "TransferCharacteristics": "UNSPECIFIED",
+                                "Width": 1920
+                            },
+                            "DisplayAspectRatio": {
+                                "Denominator": 9,
+                                "Numerator": 16
+                            },
+                            "FrameRate": {
+                                "Denominator": 1,
+                                "Numerator": 30
+                            },
+                            "Height": 1080,
+                            "Rotation": 270,
+                            "SampleAspectRatio": {
+                                "Denominator": 1,
+                                "Numerator": 1
+                            },
+                            "Width": 1920
+                        }
+                    }
+                ]
+            },
+            "Metadata": {
+                "ETag": "\"c023dc29161edf7c83ce944e810f21da\"",
+                "FileSize": 7655520,
+                "LastModified": "2026-11-13T19:35:49+07:00",
+                "MimeType": "video/mp4"
+            },
+            "TrackMappings": [
+                {
+                    "VideoTrackIndexes": [
+                        1
+                    ]
+                }
+            ]
+        }
+    ]
+}

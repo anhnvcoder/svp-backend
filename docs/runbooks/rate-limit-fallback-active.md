@@ -24,10 +24,11 @@ Redis của gateway là Valkey db 10, user `svp-gateway`, TLS: compose `valkey:6
 ElastiCache for Valkey. Lệnh vào Valkey đi qua `svp-valkey` (`valkey-cli --tls`, đăng nhập `svp-ops`,
 [ADR-0053](../adr/0053-msk-elasticache-valkey.md) §13): compose trong container `valkey`, k3d và EKS trong Deployment `svp-ops`.
 
-Theo bảng của [ADR-0010](../adr/0010-redis-ratelimit-cache-resilience-stage2c.md) §2 (và hai lớp thêm sau, khai cùng chỗ ở
+Theo bảng của [ADR-0010](../adr/0010-redis-ratelimit-cache-resilience-stage2c.md) §2 (và các lớp thêm sau, khai cùng chỗ ở
 `services/gateway/internal/ratelimit/ratelimit.go`):
 
-- Lớp **đóng mềm** (`register`, `login-ip`, `login-email`, `upload`, `refresh`, `public`) đếm trong bộ nhớ của từng instance
+- Lớp **đóng mềm** (`register`, `login-ip`, `login-email`, `login-account`, `upload`, `refresh`, `public`) đếm trong bộ
+  nhớ của từng instance
   với ngưỡng bằng nửa: người dùng có thể nhận 429 `RATE_LIMITED` sớm hơn bình thường khi đăng ký, đăng nhập, làm mới phiên,
   tạo video, mở trang chia sẻ công khai.
 - Lớp **mở** (`write`, `read`) cho qua không giới hạn; `view-once` chuyển tiếp mọi lượt xem, nên một lượt xem lặp trong 60 s

@@ -1,6 +1,11 @@
 # FF-5 of the threat model (docs/threat-model.md): media-worker, which handles untrusted uploads, reaches only what it
-# needs. From media-worker (kubectl exec, busybox nslookup and nc -z): the internet (an IP and a name), the gateway, the
-# four gRPC services, Postgres, Valkey and the API server are closed; the object store, Kafka and the Collector open.
+# needs. From a pod with media-worker's labels in svp (templates/media-worker-standin-up.yaml; kubectl exec of its node,
+# a name resolved first): the internet (an IP and a name), the gateway, the four gRPC services, Postgres, Valkey and the
+# API server are closed; the object store, Kafka and the Collector open.
+
+# The stand-in is in the mesh, where ztunnel accepts every connection before it dials, so the probe
+# (templates/ambient-probe.js) holds a socket to judge it: closed says some layer refused (a NetworkPolicy or an
+# AuthorizationPolicy), not which; the mesh drill (deploy/k8s/drills/mesh/) checks those layers apart.
 
 # A name that resolves makes a closed port the policy, not a missing service. The controls show each closed target
 # answers a client the policy lets in: /readyz through Envoy (the gateway reaches user-, video- and feed-service), the
@@ -8,12 +13,12 @@
 # reaches the gateway).
 
 # Also GlitchTip's pod opens 5432, a login leaves its rate limit key in Valkey (the gateway reaches 6379), and pod probe
-# of namespace svp-probe (no egress policy) reaches the API server. The internet has no control case: it is tried from
+# of namespace svp-probe (no egress policy) reaches the API server. The internet has no control case: it is tried as
 # media-worker only; example.com resolves there, so its failure is the connection.
 
-# The template's cleanup deletes svp-probe. LOCAL LAB ONLY: the test deletes the register rate limit keys
-# svp:gw:rl:register:* in the cluster's Valkey db 10 (SCAN + DEL) before it registers its drill user, and otherwise only
-# reads Valkey (SCAN in db 10).
+# The templates' cleanup deletes svp-probe and the stand-in pod. LOCAL LAB ONLY: the test deletes the register rate
+# limit keys svp:gw:rl:register:* in the cluster's Valkey db 10 (SCAN + DEL) before it registers its drill user, and
+# otherwise only reads Valkey (SCAN in db 10).
 apiVersion: chainsaw.kyverno.io/v1alpha1
 kind: Test
 metadata:
@@ -41,32 +46,26 @@ spec:
   - name: "FF-5: setup: namespace svp-probe with pod probe"
     use:
       template: ../../templates/probe-up.yaml
+  - name: "FF-5: setup: pod drill-media-worker-standin in svp with media-worker's labels"
+    use:
+      template: ../../templates/media-worker-standin-up.yaml
 
-  # One target per step, from media-worker: "<dns|nodns|ip> <open|closed>" as busybox nslookup and nc -z (3 s) see it.
+  # One target per step, from the stand-in: "<dns|nodns|ip> <open|closed>" as node's dns.lookup and the probe see it. An
+  # http:// target gets a request, since its server may drop a silent connection before the probe's hold ends.
   - name: "FF-5: from media-worker 1.1.1.1:443 closed"
     bindings:
-    - {name: fromNamespace, value: svp}
-    - {name: from, value: deploy/media-worker}
     - {name: target, value: 1.1.1.1:443}
     - {name: want, value: ip closed}
-    try: &reach
+    try: &workerReach
     - script:
         env:
         - {name: CALLER_KUBECONFIG, value: (env('KUBECONFIG'))}
-        - {name: FROM_NS, value: ($fromNamespace)}
-        - {name: FROM, value: ($from)}
         - {name: TARGET, value: ($target)}
         content: |
           set -eu
           export KUBECONFIG="$CALLER_KUBECONFIG"
-          kubectl --context k3d-svp -n "$FROM_NS" exec "$FROM" -- sh -c '
-            h=${1%:*} p=${1##*:}
-            case $h in
-              *[!0-9.]*) if nslookup "$h" >/dev/null 2>&1; then d=dns; else d=nodns; fi ;;
-              *) d=ip ;;
-            esac
-            if timeout 5 nc -z -w 3 "$h" "$p" >/dev/null 2>&1; then s=open; else s=closed; fi
-            echo "$d $s"' sh "$TARGET"
+          js=$(cat "$(git rev-parse --show-toplevel)/deploy/k8s/drills/templates/ambient-probe.js")
+          kubectl --context k3d-svp -n svp exec pod/drill-media-worker-standin -c probe -- /nodejs/bin/node -e "$js" tcp "$TARGET" </dev/null
         check:
           ($error): ~
           # nodns: the name does not resolve, so a closed port proves nothing.
@@ -74,88 +73,64 @@ spec:
       continueOnError: true
   - name: "FF-5: from media-worker example.com:443 closed"
     bindings:
-    - {name: fromNamespace, value: svp}
-    - {name: from, value: deploy/media-worker}
     - {name: target, value: example.com:443}
     - {name: want, value: dns closed}
-    try: *reach
+    try: *workerReach
   - name: "FF-5: from media-worker gateway.svp:8080 closed"
     bindings:
-    - {name: fromNamespace, value: svp}
-    - {name: from, value: deploy/media-worker}
     - {name: target, value: gateway.svp.svc.cluster.local:8080}
     - {name: want, value: dns closed}
-    try: *reach
+    try: *workerReach
   - name: "FF-5: from media-worker user-service.svp:9101 closed"
     bindings:
-    - {name: fromNamespace, value: svp}
-    - {name: from, value: deploy/media-worker}
     - {name: target, value: user-service.svp.svc.cluster.local:9101}
     - {name: want, value: dns closed}
-    try: *reach
+    try: *workerReach
   - name: "FF-5: from media-worker video-service.svp:9102 closed"
     bindings:
-    - {name: fromNamespace, value: svp}
-    - {name: from, value: deploy/media-worker}
     - {name: target, value: video-service.svp.svc.cluster.local:9102}
     - {name: want, value: dns closed}
-    try: *reach
+    try: *workerReach
   - name: "FF-5: from media-worker engagement-service.svp:9103 closed"
     bindings:
-    - {name: fromNamespace, value: svp}
-    - {name: from, value: deploy/media-worker}
     - {name: target, value: engagement-service.svp.svc.cluster.local:9103}
     - {name: want, value: dns closed}
-    try: *reach
+    try: *workerReach
   - name: "FF-5: from media-worker feed-service.svp:9104 closed"
     bindings:
-    - {name: fromNamespace, value: svp}
-    - {name: from, value: deploy/media-worker}
     - {name: target, value: feed-service.svp.svc.cluster.local:9104}
     - {name: want, value: dns closed}
-    try: *reach
+    try: *workerReach
   - name: "FF-5: from media-worker svp-pg-rw.svp-data:5432 closed"
     bindings:
-    - {name: fromNamespace, value: svp}
-    - {name: from, value: deploy/media-worker}
     - {name: target, value: svp-pg-rw.svp-data.svc.cluster.local:5432}
     - {name: want, value: dns closed}
-    try: *reach
+    try: *workerReach
   - name: "FF-5: from media-worker valkey.svp-data:6379 closed"
     bindings:
-    - {name: fromNamespace, value: svp}
-    - {name: from, value: deploy/media-worker}
     - {name: target, value: valkey.svp-data.svc.cluster.local:6379}
     - {name: want, value: dns closed}
-    try: *reach
+    try: *workerReach
   - name: "FF-5: from media-worker kubernetes.default:443 (the API server) closed"
     bindings:
-    - {name: fromNamespace, value: svp}
-    - {name: from, value: deploy/media-worker}
     - {name: target, value: kubernetes.default.svc.cluster.local:443}
     - {name: want, value: dns closed}
-    try: *reach
+    try: *workerReach
   - name: "FF-5: from media-worker s3.svp-data:9000 open"
     bindings:
-    - {name: fromNamespace, value: svp}
-    - {name: from, value: deploy/media-worker}
-    - {name: target, value: s3.svp-data.svc.cluster.local:9000}
+    - {name: target, value: http://s3.svp-data.svc.cluster.local:9000}
     - {name: want, value: dns open}
-    try: *reach
+    try: *workerReach
   - name: "FF-5: from media-worker kafka.svp-data:9096 open"
     bindings:
-    - {name: fromNamespace, value: svp}
-    - {name: from, value: deploy/media-worker}
     - {name: target, value: kafka.svp-data.svc.cluster.local:9096}
     - {name: want, value: dns open}
-    try: *reach
+    try: *workerReach
   - name: "FF-5: from media-worker otel-collector.svp-obs:4317 open"
     bindings:
-    - {name: fromNamespace, value: svp}
-    - {name: from, value: deploy/media-worker}
     - {name: target, value: otel-collector.svp-obs.svc.cluster.local:4317}
     - {name: want, value: dns open}
-    try: *reach
+    try: *workerReach
 
   - name: "FF-5: control: /readyz through Envoy 200: the gateway reaches user-, video- and feed-service (9101, 9102, 9104)"
     bindings:
@@ -280,9 +255,18 @@ spec:
           (trim_space($stdout)): status 401, keys 1
       continueOnError: true
   - name: "FF-5: control: from svp-probe (no egress policy) kubernetes.default:443 (the API server) open"
-    bindings:
-    - {name: fromNamespace, value: svp-probe}
-    - {name: from, value: pod/probe}
-    - {name: target, value: kubernetes.default.svc.cluster.local:443}
-    - {name: want, value: dns open}
-    try: *reach
+    try:
+    - script:
+        env:
+        - {name: CALLER_KUBECONFIG, value: (env('KUBECONFIG'))}
+        content: |
+          set -eu
+          export KUBECONFIG="$CALLER_KUBECONFIG"
+          kubectl --context k3d-svp -n svp-probe exec pod/probe -- sh -c '
+            if nslookup "$1" >/dev/null 2>&1; then d=dns; else d=nodns; fi
+            if timeout 5 nc -z -w 3 "$1" 443 >/dev/null 2>&1; then s=open; else s=closed; fi
+            echo "$d $s"' sh kubernetes.default.svc.cluster.local
+        check:
+          ($error): ~
+          (trim_space($stdout)): dns open
+      continueOnError: true

@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
-# image-guard.sh leg|trivy-report|grype-summary|sarif|push|pushed|index|index-check|sign ARGS...: the guards of the
-# image pipeline around the tools the composite actions image-* call; each subcommand checks what its step must not get
-# wrong and hands it what it needs as outputs. A scan's verdict stays the scanner's own exit code, read in the step.
+# image-guard.sh leg|trivy-report|grype-summary|fixed-high|sarif|push|pushed|index|index-check|sign ARGS...: the
+# guards of the image pipeline around the tools the composite actions image-* call; each subcommand checks what its
+# step must not get wrong and hands it what it needs as outputs. A verdict is the scanner's exit code or fixed-high's.
 # Design notes: docs/reference/ci.md.
 
 # Guards: the image and the code tree are the run's own, checked before docker is called; what is pushed is the scanned
 # image; the index holds exactly the two scanned manifests and the index read back is what is signed; only
-# drill-vulnerable passes CRITICAL, a secret blocks every image; a release is signed only as its source's workflow, each
-# bundle once per digest, and a digest in cosign's older format is refused.
+# drill-vulnerable passes CRITICAL and HIGH with a fix, a secret blocks every image; a release is signed only as its
+# source's workflow, each bundle once per digest, and a digest in cosign's older format is refused.
 set -euo pipefail
 
 # shellcheck source=deploy/ci/common.sh
@@ -79,15 +79,16 @@ leg() {
 # and OUT/gate/secrets.json without the vulnerabilities, so neither pass counts the other's findings.
 trivy_report() {
   [ $# -eq 2 ] || fail "usage: image-guard.sh trivy-report LABEL OUT"
-  local label=$1 report=$2/trivy.json critical high secrets
+  local label=$1 report=$2/trivy.json critical high fixed secrets
   jq -e '.SchemaVersion == 2 and (.Metadata.ImageID | test("^sha256:[0-9a-f]{64}$"))' "$report" >/dev/null 2>&1 || {
     echo "FAIL  $label: $report is not a trivy image JSON report (SchemaVersion 2 with Metadata.ImageID)" >&2
     exit 2
   }
-  read -r critical high secrets < <(jq -r '[.Results[]?.Vulnerabilities[]?.Severity] as $s
-    | [([$s[] | select(. == "CRITICAL")] | length), ([$s[] | select(. == "HIGH")] | length),
-      ([.Results[]?.Secrets[]?] | length)] | @tsv' "$report")
-  summary "$label (trivy): CRITICAL $critical, HIGH $high, secrets $secrets"
+  read -r critical high fixed secrets < <(jq -r '[.Results[]?.Vulnerabilities[]?] as $v
+    | [([$v[] | select(.Severity == "CRITICAL")] | length), ([$v[] | select(.Severity == "HIGH")] | length),
+      ([$v[] | select(.Severity == "HIGH" and .Status == "fixed")] | length), ([.Results[]?.Secrets[]?] | length)]
+    | @tsv' "$report")
+  summary "$label (trivy): CRITICAL $critical, HIGH $high (with a fix $fixed), secrets $secrets"
   mkdir -p "$2/gate" || fail "create $2/gate"
   jq 'del(.Results[]?.Secrets)' "$report" >"$2/gate/vulnerabilities.json" &&
     jq 'del(.Results[]?.Vulnerabilities)' "$report" >"$2/gate/secrets.json" || fail "split $report"
@@ -98,11 +99,12 @@ trivy_report() {
 # grype scans.
 grype_summary() {
   [ $# -eq 2 ] || fail "usage: image-guard.sh grype-summary LABEL OUT"
-  local label=$1 report=$2/grype.json critical high excepted
-  read -r critical high excepted < <(jq -r '[([.matches[] | select(.vulnerability.severity == "Critical")] | length),
-    ([.matches[] | select(.vulnerability.severity == "High")] | length), (.ignoredMatches // [] | length)] | @tsv' \
-    "$report")
-  summary "$label (grype): Critical $critical, High $high, excepted by .grype.yaml $excepted"
+  local label=$1 report=$2/grype.json critical high fixed excepted
+  read -r critical high fixed excepted < <(jq -r '[.matches[].vulnerability] as $v
+    | [([$v[] | select(.severity == "Critical")] | length), ([$v[] | select(.severity == "High")] | length),
+      ([$v[] | select(.severity == "High" and .fix.state == "fixed")] | length), (.ignoredMatches // [] | length)]
+    | @tsv' "$report")
+  summary "$label (grype): Critical $critical, High $high (with a fix $fixed), excepted by .grype.yaml $excepted"
   if [ "$critical" -gt 0 ]; then
     jq -r '.matches[] | select(.vulnerability.severity == "Critical")
       | "critical  \(.vulnerability.id) \(.artifact.name)@\(.artifact.version) \(.artifact.purl // "no purl")"
@@ -111,6 +113,37 @@ grype_summary() {
   fi
   [ ! -f "$2/sbom.spdx.json" ] ||
     echo "binaries outside a package manager: $(sbom_binaries "$2/sbom.spdx.json" | sed 's/^$/none/')"
+}
+
+# fixed-high trivy|grype LABEL REPORT: the second step of the scan gate, after CRITICAL: lists each HIGH with a fix in
+# REPORT, the JSON of trivy convert with the ignore file or a grype.json (grype leaves its excepted matches out of
+# matches); exits 1 when there is one, 2 when REPORT is no report of that scanner (an empty file too). It reads the
+# fix status of each finding: the filter flags (--ignore-unfixed, --only-fixed) would drop an unfixed CRITICAL too.
+fixed_high() {
+  [ $# -eq 3 ] || fail "usage: image-guard.sh fixed-high trivy|grype LABEL REPORT"
+  local label=$2 report=$3 form list
+  case $1 in
+  trivy)
+    form='.SchemaVersion == 2'
+    list='(.Results // [])[] | (.Vulnerabilities // [])[] | select(.Severity == "HIGH" and .Status == "fixed")
+      | "high  \(.VulnerabilityID) \(.PkgName)@\(.InstalledVersion) \(.PkgIdentifier.PURL // "no purl")"
+        + " (fixed: \(.FixedVersion))"'
+    ;;
+  grype)
+    form='.descriptor.name == "grype"'
+    list='.matches[] | select(.vulnerability.severity == "High" and .vulnerability.fix.state == "fixed")
+      | "high  \(.vulnerability.id) \(.artifact.name)@\(.artifact.version) \(.artifact.purl // "no purl")"
+        + " (fixed: \(.vulnerability.fix.versions // [] | join(", ")))"'
+    ;;
+  *) fail "usage: image-guard.sh fixed-high trivy|grype LABEL REPORT" ;;
+  esac
+  jq -e "$form" "$report" >/dev/null 2>&1 && list=$(jq -r "$list" "$report" 2>/dev/null) || {
+    echo "FAIL  $label: $report cannot be read for HIGH with a fix" >&2
+    exit 2
+  }
+  [ -n "$list" ] || return 0
+  step_summary_tee >&2 <<<"$list"
+  return 1
 }
 
 # sarif IMAGE ARCH OUT: OUT/trivy.sarif from OUT/trivy.sarif.tmp (trivy convert of the report, HIGH and CRITICAL) and
@@ -277,13 +310,15 @@ missing() {
   fi
 }
 
-[ $# -gt 0 ] || fail "usage: image-guard.sh leg|trivy-report|grype-summary|sarif|push|pushed|index|index-check|sign ..."
+[ $# -gt 0 ] ||
+  fail "usage: image-guard.sh leg|trivy-report|grype-summary|fixed-high|sarif|push|pushed|index|index-check|sign ..."
 command=$1
 shift
 case $command in
 leg) leg "$@" ;;
 trivy-report) trivy_report "$@" ;;
 grype-summary) grype_summary "$@" ;;
+fixed-high) fixed_high "$@" ;;
 sarif) sarif "$@" ;;
 push) push "$@" ;;
 pushed) pushed "$@" ;;

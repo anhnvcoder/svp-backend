@@ -105,8 +105,9 @@ keep_own() {
 }
 
 # list GITOPS_DIR [VALUES_REF]: prints the releases a run of the source rescans (source_args first), one per line:
-# service, repository, digest and where it was read, tab-separated. Fails, after printing every release it could read,
-# when a file cannot be read or the host does not say whether the promote pull request is open.
+# service, repository, digest and where it was read, tab-separated. A service with no image file at a ref is not
+# released there (a new release before its first promote). Fails, after printing every release it could read, when a
+# file cannot be read or the host does not say whether the promote pull request is open.
 list() {
   local dir=$1 values_ref=${2:-} refs=() labels=() open prd_app i ref e svc file status=0 code=
   [ "$(git -C "$dir" rev-parse --show-toplevel 2>/dev/null)" = "$(cd "$dir" 2>/dev/null && pwd -P)" ] ||
@@ -154,6 +155,7 @@ list() {
     for e in $(git -C "$dir" ls-tree --name-only "$ref:envs" 2>/dev/null); do
       for svc in "${svp_services[@]}"; do
         file=envs/$e/images/$svc.yaml
+        git -C "$dir" cat-file -e "$ref:$file" 2>/dev/null || continue
         if ! git -C "$dir" show "$ref:$file" 2>/dev/null | image_line "$file" "${labels[$i]}" "${labels[$i]}, $file" |
           keep_own; then
           status=1
@@ -164,6 +166,7 @@ list() {
   if [ -n "$code" ]; then
     for svc in "${svp_services[@]}"; do
       file=deploy/k8s/values/services/$svc.yaml
+      git -C "$repo_root" cat-file -e "$code:$file" 2>/dev/null || continue
       if ! git -C "$repo_root" show "$code:$file" 2>/dev/null |
         image_line "$file" "${code:0:12}" "commit ${code:0:12} of the code repository, $file" | keep_own; then
         status=1

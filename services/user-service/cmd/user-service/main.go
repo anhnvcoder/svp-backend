@@ -95,6 +95,10 @@ func serve(ctx context.Context, logger *slog.Logger) (err error) {
 	if err != nil {
 		return err
 	}
+	maxConns, err := pgpool.MaxConns(1)
+	if err != nil {
+		return err
+	}
 	kid, err := envcfg.Required("JWT_SIGNING_KID")
 	if err != nil {
 		return err
@@ -152,7 +156,7 @@ func serve(ctx context.Context, logger *slog.Logger) (err error) {
 			pool.Close()
 		}
 	}()
-	pool, err = pgpool.New(ctx, databaseURL)
+	pool, err = pgpool.New(ctx, databaseURL, pgpool.WithMaxConns(maxConns))
 	if err != nil {
 		return fmt.Errorf("DATABASE_URL: %w", err)
 	}

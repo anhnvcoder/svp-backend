@@ -94,6 +94,11 @@ spec:
       automountServiceAccountToken: false
       securityContext:
         {{- include "svp-service.podSecurityContext" . | nindent 8 }}
+      {{- with .Values.nodeAffinity }}
+      affinity:
+        nodeAffinity:
+          {{- toYaml . | nindent 10 }}
+      {{- end }}
       containers:
         - name: migrate
           image: {{ include "svp-service.image" . }}

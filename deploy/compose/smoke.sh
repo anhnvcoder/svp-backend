@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
 # End-to-end smoke test of the core stack through the gateway: users, videos, the presigned upload, transcode, HLS
-# playback, feeds, likes, views, follows and refresh tokens. Prints one ok/FAIL line per step and exits non-zero on the
-# first failure. Needs curl, jq, openssl and ffmpeg on the host; lib.sh resets the register rate limit in the stack's
-# Valkey through docker compose exec.
+# playback, premium playback, feeds, likes, views, follows and refresh tokens. Prints one ok/FAIL line per step and
+# exits non-zero on the first failure. Needs curl, jq, openssl and ffmpeg on the host; lib.sh resets the register rate
+# limit in the stack's Valkey through docker compose exec.
 
 # Usage: deploy/compose/smoke.sh [base-url]   (default http://127.0.0.1:8080)
 
-# The HLS output must use the versioned layout (media/<id>/<version>/master.m3u8, variants under
-# <attempt>/<rendition>/) and its master, a variant playlist, a segment and the thumbnail must come with
+# The HLS output must use the versioned layout (media/<id>/<version>/master.m3u8, variants named
+# <attempt>/index_<rendition>.m3u8) and its master, a variant playlist, a segment and the thumbnail must come with
 # Cache-Control: max-age=31536000, immutable.
 
 # `make k8s-smoke` and `make eks-smoke` run the same steps against a cluster, with SVP_STACK=k3d or eks so lib.sh resets
@@ -191,8 +191,8 @@ playlist_key=${playlist_url#"$media_base"/}
 thumbnail_key=${thumbnail_url#"$media_base"/}
 if [[ $playlist_key =~ ^media/$clip_id/$uuid_re/master\.m3u8$ ]]; then
   variant_ref=$(first_uri "$work/master.m3u8")
-  [[ $variant_ref =~ ^$uuid_re/[a-z0-9]+/index\.m3u8$ && $thumbnail_key == "${playlist_key%/*}/${variant_ref%%/*}/thumbnail.jpg" ]] ||
-    fail "master names <attempt>/<rendition>/index.m3u8 and the thumbnail is in that attempt directory (variant $variant_ref, thumbnail key $thumbnail_key)"
+  [[ $variant_ref =~ ^$uuid_re/index_[a-z0-9]+\.m3u8$ && $thumbnail_key == "${playlist_key%/*}/${variant_ref%%/*}/thumbnail.jpg" ]] ||
+    fail "master names <attempt>/index_<rendition>.m3u8 and the thumbnail is in that attempt directory (variant $variant_ref, thumbnail key $thumbnail_key)"
   # One "<name>|<url>" per object: the names have blanks, the URLs none.
   for object in "master|$playlist_url" "variant playlist|$variant_url" "segment|$(resolve "$variant_url" "$segment_ref")" \
     "thumbnail|$thumbnail_url"; do
@@ -324,6 +324,116 @@ status=$(feed_item explore "$work/b.auth" "$clip_id")
 [[ $status == 200 && $(<"$work/item") != null ]] ||
   fail "video still in explore after unfollow (status $status, $(item_summary))"
 ok "video still in explore after unfollow"
+
+# Premium videos: two of A's, the same clip. Only the preview is public; the full output is read through the playback
+# route, which cuts the master to the caller's tier and signs segment URLs per video and rendition. Every URL comes from
+# an answer, so the checks hold whether the store is path-style (compose, k3d) or a CDN (EKS).
+
+# create_premium NAME: POST /videos of clip.mp4 as user A, premium; like create_video of lib.sh.
+create_premium() {
+  local status
+  jq -n --arg t "smoke premium $(openssl rand -hex 4)" --argjson s "$clip_size" \
+    '{title: $t, size_bytes: $s, content_type: "video/mp4", premium: true}' >"$work/$1.json"
+  status=$(request POST /videos "$work/a.auth" "$work/$1.json")
+  [[ $status == 201 && -n $(field video_id) && -n $(field upload_url) ]] ||
+    fail "create premium video $1 (status $status, $(problem_summary))"
+  printf -v "${1}_id" '%s' "$(field video_id)"
+  mv "$work/body" "$work/$1.upload"
+}
+
+# signed_playlist NAME AUTH_FILE RENDITION: GET of video NAME's playlist of RENDITION through the playback route; sets
+# <NAME>_segment to the URL of its first segment, which must carry a query (the signature).
+signed_playlist() {
+  local id_var="${1}_id" status segment
+  status=$(request GET "/videos/${!id_var}/playback/$3.m3u8" "$2")
+  segment=$(first_uri "$work/body")
+  [[ $status == 200 && $segment =~ ^https?://[^?]+\?.+ ]] ||
+    fail "GET playback $3.m3u8 of $1 is 200 with absolute signed segment URLs (status $status, $(problem_summary))"
+  printf -v "${1}_segment" '%s' "$segment"
+}
+
+for name in p1 p2; do
+  create_premium "$name"
+  status=$(upload_file "$name" "$work/clip.mp4")
+  [[ $status == 2?? ]] || fail "upload premium video $name (status $status, code $(storage_error_code))"
+  status=$(complete_upload "$name" "$work/a.auth")
+  [[ $status == 202 && $(field status) == PROCESSING ]] ||
+    fail "complete premium video $name is 202 PROCESSING (status $status, $(problem_summary))"
+done
+ok "create, upload and complete two premium videos"
+wait_ready p1 "$work/a.auth" 180
+[[ $(field premium) == true && $(field entitlement_tier) == fhd ]] ||
+  fail "author reads premium video: premium true, entitlement_tier fhd (got $(field premium), $(field entitlement_tier))"
+wait_ready p2 "$work/a.auth" 180
+ok "premium videos READY; the author holds fhd"
+
+# B holds no tier yet: the answer names the preview only, never an object under premium/.
+status=$(request GET "/videos/$p1_id" "$work/b.auth")
+preview_url=$(field playlist_url)
+preview_thumbnail_url=$(field thumbnail_url)
+[[ $status == 200 && $(field premium) == true && -z $(field entitlement_tier) && $preview_url == */preview/"$p1_id"/* &&
+  $preview_thumbnail_url == */preview/"$p1_id"/* ]] ||
+  fail "B reads premium video: playlist_url and thumbnail_url under preview/, no entitlement_tier (status $status, $(problem_summary))"
+ok "B reads premium video: preview playlist_url and thumbnail_url, no entitlement_tier"
+
+status=$(fetch "$preview_url" "$work/preview-master.m3u8")
+[[ $status == 200 ]] && grep -q '^#EXT-X-STREAM-INF' "$work/preview-master.m3u8" ||
+  fail "anonymous GET of the preview master is 200 with #EXT-X-STREAM-INF (status $status)"
+preview_variant_url=$(resolve "$preview_url" "$(first_uri "$work/preview-master.m3u8")")
+status=$(fetch "$preview_variant_url" "$work/preview-variant.m3u8")
+preview_segment_ref=$(first_uri "$work/preview-variant.m3u8")
+[[ $status == 200 && -n $preview_segment_ref ]] || fail "anonymous GET of the preview playlist is 200 (status $status)"
+status=$(fetch "$(resolve "$preview_variant_url" "$preview_segment_ref")" "$work/preview-segment")
+[[ $status == 200 && -s $work/preview-segment ]] || fail "anonymous GET of a preview segment is 200 (status $status)"
+status=$(fetch "$preview_thumbnail_url" "$work/preview-thumbnail")
+[[ $status == 200 && -s $work/preview-thumbnail ]] || fail "anonymous GET of the preview thumbnail is 200 (status $status)"
+ok "anonymous GET of the preview master, playlist, segment and thumbnail: 200"
+
+# The author's signed playlist names the objects under premium/. Without a signature each is refused: the segment, the
+# media playlist in its directory and the master one level up (<version>/<attempt>/<segment>).
+signed_playlist p1 "$work/a.auth" 360p
+premium_segment_url=${p1_segment%%\?*}
+premium_attempt_url=${premium_segment_url%/*}
+for object in "segment|$premium_segment_url" "media playlist|$premium_attempt_url/index_360p.m3u8" \
+  "master|${premium_attempt_url%/*}/master.m3u8"; do
+  status=$(fetch "${object#*|}" "$work/premium-object")
+  [[ $status == 403 ]] || fail "anonymous GET of the premium ${object%%|*} is 403 (status $status)"
+done
+ok "anonymous GET of a premium segment, media playlist and master: 403"
+
+status=$(request GET "/videos/$p1_id/playback/master.m3u8" "$work/b.auth")
+[[ $status == 403 && $(field code) == NOT_ENTITLED ]] ||
+  fail "B's master without a tier is 403 NOT_ENTITLED (status $status, $(problem_summary))"
+ok "B's master without a tier: 403 NOT_ENTITLED"
+
+jq -n '{tier: "sd"}' >"$work/tier.json"
+status=$(request PUT "/me/entitlements/$p1_id" "$work/b.auth" "$work/tier.json")
+[[ $status == 200 && $(field video_id) == "$p1_id" && $(field tier) == sd && -n $(field granted_at) ]] ||
+  fail "B buys sd: 200 with the entitlement (status $status, $(problem_summary))"
+ok "B buys sd: 200"
+
+# The sd tier holds 360p of this 720p clip: the master names it alone, as a playback path.
+status=$(request GET "/videos/$p1_id/playback/master.m3u8" "$work/b.auth")
+renditions=$({ grep -v -e '^#' -e '^[[:space:]]*$' "$work/body" || true; } | tr -d '\r' | tr '\n' ' ')
+[[ $status == 200 && $(<"$work/type") == application/vnd.apple.mpegurl* && $renditions == "360p.m3u8 " ]] ||
+  fail "B's master with sd is 200 HLS naming 360p.m3u8 only (status $status, renditions '$renditions', $(problem_summary))"
+ok "B's master with sd: 360p only"
+
+signed_playlist p1 "$work/b.auth" 360p
+status=$(fetch "$p1_segment" "$work/signed-segment")
+[[ $status == 200 && -s $work/signed-segment ]] || fail "GET of a signed segment is 200 and not empty (status $status)"
+ok "B's signed 360p playlist plays: segment 200"
+
+status=$(request GET "/videos/$p1_id/playback/720p.m3u8" "$work/b.auth")
+[[ $status == 403 && $(field code) == RENDITION_NOT_ENTITLED ]] ||
+  fail "B's 720p playlist with sd is 403 RENDITION_NOT_ENTITLED (status $status, $(problem_summary))"
+ok "B's 720p playlist with sd: 403 RENDITION_NOT_ENTITLED"
+
+# A signature opens one video's rendition only: B's for p1 on a segment of p2 is refused.
+signed_playlist p2 "$work/a.auth" 360p
+status=$(fetch "${p2_segment%%\?*}?${p1_segment#*\?}" "$work/borrowed-segment")
+[[ $status == 403 ]] || fail "p1's signature on a segment of p2 is 403 (status $status)"
+ok "p1's signature on a segment of p2: 403"
 
 # Refresh tokens stay in private files of $work, never on a command line: jq reads them from the response and writes the
 # next request body.

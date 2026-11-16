@@ -1,15 +1,41 @@
 package migrations_test
 
 import (
+	"io/fs"
 	"testing"
+	"testing/fstest"
+	"uuid"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/jackc/pgx/v5/stdlib"
 	"github.com/pressly/goose/v3"
 
+	"github.com/anhnvcoder/svp-backend/internal/dbmigrate"
 	"github.com/anhnvcoder/svp-backend/internal/pgtest"
 	"github.com/anhnvcoder/svp-backend/services/video-service/migrations"
 )
+
+// upTo returns the migrations up to and including version, named as goose expects.
+func upTo(t *testing.T, version string) fs.FS {
+	t.Helper()
+	files, err := fs.Glob(migrations.FS, "*.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	out := fstest.MapFS{}
+	for _, f := range files {
+		if f[:len(version)] > version {
+			continue
+		}
+		data, err := fs.ReadFile(migrations.FS, f)
+		if err != nil {
+			t.Fatal(err)
+		}
+		out[f] = &fstest.MapFile{Data: data}
+	}
+	return out
+}
 
 // tables returns which of videos and outbox exist.
 func tables(t *testing.T, pool *pgxpool.Pool) (videos, outbox bool) {
@@ -76,6 +102,21 @@ func requestID(t *testing.T, pool *pgxpool.Pool) (column, index bool) {
 	return column, index
 }
 
+// premium returns whether videos has the two columns of 00007 and whether video_entitlements
+// exists.
+func premium(t *testing.T, pool *pgxpool.Pool) (columns int, entitlements bool) {
+	t.Helper()
+	err := pool.QueryRow(t.Context(),
+		`SELECT (SELECT count(*) FROM information_schema.columns
+		   WHERE table_schema = 'public' AND table_name = 'videos' AND column_name IN ('premium', 'preview_playlist_key')),
+		 to_regclass('public.video_entitlements') IS NOT NULL`,
+	).Scan(&columns, &entitlements)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return columns, entitlements
+}
+
 // Every migration goes down and up again cleanly after pgtest applied them.
 func TestMigrationsDownAndUp(t *testing.T) {
 	pool := pgtest.New(t, "svp_video_migrations_test", migrations.FS)
@@ -94,6 +135,12 @@ func TestMigrationsDownAndUp(t *testing.T) {
 	if column, index := requestID(t, pool); !column || !index {
 		t.Fatalf("after up: request_id column %v, index %v, want both", column, index)
 	}
+	if columns, index := outboxFailed(t, pool); columns != 2 || !index {
+		t.Fatalf("after up: %d outbox failed columns, index %v, want 2 and the index", columns, index)
+	}
+	if columns, entitlements := premium(t, pool); columns != 2 || !entitlements {
+		t.Fatalf("after up: %d premium columns, video_entitlements %v, want 2 and true", columns, entitlements)
+	}
 
 	db := stdlib.OpenDBFromPool(pool)
 	t.Cleanup(func() { _ = db.Close() })
@@ -106,6 +153,24 @@ func TestMigrationsDownAndUp(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	if _, err := provider.Down(t.Context()); err != nil {
+		t.Fatalf("down 00008: %v", err)
+	}
+	if columns, index := outboxFailed(t, pool); columns != 0 || index {
+		t.Fatalf("after down 00008: %d outbox failed columns, index %v, want neither", columns, index)
+	}
+	if columns, entitlements := premium(t, pool); columns != 2 || !entitlements {
+		t.Fatalf("after down 00008: %d premium columns, video_entitlements %v, want 2 and true", columns, entitlements)
+	}
+	if _, err := provider.Down(t.Context()); err != nil {
+		t.Fatalf("down 00007: %v", err)
+	}
+	if columns, entitlements := premium(t, pool); columns != 0 || entitlements {
+		t.Fatalf("after down 00007: %d premium columns, video_entitlements %v, want neither", columns, entitlements)
+	}
+	if column, index := requestID(t, pool); !column || !index {
+		t.Fatalf("after down 00007: request_id column %v, index %v, want both", column, index)
+	}
 	if _, err := provider.Down(t.Context()); err != nil {
 		t.Fatalf("down 00006: %v", err)
 	}
@@ -171,5 +236,142 @@ func TestMigrationsDownAndUp(t *testing.T) {
 	}
 	if column, index := requestID(t, pool); !column || !index {
 		t.Fatalf("after up again: request_id column %v, index %v, want both", column, index)
+	}
+	if columns, index := outboxFailed(t, pool); columns != 2 || !index {
+		t.Fatalf("after up again: %d outbox failed columns, index %v, want 2 and the index", columns, index)
+	}
+	if columns, entitlements := premium(t, pool); columns != 2 || !entitlements {
+		t.Fatalf("after up again: %d premium columns, video_entitlements %v, want 2 and true", columns, entitlements)
+	}
+}
+
+// oldRelay runs what the outbox code of the release before the failed columns does: insert an
+// event the way outbox.Write did, read the unsent rows the way the relay did, and mark them sent.
+// It returns the ids it read.
+func oldRelay(t *testing.T, pool *pgxpool.Pool) []int64 {
+	t.Helper()
+	ctx := t.Context()
+	if _, err := pool.Exec(ctx, `INSERT INTO outbox (event_id, topic, record_key, payload, headers)
+		VALUES (gen_random_uuid(), 'video.lifecycle.v1', 'k', '\x00', '{}')`); err != nil {
+		t.Fatalf("old insert: %v", err)
+	}
+	rows, err := pool.Query(ctx, "SELECT id FROM outbox WHERE published_at IS NULL ORDER BY id LIMIT 100")
+	if err != nil {
+		t.Fatalf("old read: %v", err)
+	}
+	ids, err := pgx.CollectRows(rows, pgx.RowTo[int64])
+	if err != nil {
+		t.Fatalf("old read: %v", err)
+	}
+	if _, err := pool.Exec(ctx, "UPDATE outbox SET published_at = now() WHERE id = ANY($1)", ids); err != nil {
+		t.Fatalf("old mark sent: %v", err)
+	}
+	return ids
+}
+
+// outboxFailed returns how many of the columns of the failed-rows migration exist and whether
+// its index does.
+func outboxFailed(t *testing.T, pool *pgxpool.Pool) (columns int, index bool) {
+	t.Helper()
+	err := pool.QueryRow(t.Context(),
+		`SELECT (SELECT count(*) FROM information_schema.columns WHERE table_schema = 'public'
+		           AND table_name = 'outbox' AND column_name IN ('failed_at', 'last_error')),
+		        to_regclass('public.outbox_pending_idx') IS NOT NULL`,
+	).Scan(&columns, &index)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return columns, index
+}
+
+// The release before keeps writing and relaying events on the table the failed-rows migration
+// changed, and the rows it writes are unfailed, so the current relay reads them too.
+func TestOutboxFailedMigrationKeepsReleaseBefore(t *testing.T) {
+	pool := pgtest.New(t, "svp_video_outbox_failed_test", upTo(t, "00007"))
+	ctx := t.Context()
+	if got := oldRelay(t, pool); len(got) != 1 {
+		t.Fatalf("old relay before the migration read %v, want one row", got)
+	}
+
+	if err := dbmigrate.Up(ctx, pool.Config().ConnString(), migrations.FS); err != nil {
+		t.Fatalf("migrate to the latest version: %v", err)
+	}
+	if columns, index := outboxFailed(t, pool); columns != 2 || !index {
+		t.Fatalf("after up: %d failed columns, index %v; want 2 and the index", columns, index)
+	}
+	if got := oldRelay(t, pool); len(got) != 1 {
+		t.Errorf("old relay after the migration read %v, want only its new row", got)
+	}
+	if _, err := pool.Exec(ctx, `INSERT INTO outbox (event_id, topic, record_key, payload)
+		VALUES (gen_random_uuid(), 'video.lifecycle.v1', 'k', '\x00')`); err != nil {
+		t.Fatal(err)
+	}
+	var pending int
+	if err := pool.QueryRow(ctx,
+		"SELECT count(*) FROM outbox WHERE published_at IS NULL AND failed_at IS NULL").Scan(&pending); err != nil {
+		t.Fatal(err)
+	}
+	if pending != 1 {
+		t.Errorf("current relay sees %d pending rows, want the one the release before wrote", pending)
+	}
+}
+
+// insertOld creates a video the way the release before 00007 does, naming neither premium nor
+// preview_playlist_key.
+func insertOld(t *testing.T, pool *pgxpool.Pool, id uuid.UUID) error {
+	t.Helper()
+	_, err := pool.Exec(t.Context(), `INSERT INTO videos (id, author_id, title, status, size_bytes, content_type, request_id)
+		VALUES ($1, $2, 'Old release', 'UPLOADING', 1000, 'video/mp4', NULL)`, id, uuid.NewV7())
+	return err
+}
+
+// The release before 00007, still serving during a rollout, keeps creating and publishing regular
+// videos on the new schema, and works again after Down.
+func TestPremiumMigrationKeepsReleaseBefore(t *testing.T) {
+	pool := pgtest.New(t, "svp_video_migrations_premium_test", migrations.FS)
+	ctx := t.Context()
+
+	id := uuid.NewV7()
+	if err := insertOld(t, pool, id); err != nil {
+		t.Fatalf("old-style insert after 00007: %v", err)
+	}
+	// MarkVideoReady of the release before, which sets no preview_playlist_key.
+	if _, err := pool.Exec(ctx, `UPDATE videos SET status = 'READY', duration_ms = 1000, playlist_key = 'media/x',
+		thumbnail_key = 'media/y', published_at = now() WHERE id = $1`, id); err != nil {
+		t.Fatalf("old-style ready after 00007: %v", err)
+	}
+	var isPremium bool
+	var preview *string
+	if err := pool.QueryRow(ctx, "SELECT premium, preview_playlist_key FROM videos WHERE id = $1", id).
+		Scan(&isPremium, &preview); err != nil {
+		t.Fatal(err)
+	}
+	if isPremium || preview != nil {
+		t.Errorf("old-style video: premium %v, preview_playlist_key %v; want false and NULL", isPremium, preview)
+	}
+	// An entitlement needs an existing video and a known tier.
+	if _, err := pool.Exec(ctx, "INSERT INTO video_entitlements (user_id, video_id, tier) VALUES ($1, $2, 'uhd')",
+		uuid.NewV7(), id); err == nil {
+		t.Error("entitlement with tier uhd was accepted")
+	}
+	if _, err := pool.Exec(ctx, "INSERT INTO video_entitlements (user_id, video_id, tier) VALUES ($1, $2, 'sd')",
+		uuid.NewV7(), uuid.NewV7()); err == nil {
+		t.Error("entitlement to a missing video was accepted")
+	}
+
+	db := stdlib.OpenDBFromPool(pool)
+	t.Cleanup(func() { _ = db.Close() })
+	provider, err := goose.NewProvider(goose.DialectPostgres, db, migrations.FS,
+		goose.WithDisableGlobalRegistry(true),
+		goose.WithTableName("goose.goose_db_version"),
+		goose.WithLogger(goose.NopLogger()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := provider.DownTo(ctx, 6); err != nil {
+		t.Fatalf("down to 00006: %v", err)
+	}
+	if err := insertOld(t, pool, uuid.NewV7()); err != nil {
+		t.Errorf("old-style insert after Down: %v", err)
 	}
 }

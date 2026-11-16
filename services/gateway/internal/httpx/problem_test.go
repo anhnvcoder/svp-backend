@@ -109,7 +109,7 @@ func TestWriteGRPCErrorUnwrapsWrappedStatus(t *testing.T) {
 	}
 }
 
-// The idempotency reasons get a finer status than their gRPC code; a 5xx keeps its own.
+// The idempotency and premium reasons get a finer status than their gRPC code; a 5xx keeps its own.
 func TestWriteGRPCErrorReasonStatus(t *testing.T) {
 	for _, tc := range []struct {
 		code       codes.Code
@@ -121,6 +121,14 @@ func TestWriteGRPCErrorReasonStatus(t *testing.T) {
 		{codes.InvalidArgument, "IDEMPOTENCY_KEY_MISMATCH", 422, "Unprocessable Entity", "IDEMPOTENCY_KEY_MISMATCH"},
 		{codes.FailedPrecondition, "VIDEO_NOT_UPLOADING", 409, "Conflict", "VIDEO_NOT_UPLOADING"},
 		{codes.Internal, "VIDEO_NOT_UPLOADING", 500, "Internal Server Error", "INTERNAL"},
+		{codes.FailedPrecondition, "VIDEO_NOT_PREMIUM", 409, "Conflict", "VIDEO_NOT_PREMIUM"},
+		{codes.FailedPrecondition, "ALREADY_ENTITLED", 409, "Conflict", "ALREADY_ENTITLED"},
+		{codes.Internal, "ALREADY_ENTITLED", 500, "Internal Server Error", "INTERNAL"},
+		// Other premium reasons keep the status of their code.
+		{codes.PermissionDenied, "NOT_ENTITLED", 403, "Forbidden", "NOT_ENTITLED"},
+		{codes.PermissionDenied, "RENDITION_NOT_ENTITLED", 403, "Forbidden", "RENDITION_NOT_ENTITLED"},
+		{codes.NotFound, "RENDITION_NOT_FOUND", 404, "Not Found", "RENDITION_NOT_FOUND"},
+		{codes.InvalidArgument, "INVALID_TIER", 400, "Bad Request", "INVALID_TIER"},
 	} {
 		t.Run(tc.reason+" "+tc.code.String(), func(t *testing.T) {
 			captureLog(t)

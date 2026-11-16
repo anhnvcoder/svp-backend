@@ -43,7 +43,7 @@ Hệ thống chia ba repo ([ADR-0033](docs/adr/0033-svp-web-repo.md), [ADR-0025]
 
 | Repo | Chứa gì |
 | --- | --- |
-| [`svp-backend`](https://github.com/anhnvcoder/svp-backend) (repo này) | Code backend, test, Dockerfile, chart Helm (`deploy/helm/`), stack compose, cluster k3d, CI build, quét, ký sáu image Go. |
+| [`svp-backend`](https://github.com/anhnvcoder/svp-backend) (repo này) | Code backend, test, Dockerfile, chart Helm (`deploy/helm/`), stack compose, cluster k3d, CI build, quét, ký mọi image Go. |
 | [`svp-frontend`](https://github.com/anhnvcoder/svp-frontend) | Web client (Next.js và BFF): mã, test, CI và image web. Nói chuyện với backend qua hợp đồng REST `services/gateway/openapi.yaml` có version, phát hành có chữ ký thành `ghcr.io/anhnvcoder/svp-backend/api/gateway:<version>`; `make api-contract-check` kiểm luật version ở PR. |
 | [`svp-gitops`](https://github.com/anhnvcoder/svp-gitops) | Môi trường nào chạy bản nào: `base/` (values gốc), `envs/stg/`, `envs/prd/` (overlay, `charts.yaml`, digest đang chạy), `argocd/`. Bản phát hành tới stg bằng PR do GitHub App mở, tự merge khi check `gitops-ok` xanh; tới prd bằng PR chép cả bộ đã chạy ở stg, qua environment `promote-prd` có người duyệt. Push vào `main` của repo này không đổi cluster nào. |
 
@@ -98,20 +98,21 @@ Compose và k3d không chạy cùng lúc: mỗi bên từ chối khi bên kia đ
 | Nơi | Dùng để | Lệnh vào | Tài liệu |
 | --- | --- | --- | --- |
 | Compose trên máy | Đường dev chính, smoke, diễn tập | `make up`, `make smoke` | [`reference/compose.md`](docs/reference/compose.md) |
-| Cluster k3d | Cùng chart như cloud: Envoy Gateway, NetworkPolicy, canary, Kyverno; `make k8s-gitops-up` chạy như stg qua Argo CD | `make k8s-up`, `make k8s-gitops-up`, `make k8s-smoke` | [`reference/k8s.md`](docs/reference/k8s.md) |
+| Cluster k3d | Cùng chart như cloud: Envoy Gateway, service mesh Istio ambient (mTLS, quyền theo ServiceAccount, waypoint), NetworkPolicy, canary, Kyverno; `make k8s-gitops-up` chạy như stg qua Argo CD | `make k8s-up`, `make k8s-gitops-up`, `make k8s-smoke`, `make drill-k8s-mesh` | [`reference/k8s.md`](docs/reference/k8s.md) |
 | EKS stg, prd trên AWS | Môi trường thật, dựng bằng Terraform của [`svp-infra`](https://github.com/anhnvcoder/svp-infra) (cluster rồi Argo CD và root), dựng và xoá trong mỗi buổi; người học chạy | `make eks-secrets`, `make eks-glitchtip-init`, `make eks-smoke` | [`reference/eks.md`](docs/reference/eks.md) |
 
 ## Bản đồ thư mục
 
 | Thư mục | Chứa gì, khi nào cần mở |
 | --- | --- |
-| `services/` | Sáu service Go, mỗi service một thư mục. Mở khi sửa logic nghiệp vụ. |
+| `services/` | Service Go và công cụ vận hành Go, mỗi cái một thư mục. Mở khi sửa logic nghiệp vụ. |
 | `services/gateway/` | Biên REST/JSON: route, auth, rate limit, retry và circuit breaker tới gRPC, `openapi.yaml`. |
 | `services/user-service/` | Đăng ký, đăng nhập, JWT, refresh token, hồ sơ, follow (database `svp_user`). |
 | `services/video-service/` | Metadata video, presigned POST, `CompleteUpload`, job dọn upload bỏ dở (database `svp_video`). |
-| `services/media-worker/` | Consumer transcode bằng ffmpeg ra HLS, không có database. |
+| `services/media-worker/` | Consumer transcode ra HLS, không có database: ffmpeg trong container ở compose, k3d; AWS Elemental MediaConvert ở stg, prd ([`docs/explanation/transcode.md`](docs/explanation/transcode.md)). |
 | `services/engagement-service/` | Like, unlike, lượt xem gom theo lô (database `svp_engagement`). |
 | `services/feed-service/` | Feed following (fan-out on write), feed khám phá có cache (database `svp_feed`). |
+| `services/dlq-replay/` | Công cụ phát lại DLQ: chép record của topic `*.dlq` về topic gốc nguyên byte, có `--dry-run`; pod chờ để `exec`, không database ([runbook](docs/runbooks/kafka-dlq-records.md)). |
 | `internal/` | Thư viện dùng chung: kết nối Postgres và retry, Kafka, outbox, Redis (Valkey), telemetry, gRPC, env. |
 | `proto/` | Contract `.proto` của gRPC và event, quản lý bằng buf. Sửa ở đây rồi chạy `make generate`. |
 | `gen/` | Code Go sinh từ `proto/`; commit cùng thay đổi, không sửa tay. Code sinh từ SQL (sqlc) ở `services/*/internal/store`. |
@@ -122,7 +123,7 @@ Compose và k3d không chạy cùng lúc: mỗi bên từ chối khi bên kia đ
 | `deploy/kafka/`, `deploy/valkey/`, `deploy/ops/` | Broker `apache/kafka` (cấu hình, script init topic, user, ACL), aclfile của Valkey, CLI vận hành `svp-kafka`, `svp-valkey`. |
 | `deploy/observability/` | Collector, Prometheus và rule SLO, Alertmanager, Grafana LGTM, GlitchTip, Elastic (so sánh). |
 | `deploy/k8s/` | Cluster k3d: `helmfile.yaml.gotmpl` cùng glue `install.sh` (đường dev), `gitops.sh`, `secrets.sh` và `rotate.sh` (xoay credential, Reloader restart), `k8s.mk`, PSA, `drills/` (Chainsaw), `cloud/` (kiểm tĩnh Job k6). Values, overlay và digest của các môi trường ở `svp-gitops`. |
-| `deploy/helm/` | Chart Helm: `svp-service` (chung cho mọi service), `svp-cluster`, `svp-data`, `svp-observability`, `svp-policy` (Kyverno). |
+| `deploy/helm/` | Chart Helm: `svp-service` (chung cho mọi service), `svp-cluster` (kèm namespace và waypoint của mesh), `svp-data`, `svp-observability`, `svp-policy` (Kyverno). |
 | `deploy/k6/`, `deploy/dast/` | Kịch bản tải k6 theo SLO; DAST của gateway theo `openapi.yaml` bằng Schemathesis (`make dast`). |
 | `deploy/ci/` | Script của pipeline: build, quét, ký, attest, guard promote sang `svp-gitops`, check của `svp-gitops`; `verify/` là trình tự của `verify.yml`. Phần lớn logic CI ở đây, không ở YAML. |
 | `.githooks/` | Git hook `pre-commit` (gofmt, golangci-lint, buf lint, gitleaks); bật bằng `make hooks`. |

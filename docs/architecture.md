@@ -13,7 +13,7 @@ like và để lại lượt xem. Hệ thống chạy được trên máy (compo
 | F1 | Đăng ký, đăng nhập bằng email + mật khẩu, nhận JWT |
 | F2 | Follow, unfollow người dùng khác |
 | F3 | Upload video tối đa 3 phút; hệ thống transcode ra HLS; trạng thái `UPLOADING → PROCESSING → READY` hoặc `FAILED` |
-| F4 | Phát video bằng HLS, tự đổi chất lượng theo mạng |
+| F4 | Phát video bằng HLS, tự đổi chất lượng theo mạng; video premium phát đủ chỉ cho người có vé, tới chất lượng của gói, người khác xem bản xem thử |
 | F5 | Feed "đang theo dõi": video mới nhất của người mình follow, phân trang bằng cursor |
 | F6 | Feed "khám phá": video mới nhất toàn hệ thống, cho người chưa follow ai |
 | F7 | Like, unlike; ghi lượt xem; hiện số lượt xem, số like và mình đã like chưa |
@@ -21,7 +21,7 @@ like và để lại lượt xem. Hệ thống chạy được trên máy (compo
 **Web client** (repo `svp-frontend`, [ADR-0016](adr/0016-web-client.md), [ADR-0018](adr/0018-web-profiles-public-video-upload.md)):
 Next.js phục vụ F1–F7, thêm hồ sơ tối thiểu (handle không đổi, tên hiển thị đổi được), video theo tác giả, "Video của tôi" và
 trang chia sẻ `/v/:id` mở được khi chưa đăng nhập. Web là BFF: trình duyệt chỉ gọi API qua web (file video thì tải lên và phát thẳng
-với object storage), token không tới trình duyệt. k6 và curl gọi thẳng gateway.
+với object storage, trừ playlist của video premium đi qua BFF), token không tới trình duyệt. k6 và curl gọi thẳng gateway.
 
 **Ngoài phạm vi:** app di động, comment, tìm kiếm, gợi ý bằng ML, thông báo, xoá/sửa video, kiểm duyệt nội dung. Thêm thì viết ADR.
 
@@ -90,6 +90,7 @@ alarm của dịch vụ dữ liệu báo người vận hành qua email, độc 
 | JWT ký ở user-service, kiểm ở gateway và ở mỗi service; refresh token xoay; session BFF ở Redis | [ADR-0016](adr/0016-web-client.md), [ADR-0042](adr/0042-caller-identity-grpc.md), [ADR-0046](adr/0046-web-session-lifetime.md) |
 | Web client Next.js ở repo riêng, hợp đồng REST có version | [ADR-0016](adr/0016-web-client.md), [ADR-0033](adr/0033-svp-web-repo.md) |
 | OpenTelemetry qua Collector tới Grafana LGTM, GlitchTip cho lỗi, SLO bằng Sloth | [ADR-0011](adr/0011-observability-stage3.md), [ADR-0012](adr/0012-elastic-vs-grafana-stage3.md) |
+| Istio ambient trên cluster: mTLS STRICT giữa mọi pod của `svp`, quyền theo ServiceAccount, cân tải và canary gRPC theo request bằng waypoint; compose không có mesh | [ADR-0042](adr/0042-caller-identity-grpc.md), [ADR-0075](adr/0075-service-mesh.md) |
 | Cùng chart chạy trên k3d và EKS, Envoy Gateway, dữ liệu trong cluster (trên AWS: RDS, S3, MSK, ElastiCache managed) | [ADR-0014](adr/0014-kubernetes-local-stage4.md), [ADR-0034](adr/0034-aws-stage7.md) |
 | Kafka và Valkey managed ở stg, prd (Amazon MSK, ElastiCache for Valkey, ở subnet database không route ra Internet); compose, k3d chạy cùng phần mềm, cùng xác thực, TLS, cổng; mỗi client một user ACL | [ADR-0053](adr/0053-msk-elasticache-valkey.md), [ADR-0054](adr/0054-data-subnet-tier.md) |
 | PostgreSQL 17 ở RDS, CloudNativePG, compose; mọi client kiểm cert server bằng `sslmode=verify-full`; RDS lớp production ở prd, CMK riêng, tham số ghi log; không proxy kết nối | [ADR-0057](adr/0057-postgres17-verify-full.md) |
@@ -111,11 +112,12 @@ flowchart LR
         us["<b>user-service</b><br/>[Go, gRPC; Postgres svp_user]<br/>Tài khoản, follow, hồ sơ"]
         vs["<b>video-service</b><br/>[Go, gRPC; Postgres svp_video]<br/>Metadata, vòng đời video"]
         mw["<b>media-worker</b><br/>[Go + ffmpeg]<br/>Transcode HLS"]
+        dr["<b>dlq-replay</b><br/>[Go]<br/>Chờ lệnh; phát lại record DLQ"]
         es["<b>engagement-service</b><br/>[Go, gRPC; Postgres svp_engagement]<br/>Like, view, bộ đếm"]
         fs["<b>feed-service</b><br/>[Go, gRPC; Postgres svp_feed]<br/>Read model feed"]
         bus[["<b>Kafka</b><br/>[Apache Kafka; MSK trên cloud]<br/>SCRAM-SHA-512 trên TLS, 9096"]]
-        obj[("<b>Object storage</b><br/>[RustFS / S3]<br/>bucket uploads, media")]
-        cdn["<b>CDN</b><br/>[CloudFront]<br/>chỉ có trên cloud"]
+        obj[("<b>Object storage</b><br/>[RustFS / S3]<br/>bucket uploads, media (media/, preview/, premium/)")]
+        cdn["<b>CDN</b><br/>[CloudFront]<br/>chỉ có trên cloud; premium/ cần URL đã ký"]
         redis[("<b>Valkey</b><br/>[ElastiCache trên cloud]<br/>TLS, 6379, user ACL theo db")]
     end
 
@@ -133,7 +135,7 @@ flowchart LR
     gw -->|gRPC| es
     gw -->|gRPC| fs
 
-    vs -->|"ký URL, HEAD"| obj
+    vs -->|"ký URL, HEAD, đọc playlist premium"| obj
     mw -->|"đọc file gốc, ghi HLS"| obj
     fs -->|"cache feed khám phá"| redis
 
@@ -145,6 +147,8 @@ flowchart LR
     es -.->|"view.recorded"| bus
     bus -.->|"view.recorded"| es
     bus -.->|"user.*, video.ready"| fs
+    bus -.->|"record trong *.dlq"| dr
+    dr -.->|"cùng record về topic gốc"| bus
 ```
 
 Mỗi service chỉ đọc ghi database của mình; event về một thực thể chỉ do service sở hữu thực thể đó phát
@@ -190,7 +194,7 @@ sequenceDiagram
     VS-->>C: 202, PROCESSING
     VS--)RP: relay phát video.uploaded
     RP--)MW: video.uploaded
-    MW->>S3: tải file gốc, ffmpeg, ghi HLS vào media/{video_id}/{version}/{attempt}/
+    MW->>S3: tải file gốc, ffmpeg, ghi HLS vào media/{video_id}/{version}/{attempt}/ (video premium: premium/, xem thử preview/)
     MW--)RP: transcode.completed
     RP--)VS: transcode.completed
     VS->>VS: 1 transaction: READY + outbox video.ready
@@ -203,6 +207,8 @@ Saga dạng choreography: mỗi service nghe event rồi làm phần của mình
 video-service chuyển `FAILED` và xoá file dở dang. Mọi bước chịu được event trùng: media-worker ghi output theo version (`event_id`
 của `video.uploaded`), master tạo một lần bằng `If-None-Match: *` ([ADR-0029](adr/0029-immutable-media-versions.md));
 video-service chỉ chuyển trạng thái một chiều; feed-service ghi timeline với khoá chính chống trùng.
+Sơ đồ trên là đường của compose, k3d (ffmpeg trong media-worker); ở stg, prd media-worker giao bước transcode cho
+MediaConvert với cùng event và bố cục ([`explanation/transcode.md`](explanation/transcode.md)).
 
 Với `S3_CREDENTIALS=container`, `internal/objstore` giữ hai cache credential riêng: một ký lời gọi tới storage, một ký form
 presigned (client chỉ để ký, có cache riêng, thay credential sớm hơn nhiều so với cache của lời gọi). Mỗi cache lấy credential
@@ -223,6 +229,9 @@ engagement-service và `GetProfiles` của user-service, mỗi lời gọi timeo
 vẫn trả về, chỉ thiếu `stats` hay `author` (graceful degradation, [ADR-0018](adr/0018-web-profiles-public-video-upload.md) §5);
 danh sách video theo tác giả và trang một video ghép cùng cách. Chống quá tải và lỗi lan ([ADR-0010](adr/0010-redis-ratelimit-cache-resilience-stage2c.md)):
 
+- **Giới hạn in-flight** mỗi pod gateway (`MAX_IN_FLIGHT`, middleware `httpx.LoadShed` trước rate limit): quá giới hạn
+  trả ngay 503, `Retry-After: 1`, không xếp hàng ([ADR-0072](adr/0072-pod-operations.md),
+  [`explanation/reliability.md`](explanation/reliability.md#chặn-quá-tải-ở-gateway)).
 - **Rate limit** GCRA theo lớp route; Redis lỗi thì lớp `read`, `write` mở, các lớp còn lại đóng mềm bằng bộ đếm trong bộ nhớ
   (ngưỡng từng lớp ở [`reference/contracts.md`](reference/contracts.md#rest-ở-gateway)).
 - **Cache khám phá:** chỉ trang đầu, TTL 5 s, không xoá chủ động; Redis lỗi hay quá 50 ms thì đọc Postgres, không báo lỗi.
@@ -230,13 +239,20 @@ danh sách video theo tác giả và trang một video ghép cùng cách. Chốn
   3 s; breaker mở thì lỗi ngay không gọi mạng (feed trả trang không `stats`, like trả 503). `GetStats`, `GetProfiles` không
   retry và `DEADLINE_EXCEEDED` của chúng không mở breaker.
 
+Item của video premium mang `premium: true` và `playlist_url` của bản xem thử; feed không giữ key nào của bản đầy đủ. Phát đủ đi đường
+khác: trình phát hỏi playlist qua BFF tới route phát của gateway, video-service kiểm vé, lọc master theo gói và ký URL từng segment, rồi
+segment đi thẳng từ CDN (local: object store) ([`explanation/premium-playback.md`](explanation/premium-playback.md),
+[ADR-0073](adr/0073-premium-playback.md)).
+
 ### 6.3 Ghi lượt xem
 
 `POST /videos/{id}/views`: engagement-service phát `view.recorded` lên Kafka (`acks=all`) rồi trả 202, không chạm database.
 Consumer của nó gom lô tối đa 5.000 record hoặc 1 s, cộng dồn theo `video_id`, ghi cả lô bằng một câu `INSERT ... ON CONFLICT DO
 UPDATE` vào `view_counts`. Bảng `consumer_offsets` giữ offset từng partition, cập nhật trong cùng transaction với bộ đếm, nên lô giao
 lại chỉ cộng phần chưa cộng ([ADR-0009](adr/0009-engagement-feed-stage2b.md)). Lỗi tạm thời thử lại trong ngân sách 5 phút rồi
-chép lô sang `engagement.views.v1.dlq` ([ADR-0045](adr/0045-bounded-batch-retry.md), [runbook](runbooks/kafka-dlq-records.md)).
+chép lô sang `engagement.views.v1.dlq` ([ADR-0045](adr/0045-bounded-batch-retry.md),
+[runbook](runbooks/kafka-dlq-records.md)); phát lại lô đó chỉ bằng `dlq-replay`, mỗi khoảng một lần vì khử trùng lượt
+xem theo offset ([độ tin cậy](explanation/reliability.md#phát-lại-dlq)).
 Like đi đường đồng bộ: bảng `likes` và `like_counts` đổi trong cùng transaction, nên like của chính mình thấy ngay.
 
 ### 6.4 Xác thực
@@ -245,37 +261,74 @@ user-service cấp JWT ký bằng khoá riêng; gateway kiểm chữ ký bằng 
 trong gRPC metadata `authorization`; mỗi service kiểm lại bằng `JWT_VERIFY_KEYS` và lấy người gọi từ `sub`
 ([ADR-0042](adr/0042-caller-identity-grpc.md)). Login trả thêm refresh token mờ (user-service chỉ lưu SHA-256), xoay mỗi lần dùng;
 trình lại token đã dùng thì cả họ bị thu hồi ([ADR-0016](adr/0016-web-client.md)). Session của web có idle và absolute timeout
-([ADR-0046](adr/0046-web-session-lifetime.md)).
+([ADR-0046](adr/0046-web-session-lifetime.md)). Sơ đồ sequence của đăng ký, đăng nhập, làm mới phiên, đăng xuất và lý do
+từng bước ở [`explanation/authentication.md`](explanation/authentication.md).
+
+Access token sống `authtoken.TTL` (15 phút, [ADR-0069](adr/0069-auth-hardening.md) §4); đã cấp thì sống tới hết hạn
+(JWT-3 của [`threat-model.md`](threat-model.md#41-jwt-và-đăng-nhập)), nên BFF làm mới trước khi hết hạn. Refresh không
+rõ kết quả thì BFF giữ session và không thử lại trong request đó.
+
+### 6.5 Request gRPC qua mesh
+
+Cluster (k3d, EKS) chạy Istio ambient ([ADR-0075](adr/0075-service-mesh.md)); compose không có mesh. Bốn thành phần
+nằm ở `istio-system`: `istiod` (cấp chứng chỉ theo ServiceAccount, đẩy cấu hình xuống proxy), `istio-cni` (đặt luật chuyển
+hướng lưu lượng của pod), `ztunnel` (DaemonSet, mã hoá L4 trong network namespace của từng pod) và chart `base` (CRD). Namespace
+`svp` và pod proxy của Envoy Gateway vào mesh bằng nhãn `istio.io/dataplane-mode: ambient`. **Waypoint** là một Envoy chung ở
+namespace `svp-mesh`, chỉ nhận lưu lượng của bốn Service gRPC (nhãn `istio.io/use-waypoint`): nó cân tải theo từng request và
+kiểm quyền L7. Pod của waypoint đứng ngoài mesh (`dataplane-mode: none`), tự nói HBONE, giao thức đường hầm mTLS của ambient
+trên cổng 15008. Postgres, Valkey, Kafka, object store và observability ngoài mesh: ztunnel chuyển nguyên, TLS riêng của chúng giữ.
 
 ```mermaid
 sequenceDiagram
-    participant B as Trình duyệt
-    participant W as web (BFF)
-    participant R as Valkey db 9
+    participant C as Client
+    participant E as Envoy (envoy-gateway-system)
+    participant ZE as ztunnel (pod Envoy)
+    participant ZG as ztunnel (pod gateway)
     participant G as gateway
+    participant W as waypoint (svp-mesh)
+    participant ZU as ztunnel (pod user-service)
     participant U as user-service
-    B->>W: POST form đăng nhập (Server Action, kiểm CSRF)
-    W->>G: POST /auth/login
-    G->>U: Login
-    U-->>W: access token, refresh token (họ mới)
-    W->>R: session mới (khoá sha256(sid))
-    W-->>B: Set-Cookie svp_sid (HttpOnly), 303
-    W->>R: access token sắp hết hạn: SET khoá refresh NX (single-flight giữa replica)
-    W->>G: POST /auth/refresh
-    G->>U: Refresh (một transaction, khoá theo họ)
-    U-->>W: cặp token mới, token cũ đánh dấu đã dùng
-    W->>R: compare-and-set session
+
+    C->>E: REST/JSON, TLS kết thúc ở Envoy (chưa vào mesh)
+    E->>ZE: kết nối tới pod gateway, plaintext trong pod
+    ZE->>ZG: HBONE mTLS 15008, danh tính: namespace envoy-gateway-system
+    Note over ZG: AuthorizationPolicy L4 của gateway: chỉ envoy-gateway-system và ServiceAccount web
+    ZG->>G: plaintext trong pod
+    G->>G: JWT, rate limit, chọn lời gọi gRPC
+    G->>ZG: gRPC tới Service user-service, credential insecure, ztunnel của pod bắt
+    ZG->>W: HBONE mTLS 15008, danh tính: ServiceAccount gateway
+    Note over W: AuthorizationPolicy L7 của Service: chỉ ServiceAccount gateway. Chọn pod theo từng request, GRPCRoute chia stable/canary, không retry
+    W->>ZU: HBONE mTLS mới, danh tính: ServiceAccount waypoint
+    Note over ZU: PeerAuthentication STRICT, AuthorizationPolicy L4: chỉ waypoint, chỉ cổng gRPC
+    ZU->>U: plaintext trong pod
+    U-->>G: response gRPC, ngược đường đã đi
+    G-->>E: response REST, ngược đường đã đi
 ```
 
-Refresh không rõ kết quả thì BFF giữ session và không thử lại trong request đó. Access token đã cấp sống tới hết hạn (JWT-3 của
-[`threat-model.md`](threat-model.md#41-jwt-và-đăng-nhập)).
+Plaintext chỉ còn trong network namespace của pod, giữa process và ztunnel của nó; trên dây mọi chặng giữa pod của `svp` đi
+mTLS. Quyền kiểm ở ba chỗ, mỗi chỗ theo danh tính SPIFFE `cluster.local/ns/<namespace>/sa/<serviceaccount>`:
+
+- **Pod đích, L4 (ztunnel):** pod gateway chỉ nhận namespace của Envoy và ServiceAccount `web`; pod service gRPC chỉ nhận
+  ServiceAccount của waypoint, nên lời gọi bỏ qua waypoint (tới thẳng IP pod) bị từ chối. Pod không có `ingressFrom`
+  (`media-worker`, `dlq-replay`) không nhận ai. `PeerAuthentication` STRICT từ chối plaintext ở mọi cổng.
+- **Waypoint, L7:** `AuthorizationPolicy` gắn vào Service của release gRPC, chỉ cho ServiceAccount trong `ingressFrom`
+  (gateway). ServiceAccount lạ trong mesh bị từ chối ở đây.
+- **NetworkPolicy** giữ làm lớp mạng, mở thêm 15008 giữa các peer trong mesh và nguồn probe của kubelet
+  (`169.254.7.127/32`, địa chỉ istio-cni ghi lại cho probe).
+
+Service gRPC của `svp` vẫn dựng kết nối `insecure` (không TLS ở lớp ứng dụng): mesh mã hoá trên dây, còn compose không có
+mesh nên ở đó lớp ứng dụng ([ADR-0042](adr/0042-caller-identity-grpc.md) §1) che. Lý do và phương án đã loại: mục
+[Phương án đã cân nhắc](adr/0075-service-mesh.md#phương-án-đã-cân-nhắc) của ADR-0075. Cân tải, canary và cái gì hỏng khi
+mesh hỏng:
+[`explanation/reliability.md`](explanation/reliability.md#mesh-cân-tải-và-khi-mesh-hỏng),
+[`explanation/delivery.md`](explanation/delivery.md#release-mới-và-canary-grpc).
 
 ## 7. Triển khai
 
 | Nơi | Dùng để | Dữ liệu | Chi tiết |
 | --- | --- | --- | --- |
 | Compose trên máy | Đường dev chính, smoke, diễn tập | Postgres, Kafka, Valkey, RustFS trong compose | [Compose](explanation/deployment.md#compose) |
-| Cluster k3d | Cùng chart như cloud: Envoy Gateway, NetworkPolicy, canary, Kyverno, đường GitOps | CloudNativePG, Kafka, Valkey, RustFS trong cluster | [k3d](explanation/deployment.md#kubernetes-cục-bộ-k3d) |
+| Cluster k3d | Cùng chart như cloud: Envoy Gateway, mesh Istio ambient, NetworkPolicy, canary, Kyverno, đường GitOps | CloudNativePG, Kafka, Valkey, RustFS trong cluster | [k3d](explanation/deployment.md#kubernetes-cục-bộ-k3d) |
 | EKS trên AWS | stg và prd, dựng bằng Terraform của `svp-infra`; khác biệt stg/prd ở [`explanation/environments.md`](explanation/environments.md) | RDS for PostgreSQL, Amazon MSK, ElastiCache for Valkey ở subnet database; S3 + CloudFront | [AWS](explanation/deployment.md#aws) |
 
 **Postgres, Kafka và Valkey ở mọi nơi** ([ADR-0053](adr/0053-msk-elasticache-valkey.md), [ADR-0057](adr/0057-postgres17-verify-full.md)):
@@ -295,7 +348,12 @@ nhánh `if` theo môi trường.
 - Client Valkey dùng `rediss://<user>:<mật khẩu>@<host>:6379/<db>`; mỗi client một user ACL chỉ được db và tiền tố khoá của mình
   (gateway db 10 `svp:gw:*`, feed-service db 14 `svp:feed:*`, web db 9 `svp:web:*`), user `default` tắt.
 - Script, drill, runbook chạm Kafka và Valkey chỉ qua **CLI vận hành** `/opt/svp/bin/svp-kafka`, `/opt/svp/bin/svp-valkey`: trong container
-  `kafka`, `valkey` của compose, trong Deployment `svp-ops` (namespace `svp-data`) ở k3d và EKS.
+  `kafka`, `valkey` của compose, trong Deployment `svp-ops` (namespace `svp-data`) ở k3d và EKS. Ngoại lệ duy nhất là
+  phát lại record DLQ, chỉ qua release `dlq-replay` (user Kafka `svp-dlq-replay`): `make dlq-replay ARGS=…` ở compose,
+  `kubectl exec deploy/dlq-replay -- /app replay …` ở k3d và EKS
+  ([`explanation/reliability.md`](explanation/reliability.md#phát-lại-dlq), [ADR-0072](adr/0072-pod-operations.md)).
+- RDS và hai bucket của `media` có backup hằng ngày bằng AWS Backup, chép sang account `svp-backup`; RDS thêm PITR gốc. Phạm vi, RTO/RPO và
+  diễn tập: [`explanation/backup-dr.md`](explanation/backup-dr.md).
 - Trên AWS, RDS, MSK và ElastiCache nằm ở subnet database, route table không có `0.0.0.0/0`; egress 5432, 9096, 6379 của pod chỉ tới dải
   của subnet đó (`cluster.dbCidrs`, [ADR-0054](adr/0054-data-subnet-tier.md)).
 
@@ -322,8 +380,9 @@ flowchart TB
                     end
                     subgraph kn["Node của Karpenter, NodePool default<br/>[Graviton; stg Spot, prd on-demand]"]
                         envoy["Envoy Gateway<br/>[HPA từ 2, PDB, trải zone]"]
-                        svc["web, gateway, 4 service gRPC,<br/>media-worker [svp-service]"]
-                        obsn["Collector, Prometheus agent,<br/>Pyroscope, GlitchTip [svp-obs]"]
+                        svc["web, gateway, 4 service gRPC,<br/>media-worker, dlq-replay [svp-service]"]
+                        obsn["Collector, Prometheus agent,<br/>Pyroscope, GlitchTip, OpenCost,<br/>blackbox exporter [svp-obs]"]
+                        mesh["istiod, istio-cni, ztunnel [istio-system];<br/>waypoint [svp-mesh]"]
                     end
                     kyv["Kyverno<br/>[3 replica, PDB, trải zone]"]
                 end
@@ -337,8 +396,9 @@ flowchart TB
         end
         s3[("S3 uploads, media")]
         cfe["CloudFront svp-env-web, svp-env-api<br/>[web ACL, cert ACM; VPC origin]"]
-        cf["CloudFront svp-env-media<br/>[web ACL, OAC]"]
+        cf["CloudFront svp-env-media<br/>[web ACL, OAC; key group cho premium/]"]
         q[["SQS + EventBridge<br/>interruption của Karpenter"]]
+        mc["MediaConvert queue svp-env<br/>[trạng thái job: EventBridge → SQS svp-env-transcode-events]"]
         alarm["CloudWatch alarm, ruler của AMP<br/>→ SNS svp-env-alarms → email"]
         subgraph keep["Sống qua destroy [root aws/accounts/env]"]
             ecr[("ECR<br/>[repo phát hành, pull-through cache]")]
@@ -351,8 +411,12 @@ flowchart TB
     svc --> msk
     svc --> vk
     svc --> s3
+    svc -->|"media-worker mediaconvert"| mc
+    mc --> s3
     cf --> s3
     q --> plat
+    obsn -->|"probe web, api qua NAT, tên công khai"| cfe
+    obsn -->|"probe media"| cf
     rds -.-> alarm
     msk -.-> alarm
     vk -.-> alarm
@@ -376,8 +440,9 @@ endpoint interface ([ADR-0064](adr/0064-interface-endpoints.md)). Sơ đồ AWS 
 [luồng](https://github.com/anhnvcoder/svp-infra/blob/main/docs/diagrams/svp-aws-flows.png).
 
 Account của env nằm trong một org AWS theo AWS Security Reference Architecture: account `svp-log-archive` giữ mọi log bảo mật (trail org, Config,
-flow log, log WAF, log CloudFront, finding GuardDuty), account `svp-security` chạy GuardDuty, Security Hub, Config, Access Analyzer cho mọi account và gửi sự
-kiện bảo mật tới email; SCP, RCP gắn ở root của org đặt trần cho mọi account thành viên (không áp lên management), declarative policy EC2 áp cả
+flow log, log WAF, log CloudFront, finding GuardDuty), account `svp-security` chạy GuardDuty và Access Analyzer cho mọi account, Security Hub và
+Config cho các account có cờ `security_hub`, `config_recording` bật ([`paid-features.md`](explanation/paid-features.md)), và gửi sự kiện bảo mật
+tới email; SCP, RCP gắn ở root của org đặt trần cho mọi account thành viên (không áp lên management), declarative policy EC2 áp cả
 management ([ADR-0059](adr/0059-org-structure-guardrails.md), [ADR-0060](adr/0060-org-detection-logging.md)). Cấu trúc, quyền, luồng log và
 luồng cảnh báo: [`explanation/aws-security.md`](explanation/aws-security.md).
 
@@ -387,6 +452,8 @@ luồng cảnh báo: [`explanation/aws-security.md`](explanation/aws-security.md
   mã lỗi gRPC sang HTTP, route: [`reference/contracts.md`](reference/contracts.md).
 - **Idempotency:** mọi consumer chịu được event trùng; `POST /videos` nhận `Idempotency-Key` ([ADR-0043](adr/0043-idempotency-key.md)).
 - **Quan sát:** OpenTelemetry Collector, lỗi ở GlitchTip, RUM của web: [`explanation/observability.md`](explanation/observability.md).
+- **Chi phí và uptime:** chi phí compute theo namespace, service bằng OpenCost; probe từ ngoài vào bằng blackbox exporter, SLO `public-uptime`:
+  [`explanation/cost-and-uptime.md`](explanation/cost-and-uptime.md) ([ADR-0074](adr/0074-cost-uptime.md)).
 - **Bảo mật:** [`threat-model.md`](threat-model.md); chuỗi cung ứng: [`explanation/delivery.md`](explanation/delivery.md#cicd-và-chuỗi-cung-ứng).
 - **Độ tin cậy:** SLO, tải, backup, probe ([ADR-0044](adr/0044-grpc-readiness.md)): [`explanation/reliability.md`](explanation/reliability.md),
   [`runbooks/`](runbooks/).
@@ -401,8 +468,9 @@ Danh sách đầy đủ kèm lý do chấp nhận và điều kiện xem lại: 
 
 - **Chưa đo trên cloud:** k6 1.000 req/s, chaos trên EKS, diễn tập phục hồi RDS, hạn 50 ms của Valkey
   ([`explanation/reliability.md`](explanation/reliability.md#chưa-đo-trên-cloud)); NFR độ trễ chưa có số đo ở tải mục tiêu.
-- **Không có mTLS giữa gateway và service gRPC:** token chuyển tiếp đi plaintext trong cluster, NetworkPolicy là lớp chặn duy nhất;
-  Istio ambient là phương án tuỳ chọn, chưa dựng (IN-2, IN-3, [mục 4.5](threat-model.md#45-mức-tin-cậy-giữa-các-service)).
+- **Compose không có mTLS giữa gateway và service gRPC:** token chuyển tiếp đi plaintext trong mạng compose, chỉ lớp ứng dụng
+  ([ADR-0042](adr/0042-caller-identity-grpc.md) §1) che; trên cluster mesh mã hoá và kiểm danh tính (IN-2, IN-3, [mục
+  4.5](threat-model.md#45-mức-tin-cậy-giữa-các-service)). Telemetry (OTLP) ra `svp-obs` ngoài mesh.
 - **Độ tươi feed chưa thành SLO:** local quá ít event để burn rate có nghĩa; chỉ có histogram trên dashboard.
 - **Kyverno một replica ở k3d:** nó chết thì webhook từ chối mọi pod `svp` mới tới khi nó lên lại (SC-1, SC-7); trên EKS ba replica có PDB
   và trải zone ([ADR-0056](adr/0056-eks-platform-ha.md) §5).

@@ -510,6 +510,18 @@ Dưới ngưỡng $5 mỗi tháng. Khoản lớn nhất là hai key KMS.
 
 Bảng đủ của mọi thành phần ở `docs/explanation/environments.md`.
 
+## Phép kiểm edge
+
+Runbook buổi kiểm:
+
+- `curl -sI` web, api, media có HSTS, nosniff, cert ACM đúng tên, TLS ≥ 1.2.
+- Tên ALB ra IP private.
+- Mẫu thử KnownBadInputs nhận 403 ở web, api.
+- Log gateway có IP công khai của máy người học, kể cả khi tự đặt `CloudFront-Viewer-Address`, `X-Forwarded-For`.
+- Object mới trong bucket log CloudFront và bucket log WAF.
+- `dig +dnssec` có cờ `ad`; `dig CAA`.
+- Plan lần hai `No changes`; sau destroy `sweep.sh <env>` sạch.
+
 ## Bảng control FSBP
 
 Control của Security Hub CSPM áp lên tài nguyên mới. "FSBP" là có trong chuẩn AWS Foundational Security Best Practices v1.0.0 [N22].

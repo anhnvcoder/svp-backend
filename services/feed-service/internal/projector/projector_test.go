@@ -114,6 +114,18 @@ func readyEvent(video, author string, published time.Time) *videov1.VideoReady {
 	}
 }
 
+// premiumReadyEvent returns a valid video.ready of a premium video: its master under premium/,
+// its thumbnail and public preview under preview/.
+func premiumReadyEvent(video, author string, published time.Time) *videov1.VideoReady {
+	e := readyEvent(video, author, published)
+	const version, attempt = "0190a6e4-7b2c-7d3e-9f40-0000000000a1", "0190a6e4-7b2c-7d3e-9f40-0000000000b2"
+	e.Premium = true
+	e.PlaylistKey = "premium/" + video + "/" + version + "/master.m3u8"
+	e.ThumbnailKey = "preview/" + video + "/" + version + "/" + attempt + "/thumbnail.jpg"
+	e.PreviewPlaylistKey = "preview/" + video + "/" + version + "/master.m3u8"
+	return e
+}
+
 func videoRecord(t *testing.T, e *videov1.VideoReady) *kgo.Record {
 	t.Helper()
 	return &kgo.Record{Topic: TopicVideoLifecycle, Key: []byte(e.GetVideoId()), Value: mustMarshal(t, &videov1.VideoEvent{
@@ -697,6 +709,13 @@ func TestInvalidEventsGoToDeadLetter(t *testing.T) {
 			return videoRecord(t, e)
 		}
 	}
+	premium := func(change func(id string, e *videov1.VideoReady)) func(t *testing.T, id string) *kgo.Record {
+		return func(t *testing.T, id string) *kgo.Record {
+			e := premiumReadyEvent(id, author, now())
+			change(id, e)
+			return videoRecord(t, e)
+		}
+	}
 	cases := []struct {
 		name   string
 		record func(t *testing.T, id string) *kgo.Record
@@ -713,6 +732,27 @@ func TestInvalidEventsGoToDeadLetter(t *testing.T) {
 		{"playlist with %2e%2e", ready(func(id string, e *videov1.VideoReady) { e.PlaylistKey = "media/" + id + "/%2e%2e/master.m3u8" })},
 		{"thumbnail with backslash", ready(func(id string, e *videov1.VideoReady) { e.ThumbnailKey = "media/" + id + "/..\\x.jpg" })},
 		{"playlist is the prefix", ready(func(id string, e *videov1.VideoReady) { e.PlaylistKey = "media/" + id + "/" })},
+		{"regular video with a preview", ready(func(id string, e *videov1.VideoReady) {
+			e.PreviewPlaylistKey = premiumReadyEvent(id, author, now()).GetPreviewPlaylistKey()
+		})},
+		{"premium without preview", premium(func(_ string, e *videov1.VideoReady) { e.PreviewPlaylistKey = "" })},
+		{"premium preview under premium/", premium(func(_ string, e *videov1.VideoReady) { e.PreviewPlaylistKey = e.GetPlaylistKey() })},
+		{"premium preview under media/", premium(func(id string, e *videov1.VideoReady) {
+			e.PreviewPlaylistKey = readyEvent(id, author, now()).GetPlaylistKey()
+		})},
+		{"premium preview under another video", premium(func(_ string, e *videov1.VideoReady) {
+			e.PreviewPlaylistKey = "preview/" + ids.New() + "/master.m3u8"
+		})},
+		{"premium preview with ..", premium(func(id string, e *videov1.VideoReady) { e.PreviewPlaylistKey = "preview/" + id + "/../master.m3u8" })},
+		{"premium playlist under media/", premium(func(id string, e *videov1.VideoReady) {
+			e.PlaylistKey = readyEvent(id, author, now()).GetPlaylistKey()
+		})},
+		{"premium thumbnail under premium/", premium(func(id string, e *videov1.VideoReady) {
+			e.ThumbnailKey = "premium/" + id + "/thumbnail.jpg"
+		})},
+		{"premium thumbnail under media/", premium(func(id string, e *videov1.VideoReady) {
+			e.ThumbnailKey = readyEvent(id, author, now()).GetThumbnailKey()
+		})},
 		{"no published_at", ready(func(_ string, e *videov1.VideoReady) { e.PublishedAt = nil })},
 		{"no duration", ready(func(_ string, e *videov1.VideoReady) { e.Duration = nil })},
 		{"zero duration", ready(func(_ string, e *videov1.VideoReady) { e.Duration = durationpb.New(0) })},
@@ -816,6 +856,53 @@ func TestInvalidEventsGoToDeadLetter(t *testing.T) {
 	}
 	if n := count(t, "SELECT count(*) FROM follows WHERE followee_id = $1", author); n != 1 {
 		t.Errorf("got %d follows of the author, want only the valid one", n)
+	}
+}
+
+// storedVideo returns the playlist_key, thumbnail_key and premium flag stored for video.
+func storedVideo(t *testing.T, video string) (playlist, thumbnail string, premium bool) {
+	t.Helper()
+	err := testPool.QueryRow(t.Context(), "SELECT playlist_key, thumbnail_key, premium FROM videos WHERE video_id = $1",
+		video).Scan(&playlist, &thumbnail, &premium)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return playlist, thumbnail, premium
+}
+
+// A video.ready without the premium fields, as the release before sends, stores a regular video
+// with the event's keys.
+func TestRegularVideoReadyStoresItsKeys(t *testing.T) {
+	needDB(t)
+	video := ids.New()
+	e := readyEvent(video, ids.New(), now())
+	handle(t, newProjector(), videoRecord(t, e))
+	playlist, thumbnail, premium := storedVideo(t, video)
+	if playlist != e.GetPlaylistKey() || thumbnail != e.GetThumbnailKey() || premium {
+		t.Errorf("stored (%q, %q, premium %v), want (%q, %q, false)", playlist, thumbnail, premium,
+			e.GetPlaylistKey(), e.GetThumbnailKey())
+	}
+}
+
+// A premium video is stored with its public preview as playlist_key, and fans out like any other:
+// the feed keeps no key under premium/.
+func TestPremiumVideoReadyStoresPreview(t *testing.T) {
+	needDB(t)
+	p := newProjector()
+	video, author, follower := ids.New(), ids.New(), ids.New()
+	e := premiumReadyEvent(video, author, now())
+	handle(t, p, followRecord(t, follower, author), videoRecord(t, e))
+	playlist, thumbnail, premium := storedVideo(t, video)
+	if playlist != e.GetPreviewPlaylistKey() || thumbnail != e.GetThumbnailKey() || !premium {
+		t.Errorf("stored (%q, %q, premium %v), want (%q, %q, true)", playlist, thumbnail, premium,
+			e.GetPreviewPlaylistKey(), e.GetThumbnailKey())
+	}
+	if n := count(t, "SELECT count(*) FROM videos WHERE video_id = $1 AND (playlist_key LIKE 'premium/%' OR "+
+		"thumbnail_key LIKE 'premium/%')", video); n != 0 {
+		t.Error("the feed stored a key under premium/")
+	}
+	if !hasRow(t, follower, video) {
+		t.Error("premium video not fanned out to the author's follower")
 	}
 }
 
@@ -1021,7 +1108,7 @@ func TestPruneTimelineDeletesOnlyExpired(t *testing.T) {
 
 	// A batch of 2 needs four DELETEs for 7 rows, the last one partial.
 	batches := 0
-	n, err := p.pruneTimeline(t.Context(), 2, func() { batches++ })
+	n, err := p.pruneTimeline(t.Context(), time.Minute, 2, func() { batches++ })
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1041,7 +1128,7 @@ func TestPruneTimelineDeletesOnlyExpired(t *testing.T) {
 
 	// Nothing left to do, which is still a batch done.
 	batches = 0
-	if n, err := p.PruneTimeline(t.Context(), func() { batches++ }); err != nil || n != 0 || batches != 1 {
+	if n, err := p.PruneTimeline(t.Context(), time.Minute, func() { batches++ }); err != nil || n != 0 || batches != 1 {
 		t.Errorf("PruneTimeline again = %d, %v with %d batches, want 0, nil with 1", n, err, batches)
 	}
 }
@@ -1060,7 +1147,7 @@ func TestPruneTimelineReportsBatchesOfARunCutShort(t *testing.T) {
 	defer cancel()
 	batches := 0
 	// The deadline comes once the first batch is done, so the second DELETE never runs.
-	n, err := p.pruneTimeline(ctx, 2, func() {
+	n, err := p.pruneTimeline(ctx, time.Minute, 2, func() {
 		batches++
 		cancel()
 	})
@@ -1069,5 +1156,147 @@ func TestPruneTimelineReportsBatchesOfARunCutShort(t *testing.T) {
 	}
 	if n != 2 || batches != 1 {
 		t.Errorf("pruneTimeline() deleted %d rows in %d reported batches, want 2 in 1", n, batches)
+	}
+}
+
+// shortRoleTimeout is the statement timeout of strictPool's sessions, standing in for the app
+// role's: shorter than every wait the tests below hold a statement in.
+const shortRoleTimeout = 100 * time.Millisecond
+
+// strictPool returns a pool to the test database whose sessions start with statement_timeout
+// shortRoleTimeout, as the app role's sessions start with its own.
+func strictPool(t *testing.T) *pgxpool.Pool {
+	t.Helper()
+	cfg := testPool.Config()
+	cfg.ConnConfig.RuntimeParams["statement_timeout"] = shortRoleTimeout.String()
+	pool, err := pgxpool.NewWithConfig(t.Context(), cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(pool.Close)
+	return pool
+}
+
+// Each transaction sets the statement timeout it is given for itself only: the session keeps its
+// own once the transaction ends.
+func TestTransactionSetsItsStatementTimeout(t *testing.T) {
+	needDB(t)
+	p := New(strictPool(t), slog.New(slog.DiscardHandler))
+	for _, tc := range []struct {
+		timeout time.Duration
+		want    string
+	}{{handlerTimeout, "30s"}, {2 * time.Minute, "2min"}} {
+		var got string
+		err := p.inTx(t.Context(), tc.timeout, func(tx pgx.Tx) error {
+			return tx.QueryRow(t.Context(), "SHOW statement_timeout").Scan(&got)
+		})
+		if err != nil || got != tc.want {
+			t.Errorf("statement_timeout in a transaction of %s = %q, %v; want %q", tc.timeout, got, err, tc.want)
+		}
+	}
+	var session string
+	if err := p.pool.QueryRow(t.Context(), "SHOW statement_timeout").Scan(&session); err != nil || session != "100ms" {
+		t.Errorf("statement_timeout after the transactions = %q, %v; want the session's 100ms", session, err)
+	}
+}
+
+// release waits until a statement waits on a lock of holder, then lets go of holder after a wait
+// longer than shortRoleTimeout, and fails the test when done reports before then: the statement
+// waiting on holder outlived the session's statement timeout.
+func release(t *testing.T, holder pgx.Tx, done <-chan error) {
+	t.Helper()
+	var pid int
+	if err := holder.QueryRow(t.Context(), "SELECT pg_backend_pid()").Scan(&pid); err != nil {
+		t.Fatal(err)
+	}
+	// The deadline only bounds a broken test: a statement normally waits within milliseconds.
+	deadline := time.Now().Add(30 * time.Second)
+	for {
+		var waiting int
+		if err := testPool.QueryRow(t.Context(), `SELECT count(*) FROM pg_stat_activity
+			WHERE wait_event_type = 'Lock' AND $1 = ANY(pg_blocking_pids(pid))`, pid).Scan(&waiting); err != nil {
+			t.Fatalf("read pg_stat_activity: %v", err)
+		}
+		if waiting > 0 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("no statement waits on a lock of pid %d after 30s", pid)
+		}
+		select {
+		case err := <-done:
+			t.Fatalf("returned before waiting on the lock: %v", err)
+		case <-time.After(10 * time.Millisecond):
+		}
+	}
+	select {
+	case err := <-done:
+		t.Fatalf("returned while the lock was held: %v", err)
+	case <-time.After(3 * shortRoleTimeout):
+	}
+	if err := holder.Rollback(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// A fan-out waiting on the author lock longer than the role's statement timeout goes on, within
+// the attempt's own timeout, and applies once the lock is free.
+func TestAuthorTxOutlastsRoleStatementTimeout(t *testing.T) {
+	needDB(t)
+	p := New(strictPool(t), slog.New(slog.DiscardHandler))
+	author, b, video := ids.New(), ids.New(), ids.New()
+	handle(t, p, followRecord(t, b, author))
+
+	holder, err := testPool.Begin(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = holder.Rollback(context.Background()) }()
+	if _, err := holder.Exec(t.Context(),
+		"SELECT pg_advisory_xact_lock(hashtextextended('feed-author:' || $1::uuid::text, 0))", author); err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan error, 1)
+	go func() { done <- p.Handle(t.Context(), readyRecord(t, video, author, now()), kafkax.Attempt{Number: 1}) }()
+	release(t, holder, done)
+	if err := <-done; err != nil {
+		t.Fatalf("Handle = %v, want nil once the lock is free", err)
+	}
+	if got := timeline(t, b); !slices.Equal(got, []string{video}) {
+		t.Errorf("timeline = %v, want [%s]", got, video)
+	}
+}
+
+// A prune batch waiting on a row longer than the role's statement timeout goes on with the
+// statement timeout it was given, and deletes the row once it is free.
+func TestPruneBatchOutlastsRoleStatementTimeout(t *testing.T) {
+	needDB(t)
+	p := New(strictPool(t), slog.New(slog.DiscardHandler))
+	user := ids.New()
+	if _, err := testPool.Exec(t.Context(),
+		"INSERT INTO timeline (user_id, published_at, video_id) VALUES ($1, $2, gen_random_uuid())",
+		user, now().Add(-31*24*time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+
+	holder, err := testPool.Begin(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = holder.Rollback(context.Background()) }()
+	if _, err := holder.Exec(t.Context(), "SELECT 1 FROM timeline WHERE user_id = $1 FOR UPDATE", user); err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan error, 1)
+	go func() {
+		_, err := p.PruneTimeline(t.Context(), time.Minute, func() {})
+		done <- err
+	}()
+	release(t, holder, done)
+	if err := <-done; err != nil {
+		t.Fatalf("PruneTimeline = %v, want nil once the row is free", err)
+	}
+	if got := count(t, "SELECT count(*) FROM timeline WHERE user_id = $1", user); got != 0 {
+		t.Errorf("%d expired rows left, want 0", got)
 	}
 }

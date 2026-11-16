@@ -350,3 +350,20 @@ func TestServeRequiresVerifyKeys(t *testing.T) {
 		}
 	}
 }
+
+// An invalid DATABASE_MAX_CONNS stops serve before anything starts, with an error that names the
+// variable and not the database URL.
+func TestServeRejectsInvalidMaxConns(t *testing.T) {
+	const secret = "s3cret-pw"
+	t.Setenv("DATABASE_URL", "postgres://svp:"+secret+"@127.0.0.1:1/svp")
+	for _, value := range []string{"0", "-1", "ten"} {
+		t.Setenv("DATABASE_MAX_CONNS", value)
+		err := serve(t.Context(), slog.New(slog.DiscardHandler))
+		if err == nil || !strings.Contains(err.Error(), "DATABASE_MAX_CONNS") {
+			t.Fatalf("DATABASE_MAX_CONNS=%q: serve() = %v, want an error naming DATABASE_MAX_CONNS", value, err)
+		}
+		if strings.Contains(err.Error(), secret) || strings.Contains(err.Error(), "127.0.0.1") {
+			t.Errorf("error %q leaks the database URL", err)
+		}
+	}
+}

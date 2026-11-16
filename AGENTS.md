@@ -82,7 +82,10 @@ nó hoặc dựng bản sao từ event.
 - **CLI vận hành là đường duy nhất script, drill, runbook chạm Valkey và Kafka của stack** (không `redis-cli` hay công cụ Kafka trên host, không pod
   tạm): `/opt/svp/bin/svp-valkey` (đăng nhập `svp-ops`) và `/opt/svp/bin/svp-kafka` (`svp-admin`) ở `deploy/ops/`, chạy trong container
   `valkey`, `kafka` của compose hay Deployment `svp-ops` của chart `svp-data` (k3d, EKS); `SVP_AS_USER=<user>` đăng nhập user thường để kiểm
-  quyền, mật khẩu là dòng đầu của stdin. ACL của `svp-ops` chỉ cho `DEL` đúng hai tiền tố ở dòng dưới.
+  quyền, mật khẩu là dòng đầu của stdin. ACL của `svp-ops` chỉ cho `DEL` đúng hai tiền tố ở dòng dưới. Trên k3d, EKS, `svp-ops` còn container
+  `postgres` với `/opt/svp/bin/svp-pg <video|engagement|feed> [--host <tên>] -c '<SQL>'`: đọc Postgres bằng role app, phiên chỉ đọc.
+  Phát lại record DLQ cũng chỉ qua đường định sẵn: release `dlq-replay` (`make dlq-replay ARGS=…` ở compose, `kubectl exec
+  deploy/dlq-replay -- /app replay …` ở k3d, EKS), không `console-producer`, không pod tạm.
 - **Xoá khoá chỉ ở lab local** (LOCAL LAB ONLY, không trỏ script vào stack dùng chung): smoke, e2e, diễn tập, tải, DAST, game day
   chỉ được xoá khoá rate limit đăng ký `svp:gw:rl:register:*` ở db 10 (`SCAN` + `DEL`, không `FLUSHDB`) và cache khám phá
   `svp:feed:explore:*` ở db 14, qua CLI vận hành (user `svp-ops`) ở compose, k3d và EKS; ngoài hai tiền tố đó script chỉ đọc Valkey.
@@ -150,6 +153,8 @@ Mọi lệnh chạy từ gốc repo (hay worktree của nó) qua `Makefile`; `ma
 - `make zizmor`: lint bảo mật workflow (zizmor ghim; audit online khi có `GH_TOKEN`); ngoại lệ ở `.github/zizmor.yml`
   ([ADR-0041](docs/adr/0041-github-hardening.md) (g)).
 - `make helm-check`: lint, render mọi chart với `base/`, overlay của bản clone `svp-gitops` và policy Kyverno CLI.
+- `make migration-lint`: squawk trên file migration (`.squawk.toml`); `make migration-drill`: diễn tập đổi tên cột của `internal/dbmigrate` trên
+  1 000 000 dòng, in bảng số đo; chạy khi sửa `services/*/migrations/` ([ADR-0068](docs/adr/0068-zero-downtime-migrations.md), [`schema-change.md`](docs/runbooks/schema-change.md)).
 - `make compose-config`, `make otelcol-validate`, `make slo-check`, `make k6-check`, `make kyverno-test`, `make cloud-check`: kiểm
   cấu hình tĩnh khi sửa phần tương ứng.
 - `make env`, `make up [OBS=lgtm]`, `make smoke`, `make down`: dựng stack compose local và chạy luồng đầu-cuối.

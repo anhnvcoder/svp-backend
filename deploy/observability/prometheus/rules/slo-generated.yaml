@@ -1070,3 +1070,159 @@ groups:
         burn)'
       title: (ticket) {{$labels.sloth_service}} {{$labels.sloth_slo}} SLO error budget
         burn rate is too fast.
+- name: sloth-slo-sli-recordings-svp-public-uptime
+  rules:
+  - record: slo:sli_error:ratio_rate5m
+    expr: (1 - avg(avg_over_time(probe_success{job="blackbox-http"}[5m])))
+    labels:
+      sloth_id: svp-public-uptime
+      sloth_service: svp
+      sloth_slo: public-uptime
+      sloth_window: 5m
+  - record: slo:sli_error:ratio_rate30m
+    expr: (1 - avg(avg_over_time(probe_success{job="blackbox-http"}[30m])))
+    labels:
+      sloth_id: svp-public-uptime
+      sloth_service: svp
+      sloth_slo: public-uptime
+      sloth_window: 30m
+  - record: slo:sli_error:ratio_rate1h
+    expr: (1 - avg(avg_over_time(probe_success{job="blackbox-http"}[1h])))
+    labels:
+      sloth_id: svp-public-uptime
+      sloth_service: svp
+      sloth_slo: public-uptime
+      sloth_window: 1h
+  - record: slo:sli_error:ratio_rate2h
+    expr: (1 - avg(avg_over_time(probe_success{job="blackbox-http"}[2h])))
+    labels:
+      sloth_id: svp-public-uptime
+      sloth_service: svp
+      sloth_slo: public-uptime
+      sloth_window: 2h
+  - record: slo:sli_error:ratio_rate6h
+    expr: (1 - avg(avg_over_time(probe_success{job="blackbox-http"}[6h])))
+    labels:
+      sloth_id: svp-public-uptime
+      sloth_service: svp
+      sloth_slo: public-uptime
+      sloth_window: 6h
+  - record: slo:sli_error:ratio_rate1d
+    expr: (1 - avg(avg_over_time(probe_success{job="blackbox-http"}[1d])))
+    labels:
+      sloth_id: svp-public-uptime
+      sloth_service: svp
+      sloth_slo: public-uptime
+      sloth_window: 1d
+  - record: slo:sli_error:ratio_rate3d
+    expr: (1 - avg(avg_over_time(probe_success{job="blackbox-http"}[3d])))
+    labels:
+      sloth_id: svp-public-uptime
+      sloth_service: svp
+      sloth_slo: public-uptime
+      sloth_window: 3d
+  - record: slo:sli_error:ratio_rate30d
+    expr: (1 - avg(avg_over_time(probe_success{job="blackbox-http"}[30d])))
+    labels:
+      sloth_id: svp-public-uptime
+      sloth_service: svp
+      sloth_slo: public-uptime
+      sloth_window: 30d
+- name: sloth-slo-meta-recordings-svp-public-uptime
+  rules:
+  - record: slo:objective:ratio
+    expr: vector(0.9990000000000001)
+    labels:
+      sloth_id: svp-public-uptime
+      sloth_service: svp
+      sloth_slo: public-uptime
+  - record: slo:error_budget:ratio
+    expr: vector(1-0.9990000000000001)
+    labels:
+      sloth_id: svp-public-uptime
+      sloth_service: svp
+      sloth_slo: public-uptime
+  - record: slo:time_period:days
+    expr: vector(30)
+    labels:
+      sloth_id: svp-public-uptime
+      sloth_service: svp
+      sloth_slo: public-uptime
+  - record: slo:current_burn_rate:ratio
+    expr: |
+      slo:sli_error:ratio_rate5m{sloth_id="svp-public-uptime", sloth_service="svp", sloth_slo="public-uptime"}
+      / on(sloth_id, sloth_slo, sloth_service) group_left
+      slo:error_budget:ratio{sloth_id="svp-public-uptime", sloth_service="svp", sloth_slo="public-uptime"}
+    labels:
+      sloth_id: svp-public-uptime
+      sloth_service: svp
+      sloth_slo: public-uptime
+  - record: slo:period_burn_rate:ratio
+    expr: |
+      slo:sli_error:ratio_rate30d{sloth_id="svp-public-uptime", sloth_service="svp", sloth_slo="public-uptime"}
+      / on(sloth_id, sloth_slo, sloth_service) group_left
+      slo:error_budget:ratio{sloth_id="svp-public-uptime", sloth_service="svp", sloth_slo="public-uptime"}
+    labels:
+      sloth_id: svp-public-uptime
+      sloth_service: svp
+      sloth_slo: public-uptime
+  - record: slo:period_error_budget_remaining:ratio
+    expr: 1 - slo:period_burn_rate:ratio{sloth_id="svp-public-uptime", sloth_service="svp",
+      sloth_slo="public-uptime"}
+    labels:
+      sloth_id: svp-public-uptime
+      sloth_service: svp
+      sloth_slo: public-uptime
+  - record: sloth_slo_info
+    expr: vector(1)
+    labels:
+      sloth_id: svp-public-uptime
+      sloth_mode: cli-gen-prom
+      sloth_objective: "99.9"
+      sloth_service: svp
+      sloth_slo: public-uptime
+      sloth_spec: prometheus/v1
+      sloth_version: v0.16.0
+- name: sloth-slo-alerts-svp-public-uptime
+  rules:
+  - alert: PublicUptimeBudgetBurn
+    expr: |
+      (
+          max(slo:sli_error:ratio_rate5m{sloth_id="svp-public-uptime", sloth_service="svp", sloth_slo="public-uptime"} > (14.4 * 0.0009999999999999432)) without (sloth_window)
+          and
+          max(slo:sli_error:ratio_rate1h{sloth_id="svp-public-uptime", sloth_service="svp", sloth_slo="public-uptime"} > (14.4 * 0.0009999999999999432)) without (sloth_window)
+      )
+      or
+      (
+          max(slo:sli_error:ratio_rate30m{sloth_id="svp-public-uptime", sloth_service="svp", sloth_slo="public-uptime"} > (6 * 0.0009999999999999432)) without (sloth_window)
+          and
+          max(slo:sli_error:ratio_rate6h{sloth_id="svp-public-uptime", sloth_service="svp", sloth_slo="public-uptime"} > (6 * 0.0009999999999999432)) without (sloth_window)
+      )
+    labels:
+      severity: page
+      sloth_severity: page
+    annotations:
+      runbook_url: https://github.com/anhnvcoder/svp-backend/blob/main/docs/runbooks/public-uptime-budget-burn.md
+      summary: 'blackbox: probes of web, api and media burn the 99.9% uptime budget'
+      title: (page) {{$labels.sloth_service}} {{$labels.sloth_slo}} SLO error budget
+        burn rate is too fast.
+  - alert: PublicUptimeBudgetBurn
+    expr: |
+      (
+          max(slo:sli_error:ratio_rate2h{sloth_id="svp-public-uptime", sloth_service="svp", sloth_slo="public-uptime"} > (3 * 0.0009999999999999432)) without (sloth_window)
+          and
+          max(slo:sli_error:ratio_rate1d{sloth_id="svp-public-uptime", sloth_service="svp", sloth_slo="public-uptime"} > (3 * 0.0009999999999999432)) without (sloth_window)
+      )
+      or
+      (
+          max(slo:sli_error:ratio_rate6h{sloth_id="svp-public-uptime", sloth_service="svp", sloth_slo="public-uptime"} > (1 * 0.0009999999999999432)) without (sloth_window)
+          and
+          max(slo:sli_error:ratio_rate3d{sloth_id="svp-public-uptime", sloth_service="svp", sloth_slo="public-uptime"} > (1 * 0.0009999999999999432)) without (sloth_window)
+      )
+    labels:
+      severity: ticket
+      sloth_severity: ticket
+    annotations:
+      summary: 'blackbox: probes of web, api and media burn the 99.9% uptime budget'
+      title: (ticket) {{$labels.sloth_service}} {{$labels.sloth_slo}} SLO error budget
+        burn rate is too fast.

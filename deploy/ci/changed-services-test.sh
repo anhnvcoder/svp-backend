@@ -35,6 +35,8 @@ cp "$src/deploy/docker-bake.json" "$tree/deploy/"
 cp -R "$src/deploy/k8s/drills" "$tree/deploy/k8s/"
 cp -R "$src/deploy/helm/svp-policy/values.yaml" "$src/deploy/helm/svp-policy/files" "$tree/deploy/helm/svp-policy/"
 echo "# A decision" >"$tree/docs/decision.md"
+# release-please writes the changelog with the first release, so the copy of deploy/ci/ may not hold it yet.
+echo "# Changelog" >"$tree/deploy/ci/CHANGELOG.md"
 g() {
   GIT_DIR=$tree/.git GIT_WORK_TREE=$tree GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 git -c user.name=test \
     -c user.email=test@example.invalid -c commit.gpgsign=false -c core.hooksPath=/dev/null "$@"
@@ -52,16 +54,25 @@ changed_by() {
   changed
 }
 
-all="engagement-service feed-service gateway media-worker user-service video-service"
-same "changed-services: a change of common.sh builds all six" "$all" "$(changed_by deploy/ci/common.sh)"
-same "changed-services: a change of rescan.sh builds all six" "$all" "$(changed_by deploy/ci/rescan.sh)"
-same "changed-services: a change of image-guard.sh builds all six" "$all" "$(changed_by deploy/ci/image-guard.sh)"
+all=$(jq -r '.group.default.targets[]' "$tree/deploy/docker-bake.json" | sort | paste -sd' ' -)
+same "changed-services: a change of common.sh builds every service" "$all" "$(changed_by deploy/ci/common.sh)"
+same "changed-services: a change of rescan.sh builds every service" "$all" "$(changed_by deploy/ci/rescan.sh)"
+same "changed-services: a change of image-guard.sh builds every service" "$all" "$(changed_by deploy/ci/image-guard.sh)"
 # The composite actions are the pipeline: one of them changed alone builds every image.
 for a in image-leg image-index image-sign; do
-  same "changed-services: a change of the action $a alone builds all six" "$all" \
+  same "changed-services: a change of the action $a alone builds every service" "$all" \
     "$(changed_by ".github/actions/$a/action.yml")"
 done
 same "changed-services: a change of another action builds nothing" "" "$(changed_by .github/actions/other/action.yml)"
+# A service's own tree builds that service alone; a shared package under internal/ builds every service, since each
+# image copies all of internal/.
+mkdir -p "$tree/services/dlq-replay/cmd/dlq-replay" "$tree/internal/kafkax"
+echo "package main" >"$tree/services/dlq-replay/cmd/dlq-replay/main.go"
+echo "package kafkax" >"$tree/internal/kafkax/kafkax.go"
+g add services internal && g commit -qm "a service and a shared package"
+same "changed-services: a change under services/dlq-replay/ builds dlq-replay only" dlq-replay \
+  "$(changed_by services/dlq-replay/cmd/dlq-replay/main.go)"
+same "changed-services: a change of internal/kafkax builds every service" "$all" "$(changed_by internal/kafkax/kafkax.go)"
 # The web client's source left this repository: a file under web/ (and its removal) builds no image.
 mkdir -p "$tree/web" && echo "export {};" >"$tree/web/page.ts"
 same "changed-services: a file added under web/ builds nothing" "" "$(g add web && changed_by web/page.ts)"
@@ -74,7 +85,7 @@ for f in changed-services-test.sh plan-test.sh promote-test.sh rescan-test.sh sc
   ghcr-digest.sh ghcr-digest-test.sh verify-host.sh verify-mask.sh verify-collect.sh verify-collect-test.sh \
   verify-steps/steps.sh verify-steps/supplychain.sh verify-steps/supplychain-test.sh \
   verify-steps/admission-metrics.sh verify-steps/objstore.sh gitops-check.sh gitops-check-test.sh values-check.sh \
-  verify-release.sh ignorefile-policies/grypeignore.rego gitops-tree-policies/author.rego; do
+  verify-release.sh ignorefile-policies/grypeignore.rego gitops-tree-policies/author.rego CHANGELOG.md; do
   same "changed-services: a change of $f builds nothing" "" "$(changed_by "deploy/ci/$f")"
 done
 for f in drills/run.sh drills/.chainsaw.yaml drills/gitops/env/chainsaw-test.yaml drills/gitops/gitops-test.sh \
@@ -82,7 +93,7 @@ for f in drills/run.sh drills/.chainsaw.yaml drills/gitops/env/chainsaw-test.yam
   same "changed-services: a change of deploy/k8s/$f builds nothing" "" "$(changed_by "deploy/k8s/$f")"
 done
 # A file of deploy/ci/ that is none of those still builds every image: the list is of names, not of a folder.
-same "changed-services: a change of another script of deploy/ci/ beside the verification scripts builds all six" "$all" \
+same "changed-services: a change of another script of deploy/ci/ beside the verification scripts builds every service" "$all" \
   "$(changed_by deploy/ci/vuln-predicate.sh)"
 same "changed-services: a change of the policy's values builds nothing" "" \
   "$(changed_by deploy/helm/svp-policy/values.yaml)"
@@ -92,7 +103,7 @@ printf 'TRIVY_IMAGE := trivy@sha256:1\nGRYPE_IMAGE := grype@sha256:1\nK6_IMAGE :
 g add Makefile && g commit -qm "add the Makefile"
 sed 's/^GRYPE_IMAGE := grype@sha256:1$/GRYPE_IMAGE := grype@sha256:2/' "$tree/Makefile" >"$work/Makefile" &&
   cp "$work/Makefile" "$tree/Makefile" && g commit -qam "bump grype"
-same "changed-services: a change of the GRYPE_IMAGE line builds all six" "$all" "$(changed)"
+same "changed-services: a change of the GRYPE_IMAGE line builds every service" "$all" "$(changed)"
 same "changed-services: a change of another line of the Makefile builds nothing" "" "$(changed_by Makefile)"
 
 # The image table, compared as JSON between the two commits.
@@ -109,15 +120,15 @@ same "changed-services: another Dockerfile in the target of media-worker builds 
 jq -c . "$tree/deploy/docker-bake.json" >"$work/table.json" && cp "$work/table.json" "$tree/deploy/docker-bake.json"
 g commit -qam "image table: on one line"
 same "changed-services: the table written in another form, the same JSON, builds nothing" "" "$(changed)"
-same "changed-services: the order of group default changed builds all six" "$all" \
+same "changed-services: the order of group default changed builds every service" "$all" \
   "$(table_change "the group" '.group.default.targets |= reverse')"
-same "changed-services: a part of the table outside the targets of the services builds all six" "$all" \
+same "changed-services: a part of the table outside the targets of the services builds every service" "$all" \
   "$(table_change "a variable" '.variable = {"TAG": {"default": "dev"}}')"
-same "changed-services: a target no service names builds all six" "$all" \
+same "changed-services: a target no service names builds every service" "$all" \
   "$(table_change "a target of no service" '.target._base = {"context": "."}')"
 g rm -q deploy/docker-bake.json && g commit -qm "drop the image table"
 g checkout -q HEAD~1 -- deploy/docker-bake.json && g commit -qm "the image table again"
-same "changed-services: a table the base commit lacks builds all six" "$all" "$(changed)"
+same "changed-services: a table the base commit lacks builds every service" "$all" "$(changed)"
 
 if ((failures)); then
   echo "$failures check(s) failed" >&2

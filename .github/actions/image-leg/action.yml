@@ -1,6 +1,7 @@
 # Builds, scans and gates one image for the runner's architecture; used by backend and svp-frontend images.yml.
 # image-guard.sh validates image/tree upfront and verifies pushed config digest matches scanned tar.
-# Gates secrets (no --severity, no ignore: any secret blocks even drill-vulnerable) and CRITICAL with trivy and grype.
+# Gates secrets (no --severity, no ignore: any secret blocks even drill-vulnerable), then CRITICAL, then HIGH with a fix
+# (the fix status in the same report), with trivy and with grype.
 # Pushes only if all gates pass; inputs reach steps via env:, never ${{ }} inside run:; unsets DOCKER_DEFAULT_PLATFORM.
 # Daily cache for scanner DBs only.
 # Design notes: docs/ci-cd.md.
@@ -138,7 +139,7 @@ runs:
     # Scans the SBOM with grype, a second matcher that also sees binaries outside package managers (node of web);
     # reads only the tree's .grype.yaml. A DB it cannot fetch or built more than five days ago fails the scan.
     # grype exits 2 on a Critical match, 1 when it could not scan; this step exits 1 when blocked, 2 when grype
-    # could not scan.
+    # could not scan. HIGH with a fix: image-guard.sh fixed-high on grype.json, which leaves excepted matches out.
     - name: Scan the SBOM with grype, gate
       id: grype
       shell: bash
@@ -171,12 +172,26 @@ runs:
           exit 2
         fi
         "$GUARD" grype-summary "$LABEL" "$OUT"
+        blocked=0
         if [ "$rc" -eq 2 ]; then
           echo "::error::$LABEL (grype): Critical vulnerabilities; nothing is pushed, signed or attested"
-          exit 1
+          blocked=1
         fi
         [ "$ALLOW_CRITICAL" != true ] || echo "note  $LABEL (grype): Critical vulnerabilities let through (allow-critical)"
-        echo "ok    $LABEL (grype) passes the scan gate"
+        rc=0
+        "$GUARD" fixed-high grype "$LABEL" "$OUT/grype.json" || rc=$?
+        if [ "$rc" -eq 1 ]; then
+          if [ "$ALLOW_CRITICAL" = true ]; then
+            echo "note  $LABEL (grype): High vulnerabilities with a fix let through (allow-critical)"
+          else
+            echo "::error::$LABEL (grype): High vulnerabilities with a fix; nothing is pushed, signed or attested"
+            blocked=1
+          fi
+        elif [ "$rc" -ne 0 ]; then
+          exit 2
+        fi
+        [ "$blocked" -ne 0 ] || echo "ok    $LABEL (grype) passes the scan gate"
+        exit "$blocked"
 
     # SARIF for the Security tab (HIGH and CRITICAL; convert applies the scan's own filters), one category per image and
     # architecture, written before the trivy gate decides, so a blocked image still shows its findings on main.
@@ -196,9 +211,9 @@ runs:
           convert --format sarif --severity HIGH,CRITICAL --output /out/trivy.sarif.tmp /out/trivy.json --cache-dir /cache
         "$GUARD" sarif "$IMAGE" "$ARCH" "$OUT"
 
-    # The trivy gate, two passes of trivy convert on the report, each on its own half: trivy exits 5 (--exit-code) for a
-    # finding, 1 when it fails. Exit 1: blocked; exit 2: trivy could not read the report. Prints
-    # rule, file and line of a secret, never the matched text (trivy masks it anyway; the report is never printed).
+    # The trivy gate, passes of trivy convert on the report, each on its own half: trivy exits 5 (--exit-code) for a
+    # finding, 1 when it fails; HIGH with a fix from the JSON of the last pass. Exit 1: blocked; exit 2: trivy could not
+    # read the report. Prints rule, file and line of a secret, never the matched text (the report is never printed).
     - name: Gate the trivy report
       id: trivy-gate
       if: ${{ !cancelled() && steps.scan.outcome == 'success' }}
@@ -246,6 +261,23 @@ runs:
             echo "::error::$LABEL (trivy): CRITICAL vulnerabilities; nothing is pushed, signed or attested"
             blocked=1
           fi
+        fi
+        docker run --rm --user "$(id -u):$(id -g)" -e HOME=/tmp -v "$TRIVY_CACHE:/cache" "${mounts[@]}" "$TRIVY_IMAGE" \
+          convert --format json "${ignore[@]}" /in/vulnerabilities.json --cache-dir /cache >"$OUT/gate/kept.json" || {
+          echo "::error::$LABEL: trivy could not read $OUT/trivy.json"
+          exit 2
+        }
+        rc=0
+        "$GUARD" fixed-high trivy "$LABEL" "$OUT/gate/kept.json" || rc=$?
+        if [ "$rc" -eq 1 ]; then
+          if [ "$ALLOW_CRITICAL" = true ]; then
+            echo "note  $LABEL (trivy): HIGH vulnerabilities with a fix let through (allow-critical)"
+          else
+            echo "::error::$LABEL (trivy): HIGH vulnerabilities with a fix; nothing is pushed, signed or attested"
+            blocked=1
+          fi
+        elif [ "$rc" -ne 0 ]; then
+          exit 2
         fi
         [ "$blocked" -ne 0 ] || echo "ok    $LABEL (trivy) passes the scan gate"
         exit "$blocked"

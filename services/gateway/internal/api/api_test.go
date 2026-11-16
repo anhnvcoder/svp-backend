@@ -494,18 +494,26 @@ func newEnvBehind(t *testing.T, clientAddr httpx.ClientAddr, limits *ratelimit.L
 // newEnvDialed is newEnvBehind with userOpts added to the dial options of user-service too.
 func newEnvDialed(t *testing.T, clientAddr httpx.ClientAddr, limits *ratelimit.Limiter, userOpts, engagementOpts []grpc.DialOption) *env {
 	t.Helper()
+	return newEnvServing(t, clientAddr, limits, userOpts, engagementOpts, fakeVideos{}, fakeFeed{})
+}
+
+// newEnvServing is newEnvDialed with videoSrv and feedSrv as the fake video and feed services.
+func newEnvServing(t *testing.T, clientAddr httpx.ClientAddr, limits *ratelimit.Limiter, userOpts, engagementOpts []grpc.DialOption,
+	videoSrv videov1.VideoServiceServer, feedSrv feedv1.FeedServiceServer,
+) *env {
+	t.Helper()
 	key, err := authtoken.GenerateKey()
 	if err != nil {
 		t.Fatal(err)
 	}
 	users, userConn := startBackend(t, func(s *grpc.Server) { userv1.RegisterUserServiceServer(s, fakeUsers{}) }, userOpts...)
-	videos, videoConn := startBackend(t, func(s *grpc.Server) { videov1.RegisterVideoServiceServer(s, fakeVideos{}) })
-	feeds, feedConn := startBackend(t, func(s *grpc.Server) { feedv1.RegisterFeedServiceServer(s, fakeFeed{}) })
+	videos, videoConn := startBackend(t, func(s *grpc.Server) { videov1.RegisterVideoServiceServer(s, videoSrv) })
+	feeds, feedConn := startBackend(t, func(s *grpc.Server) { feedv1.RegisterFeedServiceServer(s, feedSrv) })
 	stats := &fakeEngagement{}
 	engagement, engagementConn := startBackend(t, func(s *grpc.Server) { engagementv1.RegisterEngagementServiceServer(s, stats) }, engagementOpts...)
 	verifier := authtoken.NewVerifier(map[string]ed25519.PublicKey{testKID: key.Public().(ed25519.PublicKey)})
 	return &env{
-		handler:    New(userConn, videoConn, feedConn, engagementConn, verifier, mediaBase, limits, clientAddr, "gateway:8080"),
+		handler:    New(userConn, videoConn, feedConn, engagementConn, verifier, mediaBase, limits, clientAddr, "gateway:8080", 150),
 		users:      users,
 		videos:     videos,
 		feeds:      feeds,
@@ -808,6 +816,77 @@ func TestRefreshAndLogoutBodies(t *testing.T) {
 			})
 		}
 	}
+}
+
+// wantSecurityHeaders checks rec carries the headers httpx.SecurityHeaders sets, with
+// cacheControl.
+func wantSecurityHeaders(t *testing.T, rec *httptest.ResponseRecorder, cacheControl string) {
+	t.Helper()
+	for k, v := range map[string]string{
+		"X-Content-Type-Options":  "nosniff",
+		"Content-Security-Policy": "default-src 'none'; frame-ancestors 'none'",
+		"Cache-Control":           cacheControl,
+	} {
+		if got := rec.Header().Get(k); got != v {
+			t.Errorf("%s = %q, want %q", k, got, v)
+		}
+	}
+}
+
+// TestSecurityHeaders checks the answers that carry tokens, the errors of the routes that issue
+// them and the probes are never stored by a cache, and that only a public video found is.
+func TestSecurityHeaders(t *testing.T) {
+	captureLog(t)
+	for _, tc := range []struct {
+		name, method, path, body string
+		usersErr                 error
+		wantStatus               int
+		wantCache                string
+	}{
+		{name: "login", method: http.MethodPost, path: "/auth/login", body: credentialsBody, wantStatus: http.StatusOK, wantCache: "no-store"},
+		{name: "refresh", method: http.MethodPost, path: "/auth/refresh", body: refreshBody, wantStatus: http.StatusOK, wantCache: "no-store"},
+		{
+			name: "login refused", method: http.MethodPost, path: "/auth/login", body: credentialsBody,
+			usersErr:   grpcerr.New(codes.Unauthenticated, "INVALID_CREDENTIALS", "invalid email or password"),
+			wantStatus: http.StatusUnauthorized, wantCache: "no-store",
+		},
+		{name: "logout", method: http.MethodPost, path: "/auth/logout", body: refreshBody, wantStatus: http.StatusNoContent, wantCache: "no-store"},
+		{name: "healthz", method: http.MethodGet, path: "/healthz", wantStatus: http.StatusOK, wantCache: "no-store"},
+		{name: "readyz", method: http.MethodGet, path: "/readyz", wantStatus: http.StatusOK, wantCache: "no-store"},
+		{name: "public video", method: http.MethodGet, path: "/public/videos/" + videoID, wantStatus: http.StatusOK, wantCache: "public, max-age=30"},
+		{name: "public video not found", method: http.MethodGet, path: "/public/videos/NOT-a-uuid", wantStatus: http.StatusNotFound, wantCache: "no-store"},
+		{name: "no route", method: http.MethodGet, path: "/nowhere", wantStatus: http.StatusNotFound, wantCache: "no-store"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			e := newEnv(t)
+			if tc.usersErr != nil {
+				e.users.fail(tc.usersErr)
+			}
+			rec := e.do(t, tc.method, tc.path, tc.body, "")
+			wantStatus(t, rec, tc.wantStatus)
+			wantSecurityHeaders(t, rec, tc.wantCache)
+		})
+	}
+
+	t.Run("login rate limited", func(t *testing.T) {
+		e := newEnv(t)
+		for i := range 20 {
+			rec := e.do(t, http.MethodPost, "/auth/login", credentialsBody, "")
+			if rec.Code == http.StatusTooManyRequests {
+				wantSecurityHeaders(t, rec, "no-store")
+				if ct := rec.Header().Get("Content-Type"); ct != "application/problem+json" {
+					t.Errorf("Content-Type = %q, want application/problem+json", ct)
+				}
+				return
+			}
+			wantStatus(t, rec, http.StatusOK)
+			wantSecurityHeaders(t, rec, "no-store")
+			if i == 0 {
+				wantJSON(t, rec)
+			}
+		}
+		t.Fatal("no login refused after 20")
+	})
 }
 
 func TestPublicRoutesSendNoUserID(t *testing.T) {
@@ -1250,6 +1329,11 @@ func TestAuthenticatedRoutesNeedToken(t *testing.T) {
 		{http.MethodGet, "/me/videos", ""},
 		{http.MethodGet, "/profiles/bob", ""},
 		{http.MethodGet, "/users/" + userB + "/videos", ""},
+		{http.MethodPut, "/me/entitlements/" + videoID, `{"tier":"sd"}`},
+		{http.MethodGet, "/videos/" + videoID + "/playback/master.m3u8", ""},
+		{http.MethodGet, "/videos/" + videoID + "/playback/360p.m3u8", ""},
+		// A file of the wrong form is refused for the token before its form is checked.
+		{http.MethodGet, "/videos/" + videoID + "/playback/index.ts", ""},
 	}
 	for _, rt := range routes {
 		for _, token := range []string{"", "not-a-jwt"} {

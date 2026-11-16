@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Tests for deploy/k8s/drills/run.sh (make drill-k8s-threats, drill-k8s-supplychain, drill-k8s-gitops,
+# Tests for deploy/k8s/drills/run.sh (make drill-k8s-threats, drill-k8s-mesh, drill-k8s-supplychain, drill-k8s-gitops,
 # drill-k8s-reloader), deploy/k8s/drills/reloader/new-values.sh and the snapshot helpers of
 # deploy/k8s/drills/reloader/rotate/reloader.sh, without a cluster, a network or Docker.
 
@@ -56,6 +56,7 @@ a_test threats in-2-in-4
 a_test threats ops-2
 a_test threats sec-5-6-7 '    requires: external-secrets'
 a_test threats sec-6-reader '    requires: external-secrets'
+a_test mesh m-1
 for c in a b l; do a_test supplychain "case-$c"; done
 a_test reloader rotate
 cat >"$tree/deploy/ci/ghcr-digest.sh" <<'EOF'
@@ -152,11 +153,11 @@ EOF
 chmod +x "$bin/kubectl" "$bin/chainsaw" "$bin/mktemp" "$bin/go"
 export PATH="$bin:$PATH"
 
-# The Secret values: 7 Kafka users, the Valkey password of svp-feed-service (in its REDIS_URL), the Grafana admin, the
-# 3 object store users.
+# The Secret values: some Kafka users, the Valkey password of svp-feed-service (in its REDIS_URL), the Grafana admin,
+# the object store users; 13 in all, as deploy/k8s/secrets.sh writes them (8 Kafka users).
 values=$work/values
 mkdir -p "$values"
-for i in 1 2 3 4 5 6 7; do openssl rand -hex 12; done >"$values/svp-data-kafka-users"
+for i in 1 2 3 4 5 6 7 8; do openssl rand -hex 12; done >"$values/svp-data-kafka-users"
 valkey_feed=$(openssl rand -hex 12)
 echo "rediss://svp-feed-service:$valkey_feed@valkey.svp-data.svc.cluster.local:6379/14" >"$values/svp-feed-service-env"
 openssl rand -hex 12 >"$values/svp-obs-grafana-admin"
@@ -175,14 +176,14 @@ secret_json() {
   done | jq -s '{data: add}' >"$work/secrets/$ns-$name.json"
 }
 mkdir -p "$work/secrets"
-secret_json svp-data kafka-users K1 K2 K3 K4 K5 K6 K7
+secret_json svp-data kafka-users K1 K2 K3 K4 K5 K6 K7 K8
 secret_json svp feed-service-env REDIS_URL
 secret_json svp-obs grafana-admin admin-password
 secret_json svp-data pg-backup-s3 ACCESS_SECRET_KEY
 secret_json svp-data s3-users SVP_VIDEO_S3_SECRET_KEY SVP_MEDIA_WORKER_S3_SECRET_KEY
 openssl rand -hex 12 >"$values/svp-obs-glitchtip-api"
 secret_json svp-obs glitchtip-api SENTRY_AUTH_TOKEN
-# fresh [TESTS]: a new FAKE_STATE (cluster up with context k3d-svp, External Secrets Operator, the 12 values, chainsaw
+# fresh [TESTS]: a new FAKE_STATE (cluster up with context k3d-svp, External Secrets Operator, the 13 values, chainsaw
 # green with TESTS testcases, default 4) and a tree without logs or reports but .k8s/ca.crt.
 fresh() {
   export FAKE_STATE=$work/state FAKE_TMP=$work/tmp
@@ -262,7 +263,7 @@ for want in "--kube-context"$'\n'"k3d-svp" "--config"$'\n'"deploy/k8s/drills/.ch
 done
 lacks "threats: no values file" "$args" "--values"
 same "threats: curl gets the cluster's CA" "$tree/.k8s/ca.crt" "$(cat "$FAKE_STATE/chainsaw.ca")"
-has "threats: the search found nothing" "$out" "ok    SECRETS: none of the 12 Secret values"
+has "threats: the search found nothing" "$out" "ok    SECRETS: none of the 13 Secret values"
 has "threats: the output reaches the terminal" "$out" "step two"
 log=$(ls "$tree"/.k8s/drills/threats-*.log 2>/dev/null || true)
 if [[ $log =~ /threats-[0-9]{8}T[0-9]{6}Z\.log$ ]]; then ok "threats: log .k8s/drills/threats-<UTC>.log"; else
@@ -351,7 +352,7 @@ fresh 4
 printf 'before\nthe password is %s here\nafter\n' "$secret1" >"$FAKE_STATE/out"
 drill threats
 red "threats: a Secret value in the output fails the drill"
-has "threats: names the leak" "$out" "FAIL  SECRETS: 1 line(s) of the drill's log and report hold one of the 12 Secret values"
+has "threats: names the leak" "$out" "FAIL  SECRETS: 1 line(s) of the drill's log and report hold one of the 13 Secret values"
 no_value "threats: the leaked value is not printed" "$out"
 has "threats: the line is withheld from the terminal" "$out" "[a line of the output holds a Secret value: not shown]"
 has "threats: the other lines still reach the terminal" "$out" "after"
@@ -362,19 +363,24 @@ red "threats: a Secret value in the report fails the drill"
 has "threats: names the leak in the report" "$out" "FAIL  SECRETS: 1 line(s)"
 no_value "threats: the value of the report is not printed" "$out"
 
-# --- fewer than 12 values: red before chainsaw.
+# --- fewer than 13 values: red before chainsaw.
 fresh 4
 rm "$FAKE_STATE/secrets/svp-obs-grafana-admin.json"
 drill threats
-red "threats: 11 Secret values fail before chainsaw" before
-has "threats: says how many it read" "$out" "(got 11)"
+red "threats: 12 Secret values fail before chainsaw" before
+has "threats: says how many it read" "$out" "(got 12)"
+fresh 4
+rm "$FAKE_STATE/secrets/svp-data-kafka-users.json"
+drill threats
+red "threats: no Secret kafka-users fails before chainsaw" before
+has "threats: names Secret kafka-users" "$out" "FAIL  SECRETS: read Secret svp-data/kafka-users"
 
 # --- the Valkey password of svp-feed-service is searched for alone, not only inside its REDIS_URL.
 fresh 4
 printf 'before\nthe Valkey password is %s here\nafter\n' "$valkey_feed" >"$FAKE_STATE/out"
 drill threats
 red "threats: the Valkey password of svp-feed-service in the log fails the drill"
-has "threats: names that leak" "$out" "FAIL  SECRETS: 1 line(s) of the drill's log and report hold one of the 12 Secret values"
+has "threats: names that leak" "$out" "FAIL  SECRETS: 1 line(s) of the drill's log and report hold one of the 13 Secret values"
 fresh 4
 rm "$tree/.k8s/ca.crt"
 drill threats
@@ -409,6 +415,21 @@ drill gitops
 same "gitops: green run exits 0" 0 "$rc"
 has "gitops: selector drill=gitops" "$(cat "$FAKE_STATE/chainsaw.args")" "drill=gitops"
 lacks "gitops: no Secret search" "$out" "SECRETS"
+
+# --- mesh: the cluster's CA for curl, no Secret value read.
+fresh 1
+drill mesh
+same "mesh: green run exits 0" 0 "$rc"
+has "mesh: selector drill=mesh" "$(cat "$FAKE_STATE/chainsaw.args")" "--selector"$'\n'"drill=mesh"$'\n'
+has "mesh: chainsaw gets the mesh tests" "$(cat "$FAKE_STATE/chainsaw.args")" "--test-dir"$'\n'"deploy/k8s/drills/mesh"
+same "mesh: curl gets the cluster's CA" "$tree/.k8s/ca.crt" "$(cat "$FAKE_STATE/chainsaw.ca")"
+lacks "mesh: no Secret search" "$out" "SECRETS"
+same "mesh: no Secret read" "" "$(grep 'get secret' "$FAKE_STATE/kubectl.log" || true)"
+fresh 1
+rm "$tree/.k8s/ca.crt"
+drill mesh
+red "mesh: no .k8s/ca.crt stops before chainsaw" before
+has "mesh: names the missing CA" "$out" "drill-k8s-mesh: .k8s/ca.crt missing"
 
 # --- supplychain: the values of each row "diễn tập" of the image table.
 digest=@sha256:$(printf '%064d' 0)
@@ -733,6 +754,23 @@ pg-bootstrap j-pg-1 1
 s3-init j-s3-1 0" "$(cat "$work/helper/jobs-before" 2>&1)"
 same "reloader.sh: the revisions of Rollouts gateway and web" "gateway 7
 web 3" "$(cat "$work/helper/revisions-before" 2>&1)"
+# readers_of: a service is the Deployment or the Rollout (release with canary) that has pods in the snapshot.
+helper 'printf "%s\n" "Rollout/svp/user-service u1 ready a" "Deployment/svp/video-service u2 ready b" >"$state/pods-before"
+  printf "%s\n" svp/user-service-env svp/video-service-env svp/feed-service-env | readers_of'
+same "reloader.sh: readers_of takes the kind of a service from its pods, whether Rollout or Deployment" \
+  "Deployment/svp/video-service
+Rollout/svp/user-service
+Workload/svp/feed-service" "$out"
+helper 'printf "%s\n" "Rollout/svp/gateway g1 ready a" "Deployment/svp/user-service u1 ready b" >"$state/pods-before"
+  printf "%s\n" svp/sentry | readers_of'
+same "reloader.sh: the shared sentry Secret reaches both kinds" \
+  "Deployment/svp/user-service
+Rollout/svp/gateway
+Rollout/svp/web
+Workload/svp/engagement-service
+Workload/svp/feed-service
+Workload/svp/video-service" "$out"
+helper "snapshot before"
 job_list j-pg-2 j-kafka-2 j-s3-2
 helper 'init_jobs "$state/jobs-after"; jobs_ran "$state/jobs-before" "$state/jobs-after"'
 same "reloader.sh: init Jobs that ran again and Succeeded pass" 0 "$rc"

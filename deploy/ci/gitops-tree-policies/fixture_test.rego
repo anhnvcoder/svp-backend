@@ -6,7 +6,7 @@ envs := ["prd", "stg"]
 
 services := ["gateway", "user-service", "video-service", "engagement-service", "feed-service", "media-worker", "web"]
 
-six := [svc | some svc in services; svc != "web"]
+backend_services := [svc | some svc in services; svc != "web"]
 
 cfg := {"environments": envs, "services": services}
 
@@ -19,7 +19,7 @@ digest := "sha256:4f5c048eb90e6728ee82073bc7b0c422ca2111fb45471e58d92e70dc54942c
 backend := {
 	"name": "backend",
 	"imagePrefix": "ghcr.io/anhnvcoder/svp-backend/",
-	"services": six,
+	"services": backend_services,
 	"promoter": "svp-gitops-promoter",
 }
 
@@ -32,7 +32,7 @@ web := {
 
 # The two sources a table kept after the repositories were renamed, without promoter: an environment may still pin it.
 retired := [
-	{"name": "oldbackend", "imagePrefix": "ghcr.io/anhnvcoder/short-video-platform/", "services": six},
+	{"name": "oldbackend", "imagePrefix": "ghcr.io/anhnvcoder/short-video-platform/", "services": backend_services},
 	{"name": "oldweb", "imagePrefix": "ghcr.io/anhnvcoder/svp-web/", "services": ["web"]},
 ]
 
@@ -120,6 +120,7 @@ tree_input := {
 	"tree": tree,
 	"charts": {env: {"revision": revision, "podSecurityVersion": "v1.36", "collectorConfigSha256": sha} | some env in envs},
 	"sources": {env: {"revision": revision, "sources": table} | some env in envs},
+	"built": {env: {"revision": revision, "services": services} | some env in envs},
 }
 
 with_file(given, path, text) := object.union(given, {"tree": {path: file(text)}})

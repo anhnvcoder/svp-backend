@@ -3,8 +3,8 @@
 # container, and the web client `web`. Run it through `make up` / `make down` (deploy/compose/compose.mk), which pass
 # --env-file .env.
 
-# Profiles: `core` is the application. `obs` (`make up OBS=lgtm`) adds otelcol, lgtm, alertmanager and glitchtip
-# with its one-shot glitchtip-init; no core service depends on an obs service. Every Go service sends OTLP to
+# Profiles: `core` is the application. `obs` (`make up OBS=lgtm`) adds otelcol, lgtm, alertmanager, blackbox and
+# glitchtip with its one-shot glitchtip-init; no core service depends on an obs service. Every Go service sends OTLP to
 # otelcol:4317 whether or not `obs` runs: without it export fails with a rate-limited WARN and the services work as
 # before.
 
@@ -25,15 +25,19 @@
 # the Collector (4317) and LGTM's Prometheus (9090), Tempo (3200), Loki (3100) and Pyroscope (4040), reached from the
 # host through Grafana's datasource proxy.
 
-# Networks: `default` holds everything but media-worker and web; `worker` (internal, no route out) holds media-worker,
-# Kafka, the object store and the Collector only, so the worker that runs ffmpeg on uploaded files reaches neither
-# the gateway, the gRPC services, Postgres, LGTM nor the internet (threat model FF-4, FF-5). The Collector only
-# receives telemetry there; it proxies nothing for the worker.
+# Networks: `default` holds everything but media-worker, dlq-replay and web; `worker` (internal, no route out) holds
+# media-worker, dlq-replay, Kafka, the object store and the Collector only, so the worker that runs ffmpeg on uploaded
+# files reaches neither the gateway, the gRPC services, Postgres, LGTM nor the internet (threat model FF-4, FF-5). The
+# Collector only receives telemetry there; it proxies nothing for the worker.
 
 # `web` holds web, the gateway, Valkey and, with `obs`, GlitchTip and the Collector only: code run in the Next server
 # (CVE-2025-55182) reaches the gateway's HTTP API, Valkey (where its user may touch only db 9 and svp:web:*), the error
-# tracker and the Collector and nothing else in the stack: not the gRPC services, which check the caller's access token
-# but not which container calls them, nor Kafka or the object store by their compose names.
+# tracker, the Collector and, with `obs`, the blackbox exporter on `probe-web`, and nothing else in the stack: not the
+# gRPC services, which check the caller's access token but not which container calls them, nor Kafka or the store.
+
+# `probe` holds blackbox, LGTM, the gateway and the object store, `probe-web` blackbox and web, both internal: the
+# exporter reaches Prometheus and its targets only, never the internet. Code in web can still have it GET a URL of the
+# gateway, the object store or LGTM and read the status back; accepted for the compose lab (threat model WEB-13).
 
 # `web` is not internal: Docker publishes no port of a container attached to internal networks only. Docker Desktop
 # resolves host.docker.internal in every container, which opens the host's loopback ports to web (the object store's
@@ -61,8 +65,8 @@ x-telemetry-env: &telemetry-env
   OTEL_SDK_DISABLED: ${SVP_OTEL_SDK_DISABLED:-false}
 
 # The five services on the `default` network also push profiles to LGTM's Pyroscope and report
-# errors to the tracker at SENTRY_DSN (empty: off). media-worker gets neither: its network reaches
-# only the Collector.
+# errors to the tracker at SENTRY_DSN (empty: off). media-worker and dlq-replay get neither: their
+# network reaches only the Collector.
 x-telemetry-app-env: &telemetry-app-env
   <<: *telemetry-env
   PYROSCOPE_SERVER_ADDRESS: ${SVP_PYROSCOPE_SERVER_ADDRESS-http://lgtm:4040}
@@ -74,7 +78,7 @@ x-telemetry-app-env: &telemetry-app-env
 x-postgres-image: &postgres-image docker.io/library/postgres:17.11-trixie@sha256:ff87138949ad9a46f32ff23bd6852b52ce024a13dffe9b4087be98292cdd3b4f
 x-kafka-image: &kafka-image apache/kafka:4.1.2@sha256:5cc2a2fd93fa2687b44015eee04fb2c3edd9e526bd64bf8bec5ff1e268772e0e
 x-valkey-image: &valkey-image docker.io/valkey/valkey:9.1.3-alpine@sha256:bf09d58e96d6b4524a15396b65b242bbe18beebbcc15a04d8ee75ddac62fae0b
-x-s3-image: &s3-image rustfs/rustfs:1.0.4@sha256:ed9210d6411d77ffceb70d94b964a3cb7d225983368bc25bebe01e995293dcc2
+x-s3-image: &s3-image rustfs/rustfs:1.0.5@sha256:b81d16a90ee25bd9511280127ca1471788c6e874cf0f0da759645f46b2dc1d74
 x-glitchtip-image: &glitchtip-image glitchtip/glitchtip:6.2.6@sha256:a3d8eb1b36c1e1603d55ab32711ea3dd8115874742a781a57391a62a16e0dff6
 
 # The local CA's certificate (public), for every client of Postgres, Kafka and Valkey: libpq, pgx and psycopg read it as
@@ -279,6 +283,7 @@ services:
       SVP_KAFKA_ENGAGEMENT_SERVICE_PASSWORD: ${SVP_KAFKA_ENGAGEMENT_SERVICE_PASSWORD:?run make env}
       SVP_KAFKA_FEED_SERVICE_PASSWORD: ${SVP_KAFKA_FEED_SERVICE_PASSWORD:?run make env}
       SVP_KAFKA_MEDIA_WORKER_PASSWORD: ${SVP_KAFKA_MEDIA_WORKER_PASSWORD:?run make env}
+      SVP_KAFKA_DLQ_REPLAY_PASSWORD: ${SVP_KAFKA_DLQ_REPLAY_PASSWORD:?run make env}
       SVP_KAFKA_KEDA_PASSWORD: ${SVP_KAFKA_KEDA_PASSWORD:?run make env}
       SVP_KAFKA_OTELCOL_PASSWORD: ${SVP_KAFKA_OTELCOL_PASSWORD:?run make env}
     volumes:
@@ -365,7 +370,8 @@ services:
       # root would refuse.
       RUSTFS_OBS_LOG_DIRECTORY: ""
     mem_limit: 512m
-    networks: [default, worker]
+    # `probe` only for the uptime probe of the media host.
+    networks: [default, worker, probe]
     volumes:
       - s3-data:/data
     ports:
@@ -467,7 +473,7 @@ services:
 
   user-service:
     profiles: [core]
-    # `make up` sets SVP_<SERVICE>_IMAGE of the six backend services and has their images ready before compose starts:
+    # `make up` sets SVP_<SERVICE>_IMAGE of the backend services and has their images ready before compose starts:
     # built from the working tree by docker buildx bake (deploy/docker-bake.json, tag svp/<service>:dev), or with
     # IMAGES=stg their releases in staging, pulled already. Compose neither builds nor pulls them (policy never).
     image: ${SVP_USER_SERVICE_IMAGE:-svp/user-service:dev}
@@ -519,6 +525,8 @@ services:
       S3_PUBLIC_ENDPOINT: http://127.0.0.1:9000
       S3_ACCESS_KEY_ID: svp-video-service
       S3_SECRET_ACCESS_KEY: ${SVP_VIDEO_S3_SECRET_KEY:?run make env}
+      # No CloudFront locally: premium segments get SigV4 presigned GET URLs on S3_PUBLIC_ENDPOINT.
+      MEDIA_SIGNER: s3
       # Abandoned uploads are cleaned up after this long, so their objects do not stay in the store. Only the
       # upload-cleanup drill sets SVP_UPLOAD_* short; a value under the 15 minutes of an upload form is for drills only.
       UPLOAD_ABANDON_AFTER: ${SVP_UPLOAD_ABANDON_AFTER:-1h}
@@ -629,8 +637,8 @@ services:
       - *ca-volume
     ports:
       - "127.0.0.1:8080:8080"
-    # `web` only for the web client's BFF calls.
-    networks: [default, web]
+    # `web` only for the web client's BFF calls, `probe` only for the uptime probe.
+    networks: [default, web, probe]
     healthcheck: *healthcheck
     restart: unless-stopped
     depends_on:
@@ -660,7 +668,7 @@ services:
     image: ${SVP_WEB_IMAGE:-svp/web:dev}
     pull_policy: ${SVP_WEB_PULL_POLICY:-never}
     build:
-      # The web client's own tree, so the six Go images keep the repository's .dockerignore and
+      # The web client's own tree, so the Go images keep the repository's .dockerignore and
       # build cache; its .dockerignore leaves out node_modules, build output and .env*.
       context: ${SVP_WEB_CONTEXT:-.}
       dockerfile: ${SVP_WEB_DOCKERFILE:-Dockerfile}
@@ -696,8 +704,9 @@ services:
       - *ca-volume
     ports:
       - "127.0.0.1:3001:3001"
-    # Only the network it shares with the gateway, Valkey and, with `obs`, GlitchTip and the Collector.
-    networks: [web]
+    # `web`, shared with the gateway, Valkey and, with `obs`, GlitchTip and the Collector; `probe-web` for the uptime
+    # probe.
+    networks: [web, probe-web]
     # The same lockdown as media-worker, although the distroless image has no shell or package
     # manager to take away: read-only root (the server writes no file: every route is rendered per
     # request and images are not optimized, so .next/cache stays empty), no capabilities, no
@@ -741,7 +750,7 @@ services:
     # left in /work, so a second replica sharing this volume would delete the jobs of the first.
     # Scaling out needs one volume per replica.
     scale: 1
-    # The image has a shell and apk (ffmpeg needs Alpine), so the container takes them away:
+    # The image has no shell and no package manager, and the container takes more away:
     # read-only root, no capabilities, no privilege gain, the image's non-root user.
     read_only: true
     cap_drop: [ALL]
@@ -758,6 +767,9 @@ services:
     tmpfs:
       - /tmp:size=16m,noexec,nosuid,nodev
     networks: [worker]
+    # On SIGTERM the worker finishes the job it is running (up to 540 s), then closes its clients
+    # and flushes telemetry: compose waits that long before it kills the container.
+    stop_grace_period: 570s
     # Exits when its consumer fails (a commit or DLQ produce while Kafka restarts) and relies on
     # being started again; the uncommitted record is delivered again.
     restart: unless-stopped
@@ -765,6 +777,34 @@ services:
       kafka-init:
         condition: service_completed_successfully
       s3-init:
+        condition: service_completed_successfully
+
+  # The DLQ replay tool, idle in standby: `make dlq-replay ARGS='replay ...'` runs a replay in
+  # it as Kafka user svp-dlq-replay. It needs only Kafka and the Collector, so it joins the
+  # `worker` network (no route out) with no object store key; no port, and the same lockdown
+  # as media-worker.
+  dlq-replay:
+    profiles: [core]
+    image: ${SVP_DLQ_REPLAY_IMAGE:-svp/dlq-replay:dev}
+    pull_policy: never
+    command: [standby]
+    environment:
+      <<: *telemetry-env
+      KAFKA_BROKERS: kafka:9096
+      KAFKA_SASL_USERNAME: svp-dlq-replay
+      KAFKA_SASL_PASSWORD: ${SVP_KAFKA_DLQ_REPLAY_PASSWORD:?run make env}
+      # The local CA of Kafka's certificate, read beside the system roots.
+      SSL_CERT_DIR: /etc/svp-ca
+    volumes:
+      - *ca-volume
+    networks: [worker]
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    user: "65532:65532"
+    restart: unless-stopped
+    depends_on:
+      kafka-init:
         condition: service_completed_successfully
 
   otelcol:
@@ -782,8 +822,8 @@ services:
     # The memory_limiter processor keeps the heap at 192 MiB of this, so a burst of telemetry makes
     # the Collector refuse data rather than run out of memory.
     mem_limit: 256m
-    # `default` for the services and LGTM, `worker` for media-worker, `web` for the web client. No
-    # published port.
+    # `default` for the services and LGTM, `worker` for media-worker and dlq-replay, `web` for the
+    # web client. No published port.
     networks: [default, worker, web]
     restart: unless-stopped
 
@@ -814,6 +854,8 @@ services:
       # (Grafana's datasource, the image's healthcheck, OTLP and remote write) still reaches Prometheus at the root.
       PROMETHEUS_EXTRA_ARGS: --web.external-url=http://127.0.0.1:3000/api/datasources/proxy/uid/prometheus --web.route-prefix=/
     mem_limit: 1536m
+    # `probe` to scrape the blackbox exporter.
+    networks: [default, probe]
     volumes:
       - lgtm-data:/data
       # Config files mounted over the ones the image's run scripts read, so the bundled Loki, Prometheus and Grafana pick
@@ -834,6 +876,23 @@ services:
       retries: 3
       start_period: 120s
       start_interval: 2s
+    restart: unless-stopped
+
+  # The uptime probes of LGTM's Prometheus (scrape job blackbox-http): web, gateway and the object store over plain
+  # HTTP, as the cluster probes its hosts. Internal networks only, so it reaches Prometheus and its targets and nothing
+  # else: `probe` for Prometheus, the gateway and the store, `probe-web` for web. Same image and digest as the blackbox
+  # exporter of the platform layer: keep in step.
+  blackbox:
+    profiles: [obs]
+    image: quay.io/prometheus/blackbox-exporter:v0.29.1@sha256:ea1c7aa3ef3f307cd03e85f34abb604478ccb90b567fc690da0cd9776da76b13
+    command: ["--config.file=/etc/blackbox/blackbox.yaml"]
+    volumes:
+      - ../observability/blackbox/blackbox.yaml:/etc/blackbox/blackbox.yaml:ro
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    mem_limit: 64m
+    networks: [probe, probe-web]
     restart: unless-stopped
 
   # Routes the alerts of LGTM's Prometheus. The entry point writes the config: severity="page" goes to Telegram only
@@ -893,7 +952,7 @@ services:
 
   # GlitchTip web and task worker in one process, with no Valkey: one container to run instead of several, within the
   # RAM budget. Its init commands are skipped: glitchtip-init ran them. On `default` for the Go services and on `web`
-  # for the web client, which joins no other network; media-worker, on `worker`, reports no errors.
+  # for the web client, which joins no other network; media-worker and dlq-replay, on `worker`, report no errors.
   glitchtip:
     profiles: [obs]
     image: *glitchtip-image
@@ -1022,6 +1081,10 @@ networks:
   worker:
     internal: true
   web:
+  probe:
+    internal: true
+  probe-web:
+    internal: true
 
 volumes:
   # Postgres' data directory; created owned by postgres from the image's /var/lib/postgresql/data.

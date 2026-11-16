@@ -128,3 +128,4 @@ Phụ lục: [`appendix/0058-managed-data-operations.md`](appendix/0058-managed-
 ### Chỉnh bởi
 
 - §1: [0063](0063-managed-observability.md): topic `svp-<env>-alarms` thêm publisher AMP (`aps.amazonaws.com`, `sns:Publish`): luật và Alertmanager của AMP gửi cảnh báo qua topic này.
+- §1: [0067](0067-backup-dr.md): alarm `backup-job-failed`, `backup-copy-failed` (`ticket`) là query Metrics Insights trên namespace `AWS/Backup`, chu kỳ 300 s, `treat_missing_data = notBreaching` thay chu kỳ 60 s, `missing`: AWS Backup đẩy metric mỗi 5 phút, chỉ khi có job.

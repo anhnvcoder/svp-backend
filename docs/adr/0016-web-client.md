@@ -189,8 +189,7 @@ Phụ lục: [`appendix/0016-web-client.md`](appendix/0016-web-client.md) (trạ
 
 - §5: [0046](0046-web-session-lifetime.md): thời hạn session (idle, absolute, `Max-Age` của cookie).
 - §6, §8, §11: [0018](0018-web-profiles-public-video-upload.md): chi tiết phần B (§6 origin upload, §8 trạng thái follow, §11 phạm vi).
-- §6: [0019](0019-web-k3d-supply-chain-observability.md): Trusted Types dời.
-- §7: [0019](0019-web-k3d-supply-chain-observability.md): chứng chỉ riêng cho `svp.localhost` thay SAN của chứng chỉ wildcard.
+- §6, §7: [0019](0019-web-k3d-supply-chain-observability.md): §6 Trusted Types dời; §7 chứng chỉ riêng cho `svp.localhost` thay SAN của chứng chỉ wildcard.
 - §8: [0033](0033-svp-web-repo.md): `gen/api.d.ts` sinh từ hợp đồng đã phát hành, không từ file trong repo.
 - §10: [0019](0019-web-k3d-supply-chain-observability.md): `@sentry/nextjs` chỉ ở server, thêm dev dependency `sentry` (CLI getsentry/cli), ngân sách tải lần đầu của login nới lên 210 kB.
 - §10: [0033](0033-svp-web-repo.md): danh sách gói npm và Renovate của web ở `svp-frontend`.
@@ -198,3 +197,4 @@ Phụ lục: [`appendix/0016-web-client.md`](appendix/0016-web-client.md) (trạ
 - §11: [0022](0022-local-object-store-minio-replacement.md): CORS MinIO toàn cục, MinIO community thay bằng RustFS, CORS theo bucket.
 - Vị trí `web/` và các target `web-*` từ 2026-10-31: [0033](0033-svp-web-repo.md).
 - §5: [0053](0053-msk-elasticache-valkey.md): session db 9 ở compose là container `valkey` TLS, user `svp-web`; Redis native db 9 chỉ còn cho `make dev`.
+- §2: [0069](0069-auth-hardening.md): access token 15 phút thay 1 giờ (`authtoken.TTL`); hạn refresh token và hạn cả họ không đổi.

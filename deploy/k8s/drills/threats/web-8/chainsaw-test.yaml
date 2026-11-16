@@ -146,7 +146,7 @@ spec:
             : >"$work/web8.others"
             while read -r i status error; do
               h=$(awk -v i="$i" '$1 == i { print $2 }' "$work/web8.hashes")
-              key=$(grep ":$h\$" "$work/rl-keys" | head -n 1 || true)
+              key=$(grep "^svp:gw:rl:login-email:.*:$h\$" "$work/rl-keys" | head -n 1 || true)
               case "$status $error" in
                 "200 wrong-credentials") if [[ -n $key ]]; then passed=$((passed + 1)); else wrong=$((wrong + 1)); fi ;;
                 # Any 429 of the gateway reads "Too many tries": with a login-email key it passed the rate limit (user-service's

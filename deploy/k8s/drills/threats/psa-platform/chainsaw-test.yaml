@@ -1,7 +1,10 @@
 # PSA-platform of the threat model (docs/threat-model.md) on cluster svp: every namespace but kube-system, kube-public,
-# kube-node-lease and default (the platform charts' included: cert-manager, envoy-gateway-system, cnpg-system, keda,
-# argo-rollouts, kyverno, argocd on the GitOps path) enforces PSA restricted at the podSecurityVersion of chart
-# svp-cluster (deploy/helm/svp-cluster/values.yaml).
+# kube-node-lease, default and istio-system (the platform charts' included: cert-manager, envoy-gateway-system,
+# cnpg-system, keda, argo-rollouts, kyverno, argocd on the GitOps path) enforces PSA restricted at the
+# podSecurityVersion of chart svp-cluster (deploy/helm/svp-cluster/values.yaml).
+
+# istio-system is printed as info with its level and reason: chart svp-cluster labels it privileged, since ztunnel and
+# Istio's CNI agent need privileges on the node's network. Any other namespace without restricted fails the check.
 
 # Every namespace of argocd/apps/components.json of svp-gitops that runs on k3d exists (the clone deploy/k8s/lib.sh's
 # gitops_dir names: SVP_GITOPS_DIR, or <workspace>/gitops).
@@ -58,7 +61,7 @@ spec:
         outputs:
         - name: namespaceLabels
           value: ($stdout)
-    - description: "PSA-platform: every namespace but kube-system, kube-public, kube-node-lease and default enforces PSA restricted at podSecurityVersion"
+    - description: "PSA-platform: every namespace but kube-system, kube-public, kube-node-lease, default and istio-system enforces PSA restricted at podSecurityVersion"
       continueOnError: true
       script:
         shell: bash
@@ -70,6 +73,10 @@ spec:
           bad=0
           while IFS=$'\t' read -r ns level got; do
             case $ns in '' | kube-system | kube-public | kube-node-lease | default) continue ;; esac
+            if [[ $ns == istio-system ]]; then
+              echo "info  PSA-platform: namespace istio-system enforces PSA $level $got: chart svp-cluster labels it privileged, since ztunnel and Istio's CNI agent need privileges on the node's network (capabilities such as NET_ADMIN; the CNI agent runs privileged on the host network), the one exception besides kube-system"
+              continue
+            fi
             if [[ $level == restricted && $got == "$VERSION" ]]; then
               echo "ok    PSA-platform: namespace $ns enforces PSA restricted $VERSION"
             else
@@ -78,10 +85,10 @@ spec:
             fi
           done <<<"$NAMESPACE_LABELS"
           [ "$bad" = 0 ] || exit 1
-          echo "ok    PSA-platform: every namespace but kube-system, kube-public, kube-node-lease and default enforces PSA restricted $VERSION"
+          echo "ok    PSA-platform: every namespace but kube-system, kube-public, kube-node-lease, default and istio-system enforces PSA restricted $VERSION"
         check:
           ($error): ~
-          (starts_with($stdout, 'ok    PSA-platform') && contains($stdout, 'and default enforces PSA restricted')): true
+          "(contains($stdout, 'ok    PSA-platform: every namespace but kube-system, kube-public, kube-node-lease, default and istio-system enforces PSA restricted'))": true
     # A component of the GitOps path only (gitopsOnly: External Secrets Operator) has its namespace there only, one of
     # another platform (platforms without k3d) none at all: this test runs on k3d only, and such a component (an EKS
     # controller, say) is never installed here.
@@ -136,19 +143,22 @@ spec:
     try:
     - description: "PSA-platform: read podSecurityVersion of deploy/helm/svp-cluster/values.yaml"
       script: *read-version
-    - description: "PSA-platform: read the image of deployment svp/media-worker"
+    # Only dry runs, in namespaces the image policy does not check: the drills' pinned probe image is enough.
+    - description: "PSA-platform: read SVP_PROBE_IMAGE of deploy/k8s/lib.sh"
       script:
         env:
-        - *kubeconfig
+        - name: PROBE_IMAGE
+          value: (env('SVP_PROBE_IMAGE'))
         content: |
           set -eu
-          export KUBECONFIG="$CALLER_KUBECONFIG"
-          kubectl --context k3d-svp -n svp get deployment media-worker -o jsonpath='{.spec.template.spec.containers[0].image}'
+          case $PROBE_IMAGE in
+            *@sha256:*) printf %s "$PROBE_IMAGE" ;;
+            *) echo "FAIL  SVP_PROBE_IMAGE is '$PROBE_IMAGE', not an image pinned by digest: run the drill with deploy/k8s/drills/run.sh" >&2; exit 1 ;;
+          esac
         check:
           ($error): ~
-          (trim_space($stdout) != ''): true
         outputs:
-        - name: workerImage
+        - name: probeImage
           value: (trim_space($stdout))
     - description: "PSA-platform: namespace default has no PSA enforce label, so the cluster default applies"
       continueOnError: true
@@ -173,7 +183,7 @@ spec:
             automountServiceAccountToken: false
             containers:
             - name: c
-              image: ($workerImage)
+              image: ($probeImage)
               securityContext:
                 privileged: true
                 runAsUser: 0
@@ -206,7 +216,7 @@ spec:
                 type: RuntimeDefault
             containers:
             - name: c
-              image: ($workerImage)
+              image: ($probeImage)
               securityContext:
                 allowPrivilegeEscalation: false
                 readOnlyRootFilesystem: true
@@ -241,7 +251,7 @@ spec:
             automountServiceAccountToken: false
             containers:
             - name: c
-              image: ($workerImage)
+              image: ($probeImage)
               securityContext:
                 privileged: true
                 runAsUser: 0
@@ -274,7 +284,7 @@ spec:
                 type: RuntimeDefault
             containers:
             - name: c
-              image: ($workerImage)
+              image: ($probeImage)
               securityContext:
                 allowPrivilegeEscalation: false
                 readOnlyRootFilesystem: true
@@ -309,7 +319,7 @@ spec:
             automountServiceAccountToken: false
             containers:
             - name: c
-              image: ($workerImage)
+              image: ($probeImage)
               securityContext:
                 privileged: true
                 runAsUser: 0
@@ -342,7 +352,7 @@ spec:
                 type: RuntimeDefault
             containers:
             - name: c
-              image: ($workerImage)
+              image: ($probeImage)
               securityContext:
                 allowPrivilegeEscalation: false
                 readOnlyRootFilesystem: true

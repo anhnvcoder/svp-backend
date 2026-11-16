@@ -122,7 +122,7 @@ func TestServiceConfig(t *testing.T) {
 	t.Parallel()
 	type name struct{ Service, Method string }
 	// Only the methods a second try cannot change are retried: Follow, Unfollow, Logout,
-	// UpdateDisplayName, CompleteUpload, Like, Unlike and the reads. A second try of any other
+	// UpdateDisplayName, CompleteUpload, GrantEntitlement, Like, Unlike and the reads. A second try of any other
 	// would repeat its effect, and GetStats and GetProfiles would overrun their 100 ms budget.
 	want := map[string][]name{
 		"user-service": {
@@ -137,6 +137,8 @@ func TestServiceConfig(t *testing.T) {
 			{"svp.video.v1.VideoService", "CompleteUpload"},
 			{"svp.video.v1.VideoService", "GetPublicVideo"},
 			{"svp.video.v1.VideoService", "ListAuthorVideos"},
+			{"svp.video.v1.VideoService", "GetPlaybackPlaylist"},
+			{"svp.video.v1.VideoService", "GrantEntitlement"},
 		},
 		"feed-service": {
 			{"svp.feed.v1.FeedService", "GetFollowingFeed"},
@@ -482,6 +484,40 @@ func TestTrustTraceContext(t *testing.T) {
 			}
 			if err != nil || got != tc.want {
 				t.Errorf("trustTraceContext() = %v, %v; want %v, nil", got, err, tc.want)
+			}
+		})
+	}
+}
+
+func TestMaxInFlight(t *testing.T) {
+	for _, tc := range []struct {
+		value   string
+		want    int
+		wantErr bool
+	}{
+		{value: "", want: 150},
+		{value: "1", want: 1},
+		{value: "400", want: 400},
+		{value: "0", wantErr: true},
+		{value: "-5", wantErr: true},
+		{value: "abc", wantErr: true},
+		{value: "1.5", wantErr: true},
+		{value: " 10", wantErr: true},
+	} {
+		t.Run(tc.value, func(t *testing.T) {
+			t.Setenv("MAX_IN_FLIGHT", tc.value)
+			got, err := maxInFlight()
+			if tc.wantErr {
+				if err == nil || !strings.Contains(err.Error(), "MAX_IN_FLIGHT") {
+					t.Fatalf("error = %v, want one naming MAX_IN_FLIGHT", err)
+				}
+				if len(tc.value) > 1 && strings.Contains(err.Error(), tc.value) {
+					t.Errorf("error %q carries the value %q", err, tc.value)
+				}
+				return
+			}
+			if err != nil || got != tc.want {
+				t.Errorf("maxInFlight() = %v, %v; want %v, nil", got, err, tc.want)
 			}
 		})
 	}

@@ -113,7 +113,7 @@ func (q *Queries) FanOutVideo(ctx context.Context, arg FanOutVideoParams) (int64
 }
 
 const getExploreFeed = `-- name: GetExploreFeed :many
-SELECT video_id, author_id, title, duration_ms, playlist_key, thumbnail_key, published_at
+SELECT video_id, author_id, title, duration_ms, playlist_key, thumbnail_key, published_at, premium
 FROM videos
 WHERE (published_at, video_id) < (COALESCE($1::timestamptz, 'infinity'), $2::uuid)
 ORDER BY published_at DESC, video_id DESC
@@ -134,6 +134,7 @@ type GetExploreFeedRow struct {
 	PlaylistKey  string
 	ThumbnailKey string
 	PublishedAt  time.Time
+	Premium      bool
 }
 
 // Reads a page of every READY video, newest first, strictly after the cursor, on
@@ -155,6 +156,7 @@ func (q *Queries) GetExploreFeed(ctx context.Context, arg GetExploreFeedParams) 
 			&i.PlaylistKey,
 			&i.ThumbnailKey,
 			&i.PublishedAt,
+			&i.Premium,
 		); err != nil {
 			return nil, err
 		}
@@ -167,7 +169,7 @@ func (q *Queries) GetExploreFeed(ctx context.Context, arg GetExploreFeedParams) 
 }
 
 const getFollowingFeed = `-- name: GetFollowingFeed :many
-SELECT v.video_id, v.author_id, v.title, v.duration_ms, v.playlist_key, v.thumbnail_key, v.published_at
+SELECT v.video_id, v.author_id, v.title, v.duration_ms, v.playlist_key, v.thumbnail_key, v.published_at, v.premium
 FROM timeline t
 JOIN videos v ON v.video_id = t.video_id
 WHERE t.user_id = $1
@@ -192,6 +194,7 @@ type GetFollowingFeedRow struct {
 	PlaylistKey  string
 	ThumbnailKey string
 	PublishedAt  time.Time
+	Premium      bool
 }
 
 // Reads a page of user's timeline of the last 30 days, newest first, strictly after the cursor
@@ -220,6 +223,7 @@ func (q *Queries) GetFollowingFeed(ctx context.Context, arg GetFollowingFeedPara
 			&i.PlaylistKey,
 			&i.ThumbnailKey,
 			&i.PublishedAt,
+			&i.Premium,
 		); err != nil {
 			return nil, err
 		}
@@ -248,8 +252,8 @@ func (q *Queries) InsertFollow(ctx context.Context, arg InsertFollowParams) erro
 }
 
 const insertVideo = `-- name: InsertVideo :execrows
-INSERT INTO videos (video_id, author_id, title, duration_ms, playlist_key, thumbnail_key, published_at)
-VALUES ($1, $2, $3, $4, $5, $6, $7)
+INSERT INTO videos (video_id, author_id, title, duration_ms, playlist_key, thumbnail_key, published_at, premium)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
 ON CONFLICT (video_id) DO NOTHING
 `
 
@@ -261,6 +265,7 @@ type InsertVideoParams struct {
 	PlaylistKey  string
 	ThumbnailKey string
 	PublishedAt  time.Time
+	Premium      bool
 }
 
 // The first video.ready wins: published_at of a stored video never changes. Returns 0 for a video
@@ -274,6 +279,7 @@ func (q *Queries) InsertVideo(ctx context.Context, arg InsertVideoParams) (int64
 		arg.PlaylistKey,
 		arg.ThumbnailKey,
 		arg.PublishedAt,
+		arg.Premium,
 	)
 	if err != nil {
 		return 0, err

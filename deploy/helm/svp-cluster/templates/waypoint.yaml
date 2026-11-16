@@ -1,0 +1,102 @@
+{{- /* The waypoint of the mesh in svp-mesh: the L7 proxy of the gRPC Services of svp that opt in with label
+istio.io/use-waypoint, where requests are balanced one by one and the L7 AuthorizationPolicies of their charts apply.
+istiod (class istio-waypoint) makes its Deployment, Service and ServiceAccount waypoint from this Gateway and the
+ConfigMap below; no Istio CRD here, so this chart installs before Istio's. */}}
+{{- $w := .Values.waypoint }}
+{{- $replicas := $w.replicas | int }}
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: waypoint
+  namespace: svp-mesh
+  labels:
+    istio.io/waypoint-for: service
+  annotations:
+    # Argo CD's health of a Gateway waits for Programmed=True, which only istiod sets, and istiod installs in a later
+    # wave: without this the Application of this chart would never be Healthy and the waves after it would never start.
+    # The waypoint's health is its Deployment's.
+    argocd.argoproj.io/ignore-healthcheck: "true"
+spec:
+  gatewayClassName: istio-waypoint
+  infrastructure:
+    parametersRef:
+      group: ""
+      kind: ConfigMap
+      name: waypoint
+  listeners:
+    - name: mesh
+      port: 15008
+      protocol: HBONE
+      # Services of other namespaces attach only from those allowed here: the waypoint sits apart from svp, and no
+      # other namespace may send its Services' traffic through it.
+      allowedRoutes:
+        namespaces:
+          from: Selector
+          selector:
+            matchLabels:
+              kubernetes.io/metadata.name: svp
+---
+# Strategic merge patches istiod applies to what it makes for Gateway waypoint. Pod Security "restricted" of svp-mesh
+# also needs a seccomp profile, which Istio's template leaves out. podDisruptionBudget makes the PDB, whose selector
+# istiod fills in.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: waypoint
+  namespace: svp-mesh
+data:
+  deployment: |
+    spec:
+      replicas: {{ $replicas }}
+      template:
+        spec:
+          securityContext:
+            seccompProfile:
+              type: RuntimeDefault
+          containers:
+            - name: istio-proxy
+              resources:
+                {{- toYaml $w.resources | nindent 16 }}
+  {{- if ge $replicas 2 }}
+  podDisruptionBudget: |
+    spec:
+      minAvailable: 1
+  {{- end }}
+---
+# Only the mesh reaches the waypoint and only the mesh is reached from it, all in HBONE on 15008: in from the pods of
+# svp (the clients of the gRPC Services), out to the pods of svp (the servers behind them) and to istiod's 15012 for
+# its certificate and configuration. Its pods stay outside the mesh (istio.io/dataplane-mode none), so the readiness
+# probe comes from the node, which Kubernetes always lets in.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: waypoint
+  namespace: svp-mesh
+spec:
+  podSelector:
+    matchLabels:
+      gateway.networking.k8s.io/gateway-name: waypoint
+  policyTypes: [Ingress, Egress]
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: svp
+      ports:
+        - protocol: TCP
+          port: 15008
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: svp
+      ports:
+        - protocol: TCP
+          port: 15008
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: istio-system
+      ports:
+        - protocol: TCP
+          port: 15012

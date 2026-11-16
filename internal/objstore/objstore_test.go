@@ -10,6 +10,8 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"slices"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -71,6 +73,14 @@ func TestBucketByPrefix(t *testing.T) {
 		{"uploads/0192", "up-bucket"},
 		{"media/0192/master.m3u8", "media-bucket"},
 		{"media/0192/", "media-bucket"},
+		{"premium/0192/v/a/index_360p_00001.ts", "media-bucket"},
+		{"preview/0192/v/master.m3u8", "media-bucket"},
+		{"transcode-jobs/0192/0193.json", "media-bucket"},
+		{"premium/", ""},
+		{"preview/", ""},
+		{"premium0192", ""},
+		{"transcode-jobs/", ""},
+		{"transcode-jobs0192", ""},
 		{"uploads/", ""},
 		{"media/", ""},
 		{"", ""},
@@ -384,6 +394,165 @@ func TestIsMediaKey(t *testing.T) {
 	}
 }
 
+// IsKeyUnder applies the rule of IsMediaKey under each media prefix it is given, and only under it;
+// any other prefix is refused whatever the key.
+func TestIsKeyUnder(t *testing.T) {
+	t.Parallel()
+	const id = "0190a6e4-7b2c-7d3e-9f40-123456789abc"
+	const other = "0190a6e4-7b2c-7d3e-9f40-123456789abd"
+	const dir = id + "/0190a6e4-7b2c-7d3e-9f40-0000000000a1/0190a6e4-7b2c-7d3e-9f40-0000000000b2/"
+	tests := []struct {
+		prefix, key string
+		want        bool
+	}{
+		{PremiumPrefix, PremiumPrefix + dir + "index_360p_00001.ts", true},
+		{PremiumPrefix, PremiumPrefix + id + "/0190a6e4-7b2c-7d3e-9f40-0000000000a1/master.m3u8", true},
+		{PreviewPrefix, PreviewPrefix + dir + "thumbnail.jpg", true},
+		{MediaPrefix, MediaPrefix + dir + "index_720p.m3u8", true},
+		// The prefix of the key must be the one asked for.
+		{PremiumPrefix, MediaPrefix + dir + "index_360p_00001.ts", false},
+		{PremiumPrefix, PreviewPrefix + dir + "index_360p_00001.ts", false},
+		{PreviewPrefix, PremiumPrefix + dir + "index_360p_00001.ts", false},
+		{MediaPrefix, PremiumPrefix + dir + "index_360p_00001.ts", false},
+		// Prefixes outside the three media ones are refused, even when the key matches them.
+		{UploadsPrefix, UploadsPrefix + id + "/x", false},
+		{JobsPrefix, JobsPrefix + id + "/x", false},
+		{"", id + "/x", false},
+		{"premium", "premium" + id + "/x", false},
+		{"premium//", "premium//" + id + "/x", false},
+		// Another video, and paths that climb out or that a URL parser reads differently.
+		{PremiumPrefix, PremiumPrefix + other + "/v/a/index_360p_00001.ts", false},
+		{PremiumPrefix, PremiumPrefix + id + "x/v/a/index_360p_00001.ts", false},
+		{PremiumPrefix, PremiumPrefix + dir + "../index_360p_00001.ts", false},
+		{PremiumPrefix, PremiumPrefix + id + "/../" + other + "/v/a/x.ts", false},
+		{PremiumPrefix, PremiumPrefix + dir + "%2e%2e/x.ts", false},
+		{PremiumPrefix, PremiumPrefix + dir + "%2E%2E/x.ts", false},
+		{PreviewPrefix, PreviewPrefix + id + "/./x", false},
+		{PreviewPrefix, PreviewPrefix + id + "/a//x", false},
+		{PreviewPrefix, PreviewPrefix + id + `/a\x`, false},
+		{PremiumPrefix, PremiumPrefix + id + "/", false},
+		{PremiumPrefix, PremiumPrefix + id, false},
+	}
+	for _, tt := range tests {
+		if got := IsKeyUnder(tt.prefix, tt.key, id); got != tt.want {
+			t.Errorf("IsKeyUnder(%q, %q, %q) = %v, want %v", tt.prefix, tt.key, id, got, tt.want)
+		}
+	}
+}
+
+// PresignGet signs a GET of one premium key on the public endpoint, for exactly ttl, without
+// sending anything; other prefixes and out-of-range ttls are refused.
+func TestPresignGet(t *testing.T) {
+	t.Parallel()
+	cfg := testConfig("http://svp-unreachable.invalid:9000")
+	cfg.PublicEndpoint = "http://127.0.0.1:9000"
+	s := newTestStore(t, cfg)
+	const key = "premium/0190a6e4-7b2c-7d3e-9f40-123456789abc/v/a/index_360p_00001.ts"
+
+	for _, ttl := range []time.Duration{time.Second, 1234 * time.Second, time.Hour} {
+		raw, err := s.PresignGet(t.Context(), key, ttl)
+		if err != nil {
+			t.Fatalf("PresignGet(ttl %v) error = %v", ttl, err)
+		}
+		u, err := url.Parse(raw)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if u.Scheme+"://"+u.Host != cfg.PublicEndpoint || u.Path != "/media/"+key {
+			t.Errorf("URL = %s, want the public endpoint, the media bucket and the key", raw)
+		}
+		q := u.Query()
+		if got, want := q.Get("X-Amz-Expires"), strconv.Itoa(int(ttl/time.Second)); got != want {
+			t.Errorf("X-Amz-Expires = %q, want %q", got, want)
+		}
+		if q.Get("X-Amz-Algorithm") != "AWS4-HMAC-SHA256" || q.Get("X-Amz-Signature") == "" ||
+			!strings.HasPrefix(q.Get("X-Amz-Credential"), "svp-test/") || q.Get("X-Amz-SignedHeaders") != "host" {
+			t.Errorf("query = %v, want a SigV4 query signature of the host only", q)
+		}
+	}
+
+	tests := []struct {
+		name, key string
+		ttl       time.Duration
+	}{
+		{"media key", "media/0190/v/a/index_360p_00001.ts", time.Minute},
+		{"preview key", "preview/0190/v/a/index_360p_00001.ts", time.Minute},
+		{"upload key", "uploads/0190", time.Minute},
+		{"bare prefix", "premium/", time.Minute},
+		{"no ttl", key, 0},
+		{"under a second", key, time.Second - time.Nanosecond},
+		{"over an hour", key, time.Hour + time.Second},
+	}
+	for _, tt := range tests {
+		if raw, err := s.PresignGet(t.Context(), tt.key, tt.ttl); err == nil || raw != "" {
+			t.Errorf("%s: PresignGet() = %q, %v; want an error", tt.name, raw, err)
+		}
+	}
+}
+
+// Read returns a small object whole, refuses one over the limit whether or not the length is
+// sent, and classifies errors as Head does.
+func TestRead(t *testing.T) {
+	t.Parallel()
+	const key = "premium/v1/e1/master.m3u8"
+	tests := []struct {
+		name    string
+		status  int
+		chunked bool
+		max     int64
+		wantErr error
+	}{
+		{"within limit", http.StatusOK, false, 10, nil},
+		{"exactly the limit, chunked", http.StatusOK, true, 10, nil},
+		{"over the limit by length", http.StatusOK, false, 9, ErrTooLarge},
+		{"over the limit while streaming", http.StatusOK, true, 9, ErrTooLarge},
+		{"not found", http.StatusNotFound, false, 10, ErrNotFound},
+		{"denied", http.StatusForbidden, false, 10, ErrAccessDenied},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.Method != http.MethodGet || r.URL.Path != "/media/"+key {
+					t.Errorf("request %s %s, want GET of the key in the media bucket", r.Method, r.URL.Path)
+				}
+				if tt.status != http.StatusOK {
+					w.Header().Set("Content-Type", "application/xml")
+					w.WriteHeader(tt.status)
+					_, _ = w.Write([]byte(`<Error><Code>X</Code></Error>`))
+					return
+				}
+				const body = "0123456789"
+				if tt.chunked {
+					_, _ = w.Write([]byte(body[:1]))
+					w.(http.Flusher).Flush()
+					_, _ = w.Write([]byte(body[1:]))
+					return
+				}
+				_, _ = w.Write([]byte(body))
+			}))
+			defer srv.Close()
+			got, err := newTestStore(t, testConfig(srv.URL)).Read(t.Context(), key, tt.max)
+			if !errors.Is(err, tt.wantErr) || (tt.wantErr == nil) != (err == nil) {
+				t.Fatalf("Read() error = %v, want %v", err, tt.wantErr)
+			}
+			if tt.wantErr == nil && string(got) != "0123456789" {
+				t.Errorf("Read() = %q", got)
+			}
+			if tt.wantErr != nil && got != nil {
+				t.Errorf("Read() = %q with an error, want nil", got)
+			}
+		})
+	}
+
+	s := newTestStore(t, testConfig("http://svp-unreachable.invalid:9000"))
+	for _, k := range []string{"other/v1", "premium/", ""} {
+		if _, err := s.Read(t.Context(), k, 10); !errors.Is(err, ErrInvalidKey) {
+			t.Errorf("Read(%q) error = %v, want ErrInvalidKey", k, err)
+		}
+	}
+}
+
 // Upload sends Cache-Control only when it is given; Create adds If-None-Match: * and turns the
 // 412 of a key that is taken into ErrExists, which is neither ErrAccessDenied nor ErrNotFound.
 func TestPutHeaders(t *testing.T) {
@@ -481,5 +650,126 @@ func TestExists(t *testing.T) {
 				t.Errorf("query = %v, want list-type=2, prefix=%s, max-keys=1", query, key)
 			}
 		})
+	}
+}
+
+// List pages through every key under the prefix of the right bucket, in key order; a prefix
+// without the trailing "/" or outside the contract is refused before any request.
+func TestList(t *testing.T) {
+	t.Parallel()
+	const prefix = "media/v1/e1/a1/"
+	pages := [][]string{{prefix + "index_360p.m3u8", prefix + "index_360p_00001.ts"}, {prefix + "thumb.0000000.jpg"}}
+	var queries []url.Values
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/media" && r.URL.Path != "/media/" {
+			t.Errorf("path %s, want the media bucket", r.URL.Path)
+		}
+		q := r.URL.Query()
+		queries = append(queries, q)
+		page := 0
+		if q.Get("continuation-token") == "next" {
+			page = 1
+		}
+		var b strings.Builder
+		fmt.Fprintf(&b, `<ListBucketResult><Name>media</Name><KeyCount>%d</KeyCount><IsTruncated>%t</IsTruncated>`,
+			len(pages[page]), page == 0)
+		if page == 0 {
+			b.WriteString(`<NextContinuationToken>next</NextContinuationToken>`)
+		}
+		for _, k := range pages[page] {
+			fmt.Fprintf(&b, `<Contents><Key>%s</Key><Size>1</Size></Contents>`, k)
+		}
+		w.Header().Set("Content-Type", "application/xml")
+		_, _ = w.Write([]byte(b.String() + `</ListBucketResult>`))
+	}))
+	defer srv.Close()
+	s := newTestStore(t, testConfig(srv.URL))
+
+	keys, err := s.List(t.Context(), prefix)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := append(slices.Clone(pages[0]), pages[1]...); !slices.Equal(keys, want) {
+		t.Errorf("List() = %v, want %v", keys, want)
+	}
+	if len(queries) != 2 || queries[0].Get("prefix") != prefix || queries[1].Get("prefix") != prefix {
+		t.Errorf("queries = %v, want two pages of prefix %s", queries, prefix)
+	}
+	for _, p := range []string{"media/v1/e1/a1", "other/v1/", "media/", ""} {
+		if _, err := s.List(t.Context(), p); !errors.Is(err, ErrInvalidKey) {
+			t.Errorf("List(%q) error = %v, want ErrInvalidKey", p, err)
+		}
+	}
+	if len(queries) != 2 {
+		t.Errorf("refused prefixes sent %d requests", len(queries)-2)
+	}
+}
+
+// Copy sends one CopyObject in the bucket of both keys that replaces the metadata with the given
+// headers; keys in two buckets or outside the contract are refused before any request, and the
+// errors are classified as for any other call.
+func TestCopy(t *testing.T) {
+	t.Parallel()
+	type sent struct{ method, path, source, directive, contentType, cacheControl string }
+	var got []sent
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		got = append(got, sent{r.Method, r.URL.Path, r.Header.Get("X-Amz-Copy-Source"),
+			r.Header.Get("X-Amz-Metadata-Directive"), r.Header.Get("Content-Type"), r.Header.Get("Cache-Control")})
+		w.Header().Set("Content-Type", "application/xml")
+		if strings.HasSuffix(r.URL.Path, "/denied.ts") {
+			w.WriteHeader(http.StatusForbidden)
+			_, _ = w.Write([]byte(`<Error><Code>AccessDenied</Code></Error>`))
+			return
+		}
+		_, _ = w.Write([]byte(`<CopyObjectResult><ETag>"e"</ETag></CopyObjectResult>`))
+	}))
+	defer srv.Close()
+	s := newTestStore(t, testConfig(srv.URL))
+	const immutable = "max-age=31536000, immutable"
+	const dir = "media/v1/e1/a1/"
+
+	if err := s.Copy(t.Context(), dir+"index_360p_00001.ts", dir+"index_360p_00001.ts", "video/mp2t", immutable); err != nil {
+		t.Fatalf("Copy() in place: %v", err)
+	}
+	if err := s.Copy(t.Context(), dir+"thumb.0000000.jpg", dir+"thumbnail.jpg", "image/jpeg", immutable); err != nil {
+		t.Fatalf("Copy() to another key: %v", err)
+	}
+	if err := s.Copy(t.Context(), dir+"denied.ts", dir+"denied.ts", "video/mp2t", immutable); !errors.Is(err, ErrAccessDenied) {
+		t.Errorf("Copy() refused by storage: error = %v, want ErrAccessDenied", err)
+	}
+	for _, keys := range [][2]string{{"uploads/v1", dir + "x.ts"}, {dir + "x.ts", "uploads/v1"}, {"other/x", "other/x"}} {
+		if err := s.Copy(t.Context(), keys[0], keys[1], "video/mp2t", immutable); !errors.Is(err, ErrInvalidKey) {
+			t.Errorf("Copy(%q, %q) error = %v, want ErrInvalidKey", keys[0], keys[1], err)
+		}
+	}
+
+	want := []sent{
+		{http.MethodPut, "/media/" + dir + "index_360p_00001.ts", "media/" + dir + "index_360p_00001.ts", "REPLACE", "video/mp2t", immutable},
+		{http.MethodPut, "/media/" + dir + "thumbnail.jpg", "media/" + dir + "thumb.0000000.jpg", "REPLACE", "image/jpeg", immutable},
+		{http.MethodPut, "/media/" + dir + "denied.ts", "media/" + dir + "denied.ts", "REPLACE", "video/mp2t", immutable},
+	}
+	if fmt.Sprint(got) != fmt.Sprint(want) {
+		t.Errorf("requests:\n%v\nwant\n%v", got, want)
+	}
+}
+
+// A job record lives in the media bucket, outside media/, and Create writes it once.
+func TestCreateJobRecord(t *testing.T) {
+	t.Parallel()
+	var paths []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		paths = append(paths, r.Method+" "+r.URL.Path+" "+r.Header.Get("If-None-Match"))
+	}))
+	defer srv.Close()
+	s := newTestStore(t, testConfig(srv.URL))
+	f := filepath.Join(t.TempDir(), "record")
+	if err := os.WriteFile(f, []byte(`{"reason":"TRANSCODE_FAILURE_REASON_SOURCE_MISSING"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Create(t.Context(), "transcode-jobs/v1/e1.json", f, "application/json", ""); err != nil {
+		t.Fatal(err)
+	}
+	if want := []string{"PUT /media/transcode-jobs/v1/e1.json *"}; !slices.Equal(paths, want) {
+		t.Errorf("requests = %v, want %v", paths, want)
 	}
 }

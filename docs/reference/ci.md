@@ -6,7 +6,7 @@ Loại tài liệu (Diátaxis): **reference**, tra cứu khi cần một lệnh 
 
 - CI trên GitHub Actions ([ADR-0015](../adr/0015-cicd-devsecops-stage5.md)); workflow
   `verify.yml` kiểm chứng trên runner ([ADR-0021](../adr/0021-deferred-verification-stage6b.md)); `scorecard.yml` và `pr-title.yml` do
-  [ADR-0041](../adr/0041-github-hardening.md) thêm. Năm workflow (DORA không còn workflow riêng:
+  [ADR-0041](../adr/0041-github-hardening.md) thêm, `release.yml` do [ADR-0077](../adr/0077-versioned-gitops-checker.md). Sáu workflow (DORA không còn workflow riêng:
   bài lab `dora/` của `svp-labs`, [ADR-0037](../adr/0037-mainpath-standard-tools.md) §1), mọi action
   ghim SHA commit, `permissions: {}` ở đầu file và quyền khai theo job; mọi job của lượt `pull_request` (cả PR từ fork)
   chỉ có `contents: read` và không secret; không `pull_request_target`, `workflow_run`. CI trung lập nền tảng
@@ -19,56 +19,52 @@ Loại tài liệu (Diátaxis): **reference**, tra cứu khi cần một lệnh 
   (mục "Script CI cho cây của nguồn khác" dưới đây) ở `HEAD` với workflow `local`; lệnh ghi qua API của GitHub (dispatch) chỉ
   được in ra. CI trên GitLab là bài lab của `svp-labs`:
   - `.github/workflows/ci.yml` (PR, push `main`, dispatch): `check` (`make check-go TESTFLAGS=-count=1`, Postgres 17 và
-    Redis là service container trên `127.0.0.1` thay cho Postgres, Redis native của máy, ffmpeg), `generate`
-    (`make generate-check`), `buf` (`buf breaking` so với merge-base của PR, `main` trước push, hay merge-base với
-    `origin/main` khi dispatch), `api-contract` (luật version của hợp đồng REST, [ADR-0033](../adr/0033-svp-web-repo.md)
-    §1: `make api-contract-check BASE=<base>` với base tính như job `buf`, rồi `deploy/ci/contract-test.sh`), `config`
-    (đủ lịch sử, `make gitops-clone` và `SVP_GITOPS_DIR` ở `env` của job; `make regal-lint`, `make conftest-verify`,
-    `deploy/ci/scan-gate.sh --check-ignorefile`, test của script pipeline image trong job giả của Actions và trên máy
-    (`deploy/ci/plan-test.sh`, `image-guard-test.sh` (guard và bước của ba composite action, đọc từ file action, docker
-    giả), `image-gate-test.sh` (bước cổng của `image-leg` bằng trivy, syft, grype, conftest ghim thật trên fixture
-    `deploy/ci/testdata/image-gate/`), `scan-gate-test.sh`, `vuln-predicate-test.sh`, `sign-image-test.sh` (hàm bundle
-    của `common.sh` trên registry giả), `rescan-test.sh`, `ecr-copy-test.sh` (sao chép sang ECR trên registry giả),
-    `verify-release-test.sh` cùng `values-check.sh`, `changed-services-test.sh`), `deploy/ci/promote-test.sh` (guard của
-    hai job promote, danh sách bản phát hành của rescan), `deploy/ci/verify-collect-test.sh`, test các bước của
-    `verify.yml` (`deploy/ci/verify-steps/steps-test.sh`, `supplychain-test.sh`, `admission-metrics-test.sh`,
-    `objstore-test.sh`), `deploy/k8s/drills/run-test.sh` (cùng `new-values.sh` của diễn tập `reloader`),
-    `deploy/k8s/rotate-test.sh`, `make chainsaw-lint`, `deploy/k8s/drills/gitops/gitops-test.sh`,
-    `deploy/helm/svp-data/files/kafka-init-test.sh` và `deploy/ops/ops-test.sh` (script init Kafka và hai wrapper CLI
-    vận hành với công cụ giả, không broker), `make slo-check`, `make otelcol-validate`, `make env` rồi
-    `make compose-config`, `deploy/observability/glitchtip/dotenv-test.sh`, `make helm-check`,
-    `deploy/ci/sources-test.sh`, `deploy/ci/registry-mirror-test.sh` (`svp-registry-mirror` bằng Kyverno CLI),
+    Redis là service container trên `127.0.0.1` thay cho Postgres, Redis native của máy, ffmpeg), `generate` (`make generate-check`), `buf` (`buf breaking` so với
+    merge-base của PR, `main` trước push, hay merge-base với `origin/main` khi dispatch), `api-contract` (luật version của hợp đồng
+    REST, [ADR-0033](../adr/0033-svp-web-repo.md) §1: `make api-contract-check BASE=<base>` với base tính như job `buf`, rồi
+    `deploy/ci/contract-test.sh`), `config`
+    (đủ lịch sử, `make gitops-clone` và `SVP_GITOPS_DIR` ở `env` của job; `make regal-lint`, `make conftest-verify`, `deploy/ci/scan-gate.sh --check-ignorefile`, `make migration-lint` (squawk trên file migration, [ADR-0068](../adr/0068-zero-downtime-migrations.md) §8),
+    test của script pipeline image trong job giả của Actions và trên máy (`deploy/ci/plan-test.sh`, `image-guard-test.sh` (guard và
+    bước của ba composite action, đọc từ file action, docker giả), `image-gate-test.sh` (bước cổng của `image-leg` bằng trivy, syft,
+    grype, conftest ghim thật trên fixture `deploy/ci/testdata/image-gate/`), `scan-gate-test.sh`,
+    `vuln-predicate-test.sh`, `sign-image-test.sh` (hàm bundle của `common.sh` trên registry giả), `rescan-test.sh`, `ecr-copy-test.sh` (sao chép sang ECR trên registry giả),
+    `verify-release-test.sh` cùng `values-check.sh`, `changed-services-test.sh`), `deploy/ci/promote-test.sh`
+    (guard của hai job promote, danh sách bản phát hành của rescan),
+    `deploy/ci/verify-collect-test.sh`, test các bước của `verify.yml` (`deploy/ci/verify-steps/steps-test.sh`, `supplychain-test.sh`,
+    `admission-metrics-test.sh`, `objstore-test.sh`, `uptime-cost-test.sh`), `deploy/k8s/drills/run-test.sh` (cùng `new-values.sh` của diễn tập `reloader`), `deploy/k8s/rotate-test.sh`, `make chainsaw-lint`,
+    `deploy/k8s/drills/gitops/gitops-test.sh`, `deploy/helm/svp-data/files/kafka-init-test.sh` và `deploy/ops/ops-test.sh` (script init Kafka và hai wrapper CLI vận hành với công cụ giả, không broker), `make slo-check`, `make otelcol-validate`, `make env`
+    rồi `make compose-config`, `deploy/observability/glitchtip/dotenv-test.sh`,
+    `make helm-check`, `deploy/ci/sources-test.sh`, `deploy/ci/registry-mirror-test.sh` (`svp-registry-mirror` bằng Kyverno CLI),
     `deploy/ci/image-list-test.sh`, `deploy/ci/gitops-check-test.sh "$SVP_GITOPS_DIR"`, `make k6-check`,
-    `make cloud-check`), `gitleaks` (toàn lịch sử, `--redact`), `trivy-config` (chỉ báo), `zizmor` (lint bảo mật
-    workflow, mục dưới), `dependency-review` (chỉ lượt `pull_request`: `actions/dependency-review-action` ghim SHA,
-    `contents: read`, `fail-on-severity: high`, không `allow-licenses`; chặn dependency có lỗ hổng ngay lúc PR thêm vào,
-    [ADR-0041](../adr/0041-github-hardening.md) (k)), `docs` (`make docs-check`: markdownlint-cli2 và lychee offline,
-    image ghim digest, không mạng), `sarif` (chỉ `main`), check tổng `ci-ok` (cần đủ 11 job, trừ `sarif` và `stack`;
-    `dependency-review` `skipped` ngoài lượt `pull_request` vẫn xanh; job `changes` chia PR theo vùng (tài liệu,
-    `proto/`, hợp đồng REST, `.github/`, thứ stack compose chạy; `Makefile`, `*.mk`, `ci.yml` đổi thì chạy hết) và job
+    `make cloud-check`),
+    `gitleaks` (toàn lịch sử, `--redact`), `trivy-config` (chỉ báo), `zizmor` (lint bảo mật workflow, mục dưới),
+    `dependency-review` (chỉ lượt `pull_request`: `actions/dependency-review-action` ghim SHA, `contents: read`,
+    `fail-on-severity: high`, không `allow-licenses`; chặn dependency có lỗ hổng ngay lúc PR thêm vào,
+    [ADR-0041](../adr/0041-github-hardening.md) (k)), `docs` (`make docs-check`: markdownlint-cli2 và lychee offline, image ghim digest,
+    không mạng), `sarif` (chỉ `main`), check tổng `ci-ok` (cần đủ 11 job,
+    trừ `sarif` và `stack`; `dependency-review` `skipped` ngoài lượt `pull_request` vẫn xanh; job `changes` chia PR theo vùng
+    (tài liệu, `proto/`, hợp đồng REST, `.github/`, thứ stack compose chạy; `Makefile`, `*.mk`, `ci.yml` đổi thì chạy hết) và job
     nào PR không đụng vùng của nó thì skip, `ci-ok` nhận các skip đó; job khác `skipped` thì đỏ; job `web` cũ ở CI của
-    `svp-frontend` từ khi web tách repo). Job `stack` (ADR-0020 §15; **chỉ báo, ngoài `ci-ok`**, không chặn merge; xem
-    lại khi 20 lượt liên tiếp xanh, không lượt đỏ do môi trường, thì đưa vào `ci-ok`): `ubuntu-24.04`, tối đa 45 phút,
-    `contents: read`, không secret, không service container: Postgres, Kafka và Valkey là container của stack compose,
-    không publish cổng, `make up` bootstrap Postgres bằng `psql` trong container của nó; gói apt `ffmpeg jq`, rồi
-    `make gitops-clone`, `make web-clone` (commit của bản web stg; `SVP_GITOPS_DIR`, `SVP_WEB_DIR` ở `env` của job),
-    Node theo `.nvmrc` và pnpm theo `packageManager` của bản clone, `make install` và Playwright Chromium, WebKit trong
-    bản clone, `make env`, `make up` (sáu service build từ PR, web là bản phát hành stg theo digest), `make smoke`,
-    `make web-e2e` (e2e của `svp-frontend` ở commit của web stg), `make load-ci`, `make web-lighthouse` (đỏ không làm
-    job đỏ), `make dast` (cuối cùng, hạn bước 15 phút, đỏ không làm job đỏ), `make ps` và log của `tls-init`,
-    `postgres`, `kafka`, `kafka-init`, `valkey` khi lỗi, `make down` luôn chạy; artifact chỉ `k6-summary`
-    (`summary.json` đã grep bí mật), `lighthouse` (báo cáo đã lọc cookie) và `dast` (chỉ `report.json`, `summary.json`,
-    dò bí mật lại trước khi chép; tệp nghi bị bỏ kèm `::warning::`). Trước `make web-lighthouse` job bỏ hạn chế AppArmor
-    `kernel.apparmor_restrict_unprivileged_userns` của runner (Chrome của Playwright cần user namespace cho sandbox). Đã
-    kiểm ngày 2026-10-24 (lượt PR [40133806424](https://github.com/anhnvcoder/svp-backend/actions/runs/40133806424), ba
-    lần chạy liền xanh, quyền ở đầu log chỉ `Contents: read`, artifact chỉ hai loại).
-  - `.github/workflows/images.yml` (PR, push `main`, dispatch, lịch hằng ngày): build sáu image service Go của repo này
+    `svp-frontend` từ khi web tách repo). Job `stack` (ADR-0020 §15; **chỉ báo, ngoài `ci-ok`**, không chặn merge; xem lại
+    khi 20 lượt liên tiếp xanh, không lượt đỏ do môi trường, thì đưa vào `ci-ok`): `ubuntu-24.04`, tối đa 45 phút,
+    `contents: read`, không secret, không service container: Postgres, Kafka và Valkey là container của stack compose, không publish
+    cổng, `make up` bootstrap Postgres bằng `psql` trong container của nó; gói apt `ffmpeg jq`, rồi `make gitops-clone`, `make web-clone` (commit của bản web stg; `SVP_GITOPS_DIR`,
+    `SVP_WEB_DIR` ở `env` của job), Node theo `.nvmrc` và pnpm theo `packageManager` của bản clone, `make install` và Playwright Chromium,
+    WebKit trong bản clone, `make env`, `make up` (mọi service Go build từ PR, web là bản phát hành stg theo digest), `make smoke`,
+    `make web-e2e` (e2e của `svp-frontend` ở commit của web stg), `make load-ci`, `make web-lighthouse` (đỏ không làm job đỏ), `make dast` (cuối cùng,
+    hạn bước 15 phút, đỏ không làm job đỏ), `make ps` và log của `tls-init`, `postgres`, `kafka`, `kafka-init`, `valkey` khi lỗi, `make down` luôn chạy; artifact chỉ `k6-summary`
+    (`summary.json` đã grep bí mật), `lighthouse` (báo cáo đã lọc cookie) và `dast` (chỉ `report.json`, `summary.json`, dò bí
+    mật lại trước khi chép; tệp nghi bị bỏ kèm `::warning::`). Trước `make web-lighthouse` job bỏ hạn chế AppArmor `kernel.apparmor_restrict_unprivileged_userns` của runner
+    (Chrome của Playwright cần user namespace cho sandbox). Đã kiểm ngày 2026-10-24 (lượt PR
+    [40133806424](https://github.com/anhnvcoder/svp-backend/actions/runs/40133806424), ba lần chạy liền xanh,
+    quyền ở đầu log chỉ `Contents: read`, artifact chỉ hai loại).
+  - `.github/workflows/images.yml` (PR, push `main`, dispatch, lịch hằng ngày): build image của mọi service Go của repo này
     (`built_services`; image `web` build, ký, promote ở `images.yml` của `svp-frontend`), chỉ service đổi so với base
     (`deploy/ci/changed-services.sh`; đổi `images.yml`, `deploy/ci/` (trừ `trivy-config-ignore.yaml`, script và test của
     `verify.yml`, mọi test `*-test.sh`, `gitops-check.sh` cùng `values-check.sh`, `verify-release.sh`, policy `gitops-policies/` (chỉ check `svp-gitops`,
     `make k8s-gitops-up` và diễn tập chạy hai script này),
     `contract.sh`, `ghcr-digest.sh`: không job image nào đọc chúng), `deploy/k8s/lib.sh` hay dòng
-    `TRIVY_IMAGE`/`SYFT_IMAGE`/`GRYPE_IMAGE`/`COSIGN_IMAGE` của `Makefile` hay một file dưới `.github/actions/image-*/` thì cả sáu;
+    `TRIVY_IMAGE`/`SYFT_IMAGE`/`GRYPE_IMAGE`/`COSIGN_IMAGE` của `Makefile` hay một file dưới `.github/actions/image-*/` thì mọi service;
     fixture `deploy/ci/testdata/` không build gì; chân `web` trong checkout này bị guard từ chối trước khi build). Base: push `main` so với lượt
     push `main` thành
     công cuối (lượt dispatch không đẩy base, nên thay đổi chỉ dispatch đã phát hành, như push GitHub không chạy workflow,
@@ -81,11 +77,12 @@ Loại tài liệu (Diátaxis): **reference**, tra cứu khi cần một lệnh 
     grype bằng image ghim của `Makefile`, verdict là mã thoát của công cụ, guard ở `deploy/ci/image-guard.sh`; bước đầu chạy
     `scan-gate.sh --check-ignorefile`): trivy (báo cáo JSON mọi mức, cũng là nguồn của attestation `vuln` và SARIF) đọc lại hai lần bằng
     `trivy convert --exit-code`: bí mật mọi severity (không `--severity`, vì `--severity CRITICAL` giấu một bí mật HIGH), rồi lỗ hổng với `--severity
-    CRITICAL --ignorefile .trivyignore.yaml`; grype ([ADR-0030](../adr/0030-devsecops-supplement.md) §6) quét SBOM syft của chân đó với `--fail-on critical`
-    và `.grype.yaml` của cây được quét (`-c`), thấy cả binary ngoài trình quản lý gói (như `node` của image web, ở cổng của `svp-frontend`) mà
-    trivy không thấy. Chặn: bí mật, và CRITICAL còn lại sau ngoại lệ (cả chưa có bản vá) ở báo cáo trivy hay grype; cho qua CRITICAL chỉ
-    với image diễn tập `drill-vulnerable` (guard tính từ tên image) và rescan (`scan-gate.sh --allow-critical`), không bao giờ cho bí mật; HIGH trở xuống chỉ đếm (`(trivy): CRITICAL n, HIGH n, secrets n`,
-    `(grype): Critical n, High n, excepted by .grype.yaml n`). Mã thoát 5 của `trivy convert` là có phát hiện, mã khác không đọc được báo cáo (thoát 2); grype
+    CRITICAL --ignorefile .trivyignore.yaml`, rồi một lượt `--format json` với cùng `--ignorefile` để `image-guard.sh fixed-high` đọc HIGH có `Status` `fixed`; grype ([ADR-0030](../adr/0030-devsecops-supplement.md) §6) quét SBOM syft của chân đó với `--fail-on critical`
+    và `.grype.yaml` của cây được quét (`-c`), rồi `image-guard.sh fixed-high` đọc `grype.json` cho HIGH có `fix.state` `fixed`; thấy cả binary ngoài trình quản lý gói (như `node` của image web, ở cổng của `svp-frontend`) mà
+    trivy không thấy. Chặn: bí mật; CRITICAL còn lại sau ngoại lệ (cả chưa có bản vá); HIGH có bản vá còn lại sau ngoại lệ, ở báo cáo trivy hay grype
+    ([ADR-0070](../adr/0070-scan-gate-high-fixed.md), flowchart ở [Quét lại, cổng quét và file ngoại lệ](#quét-lại-cổng-quét-và-file-ngoại-lệ)); cho qua CRITICAL và HIGH có bản vá chỉ
+    với image diễn tập `drill-vulnerable` (guard tính từ tên image) và rescan (`scan-gate.sh --allow-critical`), không bao giờ cho bí mật; HIGH chưa có bản vá, MEDIUM, LOW chỉ đếm (`(trivy): CRITICAL n, HIGH n (with a fix n), secrets n`,
+    `(grype): Critical n, High n (with a fix n), excepted by .grype.yaml n`). Mã thoát 5 của `trivy convert` là có phát hiện, mã khác không đọc được báo cáo (thoát 2); grype
     `--fail-on` thoát 2 và vẫn ghi output. Hai file ngoại lệ được kiểm như ở mục `.trivyignore.yaml` dưới đây. DB grype cache theo ngày
     (`SVP_GRYPE_CACHE`), SARIF category `grype-image-<svc>-<arch>/` (chỉ HIGH, CRITICAL) lên tab Security ở `main`; push lên `ghcr.io/anhnvcoder/svp-backend/<svc>`
     đúng bản đã quét, ghép index, ký keyless bằng cosign kèm attestation `vuln` (kết quả trivy của hai nền tảng; attestation,
@@ -125,7 +122,8 @@ Loại tài liệu (Diátaxis): **reference**, tra cứu khi cần một lệnh 
     dispatch commit cũ; bằng `revision` thì nhận). Push `--force-with-lease`, mở hay cập nhật PR (tiêu đề, mô tả liệt kê mọi bản nhánh
     đổi so với `main`) và bật auto-merge (squash, `--match-head-commit`); đọc lại PR sau push, PR đã merge hay đóng giữa chừng thì job đỏ.
     PR đang mở đọc bằng `promote_open_pr` (PR của App, `--limit 500`; `gh` lỗi hay danh sách đầy thì đỏ). Không đổi gì so với `main` thì
-    không push. Repo này chỉ ghi file image của sáu service của nó; web do job `promote` của `svp-frontend` ghi (bước riêng của repo đó,
+    không push. Repo này chỉ ghi file image của service của nó (`built_services`); file chưa có (service của **Release mới**, mục `gitops-check.sh` dưới đây) được tạo bằng
+    `promote_image_file` của `common.sh` rồi `git add`: khối comment đầu file giống các file khác của `svp-gitops`, rồi khối `image`, và lượt không build service đó thì không tạo file. Web do job `promote` của `svp-frontend` ghi (bước riêng của repo đó,
     nhánh `bot/promote-stg-web`, bot `svp-web-promoter`, chỉ `envs/stg/images/web.yaml`). PR chỉ đổi
     `envs/stg/` (không Code Owner) nên tự merge khi `gitops-ok` xanh, không ai duyệt. Lượt push `main` không build image nào mà đổi
     `deploy/helm/` hay file chart đó đọc qua symlink (`promote_charts` của `plan.sh`) vẫn chạy `promote`, chỉ ghi `charts.yaml`. Lượt PR
@@ -160,11 +158,13 @@ Loại tài liệu (Diátaxis): **reference**, tra cứu khi cần một lệnh 
     registry ẩn danh và chỉ in việc sẽ làm. Lượt phát hành thật đầu và package `api/gateway` public: **kiểm sau push**. **Promote prd** ([ADR-0037](../adr/0037-mainpath-standard-tools.md) §6): dispatch
     `-f promote_prd=true [-f stg_ref=<main|SHA đủ 40 hex>]` trên `main` (một mình, không kèm `services`, `rescan`, `values_ref`, `drill`;
     `plan` bỏ qua mọi job khác) chạy job `promote-prd` (environment `promote-prd`, người học duyệt trước khi job chạy, token App `contents`, `pull_requests` write): bước shell
-    chép giá trị khối `image` của cả bảy `envs/stg/images/*.yaml` và ba khoá của `envs/stg/charts.yaml` ở commit `stg_ref` của
+    chép giá trị khối `image` của mọi `envs/stg/images/*.yaml` của commit `stg_ref` (service mà stg ở đó chưa có file thì bỏ qua, một dòng `skip`; file prd chưa có thì
+    `promote_image_file` tạo, PR đếm đúng số file đã chép) và ba khoá của `envs/stg/charts.yaml` ở commit `stg_ref` của
     `svp-gitops` (mặc định `main`; commit cũ hơn là rollback) vào cùng file dưới `envs/prd/` bằng `yq -i` (comment của file prd giữ nguyên),
     đặt `gitopsRevision` của `envs/prd/charts.yaml` bằng chính commit đó (**ghim**: prd render `argocd/apps`, `base/`, `platforms/` ở commit stg đã
     chạy, `envs/prd/` đọc ở `main`; ADR-0048 §7), nhánh `bot/promote-prd`, mở PR không auto-merge (Code Owner duyệt), bảng trong mô tả có
-    thêm dòng `gitopsRevision`. Rollback là một lượt với `stg_ref` cũ: PR đặt lại ghim cùng image, chart của commit đó. Environment `promote-prd` ([ADR-0041](../adr/0041-github-hardening.md) (d)): người duyệt là
+    thêm dòng `gitopsRevision`. Rollback là một lượt với `stg_ref` cũ: PR đặt lại ghim cùng image, chart của commit đó. Lùi qua lúc một release mới có file prd thì
+    file đó còn lại (bot không xoá file), nên PR rollback là PR của người học, xoá file trong đó ([`svp-gitops-setup.md`](../runbooks/svp-gitops-setup.md#c4-rollback)). Environment `promote-prd` ([ADR-0041](../adr/0041-github-hardening.md) (d)): người duyệt là
     người học, `prevent_self_review = false` (người dispatch là người duyệt duy nhất), admin không bypass, chỉ nhánh `main`; khoá App ở đây là khoá
     riêng thứ hai của `svp-gitops-promoter`, `promote` của stg giữ nguyên. Reject thì không PR prd nào mở. Hai guard của `common.sh` chạy ở bước
     riêng trước khi tạo token App: `promote_stg_ref` chỉ nhận `main` hay SHA đủ 40 hex của một commit trên `main` của `svp-gitops` (nhánh,
@@ -198,15 +198,30 @@ Loại tài liệu (Diátaxis): **reference**, tra cứu khi cần một lệnh 
     bằng `[[ =~ ]]` của bash (tiêu đề vào script qua `env`, `permissions: {}`), chạy khi `opened`, `edited`, `reopened`, `synchronize`; chạy trước
     bộ tiêu đề thử của ADR (đạt, không đạt) để regex hỏng đỏ mọi PR chứ không chỉ vài PR. Tiêu đề thành tiêu đề commit squash. `pr-title`
     thành check bắt buộc của ruleset `main` chỉ sau khi xanh trên một PR người và một PR bot: **kiểm sau áp**.
+  - `.github/workflows/release.yml` (**Release checker**, [ADR-0077](../adr/0077-versioned-gitops-checker.md) §2–§4; quy trình ở
+    [`gitops-checker-release.md`](../runbooks/gitops-checker-release.md)): chỉ `push` lên `main`, không chạy ở PR; `permissions: {}`,
+    `concurrency` `release-please` không huỷ lượt đang chạy. Job `release-please` (environment `release`, chỉ nhánh `main`; biến
+    `SVP_RELEASE_APP_CLIENT_ID`, secret `SVP_RELEASE_APP_PRIVATE_KEY` của GitHub App `svp-release-please` chỉ cài trên repo này) đổi khoá thành
+    token 1 giờ bằng `actions/create-github-app-token` (chỉ repo này, `contents`, `pull_requests` write), rồi chạy
+    `googleapis/release-please-action` (ghim SHA, có trong pattern Actions của repo) với `release-please-config.json` và
+    `.release-please-manifest.json` ở gốc; không checkout, không chạy code của repo. Cấu hình: một package `deploy/ci`, component
+    `gitops-check`, `release-type: simple`, bản đầu `1.0.0`, tag `gitops-check-v<semver>`; version chỉ ở manifest và tag. Commit `feat` →
+    minor, `fix`, `perf` → patch, `!` hay `BREAKING CHANGE` → major, `chore`, `docs`, `ci` không ra bản; chỉ commit đổi file dưới `deploy/ci`
+    được đếm. Lượt có commit phát hành mở hay cập nhật PR `chore(main): release gitops-check <semver>` (nhãn `autorelease: pending`; chỉ đổi
+    `deploy/ci/CHANGELOG.md` và manifest), do token App mở nên chạy `ci-ok`, `images-ok` như mọi PR và cần Code Owner; lượt sau khi PR đó
+    merge tạo tag và GitHub Release. `deploy/ci/CHANGELOG.md` do release-please viết: markdownlint bỏ qua nó (`.markdownlint-cli2.yaml`),
+    `changed-services.sh` không build image vì nó. **Ruleset tag checker** (`gitops-check-tags`, `github/rulesets.tf` của `svp-infra`): tag
+    `gitops-check-v*` không sửa, không xoá được, tạo thì tự do (App tạo), chỉ admin bypass.
   - `.github/workflows/verify.yml` ([ADR-0021](../adr/0021-deferred-verification-stage6b.md), thu gọn ở
     [ADR-0039](../adr/0039-mainpath-drills-scan-gate-sourcemaps.md) §1; không check bắt buộc nào, không chạy ở PR): kiểm trên runner `ubuntu-24.04`
     những gì máy 16 GB không chạy nổi, bằng đúng target `make` như trên máy. Trigger: `workflow_dispatch` (chỉ người có quyền ghi; ref
-    `main` hay `feat/stage6b-*`, ref khác dừng ở bước đầu) và lịch hằng tuần trên `main` (00:37 UTC thứ Bảy, 07:37 giờ Việt Nam; cả hai kịch bản
+    `main` hay `feat/*`, ref khác dừng ở bước đầu) và lịch hằng tuần trên `main` (00:37 UTC thứ Bảy, 07:37 giờ Việt Nam; cả hai kịch bản
     song song, mọi bước). Ba kịch bản, mỗi kịch bản một job (`dev-k3d` chỉ dispatch); lượt lịch đầu sau khi thu gọn: **kiểm sau push**.
-    - `compose-obs` (job `compose`, hạn 155 phút; không service container, Postgres là container của stack): `make up OBS=lgtm`, `make smoke`, `make drill-obs-threats`, rồi `test-stack-objstore`
+    - `compose-obs` (job `compose`, hạn 170 phút; không service container, Postgres là container của stack): `make up OBS=lgtm`, `make smoke`,
+      `uptime-cost` (`deploy/ci/verify-steps/uptime-cost.sh compose`, mục của nó bên dưới; trước diễn tập, vì diễn tập dừng service), `make drill-obs-threats`, rồi `test-stack-objstore`
       (`deploy/ci/verify-steps/objstore.sh`: `make test-stack PKGS=./internal/objstore/...`, một ca SKIP là đỏ, gồm ba test của output bất
       biến): nơi duy nhất test `internal/objstore` chạy thật thay vì SKIP.
-    - `gitops` (job `gitops`, hạn 250 phút): `make k8s-gitops-up` (vai stg; `make gitops-clone` trước; `GITOPS_REV` là SHA của `origin/main` trong
+    - `gitops` (job `gitops`, hạn 285 phút): `make k8s-gitops-up` (vai stg; `make gitops-clone` trước; `GITOPS_REV` là SHA của `origin/main` trong
       bản clone, nên cluster ở yên commit đó suốt các bước kiểm, PR promote merge giữa chừng không đổi gì), `make drill-k8s-gitops` (ba test
       Chainsaw ở `deploy/k8s/drills/gitops/`: `gitops-env` (overlay stg có trong Application `gateway` và trên mọi pod gateway đang chạy, kiểm khai
       báo), `gitops-external-secrets` (ExternalSecret của cluster đúng bằng danh sách `files/external-secrets.yaml` của chart `svp-cluster` ở
@@ -218,7 +233,9 @@ Loại tài liệu (Diátaxis): **reference**, tra cứu khi cần một lệnh 
       `gitops-admission-metrics` (`deploy/ci/verify-steps/admission-metrics.sh`: số đo thời gian admission của lượt sync đầu, chạy trước smoke và
       diễn tập để histogram chỉ chứa lượt sync đầu; điều kiện của
       [ADR-0040](../adr/0040-sigstore-bundle-actions-attest.md) mục 6: 20 s lần không cache, hạn webhook 30 s. Các histogram và cách đọc ở mục `verify-steps/admission-metrics.sh` bên dưới; thiếu metric thì dòng `NOTE`, bước không đỏ),
-      `make k8s-smoke` (chặt, không biến chuyển tiếp), `make drill-k8s-reloader` (xoay credential qua External Secrets, mục của nó ở
+      `make k8s-smoke` (chặt, không biến chuyển tiếp), `make drill-k8s-mesh` (các lớp của mesh khi mọi service chạy, trước các diễn tập
+      restart và chặn service; ca và dòng `RESULT mesh-memory` ở [`k8s.md`](k8s.md); hạn 15 phút), `uptime-cost` (`deploy/ci/verify-steps/uptime-cost.sh k8s`, trước các diễn tập vì chúng
+      restart và chặn service có chủ đích), `make drill-k8s-reloader` (xoay credential qua External Secrets, mục của nó ở
       [`k8s.md`](k8s.md); các bước sau chạy trên credential mới), `drill-k8s-supplychain` (`deploy/ci/verify-steps/supplychain.sh` gọi
       `make drill-k8s-supplychain`; ảnh chưa ký của ca (b), (h), (i) là digest mới nhất của
       `drill-unsigned` (không chữ ký, không attestation nên không có hạn 72 giờ); ca (l) là digest mới nhất của `drill-no-provenance` dưới
@@ -226,16 +243,16 @@ Loại tài liệu (Diátaxis): **reference**, tra cứu khi cần một lệnh 
       image của ca (c) hay (l) có attestation `vuln` quá 72 giờ thì không đưa cho drill: ca đó SKIP kèm dòng `NOTE` nêu tuổi và lệnh dispatch
       dựng lại image diễn tập (`-f drill=true`), mọi ca khác vẫn phải PASS; lượt dispatch quá hạn là đỏ, nên (c), (l) chỉ được chứng minh ở lượt
       dispatch sau lượt đó), `make drill-k8s-threats`.
-    - `dev-k3d` (job `dev-k3d`, hạn 210 phút, chỉ dispatch, [ADR-0050](../adr/0050-bash-to-standard-tools.md) mục 6): đường dev như trên
-      máy, `make k8s-up` (sáu image build trên runner bằng bake, web là bản phát hành stg, `make gitops-clone GITOPS_REF=<gitops_ref>`
-      trước), `make k8s-smoke`, `make drill-k8s-reloader`, `drill-k8s-supplychain` (như kịch bản `gitops`, với `SUPPLYCHAIN_ENFORCE_TMP=1`:
+    - `dev-k3d` (job `dev-k3d`, hạn 225 phút, chỉ dispatch, [ADR-0050](../adr/0050-bash-to-standard-tools.md) mục 6): đường dev như trên
+      máy, `make k8s-up` (mọi image Go build trên runner bằng bake, web là bản phát hành stg, `make gitops-clone GITOPS_REF=<gitops_ref>`
+      trước), `make k8s-smoke`, `make drill-k8s-mesh` (như kịch bản `gitops`), `make drill-k8s-reloader`, `drill-k8s-supplychain` (như kịch bản `gitops`, với `SUPPLYCHAIN_ENFORCE_TMP=1`:
       policy Audit của đường dev sang Enforce cho từng ca rồi trả lại, và ca (k), ca chỉ đường dev chạy được). Input `gitops_ref`: `main`
       (mặc định) hay SHA đủ 40 hex của `svp-gitops`, để chạy với nhánh chưa merge; khác thì job đỏ trước khi dựng gì, không in lại giá trị.
     - Đã rời `verify.yml`, nay là bài lab `drills/` của `svp-labs` (cả script diễn tập compose, [ADR-0050](../adr/0050-bash-to-standard-tools.md)): bản đo một lần của kịch bản `dev-k3d` (RAM, KEDA, PDB, canary, backup), các kịch bản `web-canary`, `k6-cloud-mini`, `chaos`, `velero`, phần còn lại của `compose-obs` (load-local,
       Lighthouse, `drill-duplicates`, `drill-kill-worker`, `drill-upload-cleanup`, `measure-upload`, `drill-alert-to-sentry`, đường quay lại
       `object-store-roundtrip`), bước chờ phát hành và `measure-gitops`, `verify-sample.sh`, `verify-tempo.sh`. Số đo và id lượt chạy ở các ADR 0014, 0017, 0019, 0020, 0021, 0022, 0031. Bản clone
       `svp-frontend`, Node, pnpm, Playwright và image source map không còn trong workflow; `web_ref` không còn là input.
-    Dispatch và đọc kết quả (AI được chạy, chỉ khi người học giao): `gh workflow run verify.yml --ref <main|feat/stage6b-…>
+    Dispatch và đọc kết quả (AI được chạy, chỉ khi người học giao): `gh workflow run verify.yml --ref <main|feat/…>
     -f scenario=<compose-obs|gitops|dev-k3d> [-f targets='<bước> …'] [-f gitops_ref=<main|SHA>]` (`targets` rỗng là mọi bước, bước dựng luôn chạy; tên bước là
     `SVP_VERIFY_STEP_NAMES` của job và cột đầu của `results.tsv`, ví dụ `targets='k8s-smoke drill-k8s-supplychain'`; tên lạ hay ký tự ngoài
     `a-z`, `0-9`, `-`, khoảng trắng thì job đỏ trước khi dựng gì; chỉ lọc, không tự thêm bước: `drill-k8s-threats`, `drill-k8s-reloader` cần
@@ -265,9 +282,11 @@ Loại tài liệu (Diátaxis): **reference**, tra cứu khi cần một lệnh 
     `argo-cd.yaml`, `services/<svc>.yaml` không khối `image`), `envs/{stg,prd}/` (overlay, `svp-policy.yaml`, `charts.yaml` ghim
     commit chart của repo này cùng hai giá trị dẫn xuất, riêng prd có thể thêm `gitopsRevision`, `images/<svc>.yaml` chỉ khối `image`),
     `argocd/` (`project.yaml`, `bootstrap.json`, chart app-of-apps `apps/` với `components.json`, root hai tầng `root/`), `CODEOWNERS` (`*` của người học, `/envs/stg/` không chủ),
-    `renovate.json` (chart upstream, image ghim trong `base/`, commit checker; bỏ qua `envs/**`). Check: `.github/workflows/check.yml`
-    (PR và push `main`, chỉ quyền đọc, không secret) checkout repo này (`anhnvcoder/svp-backend`) ở `CHECKER_COMMIT` (SHA đủ, một chỗ
-    trong workflow; đổi bằng PR ở `svp-gitops`) rồi chạy `deploy/ci/gitops-check.sh <cây> <base>`, bản rút gọn
+    `renovate.json` (chart upstream, image ghim trong `base/`, bản checker; bỏ qua `envs/**`). Check: `.github/workflows/check.yml`
+    (PR và push `main`, chỉ quyền đọc, không secret) checkout repo này (`anhnvcoder/svp-backend`) ở **Ghim checker**
+    ([ADR-0077](../adr/0077-versioned-gitops-checker.md) §5: `CHECKER_VERSION` là semver của một bản **Release checker**, `CHECKER_COMMIT` là
+    commit của tag `gitops-check-v<CHECKER_VERSION>`; job `gitops` và `diff-preview` đỏ ở một bước khớp tag khi tag không trỏ đúng commit đó;
+    Renovate nâng cả hai trong một PR bằng datasource `github-tags`, bản major ở PR riêng) rồi chạy `deploy/ci/gitops-check.sh <cây> <base>`, bản rút gọn
     ([ADR-0037](../adr/0037-mainpath-standard-tools.md) §4–§6; bước 1b "bộ prd = payload một bản ghi stg", 1c dạng cũ (tiếp quản, đọc
     qua adapter), luật tổ tiên và đường cho cây chưa có `platforms/` hay commit chưa có bảng nguồn đã bỏ): (1) cây và `charts.yaml` (khoá,
     `revision` trên `main` repo này, hai giá trị dẫn xuất tính lại; `gitopsRevision` chỉ ở prd, 40 hex, cây có nó thì phải có
@@ -291,9 +310,13 @@ Loại tài liệu (Diátaxis): **reference**, tra cứu khi cần một lệnh 
     render và policy `no-lab-hosts`); (4) mọi image ghim digest bằng policy `images-pinned` (dưới đây; ref ngoài tầm policy vẫn qua phép
     quét của script), render có overlay không đổi version image của render nó chồng lên; (5) `values-check.sh --gitops` cho file image đổi
     (chữ ký, `vuln`, provenance env đòi; provenance có thì tag là 12 hex của commit nó nêu). Check tổng `gitops-ok`. Tag image không còn
-    phải là tổ tiên của `revision`, PR prd không còn so bản ghi (cổng prd là duyệt environment `promote-prd` ở repo code rồi duyệt của Code Owner). `CHECKER_COMMIT` là một commit trên
-    `main` repo này; `check.yml` của commit checker cũ còn `deployments: read` và `GH_TOKEN` cho bước 1b: PR prd đỏ cho tới khi nâng
-    `CHECKER_COMMIT` lên commit có bản rút gọn, cùng PR bỏ hai thứ đó. **Luật tác giả hẹp** (bước 1 khi có base; tác giả
+    phải là tổ tiên của `revision`, PR prd không còn so bản ghi (cổng prd là duyệt environment `promote-prd` ở repo code rồi duyệt của Code Owner). **Expand–contract**
+    (ADR-0077 §6): đổi hợp đồng giữa checker và cây `svp-gitops` đi bằng ba PR: repo này nhận cả dạng cũ lẫn mới và phát hành minor (CI chạy
+    checker `--worktree` với `main` của `svp-gitops` nên dạng cũ còn được kiểm), `svp-gitops` nâng ghim rồi đổi cây, repo này bỏ dạng cũ bằng
+    commit `!` và phát hành major; không ghim tạm `GITOPS_REF`, không sửa tay `CHECKER_COMMIT`. **Phạm vi phiên bản** (ADR-0077 §7): chỉ checker
+    có semver, image service và chart giữ ghim commit; package là cả `deploy/ci`, nên script khác của thư mục đó cũng ra bản, còn file check
+    đọc ở `CHECKER_COMMIT` ngoài thư mục đó (`Makefile`: `ci-tools`, image ghim; `deploy/k8s/lib.sh`, `deploy/docker-bake.json`: danh sách
+    service) tới `svp-gitops` ở bản phát hành kế tiếp. **Luật tác giả hẹp** (bước 1 khi có base; tác giả
     `pull_request.user.login` và người gửi `sender.login` đọc thẳng từ `GITHUB_EVENT_PATH`, trên máy `SVP_CHANGE_REQUEST_AUTHOR` đóng vai
     tác giả): bot `<promoter>[bot]` của nguồn N chỉ đổi `envs/{stg,prd}/images/<svc>.yaml` với `<svc>` thuộc `services` của N (bảng ở
     `revision` env ghim sau thay đổi); bot của `backend` đổi thêm `envs/{stg,prd}/charts.yaml` và mọi file `envs/prd/images/` (promote prd
@@ -320,28 +343,35 @@ Loại tài liệu (Diátaxis): **reference**, tra cứu khi cần một lệnh 
     cần duyệt và không có bản ghi bypass (PR thử #8 ở trạng thái `CLEAN`, PR #3 có rule suite `pass`): GitHub coi tác giả PR kiêm Code Owner duy nhất là
     đã thoả `require_code_owner_review`, nên người học không tự kiểm mình bằng duyệt, kiểm tự động `gitops-ok` là lớp chặn còn lại; luật vẫn áp lên PR của người
     khác, ca âm cho PR của bot chưa có (việc mở: App thứ hai).
-  - Cài đặt GitHub của repo là code ở `github/` của `svp-infra` ([ADR-0041](../adr/0041-github-hardening.md)). Ruleset
-    `main`: PR (0 approval: tác giả không tự duyệt PR của mình, lab một người), check bắt buộc `ci-ok`, `images-ok` chỉ
-    nhận từ app GitHub Actions (`pr-title` thêm vào sau khi xanh trên một PR người và một PR bot), chỉ squash
-    (`allowed_merge_methods = ["squash"]`, chặn cả khi cài đặt repo bị mở lại; commit lấy `PR_TITLE` + `PR_BODY`),
-    `required_linear_history`; `strict_required_status_checks_policy` giữ `false` (bật thì mỗi PR, cả PR bot tự merge,
-    phải cập nhật nhánh và build lại image sau mỗi merge; merge queue chỉ có ở repo của organization; lượt CI trên
-    `main` sau merge bắt xung đột ngữ nghĩa). Ruleset `owners` đòi duyệt Code Owner (`require_code_owner_review`; vai
-    admin bypass chỉ ở chế độ `pull_request`, có bản ghi) trên file có chủ ở `CODEOWNERS` (`/CODEOWNERS`, `/.github/`,
-    `/renovate.json`, `/Makefile`, `/.trivyignore.yaml`, `/.grype.yaml`, `/deploy/ci/`, `/deploy/helm/svp-policy/`);
-    file khác không chủ để PR Renovate tự merge vẫn chạy, và không file nào vừa được tự merge vừa có Code Owner. Cài đặt
-    của ADR-0015 §11: quyền mặc định của `GITHUB_TOKEN` chỉ đọc và **không** "Allow GitHub Actions to create and approve
-    pull requests" (không workflow nào mở hay duyệt PR bằng `GITHUB_TOKEN`; PR promote dùng token App); Actions chỉ cho
-    action của GitHub, `sigstore/cosign-installer` và `ossf/scorecard-action`, ghim SHA bắt buộc; duyệt workflow của PR
-    fork cho mọi người ngoài; secret scanning + push protection; Dependabot alerts. Package GHCR public do người học bật
-    (ADR-0015 §5, §11). Áp theo thứ tự cài đặt repo, ruleset (chưa có `pr-title`), environment `promote-prd` với khoá
-    thứ hai, rồi merge `CODEOWNERS`, workflow, `renovate.json`: **kiểm sau áp**. Quyền deploy không còn ở repo này: push
-    vào `main` không đổi cluster nào, chỉ PR vào `svp-gitops` đổi được thứ đang chạy; environment `promote` (stg) và
-    `promote-prd` (prd) của repo này giữ khoá App, chỉ job trên `main` khai chúng (`promote` và `promote-prd` của
-    `images.yml`), không job `pull_request` nào. Environment `ecr-rescan` (chỉ `main`, không người duyệt, không secret)
-    chỉ để job `rescan` mang `sub` mà role rescan ECR tin; action `aws-actions/configure-aws-credentials` được phép
-    thêm; secret repo `SVP_AWS_STG_ACCOUNT_ID`, `SVP_AWS_PRD_ACCOUNT_ID` (account ID, để log công khai che nó) người học
-    đặt bằng `gh secret set` (Terraform của các mục này ở `github/` của `svp-infra`).
+  - **`svp-infra`** (repo Terraform, [ADR-0034](../adr/0034-aws-stage7.md) §2): check bắt buộc `infra-ok` của `check.yml` chỉ kiểm tĩnh,
+    không credential. **Plan trên PR** (`plan.yml`: `terraform plan` bằng role OIDC chỉ đọc `svp-ci-terraform-plan`, người học duyệt
+    environment `terraform-plan` từng lượt, comment tóm tắt đã che) và **Infracost** (`cost.yml`: chi phí từ HCL, comment chênh lệch) chỉ là
+    thông tin, ngoài cổng PR. Quyết định ở [ADR-0076](../adr/0076-terraform-plan-infracost-pr.md); luồng, lý do bỏ qua, cách đọc comment và
+    duyệt lượt chờ ở mục "Plan trên PR", "Chi phí trên PR" của
+    [`README.md`](https://github.com/anhnvcoder/svp-infra/blob/main/README.md#plan-trên-pr) của `svp-infra`.
+    Secret của repo mà Terraform không quản (`SVP_AWS_STG_ACCOUNT_ID`, `SVP_AWS_PRD_ACCOUNT_ID` của repo code,
+    `INFRACOST_API_KEY`, secret của
+    environment `terraform-plan`) do `make github-secrets`, `make infracost-key` của `svp-infra` đặt; lệnh và thứ tự ở
+    [`github-setup.md`](https://github.com/anhnvcoder/svp-infra/blob/main/docs/runbooks/github-setup.md) của nó.
+  - Cài đặt GitHub của repo là code ở `github/` của `svp-infra` ([ADR-0041](../adr/0041-github-hardening.md)). Ruleset `main`: PR (0 approval: tác
+    giả không tự duyệt PR của mình, lab một người), check bắt buộc `ci-ok`, `images-ok` chỉ nhận từ app GitHub Actions (`pr-title` thêm vào sau khi
+    xanh trên một PR người và một PR bot), chỉ squash (`allowed_merge_methods = ["squash"]`, chặn cả khi cài đặt repo bị mở lại; commit lấy
+    `PR_TITLE` + `PR_BODY`), `required_linear_history`; `strict_required_status_checks_policy` giữ `false` (bật thì mỗi PR, cả PR bot tự merge, phải
+    cập nhật nhánh và build lại image sau mỗi merge; merge queue chỉ có ở repo của organization; lượt CI trên `main` sau merge bắt xung đột ngữ nghĩa).
+    Ruleset `owners` đòi duyệt Code Owner (`require_code_owner_review`; vai admin bypass chỉ ở chế độ `pull_request`, có bản ghi) trên file có chủ ở
+    `CODEOWNERS` (`/CODEOWNERS`, `/.github/`, `/renovate.json`, `/release-please-config.json`, `/.release-please-manifest.json`, `/Makefile`,
+    `/.trivyignore.yaml`, `/.grype.yaml`, `/deploy/ci/`,
+    `/deploy/helm/svp-policy/`); file khác không chủ để PR Renovate tự merge vẫn chạy, và không file nào vừa được tự merge vừa có Code Owner. Cài
+    đặt của ADR-0015 §11: quyền mặc định của `GITHUB_TOKEN` chỉ đọc và **không** "Allow GitHub Actions to create and approve pull requests"
+    (không workflow nào mở hay duyệt PR bằng `GITHUB_TOKEN`; PR promote dùng token App); Actions chỉ cho action của GitHub, `sigstore/cosign-installer`
+    `ossf/scorecard-action` và `googleapis/release-please-action`, ghim SHA bắt buộc; duyệt workflow của PR fork cho mọi người ngoài; secret scanning + push protection; Dependabot
+    alerts. Package GHCR public do người học bật (ADR-0015 §5, §11). Áp theo thứ tự cài đặt repo, ruleset (chưa có `pr-title`), environment
+    `promote-prd` với khoá thứ hai, rồi merge `CODEOWNERS`, workflow, `renovate.json`: **kiểm sau áp**. Quyền deploy không còn ở repo này: push vào
+    `main` không đổi cluster nào, chỉ PR vào `svp-gitops` đổi được thứ đang chạy; environment `promote` (stg) và `promote-prd` (prd) của repo này
+    giữ khoá App, chỉ job trên `main` khai chúng (`promote` và `promote-prd` của `images.yml`), không job `pull_request` nào. Environment `ecr-rescan` (chỉ `main`, không người duyệt, không secret) chỉ để job `rescan`
+    mang `sub` mà role rescan ECR tin; action `aws-actions/configure-aws-credentials` được phép thêm; secret repo
+    `SVP_AWS_STG_ACCOUNT_ID`, `SVP_AWS_PRD_ACCOUNT_ID` (account ID, để log công khai che nó) do `make github-secrets` của
+    `svp-infra` đặt (mục `svp-infra` dưới).
   - CodeQL **default setup** ([ADR-0030](../adr/0030-devsecops-supplement.md) §4): bật bằng cài đặt repo, không file workflow
     trong repo (GitHub dựng và giữ workflow động "CodeQL"); ngôn ngữ `actions`, `go`, `javascript-typescript`, query suite
     `default`, threat model `remote`; quét mỗi push `main`, PR từ nhánh của repo (không PR từ fork) và hằng tuần. **Chỉ báo:**
@@ -366,7 +396,8 @@ Loại tài liệu (Diátaxis): **reference**, tra cứu khi cần một lệnh 
     HEAD`; bộ lọc artifact của `verify.yml`: `deploy/ci/verify-collect-test.sh`; các bước của nó: `deploy/ci/verify-steps/*-test.sh`; diễn tập
     gitops không cluster: `deploy/k8s/drills/gitops/gitops-test.sh`. Push GHCR, ký, attest chỉ chạy
     trong CI: không đăng nhập GHCR hay Sigstore từ máy. Bước promote stg, prd
-    chỉ chạy trong CI (token App); guard của chúng thử bằng `deploy/ci/promote-test.sh`.
+    chỉ chạy trong CI (token App); guard của chúng thử bằng `deploy/ci/promote-test.sh`. `release.yml` không có bản chạy trên máy: release-please chỉ chạy trong
+    Actions bằng token App; trên máy chỉ kiểm cú pháp hai file cấu hình (`python3 -m json.tool`) và workflow (`make actionlint`, `make zizmor`).
   - **Script CI cho cây của nguồn khác** ([ADR-0033](../adr/0033-svp-web-repo.md) §5): CI của một nguồn phát hành khác (`svp-frontend`)
     gọi composite action `./.backend/.github/actions/image-*` và chạy `deploy/ci/*.sh` từ checkout ghim `.backend/` của repo này, với
     `code-root` (`SVP_CODE_ROOT`) trỏ checkout của chính nó. `common.sh` có hai gốc:
@@ -427,8 +458,8 @@ Loại tài liệu (Diátaxis): **reference**, tra cứu khi cần một lệnh 
     như scope npm hay đường dẫn module Go, trừ apk, deb, rpm chỉ lấy đoạn cuối; mỗi ký tự `.*+?[](){}|^$\` của tên thoát bằng `\`, ví dụ
     `socket\.io-parser`, vì grype đọc tên có ký tự meta là regex neo hai đầu). Giá trị YAML thường mà grype đọc thành null, bool hay số
     (`1.10`, `null`, `017`) phải đặt trong dấu nháy đơn, cả `yes`, `no`, `on`, `off` (parser của conftest đọc YAML 1.1); giá trị dạng ngày
-    (`2026-1-2`) bị từ chối kể cả trong nháy, vì file đã parse không còn dấu nháy; gói mà tên grype bỏ namespace (maven) không có ngoại lệ grype, CRITICAL của nó vẫn chặn.
-    Khoá nào khác bị từ chối (`only-notfixed`, `ignore-wontfix`, rule thiếu `package`…: che CRITICAL không cần mục ngoại lệ, không hạn).
+    (`2026-1-2`) bị từ chối kể cả trong nháy, vì file đã parse không còn dấu nháy; gói mà tên grype bỏ namespace (maven) không có ngoại lệ grype, CRITICAL và HIGH có bản vá của nó vẫn chặn.
+    Khoá nào khác bị từ chối (`only-notfixed`, `ignore-wontfix`, rule thiếu `package`…: che CRITICAL hay HIGH có bản vá không cần mục ngoại lệ, không hạn).
     Vì grype không đọc hạn, mục hết hạn (từ đúng ngày `expired_at`) làm job `config` đỏ ở mọi PR thay vì cổng grype của từng chân; cổng của image chạy
     cùng phép kiểm file nhưng không kiểm hạn. `deploy/ci/trivy-config-ignore.yaml` (chỉ `make trivy-config` đọc,
     [ADR-0021](../adr/0021-deferred-verification-stage6b.md) §9): các misconfiguration bỏ qua có thời hạn; `scan-gate.sh --check-ignorefile` kiểm nó cùng hai file kia
@@ -441,8 +472,8 @@ Loại tài liệu (Diátaxis): **reference**, tra cứu khi cần một lệnh 
     workflow (`.github/` có chủ), image công cụ ghim trong `Makefile` (`/Makefile` có chủ), nhóm `tools`, `cosign`, minor, major; không đụng
     `deploy/ci/drill/`, `gen/`; luật npm, Node, Sentry của web ở
     `renovate.json` của `svp-frontend` (cùng lịch); values của
-    chart nền tảng, version chart trong `components.json`, bản cài Argo CD và digest phát hành ở `svp-gitops`, do `renovate.json` của
-    repo đó quản (bỏ qua `envs/**`). Ghim mới trong `Makefile`, `lib.sh` hay values bên thứ ba theo dạng của
+    chart nền tảng, version chart trong `components.json`, bản cài Argo CD, bản checker và digest phát hành ở `svp-gitops`, do
+    `renovate.json` của repo đó quản (bỏ qua `envs/**`). Ghim mới trong `Makefile`, `lib.sh` hay values bên thứ ba theo dạng của
     ADR-0015 §10 (chú thích `# renovate: datasource=… depName=…` ngay trên dòng khi manager có sẵn không đọc được).
 
 ### Script của các bước `verify.yml`
@@ -509,7 +540,9 @@ Các script này chạy trong job của `verify.yml` (kịch bản, bước và 
     (`$SVP_VERIFY_OUT`, mặc định `verify` trong `$RUNNER_TEMP`, không bao giờ tải cả thư mục): file ghi ngay trên runner là `results.tsv` (bảng bước, `steps.sh`), `scenario`,
     `df-before.txt` (`verify-host.sh`); file đọc từ stack hay cluster là `logs/drill-obs-threats.log`, trong đó chỉ dòng kết luận (`ok`, `PASS`, `FAIL`, `SKIP`, `WARN` và dòng đóng
     "drill-obs-threats: all checks passed"; không dòng log JSON hay trích access log) vào artifact, dưới tên `logs/drill-obs-threats.verdicts.log`, `logs/gitops-admission-metrics.log`
-    (các dòng tóm tắt của `admission-metrics.sh`) và `k8s-state.json` (`verify-k8s-state.sh`). Mọi file khác ở đó (output của mọi bước khác) được liệt kê trong `files.txt` là `not-allowed`.
+    (các dòng tóm tắt của `admission-metrics.sh`), `logs/uptime-cost.log` (bảng điều kiện và giá trị đọc của `uptime-cost.sh`), `logs/drill-k8s-mesh.results.log` (chỉ các dòng `RESULT mesh-memory`
+    của `drill-k8s-mesh`: RAM của từng pod `istio-system`, `svp-mesh` và tổng, bằng chứng chứ không cổng) và `k8s-state.json`
+    (`verify-k8s-state.sh`). Mọi file khác ở đó (output của mọi bước khác) được liệt kê trong `files.txt` là `not-allowed`.
   - Từ checkout (đều đọc từ stack hay cluster): `.k8s/drills/*.xml` (report JUnit của mỗi diễn tập Chainsaw), `*-skips.tsv` (danh sách ca SKIP và lý do: report JUnit tính SKIP là qua),
     `*.json` và `traffic-*.log` (mỗi dòng một thời điểm, user, route, status, độ trễ). Mọi thứ khác dưới chỗ đó được liệt kê `not-allowed`: log của mỗi diễn tập Chainsaw và mọi log service không bao giờ
     vào; file ẩn bị bỏ bằng luật riêng kèm cảnh báo. Phần còn lại của checkout (`.env`, kubeconfig, `.k8s/ca.*`, `.k8s/helm/`) không được nhìn tới.
@@ -551,6 +584,17 @@ Các script này chạy trong job của `verify.yml` (kịch bản, bước và 
   (port-forward Service `kyverno-svc-metrics` ra một cổng trống của `127.0.0.1` trong khoảng 19100–19120, vì `NetworkPolicy` default-deny của namespace chặn proxy của apiserver) `kyverno_admission_review_duration_seconds` và, cho policy `svp-images`,
   `kyverno_image_validating_policy_execution_duration_seconds` (nhãn `policy_name`; `svp-policy` là tên chart và webhook). Mỗi histogram cộng qua mọi tập nhãn của series được hỏi, vì nó được tách theo nhãn mà câu hỏi không hỏi. Thiếu metric, bucket hay cổng là dòng `NOTE`: phép đo là bằng chứng chứ không phải cổng, bước
   không bao giờ đỏ. `kubectl`, `curl`, `nc` là các lệnh trên `PATH`; `kubectl` luôn trên context `k3d-svp`.
+- **`verify-steps/uptime-cost.sh k8s|compose`** (bước `uptime-cost`, [`cost-and-uptime.md`](../explanation/cost-and-uptime.md)) chờ tối đa
+  10 phút (vòng cách 15 s) tới khi mọi điều kiện cùng đúng trong một vòng, đọc Prometheus như các bước khác: `k8s` qua port-forward tới Service
+  `kps-prometheus` của context `k3d-svp`, `compose` qua proxy data source `prometheus` của Grafana ở `127.0.0.1:3000`. Điều kiện:
+  `probe_success{job="blackbox-http"}` bằng 1 cho `web`, `api`, `media`; chỉ `k8s`: hạn cert của từng probe còn hơn 21 ngày,
+  `cluster:svp_node_cost_usd_per_hour:sum` và `namespace:svp_compute_cost_usd_per_hour:sum{namespace="svp"}` lớn hơn 0; cả hai:
+  `slo:sli_error:ratio_rate5m{sloth_slo="public-uptime"}` bằng 0, mọi rule của nhóm `sloth-slo-alerts-svp-public-uptime` và `svp-uptime` ở
+  `/api/v1/rules` có `health` `ok` (nhóm vắng là `none`; rule chưa đánh giá là `unknown`, bước chờ), không `UptimeProbesAbsent` nào `firing`
+  (`pending` chỉ in). Trạng thái `PublicUptimeBudgetBurn` chỉ in vào bảng, không làm bước đỏ: probe lỗi lúc dựng stack còn trong cửa sổ của
+  cảnh báo suốt đời ngắn của stack. Xanh thì in bảng của vòng đạt; hết hạn thì in bảng của vòng cuối và mỗi điều kiện sai một dòng
+  `FAIL  uptime-cost: <điều kiện>: last read <giá trị>`, thoát 1. Output vào `logs/uptime-cost.log`, không vào log job. Test:
+  `uptime-cost-test.sh` (lệnh giả trên `PATH`).
 - **`verify-steps/objstore.sh`** (bước `test-stack-objstore` của job `compose`) chạy test của object store trên object store của stack (`make test-stack PKGS=./internal/objstore/...`, `go test -race -count=1 -v`): nơi duy nhất chúng chạy thay vì skip. Output của nó được đếm: bước đỏ khi `make test-stack` thoát khác 0, khi `go test` báo `FAIL`,
   khi bất kỳ test hay subtest nào `SKIP` (một ca bị skip không chứng minh gì về store), hay khi một trong các test tích hợp (presigned POST, quyền của worker và của video-service, `DeletePrefix`, multipart với CRC32, `Cache-Control` đọc lại ẩn danh, tạo một lần duy nhất, worker liệt kê và đọc `media/`) không `PASS`, mỗi cái được nêu tên. `make` là cái trên `PATH`; chạy từ gốc repo, stack đang lên.
 
@@ -621,7 +665,7 @@ Môi trường chạy: script chạy trong GitHub Actions và đọc thẳng bi�
   - `sign IMAGE OUT`: trước khi ký (action `image-sign`): cái cần ghi, và predicate `vuln`.
 
   Luật mà mọi subcommand giữ: IMAGE là service hay image diễn tập của nguồn phát hành mà repo chạy job thuộc về (`use_build_source` của `common.sh`); code là của `code_root` (`SVP_CODE_ROOT`, input `code-root` của các action: checkout của `svp-frontend` trong lượt của nó) và `HEAD` của nó là commit của lượt (`check_code_tree`); cả hai được kiểm trước khi gọi docker. Cái được đẩy là cái đã quét: config digest của manifest đã đẩy là `ImageID` của báo cáo trivy.
-  Index có đúng hai manifest đã quét; cái được ký và attest là index đọc lại. Chỉ `drill-vulnerable` được qua CRITICAL (`allow-critical`); bí mật chặn mọi image. Một bản phát hành chỉ được ký khi workflow của lượt là danh tính của nguồn của nó; mỗi bundle (chữ ký, SBOM, `vuln`, provenance) chỉ được ghi khi digest chưa có bundle loại đó, và một digest ở định dạng cũ của cosign (`.sig`) bị từ chối.
+  Index có đúng hai manifest đã quét; cái được ký và attest là index đọc lại. Chỉ `drill-vulnerable` được qua CRITICAL và HIGH có bản vá (`allow-critical`); bí mật chặn mọi image. Một bản phát hành chỉ được ký khi workflow của lượt là danh tính của nguồn của nó; mỗi bundle (chữ ký, SBOM, `vuln`, provenance) chỉ được ghi khi digest chưa có bundle loại đó, và một digest ở định dạng cũ của cosign (`.sig`) bị từ chối.
 - **`plan.sh`** là job đầu của `images.yml`: quyết định lượt này làm gì và trao cho các job sau bằng output (`step_output` của `common.sh`; stdout trên máy). Output: `mode` (`build`, `rescan` hay `drill`); `images` (mảng JSON image cần build: service đổi khi build, image diễn tập khi drill); `legs` (ma trận JSON `{"include": [{image, arch, runner}]}`,
   mỗi image trên amd64 và arm64, runner native); `has_images` (`true` hay `false`); `base` (commit mà thay đổi được so, `""` khi không dùng được cái nào); `promote_charts` (`true` ở lượt build của `main` không build image nào mà đổi cái chart của repo này đọc, một file dưới `deploy/helm/` hay file mà một symlink ở đó trỏ tới, như
   `deploy/observability/otelcol/k8s-config.yaml`, kể từ `base`: job `promote` vẫn chạy và dời chart mà stg chạy, `envs/stg/charts.yaml` của `svp-gitops`, tới commit này); `values_ref` (input dispatch `values_ref` đã kiểm, chỉ ở rescan: một ref của `svp-gitops`, hay một commit của repo này từ trước khi `svp-gitops` giữ các bản phát hành).
@@ -635,7 +679,7 @@ Môi trường chạy: script chạy trong GitHub Actions và đọc thẳng bi�
     `ghcr-digest.sh` mà bước và diễn tập supply chain gọi), mọi test `*-test.sh` (do các job của `ci.yml` và máy dev chạy) và fixture của test dưới `testdata/`, script của check `svp-gitops` (`gitops-check.sh`, mà check `svp-gitops` và `make helm-check` chạy, cùng `values-check.sh` và `verify-release.sh` mà chỉ nó, `make k8s-gitops-up` và diễn tập chạy), policy Kyverno `gitops-policies/` và policy conftest `gitops-tree-policies/`, `contract.sh` (luật version và phát hành hợp đồng
     API của gateway: job `contract` của `images.yml` chạy nó nhưng nó không build hay promote image nào), và các policy conftest của file ignore `ignorefile-policies/` (cổng áp dụng chúng, nhưng job `config` kiểm các file đó bằng chúng ở mọi PR, như khi chính các file đổi). Các helper mà `deploy/ci/` source từ `deploy/k8s/lib.sh` vẫn tính (`docker_`, `values_field`, `ghcr_prefix`, bảng image), và các dòng của `Makefile` ghim image mà cổng chạy (`TRIVY_IMAGE`, `SYFT_IMAGE`, `GRYPE_IMAGE`, `COSIGN_IMAGE`);
     thay đổi khác của `Makefile` không tính. Nhờ vậy PR Renovate hằng tuần nâng các công cụ đó build và quét mọi image với trivy hay grype mới trước khi merge, thay vì để rescan hằng ngày trên `main` gặp nó đầu tiên. Cái giá cũng ở `main`: thay đổi như vậy phát hành lại cả sáu image (và mở PR promote của chúng) dù không code service nào đổi.
-  - Chỉ so sánh khi BASE là HEAD hay tổ tiên của nó. BASE rỗng, toàn số 0, clone này không biết, hay không so được với HEAD (force push, lịch sử viết lại): cả sáu; build thừa tốn phút runner, bỏ sót một thay đổi thì phát hành một image thiếu nó. HEAD là tổ tiên thật của BASE (một lượt cũ chạy lại sau khi lượt mới hơn đã thành công): không gì cả, lượt mới hơn đã build mọi thay đổi tới commit của nó.
+  - Chỉ so sánh khi BASE là HEAD hay tổ tiên của nó. BASE rỗng, toàn số 0, clone này không biết, hay không so được với HEAD (force push, lịch sử viết lại): mọi service; build thừa tốn phút runner, bỏ sót một thay đổi thì phát hành một image thiếu nó. HEAD là tổ tiên thật của BASE (một lượt cũ chạy lại sau khi lượt mới hơn đã thành công): không gì cả, lượt mới hơn đã build mọi thay đổi tới commit của nó.
 
 ### Quét lại, cổng quét và file ngoại lệ
 
@@ -684,11 +728,11 @@ Môi trường chạy: script chạy trong GitHub Actions và đọc thẳng bi�
     chạy lại, chỉ thiếu SBOM của một manifest con, `vuln` ở đích quá hạn, `refresh` gỡ một hay hai `vuln` cũ, bản không
     có ở ECR, identity khác của nguồn; output ẩn account ID.
 - **`scan-gate.sh`** là cổng quét ngoài pipeline image (các chân của pipeline gate trong composite action `.github/actions/image-leg`, mã thoát của chính các scanner được đọc trong các bước của nó), cùng các luật của file ignore mà hai bên dùng chung. Phán quyết là của chính scanner, từ cờ của chúng; script này chọn cờ, đọc mã thoát và in một dòng mỗi lần quét cho summary của job.
-  - `scan-gate.sh [--allow-critical] LABEL REPORT`: rescan hằng ngày (`deploy/ci/rescan.sh`, với `--allow-critical`: nó ghi kết quả thật). REPORT là JSON của `trivy image --scanners vuln,secret` với mọi severity và `.trivyignore.yaml` (bản ghi mà attestation `vuln` và SARIF được làm từ); LABEL gọi tên image trong output (`gateway linux/amd64`). `trivy convert` đọc nó hai lần: lỗ hổng với `--severity CRITICAL --ignorefile .trivyignore.yaml --exit-code`, bí mật với `--exit-code` và không `--severity` (bộ lọc severity giấu một bí mật HIGH). Mỗi lượt chỉ nhận phần riêng của nó trong báo cáo, nên không bên nào đếm phát hiện của bên kia.
+  - `scan-gate.sh [--allow-critical] LABEL REPORT`: rescan hằng ngày (`deploy/ci/rescan.sh`, với `--allow-critical`: nó ghi kết quả thật, nên cờ này cho qua cả CRITICAL lẫn HIGH có bản vá). REPORT là JSON của `trivy image --scanners vuln,secret` với mọi severity và `.trivyignore.yaml` (bản ghi mà attestation `vuln` và SARIF được làm từ); LABEL gọi tên image trong output (`gateway linux/amd64`). `trivy convert` đọc nó ba lần: lỗ hổng với `--severity CRITICAL --ignorefile .trivyignore.yaml --exit-code`, bí mật với `--exit-code` và không `--severity` (bộ lọc severity giấu một bí mật HIGH), rồi `--format json --ignorefile .trivyignore.yaml` để `image-guard.sh fixed-high trivy` liệt kê HIGH có `Status` `fixed`. Mỗi lượt chỉ nhận phần riêng của nó trong báo cáo, nên không bên nào đếm phát hiện của bên kia.
   - `scan-gate.sh --grype LABEL DIR`: `make grype` (`grype_check` của `common.sh`). Chạy grype (`grype_sbom` của `common.sh`) trên `DIR/sbom.spdx.json`, một SBOM SPDX do syft ghi, với `--fail-on critical` và `.grype.yaml`, và ghi `DIR/grype.json`, `DIR/grype.sarif.raw`. syft tìm được thứ cài không qua trình quản lý gói, như binary `node` của image web, thứ mà trivy không liệt kê.
   - `scan-gate.sh --check-ignorefile`: kiểm luật của `.trivyignore.yaml` và `.grype.yaml` (`check_ignorefiles`; chính các luật ở `deploy/ci/ignorefile-policies/`), không cần image hay báo cáo, và của `deploy/ci/trivy-config-ignore.yaml`, các misconfiguration mà `make trivy-config` bỏ qua. Job `config` của `ci.yml` chạy nó ở mọi PR và push, và mỗi chân `image-leg` cũng chạy nó trước khi build.
-  - Chặn (thoát 1) khi: có bí mật bất kể severity (một package công khai và chữ ký của nó không rút lại được, nên bí mật đã đẩy một lần là lộ vĩnh viễn; không có cách nào vòng qua: `.trivyignore.yaml` chỉ được giữ lỗ hổng, và không bao giờ truyền `--skip-files`, `--skip-dirs` hay `--secret-config` cho trivy); bất kỳ lỗ hổng CRITICAL nào còn lại sau các ngoại lệ, đã có bản vá ở upstream hay chưa, trong báo cáo của trivy hay của grype (`--allow-critical` cho CRITICAL qua trong báo cáo trivy, ở rescan, không bao giờ cho bí mật qua);
-    một file ignore phạm luật của nó (một mục hết hạn là ngoại lệ, chỉ `--check-ignorefile` đỏ vì nó). HIGH trở xuống chỉ được báo: số đếm trong summary của job, chi tiết trong SARIF. Thoát 2: không đọc hay chạy được quét (REPORT không phải báo cáo `trivy image`, trivy hay grype lỗi, không tải được DB grype). In số đếm và, với phát hiện chặn, bảng CRITICAL của trivy và luật, file, dòng của mỗi bí mật: không bao giờ đoạn khớp (trivy vẫn che bí mật trong phát hiện của nó; báo cáo thô không bao giờ in).
+  - Chặn (thoát 1) khi: có bí mật bất kể severity (một package công khai và chữ ký của nó không rút lại được, nên bí mật đã đẩy một lần là lộ vĩnh viễn; không có cách nào vòng qua: `.trivyignore.yaml` chỉ được giữ lỗ hổng, và không bao giờ truyền `--skip-files`, `--skip-dirs` hay `--secret-config` cho trivy); bất kỳ lỗ hổng CRITICAL nào còn lại sau các ngoại lệ, đã có bản vá ở upstream hay chưa; HIGH có bản vá còn lại sau các ngoại lệ (`Status` `fixed` ở trivy, `fix.state` `fixed` ở grype), trong báo cáo của trivy hay của grype (`--allow-critical` cho CRITICAL và HIGH có bản vá qua trong báo cáo trivy, ở rescan, không bao giờ cho bí mật qua);
+    một file ignore phạm luật của nó (một mục hết hạn là ngoại lệ, chỉ `--check-ignorefile` đỏ vì nó). HIGH chưa có bản vá, MEDIUM, LOW chỉ được báo: số đếm trong summary của job, chi tiết trong SARIF. Thoát 2: không đọc hay chạy được quét (REPORT không phải báo cáo `trivy image`, trivy hay grype lỗi, không tải được DB grype). In số đếm và, với phát hiện chặn, bảng CRITICAL của trivy, danh sách HIGH có bản vá và luật, file, dòng của mỗi bí mật: không bao giờ đoạn khớp (trivy vẫn che bí mật trong phát hiện của nó; báo cáo thô không bao giờ in).
   - Các ngoại lệ là của cây đang quét (`code_root` của `common.sh`): của checkout này, hay của checkout repo khác nêu bởi `SVP_CODE_ROOT` (CI của nó chạy script này từ checkout ghim của repo này), nơi cả hai file phải có: một cây thiếu chúng là cây sai, không phải cây không có ngoại lệ.
   - `check_ignorefiles live|gate`: luật của `.trivyignore.yaml` và `.grype.yaml` của cây (mỗi file khi có) và, ở chế độ `live` (job `config`), của cả `deploy/ci/trivy-config-ignore.yaml`. Luật là policy conftest trên file đã parse, viết và giải thích ở `deploy/ci/ignorefile-policies/` (test bằng `make conftest-verify`), chạy trên các file cùng lúc (`--combine`: mỗi rule của `.grype.yaml` phải là một mục của `.trivyignore.yaml`). Ở `live` một mục hết hạn phạm luật; các cổng của một báo cáo (rescan, `make grype`) để việc đó cho trivy, nơi bỏ mục hết hạn. Hai phép kiểm ở lại đây vì policy không làm được: không mapping nào của một file có khoá hai lần (parser của conftest giữ khoá sau, trivy và grype từ chối file; `yq` thấy mọi khoá) và mỗi path của `trivy-config-ignore.yaml` là một file của repo. conftest và `yq` chạy từ image mà `Makefile` ghim (`CONFTEST_IMAGE`, `YQ_IMAGE`), không mạng, bằng user của người gọi, file mount chỉ đọc. In một dòng `FAIL` cho mỗi luật bị phạm; ở `live`, một dòng `ok` khi không có.
 - **`deploy/ci/trivy-config-ignore.yaml`**: các phát hiện của `make trivy-config` là lựa chọn có chủ đích, bỏ qua có thời hạn. Phát hiện sửa được mà không đổi hành vi thì được sửa, không liệt kê ở đây. `make trivy-config` truyền file này cho `trivy config` bằng `--ignorefile`; cổng image không bao giờ đọc nó, nên không gì ở đây cho một lỗ hổng hay bí mật qua. Luật được kiểm ở mọi PR bằng `deploy/ci/scan-gate.sh --check-ignorefile` (job `config`
@@ -696,6 +740,31 @@ Môi trường chạy: script chạy trong GitHub Actions và đọc thẳng bi�
   - Lý do của các mục HEALTHCHECK: Kubernetes và compose kiểm sức khoẻ chứ không phải image: Kubernetes bỏ qua `HEALTHCHECK`, và compose cho mỗi container cái riêng (`/app healthcheck` cho các service Go, một fetch `/healthz` bằng `node` cho web client, không có cho các container migrate chạy một lần, là image service chạy với lệnh `migrate`, và không có cho `media-worker`, một consumer không có cổng). Một `HEALTHCHECK` trong image sẽ bắt đầu kiểm trong các container hiện không có,
     các container migrate bị đánh dấu unhealthy khi chúng chạy. Image diễn tập không bao giờ chạy.
   - Lý do của mục image chart dữ liệu: image của các chart dữ liệu đến từ publisher upstream của chúng, ghim bằng digest của index đa kiến trúc (bước 4 của `deploy/ci/gitops-check.sh`, Renovate đề xuất mỗi digest mới). Check chỉ tin ECR, GCR và ACR, nên tin một registry ở đây nghĩa là chép image vào một registry riêng, một quyết định riêng.
+
+Luật chặn của một chân image ([ADR-0070](../adr/0070-scan-gate-high-fixed.md)), áp riêng cho báo cáo của trivy và của grype sau file
+ignore; một trong hai thấy là đủ để chặn:
+
+```mermaid
+flowchart TD
+    start["báo cáo của một chân image<br/>sau .trivyignore.yaml, .grype.yaml"] --> secret{"có bí mật?"}
+    secret -- có --> blocked["chặn: không push, ký, attest"]
+    secret -- không --> crit{"có CRITICAL?"}
+    crit -- có --> allow1{"allow-critical?<br/>(drill-vulnerable, rescan)"}
+    allow1 -- không --> blocked
+    allow1 -- có --> high
+    crit -- không --> high{"có HIGH có bản vá?<br/>trivy Status fixed<br/>grype fix.state fixed"}
+    high -- có --> allow2{"allow-critical?"}
+    allow2 -- không --> blocked
+    allow2 -- có --> pass["qua cổng, đếm vào summary"]
+    high -- không --> pass
+```
+
+Bí mật chặn mọi image, kể cả khi `allow-critical`. HIGH chưa có bản vá, MEDIUM, LOW chỉ báo. Ngoại lệ có hạn của
+`.trivyignore.yaml` và `.grype.yaml` áp trước các bước trên, cho mọi severity theo luật của `ignorefile-policies/`; với HIGH có bản vá, ngoại
+lệ chỉ được khi build không cài được bản vá (ADR-0070 §3).
+Cổng build và admission khác luật có chủ đích: policy Kyverno, attestation `vuln` (`vuln-predicate.sh`) và rescan hằng ngày vẫn chỉ
+tính CRITICAL, nên một HIGH công bố sau ngày build không làm pod mới của image đang chạy bị từ chối; lý do ở ADR-0070 §5. Cổng CRITICAL của lockfile
+npm ở `svp-frontend` (`make lockfile-scan`) không thuộc luật này.
 
 ### `verify-release.sh` và `contract.sh`
 
@@ -715,6 +784,7 @@ Môi trường chạy: script chạy trong GitHub Actions và đọc thẳng bi�
 - **`gitops-check.sh GITOPS_DIR [BASE]`** là check của một cây của repo triển khai `svp-gitops` (`base/`, `envs/`, `argocd/`), chạy bởi workflow của repo đó từ một checkout của repo này ở một commit ghim, và trên máy với một bản clone. Thoát 0 khi mọi bước qua; mỗi bước in một dòng cho mỗi thứ nó kiểm, dòng `FAIL` ra stderr. Năm bước và các chế độ riêng lẻ (`--tree`, `--policy`) đã mô tả ở mục
   `svp-gitops` phía trên; chi tiết còn lại:
   - `gitops-check.sh --worktree GITOPS_DIR` là cùng phép render trên một bản clone `svp-gitops` (`main`, trong CI), với chart của working tree của repo này đứng thay `revision` của mọi môi trường: cái `make helm-check` chạy khi chart đổi trước khi merge. Bước 1 khi đó chỉ kiểm hình dạng của `charts.yaml` và các file image, vì `revision` chúng ghim và cái dẫn xuất từ nó là check riêng của `svp-gitops`, và bước 5 (các image phát hành, là của `svp-gitops`) bỏ qua.
+  - **Release mới** ([ADR-0072](../adr/0072-pod-operations.md)): service của group `default` trong `deploy/docker-bake.json` (**Tập build**, `built_services` của `deploy/k8s/lib.sh`) mà revision một môi trường ghim (`envs/<env>/charts.yaml`) chưa build. Luật nằm ở `envs.rego`, không ở bash: `published(env)` là service của bảng nguồn mà môi trường được kiểm theo, `built(env)` là service của bảng ở revision môi trường ghim (`input.built`, `gitops-check.sh` đặt ở cả hai chế độ); file `envs/<env>/images/<svc>.yaml` thiếu của một service thuộc `published` mà không thuộc `built` là `warn`, `gitops-check.sh` in nó thành dòng `note  envs/<env>/images/ has no <svc>.yaml: …`, không `FAIL`. Mọi file thiếu khác vẫn `deny`. Chế độ `--worktree` (CI repo code, svp-gitops `main`) chấp nhận thiếu file đó vì revision đã ghim chưa có service; kiểm theo revision (check của `svp-gitops`) đòi đủ file của mọi service mà revision của môi trường build, nên PR promote tạo file thì check mới qua. Danh sách service mà file image của một môi trường được phép có (`values-check.sh`, và nhánh promote prd của `author.rego`) lấy từ bảng nguồn phát hành ở revision môi trường đó ghim (`release_sources` của `deploy/k8s/lib.sh`), không từ bản **Checker** đang ghim: service mới không đòi phát hành checker mới. Chỉ khi revision chưa có bảng đó (rất cũ), `values-check.sh` dùng danh sách của checker (`svp_services`). Check cũng kéo ẩn danh, mà package GHCR của service mới private sau lượt `images.yml` đầu: người học bật public cho package ngay sau lượt đó, không đợi buổi stg ([`svp-gitops-setup.md`](../runbooks/svp-gitops-setup.md#c1-promote-stg-tự-động)).
   - Bước 1 dựng input cho policy: một tài liệu JSON gồm các mục và nội dung file của cây; với mỗi môi trường, `revision` có là một commit trên `origin/main` của repo này không (không thì một dòng `FAIL`), hai giá trị mà commit đó dẫn xuất (`podSecurityVersion` của `deploy/helm/svp-cluster/values.yaml`, `collectorConfigSha256` của ba file Collector) và bảng nguồn phát hành ở commit đó (`release_sources` của `deploy/k8s/lib.sh`; một revision từ trước khi có bảng đó thì fail); và, với BASE,
     PR: tác giả (`pull_request.user.login` của sự kiện ở `GITHUB_EVENT_PATH`; trên máy, nơi `GITHUB_EVENT_NAME` không đặt, `SVP_CHANGE_REQUEST_AUTHOR`), người gửi của sự kiện (`sender.login`) và, với PR của một bot, các file đổi từ BASE tới HEAD. Tác giả hay người gửi không đọc được thì fail; không có BASE, hay với một lượt không phải PR, luật in một dòng skip. Một `conftest` không trả lời, hay không có kết quả nào từ một policy, làm bước fail. Một bản phát hành có được ký, và build từ commit mà tag của nó nêu không, là việc của bước 5.
     Một môi trường ghim một commit của `svp-gitops` (`gitopsRevision` của `charts.yaml`; chỉ prd, theo các policy) cần commit đó trong GITOPS_DIR, một clone có lịch sử: nằm trên `origin/main`, chứa `argocd/apps/Chart.yaml` (không thì một dòng `FAIL`).
@@ -722,7 +792,7 @@ Môi trường chạy: script chạy trong GitHub Actions và đọc thẳng bi�
     Root sinh một Application cho mỗi component chạy trên nền tảng, mỗi cái đọc các file values `base/` (và `archValues` của kiến trúc của nó) < `platforms/<platform>/<tên>.yaml` < `envs/<env>/<tên>.yaml` < `envs/<env>/images/<tên>.yaml` mà có, theo thứ tự đó (gọi tên không kèm ref của nguồn), rồi một `valuesObject` đúng khi `platforms/<platform>/<tên>.values.tpl` có. Mọi nguồn nó đọc từ `svp-gitops` nêu một ref đầy đủ (`refs/heads/<nhánh>`) hay một commit làm `targetRevision`,
     không bao giờ một tên ngắn mà Argo CD có thể phân giải thành tag cùng tên. Argo Rollouts nhận đúng một plugin traffic router trên mỗi kiến trúc, asset build cho nó, cả hai thuộc một release. `gitops-check.sh --root GITOPS_DIR` chạy riêng bước 1 và 2 (test của chúng, không mạng).
   - Bước 4: render bằng `helm template --include-crds` mọi component của `components.json` với values `base/` của nó (chart upstream ở version ghim, chart của repo này ở mỗi revision; một component không chạy trên k3d, nền tảng của đường dev, thì dùng values của nền tảng của nó), và Argo CD như `argocd/bootstrap.json` cài nó, rồi lại với `argo-cd.yaml` của mỗi nền tảng, như `deploy/k8s/gitops.sh` cài nó ở đó. Policy `images-pinned` giữ mọi image của các render đó theo đúng một digest. Dưới policy, một phép quét text của các render (`image_refs`) tìm mọi tham chiếu image khác không có digest làm nó fail như ngoài policy.
-    Mỗi môi trường chạy các image build một lần cho `base`: mỗi component có values của một nền tảng (`platforms/<platform>/`) được render lại với chúng, và render đó không chạy phiên bản khác (tag hay digest) của một image mà `base` chạy, dù nó có thể chạy ít hơn hay khác (object store của cloud thay cho của cluster, một controller của cloud); mỗi component có overlay ở `envs/<env>/` được render lại với nó sau đó, và các image của render đó, gồm cả bảy image service, phải đúng là của render mà nó thêm lên (của nền tảng, nếu không thì của `base`), so trên các image mà `image_refs` đọc.
+    Mỗi môi trường chạy các image build một lần cho `base`: mỗi component có values của một nền tảng (`platforms/<platform>/`) được render lại với chúng, và render đó không chạy phiên bản khác (tag hay digest) của một image mà `base` chạy, dù nó có thể chạy ít hơn hay khác (object store của cloud thay cho của cluster, một controller của cloud); mỗi component có overlay ở `envs/<env>/` được render lại với nó sau đó, và các image của render đó, gồm cả image của các service, phải đúng là của render mà nó thêm lên (của nền tảng, nếu không thì của `base`), so trên các image mà `image_refs` đọc.
   - Bước 5: `deploy/ci/values-check.sh --gitops` trên các file image đổi từ commit BASE tới HEAD của GITOPS_DIR (mọi file khi không có BASE): bản phát hành đã ký, attestation `vuln`, và build provenance mà policy của môi trường đòi. Với bản phát hành đã kiểm provenance, `image.tag` phải là 12 hex của commit mà provenance nêu (`tag_provenance_mismatch` của `common.sh`); ở môi trường đòi provenance, một lần kiểm bản phát hành không nêu commit provenance cũng fail.
   - `gitops-check.sh --images GITOPS_DIR ENV OUT`: chạy bước 1–4 như thường (cùng render, `pin_check` vẫn kiểm), rồi ghi
     vào OUT, sắp và bỏ trùng, mọi tham chiếu image (`image_refs`) của bản render nền tảng `eks` của ENV (overlay của
@@ -740,7 +810,7 @@ Môi trường chạy: script chạy trong GitHub Actions và đọc thẳng bi�
 - **`values-check.sh --gitops DIR BASE`** là check bản phát hành của một cây `svp-gitops`, nơi các image phát hành là `envs/<env>/images/<service>.yaml` (`gitops-check.sh` chạy nó trong check của repo đó; bootstrap của đường GitOps cũng chạy). Với mỗi file như vậy của repo git của DIR đã đổi từ commit BASE tới HEAD, một `image.digest` không rỗng phải nêu một bản phát hành được vào môi trường đó:
   repository của service của một nguồn phát hành mà policy của môi trường đó nhận (`release_source_in` của `common.sh`: bảng của chart `svp-policy` ở commit mà `envs/<env>/charts.yaml` ghim), ký bởi `images.yml` của nguồn đó trên `main`, một attestation `vuln` phủ cả hai nền tảng, không CRITICAL, không quá 48 giờ tuổi, và một attestation build provenance khi chart `svp-policy` kiểm provenance ở môi trường đó (`verify-release.sh --gitops DIR --env <env>`: `values.yaml` của chart ở commit mà `envs/<env>/charts.yaml` ghim, rồi
   `envs/<env>/svp-policy.yaml` của DIR, như Argo CD trao chúng cho chart). Mọi file image của một môi trường mà policy của nó đã đổi từ BASE (`envs/<env>/svp-policy.yaml` hay `envs/<env>/charts.yaml`: `policy_values_paths` của `common.sh`) cũng được kiểm, vì cái mà mọi bản phát hành ở đó phải mang có thể đã đổi: PR bật provenance fail khi một bản phát hành của môi trường đó không có nó. Mọi file image của mọi môi trường khi BASE rỗng (DIR khi đó không cần là repo git).
-  Kyverno nhận attestation tới 72 giờ, nên một digest vào một môi trường cùng với một cái cũ hơn (một PR promote gộp, một revert về digest cũ) sẽ bị từ chối pod mới; check này bắt nó trước khi merge. Không dùng token. Khi fail, in lệnh dispatch `images.yml` của repo code làm mới attestation `vuln` của các bản phát hành mà `svp-gitops` nêu.
+  Kyverno nhận attestation tới 72 giờ, nên một digest vào một môi trường cùng với một cái cũ hơn (một PR promote gộp, một revert về digest cũ) sẽ bị từ chối pod mới; check này bắt nó trước khi merge. Không dùng token. File image của service mà revision môi trường ghim không build không thuộc danh sách của môi trường đó (**Release mới**): thêm hay sửa thì `FAIL`, xoá thì là một dòng `note` (rollback về commit chưa build service đó, service nghỉ hưu). Xoá file của service mà revision build thì `FAIL`. Khi fail, in lệnh dispatch `images.yml` của repo code làm mới attestation `vuln` của các bản phát hành mà `svp-gitops` nêu.
 - **`gitops-policies/images-pinned.yaml`**: mọi image mà một manifest đã render nêu được ghim bằng đúng một digest, `image:tag@sha256:<64 hex>` hay `image@sha256:<64 hex>`: một tag có thể bị đẩy lại sang nội dung khác, một digest thì không. Kyverno chỉ kiểm các image phát hành của namespace `svp` lúc admission, nên các image của namespace nền tảng được giữ theo digest của chúng trên render, bởi `deploy/ci/gitops-check.sh` với Kyverno CLI (`kyverno apply`, không cluster). Các image phát hành cũng qua: một render chỉ của `base/` cho chúng tag và digest giữ chỗ. Nơi một image được đọc:
   - mỗi container, init container và ephemeral container của một pod template (Pod, CronJob, và mọi kind có `spec.template.spec`: Deployment, StatefulSet, DaemonSet, ReplicaSet, Job, Rollout của Argo Rollouts): `image`; giá trị của một mục `env` mà tên nói nó giữ một image (`OPERATOR_IMAGE_NAME`, `RELATED_IMAGE_FOO`); trong giá trị `env`, `args` và `command`, một cờ mà tên chứa "image" (`--acme-http01-solver-image=...`) và bất cứ gì có dạng `registry/path:tag` hay `registry/path@sha256:...` với host registry có dấu chấm (`--prometheus-config-reloader=quay.io/...`);
   - một khoá của `spec` kết thúc bằng `image`, `Image` hay `imageName` có giá trị chuỗi (`spec.image` của Prometheus và Alertmanager, `spec.imageName` của Cluster của CloudNativePG);
@@ -770,8 +840,9 @@ Một package mỗi file (`gitops.layout`, `gitops.envs`, `gitops.platforms`, `g
   commit đó góp 0 byte: [checksum config Collector](../explanation/observability.md#collector-của-cluster)); một môi
   trường mà `revision` không phải commit trên `main` của repo code bị bỏ khỏi đây, và script nêu lý do;
 - `sources`: theo môi trường, `revision` (rỗng khi có `worktree`) và `sources`, bảng nguồn phát hành (`deploy/helm/svp-policy/files/sources.json`) của repo code ở revision đó, của working tree khi có `worktree`; bị bỏ khi không đọc được, và script nêu lý do;
+- `built`: theo môi trường, `revision` mà `envs/<env>/charts.yaml` ghim và `services`, các service của bảng nguồn ở revision đó, tức các service mà revision ấy build (cả khi có `worktree`: bảng của chính revision ghim, không của working tree); môi trường mà bảng ở revision đó không đọc được bị bỏ khỏi đây (chỉ khi có `worktree`; script in một dòng `note` và mọi service của bảng working tree phải có file image);
 - `pull_request`: chỉ với một PR: `author` và `sender` (login: ai mở nó, ai gây ra sự kiện đang kiểm) và, với một PR của bot, `changes: [{status, path}]`, các file mà `git diff --name-status --no-renames` liệt kê từ base của nó;
-- `data.gitops_check`: `environments` (`["prd", "stg"]`) và `services` (bảy service có image phát hành).
+- `data.gitops_check`: `environments` (`["prd", "stg"]`) và `services` (các service có image phát hành, `svp_services` của `deploy/k8s/lib.sh`).
 
 **`layout.rego`**: bố cục của cây: các file mà root chart `argocd/apps` và bootstrap đọc, và các thiết lập của những file đó mà không render nào cho thấy.
 
@@ -785,7 +856,7 @@ Một package mỗi file (`gitops.layout`, `gitops.envs`, `gitops.platforms`, `g
 
 - `charts.yaml` có đúng các khoá `revision`, `podSecurityVersion` và `collectorConfigSha256`, mỗi khoá một dòng (script đọc chúng bằng `sed`). `revision` là commit đầy đủ (40 hex) của repo code mà chart của nó môi trường chạy; `podSecurityVersion` và `collectorConfigSha256` bằng cái mà commit đó cho ra (`input.charts`, script dẫn xuất bằng git). Với `input.worktree` chỉ các khoá được kiểm.
 - Chỉ `envs/prd/charts.yaml` được thêm `gitopsRevision`, commit đầy đủ (40 hex) của repo này (`svp-gitops`) mà prd render `argocd/apps`, `base/` và `platforms/` ở đó trong khi `envs/prd/` của chính nó đọc ở `main`; chỉ promote prd ghi nó, là commit của `main` mà stg đã chạy. stg theo `main` và không bao giờ ghim. Root hai tầng `argocd/root` là thứ đọc khoá này, nên một cây đặt nó phải có root đó. Commit có nằm trên `main` của repo này và có `argocd/apps` không thì script kiểm bằng git.
-- `images/` có đúng một file mỗi service, `<service>.yaml`, mỗi file chỉ là khối image: không dòng cấp cao nào ngoài `image:`, và `image.repository`, `tag`, `digest` mỗi cái đúng một dòng của khối, như `values_field` của `deploy/k8s/lib.sh` đọc chúng (các job promote và `values-check.sh` đọc file theo cách đó). Repository là của service đó ở đúng một nguồn phát hành của bảng ở revision của môi trường (`input.sources`), tức một bản phát hành mà policy của môi trường đó nhận; `tag` và `digest` được đặt. Bản phát hành có được ký, và build từ commit mà tag của nó nêu không, là bước 5 của check (`values-check.sh`).
+- `images/` có đúng một file mỗi service, `<service>.yaml` (service của bảng nguồn mà môi trường được kiểm theo), trừ **Release mới**: service mà revision môi trường ghim (`input.built`) chưa build và chưa có file ở đây thì được thiếu file, và luật in một cảnh báo (`warn`), `gitops-check.sh` in nó thành dòng `note`; mọi trường hợp thiếu khác vẫn `deny`. Mỗi file chỉ là khối image: không dòng cấp cao nào ngoài `image:`, và `image.repository`, `tag`, `digest` mỗi cái đúng một dòng của khối, như `values_field` của `deploy/k8s/lib.sh` đọc chúng (các job promote và `values-check.sh` đọc file theo cách đó). Repository là của service đó ở đúng một nguồn phát hành của bảng ở revision của môi trường (`input.sources`), tức một bản phát hành mà policy của môi trường đó nhận; `tag` và `digest` được đặt. Bản phát hành có được ký, và build từ commit mà tag của nó nêu không, là bước 5 của check (`values-check.sh`).
 - Không overlay `envs/<env>/<tên>.yaml` hay file image nào đặt một giá trị `null`, `{}` hay `[]`, ở độ sâu nào: root trao nội dung của chúng cho các Application của `argocd/apps` trong `valuesObject`, và health check của một Application (`argoproj.io_Application` của `base/argo-cd.yaml`) so spec nó đọc với spec mà controller đã so, bằng Lua, nơi `null` là một khoá bị bỏ còn `{}` và `[]` là một bảng rỗng. Một thay đổi như vậy sẽ để Application `Healthy` trên status của spec trước, và root báo commit mới đã triển khai trước khi nó chạy.
 - Hàm `image(path)` đọc `image.repository`, `tag` và `digest` của một file image như `values_field` của `deploy/k8s/lib.sh` đọc chúng: mỗi cái đúng một dòng `<khoá>: <giá trị>` (thụt hai dấu cách) trong khối `image:` cấp cao nhất, giá trị trần hay trong nháy kép và đúng dạng của khoá (`""` khi rỗng); undefined khi một cái không như vậy.
 
@@ -801,7 +872,7 @@ bot của `backend`, nơi repo của nó giữ các chart, đổi thêm `envs/st
 `lib.rego` giữ helper dùng chung của các policy (package `trivyignore`, `grypeignore`, `configignore`). `deploy/ci/scan-gate.sh` chạy chúng bằng `conftest test --combine`, nên `input` là một danh sách `{path, contents}`, mỗi file được truyền một mục, và trao `data.scan_gate`: `today` (yyyy-mm-dd, UTC) và `live` (`true` ở job `config`, `false` ở các cổng image). `make conftest-verify` chạy test cạnh chúng (`*_test.rego`). Hình dạng của mỗi file ở mục `.trivyignore.yaml` và `.grype.yaml` phía trên; phần dưới là lý do của các luật.
 
 - **`trivyignore.rego`**: chỉ phần `vulnerabilities` được phép (`vulnerabilities: []` khi không có ngoại lệ), vì định dạng của trivy còn có `secrets`, `misconfigurations` và `licenses`, mà trivy sẽ áp dụng, nên một bí mật có thể bị cho qua. Hạn 30 ngày để không ngoại lệ nào sống lâu hơn mà không qua một thay đổi đã duyệt khác. Package `packages` trao các purl của các mục cho luật của `.grype.yaml`, mỗi rule của nó phải là một trong số đó.
-- **`grypeignore.rego`**: grype đọc cả file, và nhiều khoá nó biết để lọt một CRITICAL mà không có mục và ngày nào (`only-fixed`, `only-notfixed` và `ignore-wontfix` ở gốc, `vex-documents`, một rule chỉ nêu `fix-state` hay `package.type`, hay một rule không có `package`); một khoá nó không biết thì nó bỏ qua không một lời. Vì vậy file chỉ giữ dạng sau, mọi thứ khác bị từ chối:
+- **`grypeignore.rego`**: grype đọc cả file, và nhiều khoá nó biết để lọt một CRITICAL hay HIGH có bản vá mà không có mục và ngày nào (`only-fixed`, `only-notfixed` và `ignore-wontfix` ở gốc, `vex-documents`, một rule chỉ nêu `fix-state` hay `package.type`, hay một rule không có `package`); một khoá nó không biết thì nó bỏ qua không một lời. Vì vậy file chỉ giữ dạng sau, mọi thứ khác bị từ chối:
 
   ```yaml
   ignore:                            # khoá gốc duy nhất, một danh sách (ignore: [] khi không có ngoại lệ)

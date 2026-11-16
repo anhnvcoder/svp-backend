@@ -1,9 +1,9 @@
 # Prometheus configuration of grafana/otel-lgtm 0.36.0 (/otel-lgtm/prometheus.yaml in the image), mounted read-only
-# over the image's own. Copied unchanged except for evaluation_interval, retention, rule_files and alerting: re-check
-# it against the image's file when the image is upgraded.
+# over the image's own. Copied unchanged except for evaluation_interval, retention, rule_files, alerting and
+# scrape_configs: re-check it against the image's file when the image is upgraded.
 
 # run-prometheus.sh keeps turning on the OTLP and remote-write receivers and exemplar storage on the command line;
-# the image scrapes nothing itself (the obs Collector reads Kafka and pushes over OTLP).
+# the image scrapes only the blackbox exporter below (the obs Collector reads Kafka and pushes over OTLP).
 
 global:
   scrape_native_histograms: true
@@ -61,3 +61,29 @@ alerting:
   alertmanagers:
     - static_configs:
         - targets: ["alertmanager:9093"]
+
+# The uptime probes, one target each: web, gateway and the object store. The standard relabeling for the exporter:
+# the target becomes the __param_target parameter and the instance label, and the scrape goes to the exporter.
+scrape_configs:
+  - job_name: blackbox-http
+    metrics_path: /probe
+    params:
+      module: [http_compose]
+    scrape_interval: 30s
+    static_configs:
+      - targets: ["http://web:3001/healthz"]
+        labels:
+          probe: web
+      - targets: ["http://gateway:8080/readyz"]
+        labels:
+          probe: api
+      - targets: ["http://s3:9000/media/media/uptime-probe.txt"]
+        labels:
+          probe: media
+    relabel_configs:
+      - source_labels: [__address__]
+        target_label: __param_target
+      - source_labels: [__param_target]
+        target_label: instance
+      - target_label: __address__
+        replacement: blackbox:9115

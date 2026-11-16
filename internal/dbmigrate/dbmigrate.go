@@ -37,13 +37,26 @@ const (
 	lockRetries      = 300
 )
 
+// lockTimeout is the lock_timeout of every connection Up opens, so every migration has it, even a
+// file that sets none. A statement waiting for a lock queues every later request on that table behind
+// it; 2 s stays under the gateway's 3 s call timeout, so those requests still finish in time. It is
+// above deadlock_timeout (1 s by default): only after that long does Postgres cancel an autovacuum
+// that blocks the lock request, so a bound at or below it would fail the migration first, on every
+// retry. When it expires the migration fails with 55P03 lock_not_available, its transaction rolls
+// back, and the migrate Job's restart tries again. A migration that needs another bound sets it
+// itself: SET LOCAL in a transaction; in a NO TRANSACTION file, SET at the start and RESET at the
+// end, as goose runs a whole Up on one connection and a session SET would carry over to the next
+// migration.
+const lockTimeout = "2s"
+
 // connectTimeout bounds each connection attempt, so that an attempt that hangs leaves time for
 // the next ones; it matches pgpool.ConnectTimeout.
 const connectTimeout = 5 * time.Second
 
 // Up applies every pending goose SQL migration in fsys (files such as 00001_create_users.sql at
 // its root) to the Postgres database at databaseURL. Each migration runs in its own
-// transaction. A Postgres advisory lock serializes concurrent runs on the same database, so a
+// transaction, except a file marked NO TRANSACTION, and waits at most lockTimeout for a lock unless
+// it sets its own bound. A Postgres advisory lock serializes concurrent runs on the same database, so a
 // migration never runs twice. Applied migrations are logged through slog's default logger.
 //
 // While the first connection fails on the network (refused, timed out, closed during the
@@ -60,6 +73,7 @@ func up(ctx context.Context, databaseURL string, fsys fs.FS, window time.Duratio
 	if err != nil {
 		return fmt.Errorf("parse database url: %w", err)
 	}
+	cfg.RuntimeParams["lock_timeout"] = lockTimeout
 	db := stdlib.OpenDB(*cfg)
 	defer func() { _ = db.Close() }()
 
@@ -74,6 +88,12 @@ func up(ctx context.Context, databaseURL string, fsys fs.FS, window time.Duratio
 	if err != nil {
 		return fmt.Errorf("connect to database: %w", err)
 	}
+	// Read back from the server, so the log shows what migrations really run with.
+	var setLockTimeout string
+	if err := db.QueryRowContext(ctx, "SHOW lock_timeout").Scan(&setLockTimeout); err != nil {
+		return fmt.Errorf("read migration settings: %w", err)
+	}
+	slog.InfoContext(ctx, "migration settings", slog.String("lock_timeout", setLockTimeout))
 
 	if err := createVersionSchema(ctx, db); err != nil {
 		return fmt.Errorf("create schema %s: %w", versionSchema, err)

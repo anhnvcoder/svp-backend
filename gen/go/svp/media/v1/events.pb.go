@@ -36,6 +36,9 @@ const (
 	TranscodeFailureReason_TRANSCODE_FAILURE_REASON_DURATION_EXCEEDED TranscodeFailureReason = 3
 	// A transient error persisted after every retry.
 	TranscodeFailureReason_TRANSCODE_FAILURE_REASON_RETRIES_EXHAUSTED TranscodeFailureReason = 4
+	// The video is premium and its lowest rendition has a single segment, too
+	// short for a public preview that is not the whole video.
+	TranscodeFailureReason_TRANSCODE_FAILURE_REASON_PREVIEW_TOO_SHORT TranscodeFailureReason = 5
 )
 
 // Enum value maps for TranscodeFailureReason.
@@ -46,6 +49,7 @@ var (
 		2: "TRANSCODE_FAILURE_REASON_INVALID_INPUT",
 		3: "TRANSCODE_FAILURE_REASON_DURATION_EXCEEDED",
 		4: "TRANSCODE_FAILURE_REASON_RETRIES_EXHAUSTED",
+		5: "TRANSCODE_FAILURE_REASON_PREVIEW_TOO_SHORT",
 	}
 	TranscodeFailureReason_value = map[string]int32{
 		"TRANSCODE_FAILURE_REASON_UNSPECIFIED":       0,
@@ -53,6 +57,7 @@ var (
 		"TRANSCODE_FAILURE_REASON_INVALID_INPUT":     2,
 		"TRANSCODE_FAILURE_REASON_DURATION_EXCEEDED": 3,
 		"TRANSCODE_FAILURE_REASON_RETRIES_EXHAUSTED": 4,
+		"TRANSCODE_FAILURE_REASON_PREVIEW_TOO_SHORT": 5,
 	}
 )
 
@@ -89,11 +94,14 @@ func (TranscodeFailureReason) EnumDescriptor() ([]byte, []int) {
 // Consumed by video-service. Dead letters go to `media.transcodes.v1.dlq`.
 //
 // The output of a video.uploaded lives under a version, the event_id of that
-// video.uploaded: `media/<video_id>/<version>/`. Each try writes into a
-// directory of its own below it and the master playlist is created only once,
-// so no object under a published key is ever written again. A redelivered
-// video.uploaded writes nothing and yields the keys of the master already
-// there, with the same duration and renditions.
+// video.uploaded: `media/<video_id>/<version>/`, or for a premium video
+// `premium/<video_id>/<version>/` with its public preview under
+// `preview/<video_id>/<version>/`. Each try writes into a directory of its own
+// below it and each master playlist (the full one, and a premium video's
+// preview one) is created only once, so no object under a published key is
+// ever written again. A redelivered video.uploaded writes nothing and yields
+// the keys of the masters already there, with the same duration and
+// renditions.
 type TranscodeEvent struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	Meta  *v1.EventMeta          `protobuf:"bytes,1,opt,name=meta,proto3" json:"meta,omitempty"`
@@ -187,23 +195,29 @@ func (*TranscodeEvent_TranscodeCompleted) isTranscodeEvent_Event() {}
 func (*TranscodeEvent_TranscodeFailed) isTranscodeEvent_Event() {}
 
 // TranscodeCompleted: the HLS output of video_id is fully written under
-// `media/<video_id>/<version>/`.
+// `media/<video_id>/<version>/` (`premium/<video_id>/<version>/` for a premium
+// video, whose public preview is under `preview/<video_id>/<version>/`).
 type TranscodeCompleted struct {
 	state   protoimpl.MessageState `protogen:"open.v1"`
 	VideoId string                 `protobuf:"bytes,1,opt,name=video_id,json=videoId,proto3" json:"video_id,omitempty"`
 	// Object key of the HLS master playlist,
 	// `media/<video_id>/<version>/master.m3u8` (videos made before versions:
-	// `media/<video_id>/master.m3u8`).
+	// `media/<video_id>/master.m3u8`); `premium/<video_id>/<version>/master.m3u8`
+	// for a premium video.
 	PlaylistKey string `protobuf:"bytes,2,opt,name=playlist_key,json=playlistKey,proto3" json:"playlist_key,omitempty"`
 	// Object key of the thumbnail image under `media/<video_id>/`, in the
-	// directory the master playlist names.
+	// directory the master playlist names; under `preview/<video_id>/` for a
+	// premium video.
 	ThumbnailKey string `protobuf:"bytes,3,opt,name=thumbnail_key,json=thumbnailKey,proto3" json:"thumbnail_key,omitempty"`
 	// Length of the transcoded video.
 	Duration *durationpb.Duration `protobuf:"bytes,4,opt,name=duration,proto3" json:"duration,omitempty"`
 	// One entry per HLS variant, lowest bitrate first.
-	Renditions    []*Rendition `protobuf:"bytes,5,rep,name=renditions,proto3" json:"renditions,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	Renditions []*Rendition `protobuf:"bytes,5,rep,name=renditions,proto3" json:"renditions,omitempty"`
+	// Object key of the public preview's master playlist of a premium video,
+	// `preview/<video_id>/<version>/master.m3u8`; empty for a regular video.
+	PreviewPlaylistKey string `protobuf:"bytes,6,opt,name=preview_playlist_key,json=previewPlaylistKey,proto3" json:"preview_playlist_key,omitempty"`
+	unknownFields      protoimpl.UnknownFields
+	sizeCache          protoimpl.SizeCache
 }
 
 func (x *TranscodeCompleted) Reset() {
@@ -269,6 +283,13 @@ func (x *TranscodeCompleted) GetRenditions() []*Rendition {
 		return x.Renditions
 	}
 	return nil
+}
+
+func (x *TranscodeCompleted) GetPreviewPlaylistKey() string {
+	if x != nil {
+		return x.PreviewPlaylistKey
+	}
+	return ""
 }
 
 // Rendition describes one HLS variant stream.
@@ -420,7 +441,7 @@ const file_svp_media_v1_events_proto_rawDesc = "" +
 	"\x04meta\x18\x01 \x01(\v2\x17.svp.event.v1.EventMetaR\x04meta\x12S\n" +
 	"\x13transcode_completed\x18\x02 \x01(\v2 .svp.media.v1.TranscodeCompletedH\x00R\x12transcodeCompleted\x12J\n" +
 	"\x10transcode_failed\x18\x03 \x01(\v2\x1d.svp.media.v1.TranscodeFailedH\x00R\x0ftranscodeFailedB\a\n" +
-	"\x05event\"\xe7\x01\n" +
+	"\x05event\"\x99\x02\n" +
 	"\x12TranscodeCompleted\x12\x19\n" +
 	"\bvideo_id\x18\x01 \x01(\tR\avideoId\x12!\n" +
 	"\fplaylist_key\x18\x02 \x01(\tR\vplaylistKey\x12#\n" +
@@ -428,7 +449,8 @@ const file_svp_media_v1_events_proto_rawDesc = "" +
 	"\bduration\x18\x04 \x01(\v2\x19.google.protobuf.DurationR\bduration\x127\n" +
 	"\n" +
 	"renditions\x18\x05 \x03(\v2\x17.svp.media.v1.RenditionR\n" +
-	"renditions\"n\n" +
+	"renditions\x120\n" +
+	"\x14preview_playlist_key\x18\x06 \x01(\tR\x12previewPlaylistKey\"n\n" +
 	"\tRendition\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12\x14\n" +
 	"\x05width\x18\x02 \x01(\x05R\x05width\x12\x16\n" +
@@ -438,13 +460,14 @@ const file_svp_media_v1_events_proto_rawDesc = "" +
 	"\x0fTranscodeFailed\x12\x19\n" +
 	"\bvideo_id\x18\x01 \x01(\tR\avideoId\x12<\n" +
 	"\x06reason\x18\x02 \x01(\x0e2$.svp.media.v1.TranscodeFailureReasonR\x06reason\x12\x16\n" +
-	"\x06detail\x18\x03 \x01(\tR\x06detail*\xfb\x01\n" +
+	"\x06detail\x18\x03 \x01(\tR\x06detail*\xab\x02\n" +
 	"\x16TranscodeFailureReason\x12(\n" +
 	"$TRANSCODE_FAILURE_REASON_UNSPECIFIED\x10\x00\x12+\n" +
 	"'TRANSCODE_FAILURE_REASON_SOURCE_MISSING\x10\x01\x12*\n" +
 	"&TRANSCODE_FAILURE_REASON_INVALID_INPUT\x10\x02\x12.\n" +
 	"*TRANSCODE_FAILURE_REASON_DURATION_EXCEEDED\x10\x03\x12.\n" +
-	"*TRANSCODE_FAILURE_REASON_RETRIES_EXHAUSTED\x10\x04B\xb0\x01\n" +
+	"*TRANSCODE_FAILURE_REASON_RETRIES_EXHAUSTED\x10\x04\x12.\n" +
+	"*TRANSCODE_FAILURE_REASON_PREVIEW_TOO_SHORT\x10\x05B\xb0\x01\n" +
 	"\x10com.svp.media.v1B\vEventsProtoP\x01Z=github.com/anhnvcoder/svp-backend/gen/go/svp/media/v1;mediav1\xa2\x02\x03SMX\xaa\x02\fSvp.Media.V1\xca\x02\fSvp\\Media\\V1\xe2\x02\x18Svp\\Media\\V1\\GPBMetadata\xea\x02\x0eSvp::Media::V1b\x06proto3"
 
 var (

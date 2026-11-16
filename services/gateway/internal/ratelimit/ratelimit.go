@@ -61,8 +61,13 @@ var (
 	Upload     = Class{Name: "upload", Limit: Limit{30, time.Hour, 10}, Fallback: Limit{15, time.Hour, 5}}
 	Write      = Class{Name: "write", Limit: Limit{120, time.Minute, 60}}
 	Read       = Class{Name: "read", Limit: Limit{600, time.Minute, 200}}
-	// Refresh covers /auth/refresh and /auth/logout by client IP. A session
-	// refreshes about once an hour, so 60 a minute serves a thousand sessions behind one NAT;
+	// LoginAccount covers the logins of one email from every IP, by EmailHash, so guessing spread over many
+	// addresses is held to 100 tries a day per account. A pair the Limiter knows (see KnownPair) skips it, so an
+	// attacker spending the bucket does not lock the owner out of the addresses they logged in from. An email
+	// without an account counts the same, so the 429 does not tell whether it exists.
+	LoginAccount = Class{Name: "login-account", Limit: Limit{100, 24 * time.Hour, 10}, Fallback: Limit{50, 24 * time.Hour, 5}}
+	// Refresh covers /auth/refresh and /auth/logout by client IP. A session refreshes about once
+	// every 15 minutes, the access token's lifetime, so 60 a minute serves some 900 sessions behind one NAT;
 	// guessing a 256-bit token is hopeless anyway, so the limit guards user-service, which runs
 	// one transaction per call, rather than the tokens.
 	Refresh = Class{Name: "refresh", Limit: Limit{60, time.Minute, 30}, Fallback: Limit{30, time.Minute, 15}}
@@ -75,7 +80,7 @@ var (
 )
 
 // classes are the classes above, whose decision series New creates at zero.
-var classes = []Class{Register, LoginIP, LoginEmail, Upload, Write, Read, Refresh, Public}
+var classes = []Class{Register, LoginIP, LoginEmail, LoginAccount, Upload, Write, Read, Refresh, Public}
 
 // gcraScript is the GCRA step, atomic in Redis. KEYS[1] holds the theoretical arrival time
 // (TAT) in Unix milliseconds; ARGV[1] is the interval T and ARGV[2] the burst. Time comes from

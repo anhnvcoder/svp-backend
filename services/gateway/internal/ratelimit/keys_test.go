@@ -78,3 +78,20 @@ func TestLoginEmailID(t *testing.T) {
 		t.Error("another email or IP shares the id")
 	}
 }
+
+func TestEmailHash(t *testing.T) {
+	t.Parallel()
+	// The first 32 hex characters of the SHA-256 of "a@example.com", as shasum -a 256 prints them.
+	const want = "08168cd80dfd534ab0f10af10f1303fe"
+	for _, email := range []string{"a@example.com", "  A@Example.COM ", "\tA@EXAMPLE.com\n"} {
+		if got := EmailHash(email); got != want {
+			t.Errorf("EmailHash(%q) = %q, want %q", email, got, want)
+		}
+	}
+	if EmailHash("b@example.com") == want {
+		t.Error("another email shares the hash")
+	}
+	if got := LoginEmailID("192.0.2.1", " A@Example.com"); got != "192.0.2.1:"+want {
+		t.Errorf("LoginEmailID = %q, want the IP, a colon and EmailHash", got)
+	}
+}

@@ -145,6 +145,6 @@ Phụ lục: [`appendix/0010-redis-ratelimit-cache-resilience-stage2c.md`](appen
 ### Chỉnh bởi
 
 - §2: [0016](0016-web-client.md): bảng lớp rate limit thêm `refresh`.
-- §2: [0018](0018-web-profiles-public-video-upload.md): thêm lớp `public`.
+- §2: [0018](0018-web-profiles-public-video-upload.md): thêm lớp `public`; [0069](0069-auth-hardening.md): bảng lớp thêm `login-account` (theo email trên mọi IP, cặp (IP, email) đã đăng nhập thành công không đếm); câu "không HMAC (khoá sống tối đa 30 phút)" không còn đúng: khoá `login-account` sống tới 144 phút, khoá cặp đã biết 30 ngày, vẫn SHA-256 không khoá (lý do ở 0069 §2).
 - §4: [0031](0031-chaos-findings-feed-engagement-tempo.md): bulkhead "không thêm" và timeout "một hạn chung" cho Like/Unlike của engagement-service bị thay một phần: hai pool Postgres tách ngân sách, hạn ghi 1 s phía server, lỗi Postgres trả `DEPENDENCY_UNAVAILABLE` không thử lại.
 - §1: [0053](0053-msk-elasticache-valkey.md): compose chạy container `valkey` TLS, user theo db và tiền tố, `REDIS_URL` dạng `rediss://`, thay Redis native `redis://host.docker.internal`.

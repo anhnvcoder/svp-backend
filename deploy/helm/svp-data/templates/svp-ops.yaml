@@ -1,28 +1,33 @@
 {{- /*
-The operations CLI of the cluster: the only way scripts, drills, runbooks and session commands reach Kafka and Valkey,
-on every platform alike (kubectl exec deploy/svp-ops -c kafka -- /opt/svp/bin/svp-kafka ..., -c valkey --
-/opt/svp/bin/svp-valkey ...), as svp-admin and svp-ops, or as another user with SVP_AS_USER and its password on stdin.
+The operations CLI of the cluster: the only way scripts, drills, runbooks and session commands reach Kafka, Valkey and
+the services' Postgres data, on every platform alike (kubectl exec deploy/svp-ops -c kafka -- /opt/svp/bin/svp-kafka,
+-c valkey -- /opt/svp/bin/svp-valkey, -c postgres -- /opt/svp/bin/svp-pg), as svp-admin, svp-ops, another user with
+SVP_AS_USER and its password on stdin, or read-only as the app role of video, engagement or feed.
 */}}
 
 {{- /*
-The pod holds the passwords of svp-admin and svp-ops (Secret svp-ops): no ServiceAccount token, no Service, no ingress,
-egress only to Kafka on 9096 and Valkey on 6379 (networkpolicies.yaml), Pod Security restricted.
+The pod holds the passwords of svp-admin and svp-ops (Secret svp-ops) and of three app roles (pg-roles): no
+ServiceAccount token, no Service, no ingress, egress only to Kafka on 9096, Valkey on 6379 and Postgres on 5432
+(networkpolicies.yaml), Pod Security restricted.
 */}}
 
 {{- /* Design notes: docs/explanation/deployment.md. */}}
 {{- $kafkaExternal := include "svp-data.kafkaExternal" . }}
 {{- $valkeyExternal := include "svp-data.valkeyExternal" . }}
+{{- $pgExternal := include "svp-data.postgresExternal" . }}
 apiVersion: v1
 kind: ConfigMap
 metadata:
   name: svp-ops-bin
   namespace: {{ .Release.Namespace }}
 data:
-  # deploy/ops/ through symlinks: compose runs the same two wrappers.
+  # deploy/ops/ through symlinks: compose runs the same svp-kafka and svp-valkey.
   svp-kafka: |-
     {{- .Files.Get "files/svp-kafka" | nindent 4 }}
   svp-valkey: |-
     {{- .Files.Get "files/svp-valkey" | nindent 4 }}
+  svp-pg: |-
+    {{- .Files.Get "files/svp-pg" | nindent 4 }}
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -47,8 +52,8 @@ spec:
       # No KAFKA_* variables of Service kafka in the environment, which Kafka's own scripts read as settings.
       enableServiceLinks: false
       securityContext:
-        # The appuser of image apache/kafka for both containers (valkey-cli needs no account); fsGroup lets them read
-        # the CA certificate mounted with mode 0440.
+        # The appuser of image apache/kafka for containers kafka and valkey (valkey-cli needs no account); fsGroup lets
+        # every container read the CA certificates and passwords mounted with mode 0440.
         {{- include "svp-data.podSecurityContext" (dict "uid" 1000 "gid" 1000 "fsGroup" true) | nindent 8 }}
       containers:
         - name: kafka
@@ -108,6 +113,33 @@ spec:
             {{- end }}
             - name: tmp
               mountPath: /tmp
+        - name: postgres
+          image: {{ .Values.postgres.image }}
+          command: ["sleep", "infinity"]
+          env:
+            - name: SVP_PG_HOST
+              value: {{ if $pgExternal }}{{ .Values.postgres.external.host | quote }}{{ else }}svp-pg-rw{{ end }}
+            - name: SVP_CA_FILE
+              value: /etc/svp-pg-ca/ca.crt
+            - name: SVP_PG_PASSWORD_DIR
+              value: /etc/svp-pg-roles
+          resources:
+            {{- toYaml .Values.svpOps.resources.postgres | nindent 12 }}
+          securityContext:
+            {{- include "svp-data.containerSecurityContext" . | nindent 12 }}
+            # The image's postgres user, as in Job pg-bootstrap: an account its passwd file knows, which libpq looks up.
+            runAsUser: 26
+            runAsGroup: 102
+          volumeMounts:
+            - name: bin
+              mountPath: /opt/svp/bin
+              readOnly: true
+            - name: pg-ca
+              mountPath: /etc/svp-pg-ca
+              readOnly: true
+            - name: pg-roles
+              mountPath: /etc/svp-pg-roles
+              readOnly: true
       volumes:
         - name: bin
           configMap:
@@ -122,3 +154,18 @@ spec:
         - name: tmp
           emptyDir:
             sizeLimit: 16Mi
+        # The CA of the platform's Postgres: the local CA for svp-pg, the RDS bundle of chart svp-cluster for RDS.
+        - name: pg-ca
+          secret:
+            secretName: {{ if $pgExternal }}rds-ca{{ else }}local-ca{{ end }}
+            defaultMode: 0440
+        # Only the app roles svp-pg logs in as, one file per service. Files, not variables: the kubelet updates them
+        # when the Secret changes, so a new password needs no restart, and none is in the pod's environment.
+        - name: pg-roles
+          secret:
+            secretName: pg-roles
+            defaultMode: 0440
+            items:
+              - {key: SVP_VIDEO_APP_DB_PASSWORD, path: video}
+              - {key: SVP_ENGAGEMENT_APP_DB_PASSWORD, path: engagement}
+              - {key: SVP_FEED_APP_DB_PASSWORD, path: feed}

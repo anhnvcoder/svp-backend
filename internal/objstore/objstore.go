@@ -5,7 +5,8 @@
 // enforces the limit and the file never passes through a service.
 //
 // A key is the contract key verbatim, and its prefix picks the bucket: "uploads/<video_id>" lives
-// in the uploads bucket, "media/<video_id>/..." in the media bucket.
+// in the uploads bucket; "media/<video_id>/...", "premium/<video_id>/...", "preview/<video_id>/..."
+// and "transcode-jobs/..." in the media bucket.
 package objstore
 
 import (
@@ -27,6 +28,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/credentials"
 	"github.com/aws/aws-sdk-go-v2/credentials/endpointcreds"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
+	"github.com/aws/aws-sdk-go-v2/service/s3/types"
 
 	"github.com/anhnvcoder/svp-backend/internal/envcfg"
 
@@ -35,35 +37,53 @@ import (
 	"go.opentelemetry.io/contrib/instrumentation/github.com/aws/aws-sdk-go-v2/otelaws" //nolint:staticcheck // see above
 )
 
-// Key prefixes of the contract; each one maps to its own bucket.
+// Key prefixes of the contract and the bucket each one maps to.
 const (
 	UploadsPrefix = "uploads/"
-	MediaPrefix   = "media/"
+	// MediaPrefix holds the objects of every video that is not premium; anyone may read them.
+	MediaPrefix = "media/"
+	// PremiumPrefix holds every rendition and playlist of a premium video. Nobody reads it
+	// anonymously: only URLs signed for the viewer of the video and rendition.
+	PremiumPrefix = "premium/"
+	// PreviewPrefix holds the public preview and the thumbnail of a premium video.
+	PreviewPrefix = "preview/"
+	// JobsPrefix holds the records of transcode jobs, in the media bucket but outside media/: the
+	// CDN does not serve them and deleting a video's media/<video_id>/ leaves them.
+	JobsPrefix = "transcode-jobs/"
 )
 
 var (
-	// ErrInvalidKey is returned for a key (or prefix) outside uploads/ and media/, or naming no
-	// object under them.
-	ErrInvalidKey = errors.New("objstore: key must start with uploads/ or media/ and name an object")
+	// ErrInvalidKey is returned for a key (or prefix) outside uploads/, media/, premium/, preview/
+	// and transcode-jobs/, or naming no object under them.
+	ErrInvalidKey = errors.New("objstore: key must start with uploads/, media/, premium/, preview/ or transcode-jobs/ and name an object")
 	// ErrNotFound is returned when the object (or its bucket) does not exist.
 	ErrNotFound = errors.New("objstore: object not found")
 	// ErrAccessDenied is returned when the credential may not do the operation. It is a
 	// server-side configuration fault (credential or policy), not the caller's input, so callers
 	// treat it as temporary and retry: fixing the policy makes the same call succeed.
 	ErrAccessDenied = errors.New("objstore: access denied")
-	// ErrTooLarge is returned by Download for an object larger than the limit.
+	// ErrTooLarge is returned by Download and Read for an object larger than the limit.
 	ErrTooLarge = errors.New("objstore: object larger than the limit")
 	// ErrExists is returned by Create when the key already holds an object (HTTP 412).
 	ErrExists = errors.New("objstore: object already exists")
 )
 
-// IsMediaKey reports whether key names an object of video videoID in the media bucket:
-// "media/<videoID>/" followed by one or more segments, each made of letters, digits, ".", "_"
-// and "-" only, and not "." or "..". The gateway puts the key into a URL as it is, and a
-// URL parser reads "%2e%2e" as ".." and "\" as "/", so any other character could make a player
-// resolve the URL elsewhere.
+// IsMediaKey reports whether key names an object of video videoID under media/: IsKeyUnder with
+// MediaPrefix.
 func IsMediaKey(key, videoID string) bool {
-	rest, ok := strings.CutPrefix(key, MediaPrefix+videoID+"/")
+	return IsKeyUnder(MediaPrefix, key, videoID)
+}
+
+// IsKeyUnder reports whether key names an object of video videoID under prefix, which must be
+// MediaPrefix, PremiumPrefix or PreviewPrefix: "<prefix><videoID>/" followed by one or more
+// segments, each made of letters, digits, ".", "_" and "-" only, and not "." or "..". The key goes
+// into a URL as it is, and a URL parser reads "%2e%2e" as ".." and "\" as "/", so any other
+// character could make a player resolve the URL elsewhere. Any other prefix is false.
+func IsKeyUnder(prefix, key, videoID string) bool {
+	if prefix != MediaPrefix && prefix != PremiumPrefix && prefix != PreviewPrefix {
+		return false
+	}
+	rest, ok := strings.CutPrefix(key, prefix+videoID+"/")
 	if !ok || rest == "" {
 		return false
 	}
@@ -91,6 +111,9 @@ const (
 const (
 	// maxPresignTTL is the longest life PresignPost gives a form.
 	maxPresignTTL = 15 * time.Minute
+	// maxPresignGetTTL is the longest life PresignGet gives a URL. A playlist signs its segments for
+	// the length of the video plus at most 20 minutes, and a video lasts a few minutes at most.
+	maxPresignGetTTL = time.Hour
 	// credentialRefreshWindow is how long before its expiry a fetched credential stops signing
 	// forms. A form stops working when the credential that signed it expires, so the window is
 	// longer than the longest form, plus a margin for clock skew and the time the client takes to
@@ -273,6 +296,13 @@ func New(cfg Config) (*Store, error) {
 	}, nil
 }
 
+// CallCredentials returns the credential that signs calls under cfg, for clients of other AWS
+// services that run with the same identity as the store.
+func CallCredentials(cfg Config) (aws.CredentialsProvider, error) {
+	calls, _, err := newCredentials(cfg)
+	return calls, err
+}
+
 // newCredentials returns the credential providers of cfg.Credentials, one for calls to storage and
 // one for signing forms, checking that exactly the fields of that mode are set.
 func newCredentials(cfg Config) (calls, forms aws.CredentialsProvider, err error) {
@@ -326,7 +356,10 @@ func (s *Store) bucket(key string) (string, error) {
 	switch {
 	case strings.HasPrefix(key, UploadsPrefix) && len(key) > len(UploadsPrefix):
 		return s.uploadsBucket, nil
-	case strings.HasPrefix(key, MediaPrefix) && len(key) > len(MediaPrefix):
+	case strings.HasPrefix(key, MediaPrefix) && len(key) > len(MediaPrefix),
+		strings.HasPrefix(key, PremiumPrefix) && len(key) > len(PremiumPrefix),
+		strings.HasPrefix(key, PreviewPrefix) && len(key) > len(PreviewPrefix),
+		strings.HasPrefix(key, JobsPrefix) && len(key) > len(JobsPrefix):
 		return s.mediaBucket, nil
 	default:
 		return "", ErrInvalidKey
@@ -400,6 +433,30 @@ func policyExpiration(policy string) (time.Time, error) {
 	return doc.Expiration, nil
 }
 
+// PresignGet returns a URL on the public endpoint that lets its holder GET exactly key until ttl
+// from now, signed with SigV4 (X-Amz-Expires is ttl in whole seconds, rounded down). Only keys under
+// premium/ can be signed, and ttl is 1 second to 1 hour. Signing is local, as for PresignPost, and
+// with container credentials a URL also stops working when the credential that signed it expires,
+// at least 20 minutes after signing. The URL grants read access: never log it.
+func (s *Store) PresignGet(ctx context.Context, key string, ttl time.Duration) (string, error) {
+	if !strings.HasPrefix(key, PremiumPrefix) {
+		return "", ErrInvalidKey
+	}
+	bucket, err := s.bucket(key)
+	if err != nil {
+		return "", err
+	}
+	if ttl < time.Second || ttl > maxPresignGetTTL {
+		return "", fmt.Errorf("objstore: presign get needs a ttl of 1s to %s", maxPresignGetTTL)
+	}
+	req, err := s.presign.PresignGetObject(ctx, &s3.GetObjectInput{Bucket: aws.String(bucket), Key: aws.String(key)},
+		s3.WithPresignExpires(ttl))
+	if err != nil {
+		return "", fmt.Errorf("objstore: presign get: %w", err)
+	}
+	return req.URL, nil
+}
+
 // ObjectInfo is what Head reports about an object.
 type ObjectInfo struct {
 	Size        int64
@@ -459,6 +516,32 @@ func (s *Store) Download(ctx context.Context, key, path string, maxBytes int64) 
 		return fmt.Errorf("download %s: %w", key, ErrTooLarge)
 	}
 	return nil
+}
+
+// Read returns the content of key, a small object such as a playlist. An object larger than
+// maxBytes fails with ErrTooLarge; errors are classified as for Head.
+func (s *Store) Read(ctx context.Context, key string, maxBytes int64) ([]byte, error) {
+	bucket, err := s.bucket(key)
+	if err != nil {
+		return nil, err
+	}
+	out, err := s.client.GetObject(ctx, &s3.GetObjectInput{Bucket: aws.String(bucket), Key: aws.String(key)})
+	if err != nil {
+		return nil, classify("read "+key, err)
+	}
+	defer func() { _ = out.Body.Close() }()
+	if aws.ToInt64(out.ContentLength) > maxBytes {
+		return nil, fmt.Errorf("read %s: %w", key, ErrTooLarge)
+	}
+	// As in Download: the length header can be missing, so the limit is checked on what is read.
+	data, err := io.ReadAll(io.LimitReader(out.Body, maxBytes+1))
+	if err != nil {
+		return nil, fmt.Errorf("objstore: read %s: %w", key, err)
+	}
+	if int64(len(data)) > maxBytes {
+		return nil, fmt.Errorf("read %s: %w", key, ErrTooLarge)
+	}
+	return data, nil
 }
 
 // Upload writes the file at path to key with the given content type, and with header
@@ -525,6 +608,71 @@ func (s *Store) Exists(ctx context.Context, key string) (bool, error) {
 		return false, classify("list "+key, err)
 	}
 	return len(out.Contents) > 0 && aws.ToString(out.Contents[0].Key) == key, nil
+}
+
+// List returns the key of every object whose key starts with prefix, which must end with "/", in
+// key order.
+func (s *Store) List(ctx context.Context, prefix string) ([]string, error) {
+	bucket, err := s.bucket(prefix)
+	if err != nil {
+		return nil, err
+	}
+	if !strings.HasSuffix(prefix, "/") {
+		return nil, ErrInvalidKey
+	}
+	in := &s3.ListObjectsV2Input{Bucket: aws.String(bucket), Prefix: aws.String(prefix)}
+	if s.listPageSize > 0 {
+		in.MaxKeys = aws.Int32(s.listPageSize)
+	}
+	var keys []string
+	pages := s3.NewListObjectsV2Paginator(s.client, in)
+	for pages.HasMorePages() {
+		page, err := pages.NextPage(ctx)
+		if err != nil {
+			return nil, classify("list "+prefix, err)
+		}
+		for _, obj := range page.Contents {
+			keys = append(keys, aws.ToString(obj.Key))
+		}
+	}
+	return keys, nil
+}
+
+// Copy copies the object at src to dst in the same bucket with new metadata: Content-Type
+// contentType and, unless empty, Cache-Control cacheControl, nothing else kept (MetadataDirective
+// REPLACE). With dst equal to src it rewrites an object's headers in place, which storage only
+// accepts because the metadata is replaced.
+func (s *Store) Copy(ctx context.Context, src, dst, contentType, cacheControl string) error {
+	bucket, err := s.bucket(src)
+	if err != nil {
+		return err
+	}
+	if b, err := s.bucket(dst); err != nil || b != bucket {
+		return ErrInvalidKey
+	}
+	in := &s3.CopyObjectInput{
+		Bucket:            aws.String(bucket),
+		Key:               aws.String(dst),
+		CopySource:        aws.String(copySource(bucket, src)),
+		MetadataDirective: types.MetadataDirectiveReplace,
+		ContentType:       aws.String(contentType),
+	}
+	if cacheControl != "" {
+		in.CacheControl = aws.String(cacheControl)
+	}
+	if _, err := s.client.CopyObject(ctx, in); err != nil {
+		return classify("copy "+src+" to "+dst, err)
+	}
+	return nil
+}
+
+// copySource is the x-amz-copy-source of key in bucket: each path segment URL-encoded.
+func copySource(bucket, key string) string {
+	segs := strings.Split(key, "/")
+	for i, seg := range segs {
+		segs[i] = url.PathEscape(seg)
+	}
+	return bucket + "/" + strings.Join(segs, "/")
 }
 
 // Delete removes key; a key that does not exist is not an error.

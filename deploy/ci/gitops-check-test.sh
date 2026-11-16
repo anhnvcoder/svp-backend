@@ -181,8 +181,8 @@ else
 fi
 t=$(copy)
 rm "$t/envs/stg/images/web.yaml"
-check "six image files of seven" "$t" "envs/stg/images/ holds"
-render "six image files of seven (root chart)" "$t" stg "envs/stg/images/web.yaml is missing"
+check "an image file missing" "$t" "envs/stg/images/ holds"
+render "an image file missing (root chart)" "$t" stg "envs/stg/images/web.yaml is missing"
 
 t=$(copy)
 echo 'replicas: 2' >>"$t/envs/stg/images/gateway.yaml"
@@ -617,6 +617,33 @@ EOF
 policy_case "an image where the policy does not read fails as outside it" 1 images-pinned \
   "  base/outside.yaml: quay.io/example/worker:v2 (in a field policy images-pinned does not read: add it there)" \
   base/outside.yaml
+# Go templates in the text (istiod's pod templates) are no image; a real one beside them, on the next line or on the
+# same line, still is.
+cat >"$pd/base/template.yaml" <<'EOF'
+apiVersion: example.com/v1
+kind: Thing
+metadata:
+  name: thing
+  namespace: platform
+spec:
+  podTemplate: |
+    image: "{{ .ProxyImage }}"
+    image: {{ annotation .ObjectMeta `example.com/image` .Values.image | quote }}
+    args: ["--proxy-image={{ .ProxyImage }}"]
+EOF
+policy_case "a Go template where an image goes is no image" 0 images-pinned \
+  "ok    policy images-pinned: 1 resources pass" base/template.yaml
+{
+  cat "$pd/base/template.yaml"
+  echo '    image: quay.io/example/next:v1'
+  echo '    run: "{{ .Bin }} quay.io/example/beside:v1"'
+} >"$pd/base/template-beside.yaml"
+policy_case "an image on the line after a Go template" 1 images-pinned \
+  "  base/template-beside.yaml: quay.io/example/next:v1 (in a field policy images-pinned does not read: add it there)" \
+  base/template-beside.yaml
+policy_case "an image on the line of a Go template" 1 images-pinned \
+  "  base/template-beside.yaml: quay.io/example/beside:v1 (in a field policy images-pinned does not read: add it there)" \
+  base/template-beside.yaml
 cat >"$pd/base/route.yaml" <<'EOF'
 apiVersion: gateway.networking.k8s.io/v1
 kind: HTTPRoute
@@ -682,7 +709,6 @@ fi
 # repository on its branch main: k0 holds the policy's values as they were before the table of release sources, k2
 # the table of the rename (backend and web under their new names, the retired oldbackend and oldweb under the old
 # ones, without promoter), k3 the table of the working tree; origin/main is k3.
-services=(gateway user-service video-service engagement-service feed-service media-worker web)
 code=$work/code
 mkdir -p "$code/deploy/k8s" "$code/deploy/helm/svp-policy/files" "$code/deploy/helm/svp-cluster" \
   "$code/deploy/observability/otelcol"
@@ -760,18 +786,22 @@ cp "$repo_root/deploy/helm/svp-policy/files/sources.json" "$code/deploy/helm/svp
 cg add -A && cg commit -q -m "the table of the working tree"
 k3=$(cg rev-parse HEAD)
 cg update-ref refs/remotes/origin/main "$k3"
-# sources_tree STG_REV PREFIX WEB: a copy of the tree with stg at STG_REV and prd at k3 of the throwaway repository;
-# the six services of stg released under PREFIX, web of stg WEB ("repository"); prd runs the releases of the
-# working tree's sources. A tag is any 12 hex: which commit built a release is step 5's.
+# sources_tree STG_REV PREFIX WEB: a copy of the tree with stg at STG_REV and prd at k3 of the throwaway repository,
+# one image file per service of the table at that commit (the working tree's when it has none); the backend services
+# of stg released under PREFIX, web of stg WEB ("repository"); prd runs the releases of the working tree's sources. A
+# tag is any 12 hex: which commit built a release is step 5's.
 sources_tree() {
-  local t env rev svc repo
+  local t env rev svc repo svcs
   t=$(copy)
   for env in stg prd; do
     rev=$1
     [ "$env" = stg ] || rev=$k3
     printf 'revision: %s\npodSecurityVersion: v1.36\ncollectorConfigSha256: %s\n' "$rev" \
       "$(shasum -a 256 <"$code/deploy/observability/otelcol/k8s-config.yaml" | cut -d' ' -f1)" >"$t/envs/$env/charts.yaml"
-    for svc in "${services[@]}"; do
+    svcs=$(cg show "$rev:deploy/helm/svp-policy/files/sources.json" 2>/dev/null ||
+      cat "$code/deploy/helm/svp-policy/files/sources.json")
+    rm -f "$t"/envs/"$env"/images/*.yaml
+    for svc in $(jq -r '[.sources[].services[]] | unique | .[]' <<<"$svcs"); do
       repo=ghcr.io/anhnvcoder/svp-backend/$svc
       [ "$svc" != web ] || repo=ghcr.io/anhnvcoder/svp-frontend/web
       if [ "$env" = stg ]; then
@@ -801,13 +831,13 @@ tree_check() {
 }
 t=$(sources_tree "$k2" ghcr.io/anhnvcoder/short-video-platform/ ghcr.io/anhnvcoder/svp-web/web)
 tree_check "sources: the charts of the rename with the releases of the two retired sources" 0 \
-  "ok    envs/stg/images/: seven releases, each of a release source the policy of ${k2:0:12} admits" "$t"
+  "ok    envs/stg/images/: one release per service, each of a release source the policy of ${k2:0:12} admits" "$t"
 t=$(sources_tree "$k2" ghcr.io/anhnvcoder/svp-backend/ ghcr.io/anhnvcoder/svp-frontend/web)
 tree_check "sources: the charts of the rename with the releases of the new sources" 0 \
-  "ok    envs/stg/images/: seven releases, each of a release source the policy of ${k2:0:12} admits" "$t"
+  "ok    envs/stg/images/: one release per service, each of a release source the policy of ${k2:0:12} admits" "$t"
 t=$(sources_tree "$k3" ghcr.io/anhnvcoder/svp-backend/ ghcr.io/anhnvcoder/svp-frontend/web)
 tree_check "sources: the charts of the working tree with the releases of the new sources" 0 \
-  "ok    envs/stg/images/: seven releases, each of a release source the policy of ${k3:0:12} admits" "$t"
+  "ok    envs/stg/images/: one release per service, each of a release source the policy of ${k3:0:12} admits" "$t"
 t=$(sources_tree "$k3" ghcr.io/anhnvcoder/svp-backend/ ghcr.io/anhnvcoder/svp-web/web)
 tree_check "sources: the charts of the working tree refuse a release of a retired source" 1 \
   "envs/stg/images/web.yaml: the image must be a release of ghcr.io/anhnvcoder/svp-frontend/web with its tag and digest" "$t"
@@ -816,6 +846,35 @@ tree_check "sources: charts from before the table stop, naming the commit" 1 \
   "FAIL  commit ${k0:0:12} has no deploy/helm/svp-policy/files/sources.json: it is from before the table of release sources" "$t"
 tree_check "sources: charts from before the table: the environment that pins them" 1 \
   "FAIL  envs/stg/charts.yaml: the release sources of ${k0:0:12} cannot be read (above)" "$t"
+# A new release: a service of the working tree's table that k2 does not publish. stg at k2 holds no image file of it,
+# which a check at stg's commit accepts; at k3, which builds it, the file is required. --worktree accepts the missing
+# file with a note, since only the promote of a commit that builds the service writes it (the check goes on to render
+# the charts of the throwaway repository, which has none: only its step 1 is read here).
+nr=$(jq -rn --argjson old "$(cg show "$k2:deploy/helm/svp-policy/files/sources.json")" \
+  --argjson new "$(cat "$code/deploy/helm/svp-policy/files/sources.json")" \
+  '([$new.sources[].services[]] - [$old.sources[].services[]])[0] // ""')
+if [ -z "$nr" ]; then
+  fail "new release: the working tree's table publishes no service that the table of the rename does not"
+else
+  t=$(sources_tree "$k2" ghcr.io/anhnvcoder/svp-backend/ ghcr.io/anhnvcoder/svp-frontend/web)
+  tree_check "new release: stg at a commit that does not build $nr holds no file of it" 0 \
+    "ok    envs/stg/images/: one release per service, each of a release source the policy of ${k2:0:12} admits" "$t"
+  rc=0
+  out=$(env GIT_ALLOW_PROTOCOL=file "$code/deploy/ci/gitops-check.sh" --worktree "$t" 2>&1) || rc=$?
+  want="note  envs/stg/images/ has no $nr.yaml: $nr is a new release, which the commit stg pins (${k2:0:12}) does not build; the promote of one that does writes the file"
+  if [[ $out == *"$want"* ]] && [[ $out == *"ok    the tree keeps the rules of deploy/ci/gitops-tree-policies/"* ]] &&
+    [[ $out != *"FAIL  envs/"* ]]; then
+    ok "new release: --worktree passes the tree with a note naming $nr and stg"
+  else
+    fail "new release: --worktree (exit $rc), want '$want', the tree's rules kept:"$'\n'"$(sed 's/^/      /' <<<"$out")"
+  fi
+  t=$(sources_tree "$k3" ghcr.io/anhnvcoder/svp-backend/ ghcr.io/anhnvcoder/svp-frontend/web)
+  rm "$t/envs/stg/images/$nr.yaml"
+  got=$(cd "$t/envs/stg/images" && ls -A | LC_ALL=C sort | paste -sd' ' -)
+  want=$(cd "$t/envs/stg/images" && { ls -A; echo "$nr.yaml"; } | LC_ALL=C sort | paste -sd' ' -)
+  tree_check "new release: stg at a commit that builds $nr fails without its file" 1 \
+    "FAIL  envs/stg/images/ holds '$got': exactly one file per service, $want" "$t"
+fi
 # A conftest that gives no answer fails the check instead of passing: a policy that does not compile (conftest stops,
 # no result), a package renamed (no result from it). On copies of the throwaway repository.
 t=$(sources_tree "$k3" ghcr.io/anhnvcoder/svp-backend/ ghcr.io/anhnvcoder/svp-frontend/web)
@@ -852,6 +911,88 @@ if [ "$rc" = 1 ] && [[ $out == *"$want"* ]] && [[ $out != *"check envs/"* ]]; th
 else
   fail "values-check: an image file naming the repository of another service (exit $rc, want 1, '$want', no release verified):"$'\n'"$(sed 's/^/      /' <<<"$out")"
 fi
+
+# The services an image file may name are those of the release sources at the commit its environment pins, not this
+# checker's own list. k6 builds zzz-service, which the docker-bake.json of this checker does not know: stg pins k6, prd
+# k3 (a commit that does not build it), k0 predates the table (there the checker's own list applies). Built without
+# touching the working tree of the throwaway repository.
+idx=$work/k6.index
+GIT_INDEX_FILE=$idx cg read-tree "$k3"
+blob=$(cg show "$k3:deploy/helm/svp-policy/files/sources.json" | jq '.sources[0].services += ["zzz-service"]' | cg hash-object -w --stdin)
+GIT_INDEX_FILE=$idx cg update-index --cacheinfo "100644,$blob,deploy/helm/svp-policy/files/sources.json"
+k6=$(cg commit-tree "$(GIT_INDEX_FILE=$idx cg write-tree)" -p "$k3" -m "a service the checker does not know")
+# vc_run DIR BASE: values-check.sh --gitops DIR BASE of the throwaway repository, as a machine runs it; sets $out, $rc.
+vc_run() {
+  rc=0
+  out=$(env -i PATH="$PATH" HOME="$HOME" AWS_CONFIG_FILE=/dev/null AWS_SHARED_CREDENTIALS_FILE=/dev/null \
+    TMPDIR="${TMPDIR:-/tmp}" "$code/deploy/ci/values-check.sh" --gitops "$1" "$2" 2>&1) || rc=$?
+}
+# vc_expect NAME WANT_RC MESSAGE...: the last vc_run exited WANT_RC and printed each MESSAGE.
+vc_expect() {
+  local name=$1 want=$2 m
+  shift 2
+  [ "$rc" = "$want" ] || {
+    fail "$name (exit $rc, want $want):"$'\n'"$(sed 's/^/      /' <<<"$out")"
+    return
+  }
+  for m in "$@"; do
+    [[ $out == *"$m"* ]] || {
+      fail "$name: no '$m' in:"$'\n'"$(sed 's/^/      /' <<<"$out")"
+      return
+    }
+  done
+  ok "$name"
+}
+# vc_tree REV: a git repository holding sources_tree at REV for stg, with no digest in any image file, committed.
+vc_tree() {
+  local t f
+  t=$(sources_tree "$1" ghcr.io/anhnvcoder/svp-backend/ ghcr.io/anhnvcoder/svp-frontend/web)
+  for f in "$t"/envs/*/images/*.yaml; do sed -i.bak 's/^  digest: .*/  digest: ""/' "$f" && rm "$f.bak"; done
+  git init -q "$t" && gw "$t" add -A && gw "$t" -c commit.gpgsign=false commit -q -m base
+  echo "$t"
+}
+t=$(sources_tree "$k6" ghcr.io/anhnvcoder/svp-backend/ ghcr.io/anhnvcoder/svp-frontend/web)
+for f in "$t"/envs/*/images/*.yaml; do sed -i.bak 's/^  digest: .*/  digest: ""/' "$f" && rm "$f.bak"; done
+vc_run "$t" ""
+vc_expect "values-check: a service of the commit stg pins that this checker does not know is read" 0 \
+  "ok    envs/stg/images/zzz-service.yaml: no digest" "ok    envs/stg/images/gateway.yaml: no digest"
+[[ $out != *"envs/prd/images/zzz-service.yaml"* ]] || fail "values-check: prd, which pins k3, is read for zzz-service"
+t=$(vc_tree "$k6")
+base=$(gw "$t" rev-parse HEAD)
+sed -i.bak 's/^  tag: .*/  tag: "000000000000"/' "$t/envs/stg/images/zzz-service.yaml" && rm "$t/envs/stg/images/zzz-service.yaml.bak"
+cp "$t/envs/stg/images/zzz-service.yaml" "$t/envs/stg/images/mystery-service.yaml"
+cp "$t/envs/stg/images/zzz-service.yaml" "$t/envs/prd/images/zzz-service.yaml"
+gw "$t" add -A && gw "$t" -c commit.gpgsign=false commit -q -m "change"
+vc_run "$t" "$base"
+vc_expect "values-check: a changed image file of a new service passes, a name no table knows and a service prd does not build fail" 1 \
+  "ok    envs/stg/images/zzz-service.yaml: no digest" \
+  "FAIL  envs/stg/images/mystery-service.yaml is not the image file of a service" \
+  "FAIL  envs/prd/images/zzz-service.yaml is not the image file of a service"
+# A rollback of stg to k3, which does not build zzz-service, removes its file: a note. The file of a service k3 builds
+# stays required.
+t=$(vc_tree "$k6")
+base=$(gw "$t" rev-parse HEAD)
+sed -i.bak "s/^revision: .*/revision: $k3/" "$t/envs/stg/charts.yaml" && rm "$t/envs/stg/charts.yaml.bak"
+rm "$t/envs/stg/images/zzz-service.yaml"
+gw "$t" add -A && gw "$t" -c commit.gpgsign=false commit -q -m "rollback"
+vc_run "$t" "$base"
+vc_expect "values-check: a rollback to a commit that does not build a service removes its file" 0 \
+  "note  envs/stg/images/zzz-service.yaml was removed: the commit stg pins does not build zzz-service" \
+  "ok    envs/stg/images/gateway.yaml: no digest"
+gw "$t" rm -q envs/stg/images/gateway.yaml && gw "$t" -c commit.gpgsign=false commit -q -m "remove gateway"
+vc_run "$t" "$base"
+vc_expect "values-check: the removed file of a service the pinned commit builds fails" 1 \
+  "FAIL  envs/stg/images/gateway.yaml was removed: the GitOps path needs the image file of every service the commit stg pins builds" \
+  "note  envs/stg/images/zzz-service.yaml was removed"
+# Charts from before the table keep the list of this checker.
+t=$(vc_tree "$k0")
+base=$(gw "$t" rev-parse HEAD)
+cp "$t/envs/stg/images/gateway.yaml" "$t/envs/stg/images/zzz-service.yaml"
+sed -i.bak 's/^  tag: .*/  tag: "000000000000"/' "$t/envs/stg/images/gateway.yaml" && rm "$t/envs/stg/images/gateway.yaml.bak"
+gw "$t" add -A && gw "$t" -c commit.gpgsign=false commit -q -m "change"
+vc_run "$t" "$base"
+vc_expect "values-check: charts from before the table: the list of the checker applies" 1 \
+  "ok    envs/stg/images/gateway.yaml: no digest" "FAIL  envs/stg/images/zzz-service.yaml is not the image file of a service"
 
 # --- collectorConfigSha256: the Collector's files concatenated (k8s-config.yaml, k8s-k3d.yaml, k8s-eks.yaml), a file a
 # revision does not hold adding nothing. k3 holds k8s-config.yaml alone, k4 adds the two destination files, k5 changes
@@ -903,7 +1044,8 @@ ag() { git -C "$at" -c user.name=test -c user.email=test@example.invalid -c comm
 ag init -q && ag add -A && ag commit -q -m "the releases of the working tree's sources"
 a0=$(ag rev-parse HEAD)
 web_bot='svp-web-promoter[bot]' backend_bot='svp-gitops-promoter[bot]'
-six=(gateway user-service video-service engagement-service feed-service media-worker)
+read -r -a backend_services <<<"$(jq -r '.sources[] | select(.name == "backend") | .services | join(" ")' \
+  "$code/deploy/helm/svp-policy/files/sources.json")"
 # image FILE REPOSITORY SEED: writes the image block of FILE in the tree, a digest of its own for SEED.
 image() {
   printf 'image:\n  repository: %s\n  tag: "%s"\n  digest: "sha256:%s"\n' "$2" "${k3:0:12}" \
@@ -948,15 +1090,17 @@ author_case "the bot of svp-frontend moves web of prd" 0 "ok    the pull request
   SVP_CHANGE_REQUEST_AUTHOR="$web_bot"
 from_a0
 echo '# changed' >>"$at/envs/stg/charts.yaml"
-for svc in "${six[@]}"; do image "envs/stg/images/$svc.yaml" "ghcr.io/anhnvcoder/svp-backend/$svc" "s-$svc"; done
-author_case "the bot of backend promotes charts.yaml and the six services to stg" 0 \
-  "ok    the pull request of $backend_bot, $promoted 7 changed files" SVP_CHANGE_REQUEST_AUTHOR="$backend_bot"
+for svc in "${backend_services[@]}"; do image "envs/stg/images/$svc.yaml" "ghcr.io/anhnvcoder/svp-backend/$svc" "s-$svc"; done
+author_case "the bot of backend promotes charts.yaml and its services to stg" 0 \
+  "ok    the pull request of $backend_bot, $promoted $((${#backend_services[@]} + 1)) changed files" \
+  SVP_CHANGE_REQUEST_AUTHOR="$backend_bot"
 from_a0
 echo '# changed' >>"$at/envs/prd/charts.yaml"
-for svc in "${six[@]}"; do image "envs/prd/images/$svc.yaml" "ghcr.io/anhnvcoder/svp-backend/$svc" "p-$svc"; done
+for svc in "${backend_services[@]}"; do image "envs/prd/images/$svc.yaml" "ghcr.io/anhnvcoder/svp-backend/$svc" "p-$svc"; done
 image envs/prd/images/web.yaml ghcr.io/anhnvcoder/svp-frontend/web p-web
 author_case "the bot of backend promotes the whole set of stg to prd, web's release included" 0 \
-  "ok    the pull request of $backend_bot, $promoted 8 changed files" SVP_CHANGE_REQUEST_AUTHOR="$backend_bot"
+  "ok    the pull request of $backend_bot, $promoted $((${#backend_services[@]} + 2)) changed files" \
+  SVP_CHANGE_REQUEST_AUTHOR="$backend_bot"
 from_a0
 echo '# changed' >>"$at/envs/stg/svp-cluster.yaml"
 echo '# changed' >>"$at/base/tempo.yaml"

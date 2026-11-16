@@ -33,9 +33,11 @@ proto/svp/
 - Người gọi không nằm trong request: gateway chuyển tiếp access token đã kiểm trong gRPC metadata `authorization`, service
   kiểm lại rồi lấy người gọi từ `sub` ([xác thực](../architecture.md#64-xác-thực)).
 - API và event mang object key (`uploads/<video_id>`, `media/<video_id>/<version>/master.m3u8`; video `READY` trước khi có
-  version giữ key `media/<video_id>/master.m3u8`), không mang URL; mọi object HLS và thumbnail mang
+  version giữ key `media/<video_id>/master.m3u8`; video premium dưới `premium/`, bản xem thử và thumbnail của nó dưới `preview/`), không
+  mang URL; mọi object HLS và thumbnail mang
   `Cache-Control: max-age=31536000, immutable` ([ADR-0029](../adr/0029-immutable-media-versions.md)); gateway ghép URL
-  công khai từ cấu hình của môi trường. Ngoại lệ: `upload_url` của presigned POST.
+  công khai từ cấu hình của môi trường. Ngoại lệ: `upload_url` của presigned POST và URL đã ký của segment trong playlist mà route phát
+  premium trả ([REST ở gateway](#rest-ở-gateway)).
 - Mỗi RPC có comment ghi ngữ nghĩa, idempotency và các mã lỗi chính.
 
 ## Topic
@@ -142,8 +144,10 @@ Thân lỗi theo RFC 9457 (`Content-Type: application/problem+json`):
   `detail` `"too many requests"`, header `Retry-After` tính bằng giây (làm tròn lên, tối thiểu 1). Khác với 429 do service
   trả qua `RESOURCE_EXHAUSTED` (`TOO_MANY_UPLOADS` của `POST /videos`, `SERVER_BUSY` của login): những lỗi đó không có
   `Retry-After`.
-- Hai reason có mã HTTP riêng thay mã theo bảng: `IDEMPOTENCY_KEY_MISMATCH` (`INVALID_ARGUMENT`) là 422, `VIDEO_NOT_UPLOADING`
-  (`FAILED_PRECONDITION`) là 409 ([ADR-0043](../adr/0043-idempotency-key.md)).
+- Vài reason có mã HTTP riêng thay mã theo bảng (`reasonToHTTP`): `IDEMPOTENCY_KEY_MISMATCH` (`INVALID_ARGUMENT`) là 422,
+  `VIDEO_NOT_UPLOADING` (`FAILED_PRECONDITION`) là 409 ([ADR-0043](../adr/0043-idempotency-key.md)); `VIDEO_NOT_PREMIUM`, `ALREADY_ENTITLED`
+  (`FAILED_PRECONDITION` của mua giả lập) là 409 ([ADR-0073](../adr/0073-premium-playback.md)). `NOT_ENTITLED`, `RENDITION_NOT_ENTITLED`
+  (`PERMISSION_DENIED`) theo bảng: 403.
 - Circuit breaker của service đích đang mở ([đọc feed](../architecture.md#62-đọc-feed)): gateway không gọi mạng mà trả ngay
   `UNAVAILABLE`, tức 503 với `code` `UNAVAILABLE`, `detail` rỗng, như mọi 5xx. Service báo phụ thuộc của nó chết (`UNAVAILABLE`
   kèm reason `DEPENDENCY_UNAVAILABLE`, ví dụ `RecordView` khi Kafka chết, `CompleteUpload` khi object store chết) cũng là 503
@@ -165,16 +169,19 @@ cũ không vỡ. Route đăng ký ở `services/gateway/internal/api/api.go`:
 
 | Route | Xác thực | Lớp rate limit | Việc |
 | --- | --- | --- | --- |
-| `POST /auth/register` | không | `register` | đăng ký; `handle`, `display_name` tuỳ chọn (thiếu handle thì sinh `u_` + 12 hex); trùng handle 409 `HANDLE_ALREADY_TAKEN`, sai dạng 400 `INVALID_HANDLE` |
-| `POST /auth/login` | không | `login-ip`, `login-email` | đổi email và mật khẩu lấy access token và refresh token |
+| `POST /auth/register` | không | `register` | đăng ký; `handle`, `display_name` tuỳ chọn (thiếu handle thì sinh `u_` + 12 hex); trùng handle 409 `HANDLE_ALREADY_TAKEN`, sai dạng 400 `INVALID_HANDLE`; mật khẩu phổ biến, đã lộ hay bằng email, handle 400 `PASSWORD_BLOCKLISTED` |
+| `POST /auth/login` | không | `login-ip`, `login-email`, `login-account` | đổi email và mật khẩu lấy access token và refresh token |
 | `POST /auth/refresh` | không (refresh token trong thân) | `refresh` | đổi refresh token lấy cặp token mới; token đã trình không dùng lại được ([ADR-0016](../adr/0016-web-client.md) §2–5) |
 | `POST /auth/logout` | không (refresh token trong thân) | `refresh` | thu hồi cả họ refresh token của lần đăng nhập; idempotent, trả 204 |
 | `GET /me`, `PATCH /me` | Bearer JWT | `read`, `write` | hồ sơ của mình (`user_id`, `handle`, `display_name`, không có email); đổi tên hiển thị |
 | `GET /profiles/{handle}` | Bearer JWT | `read` | hồ sơ theo handle (không phân biệt hoa thường) kèm `followed_by_me`; 404 `USER_NOT_FOUND` |
 | `PUT` / `DELETE /me/following/{user_id}` | Bearer JWT | `write` | follow, unfollow |
-| `POST /videos` | Bearer JWT | `upload` | tạo video `UPLOADING`, trả form presigned POST: `upload_url`, `form_fields`, `expires_at` (15 phút); header `Idempotency-Key` tuỳ chọn (một UUID chữ thường trong Structured Field String, sai dạng thì 400 `INVALID_IDEMPOTENCY_KEY`): gọi lặp cùng khoá, cùng `title`, `size_bytes`, `content_type` trả cùng `video_id` với form ký mới, khác thân thì 422 `IDEMPOTENCY_KEY_MISMATCH`, video đã rời `UPLOADING` thì 409 `VIDEO_NOT_UPLOADING`; khoá có phạm vi tác giả, lưu cùng transaction với video, sống bằng đời của video ([ADR-0043](../adr/0043-idempotency-key.md)) |
+| `POST /videos` | Bearer JWT | `upload` | tạo video `UPLOADING`, trả form presigned POST: `upload_url`, `form_fields`, `expires_at` (15 phút); `premium` tuỳ chọn (vắng là `false`, không đổi sau đó) làm video premium; header `Idempotency-Key` tuỳ chọn (một UUID chữ thường trong Structured Field String, sai dạng thì 400 `INVALID_IDEMPOTENCY_KEY`): gọi lặp cùng khoá, cùng `title`, `size_bytes`, `content_type`, `premium` trả cùng `video_id` với form ký mới, khác thân thì 422 `IDEMPOTENCY_KEY_MISMATCH`, video đã rời `UPLOADING` thì 409 `VIDEO_NOT_UPLOADING`; khoá có phạm vi tác giả, lưu cùng transaction với video, sống bằng đời của video ([ADR-0043](../adr/0043-idempotency-key.md)) |
 | `POST /videos/{video_id}/complete` | Bearer JWT | `write` | báo upload xong: video-service `HEAD` object, chuyển `PROCESSING`, trả 202; gọi lại khi đã `PROCESSING` hay `READY` thì trả video hiện tại |
-| `GET /videos/{video_id}` | Bearer JWT | `read` | đọc một video kèm `author`, `stats`; có `playlist_url`, `thumbnail_url` khi video đã `READY` |
+| `GET /videos/{video_id}` | Bearer JWT | `read` | đọc một video kèm `author`, `stats`; có `playlist_url`, `thumbnail_url` khi video đã `READY`; video premium có `premium: true` và `entitlement_tier` (`sd`, `hd`, `fhd`; tác giả `fhd`, vắng khi người gọi không có vé) |
+| `PUT /me/entitlements/{video_id}` | Bearer JWT | `write` | mua giả lập, không thanh toán: thân `{"tier":"sd\|hd\|fhd"}` (field lạ 400 `INVALID_JSON`, tier khác 400 `INVALID_TIER`), trả 200 `Entitlement` (`video_id`, `tier`, `granted_at`); gọi lại ghi đè gói; video thường 409 `VIDEO_NOT_PREMIUM`, tác giả 409 `ALREADY_ENTITLED`, video không có hay chưa `READY` 404 `VIDEO_NOT_FOUND` |
+| `GET /videos/{video_id}/playback/master.m3u8` | Bearer JWT | `read` | master của video premium chỉ còn biến thể thuộc gói của người gọi, URI `<rendition>.m3u8` tương đối; 200 `application/vnd.apple.mpegurl`; không vé 403 `NOT_ENTITLED`, video thường 409 `VIDEO_NOT_PREMIUM`, video không có hay chưa `READY` 404 `VIDEO_NOT_FOUND` (cùng các mã đó ở route rendition) |
+| `GET /videos/{video_id}/playback/{rendition}.m3u8` | Bearer JWT | `read` | playlist của một rendition, mỗi segment là URL tuyệt đối đã ký (công thức dưới); rendition không có 404 `RENDITION_NOT_FOUND`, ngoài gói 403 `RENDITION_NOT_ENTITLED`; mux đăng ký một pattern `…/playback/{file}`, `file` khác `master.m3u8` và `<rendition>.m3u8` (`[a-z0-9]{1,16}`) là 404 `RENDITION_NOT_FOUND` không gọi service |
 | `GET /users/{user_id}/videos`, `GET /me/videos` | Bearer JWT | `read` | video của một tác giả, mới nhất trước, query `cursor`, `page_size` như feed; chỉ tác giả thấy video chưa `READY` |
 | `GET /public/videos/{video_id}` | **không**, bỏ qua `Authorization` | `public` theo IP | video `READY` kèm `author` và số đếm không `liked_by_me`; mọi ca khác (không có, chưa `READY`, id sai dạng) cùng 404 `VIDEO_NOT_FOUND`; `Cache-Control: public, max-age=30` |
 | `GET /feed/following` | Bearer JWT | `read` | feed đang theo dõi (30 ngày); query `cursor`, `page_size`; trả `items` (kèm `stats` nếu engagement-service trả kịp 100 ms) và `next_cursor` |
@@ -185,8 +192,23 @@ cũ không vỡ. Route đăng ký ở `services/gateway/internal/api/api.go`:
 
 Item của feed và của danh sách video mang `author` (`user_id`, `handle`, `display_name`).
 
-`playlist_url`, `thumbnail_url` là `MEDIA_PUBLIC_BASE_URL` + `/` + object key, ở cả item của feed. Path hay query không
-phải UTF-8 hợp lệ thì gateway trả 400 `INVALID_UTF8` ở mọi route, không gọi service.
+`playlist_url`, `thumbnail_url` là `MEDIA_PUBLIC_BASE_URL` + `/` + object key, ở cả item của feed. Với video premium, ở mọi route trả
+chúng, `playlist_url` là URL của master xem thử (`preview_playlist_key`, dưới `preview/`), kèm `premium: true`; gateway không bao giờ trả
+URL của key dưới `premium/` (key như vậy cho URL rỗng). Path hay query không phải UTF-8 hợp lệ thì gateway trả 400 `INVALID_UTF8` ở mọi
+route, không gọi service.
+
+URL segment trong playlist của route phát do video-service ký theo `MEDIA_SIGNER`
+([`environment.md`](environment.md#biến-và-hành-vi-khởi-động-của-service)), phạm vi và hạn ở
+[`explanation/premium-playback.md`](../explanation/premium-playback.md#phạm-vi-và-hạn-chữ-ký):
+
+- `cloudfront`: `MEDIA_SIGNED_BASE_URL` + `/` + key + `?Policy=<b64>&Signature=<b64>&Key-Pair-Id=<ID>&Hash-Algorithm=SHA256`; một query cho
+  mọi segment của rendition;
+- `s3`: URL presign SigV4 `GET` của từng key trên endpoint công khai của object store (`S3_PUBLIC_ENDPOINT`).
+
+Mọi response của gateway, cả `/healthz`, `/readyz`, 404 và problem, mang header bảo mật
+`X-Content-Type-Options: nosniff`, `Content-Security-Policy: default-src 'none'; frame-ancestors 'none'` và
+`Cache-Control: no-store`; chỉ `GET /public/videos/{video_id}` thành công thay `Cache-Control` như bảng trên
+(`httpx.SecurityHeaders`, lý do ở [xác thực](../explanation/authentication.md#header-bảo-mật)).
 
 Chi tiết hiện thực của luồng upload chốt ở [ADR-0008](../adr/0008-async-upload-pipeline-stage2a.md):
 
@@ -210,7 +232,12 @@ Rate limit, cache, timeout/retry/circuit breaker và job dọn upload chốt ở
 
 - mọi route trừ `/healthz`, `/readyz` có rate limit GCRA bằng một Lua script trong Valkey db 10 (mục 2): `register` theo
   IP 60/giờ, burst 20; `login-ip` theo IP 60/phút, burst 30, và `login-email` theo cặp (IP, email) 10/giờ, burst 5 (khoá chứa
-  SHA-256 của email, không có email thô); `refresh` theo IP cho `/auth/refresh`, `/auth/logout` 60/phút, burst 30; `upload`
+  SHA-256 của email, không có email thô), rồi `login-account` theo email trên mọi IP 100/24 giờ, burst 10 (id
+  `EmailHash`), trừ **cặp đã biết**: cặp (IP, email) đã đăng nhập thành công, giữ ở khoá
+  `svp:gw:login-known:<IP>:<EmailHash>` tới hết hạn của cả họ refresh token, bỏ qua `login-account` nhưng vẫn qua hai
+  lớp kia; Valkey lỗi khi đọc khoá đó thì cặp coi là chưa biết (thứ tự kiểm và lý do ở
+  [xác thực](../explanation/authentication.md#đăng-nhập)); `refresh` theo IP cho `/auth/refresh`, `/auth/logout`
+  60/phút, burst 30 (mỗi phiên đang dùng gọi một lần trong mỗi hạn access token); `upload`
   (`POST /videos`) 30/giờ, burst 10; `write` 120/phút, burst 60; `read` 600/phút, burst 200, ba lớp sau theo `user_id`. Mọi lần
   gọi đều được đếm. IP là địa chỉ kết nối; header chỉ được đọc trên kết nối từ proxy tin cậy
   (`TRUSTED_PROXY_CIDRS`; RL-1): `X-Forwarded-For` theo `TRUSTED_PROXY_HOPS` (compose 0 hop, k3d 1 hop từ Envoy;
@@ -219,7 +246,8 @@ Rate limit, cache, timeout/retry/circuit breaker và job dọn upload chốt ở
   thì địa chỉ kết nối. Biến này cần `TRUSTED_PROXY_CIDRS` và `TRUSTED_PROXY_HOPS` bằng 0, không thì gateway không khởi
   động, lỗi nêu tên biến; eks đặt `CloudFront-Viewer-Address` với CIDR VPC
   ([ADR-0061](../adr/0061-edge-cloudfront-waf-acm.md) §9);
-- Valkey lỗi hay quá 50 ms thì `register`, `login-ip`, `login-email`, `refresh`, `upload` **đóng mềm** (bộ đếm trong bộ nhớ của
+- Valkey lỗi hay quá 50 ms thì `register`, `login-ip`, `login-email`, `login-account`, `refresh`, `upload` **đóng mềm**
+  (bộ đếm trong bộ nhớ của
   từng instance, ngưỡng bằng nửa), `write` và `read` **mở**; gateway log WARN `rate limit store unavailable, using fallback` tối
   đa một dòng mỗi 10 s (RL-2);
 - lớp `public` theo IP cho `GET /public/videos/{video_id}`: 120/phút, burst 60, Valkey lỗi thì đóng mềm 60/phút, burst 30

@@ -1,7 +1,7 @@
-{{- /* Namespaces by role: svp (the six Go services and the web client), svp-data (Postgres, Valkey, Kafka, the
-object store s3), svp-obs (observability, GlitchTip), svp-edge (Gateway and certificates). Pod Security
-Admission enforces "restricted": a chart that cannot meet it is fixed in its values, the namespace is not
-loosened. install.sh and gitops.sh render this template alone for the namespaces they make before this chart. */}}
+{{- /* Namespaces by role: svp (the Go services, the web client), svp-data (Postgres, Valkey, Kafka, the object store
+s3), svp-obs (observability, GlitchTip), svp-edge (Gateway, certificates), svp-mesh (the waypoint). Pod Security is
+"restricted": a chart that fails it is fixed in its values; only istio-system, whose pods run the node's network, names
+privileged. install.sh and gitops.sh render this template alone for the namespaces they make before this chart. */}}
 {{- $sources := list }}
 {{- with .Values.externalSecrets }}
 {{- if and .enabled (eq .store "kubernetes") }}
@@ -9,18 +9,22 @@ loosened. install.sh and gitops.sh render this template alone for the namespaces
 {{- end }}
 {{- end }}
 {{- range concat .Values.namespaces $sources .Values.platformNamespaces }}
+{{- $level := .podSecurity | default "restricted" }}
 ---
 apiVersion: v1
 kind: Namespace
 metadata:
   name: {{ .name }}
   labels:
-    pod-security.kubernetes.io/enforce: restricted
+    pod-security.kubernetes.io/enforce: {{ $level }}
     pod-security.kubernetes.io/enforce-version: {{ $.Values.podSecurityVersion }}
-    pod-security.kubernetes.io/warn: restricted
+    pod-security.kubernetes.io/warn: {{ $level }}
     pod-security.kubernetes.io/warn-version: {{ $.Values.podSecurityVersion }}
-    pod-security.kubernetes.io/audit: restricted
+    pod-security.kubernetes.io/audit: {{ $level }}
     pod-security.kubernetes.io/audit-version: {{ $.Values.podSecurityVersion }}
+    {{- with .dataplaneMode }}
+    istio.io/dataplane-mode: {{ . }}
+    {{- end }}
     {{- if .routes }}
     # Gateway svp accepts HTTPRoutes only from namespaces with this label, so a namespace cannot publish a route on the
     # shared entry point unless this chart marks it.

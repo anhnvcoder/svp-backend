@@ -45,7 +45,11 @@ case "$1 $2 $3" in
   "secretsmanager describe-secret --secret-id")
     if grep -qxF -- "$4" "$s/missing" 2>/dev/null; then echo "An error occurred (ResourceNotFoundException)" >&2; exit 254; fi
     printf '%s\n' "$4" ;;
-  "secretsmanager list-secret-version-ids --secret-id") cat "$s/runtime-version" 2>/dev/null || echo ;;
+  "secretsmanager list-secret-version-ids --secret-id")
+    case $4 in
+      */media-signing) [ -f "$s/no-signing-value" ] && echo || echo v-signing ;;
+      *) cat "$s/runtime-version" 2>/dev/null || echo ;;
+    esac ;;
   "secretsmanager put-secret-value --secret-id")
     [ "$5" = --secret-string ] && [ "${6#file://}" != "$6" ] || { echo "fake aws: no --secret-string file://" >&2; exit 2; }
     f=${6#file://}
@@ -102,9 +106,9 @@ names=(SVP_PG_SUPERUSER_PASSWORD
   SVP_S3_ROOT_PASSWORD SVP_VIDEO_S3_SECRET_KEY SVP_MEDIA_WORKER_S3_SECRET_KEY SVP_PG_BACKUP_S3_SECRET_KEY
   SVP_KAFKA_ADMIN_PASSWORD SVP_KAFKA_KEDA_PASSWORD SVP_KAFKA_USER_SERVICE_PASSWORD SVP_KAFKA_VIDEO_SERVICE_PASSWORD
   SVP_KAFKA_ENGAGEMENT_SERVICE_PASSWORD SVP_KAFKA_FEED_SERVICE_PASSWORD SVP_KAFKA_MEDIA_WORKER_PASSWORD
-  SVP_KAFKA_OTELCOL_PASSWORD SVP_VALKEY_GATEWAY_PASSWORD SVP_VALKEY_FEED_SERVICE_PASSWORD SVP_VALKEY_WEB_PASSWORD
-  SVP_VALKEY_OPS_PASSWORD JWT_SIGNING_KID JWT_SIGNING_KEY JWT_VERIFY_KEYS SVP_GRAFANA_ADMIN_PASSWORD GLITCHTIP_SECRET_KEY
-  GLITCHTIP_ADMIN_PASSWORD)
+  SVP_KAFKA_DLQ_REPLAY_PASSWORD SVP_KAFKA_OTELCOL_PASSWORD SVP_VALKEY_GATEWAY_PASSWORD SVP_VALKEY_FEED_SERVICE_PASSWORD
+  SVP_VALKEY_WEB_PASSWORD SVP_VALKEY_OPS_PASSWORD JWT_SIGNING_KID JWT_SIGNING_KEY JWT_VERIFY_KEYS SVP_GRAFANA_ADMIN_PASSWORD
+  GLITCHTIP_SECRET_KEY GLITCHTIP_ADMIN_PASSWORD)
 : >"$work/secrets"
 {
   for n in "${names[@]}"; do
@@ -251,12 +255,25 @@ terraform_entries_ok() {
   done < <(sed -n 's/^\(SVP_KAFKA_[A-Z_]*_PASSWORD\|SVP_VALKEY_[A-Z_]*_PASSWORD\)=.*/\1/p' "$work/env")
 }
 
+# signing_entry_ok ENV: entry media-signing (the infrastructure's media-signing-key.sh writes it) is checked to exist
+# and to hold a value before the first write, and never written. Prints what is wrong, nothing when all is.
+signing_entry_ok() {
+  local env=$1 read first_put
+  grep -q "^aws .* secretsmanager describe-secret --secret-id svp/$env/media-signing " "$FAKE_STATE/calls" ||
+    echo "entry media-signing not checked to exist"
+  read=$(line "^aws .* secretsmanager list-secret-version-ids --secret-id svp/$env/media-signing ")
+  first_put=$(line 'put-secret-value')
+  [ -n "$read" ] || echo "entry media-signing not checked to hold a value"
+  [ -z "$read" ] || [ -z "$first_put" ] || [ "$read" -lt "$first_put" ] || echo "entry media-signing checked after a write"
+  ! grep -q "put-secret-value --secret-id svp/$env/media-signing " "$FAKE_STATE/calls" || echo "entry media-signing written"
+}
+
 # --- a first run on svp-stg.
 new_state
 run aws-secrets.sh "$work/first.out" SVP_RDS_MASTER_PASSWORD="$rds_password"
-problems=$( (written_ok stg; aws_calls_ok; terraform_entries_ok stg) | paste -sd ';' -)
+problems=$( (written_ok stg; aws_calls_ok; terraform_entries_ok stg; signing_entry_ok stg) | paste -sd ';' -)
 if [ "$rc" = 0 ] && [ -z "$problems" ]; then
-  ok "aws-secrets.sh, a first run on svp-stg: the $(jq length <<<"$want_keys") entries of svp/stg/ with exactly their keys (pg-superuser from SVP_RDS_MASTER_PASSWORD, Telegram empty, glitchtip-runtime empty, no s3-root or s3-users), kafka-admin, kafka-users and valkey-users checked to exist and not written, no Kafka or Valkey password in any entry, profile and region in every aws call, the account read first, files in a folder of mode 700, gone after"
+  ok "aws-secrets.sh, a first run on svp-stg: the $(jq length <<<"$want_keys") entries of svp/stg/ with exactly their keys (pg-superuser from SVP_RDS_MASTER_PASSWORD, Telegram empty, glitchtip-runtime empty, no s3-root or s3-users), kafka-admin, kafka-users and valkey-users checked to exist and not written, media-signing checked to hold a value and not written, no Kafka or Valkey password in any entry, profile and region in every aws call, the account read first, files in a folder of mode 700, gone after"
 else
   fail "aws-secrets.sh, a first run on svp-stg: exit $rc; $problems"$'\n'"$(sed 's/^/      /' "$work/first.out")"
 fi
@@ -276,7 +293,7 @@ fi
 # entries, the ExternalSecrets of svp-data, the sync of svp-data, the other ExternalSecrets. No broker in the cluster.
 new_state v-runtime
 run aws-secrets.sh "$work/again.out" SVP_RDS_MASTER_PASSWORD="$rds_password"
-problems=$( (written_ok stg no-runtime; aws_calls_ok; terraform_entries_ok stg) | paste -sd ';' -)
+problems=$( (written_ok stg no-runtime; aws_calls_ok; terraform_entries_ok stg; signing_entry_ok stg) | paste -sd ';' -)
 guard=$(line '^kubectl .* -n reloader get deployment reloader ')
 first_put=$(line 'put-secret-value')
 last_put=$(last_line 'put-secret-value')
@@ -332,7 +349,7 @@ fi
 new_state
 run aws-secrets.sh "$work/prd.out" SVP_RDS_MASTER_PASSWORD="$rds_password" SVP_KUBE_CONTEXT=svp-prd \
   AWS_PROFILE=anhnv-prd FAKE_PROFILE=anhnv-prd FAKE_ACCOUNT=$prd_account
-problems=$( (written_ok prd; aws_calls_ok; terraform_entries_ok prd) | paste -sd ';' -)
+problems=$( (written_ok prd; aws_calls_ok; terraform_entries_ok prd; signing_entry_ok prd) | paste -sd ';' -)
 if [ "$rc" = 0 ] && [ -z "$problems" ] && ! grep -q 'svp/stg/' "$FAKE_STATE/calls"; then
   ok "aws-secrets.sh on svp-prd: entries svp/prd/*, the account of SVP_AWS_PRD_ACCOUNT_ID"
 else
@@ -371,6 +388,16 @@ echo svp/stg/valkey-users >"$FAKE_STATE/missing"
 run aws-secrets.sh "$work/out" SVP_RDS_MASTER_PASSWORD="$rds_password"
 refused "aws-secrets.sh, entry svp/stg/valkey-users (Terraform's) not made" "$work/out" \
   "entry svp/stg/valkey-users of AWS Secrets Manager not found"
+new_state
+echo svp/stg/media-signing >"$FAKE_STATE/missing"
+run aws-secrets.sh "$work/out" SVP_RDS_MASTER_PASSWORD="$rds_password"
+refused "aws-secrets.sh, entry svp/stg/media-signing not made" "$work/out" \
+  "entry svp/stg/media-signing of AWS Secrets Manager not found"
+new_state
+: >"$FAKE_STATE/no-signing-value"
+run aws-secrets.sh "$work/out" SVP_RDS_MASTER_PASSWORD="$rds_password"
+refused "aws-secrets.sh, entry svp/stg/media-signing without a value" "$work/out" \
+  "entry svp/stg/media-signing holds no value: run aws/scripts/media-signing-key.sh stg activate <a|b>"
 new_state v-runtime
 : >"$FAKE_STATE/unreachable"
 run aws-secrets.sh "$work/out" SVP_RDS_MASTER_PASSWORD="$rds_password"

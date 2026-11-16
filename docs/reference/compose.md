@@ -7,14 +7,18 @@ Loại tài liệu (Diátaxis): **reference**, tra cứu khi cần một lệnh 
 - `make up` / `make smoke` / `make down`: dựng stack compose profile `core` (`tls-init` (cert và khoá của CA local vào volume `svp-tls`), Postgres `postgres` và bootstrap role, database trong nó, Kafka `kafka` + `kafka-init` (topic, user, ACL),
   Valkey `valkey`, object store `s3` (RustFS, [ADR-0022](../adr/0022-local-object-store-minio-replacement.md)) + job `s3-init` tạo
   bucket, user, policy, CORS, migrate, gateway, user-service, video-service, media-worker, engagement-service,
-  feed-service, web client `web`), chạy luồng đầu-cuối qua gateway ở `127.0.0.1:8080` (gồm refresh token, dùng lại token
+  feed-service, `dlq-replay` (công cụ phát lại DLQ, chờ ở `standby`), web client `web`), chạy luồng đầu-cuối qua gateway ở `127.0.0.1:8080` (gồm refresh token, dùng lại token
   cũ thì cả họ bị thu hồi, logout, follow, hồ sơ: handle tự chọn, trùng handle 409, handle sinh `u_…`, `GET`/`PATCH /me`
   không có email, `followed_by_me`, danh sách video theo tác giả chỉ tác giả thấy video chưa `READY`, tạo video với
   `Idempotency-Key` rồi gọi lặp cùng khoá nhận lại đúng `video_id` đó, upload video bằng presigned POST lên object store, chờ `READY`, tải HLS và thumbnail, output HLS bất biến
   ([ADR-0029](../adr/0029-immutable-media-versions.md): master ở `media/<id>/<version>/master.m3u8`, version là `event_id` của
   `video.uploaded`, biến thể và thumbnail dưới thư mục lần thử `<version>/<attempt>/`; master, một playlist biến thể, một segment
   và thumbnail mang `Cache-Control: max-age=31536000, immutable`), `GET /public/videos/{id}` không token 200 với video `READY`
-  và một 404 cho video chưa `READY` lẫn id ngẫu nhiên, video vào feed following và explore kèm `author`, like/unlike, lượt
+  và một 404 cho video chưa `READY` lẫn id ngẫu nhiên, luồng premium (hai video premium của cùng clip tới `READY`, tác giả có
+  `entitlement_tier` `fhd`; người khác chỉ nhận `playlist_url`, `thumbnail_url` dưới `preview/`; master, playlist, segment, thumbnail xem thử
+  ẩn danh 200; segment, playlist, master dưới `premium/` ẩn danh 403; master không vé 403 `NOT_ENTITLED`; mua giả lập `sd`: master chỉ còn
+  `360p.m3u8`, segment đã ký 200, playlist 720p 403 `RENDITION_NOT_ENTITLED`, query ký của video này trên segment của video kia 403;
+  [`premium-playback.md`](../explanation/premium-playback.md)), video vào feed following và explore kèm `author`, like/unlike, lượt
   xem, unfollow), rồi gỡ stack (giữ volume). Gateway dùng Valkey db 10 (rate limit), feed-service db 14 (cache feed
   khám phá), web db 9 (session), mỗi client một user riêng qua `rediss://<user>:<mật khẩu>@valkey:6379/<db>` (**Kafka và Valkey** dưới). Object store chỉ nhận CORS từ `http://localhost:3001` và
   `http://localhost:3002`, theo bucket (`s3-init` đặt `PutBucketCors`: `uploads` chỉ `POST`, `media` chỉ `GET`, `HEAD`; danh
@@ -27,6 +31,10 @@ Loại tài liệu (Diátaxis): **reference**, tra cứu khi cần một lệnh 
   vài lần chạy trong một giờ sẽ cạn burst 20. Việc xoá này **chỉ dùng ở lab local**, không trỏ script vào stack dùng
   chung. Smoke luôn đòi master có version và kiểm đủ `Cache-Control` (mọi bản phát hành ghi key có version từ
   [ADR-0029](../adr/0029-immutable-media-versions.md); biến chuyển tiếp `SVP_SMOKE_LEGACY_MEDIA` đã bỏ, [ADR-0037](../adr/0037-mainpath-standard-tools.md) §4).
+- `make transcode-timing CLIP=<file> N=<n>` (gateway ở `SMOKE_URL`), `make eks-transcode-timing` ([`eks.md`](eks.md)):
+  `deploy/compose/transcode-timing.sh` upload `CLIP` `N` lần, in mỗi lần `<video_id> <giây>` từ complete (202) tới
+  `READY` (độ phân giải 1 s), cuối cùng `p50=<giây> max=<giây>`; video `FAILED` hay quá hạn thì thoát khác 0; xoá khoá
+  rate limit đăng ký như `make smoke` (**chỉ lab local**).
 - Postgres, Kafka và Valkey là container của stack (**Postgres**, **Kafka và Valkey** dưới); mỗi client có role, user và database, db
   hay khoá riêng nên không service nào đọc dữ liệu của service khác. Postgres native `127.0.0.1:5432` không thuộc stack: chỉ `make test` dùng nó. Redis native
   `127.0.0.1:6379` không thuộc stack: chỉ `make test` (db 15) và `make dev` của web dùng nó. Không service lõi nào phụ thuộc service
@@ -34,7 +42,10 @@ Loại tài liệu (Diátaxis): **reference**, tra cứu khi cần một lệnh 
   Grafana (3000), Alertmanager (9093), GlitchTip (8000). Cổng gRPC nằm trong mạng compose
   ([threat model](../threat-model.md) IN-2); Collector (4317) và Prometheus (9090), Tempo (3200), Loki (3100), Pyroscope (4040) của LGTM
   cũng vậy, từ host đọc chúng qua datasource proxy của Grafana.
-- Ba mạng. `default` chứa mọi thứ trừ media-worker và web. `worker` (internal, không route ra ngoài) chỉ chứa media-worker, Kafka,
+  Stack compose không có lớp kênh của service mesh (Istio cần Kubernetes): gRPC giữa service là plaintext trong mạng compose, lớp ứng dụng của
+  [ADR-0042](../adr/0042-caller-identity-grpc.md) §1 che phần còn lại, và cân tải theo lời gọi, mTLS, quyền theo ServiceAccount chỉ có trên
+  cluster ([ADR-0075](../adr/0075-service-mesh.md)).
+- Năm mạng. `default` chứa mọi thứ trừ media-worker, dlq-replay, web và `blackbox`. `worker` (internal, không route ra ngoài) chỉ chứa media-worker, dlq-replay, Kafka,
   object store và Collector, nên worker chạy ffmpeg trên file người dùng tải lên không tới được gateway, service gRPC, Postgres,
   LGTM hay internet (threat model FF-4, FF-5); Collector ở đó chỉ nhận telemetry, không làm proxy cho worker. `web` chỉ chứa web,
   gateway và, khi có `obs`, GlitchTip và Collector: server Next render mọi trang thay cho trình duyệt, nên code chạy được trong đó
@@ -45,7 +56,15 @@ Loại tài liệu (Diátaxis): **reference**, tra cứu khi cần một lệnh 
   tên compose; Valkey thì tới được, nhưng user `svp-web` của nó chỉ chạm db 9 và `svp:web:*`. Mạng `web` không internal vì Docker không
   publish cổng của container chỉ gắn vào mạng internal. Docker Desktop phân giải `host.docker.internal` ở mọi container, nên code chạy
   trong web vẫn tới được cổng loopback của host (cổng 9000 của object store, khi có `obs` Grafana, Alertmanager, GlitchTip, và mọi thứ
-  khác nghe ở đó). Chấp nhận ở lab compose (threat model WEB-13); bản k3d đóng bằng NetworkPolicy.
+  khác nghe ở đó). Chấp nhận ở lab compose (threat model WEB-13); bản k3d đóng bằng NetworkPolicy. `probe` và `probe-web` (cả hai
+  internal) là mạng của probe uptime ([`cost-and-uptime.md`](../explanation/cost-and-uptime.md)): `probe` chứa gateway, object store và,
+  khi có `obs`, `blackbox`, `lgtm`; `probe-web` chứa web và, khi có `obs`, `blackbox`. `blackbox` không ở mạng nào khác nên chỉ tới
+  Prometheus và ba đích, không ra internet. Qua `probe-web`, code chạy trong web tới được cổng 9115 của `blackbox` và nhờ nó GET một
+  URL của gateway, object store hay LGTM rồi đọc mã trả về (WEB-13, chấp nhận như trên).
+- Service `blackbox` (profile `obs`, blackbox exporter, cùng image và digest với component của `svp-gitops`, không publish cổng): module
+  `http_compose` ở [`deploy/observability/blackbox/blackbox.yaml`](../../deploy/observability/blackbox/blackbox.yaml), scrape job
+  `blackbox-http` của Prometheus trong `lgtm` (`deploy/observability/prometheus/prometheus.yaml`, mỗi 30 s, nhãn `probe` là `web`, `api`,
+  `media`); object probe `media/uptime-probe.txt` do `s3-init` ghi. Không có OpenCost ở compose: dashboard `svp-cost` trống.
 - Web client mở bằng `http://localhost:3001`, là `APP_ORIGIN` mà redirect sau đăng nhập và form của cookie dựa theo.
   `http://127.0.0.1:3001` cũng đăng nhập được, với cookie phiên riêng (trình duyệt gửi `Sec-Fetch-Site: same-origin` ở đó, kiểm CSRF
   chấp nhận trước khi so `Origin`), nhưng không phát và không tải video lên được vì CORS của bucket chỉ cho origin `localhost`.
@@ -59,6 +78,9 @@ Loại tài liệu (Diátaxis): **reference**, tra cứu khi cần một lệnh 
     `deploy/postgres/bootstrap.sql` cho từng database bằng `docker compose … exec -T postgres psql` dưới user `postgres` qua socket; máy không cần
     `psql`. Mật khẩu role đọc từ `.env` theo luật của `dotenv.sh`, tới psql qua biến môi trường mà dòng lệnh chỉ nêu tên (`-e NAME`), không bao giờ
     ở dòng lệnh hay output. Mật khẩu superuser `SVP_COMPOSE_PG_SUPERUSER_PASSWORD` (do `make env` sinh) chỉ được đặt khi image khởi tạo volume rỗng.
+    Bootstrap cũng đặt `statement_timeout` và `idle_in_transaction_session_timeout` cho role app của bốn database service (không cho role
+    migrator, GlitchTip) bằng `ALTER ROLE … IN DATABASE … SET`, giá trị `bootstrap.sh` truyền; chạy lại thì ghi đè. Kết nối đang mở giữ giá
+    trị cũ tới lần đăng nhập sau, nên đổi giá trị xong phải khởi động lại service.
   - Script trên máy chạm Postgres compose chỉ bằng `docker compose … exec -T postgres psql …` qua Makefile (tiền tố
     `env -u DOCKER_DEFAULT_PLATFORM`), không `psql -h 127.0.0.1 -p 5432`: cổng đó là Postgres native của máy.
   - Stack bắt đầu rỗng: dữ liệu dev ở Postgres native không chuyển sang, `make up` tạo role, database và schema mới trong container. Database
@@ -85,6 +107,17 @@ Loại tài liệu (Diátaxis): **reference**, tra cứu khi cần một lệnh 
     của `AGENTS.md`). `SVP_AS_USER=<user>` (`exec -T valkey env SVP_AS_USER=<user> /opt/svp/bin/svp-valkey …`) đăng nhập user khác để thử quyền của nó, mật khẩu là dòng đầu của stdin; mật khẩu
     không bao giờ ở dòng lệnh hay output. Helper của script là `valkey_cli` trong `deploy/compose/lib.sh`. `deploy/ops/ops-test.sh` thử hai wrapper không cần broker hay server (CI chạy nó).
   - Replication factor khác 1 chỉ có trên MSK (stg 2, prd 3), nơi `aws_msk_configuration` đặt; topic đã có giữ số replica nó có.
+- **Phát lại DLQ**: service `dlq-replay` (profile `core`, image `svp/dlq-replay:dev`) chạy lệnh con `standby`, không nối
+  Kafka, nên stack không tốn gì khi chưa phát lại. `make dlq-replay ARGS='replay --from <topic>.dlq …'` chạy
+  `docker compose exec -T dlq-replay /app $(ARGS)` (tiền tố `env -u DOCKER_DEFAULT_PLATFORM` do Makefile thêm; `ARGS`
+  rỗng thì target dừng). Cờ của `replay` ở doc comment của `services/dlq-replay/cmd/dlq-replay/main.go`; quy trình và
+  luật dùng ở [`kafka-dlq-records.md`](../runbooks/kafka-dlq-records.md). Container đăng nhập Kafka bằng user
+  `svp-dlq-replay` (`SVP_KAFKA_DLQ_REPLAY_PASSWORD` của `.env`): đọc bốn topic `*.dlq`, ghi bốn topic gốc, không group,
+  không quyền cluster (ACL ở `deploy/kafka/kafka-init.sh`). Nó ở mạng `worker` (không có khoá object store), root chỉ
+  đọc, bỏ mọi capability, không cổng.
+- `media-worker` có `stop_grace_period: 570s`: khi `docker stop` hay `make down`, worker làm nốt job đang chạy tối đa
+  540 s rồi commit, sau đó đóng client và flush telemetry; dừng container ngắn hơn thì job dở bị huỷ và record được giao
+  lại.
 - Job `s3-init` chạy với image của object store: `curl` của nó ký từng request (SigV4) bằng user root và gọi API S3 cùng API quản trị
   của RustFS (`/rustfs/admin/v3`, nhận JSON thường). Idempotent: chạy lại giữ bucket và object, đặt lại secret key và policy của
   user, bucket policy và CORS theo đúng script và môi trường của nó. Không in secret.
@@ -100,18 +133,19 @@ Loại tài liệu (Diátaxis): **reference**, tra cứu khi cần một lệnh 
   trên loopback (OPS-2).
 - `make up IMAGES=stg`, `WEB_FROM=clone|stg|image` [`WEB_IMAGE=ghcr.io/<repository>@sha256:<digest>`]
   ([ADR-0033](../adr/0033-svp-web-repo.md) §6, §7; `compose_images` của `deploy/k8s/lib.sh` đặt biến image mà
-  `deploy/compose/compose.yaml` đọc): không đặt `IMAGES` thì sáu service backend build từ working tree, một lượt bằng
+  `deploy/compose/compose.yaml` đọc): không đặt `IMAGES` thì mọi service backend build từ working tree, một lượt bằng
   `docker buildx bake -f deploy/docker-bake.json` (bảng image dùng chung với `make k8s-up` và CI,
   [ADR-0050](../adr/0050-bash-to-standard-tools.md)) thành `svp/<service>:dev` trước compose; compose không tự build service backend
   (`pull_policy: never`), nên `docker compose up` lẻ cần image do `make up` build; `IMAGES=stg` chạy
-  bản phát hành stg của sáu service (bốn job migrate cùng image) theo digest của `envs/stg/images/` trong bản clone `svp-gitops` như
+  bản phát hành stg của mọi service backend (bốn job migrate cùng image) theo digest của `envs/stg/images/` trong bản clone `svp-gitops` như
   đang có (không fetch), không build Go. `WEB_FROM` không đặt hay `stg`: bản web của stg theo digest (nên `make up` cần bản clone
   `svp-gitops` và mạng tới GHCR); `clone`: build web từ thư mục web (`web_dir`, mục `make web-clone` của [`k8s.md`](k8s.md)); `image`: `WEB_IMAGE`.
   Mỗi bản của stg phải là repository của một nguồn phát hành có service đó
   (bảng nguồn của working tree) và GHCR cho kéo ẩn danh (`WEB_IMAGE` cũng phải kéo ẩn danh được); `make up` `docker pull` từng digest
   theo kiến trúc máy trước khi dựng (kéo không được thì dừng trước khi chạy gì), bản phát hành chạy với `pull_policy: never`, có bản
-  phát hành thì sáu service của `IMAGES=stg` không bake, `--build` chỉ còn cho web khi `WEB_FROM=clone`. Giá trị sai (`IMAGES` khác `stg`, `WEB_IMAGE` thiếu `WEB_FROM=image`, tag
-  thay digest) thì dừng nêu lý do. Chế độ này cho job e2e: target diễn tập dựng lại service bằng `compose up --no-deps` không mang
+  phát hành thì các service của `IMAGES=stg` không bake, `--build` chỉ còn cho web khi `WEB_FROM=clone`. Giá trị sai (`IMAGES` khác `stg`, `WEB_IMAGE` thiếu `WEB_FROM=image`, tag
+  thay digest) thì dừng nêu lý do. Cần file image stg của mọi service trong bảng bake: `make up IMAGES=stg` đỏ ở service chưa có
+  `envs/stg/images/<service>.yaml` (một release mới có file đó sau lượt promote stg đầu tiên của nó). Chế độ này cho job e2e: target diễn tập dựng lại service bằng `compose up --no-deps` không mang
   biến của `make up` (sẽ chạy image `svp/<service>:dev` của lần bake trước thay bản phát hành), nên `make drill-obs-threats` (`deploy/compose/drills/common.sh`) từ chối
   chạy khi một service mà diễn tập dừng hay dựng lại chạy image `ghcr.io/…` (web bản phát hành không chặn: không diễn tập nào dựng lại
   web), nêu service và lệnh dựng lại (`make down`, rồi `make up` không `IMAGES`),
@@ -162,8 +196,9 @@ Loại tài liệu (Diátaxis): **reference**, tra cứu khi cần một lệnh 
   `/metrics` trả 404; project publish đúng 6 cổng loopback, gồm web 3001 và `s3` 9000, không 9001), RL-2 (gateway dựng lại với Valkey `.invalid` thì metric
   `store="fallback"` > 0 và cảnh báo `RateLimitFallbackActive` trong 4 phút), WEB-9 (web trên compose: email, token,
   sid, `?next=`, chữ ký presigned từ form của web, `/rum` và `/monitoring` không có trong GlitchTip, Tempo, Loki, Prometheus;
-  đối chứng có dữ liệu của web). **Telegram tuỳ chọn:** người học tự tạo bot
-  và điền `SVP_ALERT_TELEGRAM_BOT_TOKEN`, `SVP_ALERT_TELEGRAM_CHAT_ID` vào `.env`; có đủ cả hai thì Alertmanager gửi cảnh
+  đối chứng có dữ liệu của web). **Telegram tuỳ chọn:** người học tạo bot
+  và điền `SVP_ALERT_TELEGRAM_BOT_TOKEN`, `SVP_ALERT_TELEGRAM_CHAT_ID` vào `.env` theo
+  [`telegram-bot-setup.md`](../runbooks/telegram-bot-setup.md); có đủ cả hai thì Alertmanager gửi cảnh
   báo `severity=page` tới `api.telegram.org` (ngoại lệ hẹp về mạng ngoài của lab); thiếu thì không gửi gì.
 
 ## Tải k6
@@ -186,7 +221,9 @@ Loại tài liệu (Diátaxis): **reference**, tra cứu khi cần một lệnh 
   profile mà `SVP_K6_PROFILE` chọn (`local`, `ci`, `cloud`; `lib/config.js`). Biến môi trường: `SVP_K6_PROFILE`; `SVP_API_URL`
   (gateway), `SVP_WEB_URL` (địa chỉ k6 gọi tới web client) và `SVP_WEB_ORIGIN` (origin người dùng mở web, gửi làm `Host` và `Origin`);
   `SVP_K6_HOLD` và `SVP_K6_RAMP` (thời gian giữ tốc độ đầy đủ và thời gian tăng dần tới đó, mặc định theo profile; số nguyên kèm
-  `s`, `m` hay `h`); `SVP_K6_RESULTS` (thư mục ghi `summary.json`; không đặt thì ra stdout); `SVP_K6_PODS` và
+  `s`, `m` hay `h`; `ramp + hold + rampDown` của mọi profile không quá ngân sách `maxRunSeconds` của `lib/config.js`,
+  vì VU dùng access token cấp một lần trong `setup()`, không làm mới: vượt thì k6 dừng lúc khởi tạo, message nêu hạn
+  access token); `SVP_K6_RESULTS` (thư mục ghi `summary.json`; không đặt thì ra stdout); `SVP_K6_PODS` và
   `SVP_K6_VIEWER_IP` (chỉ Job cloud).
 - Mọi tốc độ trong `lib/config.js` tính theo phút, nên route dưới một request mỗi giây (`POST /videos`) không cần tốc độ lẻ. Tốc độ
   của profile `cloud` là tổng của cả Job: k6 chia chúng cho `pods` tiến trình bằng `--execution-segment`, còn mỗi pod đăng ký pool
@@ -208,8 +245,9 @@ Loại tài liệu (Diátaxis): **reference**, tra cứu khi cần một lệnh 
   vẫn đi hết pool của chính pod). Video tiến sau mỗi lượt của cùng một user, từ offset riêng: nếu lấy từ iteration chia dư cho số
   video như user, hai thứ quay đồng bộ và một user chỉ thấy `videos / gcd(users, videos)` video (5 trong 30 với 12 user), lặp lại
   các cặp (user, video) mà RL-3 chặn ở gateway.
-- Job k6 trên cluster cloud (`deploy/k6/cloud/`): 20 pod profile `cloud`, 1 000 request feed mỗi giây (tổng 1 250 req/s) giữ ít nhất
-  10 phút. Người học chạy với context kubectl của cluster cloud, không từ `make`; cần `kubectl` và `jq`; context `k3d-*` (laptop
+- Job k6 trên cluster cloud (`deploy/k6/cloud/`): 20 pod profile `cloud`, 1 000 request feed mỗi giây (tổng 1 250 req/s)
+  suốt thời gian giữ của profile (ngắn vì ngân sách `maxRunSeconds` ở trên).
+  Người học chạy với context kubectl của cluster cloud, không từ `make`; cần `kubectl` và `jq`; context `k3d-*` (laptop
   16 GB) bị từ chối trước mọi lệnh kubectl. `render.sh` in manifest ra stdout (namespace `svp-load`, ConfigMap `svp-k6-scripts` chứa
   script của `deploy/k6/` như trong working tree, Job Indexed của `job.yaml.in`), không chạm cluster và không đọc `.env`;
   `run.sh` áp output đó và `make cloud-check` kiểm nó (chạy `render.sh` không đối số). Image là `K6_IMAGE` đọc từ `Makefile` gốc: một nơi ghim k6
@@ -223,8 +261,10 @@ Loại tài liệu (Diátaxis): **reference**, tra cứu khi cần một lệnh 
     chúng. Chỉ nhận certificate, file chứa khoá riêng bị từ chối. Không có cờ thì pod tin root của image (chỉ cho kiểm tĩnh).
     `run.sh start` luôn truyền cờ này với CA nội bộ của cluster, người học không truyền gì.
   - `--pods`: 1 tới 20 pod (mặc định 20), mỗi pod giữ tải của một pod thiết kế nên tổng co theo số pod (`lib/config.js`,
-    `SVP_K6_PODS`). `--ramp`, `--hold`: thời gian tăng và giữ, như `2m` (mặc định 10m mỗi cái); đặt một trong hai thì hạn của Job
-    tính theo độ dài lượt chạy thay vì mặc định 3600 s.
+    `SVP_K6_PODS`). `--ramp`, `--hold`: thời gian tăng và giữ, như `2m` (mặc định 3m và 7m, như profile
+    `cloud` của `lib/config.js`); cộng 1 phút giảm tải mà vượt `max_run_seconds` của `render.sh` (cùng số với
+    `maxRunSeconds` của `lib/config.js`: token của `setup()` hết hạn giữa lượt) thì `render.sh` từ chối; đặt một
+    trong hai thì hạn của Job tính theo độ dài lượt chạy thay vì mặc định 3600 s.
   - `start`: tìm ClusterIP của Service Envoy của Gateway `svp`, đọc đúng khoá `ca.crt` của Secret `svp-edge/svp-edge-tls`
     (certificate của Envoy; jsonpath, không đọc khoá riêng cùng Secret) vào file tạm, xoá khi `run.sh` thoát, render manifest với
     `--ca-file` file đó và áp chúng (namespace, ConfigMap, Job `svp-k6`); từ chối khi đã có Job `svp-k6`, và dừng với thông báo

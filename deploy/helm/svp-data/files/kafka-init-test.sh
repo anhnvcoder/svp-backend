@@ -21,7 +21,7 @@ fail() {
 }
 
 admin_pw=Adm1nPassw0rd
-users='USER_SERVICE VIDEO_SERVICE ENGAGEMENT_SERVICE FEED_SERVICE MEDIA_WORKER KEDA OTELCOL'
+users='USER_SERVICE VIDEO_SERVICE ENGAGEMENT_SERVICE FEED_SERVICE MEDIA_WORKER DLQ_REPLAY KEDA OTELCOL'
 topics='video.lifecycle.v1 3 604800000
 media.transcodes.v1 3 604800000
 user.follows.v1 3 604800000
@@ -48,6 +48,8 @@ User:svp-feed-service Read --group feed-service
 User:svp-media-worker Write --topic media.transcodes.v1 --topic video.lifecycle.v1.dlq
 User:svp-media-worker Read --topic video.lifecycle.v1
 User:svp-media-worker Read --group media-worker
+User:svp-dlq-replay Read --topic video.lifecycle.v1.dlq --topic media.transcodes.v1.dlq --topic user.follows.v1.dlq --topic engagement.views.v1.dlq
+User:svp-dlq-replay Write --topic video.lifecycle.v1 --topic media.transcodes.v1 --topic user.follows.v1 --topic engagement.views.v1
 User:svp-keda Describe --topic video.lifecycle.v1
 User:svp-keda Describe --group media-worker
 User:svp-otelcol Describe --topic video.lifecycle.v1 --topic media.transcodes.v1 --topic user.follows.v1 --topic engagement.views.v1 --topic video.lifecycle.v1.dlq --topic media.transcodes.v1.dlq --topic user.follows.v1.dlq --topic engagement.views.v1.dlq
@@ -190,9 +192,9 @@ if run fresh && passed fresh; then
     n=$(tr 'A-Z_' 'a-z-' <<<"$u")
     echo "svp-$n PwOf${u//_/}"
   done | sort)" ]]; then
-    fail "fresh: SCRAM credentials set: $(cut -d' ' -f1 "$work/fresh/scram" | tr '\n' ' '), want the 7 users with their passwords"
+    fail "fresh: SCRAM credentials set: $(cut -d' ' -f1 "$work/fresh/scram" | tr '\n' ' '), want the 8 users with their passwords"
   elif no_password_out fresh && no_props_left fresh; then
-    ok "SVP_KAFKA_CREATE_USERS=true: login check, svp-admin's ACLs first, 8 topics without replication factor, 7 users, the ACL table; logged in as svp-admin from a 600 file, removed after, no password on a command line or in the output"
+    ok "SVP_KAFKA_CREATE_USERS=true: login check, svp-admin's ACLs first, 8 topics without replication factor, 8 users, the ACL table; logged in as svp-admin from a 600 file, removed after, no password on a command line or in the output"
   fi
 fi
 

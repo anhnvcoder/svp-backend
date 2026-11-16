@@ -23,9 +23,9 @@
 # (services/gateway/internal/ratelimit/ratelimit.go): four drill users take 2.5 requests/s each, alternating the two
 # routes, so no user comes near its limit.
 
-# Each user logs in again 5 minutes before its token expires (expires_at of the login; tokens last an hour, threat
-# model JWT-3) and as soon as a request gets 401, at most once a minute (login is limited per email, 5 at once then
-# 10 an hour), so the traffic runs for hours, through the push of a release.
+# Each user logs in again 5 minutes before its token expires (expires_at of the login; access tokens last 15 minutes,
+# TTL of internal/authtoken) and as soon as a request gets 401, at most once a minute: about 6 logins an hour, under
+# class login-email's 5 at once then 10 an hour per email, so the traffic runs for hours, through the push of a release.
 
 # Every request is one line of the log .k8s/drills/traffic-<UTC start>.log:
 #   <unix time of the request's start, ms> <user u1..u4, web for the web client's> <route explore|following|login, or

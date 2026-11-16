@@ -30,10 +30,16 @@ func ClientIP(r *http.Request, from httpx.ClientAddr) string {
 	return p.String()
 }
 
-// LoginEmailID is the id of (ip, email) for LoginEmail. The email is normalized like
-// user-service does (TrimSpace, ToLower) and hashed, so no raw email lands in Redis: the first
-// 32 hex characters of its SHA-256.
-func LoginEmailID(ip, email string) string {
+// EmailHash is the id of email in the login keys: the email normalized like user-service does
+// (TrimSpace, ToLower) and hashed, so no raw email lands in Redis: the first 32 hex characters of
+// its SHA-256.
+func EmailHash(email string) string {
 	sum := sha256.Sum256([]byte(strings.ToLower(strings.TrimSpace(email))))
-	return ip + ":" + hex.EncodeToString(sum[:])[:32]
+	return hex.EncodeToString(sum[:])[:32]
+}
+
+// LoginEmailID is the id of (ip, email) for LoginEmail and for the known pairs: ip, then
+// EmailHash(email).
+func LoginEmailID(ip, email string) string {
+	return ip + ":" + EmailHash(email)
 }

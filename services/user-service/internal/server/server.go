@@ -62,6 +62,7 @@ const TopicUserFollows = "user.follows.v1"
 const (
 	ReasonInvalidEmail           = "INVALID_EMAIL"
 	ReasonInvalidPassword        = "INVALID_PASSWORD"
+	ReasonPasswordBlocklisted    = "PASSWORD_BLOCKLISTED"
 	ReasonEmailAlreadyRegistered = "EMAIL_ALREADY_REGISTERED"
 	ReasonInvalidCredentials     = "INVALID_CREDENTIALS" //nolint:gosec // an error reason, not a credential
 	ReasonInvalidFolloweeID      = "INVALID_FOLLOWEE_ID"
@@ -127,6 +128,10 @@ func (s *Server) Register(ctx context.Context, req *userv1.RegisterRequest) (*us
 	}
 	// An empty handle means none was picked: it is generated from the id below.
 	picked := normalizeHandle(req.GetHandle())
+	if err := password.CheckBlocklist(pw, email, picked); err != nil {
+		return nil, grpcerr.New(codes.InvalidArgument, ReasonPasswordBlocklisted,
+			"password is too common, has appeared in a data breach, or is the same as the email or handle")
+	}
 	if picked != "" && !validPickedHandle(picked) {
 		return nil, grpcerr.New(codes.InvalidArgument, ReasonInvalidHandle,
 			"handle must be 3 to 30 of a-z, 0-9 and _, start with a letter, and not have the generated form u_ and 12 hex digits")

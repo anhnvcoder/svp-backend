@@ -283,6 +283,8 @@ jobs:
       - run: make regal-lint
       - run: make conftest-verify
       - run: deploy/ci/scan-gate.sh --check-ignorefile
+      # Pinned squawk in Docker over the migration files, read-only, no network.
+      - run: make migration-lint
       # Image pipeline scripts, which otherwise run only in images.yml (mostly on main), in throwaway repositories with
       # fake gh, cosign and docker: no network, no token. scan-gate-test.sh runs the pinned conftest and yq through
       # Docker; image-gate-test.sh runs the pinned trivy, syft, grype and conftest on small fixtures (no service image,
@@ -308,6 +310,7 @@ jobs:
       - run: deploy/ci/verify-steps/supplychain-test.sh
       - run: deploy/ci/verify-steps/admission-metrics-test.sh
       - run: deploy/ci/verify-steps/objstore-test.sh
+      - run: deploy/ci/verify-steps/uptime-cost-test.sh
       # Drills and credential rotation tested without a cluster: no network.
       - run: deploy/k8s/drills/run-test.sh
       - run: deploy/k8s/rotate-test.sh
@@ -354,6 +357,8 @@ jobs:
       - run: deploy/k8s/eks-context-test.sh
       # AWS Secrets Manager scripts tested with fake tools (no secret leaks in args/output): no cloud account.
       - run: deploy/k8s/aws-secrets-test.sh
+      # Premium edge check of an EKS cluster tested with fake curl, date and sleep: no network, no cloud account.
+      - run: deploy/k8s/premium-edge-check-test.sh
       # Kafka init (topics, users, ACLs) and the svp-kafka, svp-valkey wrappers tested with fake tools: no network, no
       # broker.
       - run: deploy/helm/svp-data/files/kafka-init-test.sh
@@ -490,7 +495,7 @@ jobs:
           fail-on-severity: high
 
   # End-to-end compose stack report outside ci-ok: flaky runs on shared runners must not block a merge.
-  # Six backend services built from PR, web client from staging release.
+  # Backend services built from the PR, web client from the staging release.
   # make env writes random secrets that are never printed/uploaded; rate-limit resets touch only this run's Valkey.
   stack:
     name: stack (end-to-end, report only)
@@ -657,22 +662,22 @@ jobs:
           pattern: sarif-*
           path: sarif
       - if: hashFiles('sarif/sarif-golangci-lint/golangci-lint.sarif') != ''
-        uses: github/codeql-action/upload-sarif@1fc58d04a4d4374f921bdac573c3811c240f9c26 # v4.39.2
+        uses: github/codeql-action/upload-sarif@33d7b85da1a04171e211befe2c739303b9a4c066 # v4.39.3
         with:
           sarif_file: sarif/sarif-golangci-lint/golangci-lint.sarif
           category: golangci-lint
       - if: hashFiles('sarif/sarif-gitleaks/gitleaks.sarif') != ''
-        uses: github/codeql-action/upload-sarif@1fc58d04a4d4374f921bdac573c3811c240f9c26 # v4.39.2
+        uses: github/codeql-action/upload-sarif@33d7b85da1a04171e211befe2c739303b9a4c066 # v4.39.3
         with:
           sarif_file: sarif/sarif-gitleaks/gitleaks.sarif
           category: gitleaks
       - if: hashFiles('sarif/sarif-trivy-config/trivy-config.sarif') != ''
-        uses: github/codeql-action/upload-sarif@1fc58d04a4d4374f921bdac573c3811c240f9c26 # v4.39.2
+        uses: github/codeql-action/upload-sarif@33d7b85da1a04171e211befe2c739303b9a4c066 # v4.39.3
         with:
           sarif_file: sarif/sarif-trivy-config/trivy-config.sarif
           category: trivy-config
       - if: hashFiles('sarif/sarif-zizmor/zizmor.sarif') != ''
-        uses: github/codeql-action/upload-sarif@1fc58d04a4d4374f921bdac573c3811c240f9c26 # v4.39.2
+        uses: github/codeql-action/upload-sarif@33d7b85da1a04171e211befe2c739303b9a4c066 # v4.39.3
         with:
           sarif_file: sarif/sarif-zizmor/zizmor.sarif
           category: zizmor

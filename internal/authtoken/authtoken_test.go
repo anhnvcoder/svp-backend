@@ -173,6 +173,11 @@ func TestVerifyRejectsForgedTokens(t *testing.T) {
 			c["iat"] = now.Add(-2 * TTL).Unix()
 			c["exp"] = now.Add(-Leeway - 30*time.Second).Unix()
 		}), nil)},
+		{"older than TTL plus leeway", sign(t, jwt.SigningMethodEdDSA, key, testKID, with(func(c jwt.MapClaims) {
+			iat := now.Add(-TTL - Leeway - time.Second)
+			c["iat"] = iat.Unix()
+			c["exp"] = iat.Add(TTL).Unix()
+		}), nil)},
 		{"nbf far in the future", sign(t, jwt.SigningMethodEdDSA, key, testKID, with(func(c jwt.MapClaims) {
 			c["nbf"] = now.Add(24 * time.Hour).Unix()
 		}), nil)},

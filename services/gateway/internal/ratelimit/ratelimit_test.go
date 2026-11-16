@@ -256,7 +256,7 @@ func TestGoneRequestDoesNotWarn(t *testing.T) {
 	for name, ctx := range map[string]context.Context{"cancelled": cancelled, "deadline exceeded": expired} {
 		t.Run(name, func(t *testing.T) {
 			logs := captureLog(t)
-			l := New(client, prefix)
+			l := New(client, prefix) //nolint:contextcheck // New seeds its metric series with no request
 			soft := Class{Name: "soft", Limit: Limit{100, time.Second, 100}, Fallback: testLimit}
 			for i := range testLimit.Burst {
 				if ok, _ := l.Allow(ctx, soft, "id"); !ok {

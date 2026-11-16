@@ -5,13 +5,19 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"math/rand/v2"
 	"slices"
 	"time"
+	"unicode/utf8"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/twmb/franz-go/pkg/kerr"
 	"github.com/twmb/franz-go/pkg/kgo"
 	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/metric"
+	"go.opentelemetry.io/otel/metric/noop"
 	"go.opentelemetry.io/otel/propagation"
 	"go.opentelemetry.io/otel/trace"
 
@@ -35,7 +41,35 @@ const (
 	retryMax         = 10 * time.Second
 	cleanupEvery     = 10 * time.Minute
 	cleanupBatchSize = 1000
+	lastErrorMax     = 512
 )
+
+// permanentErrors are the produce errors that a record causes itself and that sending it again
+// cannot fix, so the relay marks the row failed instead of retrying the whole batch. They are the
+// codes of pkg/kerr/kerr.go in franz-go v1.22.2 whose retriable flag is false and whose cause is
+// the record:
+//
+//   - MESSAGE_TOO_LARGE (10): the record is over the size the broker or the client accepts. The
+//     client fails such a record before sending it with an error that wraps kerr.MessageTooLarge
+//     (pkg/kgo/producer.go and pkg/kgo/sink.go), so errors.Is matches both.
+//   - INVALID_RECORD (87): the broker's validation rejected the record.
+//
+// Every other code is retried with the whole batch: CORRUPT_MESSAGE is retriable, and the other
+// codes the file marks not retriable come from the topic, the client's settings, the credentials
+// or the broker (TOPIC_AUTHORIZATION_FAILED, RECORD_LIST_TOO_LARGE of a whole batch,
+// INVALID_TIMESTAMP of a skewed clock, as the client stamps each record when it sends it), and
+// fixing those makes the same rows go through.
+var permanentErrors = []error{kerr.MessageTooLarge, kerr.InvalidRecord}
+
+// permanent reports whether err is one of permanentErrors.
+func permanent(err error) bool {
+	for _, p := range permanentErrors {
+		if errors.Is(err, p) {
+			return true
+		}
+	}
+	return false
+}
 
 // Relay sends the unsent outbox rows of one database to Kafka, oldest id first.
 type Relay struct {
@@ -52,10 +86,16 @@ type Relay struct {
 	cleanupEvery    time.Duration
 	relayLoop       *telemetry.Loop
 	cleanupLoop     *telemetry.Loop
+	rowsFailed      metric.Int64Counter
 }
 
 // NewRelay returns a relay reading the outbox table through pool and producing with client.
 func NewRelay(pool *pgxpool.Pool, client *kgo.Client, logger *slog.Logger) *Relay {
+	rowsFailed, err := otel.Meter("github.com/anhnvcoder/svp-backend/internal/outbox").Int64Counter("svp.outbox.rows.failed")
+	if err != nil {
+		otel.Handle(err)
+		rowsFailed = noop.Int64Counter{}
+	}
 	return &Relay{
 		pool:            pool,
 		client:          client,
@@ -69,13 +109,16 @@ func NewRelay(pool *pgxpool.Pool, client *kgo.Client, logger *slog.Logger) *Rela
 		cleanupEvery:    cleanupEvery,
 		relayLoop:       telemetry.NewLoop("outbox-relay"),
 		cleanupLoop:     telemetry.NewLoop("outbox-cleanup"),
+		rowsFailed:      rowsFailed,
 	}
 }
 
 // Run sends batches until ctx is canceled. A full batch is followed at once by the next one, a
 // partial or empty batch by a short wait; a failed batch is rolled back and retried with a
-// growing wait. Run also deletes rows sent more than 24 hours ago, at start and then every 10
-// minutes.
+// growing, randomized wait. A row that fails with a permanent error (permanentErrors) is marked
+// failed and never read again, and the rows after it go on, so a later event of the same key can
+// reach Kafka while an earlier one did not. Run also deletes rows sent more than 24 hours ago, at
+// start and then every 10 minutes; failed rows stay.
 func (r *Relay) Run(ctx context.Context) {
 	r.cleanup(ctx)
 	cleanup := time.NewTicker(r.cleanupEvery)
@@ -115,7 +158,8 @@ func (r *Relay) Run(ctx context.Context) {
 }
 
 // retryWait returns the wait after failures earlier consecutive failures: retryBase doubled
-// for each, capped at retryMax.
+// for each, capped at retryMax, then randomized to between half and all of it so the relays of
+// several replicas do not retry in step.
 func (r *Relay) retryWait(failures int) time.Duration {
 	d := r.retryBase
 	for range failures {
@@ -124,7 +168,8 @@ func (r *Relay) retryWait(failures int) time.Duration {
 		}
 		d *= 2
 	}
-	return min(d, r.retryMax)
+	d = min(d, r.retryMax)
+	return d/2 + rand.N(d/2+1) //nolint:gosec // jitter, not a secret
 }
 
 type row struct {
@@ -136,9 +181,17 @@ type row struct {
 	createdAt time.Time
 }
 
-// sendBatch sends up to batchSize unsent rows in one transaction holding lockID and marks them
-// sent. It returns the number of rows sent, 0 when another relay holds the lock. On any error
-// the transaction rolls back and the rows stay unsent, including rows already produced.
+// failedRow is a row the relay gives up on, with the Kafka error that stopped it.
+type failedRow struct {
+	id    int64
+	topic string
+	err   string
+}
+
+// sendBatch sends up to batchSize unsent rows in one transaction holding lockID, marks the rows
+// sent and the rows that failed with a permanent error failed, and commits. It returns the number
+// of rows it settled either way, 0 when another relay holds the lock. On any other error the
+// transaction rolls back and the rows stay unsent, including rows already produced.
 func (r *Relay) sendBatch(ctx context.Context) (n int, err error) {
 	rctx, readCancel := context.WithTimeout(ctx, r.postgresTimeout)
 	defer readCancel()
@@ -172,40 +225,94 @@ func (r *Relay) sendBatch(ctx context.Context) (n int, err error) {
 		return 0, nil
 	}
 
-	records := make([]*kgo.Record, len(rows))
-	rowIDs := make([]int64, len(rows))
-	for i, x := range rows {
-		records[i] = toRecord(ctx, x)
-		rowIDs[i] = x.id
-	}
 	pctx, cancel := context.WithTimeout(ctx, r.produceTimeout)
-	err = kafkax.Produce(pctx, r.client, records...)
+	sentIDs, failed, err := r.produce(pctx, rows)
 	cancel()
 	if err != nil {
-		return 0, fmt.Errorf("send outbox rows %d..%d: %w", rowIDs[0], rowIDs[len(rowIDs)-1], err)
+		return 0, fmt.Errorf("send outbox rows %d..%d: %w", rows[0].id, rows[len(rows)-1].id, err)
 	}
 	sentAt := time.Now()
 
 	mctx, markCancel := context.WithTimeout(ctx, r.postgresTimeout)
 	defer markCancel()
-	if _, err := tx.Exec(mctx, "UPDATE outbox SET published_at = now() WHERE id = ANY($1)", rowIDs); err != nil {
+	if _, err := tx.Exec(mctx, "UPDATE outbox SET published_at = now() WHERE id = ANY($1)", sentIDs); err != nil {
 		return 0, fmt.Errorf("mark outbox rows sent: %w", err)
+	}
+	if len(failed) > 0 {
+		failedIDs := make([]int64, len(failed))
+		errs := make([]string, len(failed))
+		for i, f := range failed {
+			failedIDs[i], errs[i] = f.id, f.err
+		}
+		if _, err := tx.Exec(mctx, `UPDATE outbox AS o SET failed_at = now(), last_error = f.err
+			  FROM unnest($1::bigint[], $2::text[]) AS f(id, err) WHERE o.id = f.id`, failedIDs, errs); err != nil {
+			return 0, fmt.Errorf("mark outbox rows failed: %w", err)
+		}
 	}
 	if err := tx.Commit(mctx); err != nil {
 		return 0, fmt.Errorf("commit outbox rows sent: %w", err)
 	}
+	for _, f := range failed {
+		r.rowsFailed.Add(ctx, 1, metric.WithAttributes(attribute.String("topic", f.topic)))
+		r.logger.LogAttrs(ctx, slog.LevelError, "outbox row failed permanently, skipped",
+			slog.Int64("id", f.id), slog.String("topic", f.topic), slog.String("error", f.err))
+	}
 	r.logger.LogAttrs(ctx, slog.LevelInfo, "outbox batch sent",
 		slog.Int("rows", len(rows)),
-		slog.Int64("first_id", rowIDs[0]),
-		slog.Int64("last_id", rowIDs[len(rowIDs)-1]),
+		slog.Int("failed", len(failed)),
+		slog.Int64("first_id", rows[0].id),
+		slog.Int64("last_id", rows[len(rows)-1].id),
 		slog.Duration("max_lag", sentAt.Sub(rows[0].createdAt)))
 	return len(rows), nil
+}
+
+// produce sends rows and returns the ids sent and the rows that failed with a permanent error.
+// The client fails every record of a partition's batch with the broker's error, so a permanent
+// error of the batch does not tell which records caused it: produce then sends each row again on
+// its own, in id order, and a row fails only when it fails alone. Rows the batch had already
+// written are written again, as after any failed batch. Any other error, of the batch or of a row
+// sent alone, is returned and nothing is marked.
+func (r *Relay) produce(ctx context.Context, rows []row) (sentIDs []int64, failed []failedRow, err error) {
+	records := make([]*kgo.Record, len(rows))
+	for i, x := range rows {
+		records[i] = toRecord(ctx, x)
+	}
+	err = kafkax.Produce(ctx, r.client, records...)
+	if err == nil {
+		for _, x := range rows {
+			sentIDs = append(sentIDs, x.id)
+		}
+		return sentIDs, nil, nil
+	}
+	if !permanent(err) {
+		return nil, nil, err
+	}
+	for _, x := range rows {
+		err := kafkax.Produce(ctx, r.client, toRecord(ctx, x))
+		switch {
+		case err == nil:
+			sentIDs = append(sentIDs, x.id)
+		case permanent(err):
+			failed = append(failed, failedRow{id: x.id, topic: x.topic, err: truncate(err.Error(), lastErrorMax)})
+		default:
+			return nil, nil, fmt.Errorf("row %d alone: %w", x.id, err)
+		}
+	}
+	return sentIDs, failed, nil
+}
+
+// truncate returns s cut to at most n characters, on a character boundary.
+func truncate(s string, n int) string {
+	if utf8.RuneCountInString(s) <= n {
+		return s
+	}
+	return string([]rune(s)[:n])
 }
 
 func readUnsent(ctx context.Context, tx pgx.Tx) ([]row, error) {
 	rs, err := tx.Query(ctx,
 		`SELECT id, topic, record_key, payload, headers, created_at
-		   FROM outbox WHERE published_at IS NULL ORDER BY id LIMIT $1`, batchSize)
+		   FROM outbox WHERE published_at IS NULL AND failed_at IS NULL ORDER BY id LIMIT $1`, batchSize)
 	if err != nil {
 		return nil, fmt.Errorf("read outbox: %w", err)
 	}

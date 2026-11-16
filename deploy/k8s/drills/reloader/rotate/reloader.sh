@@ -56,21 +56,21 @@ SVP_GRAFANA_ADMIN_PASSWORD svp-obs/grafana-admin
 JWT_VERIFY_KEYS svp/user-service-env svp/video-service-env svp/engagement-service-env svp/feed-service-env svp/gateway-env
 NEXT_SERVER_ACTIONS_ENCRYPTION_KEY svp/web-env'
 
-# The table "Secret -> workload": each Secret whose change restarts a workload, and that workload as
-# Kind/namespace/name. Left out, as they restart nothing: pg-superuser (CloudNativePG sets the password itself), the
-# inputs of the init Jobs of svp-data, <service>-migrate-env, glitchtip-admin and Alertmanager's (read from files).
+# The table "Secret -> workload": each Secret whose change restarts a workload, as Kind/namespace/name (a Workload is
+# the Deployment or Rollout of that name: readers_of reads the kind from the pods). Left out, as they restart nothing:
+# pg-superuser, the inputs of the init Jobs of svp-data, <service>-migrate-env, glitchtip-admin, Alertmanager's.
 # Written from the table, not from the workloads' annotations, so that a workload that does not opt in fails.
 readers='svp-data/s3-root StatefulSet/svp-data/s3
 svp-data/svp-ops Deployment/svp-data/svp-ops
 svp-data/valkey-acl Deployment/svp-data/valkey
-svp/user-service-env Deployment/svp/user-service
-svp/video-service-env Deployment/svp/video-service
-svp/engagement-service-env Deployment/svp/engagement-service
-svp/feed-service-env Deployment/svp/feed-service
+svp/user-service-env Workload/svp/user-service
+svp/video-service-env Workload/svp/video-service
+svp/engagement-service-env Workload/svp/engagement-service
+svp/feed-service-env Workload/svp/feed-service
 svp/media-worker-env Deployment/svp/media-worker
 svp/gateway-env Rollout/svp/gateway
 svp/web-env Rollout/svp/web
-svp/sentry Deployment/svp/user-service Deployment/svp/video-service Deployment/svp/engagement-service Deployment/svp/feed-service Rollout/svp/gateway Rollout/svp/web
+svp/sentry Workload/svp/user-service Workload/svp/video-service Workload/svp/engagement-service Workload/svp/feed-service Rollout/svp/gateway Rollout/svp/web
 svp-obs/glitchtip-env Deployment/svp-obs/glitchtip
 svp-obs/grafana-admin Deployment/svp-obs/kps-grafana
 keda/keda-kafka Deployment/keda/keda-operator'
@@ -80,10 +80,17 @@ init_job_names="pg-bootstrap kafka-init s3-init"
 
 # expected_secrets: every Secret the drill's change writes, one per line, sorted.
 expected_secrets() { printf '%s\n' "$changes" | awk '{ for (i = 2; i <= NF; i++) print $i }' | LC_ALL=C sort -u; }
-# readers_of < SECRETS: the workloads that read one of SECRETS (one per line), sorted.
+# readers_of < SECRETS: the workloads that read one of SECRETS (one per line), sorted; a Workload/ns/name of the table
+# becomes the Deployment or Rollout of that namespace and name that has pods in $state/pods-before (it stays as it is
+# when none has, so that restarted fails on it).
 readers_of() {
-  awk 'NR == FNR { r[$1] = $0; next } $1 in r { n = split(r[$1], f, " "); for (i = 2; i <= n; i++) print f[i] }' \
-    <(printf '%s\n' "$readers") - | LC_ALL=C sort -u
+  awk 'FILENAME == ARGV[1] { r[$1] = $0; next }
+    FILENAME == ARGV[2] { split($1, p, "/"); if (p[1] == "Deployment" || p[1] == "Rollout") kind[p[2] "/" p[3]] = p[1]; next }
+    $1 in r { n = split(r[$1], f, " ")
+      for (i = 2; i <= n; i++) { w = f[i]
+        if (w ~ /^Workload\//) { k = substr(w, 10); if (k in kind) w = kind[k] "/" k }
+        print w } }' \
+    <(printf '%s\n' "$readers") "$state/pods-before" - | LC_ALL=C sort -u
 }
 
 # pods FILE: one line "WORKLOAD UID STATE NAME" per pod of a Deployment, StatefulSet, Rollout or CloudNativePG Cluster
@@ -305,9 +312,9 @@ unb64url() {
 }
 
 # jwt_new_token: writes $state/new.auth, the Authorization header of a token for the drill's user signed with
-# JWT_DRILL_SIGNING_KEY under the kid of JWT_VERIFY_KEY_NEW: the claims user-service writes (internal/authtoken:
-# iss svp-user, aud svp-api, sub, iat, exp an hour later, jti), alg EdDSA. Until JWT_VERIFY_KEYS holds that key,
-# nothing takes it. The key goes to openssl in a private file of $state, removed at once.
+# JWT_DRILL_SIGNING_KEY under the kid of JWT_VERIFY_KEY_NEW: the claims of internal/authtoken, alg EdDSA, but exp an
+# hour after iat, not authtoken.TTL; it still verifies, as Verify bounds exp, not exp - iat. Until JWT_VERIFY_KEYS
+# holds that key, nothing takes it. The key goes to openssl in a private file of $state, removed at once.
 jwt_new_token() {
   local kid sub now header payload
   kid=$(value new JWT_VERIFY_KEY_NEW)

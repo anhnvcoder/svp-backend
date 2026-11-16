@@ -352,6 +352,20 @@ promote_image_row() {
     "$1" "$3" "$owner" "$repo" "$3" "$2" "${4:0:19}" "$owner" "$repo" "$repo" "$name"
 }
 
+# promote_image_file ENV SERVICE REPOSITORY TAG DIGEST: prints envs/ENV/images/SERVICE.yaml of svp-gitops for a release
+# the promote writes there first, opening with the comment of the other image files there (lines of at most 118).
+promote_image_file() {
+  local src url
+  src=$(release_source_of "$2" "$3") || fail "$3 is no release of $2 in $release_sources_file"
+  url=$(jq -r .repository <<<"$src")
+  echo "# The release image of $2 in $1, nothing else: the release on GHCR that CI of"
+  echo "$url built, scanned and signed (.github/workflows/images.yml there). The tag names the commit for people; the" \
+    "cluster pulls the digest. Its configuration is base/services/$2.yaml and envs/$1/$2.yaml when there is one." |
+    awk '{ line = "#"; for (i = 1; i <= NF; i++) { if (length(line) + 1 + length($i) > 118) { print line; line = "#" }
+      line = line " " $i } print line }'
+  printf 'image:\n  repository: %s\n  tag: "%s"\n  digest: "%s"\n' "$3" "$4" "$5"
+}
+
 # yq_ [NAME=VALUE...] ARGS...: runs pinned yq without network as calling user with PWD as workdir.
 # Passes NAME=VALUE into container env for strenv(); never run inside loops reading stdin.
 yq_() {
@@ -492,13 +506,14 @@ grype_sbom() {
 # grype_sarif DIR CATEGORY: filters DIR/grype.sarif.raw to HIGH/CRITICAL matches, matching trivy SARIF format.
 grype_sarif() {
   local dir=$1 category=$2
+  # With no match grype omits rules from the SARIF; null and missing lists are read as empty ones.
   jq --slurpfile g "$dir/grype.json" --arg c "$category" '
-    ([$g[0].matches[] | select(.vulnerability.severity == "Critical" or .vulnerability.severity == "High")
+    ([($g[0].matches // [])[] | select(.vulnerability.severity == "Critical" or .vulnerability.severity == "High")
       | "\(.vulnerability.id)-\(.artifact.name)"] | unique) as $keep
     | .runs[] |= (.automationDetails.id = $c
-      | .results |= map(select(.ruleId | IN($keep[])))
+      | .results |= (. // [] | map(select(.ruleId | IN($keep[]))))
       | ([.results[].ruleId] | unique) as $used
-      | .tool.driver.rules |= map(select(.id | IN($used[]))))' \
+      | .tool.driver.rules |= (. // [] | map(select(.id | IN($used[])))))' \
     "$dir/grype.sarif.raw" >"$dir/grype.sarif" || fail "write the SARIF of grype in $dir"
   rm -f "$dir/grype.sarif.raw"
 }

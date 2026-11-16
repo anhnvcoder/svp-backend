@@ -95,7 +95,7 @@ func TrustTraceContext(next http.Handler) http.Handler {
 // the log only.
 func Recover(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		defer func() {
+		defer func() { //nolint:contextcheck // the closure reads the request's context from the captured r
 			if p := recover(); p != nil {
 				slog.LogAttrs(r.Context(), slog.LevelError, "panic in http handler",
 					slog.Any("panic", p),
@@ -160,7 +160,7 @@ func AccessLog(next http.Handler) http.Handler {
 		rec := &statusRecorder{ResponseWriter: w}
 		finished := false
 		// Deferred so a panic, answered by an outer Recover, still gets its line.
-		defer func() {
+		defer func() { //nolint:contextcheck // the closure reads the request's context from the captured r
 			status := rec.status
 			if status == 0 {
 				status = http.StatusOK

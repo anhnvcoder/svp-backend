@@ -99,7 +99,8 @@ gr() {
     -c user.email=test@example.invalid -c commit.gpgsign=false -c core.hooksPath=/dev/null "$@"
 }
 mkdir -p "$rg/envs/stg/images"
-for svc in gateway user-service video-service engagement-service feed-service media-worker; do
+read -r -a backend_services <<<"$(bash -c '. "$1/deploy/k8s/lib.sh" && echo "${built_services[*]}"' _ "$tree")"
+for svc in "${backend_services[@]}"; do
   d=
   [ "$svc" != gateway ] || d=$digest_a
   printf 'image:\n  repository: ghcr.io/anhnvcoder/svp-backend/%s\n  tag: "%s"\n  digest: "%s"\n' "$svc" \

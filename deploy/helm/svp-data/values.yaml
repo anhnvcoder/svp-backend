@@ -12,7 +12,7 @@ postgres:
   mode: cluster
   external:
     # DNS name of the managed Postgres (the RDS endpoint, the name its certificate holds), and the CIDRs its addresses
-    # are in (the database subnets), the only addresses the pg-bootstrap Job may reach on 5432.
+    # are in (the database subnets), the only addresses the pg-bootstrap Job and svp-ops may reach on 5432.
     host: ""
     cidrs: []
   # The major of RDS, compose and CI; minimal: no extension is needed.
@@ -95,15 +95,19 @@ kafka:
     requests: {cpu: 50m, memory: 64Mi}
     limits: {cpu: "1", memory: 512Mi}
 
-# Deployment svp-ops: the one place in the cluster where scripts, drills and runbooks run the Kafka CLI and valkey-cli
-# (kubectl exec deploy/svp-ops -c kafka -- /opt/svp/bin/svp-kafka ..., -c valkey -- /opt/svp/bin/svp-valkey ...), as
-# svp-admin and svp-ops. Both containers only sleep until then; a Kafka CLI run is one JVM of a 256 MiB heap.
+# Deployment svp-ops: the one place in the cluster where scripts, drills and runbooks run the Kafka CLI, valkey-cli and
+# psql (kubectl exec deploy/svp-ops -c kafka -- /opt/svp/bin/svp-kafka ..., -c valkey -- /opt/svp/bin/svp-valkey ...,
+# -c postgres -- /opt/svp/bin/svp-pg ...), as svp-admin, svp-ops and the read-only app roles. The containers only sleep
+# until then; a Kafka CLI run is one JVM of a 256 MiB heap, psql of postgres.image prints a few rows.
 svpOps:
   resources:
     kafka:
       requests: {cpu: 10m, memory: 32Mi}
       limits: {cpu: 500m, memory: 512Mi}
     valkey:
+      requests: {cpu: 5m, memory: 8Mi}
+      limits: {cpu: 200m, memory: 64Mi}
+    postgres:
       requests: {cpu: 5m, memory: 8Mi}
       limits: {cpu: 200m, memory: 64Mi}
 
@@ -113,7 +117,7 @@ s3:
   # nothing of the store is rendered here. Postgres archives into s3, so external needs postgres.mode external too.
   mode: cluster
   # The object store, the same image as compose's s3 (RustFS), pinned by the digest of its multi-arch index.
-  image: docker.io/rustfs/rustfs:1.0.4@sha256:ed9210d6411d77ffceb70d94b964a3cb7d225983368bc25bebe01e995293dcc2
+  image: docker.io/rustfs/rustfs:1.0.5@sha256:b81d16a90ee25bd9511280127ca1471788c6e874cf0f0da759645f46b2dc1d74
   storage: 5Gi
   resources:
     requests: {cpu: 100m, memory: 256Mi}
@@ -136,11 +140,11 @@ initJobs:
     limits: {cpu: 500m, memory: 512Mi}
 
 # Who may reach the data pods. Pods are chosen by label, so the policies exist before
-# their clients do: the six services and their migrate Jobs are labelled app.kubernetes.io/name=<service>.
+# their clients do: the services and their migrate Jobs are labelled app.kubernetes.io/name=<service>.
 clients:
   # Database of each service, by its pods and its migrate Job.
   postgres: [user-service, video-service, engagement-service, feed-service]
   # Rate limits (db 10), the explore cache (db 14) and the web client's sessions (db 9).
   valkey: [gateway, feed-service, web]
-  kafka: [user-service, video-service, engagement-service, feed-service, media-worker]
+  kafka: [user-service, video-service, engagement-service, feed-service, media-worker, dlq-replay]
   s3: [video-service, media-worker]

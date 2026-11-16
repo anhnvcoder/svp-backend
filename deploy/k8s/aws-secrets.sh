@@ -4,7 +4,9 @@
 # aws/envs/<env> and before that of aws/gitops/<env>, and again whenever .env changes.
 
 # The entries of the Kafka and Valkey users (kafka-admin, kafka-users, valkey-users) are Terraform's: it makes their
-# passwords with those of Amazon MSK and ElastiCache in one apply, so this script only checks that they exist.
+# passwords with those of Amazon MSK and ElastiCache in one apply, so this script only checks that they exist. Entry
+# media-signing, the key video-service signs CloudFront URLs with, is aws/scripts/media-signing-key.sh's (activate) of
+# that repository: checked to hold a value, never written.
 
 # Every value and the account are read and checked before anything is written. pg-superuser takes
 # SVP_RDS_MASTER_PASSWORD of the environment, never .env, kept in this shell alone. Each entry is one put-secret-value
@@ -39,13 +41,13 @@ aws_setup
 trap 'rm -rf "$aws_dir"' EXIT
 
 # --- the entries and their keys, from the ExternalSecrets of chart svp-cluster as rendered for EKS (Kafka and Valkey
-# managed: localKafkaValkey off). The set does not depend on the store, so the render takes store kubernetes, whose
-# entries are named without a prefix and which needs no IAM role. grafanaOperator stays off: the session's script of
-# the infrastructure repository writes entry grafana-operator, a new token of Amazon Managed Grafana each session.
+# managed: localKafkaValkey off; mediaSigning on). The set does not depend on the store, so the render takes store
+# kubernetes, whose entries are named without a prefix and need no IAM role. grafanaOperator stays off: the session's
+# script of the infrastructure repository writes entry grafana-operator, a new Managed Grafana token each session.
 chart=$repo_root/deploy/helm/svp-cluster
 helm template svp-cluster "$chart" --show-only templates/external-secrets.yaml \
   --set externalSecrets.enabled=true --set externalSecrets.argocdNotifications=true --set s3.mode=external \
-  --set externalSecrets.localKafkaValkey=false \
+  --set externalSecrets.localKafkaValkey=false --set externalSecrets.mediaSigning=true \
   >"$aws_dir/render.yaml" || fail "render the ExternalSecrets of chart svp-cluster for EKS"
 # Each YAML document of the render becomes one line of JSON read by Helm itself (fromYaml): no YAML tool of its own.
 mkdir -p "$aws_dir/yj/templates" "$aws_dir/yj/in" && cp "$aws_dir/render.yaml" "$aws_dir/yj/in/doc" &&
@@ -61,8 +63,9 @@ entries=$(helm template yj "$aws_dir/yj" | sed -n 's/^# json //p' | jq -sc '
 names=$(jq -r 'keys[]' <<<"$entries")
 # The entries Terraform writes (above): read by the cluster, never written here, their keys not taken from .env.
 terraform_entries=(kafka-admin kafka-users valkey-users)
+signing_entry=media-signing
 entries_written=$(jq -c --args 'with_entries(select(.key | IN($ARGS.positional[]) | not))' \
-  "${terraform_entries[@]}" <<<"$entries") || fail "leave out the entries of the infrastructure repository"
+  "${terraform_entries[@]}" "$signing_entry" <<<"$entries") || fail "leave out the entries of the infrastructure repository"
 
 # --- the values, every one read and checked before anything is written.
 optional=(SVP_ALERT_TELEGRAM_BOT_TOKEN SVP_ALERT_TELEGRAM_CHAT_ID)
@@ -87,6 +90,11 @@ for name in $names; do
   aws_ secretsmanager describe-secret --secret-id "$aws_prefix$name" --query Name --output text >/dev/null ||
     fail "entry $aws_prefix$name of AWS Secrets Manager not found (above): apply root aws/envs/$aws_env of the infrastructure repository first; nothing was written"
 done
+signing=$(aws_ secretsmanager list-secret-version-ids --secret-id "$aws_prefix$signing_entry" \
+  --query "Versions[?contains(VersionStages, 'AWSCURRENT')].VersionId" --output text) ||
+  fail "read the versions of entry $aws_prefix$signing_entry"
+[ -n "$signing" ] && [ "$signing" != None ] ||
+  fail "entry $aws_prefix$signing_entry holds no value: run aws/scripts/media-signing-key.sh $aws_env activate <a|b> of the infrastructure repository after the apply of root aws/envs/$aws_env; nothing was written"
 running=
 if jq -e 'has("glitchtip-runtime")' <<<"$entries" >/dev/null; then
   running=$(aws_ secretsmanager list-secret-version-ids --secret-id "${aws_prefix}glitchtip-runtime" \
@@ -110,7 +118,7 @@ for name in $(jq -r 'keys[]' <<<"$entries_written"); do
   done | aws_put_entry "$name"
   written="$written $name"
 done
-ok "entries of $aws_prefix written:$written (pg-superuser from SVP_RDS_MASTER_PASSWORD, the others from .env); ${terraform_entries[*]} left to the infrastructure repository"
+ok "entries of $aws_prefix written:$written (pg-superuser from SVP_RDS_MASTER_PASSWORD, the others from .env); ${terraform_entries[*]} $signing_entry left to the infrastructure repository"
 if jq -e 'has("glitchtip-runtime")' <<<"$entries" >/dev/null; then
   if [ -z "$running" ]; then
     jq -r '.["glitchtip-runtime"][] | ., ""' <<<"$entries" | aws_put_entry glitchtip-runtime

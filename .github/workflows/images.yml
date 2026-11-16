@@ -274,7 +274,7 @@ jobs:
           mask-aws-account-id: true
           aws-profile: svp-stg
       - &cosign
-        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+        uses: sigstore/cosign-installer@756fe2d284c7292c4e9b62c8a28f1e5629c59532 # v4.1.3
         with:
           cosign-release: v3.1.4
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
@@ -367,8 +367,13 @@ jobs:
               $seen == *" $svc "* ]] || ! is_digest "$D"; then
               fail "$dir is no release of a service of this repository at this commit, or a second one ($R:$T@$D)"
             fi
-            yq_ R="$R" T="$T" D="$D" -i \
-              '.image.repository = strenv(R) | .image.tag = strenv(T) | .image.digest = strenv(D)' "envs/stg/images/$svc.yaml"
+            file=envs/stg/images/$svc.yaml
+            if [ -f "$file" ]; then
+              yq_ R="$R" T="$T" D="$D" -i \
+                '.image.repository = strenv(R) | .image.tag = strenv(T) | .image.digest = strenv(D)' "$file"
+            else
+              promote_image_file stg "$svc" "$R" "$T" "$D" >"$file" && git add "$file"
+            fi
             seen+="$svc "
           done 3< <(find "$RUNNER_TEMP/releases" -type f -name digest 2>/dev/null | sort)
           # The two values derived from the charts' commit, as the check of svp-gitops computes them again.
@@ -441,7 +446,7 @@ jobs:
 
           ## Phạm vi
 
-          Bot \`$app\` chỉ sửa khối \`image\` của \`envs/stg/images/<service>.yaml\` và ba giá trị \`revision\`, \`podSecurityVersion\`,
+          Bot \`$app\` chỉ sửa khối \`image\` của \`envs/stg/images/<service>.yaml\` (tạo file đó cho service mới) và ba giá trị \`revision\`, \`podSecurityVersion\`,
           \`collectorConfigSha256\` của \`envs/stg/charts.yaml\`. Mỗi lượt build dựng lại nhánh \`$branch\` từ \`main\` và giữ các bản chưa merge của PR này."
           id=$(gh api "users/${app}%5Bbot%5D" --jq .id)
           git -c user.name="${app}[bot]" -c user.email="$id+${app}[bot]@users.noreply.github.com" \
@@ -566,15 +571,26 @@ jobs:
           ref=$REF
           lease=$(git rev-parse --verify --quiet "refs/remotes/origin/$branch") || lease=
           git checkout --quiet -B "$branch" origin/main
-          # Read into a variable, not through a pipe into read: a file missing at stg_ref fails the step.
-          list='' rows=''
+          # Read into a variable, not through a pipe into read: a file of stg_ref that cannot be read fails the step.
+          # A service stg_ref has no file of is a new release the revision of stg there does not build yet.
+          list='' rows='' count=0
           for svc in "${svp_services[@]}"; do
+            if ! git cat-file -e "$ref:envs/stg/images/$svc.yaml" 2>/dev/null; then
+              echo "skip  $svc: envs/stg/images/$svc.yaml is missing at ${ref:0:12}, a release stg does not run yet"
+              continue
+            fi
             line=$(git show "$ref:envs/stg/images/$svc.yaml" | yq_ '.image | [.repository, .tag, .digest] | join("|")')
             IFS='|' read -r R T D <<<"$line"
-            yq_ R="$R" T="$T" D="$D" -i \
-              '.image.repository = strenv(R) | .image.tag = strenv(T) | .image.digest = strenv(D)' "envs/prd/images/$svc.yaml"
+            file=envs/prd/images/$svc.yaml
+            if [ -f "$file" ]; then
+              yq_ R="$R" T="$T" D="$D" -i \
+                '.image.repository = strenv(R) | .image.tag = strenv(T) | .image.digest = strenv(D)' "$file"
+            else
+              promote_image_file prd "$svc" "$R" "$T" "$D" >"$file" && git add "$file"
+            fi
             list+="- $svc: $R:$T@$D"$'\n'
             rows+="$(promote_image_row "$svc" "$R" "$T" "$D")"$'\n'
+            count=$((count + 1))
           done
           line=$(git show "$ref:envs/stg/charts.yaml" |
             yq_ '[.revision, .podSecurityVersion, .collectorConfigSha256] | join("|")')
@@ -596,7 +612,7 @@ jobs:
           Run: $RUN_URL"
           body="## Thay đổi gì
 
-          Đưa prd lên đúng bộ mà stg chạy ở commit [\`${ref:0:12}\`](https://github.com/$repo/commit/$ref) của \`svp-gitops\`: image của ${#svp_services[@]} service, chart, và
+          Đưa prd lên đúng bộ mà stg chạy ở commit [\`${ref:0:12}\`](https://github.com/$repo/commit/$ref) của \`svp-gitops\`: image của $count service, chart, và
           \`gitopsRevision\` (prd render \`argocd/apps\`, \`base/\`, \`platforms/\` ở commit đó).
 
           | Service | Commit | Image |
@@ -621,7 +637,7 @@ jobs:
 
           ## Phạm vi
 
-          Bot \`$app\` chỉ sửa khối \`image\` của ${#svp_services[@]} file \`envs/prd/images/*.yaml\` và bốn giá trị \`revision\`, \`podSecurityVersion\`,
+          Bot \`$app\` chỉ sửa khối \`image\` của $count file \`envs/prd/images/*.yaml\` (tạo file của service mới) và bốn giá trị \`revision\`, \`podSecurityVersion\`,
           \`collectorConfigSha256\`, \`gitopsRevision\` của \`envs/prd/charts.yaml\`. Các dòng khác của file, kể cả chú thích, giữ nguyên."
           id=$(gh api "users/${app}%5Bbot%5D" --jq .id)
           git -c user.name="${app}[bot]" -c user.email="$id+${app}[bot]@users.noreply.github.com" \
@@ -847,12 +863,12 @@ jobs:
           exit "$over"
       - name: Upload the trivy SARIF
         if: ${{ !cancelled() && steps.split.outputs.trivy == 'true' }}
-        uses: github/codeql-action/upload-sarif@1fc58d04a4d4374f921bdac573c3811c240f9c26 # v4.39.2
+        uses: github/codeql-action/upload-sarif@33d7b85da1a04171e211befe2c739303b9a4c066 # v4.39.3
         with:
           sarif_file: ${{ runner.temp }}/sarif-trivy
       - name: Upload the grype SARIF
         if: ${{ !cancelled() && steps.split.outputs.grype == 'true' }}
-        uses: github/codeql-action/upload-sarif@1fc58d04a4d4374f921bdac573c3811c240f9c26 # v4.39.2
+        uses: github/codeql-action/upload-sarif@33d7b85da1a04171e211befe2c739303b9a4c066 # v4.39.3
         with:
           sarif_file: ${{ runner.temp }}/sarif-grype
 

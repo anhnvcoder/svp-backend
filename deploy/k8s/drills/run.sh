@@ -1,13 +1,15 @@
 #!/usr/bin/env bash
-# The drills on the local cluster svp (make drill-k8s-threats, drill-k8s-supplychain, drill-k8s-gitops,
-# drill-k8s-reloader): the Chainsaw tests of deploy/k8s/drills/<drill>/ (label drill=<drill>, configuration
-# deploy/k8s/drills/.chainsaw.yaml), one at a time, in one call of chainsaw per drill, so two drills never run together.
-# Usage: run.sh threats|supplychain|gitops|reloader
+# The drills on the local cluster svp (make drill-k8s-threats, drill-k8s-mesh, drill-k8s-supplychain,
+# drill-k8s-gitops, drill-k8s-reloader): the Chainsaw tests of deploy/k8s/drills/<drill>/ (label drill=<drill>,
+# configuration deploy/k8s/drills/.chainsaw.yaml), one at a time, in one call of chainsaw per drill, so two drills never
+# run together. Usage: run.sh threats|mesh|supplychain|gitops|reloader
 
 # threats needs .k8s/ca.crt, given to curl as CURL_CA_BUNDLE, and a video READY and the drill users of make k8s-smoke
 # run before on the same cluster. On a cluster without External Secrets Operator (no CRD
 # externalsecrets.external-secrets.io: the dev path, whose Secrets come from .env) the tests labelled
 # requires=external-secrets are left out, each with a skip line.
+
+# mesh needs .k8s/ca.crt, given to curl as CURL_CA_BUNDLE, and reads no Secret value.
 
 # supplychain takes the Chainsaw values unsigned, vulnerable, noProvenance and enforceTmp from SUPPLYCHAIN_UNSIGNED,
 # SUPPLYCHAIN_VULNERABLE, SUPPLYCHAIN_NO_PROVENANCE and SUPPLYCHAIN_ENFORCE_TMP. An image not given is looked up here
@@ -27,9 +29,9 @@
 # holds a Secret value of threats is replaced by a line saying so. A drill with no test, or whose report holds another
 # number of tests than its folder (less those left out), fails.
 
-# threats reads the Secret values its tests use first (7 Kafka users of svp-data/kafka-users, svp-feed-service's Valkey
-# password in svp/feed-service-env, the Grafana admin, 3 object store users of svp-data/pg-backup-s3 and s3-users) into
-# a file of mode 600, removed on exit, no value on a command line: fewer than 12 fail the drill before chainsaw.
+# threats reads the Secret values its tests use first (the Kafka users of svp-data/kafka-users, svp-feed-service's
+# Valkey password in svp/feed-service-env, the Grafana admin, the object store users of svp-data/pg-backup-s3 and
+# s3-users) into a mode 600 file, removed on exit, no value on a command line: fewer than 12 fail the drill first.
 # reloader puts in that file the old and the new value of each variable it changes and GlitchTip's API token.
 
 # The terminal gets every line of the output but those that hold one of the values, and once chainsaw has ended the log
@@ -45,10 +47,10 @@ set -euo pipefail
 
 drill=${1:-}
 case $drill in
-threats | supplychain | gitops | reloader) ;;
-*) fail "usage: deploy/k8s/drills/run.sh threats|supplychain|gitops|reloader (got '$drill')" ;;
+threats | mesh | supplychain | gitops | reloader) ;;
+*) fail "usage: deploy/k8s/drills/run.sh threats|mesh|supplychain|gitops|reloader (got '$drill')" ;;
 esac
-[ $# = 1 ] || fail "usage: deploy/k8s/drills/run.sh threats|supplychain|gitops|reloader (one drill per call)"
+[ $# = 1 ] || fail "usage: deploy/k8s/drills/run.sh threats|mesh|supplychain|gitops|reloader (one drill per call)"
 
 umask 077
 work=$(mktemp -d)
@@ -91,8 +93,12 @@ threats)
   fi
   # The Secret values the tests read, one per line, for the search: only ever in this file.
   secrets=$work/secrets
+  kafka_users=$(kc -n svp-data get secret kafka-users -o json 2>/dev/null) ||
+    fail "SECRETS: read Secret svp-data/kafka-users, whose Kafka passwords the drill searches its output for"
+  # Each Kafka user, Valkey's svp-feed-service, the Grafana admin and three object store keys: one value each.
+  want=$(($(jq '.data | length' <<<"$kafka_users") + 5))
   {
-    kc -n svp-data get secret kafka-users -o json | jq -r '.data[] | @base64d'
+    jq -r '.data[] | @base64d' <<<"$kafka_users"
     kc -n svp get secret feed-service-env -o json |
       jq -r '.data.REDIS_URL | @base64d | capture("^rediss://svp-feed-service:(?<pw>[A-Za-z0-9]+)@").pw'
     kc -n svp-obs get secret grafana-admin -o json | jq -r '.data["admin-password"] | @base64d'
@@ -101,9 +107,13 @@ threats)
       jq -r '.data.SVP_VIDEO_S3_SECRET_KEY, .data.SVP_MEDIA_WORKER_S3_SECRET_KEY | @base64d'
   } 2>/dev/null | grep -v '^$' >"$secrets" || true
   n=$(grep -c . "$secrets" || true)
-  ((n >= 12)) ||
-    fail "SECRETS: read the 12 Secret values the drill uses (7 Kafka users, Valkey's svp-feed-service, Grafana admin, 3 object store users) to search its output (got $n)"
-  searched="the drill read (7 Kafka users, Valkey's svp-feed-service, Grafana admin, 3 object store users)"
+  ((n >= want)) ||
+    fail "SECRETS: read all $want of the Secret values the drill uses (Kafka users, Valkey's svp-feed-service, Grafana admin, object store users) to search its output (got $n)"
+  searched="the drill read (Kafka users, Valkey's svp-feed-service, Grafana admin, object store users)"
+  ;;
+mesh)
+  [ -s .k8s/ca.crt ] || fail "drill-k8s-mesh: .k8s/ca.crt missing; run make k8s-up (or make k8s-ca)"
+  export CURL_CA_BUNDLE=$repo_root/.k8s/ca.crt
   ;;
 reloader)
   [ -s .k8s/ca.crt ] || fail "drill-k8s-reloader: .k8s/ca.crt missing; run make k8s-up (or make k8s-ca)"

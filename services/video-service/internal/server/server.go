@@ -1,8 +1,9 @@
 // Package server implements svp.video.v1.VideoService: InitUpload records a new video and signs
 // its upload form, CompleteUpload checks the uploaded object and emits video.uploaded through the
 // outbox, GetVideo reads a video back. GetPublicVideo serves a READY video to anyone and
-// ListAuthorVideos lists the videos of an author. HandleTranscode consumes
-// the transcode results that move the video to READY or FAILED.
+// ListAuthorVideos lists the videos of an author. GrantEntitlement records the simulated purchase
+// of a premium video and GetPlaybackPlaylist serves its playlists to entitled callers.
+// HandleTranscode consumes the transcode results that move the video to READY or FAILED.
 package server
 
 import (
@@ -35,6 +36,7 @@ import (
 	"github.com/anhnvcoder/svp-backend/internal/grpcerr"
 	"github.com/anhnvcoder/svp-backend/internal/ids"
 	"github.com/anhnvcoder/svp-backend/internal/logx"
+	"github.com/anhnvcoder/svp-backend/internal/mediasign"
 	"github.com/anhnvcoder/svp-backend/internal/objstore"
 	"github.com/anhnvcoder/svp-backend/internal/outbox"
 	"github.com/anhnvcoder/svp-backend/internal/pagetoken"
@@ -102,6 +104,20 @@ const (
 	// ReasonDependencyUnavailable goes with UNAVAILABLE when a dependency of the service (object
 	// storage) is down while the service itself runs: the gateway's breaker does not count it.
 	ReasonDependencyUnavailable = "DEPENDENCY_UNAVAILABLE"
+	// ReasonInvalidTier goes with INVALID_ARGUMENT for a tier that is unspecified or unknown.
+	ReasonInvalidTier = "INVALID_TIER"
+	// ReasonVideoNotPremium goes with FAILED_PRECONDITION for an entitlement to a regular video.
+	ReasonVideoNotPremium = "VIDEO_NOT_PREMIUM"
+	// ReasonAlreadyEntitled goes with FAILED_PRECONDITION when the author of a premium video buys
+	// it: the author always holds TIER_FHD.
+	ReasonAlreadyEntitled = "ALREADY_ENTITLED"
+	// ReasonNotEntitled goes with PERMISSION_DENIED for a playlist of a premium video the caller
+	// holds no entitlement to and is not the author of.
+	ReasonNotEntitled = "NOT_ENTITLED"
+	// ReasonRenditionNotEntitled goes with PERMISSION_DENIED for a rendition above the caller's tier.
+	ReasonRenditionNotEntitled = "RENDITION_NOT_ENTITLED"
+	// ReasonRenditionNotFound goes with NOT_FOUND for a rendition the video does not have.
+	ReasonRenditionNotFound = "RENDITION_NOT_FOUND"
 )
 
 // Video statuses as stored in the status column.
@@ -118,6 +134,7 @@ type Storage interface {
 	Head(ctx context.Context, key string) (objstore.ObjectInfo, error)
 	Delete(ctx context.Context, key string) error
 	DeletePrefix(ctx context.Context, prefix string) error
+	Read(ctx context.Context, key string, maxBytes int64) ([]byte, error)
 }
 
 // Server serves VideoService. Every RPC but GetPublicVideo expects the caller id that
@@ -128,29 +145,41 @@ type Server struct {
 	pool    *pgxpool.Pool
 	queries *store.Queries
 	storage Storage
+	signer  mediasign.Signer
 	logger  *slog.Logger
+	// playlists caches the playlists of premium videos that GetPlaybackPlaylist reads.
+	playlists *playlistCache
 
 	// readyDuration is svp.video.ready.duration: from CompleteUpload to READY or FAILED.
 	readyDuration metric.Float64Histogram
+	// playlistsServed is svp.video.playback.playlists: GetPlaybackPlaylist answers by kind and result.
+	playlistsServed metric.Int64Counter
 	// rollbackTimeout is the constant of the same name; tests shorten it.
 	rollbackTimeout time.Duration
 }
 
-// New returns a Server reading and writing through pool and storage. Its metrics go to the
-// global meter provider.
-func New(pool *pgxpool.Pool, storage Storage, logger *slog.Logger) *Server {
-	readyDuration, err := otel.Meter("github.com/anhnvcoder/svp-backend/services/video-service/internal/server").
-		Float64Histogram("svp.video.ready.duration", metric.WithUnit("s"),
-			metric.WithDescription("Time from CompleteUpload to the video becoming READY or FAILED"),
-			metric.WithExplicitBucketBoundaries(readyBuckets...))
+// New returns a Server reading and writing through pool and storage, signing the segments of
+// premium videos with signer. Its metrics go to the global meter provider.
+func New(pool *pgxpool.Pool, storage Storage, signer mediasign.Signer, logger *slog.Logger) *Server {
+	meter := otel.Meter("github.com/anhnvcoder/svp-backend/services/video-service/internal/server")
+	readyDuration, err := meter.Float64Histogram("svp.video.ready.duration", metric.WithUnit("s"),
+		metric.WithDescription("Time from CompleteUpload to the video becoming READY or FAILED"),
+		metric.WithExplicitBucketBoundaries(readyBuckets...))
 	if err != nil {
 		// A metric never stops the service: report the error and record nothing.
 		otel.Handle(err)
 		readyDuration = noop.Float64Histogram{}
 	}
+	playlistsServed, err := meter.Int64Counter("svp.video.playback.playlists", metric.WithUnit("{playlist}"),
+		metric.WithDescription("Playlists of premium videos GetPlaybackPlaylist answered, by kind and result"))
+	if err != nil {
+		otel.Handle(err)
+		playlistsServed = noop.Int64Counter{}
+	}
 	return &Server{
-		pool: pool, queries: store.New(pool), storage: storage, logger: logger,
-		readyDuration: readyDuration, rollbackTimeout: rollbackTimeout,
+		pool: pool, queries: store.New(pool), storage: storage, signer: signer, logger: logger,
+		playlists:     newPlaylistCache(playlistCacheEntries, playlistCacheBytes),
+		readyDuration: readyDuration, playlistsServed: playlistsServed, rollbackTimeout: rollbackTimeout,
 	}
 }
 
@@ -169,6 +198,7 @@ func CallerInterceptor(verifier *authtoken.Verifier) grpc.UnaryServerInterceptor
 // exactly uploads/<video_id>, of 1 to size_bytes bytes with the normalized content type, for 15
 // minutes. The form is a credential: it is never logged. A caller who already has
 // MaxOpenUploads videos UPLOADING created within the form's lifetime gets RESOURCE_EXHAUSTED.
+// premium is stored with the video and never changes.
 //
 // A call with a request_id the caller has used before creates nothing: it returns the video of
 // that request_id with a newly signed form when the request matches, the video is still UPLOADING
@@ -213,6 +243,7 @@ func (s *Server) InitUpload(ctx context.Context, req *videov1.InitUploadRequest)
 		Title:       title,
 		SizeBytes:   req.GetSizeBytes(),
 		ContentType: contentType,
+		Premium:     req.GetPremium(),
 		RequestID:   requestID,
 	}
 	earlier, err := s.createVideo(ctx, p)
@@ -240,16 +271,16 @@ func (s *Server) InitUpload(ctx context.Context, req *videov1.InitUploadRequest)
 }
 
 // repeated answers a call whose request_id already belongs to v, the video an earlier call
-// created: with v and a form signed anew when p asks for the same title, size and content type
-// and v is still UPLOADING. The form of the first call is not stored, so it cannot be returned;
-// the new one ends with the window of the first, created_at + uploadFormTTL. Open uploads are
+// created: with v and a form signed anew when p asks for the same title, size, content type and
+// premium flag and v is still UPLOADING. The form of the first call is not stored, so it cannot be
+// returned; the new one ends with the window of the first, created_at + uploadFormTTL. Open uploads are
 // counted and swept by created_at, so a later end would let one account hold more than
 // MaxOpenUploads valid forms and upload to a video the sweep has already failed. With less than
 // minRepeatFormTTL left the first call can no longer be answered again.
 func (s *Server) repeated(ctx context.Context, v store.Video, p store.CreateVideoParams) (*videov1.InitUploadResponse, error) {
-	if v.Title != p.Title || v.SizeBytes != p.SizeBytes || v.ContentType != p.ContentType {
+	if v.Title != p.Title || v.SizeBytes != p.SizeBytes || v.ContentType != p.ContentType || v.Premium != p.Premium {
 		return nil, grpcerr.New(codes.InvalidArgument, ReasonIdempotencyKeyMismatch,
-			"request_id was already used with another title, size_bytes or content_type")
+			"request_id was already used with another title, size_bytes, content_type or premium")
 	}
 	if v.Status != statusUploading {
 		return nil, grpcerr.New(codes.FailedPrecondition, ReasonVideoNotUploading,
@@ -441,6 +472,7 @@ func (s *Server) markProcessing(ctx context.Context, v store.Video, key string) 
 			SourceKey:   key,
 			ContentType: v.ContentType,
 			SizeBytes:   v.SizeBytes,
+			Premium:     v.Premium,
 		}},
 	}
 	if err := outbox.Write(ctx, tx, TopicVideoLifecycle, id, ev); err != nil {
@@ -452,8 +484,9 @@ func (s *Server) markProcessing(ctx context.Context, v store.Video, key string) 
 	return updated, true, nil
 }
 
-// GetVideo returns a video that is READY, or any video of the caller's own. Every other case
-// returns the same NOT_FOUND error, so a hidden video looks exactly like a missing one.
+// GetVideo returns a video that is READY, or any video of the caller's own, with the tier the
+// caller holds on it. Every other case returns the same NOT_FOUND error, so a hidden video looks
+// exactly like a missing one.
 func (s *Server) GetVideo(ctx context.Context, req *videov1.GetVideoRequest) (*videov1.GetVideoResponse, error) {
 	caller, err := callerID(ctx)
 	if err != nil {
@@ -474,7 +507,11 @@ func (s *Server) GetVideo(ctx context.Context, req *videov1.GetVideoRequest) (*v
 	if v.Status != statusReady && v.AuthorID != caller {
 		return nil, videoNotFound()
 	}
-	return &videov1.GetVideoResponse{Video: toProto(v)}, nil
+	tier, err := s.entitlementTier(ctx, v, caller)
+	if err != nil {
+		return nil, s.internal(ctx, "select entitlement", err)
+	}
+	return &videov1.GetVideoResponse{Video: toProto(v), EntitlementTier: tier}, nil
 }
 
 // GetPublicVideo returns a READY video to anyone, for the public share page; it has no caller.
@@ -625,6 +662,7 @@ func toProto(v store.Video) *videov1.Video {
 		Title:     v.Title,
 		Status:    toProtoStatus(v.Status),
 		CreatedAt: timestamppb.New(v.CreatedAt),
+		Premium:   v.Premium,
 	}
 	if v.DurationMs != nil {
 		out.Duration = durationpb.New(time.Duration(*v.DurationMs) * time.Millisecond)
@@ -634,6 +672,9 @@ func toProto(v store.Video) *videov1.Video {
 	}
 	if v.ThumbnailKey != nil {
 		out.ThumbnailKey = *v.ThumbnailKey
+	}
+	if v.PreviewPlaylistKey != nil {
+		out.PreviewPlaylistKey = *v.PreviewPlaylistKey
 	}
 	if v.PublishedAt != nil {
 		out.PublishedAt = timestamppb.New(*v.PublishedAt)

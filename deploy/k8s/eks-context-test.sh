@@ -55,6 +55,29 @@ case $args in
   "get deployment "*" --ignore-not-found -o name") ;;
   "get crd "*" --ignore-not-found -o name") ;;
   "get pod "*) ;;
+  # eks-wait.sh: an ApplicationSet exists when listed in the file appsets, and an Application appears during the wait
+  # when listed in apps; a wait fails when its field value is in wait-fails; the state on timeout is the file app-state.
+  "get applicationsets.argoproj.io/"*" --ignore-not-found -o name")
+    a=${args#get applicationsets.argoproj.io/}
+    a=${a%% *}
+    ! grep -qx "$a" "$s/appsets" || echo "applicationset.argoproj.io/$a"
+    ;;
+  "get applications.argoproj.io/"*" -o jsonpath="*) cat "$s/app-state" ;;
+  "wait applications.argoproj.io/"*" --for=create --timeout="*)
+    a=${args#wait applications.argoproj.io/}
+    a=${a%% *}
+    grep -qx "$a" "$s/apps" || { echo "error: timed out waiting for the condition on applications/$a" >&2; exit 1; }
+    ;;
+  "wait applications.argoproj.io/"*)
+    while IFS= read -r v; do
+      case $args in
+        *"}=$v "*)
+          echo "error: timed out waiting for the condition on applications/${args#wait applications.argoproj.io/}" >&2
+          exit 1
+          ;;
+      esac
+    done <"$s/wait-fails"
+    ;;
   # The operations CLI of svp-data: svp-valkey of Deployment svp-ops, logged in as svp-ops.
   "exec -i deploy/svp-ops -c valkey -- /opt/svp/bin/svp-valkey -n 10 --scan --pattern svp:gw:rl:register:*") printf 'svp:gw:rl:register:a\nsvp:gw:rl:register:b\n' ;;
   "exec -i deploy/svp-ops -c valkey -- /opt/svp/bin/svp-valkey -n 10 DEL svp:gw:rl:register:"[ab]) echo 1 ;;
@@ -83,6 +106,10 @@ new_state() {
   : >"$FAKE_STATE/helm.log"
   : >"$FAKE_STATE/applied.yaml"
   : >"$FAKE_STATE/aws.log"
+  : >"$FAKE_STATE/apps"
+  : >"$FAKE_STATE/appsets"
+  : >"$FAKE_STATE/wait-fails"
+  echo 'sync=OutOfSync health=Progressing' >"$FAKE_STATE/app-state"
   printf '%s\n' "$@" >"$FAKE_STATE/namespaces"
 }
 
@@ -94,8 +121,8 @@ names=(SVP_PG_SUPERUSER_PASSWORD
   SVP_S3_ROOT_PASSWORD SVP_VIDEO_S3_SECRET_KEY SVP_MEDIA_WORKER_S3_SECRET_KEY SVP_PG_BACKUP_S3_SECRET_KEY
   SVP_KAFKA_ADMIN_PASSWORD SVP_KAFKA_KEDA_PASSWORD SVP_KAFKA_USER_SERVICE_PASSWORD SVP_KAFKA_VIDEO_SERVICE_PASSWORD
   SVP_KAFKA_ENGAGEMENT_SERVICE_PASSWORD SVP_KAFKA_FEED_SERVICE_PASSWORD SVP_KAFKA_MEDIA_WORKER_PASSWORD
-  SVP_KAFKA_OTELCOL_PASSWORD JWT_SIGNING_KID JWT_SIGNING_KEY JWT_VERIFY_KEYS SVP_GRAFANA_ADMIN_PASSWORD
-  GLITCHTIP_SECRET_KEY GLITCHTIP_ADMIN_PASSWORD)
+  SVP_KAFKA_DLQ_REPLAY_PASSWORD SVP_KAFKA_OTELCOL_PASSWORD JWT_SIGNING_KID JWT_SIGNING_KEY JWT_VERIFY_KEYS
+  SVP_GRAFANA_ADMIN_PASSWORD GLITCHTIP_SECRET_KEY GLITCHTIP_ADMIN_PASSWORD)
 : >"$work/secrets"
 fake=$work/code
 mkdir -p "$fake"
@@ -358,6 +385,118 @@ env PATH="$bin:$api_bin:$PATH" SVP_KUBE_CONTEXT=svp-stg "$fake/deploy/k8s/eks-se
   >"$work/out" 2>&1 || rc=$?
 refused "eks-seed.sh without SVP_STACK=eks" "$work/out" "SVP_STACK=eks is not set"
 no_cluster_call "eks-seed.sh without SVP_STACK=eks"
+
+# --- deploy/k8s/eks-wait.sh and make eks-wait: waits on Application status through kubectl alone.
+# wait_run OUT APP [VAR=VALUE...]: deploy/k8s/eks-wait.sh APP on context svp-stg with the fake tools; status in $rc.
+wait_run() {
+  local out=$1 app=$2
+  shift 2
+  rc=0
+  env SVP_KUBE_CONTEXT=svp-stg "$@" PATH="$bin:$PATH" perl -e 'alarm 60; exec @ARGV' "$fake/deploy/k8s/eks-wait.sh" "$app" \
+    >"$out" 2>&1 </dev/null || rc=$?
+}
+# only_argocd_waits NAME: every kubectl call of the run names context svp-stg.
+only_argocd_waits() {
+  if [ -z "$(grep -v '^--context svp-stg ' "$FAKE_STATE/kubectl.log")" ]; then
+    ok "$1: every kubectl call names context svp-stg"
+  else
+    fail "$1: kubectl '$(cat "$FAKE_STATE/kubectl.log")'"
+  fi
+}
+# new_wait_state [APP]: a fresh fake cluster with ApplicationSet svp-bootstrap; APP appears during the wait.
+new_wait_state() {
+  new_state
+  echo svp-bootstrap >"$FAKE_STATE/appsets"
+  printf '%s\n' "$@" >"$FAKE_STATE/apps"
+}
+for app in svp-observability svp-root; do
+  # The Application does not exist yet when the script starts: it waits for it to appear, then for its status.
+  new_wait_state "$app"
+  wait_run "$work/out" "$app"
+  health_waits=$(grep -c -- "^--context svp-stg -n argocd wait applications.argoproj.io/$app --for=jsonpath={.status.health.status}=Healthy --timeout=[0-9]*s$" "$FAKE_STATE/kubectl.log" || true)
+  first_wait=$(grep -m1 ' wait ' "$FAKE_STATE/kubectl.log" || true)
+  sync_waits=$(grep -c -- '--for=jsonpath={.status.sync.status}=Synced ' "$FAKE_STATE/kubectl.log" || true)
+  want_sync=0
+  [ "$app" != svp-root ] || want_sync=1
+  # The budget is read from the clock once per wait, so a second may pass before the first one.
+  first_timeout=${first_wait##* --timeout=}
+  first_timeout=${first_timeout%s}
+  if [ "$rc" = 0 ] && grep -qx "ok    Application argocd/$app Healthy" "$work/out" && [ "$health_waits" = 1 ] &&
+    [ "$sync_waits" = "$want_sync" ] && [ "$first_wait" = "--context svp-stg -n argocd wait applications.argoproj.io/$app --for=create --timeout=${first_timeout}s" ] &&
+    [ "$first_timeout" -ge 1795 ] && [ "$first_timeout" -le 1800 ]; then
+    ok "eks-wait.sh $app: waits for it to appear, then Healthy ($want_sync Synced wait first), 30 minutes in all"
+  else
+    fail "eks-wait.sh $app: exit $rc, first wait '$first_wait', health waits $health_waits, sync waits $sync_waits: $(cat "$work/out")"
+  fi
+  only_argocd_waits "eks-wait.sh $app"
+
+  # The state on timeout: the last sync and health status, exit not 0.
+  new_wait_state "$app"
+  echo Healthy >"$FAKE_STATE/wait-fails"
+  wait_run "$work/out" "$app"
+  refused "eks-wait.sh $app, never Healthy" "$work/out" "Application argocd/$app is not Healthy in time (last state: sync=OutOfSync health=Progressing)"
+  ! grep -q "ok    Application argocd/$app Healthy" "$work/out" || fail "eks-wait.sh $app: reported Healthy after a timeout"
+
+  if [ "$app" = svp-root ]; then
+    new_wait_state "$app"
+    echo Synced >"$FAKE_STATE/wait-fails"
+    wait_run "$work/out" "$app"
+    refused "eks-wait.sh $app, never Synced" "$work/out" "Application argocd/$app is not Synced in time (last state: sync=OutOfSync health=Progressing)"
+    if [ "$(grep -c -- ' wait .*status.health.status' "$FAKE_STATE/kubectl.log")" = 0 ]; then
+      ok "eks-wait.sh $app: no Healthy wait after the Synced one timed out"
+    else
+      fail "eks-wait.sh $app: waited for Healthy after a Synced timeout"
+    fi
+  fi
+
+  # Never appears within the budget: names what makes it (svp-root, or ApplicationSet svp-bootstrap for svp-root
+  # itself) and step 5, no status wait.
+  parent=applications.argoproj.io/svp-root
+  [ "$app" != svp-root ] || parent=applicationsets.argoproj.io/svp-bootstrap
+  new_wait_state
+  wait_run "$work/out" "$app"
+  refused "eks-wait.sh $app, never appears" "$work/out" "Application argocd/$app did not appear in svp-stg in time; read ${parent#*/} with kubectl --context svp-stg -n argocd describe $parent, and check root aws/gitops/stg is applied (step 5"
+  if grep -q -- ' wait .*--for=jsonpath' "$FAKE_STATE/kubectl.log"; then
+    fail "eks-wait.sh $app: waited for the status of an Application that never appeared"
+  else
+    ok "eks-wait.sh $app, never appears: no status wait"
+  fi
+
+  # Root aws/gitops not applied (no ApplicationSet svp-bootstrap): fails at once, no wait at all.
+  new_state
+  echo "$app" >"$FAKE_STATE/apps"
+  wait_run "$work/out" "$app"
+  refused "eks-wait.sh $app, svp-bootstrap missing" "$work/out" "ApplicationSet argocd/svp-bootstrap does not exist in svp-stg; apply root aws/gitops/stg first (step 5"
+  if grep -q '^--context svp-stg -n argocd wait ' "$FAKE_STATE/kubectl.log"; then
+    fail "eks-wait.sh $app: waited although svp-bootstrap is missing"
+  else
+    ok "eks-wait.sh $app, svp-bootstrap missing: no wait"
+  fi
+done
+for bad in svp-other '' 'svp-root;x'; do
+  new_state
+  wait_run "$work/out" "$bad"
+  refused "eks-wait.sh with APP='$bad'" "$work/out" "APP must be svp-observability or svp-root"
+  no_cluster_call "eks-wait.sh with APP='$bad'"
+done
+new_state
+rc=0
+env SVP_KUBE_CONTEXT=k3d-svp PATH="$bin:$PATH" "$fake/deploy/k8s/eks-wait.sh" svp-root >"$work/out" 2>&1 </dev/null || rc=$?
+refused "eks-wait.sh on the local cluster" "$work/out" "SVP_KUBE_CONTEXT must be svp-stg or svp-prd"
+no_cluster_call "eks-wait.sh on the local cluster"
+# make eks-wait refuses before the script: a CONTEXT that is not an EKS alias, and an APP the script does not know.
+for ctx in svp-dev k3d-svp ''; do
+  new_state
+  rc=0
+  env PATH="$bin:$PATH" make -C "$repo" eks-wait CONTEXT="$ctx" APP=svp-root >"$work/out" 2>&1 </dev/null || rc=$?
+  refused "make eks-wait CONTEXT='$ctx'" "$work/out" "CONTEXT must be svp-stg or svp-prd"
+  no_cluster_call "make eks-wait CONTEXT='$ctx'"
+done
+new_state
+rc=0
+env PATH="$bin:$PATH" make -C "$repo" eks-wait CONTEXT=svp-stg APP=svp-gitops >"$work/out" 2>&1 </dev/null || rc=$?
+refused "make eks-wait APP=svp-gitops" "$work/out" "APP must be svp-observability or svp-root"
+no_cluster_call "make eks-wait APP=svp-gitops"
 
 if [ "$failures" -gt 0 ]; then
   echo "FAIL  $failures case(s) of deploy/k8s/eks-context-test.sh" >&2

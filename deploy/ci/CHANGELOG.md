@@ -1,0 +1,70 @@
+# Changelog
+
+## [1.1.1](https://github.com/anhnvcoder/svp-backend/compare/gitops-check-v1.1.0...gitops-check-v1.1.1) (2026-11-15)
+
+
+### Bug Fixes
+
+* review findings left in code, deploy scripts and docs ([#150](https://github.com/anhnvcoder/svp-backend/issues/150)) ([6bc59f3](https://github.com/anhnvcoder/svp-backend/commit/6bc59f3f4aa1098a02c8d753c8d5181cacaa1b6a))
+
+## [1.1.0](https://github.com/anhnvcoder/svp-backend/compare/gitops-check-v1.0.0...gitops-check-v1.1.0) (2026-11-15)
+
+
+### Features
+
+* Istio ambient mesh with mTLS STRICT and gRPC canary by request ([#146](https://github.com/anhnvcoder/svp-backend/issues/146)) ([bd38c2b](https://github.com/anhnvcoder/svp-backend/commit/bd38c2b264375d7dc37227cfd0f6baf2186a452d))
+
+## 1.0.0 (2026-11-15)
+
+
+### Features
+
+* auth hardening and scan gate on fixed HIGH ([#139](https://github.com/anhnvcoder/svp-backend/issues/139)) ([5a4f3cd](https://github.com/anhnvcoder/svp-backend/commit/5a4f3cd461cfc5ff26cb1e9e5d48f62b80abcc4a))
+* **aws:** giai đoạn 7a phần repo code (EKS stg) ([#60](https://github.com/anhnvcoder/svp-backend/issues/60)) ([88975db](https://github.com/anhnvcoder/svp-backend/commit/88975db17fd0790a14f556edfa0dcd2271e30019))
+* **ci:** chữ ký, vuln, SBOM ở Sigstore bundle, provenance bằng actions/attest (ADR-0040) ([#72](https://github.com/anhnvcoder/svp-backend/issues/72)) ([1c16634](https://github.com/anhnvcoder/svp-backend/commit/1c16634d8a0ba05d9399e0be9358a5ecce643005))
+* **ci:** CI/CD và DevSecOps giai đoạn 5 ([36e0ba2](https://github.com/anhnvcoder/svp-backend/commit/36e0ba264238c3f430f16ae87c791a5c10bd387c))
+* **ci:** pipeline image bằng composite action gọi công cụ ghim digest (ADR-0050 giai đoạn 4) ([#102](https://github.com/anhnvcoder/svp-backend/issues/102)) ([6e14d15](https://github.com/anhnvcoder/svp-backend/commit/6e14d159c24bb411455faccba0ce0095fd2a98b4))
+* **ci:** rescan kiểm nguồn của lượt chạy, script đẩy image source map cho svp-web ([f59c4ca](https://github.com/anhnvcoder/svp-backend/commit/f59c4caed83ee6f0ee3818b8e1b5760a2a100b3d))
+* **ci:** rescan kiểm nguồn của lượt chạy, script đẩy image source map cho svp-web ([#48](https://github.com/anhnvcoder/svp-backend/issues/48)) ([f59c4ca](https://github.com/anhnvcoder/svp-backend/commit/f59c4caed83ee6f0ee3818b8e1b5760a2a100b3d))
+* cost per namespace with OpenCost and public uptime probes ([#143](https://github.com/anhnvcoder/svp-backend/issues/143)) ([76af74d](https://github.com/anhnvcoder/svp-backend/commit/76af74d355d152b094749a6cf3c847582459bd13))
+* **devsecops:** govulncheck, fuzz Go, DAST Schemathesis, grype quét SBOM (giai đoạn 6b, phần 3b) ([e4830e9](https://github.com/anhnvcoder/svp-backend/commit/e4830e99fe9bdba2497b8c30d86193b694e188f3))
+* **devsecops:** govulncheck, fuzz Go, DAST Schemathesis, grype quét SBOM, CodeQL (giai đoạn 6b, phần 3b) ([#28](https://github.com/anhnvcoder/svp-backend/issues/28)) ([e4830e9](https://github.com/anhnvcoder/svp-backend/commit/e4830e99fe9bdba2497b8c30d86193b694e188f3))
+* đổi tên repo thành svp-backend và svp-frontend (ADR-0036, PR-1) ([#59](https://github.com/anhnvcoder/svp-backend/issues/59)) ([b5f22c2](https://github.com/anhnvcoder/svp-backend/commit/b5f22c2328758b62909dae1e4026707389892d8c))
+* **drills:** diễn tập k8s bằng Chainsaw, verify.yml từng step (ADR-0050 giai đoạn 3) ([#101](https://github.com/anhnvcoder/svp-backend/issues/101)) ([6b5d13d](https://github.com/anhnvcoder/svp-backend/commit/6b5d13d12525b08ffbdedeeba25831f61c494e64))
+* **edge:** CloudFront, WAF and ACM in front of web and API ([#128](https://github.com/anhnvcoder/svp-backend/issues/128)) ([a6cdefb](https://github.com/anhnvcoder/svp-backend/commit/a6cdefb961fb092b2d07d0ea36b3aef1f9f2d4ae))
+* **gitops:** Argo CD Notifications ghi trạng thái deploy lên commit (ADR-0032) ([#77](https://github.com/anhnvcoder/svp-backend/issues/77)) ([6be8f25](https://github.com/anhnvcoder/svp-backend/commit/6be8f25d87d5613c26de468809f6f7affebcf67f))
+* **gitops:** checker cho repo cấu hình svp-gitops (giai đoạn 6b, phần 4) ([c59c742](https://github.com/anhnvcoder/svp-backend/commit/c59c7426663d6ee0818c707417136e7b05311fd0))
+* **gitops:** checker cho repo cấu hình svp-gitops (giai đoạn 6b, phần 4) ([#37](https://github.com/anhnvcoder/svp-backend/issues/37)) ([c59c742](https://github.com/anhnvcoder/svp-backend/commit/c59c7426663d6ee0818c707417136e7b05311fd0))
+* **gitops:** root svp-root báo Argo CD Notifications, chat Telegram từ .env (ADR-0032) ([#84](https://github.com/anhnvcoder/svp-backend/issues/84)) ([6132b7b](https://github.com/anhnvcoder/svp-backend/commit/6132b7b3a832ab4d5d9a24a471d6545f3da56288))
+* **gitops:** tách cấu hình triển khai sang svp-gitops, promote bằng GitHub App, bản ghi stg, promote prd, DORA (giai đoạn 6b, phần 4, PR-B) ([#39](https://github.com/anhnvcoder/svp-backend/issues/39)) ([2d9dab0](https://github.com/anhnvcoder/svp-backend/commit/2d9dab056a1f36d5f76aecc69ce16bc0c50f7396))
+* **k8s:** đường dev k3d bằng helmfile và Reloader, image dev bằng bake (ADR-0050 giai đoạn 5) ([#104](https://github.com/anhnvcoder/svp-backend/issues/104)) ([a6e4ec1](https://github.com/anhnvcoder/svp-backend/commit/a6e4ec183e301e86c55dc1a99b00420ce1750ae0))
+* Kafka trên Amazon MSK, Valkey trên ElastiCache; local cùng engine Apache Kafka và Valkey ([#122](https://github.com/anhnvcoder/svp-backend/issues/122)) ([d13e9a3](https://github.com/anhnvcoder/svp-backend/commit/d13e9a30ae860f45fafa88b17d885f1b0aae3da8))
+* managed platform contracts for ECR, AMP, Grafana and VPC endpoints ([#130](https://github.com/anhnvcoder/svp-backend/issues/130)) ([a8da55c](https://github.com/anhnvcoder/svp-backend/commit/a8da55c7858d5097d3622252687e361901d7b95a))
+* **objstore:** RustFS thay MinIO cho compose và k3d (giai đoạn 6b, phần 2) ([#24](https://github.com/anhnvcoder/svp-backend/issues/24)) ([39dcede](https://github.com/anhnvcoder/svp-backend/commit/39dcedeacb80740a60ee1d7e2e5dbf3711ffdb95))
+* **obs:** cảnh báo khi Argo CD không triển khai được (ADR-0032) ([#40](https://github.com/anhnvcoder/svp-backend/issues/40)) ([fa5af94](https://github.com/anhnvcoder/svp-backend/commit/fa5af94bb2cf34be2996d8830b3698db32d1453e))
+* pod operations and DLQ replay release ([#142](https://github.com/anhnvcoder/svp-backend/issues/142)) ([927dd4e](https://github.com/anhnvcoder/svp-backend/commit/927dd4e9a8080378c34036d3f7beb12722d2547f))
+* prd trên EKS: secret qua Secrets Manager, Kafka nhiều broker, check root hai tầng và ghim prd ([#98](https://github.com/anhnvcoder/svp-backend/issues/98)) ([7a4b3b3](https://github.com/anhnvcoder/svp-backend/commit/7a4b3b3ab4b6e3856ab5d826e797d231af09ed95))
+* **reliability:** SLO web, k6, backup/DR Postgres, runbook và game day (giai đoạn 6) ([#16](https://github.com/anhnvcoder/svp-backend/issues/16)) ([b993162](https://github.com/anhnvcoder/svp-backend/commit/b9931622536cc2670639655333b5ad9b747ebc4e))
+* **stage6b:** kiểm chứng sâu trên runner (giai đoạn 6b, phần 3) ([#26](https://github.com/anhnvcoder/svp-backend/issues/26)) ([0f3156f](https://github.com/anhnvcoder/svp-backend/commit/0f3156f8d153d3f6fd2281dea63fd1c5dfa9987c))
+* **stage6b:** provenance SLSA, media theo version, External Secrets trên đường GitOps (giai đoạn 6b, phần 4, PR-A) ([6ca2d8a](https://github.com/anhnvcoder/svp-backend/commit/6ca2d8a795ddbcde6956f482580502ce1a96e02c))
+* **stage6b:** provenance SLSA, media theo version, External Secrets trên đường GitOps (giai đoạn 6b, phần 4, PR-A) ([#33](https://github.com/anhnvcoder/svp-backend/issues/33)) ([6ca2d8a](https://github.com/anhnvcoder/svp-backend/commit/6ca2d8a795ddbcde6956f482580502ce1a96e02c))
+* **svp-web:** bỏ web/ khỏi repo backend, web lấy từ bản clone svp-web (giai đoạn 6b, phần 4b, PR-2) ([#55](https://github.com/anhnvcoder/svp-backend/issues/55)) ([bb560f5](https://github.com/anhnvcoder/svp-backend/commit/bb560f508cc2f1bfdb264c9d3c208dde8e1b8e5c))
+* **svp-web:** chuẩn bị tách web sang repo svp-web (giai đoạn 6b, phần 4b, PR-1) ([#43](https://github.com/anhnvcoder/svp-backend/issues/43)) ([28bf2ca](https://github.com/anhnvcoder/svp-backend/commit/28bf2ca56af73e7b0a15bb5999317bc464e97747))
+* transcode with AWS Elemental MediaConvert on eks ([#132](https://github.com/anhnvcoder/svp-backend/issues/132)) ([497489b](https://github.com/anhnvcoder/svp-backend/commit/497489b45a6e7722f0743684ef4fe38d5194d87e))
+* **verify:** bước gitops-admission-metrics ghi thời gian admission (ADR-0040) ([#73](https://github.com/anhnvcoder/svp-backend/issues/73)) ([86627ec](https://github.com/anhnvcoder/svp-backend/commit/86627ecb95c47b81a7835638f6ac56c91080e2b4))
+* **verify:** kết quả runner, sửa lỗi Linux amd64, web WebKit/LCP và bảo mật artifact (giai đoạn 6b, phần 1) ([#20](https://github.com/anhnvcoder/svp-backend/issues/20)) ([aca9d11](https://github.com/anhnvcoder/svp-backend/commit/aca9d11a7e4f9d6d34b553b8a42a3b398ba187b2))
+* **verify:** kiểm chứng trên runner, CI trung lập nền tảng (giai đoạn 6b, phần 1) ([#18](https://github.com/anhnvcoder/svp-backend/issues/18)) ([a9b035a](https://github.com/anhnvcoder/svp-backend/commit/a9b035aea00d45a18df788215a14d0f7feeca61d))
+* versioned gitops checker released by release-please ([#145](https://github.com/anhnvcoder/svp-backend/issues/145)) ([2e594b0](https://github.com/anhnvcoder/svp-backend/commit/2e594b05354f0ad3598acfa1bda72994b6396091))
+* **web:** đưa web lên k3d, chuỗi cung ứng và quan sát (giai đoạn 5b, phần C) ([#12](https://github.com/anhnvcoder/svp-backend/issues/12)) ([547a99a](https://github.com/anhnvcoder/svp-backend/commit/547a99a8c7f43d98f941f7fec29928d0ecb09f46))
+
+
+### Bug Fixes
+
+* **ci:** guard chống ký trùng nhận bundle cosign v3 không có annotation ([#103](https://github.com/anhnvcoder/svp-backend/issues/103)) ([f3fdab1](https://github.com/anhnvcoder/svp-backend/commit/f3fdab1feb218052601714c98b88713e66111219))
+* **drills:** measure-gitops đọc commit svp-gitops đúng nguồn trong history multi-source ([#57](https://github.com/anhnvcoder/svp-backend/issues/57)) ([309c1e1](https://github.com/anhnvcoder/svp-backend/commit/309c1e1fdcbf31f060b36cdf5831432b113a5616))
+* **gitops:** dựng cluster ở commit đã kiểm, kiểm provenance không fail-open, review lại cảnh báo Argo CD ([#41](https://github.com/anhnvcoder/svp-backend/issues/41)) ([ec12f11](https://github.com/anhnvcoder/svp-backend/commit/ec12f1141e578c142fef86b49df6c1d59b3a1a8a))
+* **policy:** svp-images khớp mỗi tên được phát hành, không mỗi prefix ([e66dd58](https://github.com/anhnvcoder/svp-backend/commit/e66dd58dcd063761b67645ba4e0d02113d9f5553))
+* **policy:** svp-images khớp mỗi tên được phát hành, không mỗi prefix ([#45](https://github.com/anhnvcoder/svp-backend/issues/45)) ([e66dd58](https://github.com/anhnvcoder/svp-backend/commit/e66dd58dcd063761b67645ba4e0d02113d9f5553))
+* **reliability:** sửa ba phát hiện của chaos và k6 (ADR-0031) ([e824425](https://github.com/anhnvcoder/svp-backend/commit/e824425ddce3c948b93afa8e402e5c461ee1689e))
+* **reliability:** sửa ba phát hiện của chaos và k6, kiểm lại trên runner (ADR-0031) ([#31](https://github.com/anhnvcoder/svp-backend/issues/31)) ([e824425](https://github.com/anhnvcoder/svp-backend/commit/e824425ddce3c948b93afa8e402e5c461ee1689e))
+* việc còn mở của giai đoạn 6b phần 1 (like khi Back, body-parser, P2 verify) ([#22](https://github.com/anhnvcoder/svp-backend/issues/22)) ([1ded60f](https://github.com/anhnvcoder/svp-backend/commit/1ded60f3678f59ac568efbe3d2d03ac2beaedcce))

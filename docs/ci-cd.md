@@ -5,19 +5,20 @@ và đọc kết quả ở đâu. Luồng kể bằng khái niệm chung của m
 tên workflow và job của GitHub ghi kèm. Bảng tương ứng với GitLab ở
 [ADR-0023](adr/0023-ci-platform-neutral.md) (mục "Bảng ánh xạ CI: GitHub Actions ↔ GitLab CI"), không chép lại ở đây.
 
-Repo có năm workflow, mỗi file nối các bước, logic nằm ở `Makefile` và `deploy/ci/*.sh` (chạy được cả trên máy):
+Repo có sáu workflow, mỗi file nối các bước, logic nằm ở `Makefile` và `deploy/ci/*.sh` (chạy được cả trên máy):
 
 | Workflow | Việc | Quyết định |
 | --- | --- | --- |
 | `.github/workflows/ci.yml` | Kiểm code của mọi PR và mọi push `main`: Go (gồm govulncheck), code sinh, contract, luật version của hợp đồng REST, cấu hình, bí mật, misconfig, stack đầu-cuối (gồm DAST) | [ADR-0015](adr/0015-cicd-devsecops-stage5.md) §1, §2; [ADR-0020](adr/0020-reliability-stage6.md) §15 (job `stack`); [ADR-0030](adr/0030-devsecops-supplement.md) §1, §3; [ADR-0033](adr/0033-svp-web-repo.md) §1 (job `api-contract`) |
-| `.github/workflows/images.yml` | Image của sáu service Go (image web ở CI của [`svp-frontend`](https://github.com/anhnvcoder/svp-frontend)): build, quét (trivy trên image, grype trên SBOM), push GHCR, ký, attestation, chép cùng digest sang ECR của stg, prd, PR promote stg và prd sang repo `svp-gitops`, quét lại hằng ngày (cả bản ở ECR); phát hành hợp đồng REST của gateway có chữ ký | ADR-0015 §3–§9; [ADR-0062](adr/0062-ecr-registry-ci-oidc.md) §3–§5 (ECR, role OIDC); ADR-0030 §6 (grype); [ADR-0025](adr/0025-gitops-config-repo.md) §2 (promote bằng GitHub App); [ADR-0037](adr/0037-mainpath-standard-tools.md) §6 (bước promote `yq` + `gh pr`); [ADR-0033](adr/0033-svp-web-repo.md) §1, §2, §4 (job `contract`, nguồn phát hành) |
+| `.github/workflows/images.yml` | Image của các service Go (image web ở CI của [`svp-frontend`](https://github.com/anhnvcoder/svp-frontend)): build, quét (trivy trên image, grype trên SBOM), push GHCR, ký, attestation, chép cùng digest sang ECR của stg, prd, PR promote stg và prd sang repo `svp-gitops`, quét lại hằng ngày (cả bản ở ECR); phát hành hợp đồng REST của gateway có chữ ký | ADR-0015 §3–§9; [ADR-0062](adr/0062-ecr-registry-ci-oidc.md) §3–§5 (ECR, role OIDC); ADR-0030 §6 (grype); [ADR-0025](adr/0025-gitops-config-repo.md) §2 (promote bằng GitHub App); [ADR-0037](adr/0037-mainpath-standard-tools.md) §6 (bước promote `yq` + `gh pr`); [ADR-0033](adr/0033-svp-web-repo.md) §1, §2, §4 (job `contract`, nguồn phát hành) |
 | `.github/workflows/scorecard.yml` | OpenSSF Scorecard khi push `main`, hằng tuần: đo cả repo (ruleset, ghim, quyền), kết quả công khai và SARIF lên code scanning; không phải check của PR | [ADR-0041](adr/0041-github-hardening.md) (g) |
 | `.github/workflows/pr-title.yml` | Job `pr-title`: tiêu đề PR theo Conventional Commits, vì tiêu đề thành tiêu đề commit squash | [ADR-0041](adr/0041-github-hardening.md) (h) |
+| `.github/workflows/release.yml` | Phát hành checker của `svp-gitops` (package `deploy/ci`): mở PR phát hành từ Conventional Commits bằng release-please, tạo tag `gitops-check-v<semver>` và GitHub Release khi PR đó merge; chỉ push `main` | [ADR-0077](adr/0077-versioned-gitops-checker.md) §2, §3 |
 | `.github/workflows/verify.yml` | Kiểm chứng trên runner những gì máy 16 GB không chạy nổi (stack có observability, cluster GitOps do Argo CD dựng, cluster của đường dev): ba kịch bản `compose-obs`, `gitops`, `dev-k3d` (chỉ dispatch) | [ADR-0021](adr/0021-deferred-verification-stage6b.md); [ADR-0037](adr/0037-mainpath-standard-tools.md) §6 (bỏ bản ghi stg); [ADR-0039](adr/0039-mainpath-drills-scan-gate-sourcemaps.md) §1 (thu gọn); [ADR-0050](adr/0050-bash-to-standard-tools.md) mục 6 (`dev-k3d`) |
 
 Cấu hình triển khai (values, overlay, digest của mỗi môi trường, Argo CD) nằm ở repo public riêng
 [`svp-gitops`](https://github.com/anhnvcoder/svp-gitops) ([ADR-0025](adr/0025-gitops-config-repo.md)); repo đó có một workflow
-`check.yml` với check tổng `gitops-ok`, chạy `deploy/ci/gitops-check.sh` của repo này ở một commit ghim ([mục 1.5](#15-repo-cấu-hình-svp-gitops)).
+`check.yml` với check tổng `gitops-ok`, chạy `deploy/ci/gitops-check.sh` của repo này ở một bản phát hành ghim ([mục 1.5](#15-repo-cấu-hình-svp-gitops)).
 
 Script của `deploy/ci/` đọc thẳng biến của GitHub Actions (`$GITHUB_OUTPUT`, `$GITHUB_STEP_SUMMARY`, `$RUNNER_TEMP`, repo, commit,
 workflow của lượt) và gọi `gh` trực tiếp ([ADR-0037](adr/0037-mainpath-standard-tools.md) §2). DORA không còn workflow ở đây: là bài lab `dora/` của
@@ -56,7 +57,7 @@ flowchart LR
     pr --> plan --> nopush --> imgok --> merge
 ```
 
-- `stack` dựng cả stack compose (sáu service build từ PR, web là bản phát hành stg) và chạy smoke, e2e của `svp-frontend`, k6, Lighthouse,
+- `stack` dựng cả stack compose (mọi service Go build từ PR, web là bản phát hành stg) và chạy smoke, e2e của `svp-frontend`, k6, Lighthouse,
   DAST (Schemathesis), nhưng không nằm trong `ci-ok`: đỏ thì người đọc PR thấy, không chặn merge.
 - CodeQL quét PR từ nhánh của chính repo (PR từ fork thì không), check "CodeQL" hiện trên PR nhưng không bắt buộc.
 - `build-nopush` chỉ có khi PR đổi đường dẫn của ít nhất một image; PR chỉ sửa tài liệu thì `plan` báo không có image và các
@@ -65,7 +66,7 @@ flowchart LR
 ### 1.2 Push hay merge vào `main`
 
 `ci.yml` chạy lại toàn bộ trên `main` (thêm job `sarif` tải báo cáo lên tab Security). `images.yml` build bản phát hành
-của sáu service Go, chép từng bản đã ký sang ECR của stg rồi mở một PR "promote" **trong repo `svp-gitops`** ghi digest
+của mọi service Go, chép từng bản đã ký sang ECR của stg rồi mở một PR "promote" **trong repo `svp-gitops`** ghi digest
 mới vào `envs/stg/images/` và commit chart vào `envs/stg/charts.yaml`; PR đó tự merge khi check `gitops-ok` của
 `svp-gitops` xanh (không ai duyệt: `envs/stg/` không có Code Owner), Argo CD của stg thấy commit và triển khai.
 
@@ -98,14 +99,49 @@ flowchart LR
 - `promote` là bước shell trong `images.yml` ([ADR-0037](adr/0037-mainpath-standard-tools.md) §6): clone `svp-gitops` ẩn danh, nhánh
   `bot/promote-stg` một commit của bot App trên `main` (giữ file mà PR bot đang mở đã đổi), `yq -i` (`YQ_IMAGE` ghim) khối `image` của
   file mỗi service vừa ký ở lượt này và `envs/stg/charts.yaml`, push `--force-with-lease`, `gh pr create`/`edit`,
-  `gh pr merge --auto --squash --match-head-commit`. Chỉ ghi file của sáu service do repo này build; web do job `promote` của
+  `gh pr merge --auto --squash --match-head-commit`. Chỉ ghi file của service do repo này build, và tạo file của service mới (xem dưới); web do job `promote` của
   `svp-frontend` ghi ([ADR-0033](adr/0033-svp-web-repo.md) §4). Thứ tự giữ bằng nhóm `concurrency` không huỷ của build; guard
   `promote_not_behind` (`deploy/ci/common.sh`, thử ở `promote-test.sh`) từ chối lượt có commit cũ hơn `revision` mà stg đang ghim
   (chạy lại, dispatch commit cũ).
 - Cùng lượt, job `contract` phát hành hợp đồng REST của gateway (`services/gateway/openapi.yaml`) thành OCI artifact
   `ghcr.io/anhnvcoder/svp-backend/api/gateway:<info.version>` ký keyless; version đã phát hành với đúng file đó thì bỏ qua,
   khác nội dung thì đỏ, không ghi đè ([ADR-0033](adr/0033-svp-web-repo.md) §1).
+- **Release mới** ([ADR-0072](adr/0072-pod-operations.md)): một service vào group `default` của `deploy/docker-bake.json` (**Tập build**) khi stg, prd còn ghim
+  revision chưa build nó. Trong PR: `gitops-check.sh --worktree` (job `config`, `make helm-check`) chấp nhận env chưa có
+  `envs/<env>/images/<svc>.yaml` của service đó và in một dòng `note` thay `FAIL`; các thiếu sót khác vẫn đỏ. Thêm service
+  đổi group `default` của bảng image, phần ngoài target của từng service (`changed-services.sh`), nên lượt `main` kế build mọi
+  service, `promote` tạo file thiếu (khối comment đầu file như các file khác, `promote_image_file` của `deploy/ci/common.sh`).
+  PR `bot/promote-stg` đó không chờ bản checker mới: `values-check.sh` lấy danh sách service từ bảng nguồn ở commit mà
+  `envs/<env>/charts.yaml` ghim (`release_sources`), không từ `deploy/docker-bake.json` của bản checker đang ghim, nên file vừa tạo
+  là file image của một service. Check kéo ẩn danh mà package GHCR của service mới còn private sau lượt `images.yml` đầu, nên người học
+  bật public cho package ngay sau lượt đó. Rồi chạy lại check của PR promote; auto-merge còn bật nên PR tự merge khi xanh.
+  `promote-prd` bỏ qua service mà stg ở `stg_ref` chưa có file (dòng `skip`) và tạo file prd của service đã có. Luồng đầy đủ:
+  [`explanation/delivery.md`](explanation/delivery.md#release-mới-và-canary-grpc).
+- Cùng push, `release.yml` chạy release-please ([ADR-0077](adr/0077-versioned-gitops-checker.md)): khi `main` có commit `feat`, `fix`,
+  `perf` đổi `deploy/ci` chưa phát hành, nó mở hay cập nhật PR `chore(main): release gitops-check <semver>` (chỉ đổi `deploy/ci/CHANGELOG.md`
+  và `.release-please-manifest.json`). PR đó do token của App `svp-release-please` mở nên chạy `ci-ok`, `images-ok` như mọi PR, không build image,
+  cần Code Owner. Push merge nó thì lượt `release.yml` kế tạo tag `gitops-check-v<semver>` (bất biến, ruleset `gitops-check-tags`) và GitHub
+  Release; Renovate của `svp-gitops` mở PR nâng ghim checker ([mục 1.5](#15-repo-cấu-hình-svp-gitops)). Lượt không có gì để phát hành thì
+  xanh, không làm gì. Quy trình: [`runbooks/gitops-checker-release.md`](runbooks/gitops-checker-release.md).
+
+```mermaid
+sequenceDiagram
+    participant Main as main
+    participant Release as release.yml
+    participant PR as PR phát hành
+    actor Learner as người học
+    participant Renovate as Renovate của svp-gitops
+    Main->>Release: push có commit feat, fix dưới deploy/ci
+    Release->>PR: mở hay cập nhật (token App): CHANGELOG, manifest
+    PR->>PR: ci-ok, images-ok
+    Learner->>PR: Code Owner duyệt, squash merge
+    PR->>Release: push main
+    Release->>Main: tag gitops-check-v semver, GitHub Release
+    Renovate->>Renovate: lượt Mend kế: PR nâng CHECKER_VERSION, CHECKER_COMMIT
+```
+
 - Rollback stg là PR revert trong `svp-gitops`; lượt promote sau đó ghi bản của lượt đó (mới hơn), không ghi lại bản đã revert.
+  Rollback prd về revision trước một release mới là PR của người học có xoá `envs/prd/images/<svc>.yaml`, vì bot không xoá file.
   Quy trình ở [`runbooks/svp-gitops-setup.md`](runbooks/svp-gitops-setup.md).
 - Lần promote đầu sau khi tách repo, auto-merge của PR bot (bằng `promote.sh` cũ; bước shell thay nó: kiểm sau push): đã kiểm ngày 2026-10-30 (lượt [40984668411](https://github.com/anhnvcoder/svp-backend/actions/runs/40984668411) trên `2d9dab0`; PR #4, #5, #6 của `svp-gitops`, 0 review, bot tự merge sau `gitops-ok`).
 - CodeQL default setup cũng quét mỗi push `main`; cảnh báo mở và đóng trên `refs/heads/main` ở tab Security.
@@ -164,7 +200,7 @@ flowchart LR
   `actions/attest`, Build L2): **kiểm sau push**, cùng phép đo admission thật của
   [ADR-0040](adr/0040-sigstore-bundle-actions-attest.md) §6.
 - `-f promote_prd=true [-f stg_ref=<main|SHA đủ 40 hex>]` (chỉ `main`, một mình): job `promote-prd` mở PR
-  `bot/promote-prd` trong `svp-gitops` chép giá trị khối `image` của bảy file và ba khoá `charts.yaml` của `envs/stg/` ở
+  `bot/promote-prd` trong `svp-gitops` chép giá trị khối `image` của mọi file và ba khoá `charts.yaml` của `envs/stg/` ở
   commit `stg_ref` (mặc định `main`; commit cũ hơn của `main` là rollback prd; nhánh, SHA ngắn, commit ngoài `main` bị
   từ chối) sang `envs/prd/` và ghim `gitopsRevision` của `envs/prd/charts.yaml` vào chính commit đó (prd render
   `argocd/apps`, `base/`, `platforms/` ở đó), không auto-merge; job dừng chờ người học duyệt environment `promote-prd`,
@@ -174,7 +210,7 @@ flowchart LR
   đúng `sub` environment `promote-prd`), chép và verify sang ECR prd mọi image mà `envs/stg/images/` ghi ở commit đó;
   một image lỗi thì không PR nào mở, thông điệp nêu từng image lỗi. Rồi người học duyệt PR (Code Owner). Buổi prd vì vậy
   cần buổi stg đã đồng bộ đúng commit sẽ promote; rollback là một lượt với `stg_ref` cũ có status đó.
-- `verify.yml` nhận `--ref main` hay nhánh `feat/stage6b-*`, ref khác dừng ở bước đầu; `targets` rỗng là mọi bước, bước dựng
+- `verify.yml` nhận `--ref main` hay nhánh `feat/*`, ref khác dừng ở bước đầu; `targets` rỗng là mọi bước, bước dựng
   (`up`, `k8s-gitops-up`, `k8s-up`) luôn chạy; `gitops_ref` (chỉ `dev-k3d`) là `main` hay SHA đủ 40 hex của `svp-gitops`. Không còn input
   `web_ref`: workflow không clone `svp-frontend`, mọi kịch bản chạy image web của bản phát hành stg. Lệnh đầy đủ ở [`reference/ci.md`](reference/ci.md).
 
@@ -185,7 +221,7 @@ flowchart LR
     bot["PR của bot App<br/>chỉ đổi envs/stg/"]
     prd["PR của bot App<br/>đổi envs/prd/"]
     own["PR của người học<br/>đổi file chung"]
-    check["check.yml: gitops-ok<br/>(gitops-check.sh của repo code<br/>ở CHECKER_COMMIT)"]
+    check["check.yml: gitops-ok<br/>(gitops-check.sh của repo code<br/>ở bản checker ghim)"]
     m{"merge vào main<br/>của svp-gitops"}
     bot --> check -->|"auto-merge, không ai duyệt"| m
     prd --> check
@@ -210,8 +246,11 @@ flowchart LR
 - Luật tác giả hẹp: PR của bot một nguồn (`<promoter>[bot]`, đọc thẳng từ sự kiện PR) chỉ được đổi `envs/{stg,prd}/images/` của service
   thuộc nguồn đó (bot `backend` thêm hai `charts.yaml` và mọi file image prd, vì promote prd chép cả bộ); không bot nào xoá file; bot khác
   không đổi gì dưới `envs/`; PR của người không bị giới hạn ở bước này. Giữ vì `envs/stg/` không có Code Owner: PR bot tự merge.
-- `CHECKER_COMMIT` (commit của repo này mà check chạy) đổi bằng PR ở `svp-gitops`; PR thêm hay sửa `check.yml` tự chạy bản sửa của
-  chính nó (đặc tính của `pull_request`), nên `.github/` có Code Owner.
+- Bản checker mà check chạy là ghim trong `check.yml`: `CHECKER_VERSION` (semver, tag `gitops-check-v<CHECKER_VERSION>` của repo này) và
+  `CHECKER_COMMIT` (commit của tag đó); một bước đỏ khi tag không trỏ đúng commit đó. Renovate nâng cả hai trong một PR ở `svp-gitops` (major
+  ở PR riêng); đổi hợp đồng giữa checker và cây theo expand–contract ([ADR-0077](adr/0077-versioned-gitops-checker.md) §5, §6,
+  [`runbooks/gitops-checker-release.md`](runbooks/gitops-checker-release.md)). PR thêm hay sửa `check.yml` tự chạy bản sửa của chính nó (đặc
+  tính của `pull_request`), nên `.github/` có Code Owner.
 - Ruleset `owners` đòi duyệt của Code Owner cho mọi file trừ `envs/stg/`; ruleset `tags` cấm tạo tag (Argo CD có thể phân giải tên
   ngắn sang tag cùng tên). Lượt `check` đầu trên `main`: [40902199532](https://github.com/anhnvcoder/svp-gitops/actions/runs/40902199532)
   (2026-10-29), token chỉ `Contents: read`. Kiểm ngày 2026-10-30: người học là Code Owner duy nhất kiêm tác giả PR nên GitHub coi
@@ -261,12 +300,20 @@ chỉ chạy `promote-prd`. "Trên `main`" dưới đây là `github.ref == 'ref
 | `sign` | Ký keyless, attestation `vuln` và SBOM bằng `.github/actions/image-sign` (cosign ghim `COSIGN_IMAGE`, guard `deploy/ci/image-guard.sh`; Sigstore bundle, chỉ ghi loại chưa có trên digest nên chạy lại không thêm gì; [ADR-0040](adr/0040-sigstore-bundle-actions-attest.md)), rồi build provenance SLSA v1 bằng `actions/attest` (`attestations: write` chỉ ở job này, digest index, sau `vuln`; Build L2; ADR-0040 thay [ADR-0027](adr/0027-slsa-build-provenance.md)): chỉ khi `builder.id` bằng identity ký của nguồn phát hành của lượt (`deploy/helm/svp-policy/files/sources.json`, kiểm trước khi ký gì); image diễn tập không có | Như `build` | Như `build` | Có |
 | `ecr-copy` | Matrix theo image, `fail-fast: false`; `id-token: write`, role `svp-ci-ecr-release-backend` của account stg (`aws-actions/configure-aws-credentials`, phiên 1 giờ, che account ID); đăng nhập ECR vào `DOCKER_CONFIG` riêng, `deploy/ci/ecr-copy.sh copy` (index, referrer, verify ở ECR), rồi artifact `ecr-<image>` | Như `build` (sau `sign`) | Như `build` | Có |
 | `promote` | Environment `promote`, token App chỉ `svp-gitops` (`contents`, `pull_requests` write); đọc artifact `ecr-*` (chỉ image đã chép, verify ở ECR stg); bước shell dựng lại `bot/promote-stg` của `svp-gitops` bằng `yq` (`envs/stg/images/` của các image đó, `envs/stg/charts.yaml`; guard tổ tiên với `revision` của stg), mở hay cập nhật PR, bật auto-merge | Chế độ `build`, trên `main`, có image hay chart đổi (`promote_charts`) | PR, nhánh khác, không image và không chart nào đổi | Có |
-| `promote-prd` | Environment `promote-prd` (người học duyệt trước khi job chạy); `id-token: write`, role `svp-ci-ecr-promote` của account prd: chép, verify sang ECR prd mọi image của `envs/stg/images/` ở `stg_ref`, một image lỗi thì dừng; token App (`contents`, `pull_requests` write); bước shell chép giá trị `image` của bảy file và ba khoá `charts.yaml` của `envs/stg/` ở `stg_ref` vào `envs/prd/` trên `bot/promote-prd`, PR không auto-merge | Dispatch `promote_prd=true` trên `main` (kèm `services`, `rescan`, `values_ref`, `drill`, `digest`, `image`, `env` thì đỏ ở bước đầu) | Mọi lượt khác | Có |
+| `promote-prd` | Environment `promote-prd` (người học duyệt trước khi job chạy); `id-token: write`, role `svp-ci-ecr-promote` của account prd: chép, verify sang ECR prd mọi image của `envs/stg/images/` ở `stg_ref`, một image lỗi thì dừng; token App (`contents`, `pull_requests` write); bước shell chép giá trị `image` của mọi file và ba khoá `charts.yaml` của `envs/stg/` ở `stg_ref` vào `envs/prd/` trên `bot/promote-prd`, PR không auto-merge | Dispatch `promote_prd=true` trên `main` (kèm `services`, `rescan`, `values_ref`, `drill`, `digest`, `image`, `env` thì đỏ ở bước đầu) | Mọi lượt khác | Có |
 | `rescan` | Environment `ecr-rescan`; `make gitops-clone`, quét lại mọi digest phát hành của nguồn `backend` trong `envs/*/images/` của `svp-gitops` (bản của nguồn khác bỏ qua), thay attestation `vuln` (digest định dạng cũ `--replace`; bundle: attest rồi gỡ `vuln` cũ bằng `oras manifest delete`), rồi làm mới bản ở ECR của mọi env ghi digest bằng role `svp-ci-ecr-rescan-backend` của account đó (hai profile `svp-stg`, `svp-prd`); với `digest`, `image`, `env` chỉ quét lại một bản đó (`rescan.sh run-digest`) | Chế độ `rescan`, trên `main` | Mọi chế độ khác | Có |
 | `contract` | `deploy/ci/contract.sh publish`: đẩy `info.version` của spec gateway thành OCI artifact `ghcr.io/anhnvcoder/svp-backend/api/gateway:<version>` bằng ORAS (`ORAS_IMAGE`), ký keyless digest đó; tag có cùng file thì bỏ qua (thiếu chữ ký thì ký bù), khác thì đỏ; `packages: write`, `id-token: write` | Chế độ `build`, trên `main` (push, dispatch không `rescan`, `drill`, `promote_prd`) | PR, nhánh khác, chế độ khác | Có |
 | `drill-build`, `drill-merge`, `drill-sign` | Ba image diễn tập `drill-vulnerable` (có CRITICAL, ký), `drill-unsigned` (không ký) và `drill-no-provenance` (sạch, ký và attest `vuln`, không provenance), cùng các bước của bản phát hành | Chế độ `drill`, trên `main` | Mọi chế độ khác, nên luôn skip ở PR và push | Có |
 | `sarif` | Tải SARIF của build (`trivy.sarif`, `grype.sarif` mỗi chân) và rescan trên `main` | Trên `main`, chế độ `rescan` hay `build` có image | PR, nhánh khác, không image | Không |
 | `images-ok` | Xanh khi mỗi job `success`, hay `skipped` vì đúng lý do mà job này tính lại từ sự kiện, ref, output của `plan` | `always()` | Không bao giờ | Là check bắt buộc |
+
+### `release.yml`
+
+Trigger: `push` vào `main`. Không chạy ở PR, nên không phải check của PR; PR phát hành nó mở đi qua `ci-ok`, `images-ok` như mọi PR.
+
+| Job | Làm gì | Chạy khi | Skip khi |
+| --- | --- | --- | --- |
+| `release-please` | Environment `release`; token App `svp-release-please` 1 giờ (`actions/create-github-app-token`, chỉ repo này, `contents`, `pull_requests` write); `googleapis/release-please-action` với `release-please-config.json`, `.release-please-manifest.json`: mở hay cập nhật PR phát hành, hay tạo tag và GitHub Release cho PR phát hành vừa merge; không checkout | Mọi push `main` (nhóm `concurrency` `release-please`, lượt đang chạy không bị huỷ) | Không bao giờ; không có gì để phát hành thì xanh, không ghi gì |
 
 ### `verify.yml`
 
@@ -274,9 +321,9 @@ Trigger: `workflow_dispatch` (input `scenario`, `targets`, `gitops_ref`) và `sc
 
 | Job | Làm gì | Chạy khi | Skip khi |
 | --- | --- | --- | --- |
-| `compose` | Kịch bản `compose-obs`: `make up OBS=lgtm`, smoke, `drill-obs-threats`, test tích hợp của object store (`test-stack-objstore`, không ca nào được SKIP); hạn 155 phút | `github.event_name == 'schedule' \|\| inputs.scenario == 'compose-obs'` | Dispatch kịch bản khác |
-| `gitops` | Kịch bản `gitops`: `make gitops-clone`, `make k8s-gitops-up` vai stg ở SHA của `origin/main` trong bản clone (Argo CD đọc `svp-gitops` ở đúng commit đó, cluster ở yên commit đó suốt các bước kiểm, PR promote merge giữa chừng không đổi gì; chart của repo này ở commit `envs/stg/charts.yaml`, qua HTTPS ẩn danh), `make drill-k8s-gitops` (ba test Chainsaw của `deploy/k8s/drills/gitops/`: `gitops-env`, `gitops-external-secrets` (mọi ExternalSecret chart render với values của cluster `Ready`, 28 trên runner k3d, Secret đích đúng type và tên key), `gitops-argocd-metrics` (Prometheus thấy mọi Application của Argo CD Synced/Healthy, không cảnh báo Argo CD nào cháy, [ADR-0032](adr/0032-argocd-deploy-status.md))), `gitops-admission-metrics` (thời gian admission của lượt sync đầu từ apiserver và Kyverno, chỉ ghi số vào file của bước, [ADR-0040](adr/0040-sigstore-bundle-actions-attest.md) mục 6; thiếu metric là dòng `NOTE`, không đỏ), smoke chặt (key có version, `Cache-Control`), `drill-k8s-reloader` (xoay credential qua External Secrets; các bước sau chạy trên credential mới), `drill-k8s-supplychain` (gồm ca `l`: bản web thiếu provenance), `drill-k8s-threats` (gồm SEC-5/6/7). Lượt lịch bỏ ca (c), (l) của supplychain khi image của ca đó quá 72 giờ (SKIP kèm dòng `NOTE`, lệnh dispatch dựng lại image diễn tập `-f drill=true`; `SVP_VERIFY_SCHEDULED=true`); hạn 250 phút | `github.event_name == 'schedule' \|\| inputs.scenario == 'gitops'` | Dispatch kịch bản khác |
-| `dev-k3d` | Kịch bản `dev-k3d`: kiểm `gitops_ref`, `make gitops-clone GITOPS_REF=<gitops_ref>`, `make k8s-up` (đường dev: helmfile, sáu image build bằng bake trên runner), `make k8s-smoke`, `make drill-k8s-reloader`, `drill-k8s-supplychain` với `SUPPLYCHAIN_ENFORCE_TMP=1` (gồm ca (k), chỉ chạy khi policy đang Audit); hạn 210 phút | `inputs.scenario == 'dev-k3d'` | Lượt lịch, dispatch kịch bản khác |
+| `compose` | Kịch bản `compose-obs`: `make up OBS=lgtm`, smoke, `uptime-cost` (probe `web`, `api`, `media` về 1, không `UptimeProbesAbsent` cháy), `drill-obs-threats`, test tích hợp của object store (`test-stack-objstore`, không ca nào được SKIP); hạn job: [`reference/ci.md`](reference/ci.md) | `github.event_name == 'schedule' \|\| inputs.scenario == 'compose-obs'` | Dispatch kịch bản khác |
+| `gitops` | Kịch bản `gitops`: `make gitops-clone`, `make k8s-gitops-up` vai stg ở SHA của `origin/main` trong bản clone (Argo CD đọc `svp-gitops` ở đúng commit đó, cluster ở yên commit đó suốt các bước kiểm, PR promote merge giữa chừng không đổi gì; chart của repo này ở commit `envs/stg/charts.yaml`, qua HTTPS ẩn danh), `make drill-k8s-gitops` (ba test Chainsaw của `deploy/k8s/drills/gitops/`: `gitops-env`, `gitops-external-secrets` (mọi ExternalSecret chart render với values của cluster `Ready`, 28 trên runner k3d, Secret đích đúng type và tên key), `gitops-argocd-metrics` (Prometheus thấy mọi Application của Argo CD Synced/Healthy, không cảnh báo Argo CD nào cháy, [ADR-0032](adr/0032-argocd-deploy-status.md))), `gitops-admission-metrics` (thời gian admission của lượt sync đầu từ apiserver và Kyverno, chỉ ghi số vào file của bước, [ADR-0040](adr/0040-sigstore-bundle-actions-attest.md) mục 6; thiếu metric là dòng `NOTE`, không đỏ), smoke chặt (key có version, `Cache-Control`), `drill-k8s-mesh` (các lớp của mesh: plaintext, ServiceAccount lạ và bỏ qua waypoint bị từ chối, mọi pod được ambient bắt; dòng `RESULT mesh-memory` là bằng chứng RAM, không cổng), `uptime-cost` (probe về 1, hạn cert, chi phí OpenCost > 0, không `UptimeProbesAbsent` cháy), `drill-k8s-reloader` (xoay credential qua External Secrets; các bước sau chạy trên credential mới), `drill-k8s-supplychain` (gồm ca `l`: bản web thiếu provenance), `drill-k8s-threats` (gồm SEC-5/6/7). Lượt lịch bỏ ca (c), (l) của supplychain khi image của ca đó quá 72 giờ (SKIP kèm dòng `NOTE`, lệnh dispatch dựng lại image diễn tập `-f drill=true`; `SVP_VERIFY_SCHEDULED=true`); hạn job: [`reference/ci.md`](reference/ci.md) | `github.event_name == 'schedule' \|\| inputs.scenario == 'gitops'` | Dispatch kịch bản khác |
+| `dev-k3d` | Kịch bản `dev-k3d`: kiểm `gitops_ref`, `make gitops-clone GITOPS_REF=<gitops_ref>`, `make k8s-up` (đường dev: helmfile, mọi image Go build bằng bake trên runner), `make k8s-smoke`, `make drill-k8s-mesh`, `make drill-k8s-reloader`, `drill-k8s-supplychain` với `SUPPLYCHAIN_ENFORCE_TMP=1` (gồm ca (k), chỉ chạy khi policy đang Audit); hạn 225 phút | `inputs.scenario == 'dev-k3d'` | Lượt lịch, dispatch kịch bản khác |
 
 Mỗi job: kiểm ref, checkout, kiểm input `targets` (`deploy/ci/verify-steps/steps.sh check`), cài công cụ, `make gitops-clone` (đặt
 `SVP_GITOPS_DIR` cho mọi bước sau), `make env`, `deploy/ci/verify-mask.sh`, ở `gitops` và `dev-k3d` bước sinh và mask giá trị mới của
@@ -301,7 +348,7 @@ và không còn ở workflow: bản đo một lần của `dev-k3d`, `web-canary
   `pull_request_target`, `workflow_run`. Chi tiết: ADR-0015 §1; [`threat-model.md`](threat-model.md) SC-2, SC-10, SC-11.
 - **Chỉ build service đổi** (`deploy/ci/changed-services.sh`, ADR-0015 §3). Mỗi service có tập đường dẫn của image (`image_paths`
   của `deploy/k8s/lib.sh`); đổi đường build, quét, ký (`images.yml`, `deploy/ci/`, ghim `TRIVY_IMAGE`/`SYFT_IMAGE`/`GRYPE_IMAGE`/
-  `COSIGN_IMAGE`) thì cả sáu (PR nâng một bộ quét quét lại mọi image trước khi merge), trừ các file của `deploy/ci/` không job image nào đọc (tệp bỏ qua misconfig, script của `verify.yml`, mọi test
+  `COSIGN_IMAGE`) thì mọi service (PR nâng một bộ quét quét lại mọi image trước khi merge), trừ các file của `deploy/ci/` không job image nào đọc (tệp bỏ qua misconfig, script của `verify.yml`, mọi test
   `*-test.sh`, check của `svp-gitops` cùng `values-check.sh` và `verify-release.sh` mà chỉ nó, `make k8s-gitops-up` và diễn tập chạy). Base của push `main` là lượt push thành công cuối chứ không phải commit ngay trước, để thay đổi của một lượt đỏ
   hay bị thay trong hàng chờ không bị bỏ sót. Không dùng `paths:` ở trigger vì check bắt buộc của workflow không chạy thì không
   bao giờ được báo, PR treo chờ mãi.
@@ -325,7 +372,7 @@ và không còn ở workflow: bản đo một lần của `dev-k3d`, `web-canary
   ([`threat-model.md`](threat-model.md) GIT-1 tới GIT-6).
 - **govulncheck chặn, trivy và grype chặn image, CodeQL chỉ báo.** govulncheck chỉ đỏ với lỗ hổng mà code gọi tới (theo đồ thị
   gọi), nên ít báo giả; trivy và grype là hai DB và hai cách khớp khác nhau trên cùng image (grype đọc SBOM syft, thấy binary
-  ngoài trình quản lý gói mà trivy không thấy), cùng cổng CRITICAL; ngoại lệ là một mục `.trivyignore.yaml` kèm rule `.grype.yaml` cùng id và version ([ADR-0039](adr/0039-mainpath-drills-scan-gate-sourcemaps.md) §2). CodeQL theo luồng dữ liệu qua
+  ngoài trình quản lý gói mà trivy không thấy), cùng cổng CRITICAL và HIGH có bản vá ([ADR-0070](adr/0070-scan-gate-high-fixed.md)); ngoại lệ là một mục `.trivyignore.yaml` kèm rule `.grype.yaml` cùng id và version ([ADR-0039](adr/0039-mainpath-drills-scan-gate-sourcemaps.md) §2). CodeQL theo luồng dữ liệu qua
   hàm và tệp, còn mới ở repo nên chưa là check bắt buộc; gosec trong `check` vẫn là cổng SAST chặn (ADR-0030 §1, §4, §6).
 - **Vì sao job `drill-*` nằm trong `images.yml` dù luôn skip ở PR và push.** Ký keyless không có khoá: danh tính ký là chứng chỉ
   Fulcio cấp cho đúng file workflow và ref đang chạy (SAN là `server_url` + `job_workflow_ref`, ADR-0015 §7), và Kyverno chỉ tin
@@ -361,7 +408,7 @@ và không còn ở workflow: bản đo một lần của `dev-k3d`, `web-canary
   (`mask-aws-account-id`; output của `ecr-copy.sh` thay nó bằng `<account>`); region, tên role cố định trong workflow.
   Hai account trong job `rescan` là hai profile AWS (`svp-stg`, `svp-prd`), mỗi bước làm mới chọn profile của env.
 - **`last-success` là job riêng, và `plan` chỉ nhận SHA đủ.** Chỉ job này đọc Actions API nên nó không checkout và không chạy code của repo.
-  API lỗi thì output rỗng và job vẫn xanh: `plan` build cả sáu image (thừa chứ không thiếu). API lọc theo nhánh, sự kiện, trạng thái;
+  API lỗi thì output rỗng và job vẫn xanh: `plan` build mọi image (thừa chứ không thiếu). API lọc theo nhánh, sự kiện, trạng thái;
   `plan.sh` chỉ nhận đáp án khi nó là SHA commit đủ.
 - **`promote` chạy cả khi ký hay chép một image lỗi.** Mọi image đã chép và verify ở ECR stg trong lượt này vẫn được
   promote, image lỗi đỏ ở `sign` hay `ecr-copy` và không có artifact `ecr-<image>`; chạy lại leg lỗi rồi `promote` thì
@@ -380,7 +427,7 @@ và không còn ở workflow: bản đo một lần của `dev-k3d`, `web-canary
   từ đó; `GITHUB_TOKEN` chỉ dùng để hỏi PR promote có đang mở không (đọc repo public). Environment `ecr-rescan` (chỉ
   `main`, không người duyệt vì chạy theo lịch) không giữ secret riêng: tên của nó là `sub` mà role rescan tin.
 - **Báo cáo SARIF của `images.yml` tải một lần mỗi công cụ.** `upload-sarif` gộp mọi file nhận được thành một log SARIF và GitHub từ chối
-  log quá 20 run. Mỗi chân ghi một run trivy và một run grype, nên sáu image (12 chân) gộp cả hai công cụ ra 24 run; tách theo công cụ thì
+  log quá 20 run. Mỗi chân ghi một run trivy và một run grype, nên mỗi image hai chân gộp cả hai công cụ ra bốn run; tách theo công cụ thì
   tối đa 14 (rescan chỉ ghi run trivy và không chung log với build). Bước đầu của job xếp file vào một thư mục mỗi công cụ và đếm run
   bằng `jq` của runner, để log vượt giới hạn dừng ở đó kèm số đếm thay vì bị GitHub từ chối; công cụ vượt giới hạn không được tải, công cụ
   kia vẫn tải. Job là báo cáo chứ không phải check: nằm ngoài `images-ok`, nhưng tải lỗi vẫn làm lượt đỏ.
@@ -430,12 +477,12 @@ và không còn ở workflow: bản đo một lần của `dev-k3d`, `web-canary
   test tự tạo các database `svp_*_test` từ đó. Redis native cùng dòng
   với Redis của máy dev; test dùng db 15 (mặc định của `SVP_TEST_REDIS_URL`); stack `make up` không dùng nó.
 - **Job `stack`: cách chạy và vì sao.** Dựng cả stack `make up` trên runner như trên máy dev rồi chạy `make smoke`, e2e của web, k6 profile `ci` (chỉ ngưỡng
-  lỗi: runner dùng chung không nói gì về độ trễ), Lighthouse và Schemathesis theo hợp đồng OpenAPI của gateway. Sáu service build từ code của
-  PR; web là bản phát hành mà stg chạy (mặc định của `make up`, ghi ở `main` của `svp-gitops`, kéo ẩn danh từ GHCR), và e2e, Lighthouse
+  lỗi: runner dùng chung không nói gì về độ trễ), Lighthouse và Schemathesis theo hợp đồng OpenAPI của gateway. Mọi image Go của bảng image
+  build từ code của PR; web là bản phát hành mà stg chạy (mặc định của `make up`, ghi ở `main` của `svp-gitops`, kéo ẩn danh từ GHCR), và e2e, Lighthouse
   là code của `svp-frontend` ở đúng commit của bản phát hành đó (`make web-clone`), nên thay đổi backend làm hỏng web hiện ở đây. Job build và chạy code của PR
   như các job khác, với `contents: read` và không secret: `make env` ghi `.env` gồm secret ngẫu nhiên mới, chỉ sống trên runner tới hết job,
   không in, không tải lên. Các thao tác đặt lại "LOCAL LAB ONLY" của smoke, e2e, k6, Lighthouse, DAST (xoá khoá rate limit đăng ký của gateway ở
-  Valkey db 10, qua CLI vận hành trong container `valkey`) chỉ chạm Valkey của stack compose lượt này. Job chạy khoảng 15 đến 25 phút (sáu lần build image, kéo bản web phát hành, seed e2e
+  Valkey db 10, qua CLI vận hành trong container `valkey`) chỉ chạm Valkey của stack compose lượt này. Job chạy khoảng 15 đến 25 phút (một lần build mỗi image Go, kéo bản web phát hành, seed e2e
   (video READY), hai trình duyệt); `timeout-minutes: 45` chừa chỗ cho runner chậm và dừng một bước treo xa trước mặc định 6 giờ của
   GitHub.
 - **Job `stack`: môi trường của runner.** Job không có service container: Postgres, Kafka và Valkey là container của stack compose (`tls-init`,
@@ -480,6 +527,13 @@ và không còn ở workflow: bản đo một lần của `dev-k3d`, `web-canary
   Renovate), và cả nút Revert của GitHub (`Revert "<tiêu đề>"`). Cùng mẫu và bộ test chạy ở bốn repo có CI (`svp-backend`, `svp-frontend`, `svp-gitops`,
   `svp-infra`). Là workflow riêng, không phải job của `ci.yml`: sửa tiêu đề chạy riêng nó chứ không chạy cả CI. Không quyền, không checkout, không code của PR: tiêu đề
   tới script chỉ qua `env`.
+- **`release.yml`: token App, chỉ `main`, không checkout.** PR mở bằng `GITHUB_TOKEN` không chạy workflow nào, nên PR phát hành sẽ không bao giờ
+  có `ci-ok`, `images-ok`; token của App `svp-release-please` làm PR đó chạy CI như mọi PR. Khoá App là secret của environment `release`, chỉ
+  nhánh `main` dùng được, nên không job `pull_request` nào đọc được; workflow không có trigger `pull_request` vì release-please chỉ có việc khi
+  `main` đổi, và lượt PR không bao giờ cần token ghi. Job không checkout và không chạy code của repo: action đọc cấu hình và lịch sử qua API,
+  nên code của một PR chưa merge không tới được token. `permissions: {}` cho `GITHUB_TOKEN`; `concurrency` không huỷ lượt đang chạy, vì lượt bị
+  cắt giữa lúc tạo GitHub Release và lúc đổi nhãn để PR phát hành treo ở `autorelease: pending`. Tag bất biến (ruleset `gitops-check-tags`):
+  `svp-gitops` ghim cả version lẫn commit của tag, bản lỗi sửa bằng bản mới ([ADR-0077](adr/0077-versioned-gitops-checker.md) §3, §4).
 - **`scorecard.yml`.** OpenSSF Scorecard của repo: ghim, quyền của token, ruleset, mẫu workflow nguy hiểm và các check khác (danh sách ở tài liệu của
   Scorecard), chạy mỗi push `main`, hằng tuần và khi một luật branch protection cổ điển đổi. Kết quả công khai ở API Scorecard (`publish_results: true`, huy hiệu và trang
   xem) và tải lên code scanning. Không trigger `pull_request`: đây không phải check của PR. Branch-Protection đọc ruleset bằng `GITHUB_TOKEN`
@@ -497,16 +551,19 @@ Trang một lượt chạy (Actions → chọn lượt) có đồ thị job, dan
   cho sự kiện này (ví dụ cả nhóm `build`, `sign`, `promote`, `drill-*` ở lượt PR). Muốn biết skip có đúng không, mở log job
   `images-ok`: mỗi job một dòng `ok    <job> skipped: not part of this run`, hay `::error::<job> was skipped, but this run needed
   it`.
-- **Summary của job** (cuộn xuống dưới đồ thị), từ hai nguồn. Script ghi vào `$GITHUB_STEP_SUMMARY` (`step_summary` của `common.sh`): một dòng mỗi lần quét của mỗi chân build của `images.yml` (`image-guard.sh` trong bước của `image-leg`), của `scan-gate.sh` ở rescan và `make grype` (`(trivy): CRITICAL n, HIGH n, secrets n` và
-  `(grype): Critical n, High n, excepted by .grype.yaml n`; chi tiết CRITICAL ở bảng của trivy trong log, HIGH ở SARIF); `plan` (chế độ, base, image được chọn và lý do); `rescan.sh` của lượt quét lại hằng ngày hay dispatch `rescan=true` (service chưa phát hành bị bỏ qua, hay không
+- **Summary của job** (cuộn xuống dưới đồ thị), từ hai nguồn. Script ghi vào `$GITHUB_STEP_SUMMARY` (`step_summary` của `common.sh`): một dòng mỗi lần quét của mỗi chân build của `images.yml` (`image-guard.sh` trong bước của `image-leg`), của `scan-gate.sh` ở rescan và `make grype` (`(trivy): CRITICAL n, HIGH n (with a fix n), secrets n` và
+  `(grype): Critical n, High n (with a fix n), excepted by .grype.yaml n`; chi tiết CRITICAL ở bảng của trivy trong log, HIGH có bản vá ở danh sách của `image-guard.sh fixed-high`, mọi HIGH ở SARIF); `plan` (chế độ, base, image được chọn và lý do); `rescan.sh` của lượt quét lại hằng ngày hay dispatch `rescan=true` (service chưa phát hành bị bỏ qua, hay không
   có digest đã phát hành nào để quét). Chính YAML của `ci.yml` ghi thẳng `$GITHUB_STEP_SUMMARY`: bảng SARIF (mức, rule, vị trí
   mỗi phát hiện, tối đa 50 dòng) của golangci-lint ở `check`, `gitleaks`, `trivy-config`, và
   dòng "buf breaking skipped" của `buf` khi bỏ qua; khi chuyển nền tảng, các bước này viết lại cùng YAML
   ([ADR-0023](adr/0023-ci-platform-neutral.md)). Playwright, k6 không ghi summary: kết quả ở
   log của bước tương ứng (`make web-e2e`, `make load-ci`); `promote`, `promote-prd` cũng không: bản phát hành nhánh bot mang nằm ở tiêu
   đề và mô tả của PR trong `svp-gitops`, link PR ở log bước.
+- **Dòng `note`:** `gitops-check.sh` in `note  …` (không `FAIL`) khi env thiếu file image của một service mà revision nó ghim
+  không build: đó là **Release mới** (mục 1.2), đợi PR promote tạo file; `values-check.sh` in nó khi PR xoá file như vậy (rollback,
+  service nghỉ hưu); dòng `note` về bảng nguồn không đọc được thì mọi service của working tree phải có file.
 - **Annotation:** dòng `::warning::`/`::error::` của script hiện ở đầu trang, kèm job. Ví dụ: `last-success` cảnh báo khi API
-  không trả lời (lượt build cả sáu), `verify-collect.sh` cảnh báo khi bỏ một file khỏi artifact vì nghi có bí mật (không in đoạn
+  không trả lời (lượt build mọi service), `verify-collect.sh` cảnh báo khi bỏ một file khỏi artifact vì nghi có bí mật (không in đoạn
   khớp), `images-ok` báo job skip sai.
 - **Bước đỏ trong job xanh:** bước có `continue-on-error: true` đỏ mà job vẫn xanh. Ở repo này là `make web-lighthouse` của job
   `stack`: Lighthouse một lượt mỗi trang trên runner dùng chung là nhiễu, nên vượt ngưỡng LCP/TBT không làm job đỏ; mở log bước

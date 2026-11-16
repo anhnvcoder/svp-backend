@@ -12,6 +12,14 @@ Loại tài liệu (Diátaxis): **reference**, tra cứu khi cần một lệnh 
   `postgres` của compose (container đó không publish cổng). Job `check` của CI chạy cùng URL trên service container Postgres 17, cùng
   major với compose, k3d và RDS; Postgres native của máy có thể là major cũ hơn, nên lỗi chỉ có ở 17 lộ ra ở CI
   ([ADR-0057](../adr/0057-postgres17-verify-full.md) §1, §4).
+- Migration ([ADR-0068](../adr/0068-zero-downtime-migrations.md) §6 (h), §10, §11; cách viết ở
+  [`schema-change.md`](../runbooks/schema-change.md)): migration đổi bảng đã có kèm test chạy SQL của release trước sau migration
+  (khuôn `services/user-service/migrations/migrations_test.go`). `internal/dbmigrate/files_test.go` (`TestMigrationFiles`) kiểm mọi file
+  của `services/*/migrations/` và `internal/dbmigrate/testdata/*/` theo luật transaction của file. Test diễn tập `drill_test.go`
+  (`TestRenameDrill`, `TestRenameDrillNaive`, `TestRenameDrillLockTimeout`) dùng database `svp_migration_drill_test`,
+  `svp_migration_drill_naive_test`, `svp_migration_drill_lock_test`; số dòng nạp trước đọc từ `SVP_DRILL_ROWS` (mặc định 20 000 trong
+  `make test`; `make migration-drill` đặt 1 000 000). `TestBackfillKeyset` chạy migration backfill mẫu trên bảng rỗng và bảng có id không liên
+  tục, database `svp_migration_backfill_empty_test`, `svp_migration_backfill_gaps_test`.
 - Test gateway gọi service qua `bufconn` (gRPC trong bộ nhớ), không mở cổng.
 - Fuzz test (`FuzzXxx` trong `fuzz_test.go` của gói) kiểm tính chất bằng oracle độc lập với hàm (regexp, bảng `unicode`,
   `ed25519.Verify`, `proto.Marshal`), không chỉ "không panic"; tất định, không dựa trạng thái toàn cục. `TestMain` nào dựng

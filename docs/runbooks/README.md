@@ -111,6 +111,7 @@ có khối chuẩn bị riêng.
   `kubectl --context k3d-svp -n svp-data exec deploy/svp-ops -c kafka -- /opt/svp/bin/svp-kafka …` và `… -c valkey --
   /opt/svp/bin/svp-valkey -n <db> …`. Gateway db 10, feed-service db 14, web db 9. `svp-ops` chỉ đọc khoá `svp:*` và xoá đúng hai tiền
   tố mà `AGENTS.md` cho phép (`svp:gw:rl:register:*` ở db 10, `svp:feed:explore:*` ở db 14); không `FLUSHDB`/`FLUSHALL`.
+  Ngoại lệ duy nhất: phát lại record DLQ qua release `dlq-replay` ([`kafka-dlq-records.md`](kafka-dlq-records.md)).
 - Postgres của compose chỉ qua container `postgres`: `dc exec -T postgres psql -U postgres -d <database> -X -c '…'` (user
   `postgres` qua socket Unix trong container, không `psql` trên host, không cổng publish). Postgres native `-h 127.0.0.1 -p 5432`
   chỉ còn `make test` dùng; nó **dùng chung với dự án khác**: không restart.
@@ -126,7 +127,8 @@ có khối chuẩn bị riêng.
 ## Mục lục
 
 Cảnh báo `severity=page` (rule viết tay ở `svp-alerts.yaml`, SLO ở `svp-slos.yaml`, alarm managed ở CloudWatch theo
-[ADR-0058](../adr/0058-managed-data-operations.md) §2 và alarm DNSSEC của zone prd theo [ADR-0061](../adr/0061-edge-cloudfront-waf-acm.md) §11,
+[ADR-0058](../adr/0058-managed-data-operations.md) §2, alarm DLQ của transcode theo ADR-0066 §7 và alarm DNSSEC của
+zone prd theo [ADR-0061](../adr/0061-edge-cloudfront-waf-acm.md) §11,
 email bảo mật của org qua EventBridge và SNS; alarm `ticket` của dịch vụ managed không có runbook riêng):
 
 | Alert | Runbook | Nguồn rule |
@@ -134,6 +136,7 @@ email bảo mật của org qua EventBridge và SNS; alarm `ticket` của dịch
 | `KafkaConsumerLagHigh` | [kafka-consumer-lag-high.md](kafka-consumer-lag-high.md) | `svp-alerts.yaml` (2 biến thể) |
 | `RateLimitFallbackActive` | [rate-limit-fallback-active.md](rate-limit-fallback-active.md) | `svp-alerts.yaml` |
 | `KafkaDLQRecords` | [kafka-dlq-records.md](kafka-dlq-records.md) | `svp-alerts.yaml` |
+| `OutboxRowsFailed` | [outbox-rows-failed.md](outbox-rows-failed.md) | `svp-alerts.yaml` |
 | `CircuitBreakerOpen` | [circuit-breaker-open.md](circuit-breaker-open.md) | `svp-alerts.yaml` |
 | `BackgroundLoopStalled` | [background-loop-stalled.md](background-loop-stalled.md) | `svp-alerts.yaml` (4 biến thể) |
 | `FeedAvailabilityBudgetBurn` | [feed-availability-budget-burn.md](feed-availability-budget-burn.md) | SLO `feed-availability` |
@@ -143,12 +146,16 @@ email bảo mật của org qua EventBridge và SNS; alarm `ticket` của dịch
 | `WebAvailabilityBudgetBurn` | [web-availability-budget-burn.md](web-availability-budget-burn.md) | SLO `web-availability` |
 | `PostgresWALArchivingFailing` | [postgres-wal-archiving-failing.md](postgres-wal-archiving-failing.md) | `svp-alerts.yaml`, nhóm `postgres-backup` (chỉ k3d) |
 | `ArgoCDApplicationDegraded` | [argocd-application-degraded.md](argocd-application-degraded.md) | `svp-alerts.yaml`, nhóm `argocd` (chỉ cluster GitOps) |
+| `PublicUptimeBudgetBurn` | [public-uptime-budget-burn.md](public-uptime-budget-burn.md) | SLO `public-uptime` |
+| `UptimeProbesAbsent` | [uptime-probes-absent.md](uptime-probes-absent.md) | `svp-alerts.yaml`, nhóm `svp-uptime` |
+| `TLSCertExpiryImminent` | [tls-cert-expiry-imminent.md](tls-cert-expiry-imminent.md) | `svp-alerts.yaml`, nhóm `svp-uptime` (chuỗi TLS: k3d, eks) |
 | `rds-storage-low` | [rds-storage-low.md](rds-storage-low.md) | ADR-0058 §2, module `rds` (chỉ AWS) |
 | `rds-txid-wraparound` | [rds-txid-wraparound.md](rds-txid-wraparound.md) | ADR-0058 §2, module `rds` (chỉ AWS) |
 | `msk-disk-high` | [msk-disk-high.md](msk-disk-high.md) | ADR-0058 §2, module `msk` (chỉ AWS) |
 | `msk-offline-partitions` | [msk-offline-partitions.md](msk-offline-partitions.md) | ADR-0058 §2, module `msk` (chỉ AWS) |
 | `msk-under-min-isr` | [msk-under-min-isr.md](msk-under-min-isr.md) | ADR-0058 §2, module `msk` (chỉ AWS) |
 | `valkey-memory-high` | [valkey-memory-high.md](valkey-memory-high.md) | ADR-0058 §2, module `elasticache` (chỉ AWS) |
+| `transcode-events-dlq` | [transcode-events-dlq.md](transcode-events-dlq.md) | [ADR-0066](../adr/0066-mediaconvert-transcode.md) §7, module `transcode` (chỉ AWS) |
 | `dnssec-internal-failure` | [dnssec-internal-failure.md](dnssec-internal-failure.md) | ADR-0061 §11, module `account-baseline` (chỉ zone prd, `us-east-1`) |
 | `dnssec-ksk-action-needed` | [dnssec-ksk-action-needed.md](dnssec-ksk-action-needed.md) | ADR-0061 §11, module `account-baseline` (chỉ zone prd, `us-east-1`) |
 | Email `svp-security` (sự kiện bảo mật, finding HIGH, CRITICAL) | [security-alert.md](security-alert.md) | [ADR-0060](../adr/0060-org-detection-logging.md) §10, rule `svp-security-*` của root `aws/security`, module `security-baseline` (chỉ AWS, mọi account của org) |
@@ -157,13 +164,15 @@ Cảnh báo `ticket` (cùng tên với page của SLO, cửa sổ 1 d/2 h và 3 
 SLO đó; `WebINPBudgetBurn` chỉ có ticket và không có runbook riêng (dashboard `svp-web`, [ADR-0020](../adr/0020-reliability-stage6.md) §3).
 Cảnh báo ticket viết tay `PostgresBackupTooOld` (nhóm `postgres-backup`, chỉ k3d, 2 biến thể) có runbook
 [postgres-backup-too-old.md](postgres-backup-too-old.md); `ArgoCDApplicationNotConverged` (nhóm `argocd`, chỉ cluster GitOps) dùng chung
-[argocd-application-degraded.md](argocd-application-degraded.md).
+[argocd-application-degraded.md](argocd-application-degraded.md); `TLSCertExpiringSoon` (nhóm `svp-uptime`) dùng chung
+[tls-cert-expiry-imminent.md](tls-cert-expiry-imminent.md).
 
 Sự cố đã gặp và quy trình:
 
 | Runbook | Khi nào mở |
 | --- | --- |
 | [k3s-server-down-under-transcode.md](k3s-server-down-under-transcode.md) | API server k3d không trả lời, container `k3d-svp-server-0` restart khi nhiều media-worker cùng transcode |
+| [mesh-traffic-denied.md](mesh-traffic-denied.md) | Lời gọi giữa workload của `svp` bị từ chối sau khi vào mesh (gRPC `PERMISSION_DENIED`, 403 RBAC, kết nối bị reset), pod không được ambient bắt, `make drill-k8s-mesh` đỏ |
 | [liveness-timeout-cpu-saturation.md](liveness-timeout-cpu-saturation.md) | Pod k3d bị restart vì probe quá hạn trong lúc node bận CPU |
 | [explore-cache-redis-timeout.md](explore-cache-redis-timeout.md) | Bài đo `measure-explore-cache` (bài lab `drills/` của `svp-labs`) FAIL hay đếm thừa lần đọc Postgres; WARN `read explore cache` |
 | [github-push-run-missing.md](github-push-run-missing.md) | Merge vào `main` mà không có lượt `images.yml`/`ci.yml` của push |
@@ -171,10 +180,18 @@ Sự cố đã gặp và quy trình:
 | [vuln-attestation-expired.md](vuln-attestation-expired.md) | Kyverno từ chối pod vì attestation `vuln` quá 72 giờ; `make k8s-gitops-up` dừng vì attestation cũ |
 | [jwt-key-rotation.md](jwt-key-rotation.md) | Đổi khoá ký JWT theo `kid` (định kỳ hay khi nghi lộ khoá) |
 | [postgres-restore.md](postgres-restore.md) | Postgres `svp-pg` của k3d mất hay hỏng, cần PITR, hay diễn tập khôi phục (bài lab `drills/` của `svp-labs`) dừng giữa chừng |
+| [rds-restore.md](rds-restore.md) | Dữ liệu RDS `svp-<env>` của stg, prd sai và cần trạng thái trước một thời điểm (PITR ra instance mới), hay mất account env |
+| [s3-restore.md](s3-restore.md) | Object của bucket `uploads`, `media` bị xoá, ghi đè, hay mất cả bucket ở stg, prd; khôi phục từ version hay từ AWS Backup |
+| [schema-change.md](schema-change.md) | Viết một thay đổi schema của service có database (file migration, release, test kiểu bản trước, `make migration-lint`), Job `migrate` lỗi `55P03`, quay lại và fix forward |
 | [argocd-notifier-key-rotation.md](argocd-notifier-key-rotation.md) | Xoay khoá GitHub App `svp-argocd-notifier` của Argo CD Notifications (Secret `argocd/argocd-notifications-secret` trên EKS), nghi khoá lộ, commit status `argocd/<env>` không còn được ghi |
-| [svp-gitops-setup.md](svp-gitops-setup.md) | Dựng hay kiểm cài đặt GitHub của `svp-gitops` (App `svp-gitops-promoter`, environment `promote`, ruleset), promote stg và prd, bản ghi stg, rollback, bump commit chart và checker, việc tay khi đổi tên repo code và repo web (C6), xoay khoá App, nghi khoá App bị lộ |
+| [gitops-checker-release.md](gitops-checker-release.md) | Đổi hợp đồng giữa checker và cây `svp-gitops` (expand–contract), duyệt PR phát hành `gitops-check` và PR Renovate nâng ghim checker, PR phát hành không mở, `gitops-ok` đỏ ở bước khớp tag hay sau khi nâng ghim, tag sai hay tag lạ |
+| [svp-gitops-setup.md](svp-gitops-setup.md) | Dựng hay kiểm cài đặt GitHub của `svp-gitops` (App `svp-gitops-promoter`, environment `promote`, ruleset), promote stg và prd, bản ghi stg, rollback, bump commit chart và nâng ghim checker, việc tay khi đổi tên repo code và repo web (C6), xoay khoá App, nghi khoá App bị lộ |
 | [svp-frontend-setup.md](svp-frontend-setup.md) | Dựng hay kiểm cài đặt GitHub của repo web `svp-frontend` (repo rỗng, cài đặt, App `svp-web-promoter`, environment `promote`, package GHCR public, Renovate, CodeQL, ruleset), PR tiếp quản `bot/promote-stg-web`, 12 package GHCR mới public sau đổi tên repo (E1), xoay khoá App web, nghi khoá App web bị lộ |
-| [svp-infra-setup.md](svp-infra-setup.md) | Dựng hay kiểm cài đặt GitHub của repo hạ tầng `svp-infra` (cài đặt repo, không credential ở 7a, push đầu lên `main`, Renovate, ruleset `main` với check `infra-ok`), PR không merge được vì check bắt buộc, nghi khoá hay thông tin tài khoản AWS đã vào repo |
+| [telegram-bot-setup.md](telegram-bot-setup.md) | Tạo bot Telegram nhận cảnh báo `severity=page`, lấy chat ID, điền `.env`, kiểm bot |
+| [svp-infra-setup.md](svp-infra-setup.md) | Dựng hay kiểm cài đặt GitHub của repo hạ tầng `svp-infra` (cài đặt repo, credential CI chỉ ở environment `terraform-plan` và khoá Infracost, push đầu lên `main`, Renovate, ruleset `main` với check `infra-ok`), PR không merge được vì check bắt buộc, nghi khoá hay thông tin tài khoản AWS đã vào repo |
+
+Dựng hạ tầng AWS (tài khoản, mạng, cluster, buổi cloud) có mục lục runbook riêng ở
+[`docs/runbooks/README.md`](https://github.com/anhnvcoder/svp-infra/blob/main/docs/runbooks/README.md) của `svp-infra`.
 
 ## Sau sự cố
 

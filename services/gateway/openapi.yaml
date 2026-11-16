@@ -17,7 +17,7 @@
 openapi: 3.1.0
 info:
   title: Short-video platform API
-  version: 1.1.0
+  version: 1.3.0
   description: |
     JSON fields are snake_case and times are RFC 3339 in UTC.
 
@@ -32,11 +32,23 @@ info:
 
     Every route but `/healthz` and `/readyz` is rate limited, to slow down password guessing, mass
     sign-ups and junk writes: `/auth/register` and `/auth/login` by the client's address,
-    `/auth/login` also by the address and email together, `/auth/refresh` and `/auth/logout` by
-    the client's address in one shared bucket of 60 a minute with bursts of 30,
+    `/auth/login` also by the address and email together, and by the email alone across every
+    address (100 a day with bursts of 10) unless that address has logged in to that account in the
+    last 30 days, so guessing one password list from many addresses is slowed too;
+    `/auth/refresh` and `/auth/logout` by the client's address in one shared bucket of 60 a minute
+    with bursts of 30,
     `/public/videos/{video_id}` by the client's address, 120 a minute with bursts of 60, the other
     routes by the authenticated user. Every call counts, successful or not. Over the limit the
     answer is a 429 with code `RATE_LIMITED` and a `Retry-After` header in seconds.
+
+    A premium video (`premium: true`) is public only as its preview: every `playlist_url` of it is
+    the preview's master playlist, never the full video. Its full playlists come from
+    `/videos/{video_id}/playback/`, for callers with an entitlement (`PUT /me/entitlements/{video_id}`)
+    and for its author.
+
+    Every response carries the security headers `X-Content-Type-Options: nosniff` and
+    `Content-Security-Policy: default-src 'none'; frame-ancestors 'none'`, and
+    `Cache-Control: no-store` unless its operation says a cache may keep it.
 
     Items of the feeds and of the video lists, and the videos of `GET /videos/{video_id}` and
     `GET /public/videos/{video_id}`, carry an optional `author` and `stats`: the gateway reads
@@ -78,7 +90,10 @@ paths:
           description: |
             A body that is not one JSON object with known, non-null fields (`INVALID_JSON`), or an
             invalid `email` (`INVALID_EMAIL`), `password` (`INVALID_PASSWORD`), `handle`
-            (`INVALID_HANDLE`) or `display_name` (`INVALID_DISPLAY_NAME`), checked in that order.
+            (`INVALID_HANDLE`) or `display_name` (`INVALID_DISPLAY_NAME`), checked in that order;
+            between the password and the handle, a password that is on the list of common or
+            leaked passwords, or equal (ignoring case) to the email, the part of the email before
+            the @, or the handle (`PASSWORD_BLOCKLISTED`).
           content:
             application/problem+json:
               schema:
@@ -121,6 +136,13 @@ paths:
       responses:
         "200":
           description: Logged in.
+          headers:
+            Cache-Control:
+              $ref: "#/components/headers/NoStore"
+            X-Content-Type-Options:
+              $ref: "#/components/headers/ContentTypeOptions"
+            Content-Security-Policy:
+              $ref: "#/components/headers/ContentSecurityPolicy"
           content:
             application/json:
               schema:
@@ -166,6 +188,13 @@ paths:
       responses:
         "200":
           description: New tokens; the presented refresh token no longer works.
+          headers:
+            Cache-Control:
+              $ref: "#/components/headers/NoStore"
+            X-Content-Type-Options:
+              $ref: "#/components/headers/ContentTypeOptions"
+            Content-Security-Policy:
+              $ref: "#/components/headers/ContentSecurityPolicy"
           content:
             application/json:
               schema:
@@ -271,6 +300,76 @@ paths:
           $ref: "#/components/responses/BadRequest"
         "401":
           $ref: "#/components/responses/Unauthorized"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+        "500":
+          $ref: "#/components/responses/InternalError"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+        "504":
+          $ref: "#/components/responses/GatewayTimeout"
+
+  /me/entitlements/{video_id}:
+    put:
+      operationId: grantEntitlement
+      summary: Buy a premium video at a tier (simulated, nothing is charged)
+      description: |
+        Records that the caller holds `tier` on the premium video. Idempotent: calling it again
+        replaces the tier, up or down. Each tier includes the renditions of the lower ones (see
+        `Tier`). The author of a video already holds every tier and cannot buy one.
+      tags: [videos]
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: video_id
+          in: path
+          required: true
+          description: The premium video. video-service validates it.
+          schema:
+            $ref: "#/components/schemas/Id"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/EntitlementRequest"
+      responses:
+        "200":
+          description: The caller's entitlement.
+          headers:
+            Cache-Control:
+              $ref: "#/components/headers/NoStore"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Entitlement"
+        "400":
+          description: |
+            A body that is not one JSON object with known, non-null fields (`INVALID_JSON`), a
+            missing or unknown `tier` (`INVALID_TIER`), a path that is not valid UTF-8
+            (`INVALID_UTF8`), or a malformed `video_id` (its reason).
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          description: No such video, or it is not READY (`VIDEO_NOT_FOUND`).
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "409":
+          description: |
+            The video is not premium (`VIDEO_NOT_PREMIUM`), or the caller is its author, who
+            already holds every tier (`ALREADY_ENTITLED`).
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "413":
+          $ref: "#/components/responses/PayloadTooLarge"
         "429":
           $ref: "#/components/responses/RateLimited"
         "500":
@@ -585,13 +684,13 @@ paths:
         short-lived credential: do not log or share them.
 
         Without an `Idempotency-Key` each call creates a video. With one, a retry is safe: when the
-        caller already has a video created with this key and the same `title`, `size_bytes` and
-        `content_type` (compared as stored: the title trimmed, the media type in lower case without
-        parameters) that is still UPLOADING, the answer is a 201 with that video's `video_id` and a
+        caller already has a video created with this key and the same `title`, `size_bytes`,
+        `content_type` and `premium` (compared as stored: the title trimmed, the media type in lower
+        case without parameters) that is still UPLOADING, the answer is a 201 with that video's `video_id` and a
         newly signed form that expires with the first one, 15 minutes after the video was created,
         and nothing is created. A retry does not count against the 3 open uploads. Concurrent
         requests with one key create one video and all answer with it. The key reused with another
-        `title`, `size_bytes` or `content_type` is a 422 (`IDEMPOTENCY_KEY_MISMATCH`); the key of a
+        `title`, `size_bytes`, `content_type` or `premium` is a 422 (`IDEMPOTENCY_KEY_MISMATCH`); the key of a
         video that has left UPLOADING, or whose first form has expired or has less than a minute
         left, is a 409 (`VIDEO_NOT_UPLOADING`): start a new upload with a new key.
       tags: [videos]
@@ -622,6 +721,12 @@ paths:
                   description: A concrete video media type (`video/<subtype>`, no wildcard), for example `video/mp4`.
                   type: string
                   examples: [video/mp4]
+                premium:
+                  description: |
+                    Makes the video premium: public only as a short preview, played in full with an
+                    entitlement. Fixed here, it can never be changed.
+                  type: boolean
+                  default: false
       responses:
         "201":
           description: Video created.
@@ -677,8 +782,8 @@ paths:
           $ref: "#/components/responses/PayloadTooLarge"
         "422":
           description: |
-            The `Idempotency-Key` was already used by the caller with another `title`, `size_bytes`
-            or `content_type` (`IDEMPOTENCY_KEY_MISMATCH`).
+            The `Idempotency-Key` was already used by the caller with another `title`, `size_bytes`,
+            `content_type` or `premium` (`IDEMPOTENCY_KEY_MISMATCH`).
           content:
             application/problem+json:
               schema:
@@ -709,7 +814,8 @@ paths:
       description: |
         A video that is not READY is visible only to its author; to anyone else it is a 404. The
         answer carries `author` and `stats` (with `liked_by_me`) when their services answer within
-        100 ms; anonymous readers use `GET /public/videos/{video_id}`.
+        100 ms, and `entitlement_tier` when the caller holds a tier of a premium video; anonymous
+        readers use `GET /public/videos/{video_id}`.
       tags: [videos]
       security:
         - bearerAuth: []
@@ -736,6 +842,110 @@ paths:
             application/problem+json:
               schema:
                 $ref: "#/components/schemas/Problem"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+        "500":
+          $ref: "#/components/responses/InternalError"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+        "504":
+          $ref: "#/components/responses/GatewayTimeout"
+
+  /videos/{video_id}/playback/master.m3u8:
+    get:
+      operationId: getPlaybackMaster
+      summary: The master playlist of a premium video, for the caller's tier
+      description: |
+        The video's HLS master playlist with only the variants of the caller's tier. Each variant's
+        URI is relative, `<rendition>.m3u8`, so a player asks
+        `GET /videos/{video_id}/playback/{rendition}.m3u8` next. Needs an entitlement, or the
+        caller is the video's author. Belongs to the caller: no cache may keep it.
+      tags: [videos]
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/PlaybackVideoId"
+      responses:
+        "200":
+          $ref: "#/components/responses/Playlist"
+        "400":
+          $ref: "#/components/responses/PlaybackBadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          description: The caller has no entitlement to the video (`NOT_ENTITLED`).
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "404":
+          description: No such video, or it is not READY (`VIDEO_NOT_FOUND`).
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "409":
+          $ref: "#/components/responses/VideoNotPremium"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+        "500":
+          $ref: "#/components/responses/InternalError"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+        "504":
+          $ref: "#/components/responses/GatewayTimeout"
+
+  /videos/{video_id}/playback/{rendition}.m3u8:
+    get:
+      operationId: getPlaybackRendition
+      summary: The media playlist of one rendition of a premium video, with signed segment URLs
+      description: |
+        The rendition's HLS media playlist, each segment URI an absolute URL signed for this
+        rendition of this video only. The signatures expire a little after the video's length
+        has played (between 5 and 20 minutes more); a player that gets a 403 on a segment asks for
+        this playlist again. The rendition must be in the caller's tier. Belongs to the caller: no
+        cache may keep it.
+      tags: [videos]
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/PlaybackVideoId"
+        - name: rendition
+          in: path
+          required: true
+          description: |
+            A rendition named by the master playlist, for example `720p`: 1 to 16 lowercase letters
+            and digits, other than `master`. A file of any other form is a 404
+            (`RENDITION_NOT_FOUND`) without asking video-service.
+          schema:
+            type: string
+            pattern: "^[a-z0-9]{1,16}$"
+            examples: [360p]
+      responses:
+        "200":
+          $ref: "#/components/responses/Playlist"
+        "400":
+          $ref: "#/components/responses/PlaybackBadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          description: |
+            The caller has no entitlement to the video (`NOT_ENTITLED`), or the rendition is above
+            the caller's tier (`RENDITION_NOT_ENTITLED`).
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "404":
+          description: |
+            No such video, or it is not READY (`VIDEO_NOT_FOUND`); the video has no such rendition,
+            or the file is not of the form `<rendition>.m3u8` (`RENDITION_NOT_FOUND`).
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "409":
+          $ref: "#/components/responses/VideoNotPremium"
         "429":
           $ref: "#/components/responses/RateLimited"
         "500":
@@ -1002,8 +1212,25 @@ components:
       schema:
         type: string
         const: no-store
+    ContentTypeOptions:
+      description: Tells a browser not to read the body as a type other than the one declared.
+      schema:
+        type: string
+        const: nosniff
+    ContentSecurityPolicy:
+      description: Lets the body load nothing and be framed by no page.
+      schema:
+        type: string
+        const: default-src 'none'; frame-ancestors 'none'
 
   parameters:
+    PlaybackVideoId:
+      name: video_id
+      in: path
+      required: true
+      description: The premium video. video-service validates it.
+      schema:
+        $ref: "#/components/schemas/Id"
     IdempotencyKey:
       name: Idempotency-Key
       in: header
@@ -1162,7 +1389,7 @@ components:
       required: [access_token, token_type, expires_at, refresh_token, refresh_expires_at]
       properties:
         access_token:
-          description: JWT signed with Ed25519 (EdDSA), valid for 1 hour.
+          description: JWT signed with Ed25519 (EdDSA), valid for 15 minutes.
           type: string
         token_type:
           type: string
@@ -1218,13 +1445,22 @@ components:
           type: string
           format: date-time
         playlist_url:
-          description: Absolute URL of the HLS master playlist; present once READY.
+          description: |
+            Absolute URL of the HLS master playlist; present once READY. For a premium video, the
+            public preview's.
           type: string
           format: uri
         thumbnail_url:
           description: Absolute URL of the thumbnail; present once READY.
           type: string
           format: uri
+        premium:
+          $ref: "#/components/schemas/Premium"
+        entitlement_tier:
+          description: |
+            The tier the caller holds on this premium video (`fhd` for its author); only in
+            `GET /videos/{video_id}`, and absent when the caller holds none.
+          $ref: "#/components/schemas/Tier"
         author:
           description: |
             The author's profile, in `GET /videos/{video_id}` and the video lists; absent from
@@ -1237,6 +1473,43 @@ components:
             (see `VideoStats`); a video that is not READY has zero counters. Absent from
             `POST /videos/{video_id}/complete`.
           $ref: "#/components/schemas/VideoStats"
+
+    Premium:
+      description: |
+        Present, and true, only for a premium video: `playlist_url` plays its public preview, and
+        the full video plays from `/videos/{video_id}/playback/master.m3u8` with an entitlement.
+      type: boolean
+      const: true
+
+    Tier:
+      description: |
+        A quality level of a premium video; each includes the lower ones: `sd` plays the
+        renditions `source` and `360p`, `hd` adds `720p`, `fhd` plays every rendition.
+      type: string
+      enum: [sd, hd, fhd]
+
+    EntitlementRequest:
+      type: object
+      additionalProperties: false
+      required: [tier]
+      properties:
+        tier:
+          $ref: "#/components/schemas/Tier"
+
+    Entitlement:
+      description: What the caller holds on one premium video.
+      type: object
+      additionalProperties: false
+      required: [video_id, tier, granted_at]
+      properties:
+        video_id:
+          $ref: "#/components/schemas/Id"
+        tier:
+          $ref: "#/components/schemas/Tier"
+        granted_at:
+          description: When the entitlement was last granted or changed.
+          type: string
+          format: date-time
 
     VideoPage:
       description: |
@@ -1272,7 +1545,7 @@ components:
           type: integer
           format: int64
         playlist_url:
-          description: Absolute URL of the HLS master playlist.
+          description: Absolute URL of the HLS master playlist; for a premium video, the public preview's.
           type: string
           format: uri
         thumbnail_url:
@@ -1283,6 +1556,8 @@ components:
           description: When the video became READY.
           type: string
           format: date-time
+        premium:
+          $ref: "#/components/schemas/Premium"
         author:
           description: Absent when user-service does not answer within 100 ms.
           $ref: "#/components/schemas/Profile"
@@ -1338,7 +1613,7 @@ components:
           type: integer
           format: int64
         playlist_url:
-          description: Absolute URL of the HLS master playlist.
+          description: Absolute URL of the HLS master playlist; for a premium video, the public preview's.
           type: string
           format: uri
         thumbnail_url:
@@ -1349,6 +1624,8 @@ components:
           description: When the video became READY.
           type: string
           format: date-time
+        premium:
+          $ref: "#/components/schemas/Premium"
         author:
           description: |
             The author's profile; absent from every item of a page when user-service does not
@@ -1412,6 +1689,30 @@ components:
           examples: [4bf92f3577b34da6a3ce929d0e0e4736]
 
   responses:
+    Playlist:
+      description: |
+        The playlist (RFC 8216), rewritten for the caller. Never stored by a cache: it carries
+        signed URLs that belong to the caller.
+      headers:
+        Cache-Control:
+          $ref: "#/components/headers/NoStore"
+      content:
+        application/vnd.apple.mpegurl:
+          schema:
+            type: string
+    PlaybackBadRequest:
+      description: |
+        The path is not valid UTF-8 (`INVALID_UTF8`), or `video_id` is malformed (its reason).
+      content:
+        application/problem+json:
+          schema:
+            $ref: "#/components/schemas/Problem"
+    VideoNotPremium:
+      description: The video is not premium (`VIDEO_NOT_PREMIUM`); play its `playlist_url`.
+      content:
+        application/problem+json:
+          schema:
+            $ref: "#/components/schemas/Problem"
     StatusOK:
       description: OK.
       content:

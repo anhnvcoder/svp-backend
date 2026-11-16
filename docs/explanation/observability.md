@@ -2,8 +2,11 @@
 
 Trang này trả lời: tín hiệu nào (trace, metric, log, profile, lỗi, số đo trình duyệt) đi từ đâu tới đâu, ở compose, k3d
 và EKS khác nhau ra sao, và web được quan sát thế nào mà không lộ dữ liệu người dùng. SLO và cảnh báo ở
-[`reliability.md`](reliability.md#slo); lệnh ở [`reference/compose.md`](../reference/compose.md),
+[`reliability.md`](reliability.md#slo); chi phí compute (OpenCost) và probe uptime từ ngoài vào (blackbox exporter) ở
+[`cost-and-uptime.md`](cost-and-uptime.md); lệnh ở [`reference/compose.md`](../reference/compose.md),
 [`reference/k8s.md`](../reference/k8s.md), [`reference/eks.md`](../reference/eks.md).
+Trên EKS, dashboard ở Amazon Managed Grafana ([ADR-0063](../adr/0063-managed-observability.md)); workspace của stg chỉ có trong buổi
+(cờ `managed_grafana`, [`paid-features.md`](paid-features.md)), còn metric ở AMP và log ở CloudWatch giữ qua các buổi.
 
 ## Compose
 
@@ -22,7 +25,8 @@ service nào mở `/metrics` hay pprof.
   `kafka_cluster_alias="svp"`).
 - **Profile `obs`** (`make up OBS=lgtm`) thêm `lgtm` (Grafana `127.0.0.1:3000` cùng Prometheus giữ 30 ngày, Loki, Tempo,
   Pyroscope; 5 service đẩy profile tới `lgtm:4040`, media-worker không), `alertmanager` (`127.0.0.1:9093`, gửi `severity=page` tới
-  Telegram khi `.env` có bot) và `glitchtip` (`127.0.0.1:8000`, tracker lỗi qua giao thức Sentry, database `svp_glitchtip` trên
+  Telegram khi `.env` có bot), `blackbox` (probe uptime, không publish cổng, [`cost-and-uptime.md`](cost-and-uptime.md)) và
+  `glitchtip` (`127.0.0.1:8000`, tracker lỗi qua giao thức Sentry, database `svp_glitchtip` trên
   container `postgres` của compose, nối `sslmode=verify-full`). Không có profile `obs`, DNS `otelcol` không tồn tại: SDK bỏ export, service vẫn chạy.
 - **RAM** (`docker stats`, giới hạn ở [`deploy/compose/compose.yaml`](../../deploy/compose/compose.yaml)): `otelcol` 64–255 MiB lúc
   nghỉ (trung vị 246 và 255,3 ở hai lượt đo), `lgtm` 730–750 MiB lúc nghỉ, 1 203 MiB sau smoke và 1 245 MiB sau mọi diễn tập,
@@ -55,7 +59,8 @@ Vì sao: [ADR-0014](../adr/0014-kubernetes-local-stage4.md) §11.
 Cùng SDK và cùng file với compose (rule, dashboard, SLO dùng lại bằng symlink), nhưng tách thành thành phần riêng trong namespace
 `svp-obs`: Collector (OTLP 4317, đẩy metric sang Prometheus bằng OTLP, log sang Loki, trace sang Tempo, đọc lag của
 Kafka bằng receiver `kafka_metrics`), kube-prometheus-stack (Prometheus, Alertmanager gửi Telegram, Grafana), Loki, Tempo có metrics-generator, Pyroscope,
-GlitchTip trên database `svp_glitchtip` của `svp-pg`. Không UI nào có route hay cổng node: chỉ `make k8s-ui-*` (port-forward trên
+GlitchTip trên database `svp_glitchtip` của `svp-pg`, OpenCost và blackbox exporter ([`cost-and-uptime.md`](cost-and-uptime.md)).
+Không UI nào có route hay cổng node: chỉ `make k8s-ui-*` (port-forward trên
 `127.0.0.1`), Grafana và GlitchTip có đăng nhập. Sơ đồ cluster ở [`deployment.md`](deployment.md#kubernetes-cục-bộ-k3d).
 
 ### Collector của cluster
@@ -182,11 +187,12 @@ Không gì mở UI cho pod nào: Grafana, Prometheus và các UI khác chỉ t�
 NetworkPolicy nào chặn. Pod gọi chính nó (memberlist, gRPC của các binary đơn) ở lại trong pod. Cổng là cổng của pod: NetworkPolicy
 thấy gói sau khi Service đã dịch tới pod (cổng 3000 của Grafana sau Service `kps-grafana:80`).
 
-- **Prometheus:** vào gồm OTLP từ Collector, remote write từ metrics-generator của Tempo, truy vấn từ Grafana và từ controller Argo
+- **Prometheus:** vào gồm OTLP từ Collector, remote write từ metrics-generator của Tempo, truy vấn từ Grafana, OpenCost và controller Argo
   Rollouts (AnalysisRun của canary gateway). Ra gồm cảnh báo tới Alertmanager, scrape của các ServiceMonitor của stack (Grafana,
   kube-state-metrics, Alertmanager và config reloader của nó, operator), kubelet của mỗi node (cAdvisor và metric probe), proxy Envoy
   (PodMonitor `envoy-svp`), exporter của Postgres `svp-pg` (PodMonitor `svp-pg`) và application controller của Argo CD ở đường
-  GitOps (PodMonitor `argocd-application-controller`). Prometheus scrape chính pod của nó ở lại trong pod. `argo-rollouts` không chặn
+  GitOps (PodMonitor `argocd-application-controller`), OpenCost (9003) và probe qua blackbox exporter (9115, khi có probe). Prometheus scrape
+  chính pod của nó ở lại trong pod. `argo-rollouts` không chặn
   lưu lượng mặc định; `envoy-gateway-system` chỉ chặn khi chart `svp-cluster` bật `envoy.networkPolicy` (EKS), và chart đó khi ấy
   tự cho phép các scrape này, nên policy ở đây là policy duy nhất các luồng còn lại cần. `argocd` có policy ingress riêng của chart
   argo-cd (mỗi thành phần một), và policy của application controller đã nhận cổng metrics (8082) từ mọi namespace; `svp-data` chặn
@@ -197,6 +203,13 @@ thấy gói sau khi Service đã dịch tới pod (cổng 3000 của Grafana sau
   gì trong cluster hay trên host bị mở. Dải đã công bố của Telegram sẽ hẹp hơn, nhưng chúng đổi không báo trước, và cảnh báo khi đó
   dừng mà không lỗi nào cho thấy. Policy vẫn còn khi Telegram tắt: Alertmanager khi đó không gửi gì. Cái giá: một Alertmanager bị chiếm
   tới được mọi địa chỉ công khai ở cổng 443 (compose cũng không giới hạn nó).
+- **blackbox exporter** (policy `blackbox-exporter`, threat model OPS-5): vào chỉ từ Prometheus 9115; ra theo `probes.egress` của chart: `envoy`
+  (k3d) chỉ tới pod Envoy của Gateway `svp` cổng 10443, `internet` (EKS) TCP 443 tới mọi IPv4 công khai như Alertmanager, vì địa chỉ của
+  CloudFront đổi không báo trước. Probe DNS hỏi kube-dns, mà `svp-cluster` đã mở cho mọi pod.
+- **OpenCost** (policy `opencost`, threat model OPS-6): vào chỉ từ Prometheus 9003; ra API server (nhãn `svp-kube-api=allow`), Prometheus 9090
+  khi `opencost.query: prometheus` (k3d), endpoint AWS và agent Pod Identity qua `allow-aws-apis-opencost` khi `amp` (EKS), và TCP 443 tới IPv4
+  công khai khi `opencost.publicPricing` (EKS, bảng giá của AWS không có interface endpoint). Cái giá của hai luật công khai: pod bị chiếm tới
+  được mọi địa chỉ công khai ở cổng 443.
 
 ## EKS
 

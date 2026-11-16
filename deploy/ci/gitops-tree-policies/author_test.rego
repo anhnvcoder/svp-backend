@@ -24,15 +24,40 @@ test_the_bot_of_svp_frontend_moves_web_of_stg if count(by(web_bot, [["M", "envs/
 
 test_the_bot_of_svp_frontend_moves_web_of_prd if count(by(web_bot, [["M", "envs/prd/images/web.yaml"]])) == 0
 
-test_the_bot_of_backend_promotes_charts_and_the_six_services_to_stg if count(by(backend_bot, array.concat(
+test_the_bot_of_backend_promotes_charts_and_its_services_to_stg if count(by(backend_bot, array.concat(
 	[["M", "envs/stg/charts.yaml"]],
-	[["M", $"envs/stg/images/{svc}.yaml"] | some svc in fx.six],
+	[["M", $"envs/stg/images/{svc}.yaml"] | some svc in fx.backend_services],
 ))) == 0
 
 test_the_bot_of_backend_promotes_the_whole_set_to_prd_web_included if count(by(backend_bot, array.concat(
 	[["M", "envs/prd/charts.yaml"]],
 	[["M", $"envs/prd/images/{svc}.yaml"] | some svc in fx.services],
 ))) == 0
+
+test_the_bot_of_backend_adds_the_image_file_of_a_new_release_to_stg if count(deny(fx.pull_request(
+	object.union(fx.tree_input, {"sources": {"stg": {"revision": fx.revision, "sources": [
+		object.union(fx.backend, {"services": array.concat(fx.backend_services, ["dlq-replay"])}),
+		fx.web,
+	]}}}),
+	backend_bot, backend_bot, [["A", "envs/stg/images/dlq-replay.yaml"]],
+))) == 0
+
+# A service of another source that only the table of the revision prd pins lists: the checker's own list lacks it.
+test_the_bot_of_backend_promotes_a_new_service_of_another_source_to_prd if count(deny(fx.pull_request(
+	object.union(fx.tree_input, {"sources": {"prd": {"revision": fx.revision, "sources": [
+		fx.backend,
+		object.union(fx.web, {"services": ["web", "portal"]}),
+	]}}}),
+	backend_bot, backend_bot, [["A", "envs/prd/images/portal.yaml"]],
+))) == 0
+
+test_the_bot_of_backend_adds_an_image_file_of_a_service_only_the_checker_lists_to_prd if fx.says(
+	deny(fx.pull_request(
+		object.union(fx.tree_input, {"sources": {"prd": {"revision": fx.revision, "sources": [fx.backend]}}}),
+		backend_bot, backend_bot, [["A", "envs/prd/images/web.yaml"]],
+	)),
+	"envs/prd/images/web.yaml: changed by svp-gitops-promoter[bot], the bot of release source backend, which publishes",
+)
 
 test_a_person_changes_anything if count(by("anhnvcoder", [
 	["M", "envs/stg/svp-cluster.yaml"],
@@ -69,7 +94,7 @@ test_the_bot_of_svp_frontend_changes_charts if fx.says(
 
 test_the_bot_of_backend_changes_web_of_stg if fx.says(
 	by(backend_bot, [["M", "envs/stg/images/web.yaml"]]),
-	"envs/stg/images/web.yaml: changed by svp-gitops-promoter[bot], the bot of release source backend, which publishes gateway user-service video-service engagement-service feed-service media-worker",
+	concat("", ["envs/stg/images/web.yaml: changed by svp-gitops-promoter[bot], the bot of release source backend, which publishes ", concat(" ", fx.backend_services)]),
 )
 
 test_the_bot_of_backend_adds_an_image_file_of_no_service_to_prd if fx.says(

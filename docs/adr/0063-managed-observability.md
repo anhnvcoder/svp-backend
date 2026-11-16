@@ -189,12 +189,12 @@ agent `aps:RemoteWrite`; ACK bốn hành động rule groups namespace, bốn al
 - AMG, Grafana: [N19] <https://aws.amazon.com/grafana/pricing/>, [N20] <https://docs.aws.amazon.com/grafana/latest/userguide/AMG-and-Organizations.html>, [N21] <https://docs.aws.amazon.com/grafana/latest/APIReference/API_CreateWorkspace.html>,
   [N22] <https://docs.aws.amazon.com/grafana/latest/userguide/AMG-configure-vpc.html>, [N23] <https://docs.aws.amazon.com/grafana/latest/userguide/version-differences.html>,
   [N25] <https://github.com/grafana/grafana-operator/releases/tag/v5.25.0>, [N26] <https://github.com/grafana/grafana-amazonprometheus-datasource>
-- ACK, OTel, Prometheus, Rollouts, Terraform: [N27] <https://github.com/aws-controllers-k8s/prometheusservice-controller/releases>, [N36] <https://github.com/hashicorp/terraform-provider-aws/blob/main/CHANGELOG.md>
-  [N28] <https://github.com/open-telemetry/opentelemetry-collector-contrib/blob/v0.162.0/exporter/prometheusremotewriteexporter/README.md>, [N29] <https://github.com/prometheus/prometheus/blob/v3.15.0/docs/configuration/configuration.md>,
-  [N30] <https://github.com/prometheus-community/helm-charts/blob/kube-prometheus-stack-92.17.1/charts/kube-prometheus-stack/values.yaml>, [N31] <https://grafana.com/docs/tempo/latest/metrics-from-traces/service_graphs/>,
-  [N32] <https://opentelemetry.io/docs/collector/internal-telemetry/>, [N33] <https://github.com/argoproj/argo-rollouts/blob/v1.10.1/docs/analysis/prometheus.md>,
 
 ## Thông tin thêm
 
-Phụ lục: [`appendix/0063-managed-observability.md`](appendix/0063-managed-observability.md) (phương án, giá trị đủ từng §, bảng nhóm luật upstream,
-bảng dịch tên metric, bảng control FSBP, bảng luồng SCP, RCP, bảng giá, chi phí và bảng tổng của run, hợp đồng cluster, nguồn).
+Phụ lục: [`appendix/0063-managed-observability.md`](appendix/0063-managed-observability.md) (phương án, giá trị đủ từng §, bảng nhóm luật upstream, bảng dịch tên metric, bảng control FSBP, bảng luồng SCP, RCP, bảng giá, chi phí và bảng tổng của run, hợp đồng cluster, nguồn).
+
+### Chỉnh bởi
+
+- §4, §12: [0071](0071-paid-features.md): AMG của stg theo cờ `managed_grafana` = `session`: workspace, role, gán nhóm, service account `svp-grafana-operator` dựng ở bước mở và gỡ ở bước đóng của buổi (root `aws/accounts/<env>`, biến `session_open`); root env đọc id workspace từ SSM parameter `/svp/<env>/grafana-workspace-id` thay biến `grafana_workspace_id`; prd giữ workspace; tháng không buổi bớt $9.
+- §5, §11: [0074](0074-cost-uptime.md): nhóm `svp-uptime`, `svp-cost` và SLO `public-uptime` vào hai file luật sẵn có, đi cùng `RuleGroupsNamespace` `svp-alerts`, `slo-generated`; danh tính Pod Identity thêm OpenCost (`svp-obs/opencost`, role `<cluster>-opencost`): `aps:QueryMetrics`, `aps:GetSeries`, `aps:GetLabels`, `aps:GetMetricMetadata` trên workspace của env, qua sidecar `aws-sigv4-proxy`.

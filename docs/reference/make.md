@@ -30,13 +30,22 @@ liệt kê target):
   của oasdiff nâng lên `err`), changelog có mục mà chỉ tăng patch. `BASE` toàn số 0 hay không có spec: một dòng summary, exit 0.
   Changelog in ra log và summary. Breaking đi ba bước: thêm cái mới (minor), chuyển client, bỏ cái cũ (major) khi không client nào
   của stg, prd còn dùng. `deploy/ci/contract-test.sh`: test của cả `check` (oasdiff thật) và `publish` (registry, cosign giả).
-- `make check` = `make check-go`. `make check-go`: `gofmt`, `go vet`, `golangci-lint run` (gồm gosec),
+- `make check` = `make check-go`. `make check-go`: `gofmt`, `go vet`, `golangci-lint run` (gồm gosec, contextcheck, spancheck),
   `actionlint` (mọi file của `.github/workflows/`), `buf lint` + `buf build`, `make vulncheck` (govulncheck, dưới đây),
   `go test -race ./...` (có integration test trên Postgres native `127.0.0.1:5432`, không phải container `postgres` của compose, qua
   `SVP_TEST_POSTGRES_URL` và Redis native db 15 qua `SVP_TEST_REDIS_URL`, mặc định `redis://127.0.0.1:6379/15` trong
   `Makefile`). Thu hẹp bằng `make test PKGS=./services/user-service/...`; `TESTFLAGS` thêm cờ cho `go test` của
   `make test`, `make cover`, `make check` (`make test TESTFLAGS=-count=1` chạy lại không dùng cache, như CI), `LINTFLAGS`
   thêm cờ cho golangci-lint của `make lint`.
+- `make dlq-replay ARGS='replay --from <topic>.dlq [--dry-run] …'`: chạy công cụ phát lại DLQ trong container
+  `dlq-replay` của stack compose (`make up` trước); `ARGS` bắt buộc, là đối số của `/app` (`replay` và cờ của nó,
+  `services/dlq-replay/cmd/dlq-replay/main.go`). Quy trình an toàn ở
+  [`kafka-dlq-records.md`](../runbooks/kafka-dlq-records.md), container ở [`compose.md`](compose.md).
+- `make jwt-rotate STEP=<add|sign|drop>`: một bước đổi khoá ký JWT trong `.env` ở gốc repo (`go run ./tools/jwtkey rotate`). `add`
+  sinh cặp khoá mới vào khoá chờ `.env.jwt-next` (mode 600) và nối khoá công khai của nó vào `JWT_VERIFY_KEYS`; `sign` đặt
+  `JWT_SIGNING_KID`, `JWT_SIGNING_KEY` theo khoá chờ; `drop` bỏ mọi khoá xác minh khác `kid` đang ký rồi xoá khoá chờ. Bước sai thứ tự
+  hay `.env` thiếu biến, sai dạng thì lệnh từ chối và không ghi gì; chỉ in `kid` và lệnh áp dụng, không in khoá. Trình tự, lệnh áp dụng
+  và các lần chờ giữa các bước ở [`jwt-key-rotation.md`](../runbooks/jwt-key-rotation.md).
 - `make zizmor` ([ADR-0041](../adr/0041-github-hardening.md) (g)): lint bảo mật workflow bằng zizmor `ZIZMOR_IMAGE` (image chính thức ghim `tag@sha256`,
   repo gắn chỉ đọc) với `--persona=regular` trên cả repo; mọi finding làm lệnh thoát khác 0 (mã 11 đến 14). Image đa kiến trúc: cùng một tham chiếu trên máy dev arm64 và runner amd64.
   Có `GH_TOKEN` thì chạy thêm audit online (impostor
@@ -47,7 +56,7 @@ liệt kê target):
   `lychee.toml`; link nội bộ và anchor heading, link ra site khác không kiểm, vì mạng không ổn định và một kiểm tra phụ thuộc mạng đỏ vì lý do nằm ngoài thay đổi). Hai image chính thức ghim `tag@sha256`, chạy
   `--network none`, repo gắn chỉ đọc; link tương đối ra ngoài repo (tới `plans/`) báo lỗi. Cả hai công cụ luôn chạy; lệnh thoát khác 0 khi
   một trong hai báo lỗi. Mặc định là mọi `.md` git theo dõi và file mới chưa theo dõi; `DOCS` thu hẹp (đường dẫn tương đối gốc repo).
-- `make helm-docs`, `make helm-docs-check`: `deploy/helm/svp-service/README.md` (bảng values của chart dùng chung bởi bảy release) sinh bởi
+- `make helm-docs`, `make helm-docs-check`: `deploy/helm/svp-service/README.md` (bảng values của chart dùng chung bởi mọi release dịch vụ) sinh bởi
   helm-docs `HELM_DOCS_IMAGE` (image chính thức ghim `tag@sha256`, không mạng, chạy bằng uid của người gọi) từ `Chart.yaml`, comment `# --` của
   `values.yaml` và `README.md.gotmpl`. `make helm-docs` ghi file; `make helm-docs-check` gắn repo chỉ đọc, in thứ helm-docs sẽ ghi và đỏ khi
   `README.md` lệch (sửa mô tả ở `values.yaml` rồi chạy `make helm-docs`). `make helm-check` chạy `helm-docs-check` trước, nên job CI của nó kiểm luôn.
@@ -85,7 +94,7 @@ liệt kê target):
   bảng ra terminal. Repo được mount chỉ đọc và container chạy bằng uid của người gọi, nên báo cáo thuộc về họ; bộ policy mà trivy
   tải về nằm trong cache bên trong container.
 - `make grype`: cổng grype của pipeline image, chạy từ một máy: `deploy/ci/scan-gate.sh --grype` chạy grype trên SBOM SPDX với
-  `--fail-on critical` và `.grype.yaml` (Critical nào còn lại sau luật của nó là đỏ). `SBOM=<đường dẫn tuyệt đối>` quét tài liệu đó;
+  `--fail-on critical` và `.grype.yaml`, rồi `image-guard.sh fixed-high` trên `grype.json` (Critical, hay High có `fix.state` `fixed`, còn lại sau luật của `.grype.yaml` là đỏ). `SBOM=<đường dẫn tuyệt đối>` quét tài liệu đó;
   `IMAGE=<ref>@sha256:<digest> [ARCH=amd64|arm64]` trước hết cho syft ghim đọc image của nền tảng đó từ registry, ẩn danh. grype cần
   mạng cho DB của nó, và DB không tải được thì target thất bại. `SVP_GRYPE_CACHE`, khi đặt, giữ DB ở thư mục đó (khoảng 3 GB sau
   khi giải nén); không đặt thì ở `$TMPDIR`.
@@ -95,6 +104,15 @@ liệt kê target):
   chỉnh luật nào có lý do ghi ngay trong file (policy do conftest đọc: namespace theo package, `data.*` do `--data` đưa vào, độ dài
   dòng 200 vì thông điệp là một chuỗi không ngắt được). Không thuộc `make check`; CI chạy ở job `config` ([`ci.md`](ci.md)), hook `pre-commit`
   chạy khi commit đổi `*.rego`.
+- `make migration-lint` ([ADR-0068](../adr/0068-zero-downtime-migrations.md) §8): squawk từ image chính thức `SQUAWK_IMAGE` ghim `tag@sha256`
+  (image chỉ có `linux/amd64`, nên lệnh ghi `--platform`), `--network none`, repo gắn chỉ đọc, lint mọi `services/*/migrations/*.sql` và
+  `internal/dbmigrate/testdata/*/*.sql`; exit khác 0 khi có vấn đề. Luật, luật tắt và migration cũ bị loại trừ (mỗi mục một comment lý do)
+  ở `.squawk.toml`. Không thuộc `make check` (cần Docker); CI chạy ở job `config`. Cách viết file để lint xanh:
+  [`schema-change.md`](../runbooks/schema-change.md).
+- `make migration-drill` (ADR-0068 §11): ba test `TestRenameDrill*` của `internal/dbmigrate` (đổi tên cột theo expand/contract, bản
+  `RENAME COLUMN` một release, chờ khoá quá `lock_timeout`) trên Postgres native với `SVP_DRILL_ROWS=1000000`, `-count=1 -v`, không `-race`
+  (nó làm sai số trễ), cùng `SVP_TEST_POSTGRES_URL`, `SVP_TEST_REDIS_URL` như `make test`; in bảng số đo qua `t.Log`. Số đo một lượt:
+  [phụ lục ADR-0068](../adr/appendix/0068-zero-downtime-migrations.md#số-đo-diễn-tập).
 - `make chainsaw-lint` ([ADR-0050](../adr/0050-bash-to-standard-tools.md) mục 2): kiểm tĩnh các diễn tập Chainsaw dưới
   `deploy/k8s/drills/`, không cần cluster. Mỗi file YAML ở đó phải là đúng một trong ba loại: `chainsaw-test.yaml` (`chainsaw lint
   test`), `.chainsaw.yaml` (`chainsaw lint configuration`), StepTemplate dưới `templates/` (kubeconform `-strict` từ
@@ -105,7 +123,8 @@ liệt kê target):
   `CHAINSAW_VERSION` ở `Makefile` (`# renovate:`), cài bằng `make tools`. Cấu hình chung `deploy/k8s/drills/.chainsaw.yaml` (chạy
   tuần tự, report JUnit vào `.k8s/drills/`; context cluster và tên report là cờ của `chainsaw test`, không đặt được trong file);
   StepTemplate dùng chung ở `deploy/k8s/drills/templates/`: `probe-up.yaml` (namespace `svp-probe` cùng pod `probe`, tự xoá khi test
-  kết thúc) và `port-forward.yaml` (port-forward loopback, dừng theo pid khi test kết thúc). Bước `script` của Chainsaw nhận
+  kết thúc), `media-worker-standin-up.yaml` (pod `drill-media-worker-standin` mang nhãn media-worker, cho diễn tập thử kết nối
+  như media-worker) và `port-forward.yaml` (port-forward loopback, dừng theo pid khi test kết thúc). Bước `script` của Chainsaw nhận
   `KUBECONFIG` là bản chép của cluster nó đang chạy (một context tên `chainsaw`), nên `kubectl` trong template đọc lại kubeconfig của
   người gọi (`env('KUBECONFIG')`) và luôn ghi `--context k3d-svp`; bước `apply`, `wait` dùng client của Chainsaw, nên `probe-up.yaml`
   dừng FAIL khi Chainsaw không chạy trên cùng server với context `k3d-svp` (thiếu `--kube-context k3d-svp`).

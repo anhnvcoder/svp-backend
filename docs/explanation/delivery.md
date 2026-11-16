@@ -66,10 +66,11 @@ flowchart LR
   trivy, syft chạy bằng image ghim digest. Mọi job của lượt PR, kể cả PR từ fork, chỉ có `contents: read` và không secret; quyền
   ghi (`packages`, `id-token`, `contents`, `pull-requests`, `security-events`) chỉ ở job chạy trên `main` với code đã qua PR.
 - **Build** (ADR-0015 §3, §4, §6): chỉ service có thay đổi so với lần push `main` thành công cuối (tập đường dẫn `image_paths` của
-  `deploy/k8s/lib.sh`; đổi đường build, quét, ký thì cả sáu). Image `web` build, ký, promote ở CI của `svp-frontend` bằng cùng script
+  `deploy/k8s/lib.sh`; đổi đường build, quét, ký thì mọi service). Image `web` build, ký, promote ở CI của `svp-frontend` bằng cùng script
   ([ba repo](#ba-repo-và-hợp-đồng-api)); trivy quét cả gói npm của `node_modules` (ADR-0019 §1). Mỗi service build native trên
-  runner amd64 và arm64, trivy quét tar cục bộ của từng kiến trúc: bí mật (mọi severity) và lỗ hổng CRITICAL chặn **trước** push,
-  HIGH chỉ báo (SARIF lên tab Security của `main`); ngoại lệ chỉ qua `.trivyignore.yaml` có lý do, tối đa 30 ngày. Push đúng image
+  runner amd64 và arm64, trivy quét tar cục bộ của từng kiến trúc: bí mật (mọi severity), lỗ hổng CRITICAL và HIGH có bản vá chặn
+  **trước** push ([ADR-0070](../adr/0070-scan-gate-high-fixed.md)), HIGH chưa có bản vá chỉ báo (SARIF lên tab Security của `main`);
+  ngoại lệ chỉ qua `.trivyignore.yaml` có lý do, tối đa 30 ngày. Push đúng image
   đã quét (so config digest), rồi ghép index đa kiến trúc `ghcr.io/anhnvcoder/svp-backend/<svc>:<12 hex commit>`.
 - **Ký và attestation** (ADR-0015 §7): cosign keyless bằng OIDC của GitHub (chứng chỉ Fulcio, ghi Rekor; không khoá dài hạn), ký
   digest index với identity `images.yml@refs/heads/main`; attestation `vuln` trên index gộp kết quả quét hai nền tảng,
@@ -80,7 +81,8 @@ flowchart LR
   ref, commit, lượt chạy), mức SLSA Build L2 (không L3).
 - **Promote** (ADR-0015 §9, [ADR-0025](../adr/0025-gitops-config-repo.md) §2, §6): job `promote` dựng lại nhánh `bot/promote-stg` từ
   `main` của repo `svp-gitops` bằng token GitHub App, ghi `repository`, `tag`, `digest` của mọi service đã ký mà stg chưa chạy (không
-  bao giờ ghi lùi) vào `envs/stg/images/<svc>.yaml` cùng commit chart vào `envs/stg/charts.yaml`, mở hay cập nhật một PR cuộn và bật
+  bao giờ ghi lùi) vào `envs/stg/images/<svc>.yaml` (tạo file khi service là
+  [release mới](#release-mới-và-canary-grpc)) cùng commit chart vào `envs/stg/charts.yaml`, mở hay cập nhật một PR cuộn và bật
   auto-merge; PR tự merge khi `gitops-ok` xanh; Argo CD poll thấy commit, sync, gateway đi
   [canary](deployment.md#kubernetes-cục-bộ-k3d). Rollback stg là PR revert trong `svp-gitops`.
 - **Admission** (ADR-0015 §8): Kyverno (admission controller + reports controller; version ghim ở
@@ -164,7 +166,7 @@ flowchart LR
   phát hành đã ký: trong Sigstore bundle, attestation của bản đó trỏ cả tới từng manifest nền tảng và Kyverno tính chúng là chữ ký, nên nó
   qua phép chữ ký rồi bị từ chối muộn hơn, ở attestation `vuln`; các ca b, h và i khi đó phụ thuộc định dạng.
 - **Renovate** (ADR-0015 §10): App Mend cho repo này và `svp-gitops`, mở PR hằng tuần cho Go module, action (SHA), base image, công
-  cụ của `Makefile` (repo này), chart upstream, image ghim trong `base/`, commit checker (`svp-gitops`, bỏ qua `envs/**`); chờ bản
+  cụ của `Makefile` (repo này), chart upstream, image ghim trong `base/`, bản checker (`svp-gitops`, bỏ qua `envs/**`); chờ bản
   phát hành 3 ngày; repo này tự merge khi `ci-ok`, `images-ok` xanh chỉ `digest`, `pinDigest` của base image và image của chart
   (cùng tag, digest mới) và `patch`, `digest` của image compose; còn lại (mọi cập nhật Go module, patch tag của base image và image
   chạy trong cluster, và mọi PR của `svp-gitops`) duyệt tay ([ADR-0041](../adr/0041-github-hardening.md) (i), thay một phần
@@ -313,7 +315,7 @@ flowchart LR
 - **Ranh giới:** repo code giữ code, test, Dockerfile, chart Helm và CI build, quét, ký; `svp-gitops` (public, không secret) giữ
   mọi thứ quyết định cái gì chạy ở một env: values gốc (`base/`), overlay, commit chart (`envs/<env>/charts.yaml`) và digest
   (`envs/<env>/images/`) của mỗi env, bản cài và manifest Argo CD. Push vào `main` repo code không đổi cluster nào.
-- **Một bản phát hành = bảy digest + một commit chart**, đi qua stg rồi mới tới prd (như Freight của Kargo). `charts.yaml` mang
+- **Một bản phát hành = một digest mỗi service + một commit chart**, đi qua stg rồi mới tới prd (như Freight của Kargo). `charts.yaml` mang
   `revision` (commit repo code) cùng hai giá trị dẫn xuất (`podSecurityVersion`, `collectorConfigSha256`); check của `svp-gitops`
   tính lại chúng; bước promote stg của repo code giữ guard tổ tiên ([ADR-0037](../adr/0037-mainpath-standard-tools.md) §6).
 - **Argo CD multi-source:** root `svp-root` và nguồn `ref: values` đọc `svp-gitops` ở `refs/heads/main` (tên đầy đủ, không bao giờ
@@ -335,6 +337,145 @@ flowchart LR
 - **Ngân sách RAM của cluster GitOps** trên runner và lượt kiểm của đường hai repo: [ADR-0021](../adr/0021-deferred-verification-stage6b.md),
   [ADR-0025](../adr/0025-gitops-config-repo.md).
 
+## Phát hành checker
+
+Vì sao: [ADR-0077](../adr/0077-versioned-gitops-checker.md). Quy trình tay ở
+[`runbooks/gitops-checker-release.md`](../runbooks/gitops-checker-release.md); workflow ở [`reference/ci.md`](../reference/ci.md).
+
+Check bắt buộc `gitops-ok` của `svp-gitops` chạy **checker** của repo code: `deploy/ci/gitops-check.sh` và các file nó đọc trong `deploy/ci/`
+(policy Rego, policy Kyverno CLI, `values-check.sh`, `verify-release.sh`, `common.sh`, `cluster-values.example.yaml`). Checker là thứ duy nhất
+của repo code có semver: mỗi bản là một tag `gitops-check-v<semver>` bất biến, `svp-gitops` ghim version cùng commit của tag, và đổi bản
+đi bằng PR như mọi dependency.
+
+```mermaid
+sequenceDiagram
+    actor Learner as người học
+    participant Main as main của svp-backend
+    participant Release as release.yml (release-please)
+    participant RelPR as PR phát hành
+    participant Renovate as Renovate (Mend)
+    participant BumpPR as PR nâng ghim ở svp-gitops
+    participant Check as check.yml của svp-gitops
+    Learner->>Main: squash merge PR feat(ci) đổi deploy/ci
+    Main->>Release: push main
+    Release->>RelPR: mở hay cập nhật bằng token App: CHANGELOG, manifest
+    RelPR->>RelPR: ci-ok, images-ok (không build image)
+    Learner->>RelPR: Code Owner duyệt, merge
+    RelPR->>Release: push main
+    Release->>Main: tag gitops-check-v semver, GitHub Release
+    Note over Main: ruleset gitops-check-tags: tag không sửa, không xoá
+    Renovate->>Main: đọc tag mới và commit của nó (github-tags)
+    Renovate->>BumpPR: CHECKER_VERSION và CHECKER_COMMIT trong một PR
+    BumpPR->>Check: pull_request
+    Check->>Check: tag trỏ đúng CHECKER_COMMIT, rồi checker bản mới trên cây
+    Learner->>BumpPR: đọc changelog, Code Owner duyệt, merge
+```
+
+- **Bản và mức tương thích.** release-please đọc tiêu đề commit (Conventional Commits, tiêu đề PR thành commit squash): `feat` ra minor,
+  `fix`, `perf` ra patch, `!` hay `BREAKING CHANGE` ra major; chỉ commit đổi file dưới `deploy/ci` được đếm. Mỗi bản là một PR phát hành qua cổng
+  như mọi PR, nên tag chỉ trỏ commit đã qua `ci-ok`, `images-ok` và duyệt của Code Owner.
+- **Token App, không `GITHUB_TOKEN`.** PR do `GITHUB_TOKEN` mở không chạy CI, nên PR phát hành dùng token 1 giờ của App `svp-release-please`
+  (chỉ repo này, `contents`, `pull_requests` write); khoá App ở environment `release`, chỉ `main` dùng được.
+- **Ghim cả version lẫn commit.** Version nói mức tương thích cho người duyệt và cho Renovate (major ở PR riêng); commit là thứ check thật sự
+  checkout. Bước khớp tag đỏ khi hai thứ lệch nhau; tag bất biến nên commit đã ghim không dời.
+- **Expand–contract.** Đổi hợp đồng giữa checker và cây `svp-gitops` đi bằng ba PR, mỗi PR qua cổng có sẵn: repo code nhận cả dạng cũ lẫn mới
+  (bản minor; CI repo code chạy checker `--worktree` với `main` của `svp-gitops`, nên dạng cũ còn được kiểm), `svp-gitops` nâng ghim rồi đổi cây,
+  repo code bỏ dạng cũ (bản major) và `svp-gitops` nâng. Thứ tự sai thì một trong hai cổng đỏ, không cần ghim tạm hay nâng tay.
+- **Phạm vi phiên bản.** Image service giữ tag theo commit và digest: build một lần, promote cùng digest, mỗi commit `main` là một bản ứng viên,
+  người tiêu thụ là GitOps của chính hệ thống. Chart giữ ghim commit trong `envs/<env>/charts.yaml`, đi cùng image. Package release-please là cả
+  `deploy/ci`, nên script không thuộc checker cũng ra bản (thêm một PR Renovate vô hại); file check đọc ở commit ghim mà nằm ngoài `deploy/ci`
+  (`Makefile`; `deploy/k8s/lib.sh`) chỉ tới `svp-gitops` ở bản phát hành kế tiếp. Danh sách service không nằm trong số đó: check lấy nó từ bảng nguồn
+  ở commit mà `envs/<env>/charts.yaml` ghim.
+- **Cái giá.** Thêm một App (khoá xoay tay), một environment, một workflow, một ruleset; mỗi bản thêm một PR phát hành ở repo code và một PR
+  Renovate ở `svp-gitops`, tới trong vài giờ sau tag (Mend chạy 4 giờ một lượt).
+
+## Release mới và canary gRPC
+
+Vì sao: [ADR-0072](../adr/0072-pod-operations.md), [ADR-0025](../adr/0025-gitops-config-repo.md),
+[ADR-0037](../adr/0037-mainpath-standard-tools.md) §6. Luật và lệnh ở [`reference/ci.md`](../reference/ci.md#gitops-checksh-values-checksh-và-policy-kyverno);
+đọc một lượt chạy ở [`ci-cd.md`](../ci-cd.md#12-push-hay-merge-vào-main).
+
+Một **release mới** là service của **tập build** (group `default` của `deploy/docker-bake.json`) mà revision stg hoặc prd đang ghim
+(`envs/<env>/charts.yaml`) chưa build. Cluster chưa chạy nó, nên `envs/<env>/images/<svc>.yaml` chưa thể có: digest của nó chỉ có sau
+khi `images.yml` build và ký. Cơ chế không cho service dựng và ghim digest bằng tay, và cũng không bỏ luật "mỗi service một file image":
+chỉ đúng chỗ thiếu file của service mà revision đã ghim không build thì được phép, và chỉ đến khi promote tạo file.
+
+```mermaid
+sequenceDiagram
+    participant PR as backend PR
+    participant Images as images.yml
+    participant Ghcr as package GHCR
+    participant Check as gitops-check.sh --worktree
+    participant Promote as job promote
+    participant Gitops as svp-gitops
+    actor Learner as người học
+    participant PromotePrd as job promote-prd
+    participant Argo as Argo CD
+    participant Rollout as Argo Rollouts
+    PR->>Check: chart, bake, sources.json, svp-gitops main
+    Check-->>PR: note envs/stg, envs/prd chưa có file image của service mới
+    PR->>Images: merge vào main, thêm service đổi bảng image nên build mọi service
+    Images->>Images: build, quét, ký mọi image của tập build
+    Images->>Ghcr: đẩy image: package của service mới private
+    Learner->>Ghcr: bật public ngay sau lượt đầu
+    Images->>Promote: digest của từng service đã ký
+    Promote->>Gitops: PR bot/promote-stg: tạo envs/stg/images/svc.yaml, charts.yaml
+    Note over Gitops,Ghcr: check kéo ẩn danh nên cần package public
+    Gitops-->>Promote: gitops-ok xanh: danh sách service từ bảng ở revision mới, tự merge
+    Learner->>PromotePrd: dispatch promote_prd với stg_ref, duyệt environment promote-prd
+    PromotePrd->>Gitops: PR bot/promote-prd tạo envs/prd/images/svc.yaml
+    Learner->>Gitops: Code Owner duyệt, merge PR prd
+    Note over Gitops: component của service chỉ vào argocd/apps/components.json<br/>khi mọi env của nền tảng đã có file image
+    Gitops->>Argo: root, values: envs/env/images và base
+    Argo->>Rollout: Rollout của release có canary (gRPC: GRPCRoute qua waypoint)
+    Rollout->>Rollout: 25%, chờ, 50%, chờ, gate, AnalysisRun đọc Prometheus
+```
+
+- **Cổng trong PR của backend.** `gitops-check.sh --worktree` chạy ở CI backend với `main` của `svp-gitops` và chart của working tree
+  thay `revision`. Luật "mỗi service một file image" nằm ở policy Rego (`envs.rego`): file thiếu của service mà revision env ghim
+  không build là cảnh báo, in thành dòng `note`; mọi thiếu khác vẫn đỏ.
+- **Cổng trong PR của `svp-gitops`.** Check theo revision vẫn đòi đủ một file mỗi service mà revision của env build. PR promote
+  của stg nâng `revision` lên commit build service mới và tạo file trong cùng PR. Checker ở bản đang ghim lấy danh sách service mà
+  file image của env được có từ bảng nguồn ở revision đó (`values-check.sh`, nhánh promote prd của `author.rego`), không từ bản checker,
+  nên check xanh mà không cần phát hành checker mới ([phát hành checker](#phát-hành-checker)). File bị xoá của service mà revision
+  env ghim không build, `values-check.sh` ghi thành dòng `note` (rollback, service nghỉ hưu); thêm hay sửa file đó thì đỏ.
+- **Package GHCR public.** Lượt `images.yml` đầu tạo package của service mới ở trạng thái private, mà check của `svp-gitops` kéo ẩn
+  danh. Người học bật public cho package ngay sau lượt đó, không đợi buổi stg ([`svp-gitops-setup.md`](../runbooks/svp-gitops-setup.md), C1);
+  chưa bật thì PR promote đỏ, và mọi bump stg dồn trong PR đó.
+- **prd do người học kéo.** Job `promote` chỉ ghi stg. Người học dispatch `images.yml` với `promote_prd` và `stg_ref`, duyệt
+  environment `promote-prd`; job `promote-prd` mở PR `bot/promote-prd` không auto-merge, Code Owner duyệt rồi merge.
+  prd đọc component của `svp-gitops` ở `main` nhưng chạy chart ở revision `envs/prd/charts.yaml` ghim, nên khi một PR đưa lớp nền
+  tảng mới vào `svp-gitops` cùng chart tương ứng của repo code (mesh: namespace `istio-system` cần nhãn PSA `privileged` từ chart),
+  prd chỉ dựng sau khi `promote-prd` đã nâng `revision` lên commit có chart đó và PR `bot/promote-prd` đã merge.
+- **Promote tạo file.** `promote` ghi file image của mỗi service vừa ký; file chưa có thì `promote_image_file` (`deploy/ci/common.sh`)
+  viết khối comment đầu file như các file khác rồi khối `image`. `promote-prd` chép file của stg ở `stg_ref`, bỏ qua service mà stg
+  ở commit đó chưa có file, và tạo file prd của service đã có. Lượt không build service mới thì không tạo file.
+- **Rollback prd.** `promote-prd` không xoá file, luật tác giả cấm bot xoá. Lùi về `stg_ref` trước lúc service mới có file prd thì file đó
+  còn lại và check đỏ; người học mở PR của mình xoá `envs/prd/images/<svc>.yaml`, check ghi dòng `note` cho file đó
+  ([`svp-gitops-setup.md`](../runbooks/svp-gitops-setup.md), C4).
+- **Component.** Chart `svp-policy` liệt kê nguồn phát hành của service ngay từ PR backend (`files/sources.json`), để Kyverno nhận
+  chữ ký. Component của release vào `argocd/apps/components.json` chỉ khi mọi env của nền tảng có file image, ở PR `svp-gitops` sau.
+
+Canary của release gRPC đi theo cùng đường phát hành và chia theo request như canary HTTP, qua waypoint của mesh thay cho Envoy
+([ADR-0075](../adr/0075-service-mesh.md)). Chart `svp-service` bật Rollout cho release `protocol: grpc` có `canary: true` và
+không `httpRoute.host`; Rollout có `trafficRouting` qua plugin Gateway API trên `GRPCRoute` tên release, gắn vào chính Service của
+release. Waypoint thực thi route, và plugin đặt trọng số giữa Service `<release>` (stable) và `<release>-canary`. Các bước như HTTP:
+25 %, chờ, 50 %, chờ, bước phân tích chặn rồi 100 %.
+
+- **`canaryRoute`.** Khoá của component trong `argocd/apps/components.json` (`svp-gitops`) là tên route mà Rollout đổi trọng số:
+  HTTPRoute `api`, `web` hay GRPCRoute `<release>`. Release thêm `canary: true` ở `base/` thì thêm `canaryRoute` cùng PR; thiếu thì
+  helmfile của đường dev dừng với lỗi nêu release, và hook postsync của `install.sh` từ chối Rollout không có route đúng loại.
+- **Đo ở pod canary.** AnalysisTemplate lấy hash của ReplicaSet canary (`podTemplateHashValue: Latest`) và hỏi Prometheus về
+  `rpc_server_call_duration_seconds` của đúng pod đó (`k8s_pod_name=~"<release>-<hash>-.*"`, thuộc tính pod do chart đặt qua downward
+  API): tỉ lệ lời gọi lỗi phía server (mã `UNKNOWN`, `INTERNAL`, `UNAVAILABLE`, `DATA_LOSS`, `DEADLINE_EXCEEDED`) và p99. Dưới 30 lời gọi
+  trong phút gần nhất thì kết quả là Inconclusive: canary dừng chờ người, không được thăng cấp. Ngưỡng là `canaryLimits` của release.
+- **Chia theo lời gọi, không theo kết nối.** Waypoint chọn Service cho từng lời gọi, nên phần tải tới canary là trọng số dù client
+  giữ một kết nối dài và dù canary chỉ có một pod. Cái giá: một chặng Envoy trong đường gọi, và pod canary nhận đúng phần đó của cả
+  release. Một service ít được gọi vẫn có thể dưới 30 lời gọi mỗi phút và dừng ở Inconclusive.
+- **Chuyển sang Rollout.** `canary: true` đổi `kind` của workload cùng tên từ Deployment sang Rollout. Mọi Application của chart
+  `svp-service` trong `svp-gitops` đặt `PruneLast=true`: Argo CD xoá Deployment cũ sau cùng, khi Rollout mới đã Healthy, nên release
+  luôn có pod sẵn sàng trong lúc chuyển. Đường dev (`make k8s-up`) dựng cụm từ đầu và không cần cơ chế này.
+
 ## Ba repo và hợp đồng API
 
 Vì sao: [ADR-0033](../adr/0033-svp-web-repo.md), [ADR-0036](../adr/0036-repo-rename.md),
@@ -347,7 +488,7 @@ Web client nằm ở repo riêng để mô phỏng team FE và team BE riêng (h
 flowchart LR
     subgraph be["repo svp-backend (backend)"]
         spec["services/gateway/openapi.yaml<br/>info.version semver"]
-        beimg["images.yml: sáu image,<br/>job contract"]
+        beimg["images.yml: image Go,<br/>job contract"]
         ci["deploy/ci/*.sh, Makefile,<br/>bảng nguồn sources.json"]
     end
     subgraph fe["repo svp-frontend (web)"]
@@ -377,14 +518,14 @@ flowchart LR
   `version`, `digest` ở `api/contract.json`; `make generate` kiểm digest, version, chữ ký của nguồn `backend` rồi mới sinh
   `gen/api.d.ts`. Breaking đi ba bước: thêm cái mới (minor), chuyển web, bỏ cái cũ (major).
 - **Nguồn phát hành:** mỗi repo phát hành image dưới prefix riêng, ký bằng workflow của chính nó
-  (`deploy/helm/svp-policy/files/sources.json`: `backend` sáu service Go dưới `ghcr.io/anhnvcoder/svp-backend/`, `web` chỉ
+  (`deploy/helm/svp-policy/files/sources.json`: `backend` các service Go dưới `ghcr.io/anhnvcoder/svp-backend/`, `web` chỉ
   `ghcr.io/anhnvcoder/svp-frontend/web`); Kyverno chọn attestor theo prefix, check của `svp-gitops` giới hạn file mỗi bot được đổi
   (luật tác giả hẹp, đọc từ bảng nguồn). Identity ký và prefix image mang tên repo ([ADR-0036](../adr/0036-repo-rename.md)), nên
-  image dưới tên repo cũ (`short-video-platform`, `svp-web`) bị policy từ chối. Danh sách build của backend (`built_services`, sáu)
-  tách khỏi danh sách bảy bản triển khai (`svp_services`) mà promote prd, rescan đọc.
+  image dưới tên repo cũ (`short-video-platform`, `svp-web`) bị policy từ chối. Danh sách build của backend (`built_services`)
+  tách khỏi danh sách bản triển khai (`svp_services`, thêm web) mà promote prd, rescan đọc.
 - **Script CI dùng chung:** `svp-frontend` checkout `deploy/ci/` của backend ở commit ghim `.backend-commit` (chỗ ghim duy nhất,
   Renovate nâng) và chạy với `SVP_CODE_ROOT` trỏ cây của nó; logic build, quét, ký, attest, rescan chỉ có một bản; promote là bước
   `yq` + `gh pr` trong `images.yml` của mỗi repo ([ADR-0037](../adr/0037-mainpath-standard-tools.md) §6).
-- **Kiểm chéo:** job `stack` của `svp-frontend` dựng compose của backend ở commit stg chạy với sáu image stg theo digest
+- **Kiểm chéo:** job `stack` của `svp-frontend` dựng compose của backend ở commit stg chạy với image stg theo digest
   (`make up IMAGES=stg WEB_FROM=clone`) và chạy e2e của PR; job `stack` của backend chạy web bản stg và e2e của `svp-frontend` ở
   commit đó. Cả hai chỉ báo; e2e không chặn một PR backend làm hỏng web mà oasdiff không thấy.

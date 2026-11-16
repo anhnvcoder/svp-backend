@@ -13,7 +13,7 @@
 
 # Mode: rescan on schedule or dispatch rescan=true; drill on dispatch drill=true; otherwise build; contradictory inputs
 # fail. Base of a build, never github.event.before (it loses the changes of a replaced queued run and of a failed one):
-# push to main the head_sha of the last successful push run (none or not a full SHA: all six); pull request the
+# push to main the head_sha of the last successful push run (none or not a full SHA: all); pull request the
 # merge-base with the PR's base branch; dispatch the merge-base with origin/main, which the input services overrides.
 
 # Another repository's tree (SVP_CODE_ROOT is not this checkout): a build builds every service of its release source, no
@@ -92,7 +92,7 @@ build)
     if [ "$INPUT_SERVICES" = all ]; then
       images=("${built_services[@]}")
     else
-      # read -a splits on blanks without expanding wildcards; every name must be one of the six.
+      # read -a splits on blanks without expanding wildcards; every name must be one of built_services.
       read -r -a names <<<"$INPUT_SERVICES"
       for name in "${names[@]}"; do
         printf '%s\n' "${built_services[@]}" | grep -qxF -- "$name" ||

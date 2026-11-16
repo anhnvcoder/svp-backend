@@ -129,3 +129,4 @@ Phụ lục: [`appendix/0037-mainpath-standard-tools.md`](appendix/0037-mainpath
 
 - §6: [0040](0040-sigstore-bundle-actions-attest.md): chữ ký, `vuln`, SBOM và provenance của image phát hành sang Sigstore bundle, provenance bằng `actions/attest`.
 - §2: [0050](0050-bash-to-standard-tools.md): bỏ hẳn adapter `platform.sh`, không còn "đóng băng, xoá dần".
+- §6: [0072](0072-pod-operations.md): job `promote`, `promote-prd` tạo file image còn thiếu của release mới (cùng khối comment đầu) rồi mới `yq -i`; kiểm worktree chấp nhận env chưa có file của release mới.

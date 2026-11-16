@@ -100,3 +100,4 @@ Từ 2026-10-31 mã web ở repo `svp-frontend` ([ADR-0033](0033-svp-web-repo.md
 
 - Quyết định (object store local, MinIO ở Bối cảnh và Quyết định): [0022](0022-local-object-store-minio-replacement.md): bị thay một phần, RustFS cho compose và k3d; presigned POST, hai bucket và đọc công khai `media` giữ nguyên.
 - Quyết định (phần Phát: đường dẫn `media/<video_id>/` cố định, transcode lại ghi đè): [0029](0029-immutable-media-versions.md): output theo version `media/<video_id>/<version>/`, không ghi đè, `Cache-Control: max-age=31536000, immutable`.
+- Quyết định (phần Phát: "Trên cloud, media-worker sẽ gọi MediaConvert (AWS) hoặc Transcoder API (GCP)"): [0066](0066-mediaconvert-transcode.md): stg, prd transcode bằng AWS Elemental MediaConvert qua lệnh con `media-worker mediaconvert` (Probe trước job, trạng thái job qua EventBridge và SQS); compose, k3d giữ ffmpeg; Transcoder API là phương án lúc chạy trên GCP.
