@@ -269,6 +269,18 @@ check_root "platforms: the tree, each environment on each platform of components
   "ok    argocd/apps for prd on eks on arm64 and amd64 nodes: one Application per component that runs there" "$(copy)"
 check_root "platforms: an environment left out of a platform is not rendered there, and says why" 0 \
   "skip  prd on k3d: prd is not in envs of platform k3d (key platforms of components.json)" "$(copy)"
+# With grafanaUrl "" in the cluster map the root leaves out Application grafana-operator: the check renders eks that way
+# too, and a root chart that still makes it fails.
+check_root "platforms: eks rendered again with an empty grafanaUrl" 0 \
+  'note  again with grafanaUrl "" in the cluster map of eks' "$(copy)"
+t=$(copy)
+# shellcheck disable=SC2016 # text of the template
+if replace_once "$t/argocd/apps/templates/applications.yaml" '{{- if eq (get $cluster "grafanaUrl") "" }}' '{{- if false }}'; then
+  check_root "platforms: a root chart that makes grafana-operator without a Managed Grafana" 1 \
+    "makes the Applications" "$t"
+else
+  fail "platforms: the root chart of $tree no longer holds the line the case of an empty grafanaUrl changes"
+fi
 platforms_case "no key platforms, read by the policies" "argocd/apps/components.json: has no key platforms" 'del(.platforms)'
 # A platform whose folder is a link to another folder, behind which an overlay sets an image: the lister of the tree
 # does not walk into the link, so the check refuses the link itself rather than pass what lies behind it.

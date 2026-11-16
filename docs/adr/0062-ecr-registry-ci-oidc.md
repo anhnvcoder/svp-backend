@@ -187,8 +187,6 @@ cluster** khớp dạng host của tài liệu ECR [N27]. ADR cũ chỉnh: 0034 
   [N6] <https://docs.aws.amazon.com/AmazonECR/latest/userguide/pull-through-cache.html>, [N27] <https://docs.aws.amazon.com/AmazonECR/latest/userguide/Registries.html>,
   [N7] <https://docs.aws.amazon.com/AmazonECR/latest/userguide/repository-creation-templates.html>, [N9] <https://github.com/aws/containers-roadmap/issues/2837>,
   [N10] <https://github.com/aws/containers-roadmap/issues/2783>, [N31] <https://github.com/aws/containers-roadmap/issues/2728>, [N8] <https://aws.amazon.com/blogs/containers/announcing-pull-through-cache-for-registry-k8s-io-in-amazon-elastic-container-registry/>
-- GitHub, IAM: [N11] <https://docs.github.com/en/actions/reference/security/oidc>, [N14] <https://github.com/aws-actions/configure-aws-credentials>, [N12] <https://github.blog/changelog/2026-04-23-immutable-subject-claims-for-github-actions-oidc-tokens>,
-  [N26] <https://docs.github.com/en/packages/working-with-a-github-packages-registry/working-with-the-container-registry>, [N13] <https://docs.aws.amazon.com/IAM/latest/UserGuide/id_roles_providers_create_oidc_verify-thumbprint.html>
 
 ## Thông tin thêm
 
@@ -198,3 +196,5 @@ Phụ lục: [`appendix/0062-ecr-registry-ci-oidc.md`](appendix/0062-ecr-registr
 
 - §10: [0071](0071-paid-features.md): Inspector ECR của account env theo cờ `inspector_ecr`: stg `off` (không member association, registry `BASIC` với một rule `SCAN_ON_PUSH` cùng filter repo cache), prd giữ `ENHANCED`, `CONTINUOUS_SCAN`.
 - §5: [0076](0076-terraform-plan-infracost-pr.md): `svp-infra` cũng có role OIDC: `plan.yml` nhận `svp-ci-terraform-plan` (`ReadOnlyAccess`, Deny đọc dữ liệu workload và ghi state, phiên 1 giờ) qua OIDC provider của module `registry` (output `github_oidc_provider_arn`), `sub` `...:environment:terraform-plan`; câu "`svp-infra` vẫn không" không còn đúng.
+- §10, §11: [0078](0078-paid-features-lean-defaults.md): prd cũng `off` (registry `BASIC`, một rule `SCAN_ON_PUSH`);
+  Inspector ECR chỉ chạy trong buổi prd; tháng không buổi không còn Inspector quét lại.

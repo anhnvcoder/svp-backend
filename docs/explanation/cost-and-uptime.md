@@ -69,12 +69,14 @@ flowchart LR
     amg -->|"đọc ba recording rule"| amp
 ```
 
-Trên eks, sidecar lấy credential từ Pod Identity của ServiceAccount `opencost`: role `<cluster>-opencost` chỉ có bốn hành động đọc của AMP
-trên workspace của env, không quyền giá, EC2 hay S3. Mọi lời gọi API AWS khác của OpenCost bị từ chối, và đó là chủ ý (mục sau). Recording
-rule chạy ở ruler của AMP như mọi luật khác của eks ([ADR-0063](../adr/0063-managed-observability.md) §5), nên số còn đọc được ở AMG sau khi
-cluster bị destroy. Component `opencost` sync sau các service: nó không Ready khi chưa tới được Prometheus, mà NetworkPolicy của
-`svp-observability` và Pod Identity có thể chưa có trên một cluster mới; root chờ từng wave, nên đặt sớm hơn thì một lỗi của nó chặn mọi
-service.
+Trên eks, sidecar lấy credential từ Pod Identity của ServiceAccount `opencost`: role `<cluster>-opencost` chỉ có bốn
+hành động đọc của AMP trên workspace của env, không quyền giá, EC2 hay S3. Mọi lời gọi API AWS khác của OpenCost bị từ
+chối, và đó là chủ ý (mục sau). Recording rule chạy ở ruler của AMP như mọi luật khác của eks
+([ADR-0063](../adr/0063-managed-observability.md) §5), nên số còn đọc được ở AMG sau khi cluster bị destroy. Dashboard
+`svp-cost`, `svp-uptime` chỉ có khi cờ `managed_grafana` của env khác `off` ([`paid-features.md`](paid-features.md));
+với `off`, số của recording rule đọc bằng truy vấn AMP, như các lệnh `promql` của runbook buổi. Component `opencost`
+sync sau các service: nó không Ready khi chưa tới được Prometheus, mà NetworkPolicy của `svp-observability` và Pod
+Identity có thể chưa có trên một cluster mới; root chờ từng wave, nên đặt sớm hơn thì một lỗi của nó chặn mọi service.
 
 ### Nghĩa và giới hạn của số
 

@@ -399,6 +399,10 @@ Khoản lớn nhất là Security Hub CSPM. Tháng đầu GuardDuty, Security Hu
 
 ### Giữ tối thiểu mà vẫn đúng chuẩn
 
+Nguyên văn ADR §12: "Giữ tối thiểu: tài nguyên toàn cục chỉ ghi ở region nhà; control dùng chung rule Config của FSBP
+và CIS chỉ tính một lần [N8]; tắt control không áp dụng; data event chỉ bucket người dùng của prd, `media` chỉ ghi;
+flow log Parquet; không conformance pack, không analyzer truy cập không dùng."
+
 | Cách | Đúng chuẩn vì | Tiết kiệm |
 | --- | --- | --- |
 | Loại toàn cục chỉ ghi ở region nhà | Khuyến nghị của Security Hub [N10] | Item IAM không ghi hai lần |

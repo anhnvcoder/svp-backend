@@ -67,6 +67,9 @@ nguồn, xếp theo §. Mọi nguồn đọc ngày 2026-11-13. Đường dẫn `
 
 ## §3. Account, Organizations, opt-in
 
+Nguyên văn ADR §3, lý do không delegated administrator: "Control Tower tách Backup Administrator, Central Backup [N41];
+lab gộp đích vào `svp-backup`, management giữ policy như SCP, RCP."
+
 - `isCrossAccountBackupEnabled`: "you must enable cross-account backup in the AWS Backup console or through the UpdateGlobalSettings API";
   "Cross-account backup can only be enabled or disabled using these credentials" (management); "When you first enable cross-account backups
   using your AWS Organizations management account, any user of a member account can configure their account to be a destination account" [N1].
@@ -148,6 +151,9 @@ copy chéo account, selection `resources` có `conditions` [N4]; giới hạn 30
 - Retention ≥ 2 ngày: bản trước hết hạn sau 24 × retention giờ, bản kế tiếp hoàn tất muộn nhất sau 24 + (60 + 180) / 60 = 28 giờ; 2 × 24 = 48 ≥ 28.
 
 ## §5. Vault, copy, alarm
+
+Nguyên văn ADR §5 (Vault copy): "Lock governance gỡ được bằng quyền IAM `DeleteBackupVaultLockConfiguration` (gỡ lab);
+compliance không gỡ được sau grace time [N17]."
 
 Vault access policy của `svp-prd-copy` (của `svp-stg-copy`: account stg) theo mẫu chia sẻ theo account của [N1]:
 
@@ -298,6 +304,10 @@ encryption context" [N29], "can reduce AWS KMS request costs by up to 99 percent
 
 ## §9. `xmin` qua restore point-in-time
 
+Nguyên văn ADR §9: "PITR của RDS dựng từ snapshot volume và log giao dịch [N23], [N24] (khôi phục file rồi replay WAL
+[N28]); `xmin` nằm trong header tuple trên trang [N26], [N27], nên bản khôi phục giữ nó và digest đổi khi có INSERT,
+UPDATE, DELETE, kể cả trả lại giá trị cũ."
+
 - RDS: "RDS creates a storage volume snapshot of your DB instance, backing up the entire DB instance" [N23]; "RDS uploads transaction logs for DB
   instances to Amazon S3 every five minutes" [N24]: PITR dựng instance mới từ snapshot volume rồi áp log giao dịch tới thời điểm chọn.
 - PostgreSQL: "we can combine a file-system-level backup with backup of the WAL files. If recovery is needed, we restore the file system backup
@@ -323,6 +333,9 @@ encryption context" [N29], "can reduce AWS KMS request costs by up to 99 percent
   giây là ~17 phút cộng thời gian dựng job đo ở **Diễn tập object S3**; ước dưới 60 phút, chưa đo.
 
 ## §12. DR đa region và chi phí
+
+Nguyên văn ADR §12: "Copy sang `us-east-1` (SCP đã cho) thêm ~$2–3 mỗi tháng ở mức lab (CMK, $0,09 mỗi GB chuyển
+[N37]); cái giá thật là đường dựng env ở region thứ hai và RTO giờ tới ngày (phụ lục §12)."
 
 | Phương án | Thêm gì | Chi phí lab (USD mỗi tháng) | Khôi phục khi mất `ap-southeast-1` |
 | --- | --- | --- | --- |

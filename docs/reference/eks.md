@@ -171,7 +171,8 @@ Loại tài liệu (Diátaxis): **reference**, tra cứu khi cần một lệnh 
     source: `ecrRegistry` (host ECR của account, đích của `svp-registry-mirror`, `releaseRegistry` của `svp-policy`),
     `ampWorkspaceId` (luật, Alertmanager của AMP qua ACK), `ampEndpoint` (base URL của workspace, kết thúc `/`: remote
     write của Prometheus agent và Collector, canary của `gateway`, `web`, data source của AMG), `logGroup`
-    (`/svp/<env>/otel`, log của Collector), `grafanaUrl` (CR `Grafana` của Grafana Operator), `alarmTopicArn` (topic
+    (`/svp/<env>/otel`, log của Collector), `grafanaUrl` (CR `Grafana` của Grafana Operator; rỗng khi
+    `managed_grafana` là `off`), `alarmTopicArn` (topic
     `svp-<env>-alarms`, receiver SNS của Alertmanager của AMP); dạng từng khoá kiểm ở
     `argocd/apps/templates/applications.yaml` của `svp-gitops` và ở `variables.tf` của module `gitops-bridge`); values
     đọc theo thứ tự `base/` < `platforms/<platform>/<tên>.yaml` < `envs/<env>/` < `envs/<env>/images/` < `valuesObject`
@@ -186,7 +187,8 @@ Loại tài liệu (Diátaxis): **reference**, tra cứu khi cần một lệnh 
 
 Lệnh `terraform` và script buổi ở `svp-infra` (`aws/scripts/`); mỗi bước xong mới sang bước sau:
 
-Root `aws/accounts/<env>` (registry ECR, role CI, workspace AMP, log group, Managed Grafana) đã áp từ trước và sống qua
+Root `aws/accounts/<env>` (registry ECR, role CI, workspace AMP, log group, Managed Grafana khi cờ
+`managed_grafana` là `always`) đã áp từ trước và sống qua
 mọi buổi; buổi không áp lại nó.
 
 1. Apply root `aws/envs/<env>` (cluster, endpoint interface, RDS, MSK, ElastiCache, vỏ entry Secrets Manager; mật khẩu
@@ -197,8 +199,8 @@ mọi buổi; buổi không áp lại nó.
    `deploy/ci/image-list.sh ../gitops <env> > <file>` (không chạm AWS), rồi `aws/scripts/ecr-warm.sh <env> <file>` của
    `svp-infra`. Chạy lại khi một PR đổi digest bên thứ ba merge giữa buổi.
 3. `aws/scripts/bootstrap.sh <env> secrets` của `svp-infra`: nguồn có trước Argo CD. Script gọi
-   `make eks-secrets CONTEXT=svp-<env>` của repo này với mật khẩu master RDS, rồi tạo token mới của service account
-   `svp-grafana-operator` vào entry `svp/<env>/grafana-operator`; chạy riêng `make eks-secrets` thì thiếu token này.
+   `make eks-secrets CONTEXT=svp-<env>` của repo này với mật khẩu master RDS, rồi, khi env có workspace Grafana, tạo token mới
+   của service account `svp-grafana-operator` vào entry `svp/<env>/grafana-operator`; chạy riêng `make eks-secrets` thì thiếu token này.
 4. Mở tunnel tới API (output `api_tunnel_command`, terminal riêng) và thêm context (output `kubeconfig_command`); chỉ
    prd: PR promote prd đã merge trước bước này.
 5. Apply root `aws/gitops/<env>` (Argo CD, AppProject, cluster Secret, root).
@@ -211,6 +213,10 @@ mọi buổi; buổi không áp lại nó.
 
 Cuối buổi, `aws/scripts/pre-destroy.sh` xoá các CR `RuleGroupsNamespace`, `AlertManagerDefinition` khi ACK còn chạy
 (luật trong AMP đi theo) trước `destroy`; dữ liệu ở AMP, CloudWatch Logs, `aws/spans` và image ở ECR ở lại.
+
+Runbook buổi `session-<env>.md` của `svp-infra` đánh dấu mỗi bước, phép kiểm sau đó là `lõi` hay `chuẩn ngành`
+([ADR-0078](../adr/0078-paid-features-lean-defaults.md) §6): đường mặc định chỉ chạy `lõi`, phép `chuẩn ngành`
+(dashboard trên Amazon Managed Grafana, thang k6, diễn tập, kiểm sâu nền tảng managed) chọn bật từng buổi.
 
 ## Đổi secret của env đang chạy
 

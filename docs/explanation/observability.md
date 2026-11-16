@@ -4,9 +4,11 @@ Trang này trả lời: tín hiệu nào (trace, metric, log, profile, lỗi, s�
 và EKS khác nhau ra sao, và web được quan sát thế nào mà không lộ dữ liệu người dùng. SLO và cảnh báo ở
 [`reliability.md`](reliability.md#slo); chi phí compute (OpenCost) và probe uptime từ ngoài vào (blackbox exporter) ở
 [`cost-and-uptime.md`](cost-and-uptime.md); lệnh ở [`reference/compose.md`](../reference/compose.md),
-[`reference/k8s.md`](../reference/k8s.md), [`reference/eks.md`](../reference/eks.md).
-Trên EKS, dashboard ở Amazon Managed Grafana ([ADR-0063](../adr/0063-managed-observability.md)); workspace của stg chỉ có trong buổi
-(cờ `managed_grafana`, [`paid-features.md`](paid-features.md)), còn metric ở AMP và log ở CloudWatch giữ qua các buổi.
+[`reference/k8s.md`](../reference/k8s.md), [`reference/eks.md`](../reference/eks.md). Trên EKS, dashboard ở Amazon Managed
+Grafana ([ADR-0063](../adr/0063-managed-observability.md)), chỉ khi cờ `managed_grafana` của env khác `off`
+([`paid-features.md`](paid-features.md)): giá trị mặc định `off` không có workspace nên không dashboard, buổi chọn bật
+dashboard dựng workspace trong buổi; cảnh báo đi AMP → SNS không cần nó, metric ở AMP và log ở CloudWatch giữ qua các
+buổi.
 
 ## Compose
 
@@ -288,13 +290,14 @@ flowchart LR
   nhận `aps.amazonaws.com` làm publisher chỉ cho workspace của env. Alertmanager của AMP chỉ có receiver SNS, nên
   Telegram chỉ còn ở k3d. Cuối buổi `pre-destroy.sh` của `svp-infra` xoá các CR khi ACK còn chạy, nên luật trong AMP đi
   theo; CR mang `adoption-policy: adopt-or-create` để buổi sau nhận lại bản còn sót.
-- **Dashboard trên AMG:** workspace Amazon Managed Grafana `svp-<env>` đăng nhập bằng IAM Identity Center
-  (`svp-platform-admins` là Admin, `svp-platform-viewers` là Viewer). Với `dashboards.target: grafana-operator`, chart
+- **Dashboard trên AMG** (chỉ khi cờ `managed_grafana` khác `off`; ở `off`, `grafanaUrl` rỗng, chart nhận
+  `dashboards.target: none` và không render phần dưới): workspace Amazon Managed Grafana `svp-<env>` đăng nhập bằng IAM
+  Identity Center (`svp-platform-admins` là Admin, `svp-platform-viewers` là Viewer). Với `dashboards.target: grafana-operator`, chart
   render cho Grafana Operator (namespace `svp-obs`) một CR `Grafana` ngoài cluster trỏ `grafanaUrl`, token đọc từ Secret
   `grafana-operator` (ExternalSecret từ entry `svp/<env>/grafana-operator`; script buổi của `svp-infra` tạo token mới
   cho service account `svp-grafana-operator` mỗi buổi), hai data source (`prometheus` kiểu
-  `grafana-amazonprometheus-datasource` ký SigV4, `cloudwatch`) và năm dashboard của
-  `deploy/observability/grafana/dashboards/`. Hai panel đọc datasource `tempo` (TraceQL của `svp-red.json`, service map
+  `grafana-amazonprometheus-datasource` ký SigV4, `cloudwatch`) và mỗi dashboard của
+  `deploy/observability/grafana/dashboards/` một CR. Hai panel đọc datasource `tempo` (TraceQL của `svp-red.json`, service map
   của `svp-pipeline.json`) bị bỏ; panel `traces_service_graph_*` giữ. Tìm trace ở trang Traces của CloudWatch
   (Transaction Search); AMG đọc span bằng Logs Insights trên `aws/spans`, không có data source `xray` (plugin của nó
   không thấy trace khi Transaction Search bật).
@@ -310,7 +313,7 @@ flowchart LR
 - **Đường mạng:** private DNS của endpoint interface (`aps-workspaces`, `logs`, `xray`, `sts`, `eks-auth`…) phân giải
   tên API ra IP trong VPC. NetworkPolicy `allow-aws-apis-collector`, `allow-aws-apis-prometheus`, `allow-aws-apis-ack`
   mở TCP 443 tới `awsEndpointCidrs` (EKS: CIDR của VPC) và TCP 80 tới agent Pod Identity `169.254.170.23`; policy `ack`
-  không mở gì thêm. API của AMG không có endpoint interface, nên policy `grafana-operator` mở TCP 443 tới mọi địa chỉ
+  không mở gì thêm. API của AMG không có endpoint interface, nên policy `grafana-operator` (chỉ khi có AMG) mở TCP 443 tới mọi địa chỉ
   IPv4 công khai qua NAT, như `allow-alertmanager-telegram` ở k3d ([ADR-0064](../adr/0064-interface-endpoints.md) §6);
   cái giá: một Grafana Operator bị chiếm tới được mọi địa chỉ công khai ở cổng 443.
 - **Pyroscope, GlitchTip** ở lại trong cluster như k3d (AWS không có dịch vụ tương đương; AMG không tới được dịch vụ

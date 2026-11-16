@@ -33,7 +33,8 @@ ampWorkspaceId: ws-00000000-0000-0000-0000-000000000000
 ampEndpoint: https://aps-workspaces.ap-southeast-1.amazonaws.com/workspaces/ws-00000000-0000-0000-0000-000000000000/
 # Log group of the application telemetry, from the root env output of the observability module.
 logGroup: /svp/stg/otel
-# Grafana managed workspace URL without a trailing slash, from the root env output of the observability module.
+# Grafana managed workspace URL without a trailing slash, from the root env output of the observability module; "" where
+# the env has no Managed Grafana (svp-gitops then renders no Grafana Operator, dashboards or token).
 grafanaUrl: https://g-0000000000.grafana-workspace.ap-southeast-1.amazonaws.com
 # SNS topic that the alarms module of the root env publishes to.
 alarmTopicArn: arn:aws:sns:ap-southeast-1:000000000000:svp-stg-alarms

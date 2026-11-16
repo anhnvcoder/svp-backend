@@ -96,8 +96,9 @@ root `aws/baseline`:
 - S3 Block Public Access cấp account, bốn cờ bật.
 - EBS mã hoá mặc định ở region nhà và `us-east-1`. Ở `svp-stg`, `svp-prd` region nhà key mặc định là CMK `alias/svp-ebs` (root `aws/baseline`
   tạo), nơi khác là `aws/ebs`.
-- AWS Config ghi liên tục mọi loại tài nguyên, giao snapshot và lịch sử về bucket Config của Log Archive; account có cờ `config_recording`
-  = `off` (stg) không có recorder ([`paid-features.md`](paid-features.md)).
+- AWS Config ghi liên tục mọi loại tài nguyên, giao snapshot và lịch sử về bucket Config của Log Archive; account có cờ
+  `config_recording` = `off` (giữa các buổi mọi account trừ `svp-security`) không có recorder
+  ([`paid-features.md`](paid-features.md)).
 - Rule EventBridge `svp-security-*` chuyển sự kiện bảo mật sang account `svp-security`.
 
 Khác biệt giữa account (key EBS, có chuyển sự kiện đổi IAM, KMS, S3 hay không, region của rule đăng nhập root) là dữ liệu trong bảng
@@ -113,20 +114,22 @@ Root `aws/security` cấu hình các dịch vụ từ account `svp-security`, de
   Malware Protection for EC2. Agent runtime của node EKS là add-on `aws-guardduty-agent` do module `eks` cài, gửi sự kiện qua interface endpoint
   `guardduty-data` của module `network`: GuardDuty tự quản agent thì tự tạo endpoint và security group ngoài state Terraform, chặn destroy VPC
   cuối buổi. Bucket `uploads` của mỗi env có plan Malware Protection for S3 (module `media`), gắn tag kết quả quét lên object.
-- **Security Hub CSPM** cấu hình tập trung: một configuration policy `svp-security-standards` gắn root bật chuẩn AWS Foundational Security Best
-  Practices và CIS AWS Foundations Benchmark cho mọi account; region nhà gom finding của `us-east-1`. Account có cờ `security_hub` = `off`
-  (stg) gắn policy `svp-security-off` thay vào đó; `svp-security` không tắt được.
-- **AWS Config**: recorder của baseline ở mọi account có cờ `config_recording` = `always` (stg không có), aggregator `svp-org` ở
-  `svp-security`. Không conformance pack: chuẩn CIS của Security Hub đã đánh giá cùng các rule.
+- **Security Hub CSPM** cấu hình tập trung: một configuration policy `svp-security-standards` gắn root bật chuẩn AWS
+  Foundational Security Best Practices và CIS AWS Foundations Benchmark cho mọi account; region nhà gom finding của
+  `us-east-1`. Account có cờ `security_hub` = `off` (giữa các buổi mọi account trừ `svp-security`) gắn policy
+  `svp-security-off` thay vào đó; `svp-security` không tắt được.
+- **AWS Config**: recorder của baseline ở account có cờ `config_recording` = `always` (giữa các buổi chỉ
+  `svp-security`), aggregator `svp-org` ở `svp-security`. Không conformance pack: chuẩn CIS của Security Hub đã đánh giá
+  cùng các rule.
 - **IAM Access Analyzer** loại `ORGANIZATION` ở hai region: báo tài nguyên chia sẻ ra ngoài org.
 - **Amazon Inspector** ([ADR-0062](../adr/0062-ecr-registry-ci-oidc.md) §10) qua delegated admin `svp-security`, chỉ
   loại tài nguyên ECR, ở region nhà: cấu hình org (`aws/security/inspector.tf`) tự bật quét ECR cho mọi account thành
   viên có cờ `inspector_ecr` khác `off`, cả `svp-security`, `svp-log-archive`. Registry của account env có cờ đó quét
-  nâng cao liên tục chỉ trên repo của pull-through cache (image bên thứ ba); account có cờ = `off` (stg) dùng quét cơ
-  bản của ECR khi push. Repo phát hành đã qua trivy, grype trước push, rescan hằng ngày và admission đòi báo cáo dưới
-  hạn, nên không quét lại. Không EC2 (node thay mỗi buổi, AMI ghim, vá bằng nâng AMI) và không Lambda (lab không có).
-  Finding vào Security Hub. GuardDuty, CloudTrail, Access Analyzer không có cờ: stg tắt gì và bù bằng gì ở
-  [`paid-features.md`](paid-features.md).
+  nâng cao liên tục chỉ trên repo của pull-through cache (image bên thứ ba); account có cờ = `off` (stg; prd giữa các
+  buổi) dùng quét cơ bản của ECR khi push. Repo phát hành đã qua trivy, grype trước push, rescan hằng ngày và admission
+  đòi báo cáo dưới hạn, nên không quét lại. Không EC2 (node thay mỗi buổi, AMI ghim, vá bằng nâng AMI) và không Lambda
+  (lab không có). Finding vào Security Hub. GuardDuty, CloudTrail, Access Analyzer không có cờ: account nào tắt gì và bù
+  bằng gì ở [`paid-features.md`](paid-features.md).
 
 Phần không được giám sát và lý do (bastion không có agent runtime, volume mã hoá bằng `alias/svp-ebs` không được quét malware, management ngoài
 hai region, kể cả phiên `AssumeRoot` mở ở đó) ở phần Hệ quả của ADR-0060.
@@ -262,7 +265,7 @@ flowchart LR
     subgraph mgmt["management"]
         trail["Trail org svp-audit<br/>mọi account, mọi region"]
     end
-    subgraph every["mọi account có config_recording always<br/>stg không có"]
+    subgraph every["account có config_recording always<br/>giữa các buổi chỉ svp-security"]
         config["Config recorder<br/>module security-baseline"]
     end
     subgraph sec["svp-security"]
@@ -339,9 +342,10 @@ flowchart LR
   của Inspector chỉ ở Security Hub, không tới email: người học đọc nó cùng bảng Security Hub. Finding của control FSBP,
   CIS không tới email: Security Hub gửi lại sự kiện mỗi lần đánh giá lại, email sẽ lặp; người học đọc bảng Security Hub
   theo runbook.
-- Account có cờ `security_hub` = `off` (stg) không có đường trên: rule `svp-security-guardduty-findings` ở hai region của `svp-security`
-  lấy finding GuardDuty mức ≥ 7 của account đó; ở `us-east-1` nó gửi qua bus `svp-security-events` (role
-  `svp-security-guardduty-forwarder`), nên email của đường đó là dòng chung của rule `svp-security-notify`.
+- Account có cờ `security_hub` = `off` (giữa các buổi: management, `svp-log-archive`, `svp-backup`, stg, prd) không có
+  đường trên: rule `svp-security-guardduty-findings` ở hai region của `svp-security` lấy finding GuardDuty mức ≥ 7 của
+  các account đó; ở `us-east-1` nó gửi qua bus `svp-security-events` (role `svp-security-guardduty-forwarder`), nên
+  email của đường đó là dòng chung của rule `svp-security-notify`.
 - Input transformer ghi tên sự kiện hay tiêu đề finding, account, region, principal, mã lỗi và URL runbook
   [`security-alert.md`](../runbooks/security-alert.md), nên email đủ để bắt đầu phân loại.
 - Topic SNS dùng module `alarms` như alarm của dịch vụ managed; publisher là `events.amazonaws.com` thay vì CloudWatch.

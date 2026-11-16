@@ -417,7 +417,9 @@ Loại tài liệu (Diátaxis): **reference**, tra cứu khi cần một lệnh 
     thư mục tạm), cộng overlay và file image của từng môi trường `envs/<stg|prd>/` ([ADR-0024](../adr/0024-multi-environment.md);
     prd chỉ render) và root chart `argocd/apps` của bản clone theo env × nền tảng × kiến trúc node (từ chối `targetRevision` tên ngắn
     vào `svp-gitops`; env nào trên nền tảng nào đọc từ khoá `platforms` của `components.json`, hôm nay stg trên `k3d`, `eks`, prd chỉ
-    `eks`; `cluster` của `eks` lấy từ `deploy/ci/cluster-values.example.yaml`; render của nền tảng không `localHosts`, tức `eks`, không
+    `eks`; `cluster` của `eks` lấy từ `deploy/ci/cluster-values.example.yaml`, rồi render lại một lượt với
+    `grafanaUrl: ""` (chồng `cluster-values-off.example.yaml`; Application `grafana-operator` phải vắng);
+    render của nền tảng không `localHosts`, tức `eks`, không
     được nêu `svp.localhost`: grep cả render và policy `no-lab-hosts`); chart của working tree đứng thay `revision` của mọi env, nên không kiểm
     revision, giá trị dẫn xuất hay bản phát hành (việc của check `svp-gitops`);
     Secret của đường GitOps ([ADR-0026](../adr/0026-secrets-gitops.md)): render gốc của `svp-cluster` (đường dev) không có
@@ -649,6 +651,8 @@ Môi trường chạy: script chạy trong GitHub Actions và đọc thẳng bi�
 
 - **`deploy/ci/cluster-values.example.yaml`** là ví dụ giá trị `cluster` của Application gốc `svp-root` trên nền tảng `eks`: cái phụ thuộc tài khoản AWS hay một phiên, không bao giờ vào git. Output `cluster_values` của repo hạ tầng cho map thật, bootstrap GitOps đặt nó lên root, và các template `platforms/eks/<tên>.values.tpl` của `svp-gitops` biến nó thành values của từng component.
   `deploy/ci/gitops-check.sh` render nền tảng `eks` với file này thay vào, nên mọi khoá của hợp đồng có ở đây, mỗi khoá một giá trị đúng dạng mà không gọi tên gì thật: dải riêng tư (RFC 1918), dải địa chỉ tài liệu (RFC 5737) cho địa chỉ công khai, định danh và tài khoản toàn số 0, tên miền dành riêng `example` (RFC 2606), và tài khoản giả `111111111111` trong ARN của các role.
+  `deploy/ci/cluster-values-off.example.yaml` chỉ đặt `grafanaUrl: ""` (môi trường không có Managed Grafana) và chồng
+  lên file trên ở lượt render thứ hai của `gitops-check.sh`.
   Thêm một khoá vào hợp đồng thì thêm nó ở đây, vào output đó, vào các template và vào bảng của hợp đồng.
 - **`deploy/ci/drill/vulnerable.Dockerfile`** (`drill-vulnerable`): image build chỉ để diễn tập admission. Nó không bao giờ được chạy: không chart nào trỏ tới nó, và Kyverno phải từ chối nó vì attestation `vuln` đã ký của nó liệt kê lỗ hổng CRITICAL. Build qua cùng pipeline hai kiến trúc như các service, nên các phát hiện CRITICAL là khác biệt duy nhất với một bản phát hành.
   Base cố ý cũ và giữ cũ (Renovate bỏ qua thư mục này): Alpine 3.12.0 (2020), ghim bằng digest của index đa kiến trúc, mà trivy báo CRITICAL trên cả `linux/amd64` và `linux/arm64` (apk-tools CVE-2021-36159, OpenSSL CVE-2021-3711, zlib CVE-2022-37434). Không thêm bí mật nào: cổng bí mật vẫn áp cho image này.
