@@ -269,15 +269,27 @@ check_root "platforms: the tree, each environment on each platform of components
   "ok    argocd/apps for prd on eks on arm64 and amd64 nodes: one Application per component that runs there" "$(copy)"
 check_root "platforms: an environment left out of a platform is not rendered there, and says why" 0 \
   "skip  prd on k3d: prd is not in envs of platform k3d (key platforms of components.json)" "$(copy)"
-# With grafanaUrl "" in the cluster map the root leaves out Application grafana-operator: the check renders eks that way
-# too, and a root chart that still makes it fails.
+# With grafanaUrl "" in the cluster map the root leaves out Application grafana-operator: the check renders eks alone
+# that way too, each line of that pass naming the form, and a root chart that still makes it fails.
 check_root "platforms: eks rendered again with an empty grafanaUrl" 0 \
-  'note  again with grafanaUrl "" in the cluster map of eks' "$(copy)"
+  'ok    argocd/apps for prd on eks (grafanaUrl "") on arm64 and amd64 nodes' "$(copy)"
+name='platforms: the pass with an empty grafanaUrl renders eks alone, each line naming the form'
+if out=$("$here/gitops-check.sh" --root "$(copy)" 2>&1); then
+  # The copy pins no environment: one pass of each form, the second after its note, then the line of the tree.
+  off=$(sed -n '/^note  again for eks alone/,$p' <<<"$out" | sed '1d;$d')
+  if [ -z "$off" ] || grep -q 'on k3d' <<<"$off" || grep -v -F '(grafanaUrl "")' <<<"$off" | grep -q .; then
+    fail "$name:"$'\n'"$(sed 's/^/      /' <<<"$out")"
+  else
+    ok "$name"
+  fi
+else
+  fail "$name: gitops-check.sh --root failed:"$'\n'"$(sed 's/^/      /' <<<"$out")"
+fi
 t=$(copy)
 # shellcheck disable=SC2016 # text of the template
 if replace_once "$t/argocd/apps/templates/applications.yaml" '{{- if eq (get $cluster "grafanaUrl") "" }}' '{{- if false }}'; then
   check_root "platforms: a root chart that makes grafana-operator without a Managed Grafana" 1 \
-    "makes the Applications" "$t"
+    'on eks (grafanaUrl "") on arm64 nodes makes the Applications' "$t"
 else
   fail "platforms: the root chart of $tree no longer holds the line the case of an empty grafanaUrl changes"
 fi

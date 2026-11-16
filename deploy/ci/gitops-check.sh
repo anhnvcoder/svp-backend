@@ -515,38 +515,43 @@ level_one() {
   if ! helm lint --quiet "$tree/argocd/root" "$@" >"$tmp/err" 2>&1 ||
     ! helm template svp-root "$tree/argocd/root" "$@" >"$top" 2>"$tmp/err"; then
     grep -v 'found symbolic link in path' "$tmp/err" >&2 || true
-    fail "helm lint and template of argocd/root for $env on $plat on $arch nodes"
+    fail "helm lint and template of argocd/root for $env on $plat$form on $arch nodes"
   fi
   yaml_json "$top" | jq -cs '[.[] | select(.kind == "Application")]' >"$tmp/render/level1-$env-$plat-$arch.json" ||
-    fail "read the Applications of argocd/root for $env on $plat on $arch nodes"
+    fail "read the Applications of argocd/root for $env on $plat$form on $arch nodes"
   got=$(jq -r '[.[].metadata.name] | join(" ")' "$tmp/render/level1-$env-$plat-$arch.json")
   [ "$got" = svp-apps ] ||
-    fail "argocd/root for $env on $plat on $arch nodes makes the Applications '$got', want svp-apps alone"
+    fail "argocd/root for $env on $plat$form on $arch nodes makes the Applications '$got', want svp-apps alone"
   got=$(short_refs "$top")
   [ -z "$got" ] ||
-    fail "argocd/root for $env on $plat on $arch nodes: every source of $gitops_url must name a full ref (refs/heads/<branch>) or a commit as targetRevision, not $got (Argo CD may resolve a short name to a tag of that name)"
+    fail "argocd/root for $env on $plat$form on $arch nodes: every source of $gitops_url must name a full ref (refs/heads/<branch>) or a commit as targetRevision, not $got (Argo CD may resolve a short name to a tag of that name)"
   source=$(jq -r '.[0].spec | if has("sources") then "several sources" else
     [.source.repoURL, .source.path, .source.targetRevision, .source.helm.valuesObject.targetRevision] | map(. // "") | join(" ") end' \
     "$tmp/render/level1-$env-$plat-$arch.json")
   [ "$source" = "$gitops_url argocd/apps $want $want" ] ||
-    fail "argocd/root for $env on $plat on $arch nodes: svp-apps has '$source' (repoURL, path, targetRevision, valuesObject.targetRevision), want '$gitops_url argocd/apps $want $want': the commit envs/$env/charts.yaml pins as gitopsRevision, refs/heads/main without one"
+    fail "argocd/root for $env on $plat$form on $arch nodes: svp-apps has '$source' (repoURL, path, targetRevision, valuesObject.targetRevision), want '$gitops_url argocd/apps $want $want': the commit envs/$env/charts.yaml pins as gitopsRevision, refs/heads/main without one"
   jq -e '.[0].spec.source.helm.valuesObject | objects' "$tmp/render/level1-$env-$plat-$arch.json" >"$tmp/render/level2-$env-$plat-$arch.json" ||
-    fail "argocd/root for $env on $plat on $arch nodes: svp-apps has no valuesObject"
+    fail "argocd/root for $env on $plat$form on $arch nodes: svp-apps has no valuesObject"
 }
 
 # render_tree GTREE ENVS PIN: steps 2 to 4 for the environments ENVS, whose argocd/, base/ and platforms/ are those of
 # GTREE (the tree, or the commit PIN of svp-gitops the one environment of ENVS pins, unpacked), their envs/<env>/ the
 # tree's.
 render_tree() {
-  local gtree=$1 envs=$2 pin=$3 apps=argocd/apps vt
+  local gtree=$1 envs=$2 pin=$3 apps=argocd/apps vt form= only=
   [ -z "$pin" ] || apps="argocd/apps at ${pin:0:12}"
+  # Only eks reads the cluster map, so the form off renders eks alone; form ends every name of a target, so a line of
+  # that pass says which pass it belongs to.
+  [ "$cluster_form" != off ] || { form=' (grafanaUrl "")' only=eks; }
   vt=$(mktemp -d "$tmp/view.XXXXXX") || fail "create a directory for the render of $envs"
   components=$gtree/argocd/apps/components.json
 
   # The platform layer, as the policies hold it: targets is each environment with the platform the root is rendered
   # for, <env>:<platform>, in the order of the map.
-  platform_names=$(jq -r '.platforms | keys | join(" ")' "$components")
-  targets=$(jq -r --arg envs " $envs " '[.platforms | to_entries[] | .key as $p | .value.envs[] as $e
+  platform_names=$(jq -r --arg only "$only" '.platforms | keys | map(select($only == "" or . == $only)) | join(" ")' \
+    "$components")
+  targets=$(jq -r --arg envs " $envs " --arg only "$only" '[.platforms | to_entries[] | .key as $p
+    | select($only == "" or $p == $only) | .value.envs[] as $e
     | select($envs | contains(" \($e) ")) | "\($e):\($p)"] | join(" ")' "$components")
   # local_hosts PLATFORM: the renders of PLATFORM may name the lab's *.svp.localhost (its localHosts).
   local_hosts() {
@@ -642,12 +647,13 @@ render_tree() {
   for plat in $platform_names; do
     for env in $envs; do
       [[ " $targets " == *" $env:$plat "* ]] ||
-        echo "skip  $env on $plat: $env is not in envs of platform $plat (key platforms of components.json), so its root is not rendered there"
+        echo "skip  $env on $plat$form: $env is not in envs of platform $plat (key platforms of components.json), so its root is not rendered there"
     done
   done
+  [ -n "$targets" ] || [ -z "$form" ] || return 0
   for target in $targets; do
     env=${target%%:*} plat=${target#*:}
-    tag=$env-$plat label="$env on $plat"
+    tag=$env-$plat label="$env on $plat$form"
     for arch in arm64 amd64; do
       root=$tmp/render/root-$tag-$arch.yaml
       # The values the bootstrap gives the root: on eks the GitOps Bridge sets cluster from the cluster Secret's
@@ -799,12 +805,13 @@ render_tree() {
   # --- 3. the charts of this repository
   jq -r '.components[] | select(.path) | [.name, .namespace, .path, (.values // "")] | @tsv' "$components" >"$vt/charts"
   while IFS=$'\t' read -r name ns path values; do
+    on_targets=0
     for env in $envs; do
       chart=$(code_of "$env")/$path
-      [ -d "$chart" ] || fail "component $name: no chart $path at $(label_of "$env") (charts of envs/$env)"
+      [ -d "$chart" ] || fail "component $name: no chart $path at $(label_of "$env")$form (charts of envs/$env)"
       # base/ alone, as the dev path installs a component of k3d. Alone, base/ has no image for a release of chart
       # svp-service: a placeholder renders it as the dev path's does.
-      if runs_on "$name" "$dev_platform"; then
+      if [ -z "$form" ] && runs_on "$name" "$dev_platform"; then
         args=(--namespace "$ns")
         [ -z "$values" ] || args+=(-f "$gtree/$values")
         [ "$path" != "$service_chart" ] || args+=(--set-string "image.repository=$(placeholder_repo "$name" "$(revision_of "$env")")"
@@ -824,25 +831,30 @@ render_tree() {
         if ! helm lint --quiet "$chart" "${args[@]}" >"$tmp/err" 2>&1 ||
           ! helm template "$name" "$chart" "${args[@]}" >"$tmp/render/t-$env-$plat-$name.yaml" 2>"$tmp/err"; then
           cat "$tmp/err" >&2
-          fail "helm lint and template of $name ($path at $(label_of "$env")) with the values of $env on $plat"
+          fail "helm lint and template of $name ($path at $(label_of "$env")) with the values of $env on $plat$form"
         fi
+        on_targets=$((on_targets + 1))
       done
     done
-    echo "ok    $name: $path with base/ alone and with the values of each environment on each platform"
+    if [ -z "$form" ]; then
+      echo "ok    $name: $path with base/ alone and with the values of each environment on each platform"
+    elif [ "$on_targets" -gt 0 ]; then
+      echo "ok    $name: $path with the values of each environment on eks$form"
+    fi
   done <"$vt/charts"
   # Real names in every render of a platform without localHosts.
   real=() real_targets=
   for target in $targets; do
     env=${target%%:*} plat=${target#*:}
     ! local_hosts "$plat" || continue
-    real_targets+="${real_targets:+, }$env on $plat"
+    real_targets+="${real_targets:+, }$env on $plat$form"
     for f in "$tmp/render/t-$env-$plat"-*.yaml "$tmp/render/root-$env-$plat"-*.yaml; do
       [ ! -f "$f" ] || real+=("$f")
     done
   done
   if [ ${#real[@]} -gt 0 ] && grep -n 'svp\.localhost' "${real[@]}" >"$tmp/leftover"; then
     sed "s|^$tmp/render/||" "$tmp/leftover" >&2
-    fail "the render above still names svp.localhost on a platform without localHosts in components.json: override it in envs/<env>/ or platforms/<platform>/"
+    fail "the render$form above still names svp.localhost on a platform without localHosts in components.json: override it in envs/<env>/ or platforms/<platform>/"
   fi
   # The same rule as a policy, where traffic comes in and in the settings of a service, on the charts' renders of each
   # such environment on its platform (the grep above reads every byte; the policy reads the fields).
@@ -853,7 +865,7 @@ render_tree() {
     set -- "$tmp/render/t-$env-$plat"-*.yaml
     [ -f "$1" ] || continue
     kyverno_apply "$tmp/render" no-lab-hosts "$@" >"$tmp/lab" ||
-      { cat "$tmp/lab" >&2; fail "policy no-lab-hosts: the render of $env on $plat above names svp.localhost where traffic comes in or in a setting of a service"; }
+      { cat "$tmp/lab" >&2; fail "policy no-lab-hosts: the render of $env on $plat$form above names svp.localhost where traffic comes in or in a setting of a service"; }
     lab_checked=$((lab_checked + kyverno_checked))
   done
   echo "ok    ${real_targets:-no render}: no svp.localhost in the render of the root or of any chart of the code repository (no localHosts on their platform); policy no-lab-hosts passes on the $lab_checked resources of those charts"
@@ -888,7 +900,7 @@ render_tree() {
   printf '%s\n' '# json {{ toJson .Values }}' >"$vt/mv/templates/values.yaml"
   for target in $targets; do
     env=${target%%:*} plat=${target#*:}
-    tag=$env-$plat label="$env on $plat"
+    tag=$env-$plat label="$env on $plat$form"
     runs_on svp-cluster "$plat" || continue
     code=$(code_of "$env")
     args=(--namespace cert-manager)
@@ -958,11 +970,13 @@ render_tree() {
     for target in $targets; do
       env=${target%%:*} plat=${target#*:}
       if [ "$(revision_of "$env")" = "$rev" ]; then
-        code=$(code_of "$env") label=$(label_of "$env")
+        code=$(code_of "$env") label=$(label_of "$env")$form
         rev_targets+=" $target"
         mkdir -p "$out/env/$env-$plat" "$out/platform/$plat"
       fi
     done
+    # The form off renders no revision without an environment on eks.
+    [ -n "$rev_targets" ] || [ -z "$form" ] || continue
     rev_platforms=$(for target in $rev_targets; do echo "${target#*:}"; done | grep . | sort -u | paste -sd ' ' -) || true
     rendered=0 platformed=0 overlays=0
     while IFS=$sep read -r name namespace path repo chart version values; do
@@ -1087,14 +1101,14 @@ render_tree() {
     [ -z "$drift$missing" ] || digest_problems=1
   done
   [ -z "$digest_problems" ] || fail "image digests (above)"
-  echo "ok    every image is pinned by digest (policy images-pinned); every overlay runs the images of what it adds to"
+  echo "ok    every image${form:+ of the renders on eks$form} is pinned by digest (policy images-pinned); every overlay runs the images of what it adds to"
 }
 
-# render_tree_off GTREE ENVS PIN: render_tree again with an empty grafanaUrl in the cluster map of eks, the form of an
-# environment without Managed Grafana, when GTREE has the platform eks.
+# render_tree_off GTREE ENVS PIN: render_tree again for the environments of ENVS on eks alone, with an empty grafanaUrl
+# in the cluster map, the form of an environment without Managed Grafana, when GTREE has the platform eks.
 render_tree_off() {
   jq -e '.platforms.eks' "$1/argocd/apps/components.json" >/dev/null || return 0
-  echo "note  again with grafanaUrl \"\" in the cluster map of eks (deploy/ci/cluster-values-off.example.yaml)"
+  echo "note  again for eks alone, with grafanaUrl \"\" in the cluster map (deploy/ci/cluster-values-off.example.yaml)"
   cluster_form=off
   render_tree "$@"
   cluster_form=url
