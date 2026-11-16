@@ -34,7 +34,7 @@ dịch vụ, tiêu đề, account, region. Phân loại theo nhóm của rule:
 | Bị guardrail từ chối | `svp-security-denied-iam`, `svp-security-denied-detection`, `svp-security-denied-storage` | mã lỗi `AccessDenied…` hay `Client.UnauthorizedOperation` | Ai đó thử việc mà `svp-protect-baseline`, `svp-deny-iam-users` chặn: tạo IAM user, access key, tắt dịch vụ phát hiện, đổi S3 BPA, EBS mặc định, key `alias/svp-ebs`. Guardrail đã giữ; câu hỏi là ai thử và vì sao |
 | Đổi quản trị | `svp-security-admin-iam`, `svp-security-admin-kms-s3`, `svp-security-admin-sso` (management, `svp-log-archive`, `svp-security`) | lệnh IAM, KMS, S3, Identity Center, không mã lỗi | IAM, key, bucket hay permission set của ba account không chạy workload đổi; hợp lệ khi đang `apply` root cấp org |
 | Finding | `svp-security-findings` | `svp-security finding HIGH` hay `CRITICAL` | GuardDuty thấy hành vi đáng ngờ (credential dùng lạ, trao đổi với địa chỉ độc hại, malware), hay Access Analyzer thấy tài nguyên chia sẻ ra ngoài org |
-| Finding của account `security_hub` `off` | `svp-security-guardduty-findings` | `svp-security finding <mức> GuardDuty: <tiêu đề>, account <id> region <region>`; finding của `us-east-1` đến dưới dạng dòng chung `svp-security: GuardDuty Finding …` của rule `svp-security-notify` | GuardDuty thấy hành vi đáng ngờ ở account không có Security Hub (stg): finding mức HIGH, CRITICAL của account đó chỉ tới qua rule này, không qua `svp-security-findings`. Ý nghĩa như dòng Finding |
+| Finding của account `security_hub` `off` | `svp-security-guardduty-findings` | `svp-security finding <mức> GuardDuty: <tiêu đề>, account <id> region <region>`; finding của `us-east-1` đến dưới dạng dòng chung `svp-security: GuardDuty Finding …` của rule `svp-security-notify` | GuardDuty thấy hành vi đáng ngờ ở account không có Security Hub (giữa các buổi: management, `svp-log-archive`, `svp-backup`, stg, prd): finding mức HIGH, CRITICAL của account đó chỉ tới qua rule này, không qua `svp-security-findings`. Ý nghĩa như dòng Finding |
 
 Người dùng của lab không thấy gì: cảnh báo không đổi đường request. Tác động là ở account: credential, log hay dữ liệu có thể đang bị dùng.
 Control FSBP, CIS bị FAILED không gửi email; đọc định kỳ ở mục [Đọc bảng Security Hub định kỳ](#đọc-bảng-security-hub-định-kỳ).
@@ -48,7 +48,7 @@ AWS (người học chạy), theo thứ tự:
 ```sh
 # 1. Có apply nào của người học đang chạy hay vừa chạy không? Có thì so tên lệnh trong email với plan đã đọc.
 # 2. Finding mới, còn mở, HIGH và CRITICAL của mọi account có Security Hub (gom us-east-1 về region nhà);
-#    account có cờ `security_hub` = `off` (stg) không có finding ở đây: xem ở bước 3 (GuardDuty)
+#    account `security_hub` = `off` (giữa các buổi mọi account trừ svp-security) không có finding ở đây: xem bước 3
 sec securityhub get-findings --filters '{"SeverityLabel":[{"Value":"HIGH","Comparison":"EQUALS"},{"Value":"CRITICAL","Comparison":"EQUALS"}],"RecordState":[{"Value":"ACTIVE","Comparison":"EQUALS"}],"WorkflowStatus":[{"Value":"NEW","Comparison":"EQUALS"}]}' --sort-criteria Field=UpdatedAt,SortOrder=desc --query 'Findings[].[UpdatedAt,Severity.Label,ProductName,AwsAccountId,Region,Title,Id,ProductArn]' --output text --max-items 20
 # Bước 3, 4 chạy ở region của finding (cột Region ở bước 2; account `off`: region trong email)
 FR=ap-southeast-1   # hay us-east-1
@@ -81,7 +81,8 @@ Trail giao log vài phút sau sự kiện: bước 6 chưa thấy gì thì chờ
 ENV=stg; ID=$([ "$ENV" = stg ] && echo "$SVP_AWS_STG_ACCOUNT_ID" || echo "$SVP_AWS_PRD_ACCOUNT_ID")
 ro() { AWS_PROFILE=anhnv-$ENV-ro aws --region ap-southeast-1 "$@"; }
 ro sts get-caller-identity   # account là $ID
-# 7. Baseline còn nguyên: bốn cờ true, EBS mã hoá mặc định true, recorder đang ghi
+# 7. Baseline còn nguyên: bốn cờ true, EBS mã hoá mặc định true;
+#    recorder đang ghi khi config_recording của account là always, rỗng khi off (aws/paid-features.json)
 ro s3control get-public-access-block --account-id "$ID" --query 'PublicAccessBlockConfiguration'
 ro ec2 get-ebs-encryption-by-default
 ro configservice describe-configuration-recorder-status --query 'ConfigurationRecordersStatus[].[name,recording,lastStatus]' --output text
@@ -127,7 +128,8 @@ Dấu ngoặc giữ credential tạm trong subshell, không còn trong terminal 
 
 ## Khôi phục và xác nhận
 
-- Bước 7 cho baseline nguyên vẹn ở stg, prd; bước 8 rỗng; bước 2 không còn finding `NEW` của sự cố.
+- Bước 7 cho baseline nguyên vẹn ở stg, prd (recorder theo cờ `config_recording` của account); bước 8 rỗng; bước 2 không còn
+  finding `NEW` của sự cố.
 - Thay đổi lạ đã hoàn tác bằng `apply` của root sở hữu nó, và plan lần sau của root đó `No changes`.
 - Cảnh báo thử của `org-security-setup.md` vẫn tới email (đường cảnh báo còn chạy).
 
@@ -149,8 +151,9 @@ Dấu ngoặc giữ credential tạm trong subshell, không còn trong terminal 
 
 ## Đọc bảng Security Hub định kỳ
 
-Control FAILED của FSBP, CIS không tới email. Mỗi tuần, và sau mỗi buổi stg, prd, đọc control FAILED còn mở của mọi account, hai region. Lệnh
-không đặt `--max-items`: CLI đọc hết mọi trang.
+Control FAILED của FSBP, CIS không tới email. Mỗi tuần, và cuối buổi prd trước khi prd về giá trị rẻ (tắt Security Hub
+xoá dần finding của account), đọc control FAILED còn mở của mọi account có Security Hub, hai region; giữa các buổi đó
+chỉ là `svp-security`. Lệnh không đặt `--max-items`: CLI đọc hết mọi trang.
 
 ```sh
 # Số finding FAILED theo control và mức

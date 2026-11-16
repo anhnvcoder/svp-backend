@@ -149,9 +149,7 @@ ngưỡng ở dịch vụ EC2, EKS. Không tính phí (FAQ: "no effort or cost" 
 Lúc không buổi, năm account, hai region (bảng giá `ap-southeast-1`, `us-east-1` từ AWS Price List API và trang giá, đọc 2026-11-12; cách ước ở
 phụ lục): Security Hub CSPM ~$9 (khoản lớn nhất), KMS ~$6 (sáu key mới), GuardDuty ~$2,4, Config ~$1,5, S3 log ~$1,1, còn lại $0: **~$20 mỗi tháng**
 (khoảng $15–30); 30 ngày đầu GuardDuty, Security Hub dùng thử. Mỗi buổi thêm ~$4–8 (item Config, check Security Hub, Runtime Monitoring, EKS Audit
-Log, flow log; prd thêm data event). Giữ tối thiểu: tài nguyên toàn cục chỉ ghi ở region nhà; control dùng chung rule Config của FSBP và CIS chỉ
-tính một lần [N8]; tắt control không áp dụng; data event chỉ bucket người dùng của prd, `media` chỉ ghi; flow log Parquet; không conformance pack,
-không analyzer truy cập không dùng.
+Log, flow log; prd thêm data event). Giữ tối thiểu mà vẫn đúng chuẩn: phụ lục §12.
 
 ### Hệ quả
 
@@ -198,3 +196,5 @@ Phụ lục: [`appendix/0060-org-detection-logging.md`](appendix/0060-org-detect
 - §7: [0061](0061-edge-cloudfront-waf-acm.md): thêm bucket `svp-cloudfront-<log>-us-east-1` (log CloudFront v2, khuôn bucket log WAF, key `us-east-1`) cùng delivery destination mỗi env và policy của nó ở `us-east-1`; `SvpLogReader` đọc bucket đó.
 - §1–§4, §12: [0067](0067-backup-dr.md): `svp-backup` nhận GuardDuty, Security Hub, Config, Inspector như mọi account thành viên; chi phí liên tục thêm ~$2,2 mỗi tháng cho account này.
 - §3, §4, §10, §12: [0071](0071-paid-features.md): Security Hub CSPM (configuration policy `svp-security-off`) và Config của từng account theo cờ `security_hub`, `config_recording` của `aws/paid-features.json` (stg tắt, account khác bật; `svp-security` không tắt được Security Hub); rule `svp-security-guardduty-findings` ở hai region của `svp-security` gửi email finding GuardDuty mức ≥ 7 của account có `security_hub` = `off`; chi phí liên tục bớt ~$2,1 mỗi tháng (stg).
+- §3, §4, §10, §12: [0078](0078-paid-features-lean-defaults.md): management, `svp-log-archive`, prd cũng `off`; giữa các
+  buổi chỉ `svp-security` có Security Hub, Config; chi phí liên tục bớt ~$6,3 mỗi tháng.

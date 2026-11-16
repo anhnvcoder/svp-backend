@@ -72,8 +72,7 @@ recovery point hoàn tất gần nhất khi mọi job thành công; tính từ c
   ghi; root `aws/backup` chạy từ management qua `OrganizationAccountAccessRole`. Baseline, contact SECURITY, GuardDuty (`ALL`), Security Hub
   (policy gắn root), Config áp như mọi account; Inspector nhận nó khi `aws/security` apply lại. `SvpReadOnly` gán thêm đọc đủ metadata vault,
   recovery point, job [N32], [N33]. **Quản lý ở Organizations**: trusted access `backup.amazonaws.com`, `BACKUP_POLICY`, cross-account backup
-  bật ở management, có hiệu lực cho mọi account thành viên [N1]. Không delegated administrator (Control Tower tách Backup Administrator,
-  Central Backup [N41]; lab gộp đích vào `svp-backup`, management giữ policy như SCP, RCP).
+  bật ở management, có hiệu lực cho mọi account thành viên [N1]. Không delegated administrator (lý do: phụ lục §3).
 - **Opt-in loại tài nguyên** ở management (plan của Backup policy theo opt-in của management, đè account thành viên chỉ cho plan đó [N3]) và
   mỗi account env: map đủ mọi loại AWS Backup hỗ trợ ở Singapore [N15], khoá viết như API trả (phụ lục §3), mọi khoá `true` vì account dùng
   AWS Backup lần đầu được opt-in mọi loại hỗ trợ lúc đó [N13]; `RDS`, `S3` là hai loại cần. Selection theo loại kèm tag thì opt-in không xét [N14].
@@ -97,7 +96,6 @@ recovery point hoàn tất gần nhất khi mọi job thành công; tính từ c
   `svp-prd-copy` ở `aws/backup`, qua **Module backup** với key của **Key vault**. AWS Backup mã hoá lại bản copy bằng key của vault đích [N1],
   [N2]: bản copy dùng được khi key RDS, key vault env đã xoá. Vault access policy của vault copy: `Allow` `backup:CopyIntoBackupVault` cho
   `arn:aws:iam::<account env>:root`, `Resource "*"`, không điều kiện thêm [N1]; action khác từ account khác bị từ chối bất kể policy [N18].
-  Lock governance gỡ được bằng quyền IAM `DeleteBackupVaultLockConfiguration` (gỡ lab); compliance không gỡ được sau grace time [N17].
 - AWS Backup không restore chéo account: copy về account đích rồi restore [N1]. Runbook mất account env thêm lúc sự cố (không có sẵn, để account
   env không chạm bản copy): statement của key `alias/svp-backup-copy` cho account đích, vault access policy của vault đích, role copy.
 - **Module backup**: alarm `svp-<env>-backup-job-failed`, `svp-<env>-backup-copy-failed` là query Metrics Insights
@@ -132,9 +130,8 @@ request KMS giảm tới 99 % [N30]). Quyền trên đúng ARN key: video-servic
 
 ### 9. Diễn tập PITR và kiểm dữ liệu
 
-- **Kiểm dữ liệu** mỗi bảng do migration của video, engagement, feed tạo, qua **svp-pg**: `count(*)` và `md5` các dòng `xmin::text || ':' ||
-  t::text` xếp thứ tự. PITR của RDS dựng từ snapshot volume và log giao dịch [N23], [N24] (khôi phục file rồi replay WAL [N28]); `xmin` nằm trong
-  header tuple trên trang [N26], [N27], nên bản khôi phục giữ nó và digest đổi khi có INSERT, UPDATE, DELETE, kể cả trả lại giá trị cũ.
+- **Kiểm dữ liệu** mỗi bảng do migration của video, engagement, feed tạo, qua **svp-pg**: `count(*)` và `md5` các dòng
+  `xmin::text || ':' || t::text` xếp thứ tự; vì sao bản khôi phục giữ `xmin`: phụ lục §9.
 - **Diễn tập PITR** (khi không tải): S1 xong lúc t1, T_r = t1 làm tròn lên giây; chờ `LatestRestorableTime` ≥ T_r; S2 trên nguồn, S1 ≠ S2 là FAIL
   không restore; T0 = gọi restore `--restore-time T_r` ra `svp-<env>-pitr` (cùng subnet group, security group, parameter group, lớp; một AZ); R
   trên bản khôi phục xong lúc T1; RTO = T1 − T0, RPO = T0 − LRT đọc ngay trước T0. PASS khi R = S1 và trong §2; R ≠ S1 là FAIL "restore khác mẫu
@@ -157,8 +154,7 @@ kiện cuối không phải `backup-drained`, không cờ bỏ qua. Vault và b�
 
 ### 12. Mất region: ngoài phạm vi
 
-Mất `ap-southeast-1` là mất dữ liệu từ lần backup cuối; env dựng lại từ IaC ở region khác không dữ liệu. Copy sang `us-east-1` (SCP đã cho) thêm
-~$2–3 mỗi tháng ở mức lab (CMK, $0,09 mỗi GB chuyển [N37]); cái giá thật là đường dựng env ở region thứ hai và RTO giờ tới ngày (phụ lục §12).
+Mất `ap-southeast-1` là mất dữ liệu từ lần backup cuối; env dựng lại từ IaC ở region khác không dữ liệu. Phụ lục §12.
 
 ### 13. Chi phí
 
@@ -198,3 +194,7 @@ Sống giữa buổi ~$4,4 mỗi tháng (ba CMK $3, bản copy ~$1,3, Config ~$0
 ## Thông tin thêm
 
 Phụ lục: [`appendix/0067-backup-dr.md`](appendix/0067-backup-dr.md) (phương án, giá trị → nguồn, JSON policy, chi phí, FSBP, SCP, RCP).
+
+### Chỉnh bởi
+
+- §3, §13, Hệ quả: [0078](0078-paid-features-lean-defaults.md): `svp-backup` tắt Security Hub, Config: bớt ~$2,1 (GuardDuty ~$0,05 còn).

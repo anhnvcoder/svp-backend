@@ -176,3 +176,24 @@ Chỉnh: 0055 §1, §2, §6; 0060 §3, §4, §10, §12; 0062 §10; 0063 §4, §1
 ## Thông tin thêm
 
 Phụ lục: [`appendix/0071-paid-features.md`](appendix/0071-paid-features.md) (phương án, kho mục, bảng tháng không buổi, đổi cờ, nguồn).
+
+### Chỉnh bởi
+
+- §1, §2: [0078](0078-paid-features-lean-defaults.md): file ghi giá trị rẻ nhất hợp lệ cho mọi account; `security` vắng
+  (`validation`); khoá vắng vẫn là giá trị production.
+- §3: [0078](0078-paid-features-lean-defaults.md): prd cũng `session`; thêm `off` không chạy Grafana nào (`grafanaUrl`
+  rỗng), mặc định của stg, prd khi hiện thực.
+- §4: [0078](0078-paid-features-lean-defaults.md): prd cũng `off`: digest bên thứ ba chỉ có quét cơ bản; Inspector chỉ
+  chạy trong buổi prd.
+- §5, §6: [0078](0078-paid-features-lean-defaults.md): management, `svp-log-archive`, `svp-backup`, prd cũng `off`; giữa
+  các buổi chỉ `svp-security` có Security Hub, Config.
+- §7: [0078](0078-paid-features-lean-defaults.md): ngưỡng tính ở mọi account; (b) thành "không cần cho chức năng lõi, an
+  toàn cơ bản".
+- §9: [0078](0078-paid-features-lean-defaults.md): endpoint interface giữ không cờ vì không có đường chạy không có nó,
+  không vì dưới ngưỡng.
+- §11: [0078](0078-paid-features-lean-defaults.md): tháng không buổi ~$31,1 (tháng đầu), ~$39,4 (tháng thứ sáu); buổi
+  prd: phụ lục 0078.
+- §12: [0078](0078-paid-features-lean-defaults.md): phép kiểm của prd chạy ở buổi prd duy nhất, sau bước đổi cờ; buổi
+  mặc định chỉ chạy phép kiểm `lõi`.
+- Hệ quả: [0078](0078-paid-features-lean-defaults.md): prd, account dùng chung cũng không thử Security Hub, Config,
+  Inspector giữa các buổi.

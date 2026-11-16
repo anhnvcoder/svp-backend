@@ -183,9 +183,6 @@ agent `aps:RemoteWrite`; ACK bốn hành động rule groups namespace, bốn al
   [N6] <https://docs.aws.amazon.com/prometheus/latest/userguide/AMP_quotas.html>, [N7] <https://docs.aws.amazon.com/prometheus/latest/userguide/AMP-ingest-methods.html>,
   [N8] <https://aws.amazon.com/blogs/mt/introducing-native-histogram-support-in-amazon-managed-service-for-prometheus/>, [N9] <https://docs.aws.amazon.com/prometheus/latest/userguide/AMP-find-workspace-details.html>,
   [N10] <https://docs.aws.amazon.com/service-authorization/latest/reference/list_amazonmanagedserviceforprometheus.html>, [N11] <https://aws.amazon.com/prometheus/pricing/>
-- CloudWatch, X-Ray: [N12] <https://docs.aws.amazon.com/AmazonCloudWatch/latest/monitoring/CloudWatch-OTLPEndpoint.html>, [N13] <https://docs.aws.amazon.com/AmazonCloudWatch/latest/logs/encrypt-log-data-kms.html>,
-  [N14] <https://docs.aws.amazon.com/AmazonCloudWatch/latest/monitoring/Enable-TransactionSearch.html>, [N15] <https://docs.aws.amazon.com/xray/latest/api/API_BatchGetTraces.html>,
-  [N16] <https://aws.amazon.com/cloudwatch/pricing/>, [N17] <https://docs.aws.amazon.com/AmazonCloudWatch/latest/monitoring/container-insights-eks-otel.html>, [N18] <https://aws.amazon.com/about-aws/whats-new/2026/06/amazon-cloudwatch-otel-metrics/>
 - AMG, Grafana: [N19] <https://aws.amazon.com/grafana/pricing/>, [N20] <https://docs.aws.amazon.com/grafana/latest/userguide/AMG-and-Organizations.html>, [N21] <https://docs.aws.amazon.com/grafana/latest/APIReference/API_CreateWorkspace.html>,
   [N22] <https://docs.aws.amazon.com/grafana/latest/userguide/AMG-configure-vpc.html>, [N23] <https://docs.aws.amazon.com/grafana/latest/userguide/version-differences.html>,
   [N25] <https://github.com/grafana/grafana-operator/releases/tag/v5.25.0>, [N26] <https://github.com/grafana/grafana-amazonprometheus-datasource>
@@ -198,3 +195,5 @@ Phụ lục: [`appendix/0063-managed-observability.md`](appendix/0063-managed-ob
 
 - §4, §12: [0071](0071-paid-features.md): AMG của stg theo cờ `managed_grafana` = `session`: workspace, role, gán nhóm, service account `svp-grafana-operator` dựng ở bước mở và gỡ ở bước đóng của buổi (root `aws/accounts/<env>`, biến `session_open`); root env đọc id workspace từ SSM parameter `/svp/<env>/grafana-workspace-id` thay biến `grafana_workspace_id`; prd giữ workspace; tháng không buổi bớt $9.
 - §5, §11: [0074](0074-cost-uptime.md): nhóm `svp-uptime`, `svp-cost` và SLO `public-uptime` vào hai file luật sẵn có, đi cùng `RuleGroupsNamespace` `svp-alerts`, `slo-generated`; danh tính Pod Identity thêm OpenCost (`svp-obs/opencost`, role `<cluster>-opencost`): `aps:QueryMetrics`, `aps:GetSeries`, `aps:GetLabels`, `aps:GetMetricMetadata` trên workspace của env, qua sidecar `aws-sigv4-proxy`.
+- §4, §12: [0078](0078-paid-features-lean-defaults.md): prd cũng `session`: không AMG nào giữa các buổi, tháng không
+  buổi bớt thêm $9; thêm `off` không có AMG (`grafanaUrl` rỗng), mặc định của stg, prd khi hiện thực.
