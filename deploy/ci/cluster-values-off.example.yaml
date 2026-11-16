@@ -1,0 +1,3 @@
+# Override of cluster-values.example.yaml for an env without Managed Grafana: deploy/ci/gitops-check.sh renders eks a
+# second time with it layered on top. Design notes: docs/reference/ci.md.
+grafanaUrl: ""

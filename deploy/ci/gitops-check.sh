@@ -9,6 +9,8 @@ set -euo pipefail
 . "$(dirname "$0")/common.sh"
 
 worktree='' tree_only='' root_only='' policy_only=''
+# The form of the cluster map on eks: url (the example file as is) or off (grafanaUrl "", no Managed Grafana).
+cluster_form=url
 if [ "${1:-}" = --policy ]; then
   policy_only=${2:-}
   case $policy_only in images-pinned | no-lab-hosts) ;; *) policy_only= ;; esac
@@ -632,8 +634,11 @@ render_tree() {
       if (.httpRoute | type) == "object" and (.httpRoute | has("name")) then "httpRoute.name" else empty end] | join(", ")' <<<"$1"
   }
 
+  rm -f "$tmp/values"/*
   { echo 'cluster:'; sed 's/^/  /' "$ci_dir/cluster-values.example.yaml"; } >"$tmp/cluster.yaml" ||
     fail "read deploy/ci/cluster-values.example.yaml"
+  { echo 'cluster:'; sed 's/^/  /' "$ci_dir/cluster-values-off.example.yaml"; } >"$tmp/cluster-off.yaml" ||
+    fail "read deploy/ci/cluster-values-off.example.yaml"
   for plat in $platform_names; do
     for env in $envs; do
       [[ " $targets " == *" $env:$plat "* ]] ||
@@ -649,6 +654,7 @@ render_tree() {
       # annotation, the fixture standing for it here.
       set -- --namespace argocd --set-string "env=$env" --set "nodeArch=$arch" --set-string "platform=$plat"
       [ "$plat" != eks ] || set -- "$@" -f "$tmp/cluster.yaml"
+      [ "$plat" != eks ] || [ "$cluster_form" != off ] || set -- "$@" -f "$tmp/cluster-off.yaml"
       if [ -n "$two_level" ]; then
         level_one "$env" "$plat" "$arch" "$@"
         set -- --namespace argocd -f "$tmp/render/level2-$tag-$arch.json"
@@ -696,6 +702,10 @@ render_tree() {
       want=$(cut -d $'\x1f' -f1 "$vt/components" | while IFS= read -r name; do
         if runs_on "$name" "$plat"; then echo "$name"; fi
       done | sort | paste -sd ' ' -)
+      # Without a Managed Grafana (grafanaUrl "") the root leaves out the Grafana Operator.
+      if [ "$plat" = eks ] && [ "$cluster_form" = off ]; then
+        want=$(tr ' ' '\n' <<<"$want" | { grep -vx grafana-operator || true; } | paste -sd ' ' -)
+      fi
       [ "$got" = "$want" ] ||
         fail "$apps for $label on $arch nodes makes the Applications '$got', want one per component of components.json that runs on $plat: '$want'"
       while IFS=$'\x1f' read -r name files object chart_rev misread revs; do
@@ -1080,6 +1090,16 @@ render_tree() {
   echo "ok    every image is pinned by digest (policy images-pinned); every overlay runs the images of what it adds to"
 }
 
+# render_tree_off GTREE ENVS PIN: render_tree again with an empty grafanaUrl in the cluster map of eks, the form of an
+# environment without Managed Grafana, when GTREE has the platform eks.
+render_tree_off() {
+  jq -e '.platforms.eks' "$1/argocd/apps/components.json" >/dev/null || return 0
+  echo "note  again with grafanaUrl \"\" in the cluster map of eks (deploy/ci/cluster-values-off.example.yaml)"
+  cluster_form=off
+  render_tree "$@"
+  cluster_form=url
+}
+
 # Each environment that pins a commit renders on its own, at that commit unpacked with git archive (neither the
 # working tree nor the index of GITOPS_DIR is read); the others together on the tree.
 unpinned=
@@ -1092,8 +1112,12 @@ for env in $envs; do
   mkdir -p "$tmp/gitops/$env"
   git -C "$tree" archive "$pin" | tar -x -C "$tmp/gitops/$env" || fail "unpack ${pin:0:12} of svp-gitops with git archive"
   render_tree "$tmp/gitops/$env" "$env" "$pin"
+  render_tree_off "$tmp/gitops/$env" "$env" "$pin"
 done
-[ -z "$unpinned" ] || render_tree "$tree" "$unpinned" ""
+if [ -n "$unpinned" ]; then
+  render_tree "$tree" "$unpinned" ""
+  render_tree_off "$tree" "$unpinned" ""
+fi
 if [ -n "$root_only" ]; then
   echo "ok    $tree: the tree and its root chart"
   exit 0

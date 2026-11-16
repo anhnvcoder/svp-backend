@@ -124,9 +124,9 @@ Chỉnh: 0071 §1–§7, §9, §11, §12, "Hệ quả"; 0055 §1, §2, §6; 0060
 ### 10. Thứ tự hiện thực
 
 - §1–§3, §7, §8 hiện thực cùng ADR này: file cờ, test, script, runbook, tài liệu.
-- §5 theo expand–contract qua ba repo: chart của repo này nhận `grafanaUrl` rỗng mà vẫn nhận dạng URL, rồi bản phát hành
-  chart, PR của `svp-gitops` nâng chart, cuối cùng `svp-infra` đổi file cờ sang `off`. Mỗi bước trước giữ dạng URL chạy
-  được, nên không buổi nào hỏng ở giữa.
+- §5 theo expand–contract qua ba repo: root chart của `svp-gitops` nhận `grafanaUrl` rỗng mà vẫn nhận dạng URL (CI của repo
+  này render bằng `main` của nó), rồi chart của repo này nhận đích `none`, bản phát hành chart, PR của `svp-gitops` nâng chart,
+  cuối cùng `svp-infra` đổi file cờ sang `off`. Mỗi bước trước giữ dạng URL chạy được, nên không buổi nào hỏng ở giữa.
 - §6 đi cùng hay sau §5, trước buổi stg đầu.
 
 ### Hệ quả
@@ -148,15 +148,20 @@ Chỉnh: 0071 §1–§7, §9, §11, §12, "Hệ quả"; 0055 §1, §2, §6; 0060
   không recorder ở management, `svp-log-archive`, `svp-backup`, stg, prd; registry prd `BASIC`; `svp-security` vẫn chấm
   FSBP, CIS.
 - Buổi prd: plan của bước đổi cờ chỉ chạm tài nguyên của bốn cờ; phép kiểm 0071 §12 chạy sau đó.
-- Lúc chấp nhận §5 (`off`) và §6 (phép kiểm `lõi`, `chuẩn ngành`) chưa hiện thực; thứ tự theo §10.
+- Kiểm tĩnh ở repo code: `make helm-check` render `eks` hai lần, dạng URL và dạng `grafanaUrl: ""`; chart
+  `svp-observability` có đủ ba đích dashboard; thứ tự hiện thực theo §10.
 
 ## Hiện thực ở
 
 - `svp-infra`: `aws/paid-features.json`, `aws/modules/paid-features/tests/` (§1, §2); `aws/scripts/verify.sh` (§1:
-  `svp-backup` có thể `off`); `docs/runbooks/paid-features.md`, `session-prd.md` (§3); `infracost.yml` (§8). §5, §6:
-  chưa hiện thực.
+  `svp-backup` có thể `off`); `docs/runbooks/paid-features.md`, `session-prd.md` (§3); `infracost.yml` (§8);
+  `aws/modules/{paid-features,gitops-bridge,external-secrets,observability}` và `aws/scripts/` (§5: `managed_grafana`
+  `off`); `docs/runbooks/session-stg.md`, `session-prd.md` (§6).
 - Repo code: `docs/explanation/paid-features.md`, `environments.md`, `aws-security.md`, `docs/threat-model.md` (ORG-6),
-  `docs/runbooks/security-alert.md` (§7).
+  `docs/runbooks/security-alert.md` (§7); `deploy/helm/svp-observability/` (§5: đích dashboard `none`);
+  `deploy/ci/gitops-check.sh`, `cluster-values-off.example.yaml` (§5: render dạng `grafanaUrl` rỗng).
+- `svp-gitops`: `argocd/apps/templates/applications.yaml`, `platforms/eks/` (§5: bỏ `grafana-operator` khi
+  `grafanaUrl` rỗng).
 
 ## Nguồn
 

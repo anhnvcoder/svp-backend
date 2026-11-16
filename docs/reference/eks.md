@@ -191,6 +191,10 @@ Lệnh `terraform` và script buổi ở `svp-infra` (`aws/scripts/`); mỗi bư
    `-n svp-mesh get deploy,pdb waypoint` (2 replica sẵn sàng, PDB có), và mọi pod của `svp` có annotation `ambient.istio.io/redirection: enabled`:
    `-n svp get pod -o custom-columns=NAME:.metadata.name,REDIRECTION:'.metadata.annotations.ambient\.istio\.io/redirection'`.
 
+Runbook buổi `session-<env>.md` của `svp-infra` đánh dấu mỗi bước, phép kiểm sau đó là `lõi` hay `chuẩn ngành`
+([ADR-0078](../adr/0078-paid-features-lean-defaults.md) §6): đường mặc định chỉ chạy `lõi`, phép `chuẩn ngành`
+(dashboard trên Amazon Managed Grafana, thang k6, diễn tập, kiểm sâu nền tảng managed) chọn bật từng buổi.
+
 ## Đổi secret của env đang chạy
 
 Sửa `.env` (hay `SVP_RDS_MASTER_PASSWORD`), rồi một lệnh; cluster phải tới được (tunnel mở, không thì dừng trước mọi lệnh ghi):

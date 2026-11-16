@@ -5,8 +5,10 @@ k3d khác nhau ra sao, và web được quan sát thế nào mà không lộ d�
 [`reliability.md`](reliability.md#slo); chi phí compute (OpenCost) và probe uptime từ ngoài vào (blackbox exporter) ở
 [`cost-and-uptime.md`](cost-and-uptime.md); lệnh ở [`reference/compose.md`](../reference/compose.md),
 [`reference/k8s.md`](../reference/k8s.md). Trên EKS, dashboard ở Amazon Managed Grafana
-([ADR-0063](../adr/0063-managed-observability.md)); workspace của stg, prd chỉ có trong buổi (cờ `managed_grafana`,
-[`paid-features.md`](paid-features.md)), còn metric ở AMP và log ở CloudWatch giữ qua các buổi.
+([ADR-0063](../adr/0063-managed-observability.md)), chỉ khi cờ `managed_grafana` của env khác `off`
+([`paid-features.md`](paid-features.md)): giá trị mặc định `off` không có workspace nên không dashboard, buổi chọn bật
+dashboard dựng workspace trong buổi; cảnh báo đi AMP → SNS không cần nó, metric ở AMP và log ở CloudWatch giữ qua các
+buổi.
 
 ## Compose
 
