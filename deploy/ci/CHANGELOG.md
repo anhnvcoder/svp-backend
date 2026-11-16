@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.2.0](https://github.com/anhnvcoder/svp-backend/compare/gitops-check-v1.1.1...gitops-check-v1.2.0) (2026-11-16)
+
+
+### Features
+
+* let svp-observability render without a Grafana ([#153](https://github.com/anhnvcoder/svp-backend/issues/153)) ([3c3bcf2](https://github.com/anhnvcoder/svp-backend/commit/3c3bcf2aee3d7b70945f801402c05dc72f4d3f7b))
+
 ## [1.1.1](https://github.com/anhnvcoder/svp-backend/compare/gitops-check-v1.1.0...gitops-check-v1.1.1) (2026-11-15)
 
 
