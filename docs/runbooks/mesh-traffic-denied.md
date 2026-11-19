@@ -97,7 +97,7 @@ chỉ chạy trên k3d.
 
 - Pod của release đích Ready, bước 2 mọi pod `svp` có `REDIRECTION=enabled`.
 - Lời gọi thật qua: `make k8s-smoke` xanh (k3d); `make drill-k8s-mesh` xanh (đối chứng: gateway gọi được, ServiceAccount lạ vẫn bị từ chối).
-- Trên EKS: pod `svp` Ready, bước 8 của "Trình tự buổi" ở [`eks.md`](../reference/eks.md), rồi `make eks-smoke`.
+- Trên EKS: pod `svp` Ready, bước 9 của "Trình tự buổi" ở [`eks.md`](../reference/eks.md), rồi `make eks-smoke`.
 
 ## Leo thang
 

@@ -39,10 +39,13 @@ Mục lục theo [Diátaxis](https://diataxis.fr): mỗi tài liệu thuộc m�
   playlist do API lọc và ký, signed URL CloudFront ở stg, prd và presign ở local, khoá ký, cách kiểm.
 - [`explanation/authentication.md`](explanation/authentication.md): đăng ký, đăng nhập, làm mới phiên, đăng xuất: thứ
   tự kiểm, giới hạn đăng nhập, mật khẩu chặn, header bảo mật và cái giá.
-- [`explanation/aws-security.md`](explanation/aws-security.md): org AWS theo AWS SRA: account, guardrail, ai đổi được gì, phát hiện, luồng
-  log và luồng cảnh báo bảo mật.
-- [`explanation/delivery.md`](explanation/delivery.md): CI/CD, chuỗi cung ứng, ba repo, phát hành checker và hợp đồng API.
-- [`explanation/observability.md`](explanation/observability.md): trace, metric, log, lỗi và số đo trình duyệt đi từ đâu tới đâu.
+- [`explanation/aws-security.md`](explanation/aws-security.md): org AWS theo AWS SRA: account, guardrail, ai đổi được
+  gì, phát hiện, registry ECR và credential AWS của CI, endpoint interface, đăng nhập công cụ vận hành, luồng log và
+  luồng cảnh báo bảo mật.
+- [`explanation/delivery.md`](explanation/delivery.md): CI/CD, chuỗi cung ứng, phát hành sang ECR và image bên thứ ba
+  trên EKS, ba repo, phát hành checker và hợp đồng API.
+- [`explanation/observability.md`](explanation/observability.md): trace, metric, log, lỗi và số đo trình duyệt đi từ đâu
+  tới đâu ở compose, k3d và EKS (dịch vụ managed của AWS).
 - [`explanation/cost-and-uptime.md`](explanation/cost-and-uptime.md): chi phí compute theo namespace và service bằng OpenCost, uptime từ
   ngoài vào bằng blackbox exporter: số lấy từ đâu, giới hạn, SLO, cảnh báo và cái giá của nơi probe.
 - [`explanation/reliability.md`](explanation/reliability.md): SLO, tải, backup, probe và vận hành.

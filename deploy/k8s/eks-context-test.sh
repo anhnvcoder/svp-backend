@@ -450,12 +450,12 @@ for app in svp-observability svp-root; do
   fi
 
   # Never appears within the budget: names what makes it (svp-root, or ApplicationSet svp-bootstrap for svp-root
-  # itself) and step 4, no status wait.
+  # itself) and step 5, no status wait.
   parent=applications.argoproj.io/svp-root
   [ "$app" != svp-root ] || parent=applicationsets.argoproj.io/svp-bootstrap
   new_wait_state
   wait_run "$work/out" "$app"
-  refused "eks-wait.sh $app, never appears" "$work/out" "Application argocd/$app did not appear in svp-stg in time; read ${parent#*/} with kubectl --context svp-stg -n argocd describe $parent, and check root aws/gitops/stg is applied (step 4"
+  refused "eks-wait.sh $app, never appears" "$work/out" "Application argocd/$app did not appear in svp-stg in time; read ${parent#*/} with kubectl --context svp-stg -n argocd describe $parent, and check root aws/gitops/stg is applied (step 5"
   if grep -q -- ' wait .*--for=jsonpath' "$FAKE_STATE/kubectl.log"; then
     fail "eks-wait.sh $app: waited for the status of an Application that never appeared"
   else
@@ -466,7 +466,7 @@ for app in svp-observability svp-root; do
   new_state
   echo "$app" >"$FAKE_STATE/apps"
   wait_run "$work/out" "$app"
-  refused "eks-wait.sh $app, svp-bootstrap missing" "$work/out" "ApplicationSet argocd/svp-bootstrap does not exist in svp-stg; apply root aws/gitops/stg first (step 4"
+  refused "eks-wait.sh $app, svp-bootstrap missing" "$work/out" "ApplicationSet argocd/svp-bootstrap does not exist in svp-stg; apply root aws/gitops/stg first (step 5"
   if grep -q '^--context svp-stg -n argocd wait ' "$FAKE_STATE/kubectl.log"; then
     fail "eks-wait.sh $app: waited although svp-bootstrap is missing"
   else

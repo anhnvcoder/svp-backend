@@ -18,11 +18,11 @@ esac
 cloud_context || fail "SVP_KUBE_CONTEXT must be svp-stg or svp-prd, an EKS cluster (got $kube_context)"
 
 kc get --raw /readyz >/dev/null 2>&1 ||
-  fail "cluster $kube_context is not reachable; open the tunnel to the API and add the context (step 3 of the sequence in docs/reference/eks.md)"
+  fail "cluster $kube_context is not reachable; open the tunnel to the API and add the context (step 4 of the sequence in docs/reference/eks.md)"
 # Terraform of root aws/gitops/<env> makes ApplicationSet svp-bootstrap itself; the Applications come later (svp-root
-# from it, svp-observability from svp-root once the earlier sync waves are Healthy), so only its absence means step 4.
+# from it, svp-observability from svp-root once the earlier sync waves are Healthy), so only its absence means step 5.
 [ -n "$(kc -n argocd get applicationsets.argoproj.io/svp-bootstrap --ignore-not-found -o name)" ] ||
-  fail "ApplicationSet argocd/svp-bootstrap does not exist in $kube_context; apply root aws/gitops/${kube_context#svp-} first (step 4 of the sequence in docs/reference/eks.md)"
+  fail "ApplicationSet argocd/svp-bootstrap does not exist in $kube_context; apply root aws/gitops/${kube_context#svp-} first (step 5 of the sequence in docs/reference/eks.md)"
 
 # One budget for the whole wait, so appearing, Synced and Healthy together take at most 30 minutes.
 deadline=$((SECONDS + 1800))
@@ -37,7 +37,7 @@ left() {
 parent=applications.argoproj.io/svp-root
 [ "$app" != svp-root ] || parent=applicationsets.argoproj.io/svp-bootstrap
 kc -n argocd wait "applications.argoproj.io/$app" --for=create --timeout="$(left)" ||
-  fail "Application argocd/$app did not appear in $kube_context in time; read ${parent#*/} with kubectl --context $kube_context -n argocd describe $parent, and check root aws/gitops/${kube_context#svp-} is applied (step 4 of the sequence in docs/reference/eks.md)"
+  fail "Application argocd/$app did not appear in $kube_context in time; read ${parent#*/} with kubectl --context $kube_context -n argocd describe $parent, and check root aws/gitops/${kube_context#svp-} is applied (step 5 of the sequence in docs/reference/eks.md)"
 
 # wait_for FIELD VALUE: kubectl wait on the jsonpath FIELD of the Application until it is VALUE. On timeout, prints
 # the sync and health status the Application ended with.

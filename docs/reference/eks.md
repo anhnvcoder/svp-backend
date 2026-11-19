@@ -59,7 +59,7 @@ Loại tài liệu (Diátaxis): **reference**, tra cứu khi cần một lệnh 
     - NetworkPolicy: probe của kubelet vào pod ambient đi từ địa chỉ `169.254.7.127`; mọi policy chứa pod vào mesh mở địa chỉ đó cho cổng probe.
       Việc VPC CNI thực thi policy với nguồn này chưa kiểm ở EKS: buổi stg xác nhận bằng pod của `svp` Ready sau khi vào mesh. Trần 24 tổ hợp
       cổng, giao thức cho một dải CIDR của VPC CNI tính cả cổng 15008.
-    - Kiểm trên cluster (người học chạy; `make drill-k8s-mesh` chỉ chạy được trên k3d): các lệnh `kubectl --context svp-<env>` của bước 8
+    - Kiểm trên cluster (người học chạy; `make drill-k8s-mesh` chỉ chạy được trên k3d): các lệnh `kubectl --context svp-<env>` của bước 9
       mục "Trình tự buổi". Lời gọi bị từ chối: [`mesh-traffic-denied.md`](../runbooks/mesh-traffic-denied.md).
   - **Agent GuardDuty** ([ADR-0060](../adr/0060-org-detection-logging.md) §5): add-on EKS `aws-guardduty-agent` (DaemonSet mọi node, version ghim
     ở `aws/modules/eks/addons.tf` của `svp-infra` như add-on khác) gửi sự kiện runtime qua interface endpoint `guardduty-data` của VPC (module
@@ -133,7 +133,7 @@ Loại tài liệu (Diátaxis): **reference**, tra cứu khi cần một lệnh 
     `svp-root` tạo khi các sync wave trước đã Healthy), rồi chờ `status.health.status` = `Healthy` (với `svp-root`,
     trước đó `status.sync.status` = `Synced`); không cần CLI `argocd` hay port-forward. Một ngân sách cho mọi lượt chờ
     (`deploy/k8s/eks-wait.sh`); quá hạn thì exit khác 0 và in trạng thái sync, health cuối. Thiếu ApplicationSet
-    `svp-bootstrap` thì lỗi ngay, nêu bước 4 (apply root `aws/gitops/<env>`). Chỉ đọc, nhưng chạm cluster EKS nên AI
+    `svp-bootstrap` thì lỗi ngay, nêu bước 5 (apply root `aws/gitops/<env>`). Chỉ đọc, nhưng chạm cluster EKS nên AI
     không chạy, người học chạy.
   - `make eks-smoke CONTEXT=… DOMAIN=<domain>`: `deploy/compose/smoke.sh https://api.<domain>` với `SVP_STACK=eks`, qua CloudFront với cert
     ACM công khai (bỏ `CURL_CA_BUNDLE`).
@@ -157,39 +157,62 @@ Loại tài liệu (Diátaxis): **reference**, tra cứu khi cần một lệnh 
     (EKS Pod Identity: `AWS_CONTAINER_CREDENTIALS_FULL_URI`, `AWS_CONTAINER_AUTHORIZATION_TOKEN_FILE`, hai biến khoá tĩnh phải không
     đặt); `S3_PATH_STYLE` `true` (mặc định, store local) hay `false` (virtual-hosted, cho S3); giá trị khác thì service không khởi động.
   - Lớp nền tảng của `svp-gitops`: root hai tầng, `svp-root` (chart `argocd/root`) render Application `svp-apps` (chart
-    `argocd/apps`), nhận `platform` (`k3d` hay `eks`) và trên EKS `cluster` (hợp đồng khoá ở `deploy/ci/cluster-values.example.yaml`,
-    trên EKS lấy từ annotation của cluster Secret mà root `aws/gitops/<env>` tạo; hai khoá của edge: `edgeTargetGroupArn` (output
-    `target_group_arn` của module `edge`) và `edgeCidrs` (danh sách CIDR của subnet edge); hai khoá của MSK, ElastiCache: `kafkaBrokers`, chuỗi
-    `host:9096,host:9096,…` là output `bootstrap_brokers` của module `msk`, và `valkeyHost`, host không cổng là `primary_endpoint_address` của module
-    `elasticache`, mà `platforms/eks/*.values.tpl` đọc để đặt `KAFKA_BROKERS`, host của Valkey trong `REDIS_URL`, `kafka.brokers` và `valkey.host`
-    của `svp-data`, `SVP_OTELCOL_KAFKA_BROKERS` của Collector; ba khoá của transcode: `mediaconvertQueueArn`,
-    `mediaconvertRoleArn`, `transcodeEventsQueueUrl`, output `queue_arn`, `role_arn`, `events_queue_url` của module
-    `transcode`, mà `platforms/eks/media-worker.values.tpl` đọc để đặt ba biến của lệnh con `mediaconvert`
-    ([`environment.md`](environment.md#biến-và-hành-vi-khởi-động-của-service))); values đọc theo thứ tự `base/` <
-    `platforms/<platform>/<tên>.yaml` < `envs/<env>/` < `envs/<env>/images/` < `valuesObject` sinh từ
-    `platforms/<platform>/<tên>.values.tpl`; Argo CD (không là component) đọc `base/argo-cd.yaml` rồi
-    `platforms/<platform>/argo-cd.yaml` khi có (`gitops.sh` cài trên k3d, `gitops-check.sh` render cùng thứ tự); revision không có
-    `platforms/` thì `k8s-gitops-up` và check của `svp-gitops` dừng ([ADR-0037](../adr/0037-mainpath-standard-tools.md) §4); env nào chạy
-    trên nền tảng nào và render của nền tảng nào được nêu `*.svp.localhost` đọc từ khoá `platforms` của `argocd/apps/components.json`
-    (§5); `k8s-gitops-up` đặt `platform=k3d`.
+    `argocd/apps`), nhận `platform` (`k3d` hay `eks`) và trên EKS `cluster` (hợp đồng khoá ở
+    `deploy/ci/cluster-values.example.yaml`, trên EKS lấy từ annotation của cluster Secret mà root `aws/gitops/<env>`
+    tạo; hai khoá của edge: `edgeTargetGroupArn` (output `target_group_arn` của module `edge`) và `edgeCidrs` (danh sách
+    CIDR của subnet edge); hai khoá của MSK, ElastiCache: `kafkaBrokers`, chuỗi `host:9096,host:9096,…` là output
+    `bootstrap_brokers` của module `msk`, và `valkeyHost`, host không cổng là `primary_endpoint_address` của module
+    `elasticache`, mà `platforms/eks/*.values.tpl` đọc để đặt `KAFKA_BROKERS`, host của Valkey trong `REDIS_URL`,
+    `kafka.brokers` và `valkey.host` của `svp-data`, `SVP_OTELCOL_KAFKA_BROKERS` của Collector; ba khoá của transcode:
+    `mediaconvertQueueArn`, `mediaconvertRoleArn`, `transcodeEventsQueueUrl`, output `queue_arn`, `role_arn`,
+    `events_queue_url` của module `transcode`, mà `platforms/eks/media-worker.values.tpl` đọc để đặt ba biến của lệnh con
+    `mediaconvert` ([`environment.md`](environment.md#biến-và-hành-vi-khởi-động-của-service)); sáu khoá của registry và
+    telemetry managed, từ tài nguyên sống lâu của root `aws/accounts/<env>` mà root `aws/envs/<env>` đọc bằng data
+    source: `ecrRegistry` (host ECR của account, đích của `svp-registry-mirror`, `releaseRegistry` của `svp-policy`),
+    `ampWorkspaceId` (luật, Alertmanager của AMP qua ACK), `ampEndpoint` (base URL của workspace, kết thúc `/`: remote
+    write của Prometheus agent và Collector, canary của `gateway`, `web`, data source của AMG), `logGroup`
+    (`/svp/<env>/otel`, log của Collector), `grafanaUrl` (CR `Grafana` của Grafana Operator; rỗng khi
+    `managed_grafana` là `off`), `alarmTopicArn` (topic
+    `svp-<env>-alarms`, receiver SNS của Alertmanager của AMP); dạng từng khoá kiểm ở
+    `argocd/apps/templates/applications.yaml` của `svp-gitops` và ở `variables.tf` của module `gitops-bridge`); values
+    đọc theo thứ tự `base/` < `platforms/<platform>/<tên>.yaml` < `envs/<env>/` < `envs/<env>/images/` < `valuesObject`
+    sinh từ `platforms/<platform>/<tên>.values.tpl`; Argo CD (không là component) đọc `base/argo-cd.yaml` rồi
+    `platforms/<platform>/argo-cd.yaml` khi có (`gitops.sh` cài trên k3d, `gitops-check.sh` render cùng thứ tự);
+    revision không có `platforms/` thì `k8s-gitops-up` và check của `svp-gitops` dừng
+    ([ADR-0037](../adr/0037-mainpath-standard-tools.md) §4); env nào chạy trên nền tảng nào và render của nền tảng nào
+    được nêu `*.svp.localhost` đọc từ khoá `platforms` của `argocd/apps/components.json` (§5); `k8s-gitops-up` đặt
+    `platform=k3d`.
 
 ## Trình tự buổi
 
 Lệnh `terraform` và script buổi ở `svp-infra` (`aws/scripts/`); mỗi bước xong mới sang bước sau:
 
-1. Apply root `aws/envs/<env>` (cluster, RDS, MSK, ElastiCache, vỏ entry Secrets Manager; mật khẩu Kafka, Valkey được sinh và ghi trong cùng apply).
-   Khoá ký media: `media-signing-key.sh <env> new a` trước `plan` của root, `activate a` sau `apply` (bước 7 và 10 của runbook buổi
-   `docs/runbooks/session-<env>.md` ở `svp-infra`), nên entry `media-signing` có giá trị trước bước 2.
-2. `AWS_PROFILE=anhnv-<env> make eks-secrets CONTEXT=svp-<env>`: nguồn có trước Argo CD.
-3. Mở tunnel tới API (output `api_tunnel_command`, terminal riêng) và thêm context (output `kubeconfig_command`); chỉ prd: PR promote prd
-   đã merge trước bước này.
-4. Apply root `aws/gitops/<env>` (Argo CD, AppProject, cluster Secret, root).
-5. `make eks-wait CONTEXT=svp-<env> APP=svp-observability`: chờ Application `svp-observability` Healthy.
-6. `AWS_PROFILE=anhnv-<env> make eks-glitchtip-init CONTEXT=svp-<env>`.
-7. `make eks-wait CONTEXT=svp-<env> APP=svp-root`: chờ Application `svp-root` Synced rồi Healthy.
-8. Kiểm mesh (người học chạy, mỗi lệnh `kubectl --context svp-<env>`): `-n istio-system get pods` (istiod, istio-cni và ztunnel mỗi node Ready),
+Root `aws/accounts/<env>` (registry ECR, role CI, workspace AMP, log group, Managed Grafana khi cờ
+`managed_grafana` là `always`) đã áp từ trước và sống qua
+mọi buổi; buổi không áp lại nó.
+
+1. Apply root `aws/envs/<env>` (cluster, endpoint interface, RDS, MSK, ElastiCache, vỏ entry Secrets Manager; mật khẩu
+   Kafka, Valkey được sinh và ghi trong cùng apply). Khoá ký media: `media-signing-key.sh <env> new a` trước `plan` của
+   root, `activate a` sau `apply` (bước 7 và 10 của runbook buổi `docs/runbooks/session-<env>.md` ở `svp-infra`), nên
+   entry `media-signing` có giá trị trước bước 3.
+2. Làm nóng pull-through cache ([image bên thứ ba](../explanation/delivery.md#image-bên-thứ-ba-trên-eks)): ở repo này
+   `deploy/ci/image-list.sh ../gitops <env> > <file>` (không chạm AWS), rồi `aws/scripts/ecr-warm.sh <env> <file>` của
+   `svp-infra`. Chạy lại khi một PR đổi digest bên thứ ba merge giữa buổi.
+3. `aws/scripts/bootstrap.sh <env> secrets` của `svp-infra`: nguồn có trước Argo CD. Script gọi
+   `make eks-secrets CONTEXT=svp-<env>` của repo này với mật khẩu master RDS, rồi, khi env có workspace Grafana, tạo token mới
+   của service account `svp-grafana-operator` vào entry `svp/<env>/grafana-operator`; chạy riêng `make eks-secrets` thì thiếu token này.
+4. Mở tunnel tới API (output `api_tunnel_command`, terminal riêng) và thêm context (output `kubeconfig_command`); chỉ
+   prd: PR promote prd đã merge trước bước này.
+5. Apply root `aws/gitops/<env>` (Argo CD, AppProject, cluster Secret, root).
+6. `make eks-wait CONTEXT=svp-<env> APP=svp-observability`: chờ Application `svp-observability` Healthy.
+7. `AWS_PROFILE=anhnv-<env> make eks-glitchtip-init CONTEXT=svp-<env>`.
+8. `make eks-wait CONTEXT=svp-<env> APP=svp-root`: chờ Application `svp-root` Synced rồi Healthy.
+9. Kiểm mesh (người học chạy, mỗi lệnh `kubectl --context svp-<env>`): `-n istio-system get pods` (istiod, istio-cni và ztunnel mỗi node Ready),
    `-n svp-mesh get deploy,pdb waypoint` (2 replica sẵn sàng, PDB có), và mọi pod của `svp` có annotation `ambient.istio.io/redirection: enabled`:
    `-n svp get pod -o custom-columns=NAME:.metadata.name,REDIRECTION:'.metadata.annotations.ambient\.istio\.io/redirection'`.
+
+Cuối buổi, `aws/scripts/pre-destroy.sh` xoá các CR `RuleGroupsNamespace`, `AlertManagerDefinition` khi ACK còn chạy
+(luật trong AMP đi theo) trước `destroy`; dữ liệu ở AMP, CloudWatch Logs, `aws/spans` và image ở ECR ở lại.
 
 Runbook buổi `session-<env>.md` của `svp-infra` đánh dấu mỗi bước, phép kiểm sau đó là `lõi` hay `chuẩn ngành`
 ([ADR-0078](../adr/0078-paid-features-lean-defaults.md) §6): đường mặc định chỉ chạy `lõi`, phép `chuẩn ngành`
