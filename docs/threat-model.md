@@ -621,9 +621,9 @@ cần SCP resource perimeter (rủi ro chấp nhận ở [mục 6](#6-rủi-ro-c
 Thiết kế ở [ADR-0061](adr/0061-edge-cloudfront-waf-acm.md); giải thích và sơ đồ ở [`explanation/edge.md`](explanation/edge.md). Bề mặt là ba
 tên công khai của mỗi env (`<domain>`, `api.<domain>`, `media.<domain>`) và chuỗi chặng sau chúng: CloudFront có web ACL, VPC origin, ALB
 internal ở subnet edge, Envoy, rồi web và gateway; cộng zone DNS chứa ba tên đó. Ranh giới tin cậy: Internet tới CloudFront; CloudFront tới VPC
-của env; VPC tới cluster. Phép kiểm trong buổi là mục Phép kiểm edge của runbook
-[`session-stg.md`](https://github.com/anhnvcoder/svp-infra/blob/main/docs/runbooks/session-stg.md#phép-kiểm-edge) của `svp-infra`, prd chạy cùng
-lệnh.
+của env; VPC tới cluster. Phép kiểm trong buổi là mục
+[Phép kiểm edge](https://github.com/anhnvcoder/svp-infra/blob/main/docs/runbooks/session-stg-check-edge-media.md#phép-kiểm-edge)
+của runbook `session-stg-check-edge-media.md` của `svp-infra`, prd chạy cùng lệnh.
 
 | ID | Thành phần | STRIDE | Kịch bản | Biện pháp | Ở đâu | Ưu tiên |
 | --- | --- | --- | --- | --- | --- | --- |

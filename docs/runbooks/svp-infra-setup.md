@@ -304,8 +304,9 @@ check (nguyên nhân 4) → so tên job tổng của `check.yml` với `context`
 
 - [ADR-0034](../adr/0034-aws-stage7.md) §2 (repo, bố cục, state, CI kiểm tĩnh không credential), §14 (buổi AWS);
   [ADR-0076](../adr/0076-terraform-plan-infracost-pr.md) (plan trên PR, Infracost); threat model [AWS-6, AWS-11](../threat-model.md#411-biên-aws).
-- Mục "Plan trên PR", "Chi phí trên PR" của [`README.md`](https://github.com/anhnvcoder/svp-infra/blob/main/README.md#plan-trên-pr) của
-  `svp-infra`: luồng, cách đọc comment, cách duyệt lượt chờ.
+- Mục "Plan trên PR", "Chi phí trên PR" của
+  [`docs/reference/ci.md`](https://github.com/anhnvcoder/svp-infra/blob/main/docs/reference/ci.md#plan-trên-pr)
+  của `svp-infra`: luồng, cách đọc comment, cách duyệt lượt chờ.
 - [svp-frontend-setup.md](svp-frontend-setup.md), [svp-gitops-setup.md](svp-gitops-setup.md): cùng mẫu cài đặt, ruleset, Renovate.
 - Trình tự buổi AWS và gỡ tài nguyên: `docs/runbooks/session-stg.md` của repo `svp-infra`.
 - Không có diễn tập; phép kiểm là lượt `check.yml` đầu (B1) và ruleset (C1).
