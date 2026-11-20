@@ -212,8 +212,9 @@ từng khác biệt ở [`environments.md`](environments.md#edge-cloudfront-waf-
 
 - Tĩnh, mỗi PR: test mocked của module `edge`, `media`, `waf`, `network`, `account-baseline` (`make check` của `svp-infra`); test và fuzz IP
   client của gateway (`make test`, `make fuzz`); render chart với values eks và policy Kyverno (`make helm-check`).
-- Trong buổi stg, prd: mục Phép kiểm edge của runbook
-  [`session-stg.md`](https://github.com/anhnvcoder/svp-infra/blob/main/docs/runbooks/session-stg.md#phép-kiểm-edge) của `svp-infra` (header, cert,
+- Trong buổi stg, prd: mục
+  [Phép kiểm edge](https://github.com/anhnvcoder/svp-infra/blob/main/docs/runbooks/session-stg-check-edge-media.md#phép-kiểm-edge)
+  của runbook `session-stg-check-edge-media.md` của `svp-infra` (header, cert,
   TLS, ALB chỉ có IP private, mẫu thử WAF bị chặn, IP thật ở span gateway kể cả khi tự đặt header, log edge có object, DNSSEC, CAA); với
   media premium, `make eks-premium-check` của repo này ([`reference/eks.md`](../reference/eks.md)): segment `premium/` không ký hay ký cho
   video, rendition khác bị 403, tỉ lệ trúng cache của segment đã ký so với công khai.

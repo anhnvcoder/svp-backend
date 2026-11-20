@@ -348,7 +348,7 @@ Loại tài liệu (Diátaxis): **reference**, tra cứu khi cần một lệnh 
     environment `terraform-plan` từng lượt, comment tóm tắt đã che) và **Infracost** (`cost.yml`: chi phí từ HCL, comment chênh lệch) chỉ là
     thông tin, ngoài cổng PR. Quyết định ở [ADR-0076](../adr/0076-terraform-plan-infracost-pr.md); luồng, lý do bỏ qua, cách đọc comment và
     duyệt lượt chờ ở mục "Plan trên PR", "Chi phí trên PR" của
-    [`README.md`](https://github.com/anhnvcoder/svp-infra/blob/main/README.md#plan-trên-pr) của `svp-infra`.
+    [`docs/reference/ci.md`](https://github.com/anhnvcoder/svp-infra/blob/main/docs/reference/ci.md#plan-trên-pr) của `svp-infra`.
     Secret của repo mà Terraform không quản (`SVP_AWS_STG_ACCOUNT_ID`, `SVP_AWS_PRD_ACCOUNT_ID` của repo code,
     `INFRACOST_API_KEY`, secret của
     environment `terraform-plan`) do `make github-secrets`, `make infracost-key` của `svp-infra` đặt; lệnh và thứ tự ở
