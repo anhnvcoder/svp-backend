@@ -2,7 +2,8 @@
 
 - Trạng thái: Chấp nhận
 - Ngày: 2026-11-20
-- Người quyết: người học (2026-11-20: chọn D2 → SVG cho sơ đồ chính của handbook `svp-infra`), AI đề xuất và so phương án
+- Người quyết: người học (2026-11-20: chọn D2 → SVG cho sơ đồ chính của handbook `svp-infra`, rồi ELK sau khi xem bản ELK và TALA
+  của cùng hai sơ đồ), AI đề xuất và so phương án
 
 ## Bối cảnh và vấn đề
 
@@ -29,14 +30,19 @@ và đổi theo code: một sơ đồ lệch Terraform còn hại hơn không c�
 ## Kết quả quyết định
 
 Sơ đồ chính viết bằng D2 ở `docs/diagrams/<tên>.d2` của `svp-infra`, sinh `<tên>.svg` bằng `make diagrams`, không sửa SVG bằng tay;
-token (màu theo chức năng, account, trust, data flow, control flow) ở `docs/diagrams/tokens.d2`. `make diagrams-check` chạy trong
-CI và đỏ khi SVG lệch nguồn. Engine layout (ELK hay TALA) và theme do `d2-config` của từng file quyết, chọn sau khi so hai bản của
-cùng một sơ đồ. draw.io giữ cho sơ đồ tổng có icon AWS, Mermaid cho luồng nhỏ và sequence.
+token (màu theo chức năng, account, region, trust, data flow, control flow) ở `docs/diagrams/tokens.d2`. `make diagrams-check` chạy
+trong CI và đỏ khi SVG lệch nguồn. draw.io giữ cho sơ đồ tổng có icon AWS, Mermaid cho luồng nhỏ và sequence.
+
+Engine layout của mọi sơ đồ là ELK (`layout-engine: elk` trong `d2-config` của từng file): phân tầng trên xuống hợp luồng một chiều
+của tài liệu, hình hẹp hơn nên đọc được trên điện thoại, và ELK là mã nguồn mở do Eclipse duy trì lâu dài. TALA, engine của
+Terrastruct, không chọn: rủi ro nhà cung cấp, và ở bản so nó cho hình rộng hơn. Engine khác chỉ dùng khi có lý do, ghi ở comment
+đầu file `.d2`; không giữ hai bản của một sơ đồ.
 
 ### Hệ quả
 
 - Tốt: sơ đồ đổi cùng PR với kiến trúc và bị kiểm lệch; mọi sơ đồ chung một bộ màu; đổi công cụ chỉ cần vẽ lại từ nguồn text.
-- Xấu: thêm một công cụ vào repo; D2 là sản phẩm của một công ty (Terrastruct), engine TALA chỉ chạy tốt khi image còn được phát hành.
+- Xấu: thêm một công cụ vào repo; D2 là sản phẩm của một công ty (Terrastruct); ELK có thể đặt nhãn mũi tên lên viền khung, nên
+  sơ đồ ghi chi tiết ở nhãn nút và tách sơ đồ tổng quan khỏi sơ đồ chi tiết.
 - Rủi ro: Terrastruct dừng kinh doanh. Giảm nhẹ: nguồn là text, SVG đã sinh là file tĩnh, image ghim digest vẫn chạy; ELK là mã
   nguồn mở nên không phụ thuộc TALA; đổi công cụ không mất nội dung.
 - Xem lại khi: image `d2lang/d2` ngừng phát hành bản vá, hay `diagrams-check` lệch giữa arm64 và amd64.
@@ -44,11 +50,11 @@ cùng một sơ đồ. draw.io giữ cho sơ đồ tổng có icon AWS, Mermaid 
 ## Xác nhận
 
 `make diagrams-check` xanh với SVG đã commit, đỏ khi một SVG bị sửa tay; chạy hai lần ra cùng byte, trên arm64 lẫn amd64 (kiểm
-bằng hai bản image theo kiến trúc, ELK và TALA).
+bằng hai bản image theo kiến trúc); mọi `.d2` có `layout-engine: elk`.
 
 ## Hiện thực ở
 
-- `svp-infra`: `Makefile` (`D2_IMAGE`, `diagrams`, `diagrams-check`, nhóm `check-lint`), `.github/workflows/check.yml` (job `docs`),
+- `svp-infra`: `Makefile` (`D2_IMAGE`, `diagrams`, `diagrams-check`, target `check`), `.github/workflows/check.yml` (job `docs`),
   `docs/diagrams/` (`tokens.d2`, `README.md`, các cặp `.d2` và `.svg`), `AGENTS.md` (luật cập nhật sơ đồ).
 
 ## Nguồn
