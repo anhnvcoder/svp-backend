@@ -168,6 +168,7 @@ Phụ lục: [`appendix/NNNN-<slug>.md`](appendix/NNNN-<slug>.md) (chỉ khi có
 | [0076](0076-terraform-plan-infracost-pr.md) | PR của `svp-infra` có `terraform plan` bằng role OIDC chỉ đọc (`ReadOnlyAccess` + Deny dữ liệu workload, không ghi state) mà người học duyệt từng lượt qua environment `terraform-plan`, chỉ đăng tóm tắt đã che; Infracost ước chi phí từ HCL; CI không `apply` | Chấp nhận |
 | [0077](0077-versioned-gitops-checker.md) | Checker của `svp-gitops` phát hành theo semver bằng release-please (tag `gitops-check-v<semver>` bất biến, App riêng), `svp-gitops` ghim version cùng commit của tag, Renovate nâng; đổi hợp đồng chéo repo theo expand–contract; image và chart giữ ghim commit | Chấp nhận |
 | [0078](0078-paid-features-lean-defaults.md) | Mọi cờ chi phí của 0071 mặc định giá trị rẻ nhất hợp lệ ở mọi account (`svp-security` giữ Security Hub, Config theo `validation`); prd chạy một buổi, đổi về giá trị production trước buổi đó; phần chuẩn ngành giữ trong code, buổi cloud mặc định chỉ chạy phép kiểm lõi; `managed_grafana` thêm `off` | Chấp nhận |
+| [0079](0079-d2-diagrams.md) | Sơ đồ chính của tài liệu `svp-infra` viết bằng D2 và sinh thành SVG (nguồn text, token dùng chung, kiểm lệch trong CI); draw.io giữ cho sơ đồ icon AWS, Mermaid cho luồng nhỏ | Chấp nhận |
 
 ## Chuẩn áp dụng
 
