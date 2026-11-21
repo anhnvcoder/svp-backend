@@ -169,6 +169,11 @@ chỉ nhận uid chữ, số, `-`, `_` [N25].
 - Giới hạn liên quan [N6]: 2 000 luật mỗi workspace; file rule groups namespace ≤ 1 000 000 byte; query trải tối đa 95 ngày (cửa sổ `30d` của SLO
   nằm trong); 50 000 000 mẫu quét mỗi khoảng 24 giờ của một query.
 
+#### Chỉnh bởi
+
+- [ADR-0080](../0080-amp-rule-interval-stg.md): stg bật luật trên AMP với 30 s, prd giữ 15 s; chart ghi value `rules.amp.interval`
+  (mặc định `15s`) thay `interval: 15s`; phép đo ở 30 s và bảng từng luật ở [phụ lục ADR-0080](0080-amp-rule-interval-stg.md).
+
 ### Alertmanager
 
 | Mục | Giá trị | Nguồn |

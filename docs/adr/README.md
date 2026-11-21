@@ -169,6 +169,7 @@ Phụ lục: [`appendix/NNNN-<slug>.md`](appendix/NNNN-<slug>.md) (chỉ khi có
 | [0077](0077-versioned-gitops-checker.md) | Checker của `svp-gitops` phát hành theo semver bằng release-please (tag `gitops-check-v<semver>` bất biến, App riêng), `svp-gitops` ghim version cùng commit của tag, Renovate nâng; đổi hợp đồng chéo repo theo expand–contract; image và chart giữ ghim commit | Chấp nhận |
 | [0078](0078-paid-features-lean-defaults.md) | Mọi cờ chi phí của 0071 mặc định giá trị rẻ nhất hợp lệ ở mọi account (`svp-security` giữ Security Hub, Config theo `validation`); prd chạy một buổi, đổi về giá trị production trước buổi đó; phần chuẩn ngành giữ trong code, buổi cloud mặc định chỉ chạy phép kiểm lõi; `managed_grafana` thêm `off` | Chấp nhận |
 | [0079](0079-d2-diagrams.md) | Sơ đồ chính của tài liệu `svp-infra` viết bằng D2 và sinh thành SVG (nguồn text, token dùng chung, kiểm lệch trong CI); draw.io giữ cho sơ đồ icon AWS, Mermaid cho luồng nhỏ | Chấp nhận |
+| [0080](0080-amp-rule-interval-stg.md) | Luật trên AMP của stg đánh giá mỗi 30 s, prd giữ 15 s, khi quota 15 s của stg chưa duyệt; chu kỳ là value `rules.amp.interval` của chart `svp-observability`, overlay stg của `svp-gitops` đặt `30s` | Chấp nhận |
 
 ## Chuẩn áp dụng
 

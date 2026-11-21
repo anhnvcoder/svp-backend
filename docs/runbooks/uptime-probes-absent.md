@@ -94,7 +94,8 @@ curl -sG "$PROM/api/v1/query" --data-urlencode 'query=count by (probe) (probe_su
 curl -sG "$AM/api/v2/alerts" --data-urlencode 'filter=alertname="UptimeProbesAbsent"' | jq -c '.[] | [.labels.severity, .status.state]'
 ```
 
-Ba đích `web`, `api`, `media` có chuỗi, cảnh báo resolve sau chu kỳ đánh giá kế tiếp (ruler AMP đánh giá mỗi 15 giây theo chart).
+Ba đích `web`, `api`, `media` có chuỗi, cảnh báo resolve sau chu kỳ đánh giá kế tiếp (ruler AMP đánh giá mỗi
+`rules.amp.interval` của chart: 15 giây ở prd, 30 giây ở stg).
 
 ## Leo thang
 

@@ -137,3 +137,5 @@ Phụ lục: [`appendix/0055-environment-matrix.md`](appendix/0055-environment-m
 - §1, §2, §6: [0071](0071-paid-features.md): luật "stg chạy cùng dịch vụ với prd" thành "stg cùng kiểu prd; phần tốn tiền không cần để chạy theo khối cờ `aws/paid-features.json` của `svp-infra`": AMG của stg chỉ có trong buổi, Inspector ECR (thay bằng quét cơ bản ECR), Security Hub CSPM, Config của stg tắt; prd và bốn account dùng chung giữ mọi dịch vụ; cờ là dữ liệu đọc qua module `paid-features`, không `if env`.
 - §1, §2, §6: [0078](0078-paid-features-lean-defaults.md): prd và bốn account dùng chung giữa các buổi cũng lấy giá trị
   rẻ của khối cờ như stg; prd về giá trị production chỉ trong buổi prd duy nhất.
+- §1, §4: [0080](0080-amp-rule-interval-stg.md): nhóm giảm có điều kiện nhận cả khác biệt tạm vì quota của account chưa duyệt, có
+  điều kiện kết thúc: chu kỳ luật trên AMP stg 30 s, prd 15 s; mất: cảnh báo stg chậm hơn, đợt ngắn có thể lọt; kiểm bù ở buổi prd.

@@ -197,3 +197,4 @@ Phụ lục: [`appendix/0063-managed-observability.md`](appendix/0063-managed-ob
 - §5, §11: [0074](0074-cost-uptime.md): nhóm `svp-uptime`, `svp-cost` và SLO `public-uptime` vào hai file luật sẵn có, đi cùng `RuleGroupsNamespace` `svp-alerts`, `slo-generated`; danh tính Pod Identity thêm OpenCost (`svp-obs/opencost`, role `<cluster>-opencost`): `aps:QueryMetrics`, `aps:GetSeries`, `aps:GetLabels`, `aps:GetMetricMetadata` trên workspace của env, qua sidecar `aws-sigv4-proxy`.
 - §4, §12: [0078](0078-paid-features-lean-defaults.md): prd cũng `session`: không AMG nào giữa các buổi, tháng không
   buổi bớt thêm $9; thêm `off` không có AMG (`grafanaUrl` rỗng), mặc định của stg, prd khi hiện thực.
+- §5, §10: [0080](0080-amp-rule-interval-stg.md): luật trên AMP của stg mỗi 30 s, prd 15 s; chu kỳ là value `rules.amp.interval`.

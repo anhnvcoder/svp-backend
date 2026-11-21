@@ -27,6 +27,10 @@ need a NetworkPolicy of their own.
 {{- fail (printf "rules.target amp needs rules.amp.%s" $key) }}
 {{- end }}
 {{- end }}
+{{- $interval := toString $.Values.rules.amp.interval }}
+{{- if not (regexMatch "^[1-9][0-9]*(s|m)$" $interval) }}
+{{- fail (printf "rules.amp.interval is %q: whole seconds or minutes with the unit, e.g. 30s or 1m" $interval) }}
+{{- end }}
 {{- end }}
 {{- range $name := list "slo-generated" "svp-alerts" }}
 {{- $path := printf "files/rules/%s.yaml" $name }}
@@ -45,10 +49,11 @@ spec:
   groups:
     {{- toYaml $rules.groups | nindent 4 }}
 {{- else }}
-{{- /* The rules assume the 15 s evaluation of the cluster's Prometheus (comment atop svp-alerts.yaml); a workspace's
-ruler runs a group at its own interval, 30 s by default, so every group names 15 s. */}}
+{{- /* A workspace's ruler runs a group at its own interval, 30 s by default, so every group names rules.amp.interval:
+15 s, the evaluation the rules assume (comment atop svp-alerts.yaml), unless the account's quota needs more. */}}
+{{- $interval := toString $.Values.rules.amp.interval }}
 {{- range $rules.groups }}
-{{- $_ := set . "interval" "15s" }}
+{{- $_ := set . "interval" $interval }}
 {{- end }}
 ---
 apiVersion: prometheusservice.services.k8s.aws/v1alpha1
