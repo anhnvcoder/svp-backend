@@ -1,5 +1,6 @@
 # Joins two scanned manifests into a multi-arch index; used by backend and svp-frontend images.yml.
-# image-guard.sh checks legs before join and verifies the inspected raw index holds exactly those two.
+# image-guard.sh checks legs before join and that the raw index read back is an OCI index of exactly those two, with the
+# annotations of the commit.
 # Inputs reach steps via env:, never ${{ }} inside run:; unsets DOCKER_DEFAULT_PLATFORM for native docker calls.
 # Design notes: docs/ci-cd.md.
 name: image-index

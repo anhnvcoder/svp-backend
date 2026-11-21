@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# image-guard.sh leg|trivy-report|grype-summary|fixed-high|sarif|push|pushed|index|index-check|sign ARGS...: the
+# image-guard.sh leg|trivy-report|grype-summary|fixed-high|sarif|push|oci|pushed|index|index-check|sign ARGS...: the
 # guards of the image pipeline around the tools the composite actions image-* call; each subcommand checks what its
 # step must not get wrong and hands it what it needs as outputs. A verdict is the scanner's exit code or fixed-high's.
 # Design notes: docs/reference/ci.md.
@@ -174,9 +174,38 @@ push() {
   echo "$build_prefix$image:${rev:0:12}-$arch"
 }
 
+# oci IMAGE ARCH OUT: OUT/pushed.json, what docker pushed under the leg's tag (the classic image store pushes Docker
+# media types only), is one Docker schema 2 manifest of the scanned config with gzip layers; pushes the same manifest
+# with the OCI media types of those blobs under that tag, nothing uploaded again: only OCI manifests join into an index
+# that carries annotations. Writes OUT/oci.json; any other manifest or layer type fails the leg.
+oci() {
+  [ $# -eq 3 ] || fail "usage: image-guard.sh oci IMAGE ARCH OUT"
+  local image=$1 arch=$2 out=$3 rev remote scanned
+  use_build_source "$image"
+  check_code_tree
+  rev=$(git -C "$code_root" rev-parse HEAD)
+  remote=$build_prefix$image:${rev:0:12}-$arch
+  scanned=$(cat "$out/config-digest") || fail "$out has no config-digest: the leg was not scanned"
+  jq -ce --arg c "$scanned" '
+    def oci: {"application/vnd.docker.container.image.v1+json": "application/vnd.oci.image.config.v1+json",
+      "application/vnd.docker.image.rootfs.diff.tar.gzip": "application/vnd.oci.image.layer.v1.tar+gzip"}[.]
+      // error("no OCI media type for \(.)");
+    select(.schemaVersion == 2 and .mediaType == "application/vnd.docker.distribution.manifest.v2+json"
+      and .config.digest == $c)
+    | .mediaType = "application/vnd.oci.image.manifest.v1+json" | .config.mediaType |= oci | .layers[].mediaType |= oci
+  ' "$out/pushed.json" >"$out/oci.json" 2>/dev/null || {
+    rm -f "$out/oci.json"
+    fail "$remote is $(jq -r '"\(.mediaType) of config \(.config.digest)"' "$out/pushed.json" 2>/dev/null ||
+      echo '<not JSON>'), not a Docker schema 2 manifest of config $scanned with gzip layers: nothing relabelled"
+  }
+  registry_oras --stdin manifest push --media-type application/vnd.oci.image.manifest.v1+json "$remote" - \
+    <"$out/oci.json" >/dev/null || fail "push the OCI manifest of $remote"
+  echo "ok    $remote relabelled as an OCI manifest of config $scanned"
+}
+
 # pushed IMAGE ARCH OUT: OUT/manifest.json, what the registry serves under the tag just pushed, read back byte for
-# byte, is one manifest whose config is the scanned one: docker compresses the layers again on push, so the manifest
-# digest differs from the local one, but the config lists the uncompressed digest of every layer. Writes
+# byte, is one OCI manifest whose config is the scanned one: docker compresses the layers again on push, so the
+# manifest digest differs from the local one, but the config lists the uncompressed digest of every layer. Writes
 # OUT/repository and OUT/digest (the sha256 of those bytes); any difference fails the leg before anything is merged.
 pushed() {
   [ $# -eq 3 ] || fail "usage: image-guard.sh pushed IMAGE ARCH OUT"
@@ -185,11 +214,10 @@ pushed() {
   repo=$build_prefix$image
   scanned=$(cat "$out/config-digest")
   digest=sha256:$(shasum -a 256 "$out/manifest.json" | cut -d' ' -f1)
-  config=$(jq -r 'select(.mediaType == "application/vnd.oci.image.manifest.v1+json"
-      or .mediaType == "application/vnd.docker.distribution.manifest.v2+json") | .config.digest' "$out/manifest.json" \
-    2>/dev/null) || config=
+  config=$(jq -r 'select(.mediaType == "application/vnd.oci.image.manifest.v1+json") | .config.digest' \
+    "$out/manifest.json" 2>/dev/null) || config=
   [ "$config" = "$scanned" ] ||
-    fail "$repo@$digest has config ${config:-<not a single manifest>}, the scan had $scanned: not the scanned image"
+    fail "$repo@$digest has config ${config:-<not a single OCI manifest>}, the scan had $scanned: not the scanned image"
   echo "$repo" >"$out/repository"
   echo "$digest" >"$out/digest"
   echo "ok    pushed $repo as $digest, config $scanned as scanned"
@@ -227,11 +255,12 @@ index() {
 }
 
 # index-check IMAGE LEGS OUT: OUT/index.json, the index read back under its tag, is an index of exactly the two
-# scanned manifests, and the registry serves those very bytes under their digest (check_index). Writes OUT/repository,
+# scanned manifests, and the registry serves those very bytes under their digest (check_index); it is an OCI index of
+# OCI manifests carrying the annotations of the commit (a Docker manifest list carries none). Writes OUT/repository,
 # OUT/tag and OUT/digest: the digest that is signed, attested and promoted.
 index_check() {
   [ $# -eq 3 ] || fail "usage: image-guard.sh index-check IMAGE LEGS OUT"
-  local image=$1 out=$3 repo digest rev a b
+  local image=$1 out=$3 repo digest rev a b want
   legs "$image" "$2"
   use_build_source "$image"
   check_code_tree
@@ -239,6 +268,13 @@ index_check() {
   rev=$(git -C "$code_root" rev-parse HEAD)
   digest=sha256:$(shasum -a 256 "$out/index.json" | cut -d' ' -f1)
   check_index "$repo" "$digest" "$a" "$b" || fail "$repo@$digest is not an index of exactly the two scanned manifests"
+  want=$(oci_labels "$build_source_name" | jq -Rn '[inputs | capture("^(?<key>[^=]+)=(?<value>.*)$")] | from_entries')
+  jq -e --argjson want "$want" '(.annotations // {}) as $a
+    | .mediaType == "application/vnd.oci.image.index.v1+json"
+    and all(.manifests[]; .mediaType == "application/vnd.oci.image.manifest.v1+json")
+    and all($want | to_entries[]; $a[.key] == .value)' "$out/index.json" >/dev/null 2>&1 ||
+    fail "$repo@$digest is not an OCI index of OCI manifests with the annotations $(jq -r 'keys | join(", ")' \
+      <<<"$want") of this commit"
   echo "$repo" >"$out/repository"
   echo "${rev:0:12}" >"$out/tag"
   echo "$digest" >"$out/digest"
@@ -310,8 +346,8 @@ missing() {
   fi
 }
 
-[ $# -gt 0 ] ||
-  fail "usage: image-guard.sh leg|trivy-report|grype-summary|fixed-high|sarif|push|pushed|index|index-check|sign ..."
+commands='leg|trivy-report|grype-summary|fixed-high|sarif|push|oci|pushed|index|index-check|sign'
+[ $# -gt 0 ] || fail "usage: image-guard.sh $commands ..."
 command=$1
 shift
 case $command in
@@ -321,6 +357,7 @@ grype-summary) grype_summary "$@" ;;
 fixed-high) fixed_high "$@" ;;
 sarif) sarif "$@" ;;
 push) push "$@" ;;
+oci) oci "$@" ;;
 pushed) pushed "$@" ;;
 index) index "$@" ;;
 index-check) index_check "$@" ;;

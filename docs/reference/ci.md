@@ -665,8 +665,14 @@ Môi trường chạy: script chạy trong GitHub Actions và đọc thẳng bi�
   - `trivy-report LABEL OUT`: trước cổng trivy, `OUT/trivy.json` là một báo cáo `trivy image`;
   - `grype-summary LABEL OUT`: sau grype, số đếm và các match Critical của `OUT/grype.json`;
   - `sarif IMAGE ARCH OUT`: SARIF của cả hai lượt quét, một category cho mỗi image và kiến trúc;
-  - `push IMAGE ARCH OUT`: trước khi push, in tag để đẩy image đã quét; `pushed IMAGE ARCH OUT`: sau khi push, manifest đọc lại mang config đã quét;
-  - `index IMAGE LEGS`: trước khi ghép index (action `image-index`); `index-check IMAGE LEGS OUT`: sau đó, index đọc lại có đúng hai manifest đã quét;
+  - `push IMAGE ARCH OUT`: trước khi push, in tag để đẩy image đã quét;
+  - `oci IMAGE ARCH OUT`: sau `docker push`, đẩy lại dưới cùng tag manifest Docker schema 2 mà image store cổ điển của
+    Docker đẩy, đổi sang media type OCI (cùng config, cùng layer gzip, không tải lại blob): `buildx imagetools create`
+    chỉ gắn annotation lên index ghép từ manifest OCI;
+  - `pushed IMAGE ARCH OUT`: manifest đọc lại là một manifest OCI mang config đã quét;
+  - `index IMAGE LEGS`: trước khi ghép index (action `image-index`); `index-check IMAGE LEGS OUT`: sau đó, index đọc lại
+    có đúng hai manifest đã quét, là index OCI của hai manifest OCI và mang annotation
+    `org.opencontainers.image.source`, `.revision`, `.created` của commit;
   - `sign IMAGE OUT`: trước khi ký (action `image-sign`): cái cần ghi, và predicate `vuln`.
 
   Luật mà mọi subcommand giữ: IMAGE là service hay image diễn tập của nguồn phát hành mà repo chạy job thuộc về (`use_build_source` của `common.sh`); code là của `code_root` (`SVP_CODE_ROOT`, input `code-root` của các action: checkout của `svp-frontend` trong lượt của nó) và `HEAD` của nó là commit của lượt (`check_code_tree`); cả hai được kiểm trước khi gọi docker. Cái được đẩy là cái đã quét: config digest của manifest đã đẩy là `ImageID` của báo cáo trivy.

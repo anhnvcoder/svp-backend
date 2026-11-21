@@ -609,18 +609,24 @@ vuln_predicate_type=https://cosign.sigstore.dev/attestation/vuln/v1
 # shellcheck disable=SC2034
 provenance_predicate_type=https://slsa.dev/provenance/v1
 
-# oras_run ARGS...: runs pinned ORAS with docker login credentials mounted read-only at /auth/config.json.
+# oras_run [--stdin] ARGS...: runs pinned ORAS with docker login credentials mounted read-only at /auth/config.json;
+# --stdin hands this shell's stdin to ORAS (a file argument -), which a call inside a read loop must not get.
 oras_run() {
-  local image config
+  local image config stdin=()
+  [ "${1:-}" != --stdin ] || {
+    stdin=(-i)
+    shift
+  }
   image=$(tool_image ORAS_IMAGE) || return 1
   config=${DOCKER_CONFIG:-$HOME/.docker}/config.json
   [ -f "$config" ] || {
     echo "FAIL  no $config: docker login to the registry first" >&2
     return 1
   }
-  docker_ run --rm --user "$(id -u):$(id -g)" -e HOME=/tmp -v "$config:/auth/config.json:ro" "$image" "$@"
+  docker_ run --rm ${stdin[@]+"${stdin[@]}"} --user "$(id -u):$(id -g)" -e HOME=/tmp -v "$config:/auth/config.json:ro" \
+    "$image" "$@"
 }
-# registry_oras ARGS...: oras_run of a command that reads one registry (not cp, which takes one config per side).
+# registry_oras [--stdin] ARGS...: oras_run of a command on one registry (not cp, which takes one config per side).
 registry_oras() { oras_run "$@" --registry-config /auth/config.json; }
 
 # bundle_referrers IMAGE: prints "<digest> <predicate type>" per bundle referrer of IMAGE (unverified listing).
