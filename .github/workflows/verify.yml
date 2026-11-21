@@ -71,7 +71,7 @@ jobs:
       - name: Check the targets
         run: deploy/ci/verify-steps/steps.sh check
       # Needed for jwtkey generation in make env and go test -race in test-stack-objstore.
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+      - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
         with:
           go-version: 1.27.4
           cache-dependency-path: go.sum
@@ -171,7 +171,7 @@ jobs:
           persist-credentials: false
       - name: Check the targets
         run: deploy/ci/verify-steps/steps.sh check
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+      - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
         with:
           go-version: 1.27.4
           cache-dependency-path: go.sum
@@ -330,7 +330,7 @@ jobs:
               fi
               ;;
           esac
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+      - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
         with:
           go-version: 1.27.4
           cache-dependency-path: go.sum
