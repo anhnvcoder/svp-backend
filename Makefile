@@ -35,13 +35,13 @@ CHAINSAW_VERSION           := v0.2.15
 # the module through the Go module proxy (checked against the checksum database, as go install does) and builds it in
 # its own folder, with the version helmfile --version reports.
 # renovate: datasource=go depName=github.com/helmfile/helmfile
-HELMFILE_VERSION           := v1.8.2
+HELMFILE_VERSION           := v1.8.4
 # actionlint also runs shellcheck on every `run:` script when shellcheck is on PATH: the CI runner has it, a dev
 # machine need not.
 # renovate: datasource=go depName=github.com/rhysd/actionlint
 ACTIONLINT_VERSION         := v1.7.12
 # renovate: datasource=go depName=golang.org/x/vuln
-GOVULNCHECK_VERSION        := v1.9.0
+GOVULNCHECK_VERSION        := v1.10.0
 
 # CI only (`make ci-tools`, Linux amd64 runner): a dev machine installs buf and Helm with Homebrew at these versions.
 # Helm's archive is checked against the sha256 published with the release (helm-<version>-linux-amd64.tar.gz.sha256sum),
@@ -49,7 +49,7 @@ GOVULNCHECK_VERSION        := v1.9.0
 # renovate: datasource=go depName=github.com/bufbuild/buf
 BUF_VERSION                := v1.75.0
 # renovate: datasource=github-releases depName=helm/helm
-HELM_VERSION               := v4.3.1
+HELM_VERSION               := v4.3.2
 HELM_LINUX_AMD64_SHA256    := 0403a88ae20913d11b10a2467b50087721fea7581736da6b9d3992f5357fe54b
 # Scanner and SBOM generator, run from their official images pinned by digest, the same reference on a dev machine and
 # in CI: nothing to install and no setup action to trust (both trivy setup actions were hijacked in March 2026), and a
@@ -69,7 +69,7 @@ COSIGN_IMAGE := ghcr.io/sigstore/cosign/cosign:v3.1.3@sha256:9e5c2f2edc343511604
 # start inside the cluster to measure the system rather than the home network. The k6 of Homebrew is not pinned. v2: the v1
 # line only gets security fixes.
 # renovate: datasource=docker depName=grafana/k6
-K6_IMAGE := grafana/k6:2.3.0@sha256:2dd4756ec6e14e62778916e1eb850108e4b499304c02df56760fa0bdb0fba0b8
+K6_IMAGE := grafana/k6:2.4.0@sha256:d41bb79cd8de5a7ad619b53570e3712633e8bff0937010a5c6c57a4747e7a276
 # DAST (make dast): the same pinned image on a dev machine and in the CI job stack.
 # renovate: datasource=docker depName=schemathesis/schemathesis
 SCHEMATHESIS_IMAGE := schemathesis/schemathesis:4.32.4@sha256:b501f25d00fa6e2b393ddd1b525a11bb560d593fd06268491595c2e439090bf0
@@ -85,14 +85,14 @@ KYVERNO_CLI_IMAGE := ghcr.io/kyverno/kyverno-cli:v1.19.1@sha256:ced7b2be0b04250c
 # oasdiff compares the spec of a pull request with its base (make api-contract-check), ORAS pushes a new version to
 # GHCR as an OCI artifact on main (deploy/ci/contract.sh); no GitHub Action of either is used.
 # renovate: datasource=docker depName=tufin/oasdiff
-OASDIFF_IMAGE := tufin/oasdiff:v1.34.1@sha256:67a23cfea7d251e2ae34ee703ac8733c5d96bc2e7b90fd0f4d475ec99367b85f
+OASDIFF_IMAGE := tufin/oasdiff:v1.39.0@sha256:004bef22058ace818b61f0eb2f05efb89fc6a3882f68bf4db0b6a86f40723fe0
 # renovate: datasource=docker depName=ghcr.io/oras-project/oras
 ORAS_IMAGE := ghcr.io/oras-project/oras:v1.3.6@sha256:9cfb578be975b762fd898b9d004243d8003aeb807a3e15b2ed212cdd1326c9eb
 # yq of the steps of images.yml that write svp-gitops (jobs promote and promote-prd, through yq_ of deploy/ci/common.sh),
 # from its official image pinned by digest, run without network: the yq preinstalled on the runner changes with the
 # runner image, unseen by Renovate and unreviewed, and these steps write the deployment repository.
 # renovate: datasource=docker depName=mikefarah/yq
-YQ_IMAGE := mikefarah/yq:4.54.1@sha256:4b3d9475d65571d28cbb19544d3820ec2945e4c8b2f18279394282b8dc3a592e
+YQ_IMAGE := mikefarah/yq:4.54.3@sha256:7834187596ad56fd5a81436114e0b0b9dd54c91bb43946d1f7145b2be5f9c3d2
 # conftest applies the Rego policies of deploy/ci/ignorefile-policies/ (the scan gate's ignore files) and
 # deploy/ci/gitops-tree-policies/ (a tree of svp-gitops), without network. yq above finds a key written twice, which
 # conftest's parser hides.
@@ -441,7 +441,7 @@ zizmor: ## Security lint of the workflows with the pinned zizmor (online audits 
 # relative link that leaves it (to plans/, which is no repository's) is an error on purpose. Both tools always run; the
 # exit code is not 0 when either reports a problem.
 # renovate: datasource=docker depName=davidanson/markdownlint-cli2
-MARKDOWNLINT_IMAGE := davidanson/markdownlint-cli2:v0.24.0@sha256:70ead7c0352d22d04bbe612cd96b54ec591538d8f4626cafe391bb2ecf3639ca
+MARKDOWNLINT_IMAGE := davidanson/markdownlint-cli2:v0.24.1@sha256:caf0698eaea0268bcf35b5e2d7ba946b5899d323e765bc2862054405658cd948
 # renovate: datasource=docker depName=lycheeverse/lychee
 LYCHEE_IMAGE := lycheeverse/lychee:0.24.2@sha256:e2d19e57cf6ab037026f20b8e449a1f30d9d7f81eef4194763aab2eab20bd28d
 # set -f keeps the globs of DOCS whole: the tools expand them (with **), sh does not and would drop the files at the top.

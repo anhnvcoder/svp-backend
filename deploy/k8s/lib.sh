@@ -17,7 +17,7 @@ export K3D_IMAGE_TOOLS=ghcr.io/k3d-io/k3d-tools:5.9.0@sha256:c57abce697e66feeb82
 # The local registry: k3d prefixes the name, so the container is k3d-svp-registry; inside it listens on
 # 5000, published on 127.0.0.1:5111 only.
 # renovate: datasource=docker depName=docker.io/library/registry
-registry_image=docker.io/library/registry:3.1.2@sha256:d4032d4cc323c1731c707931ecada07a53076eac38e3b61ae57533f170f2c6c3
+registry_image=docker.io/library/registry:3.1.2@sha256:82f6ff4a7f982960c8aa51617fea3aabc485df6e55cce80d22deb1de36f1bc3c
 # Pod probe of the drills (deploy/k8s/drills/templates/probe-up.yaml) needs busybox nc, nslookup and sleep: the Alpine
 # of media-worker's rootfs stage, which renovate.json keeps in step. Nodes pull it from Docker Hub; namespace svp-probe
 # is outside the cluster's image policy.
