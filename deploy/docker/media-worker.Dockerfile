@@ -9,7 +9,7 @@
 # Build stage: the Go release named by the go directive of go.mod (make vulncheck fails when they differ). Base images
 # are pinned by the digest of their multi-arch index (linux/amd64 and linux/arm64), as in service.Dockerfile: a tag can
 # be pushed again with other content, a digest cannot.
-FROM golang:1.27.4-trixie@sha256:b54b2639de8c1bfe538ec5ffc45f29b1932235ac5f6d63c059853646677112d9 AS build
+FROM golang:1.27.4-trixie@sha256:f18c3d73a184fb0582828510722e723b63a93f7188d11dd223d9be6f6880e65d AS build
 WORKDIR /src
 
 # Modules first, so the download layer is reused until go.mod or go.sum change.
