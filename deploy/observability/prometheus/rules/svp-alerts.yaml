@@ -1,7 +1,10 @@
-# Hand-written alerts; the SLO burn-rate alerts are in slo-generated.yaml. Evaluated every 15 s. Tested by
+# Hand-written alerts; the SLO burn-rate alerts are in slo-generated.yaml. Tested by
 # svp-alerts.test.yaml (`make slo-check`). Every alert pages but PostgresBackupTooOld, RateLimitFallbackElevated,
 # ArgoCDApplicationNotConverged and TLSCertExpiringSoon (ticket); annotations name the service, target or pod, never a
 # user value, and runbook_url points to the runbook of the alert name in docs/runbooks/ on main.
+
+# Prometheus (compose, cluster) evaluates these rules every 15 s; an AMP ruler, every rules.amp.interval of chart
+# svp-observability.
 
 # Gauges pushed over OTLP get no staleness marker when a process stops, so a stopped instance's last sample stays
 # visible for the 5 m lookback, and every restart brings a new service_instance_id. The gauge rules therefore keep only

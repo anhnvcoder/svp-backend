@@ -279,7 +279,10 @@ flowchart LR
   không có Alertmanager, Grafana của chart; Loki, Tempo chỉ chạy ở k3d (trường `platforms` của `components.json`).
 - **Luật trên AMP:** chart `svp-observability` với `rules.target: amp` render mỗi file luật (`svp-alerts`,
   `slo-generated`) thành một `RuleGroupsNamespace` của ACK prometheusservice controller trên workspace, mỗi nhóm
-  `interval: 15s` như k3d (cần quota của account nâng chu kỳ tối thiểu của AMP từ 30 s xuống 15 s, ADR-0063 §5). ACK
+  `interval` lấy từ value `rules.amp.interval`: mặc định `15s` như k3d, prd chạy giá trị này (cần quota của account nâng
+  chu kỳ tối thiểu của AMP từ 30 s xuống 15 s, ADR-0063 §5); stg `30s` ở overlay của `svp-gitops` tới khi quota 15 s của
+  stg được duyệt: cảnh báo stg cháy chậm hơn tới ~30 s, lần cháy đầu của burn rate SLO tới ~45 s
+  ([ADR-0080](../adr/0080-amp-rule-interval-stg.md)). ACK
   tạo, sửa chúng trong AMP; Argo CD chỉ áp CR. AMP đánh giá luật trễ 60 s (`rule_query_offset` mặc định) để chờ mẫu đến
   muộn, nên cảnh báo cháy chậm hơn k3d khoảng một phút. Nhóm luật upstream của `kube-prometheus-stack` (`defaultRules`)
   không chuyển lên AMP: ở k3d chúng không page, và không luật, dashboard nào của dự án đọc recording rule của chúng;
@@ -416,15 +419,16 @@ Khi feed-service đọc Postgres để trả trang khám phá, nó ghi dòng `ex
 
 Rule viết tay ở
 [`deploy/observability/prometheus/rules/svp-alerts.yaml`](../../deploy/observability/prometheus/rules/svp-alerts.yaml);
-cảnh báo burn rate của SLO ở `slo-generated.yaml` ([SLO](reliability.md#slo)). Rule được đánh giá mỗi 15 s (Prometheus ở
-compose, k3d; ruler của AMP trên EKS, [mục EKS](#eks)) và kiểm bằng `svp-alerts.test.yaml` (`make slo-check`). Trong
-rule viết tay, mọi cảnh báo là page trừ `PostgresBackupTooOld`, `RateLimitFallbackElevated` và
+cảnh báo burn rate của SLO ở `slo-generated.yaml` ([SLO](reliability.md#slo)). Prometheus ở compose, k3d và ruler của AMP
+ở prd đánh giá rule mỗi 15 s, ruler của AMP ở stg mỗi 30 s ([mục EKS](#eks)); rule kiểm bằng `svp-alerts.test.yaml` ở 15 s
+(`make slo-check`). Trong rule viết tay, mọi cảnh báo là page trừ `PostgresBackupTooOld`, `RateLimitFallbackElevated` và
 `ArgoCDApplicationNotConverged` (ticket). Annotation nêu service, target hay pod, không bao giờ nêu giá trị của user;
 `runbook_url` trỏ tới runbook cùng tên cảnh báo trong `docs/runbooks/` trên `main`.
 
 - **Gauge đẩy qua OTLP:** gauge đẩy qua OTLP không có staleness marker khi tiến trình dừng, nên mẫu cuối của instance đã dừng vẫn
   hiện trong 5 phút lookback, và mỗi lần restart mang `service_instance_id` mới. Vì vậy rule trên gauge giữ chỉ các mẫu mới hơn 45 s
-  (2 lần chu kỳ xuất 15 s cộng 15 s đánh giá), theo từng series gồm instance, bằng `timestamp(x) > time() - 45` trên chính series
+  (2 lần chu kỳ xuất 15 s cộng 15 s đánh giá; ruler 30 s của stg vẫn giữ mọi series còn xuất, chỉ bỏ mẫu của instance đã dừng
+  chậm hơn tối đa 15 s), theo từng series gồm instance, bằng `timestamp(x) > time() - 45` trên chính series
   nguồn; và đo mọi khoảng thời gian bằng mẫu thật, không dùng `for`: `for` sẽ tiếp tục đếm trong lúc mẫu cuối của instance đã được
   thay còn nằm trong 45 s, và page về một instance đã biến mất. Bộ ngắt mạch đếm mẫu trong một cửa sổ; các vòng lặp so thời điểm
   của chính một mẫu với lần thành công cuối mà nó báo. Cửa sổ dài hơn khoảng thời gian nó chứng minh 20 s (15 s cho mẫu ở đầu cửa

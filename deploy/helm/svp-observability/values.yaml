@@ -138,13 +138,15 @@ collector:
 
 # The rules of files/rules/: prometheus, a PrometheusRule each for the Prometheus in the cluster; amp, a
 # RuleGroupsNamespace each in workspace amp.workspaceId and one AlertManagerDefinition sending every alert to SNS topic
-# amp.alarmTopicArn, both through ACK's controller (pods.ack). region: the workspace's and the topic's.
+# amp.alarmTopicArn, both through ACK's controller (pods.ack). region: the workspace's and the topic's. interval: the
+# ruler's period for every group (30s, 1m), not below the account's AMP quota "Rule evaluation interval".
 rules:
   target: prometheus
   amp:
     workspaceId: ""
     alarmTopicArn: ""
     region: ""
+    interval: 15s
 
 # The dashboards of files/dashboards/ and their data sources: sidecar, ConfigMaps Grafana of kube-prometheus-stack
 # loads; grafana-operator, a Grafana outside the cluster (grafana.url, its API token in Secret grafana-operator, key
