@@ -58,6 +58,16 @@ done
    bundle quá 72 giờ dù rescan vừa chạy; `verify-release.sh` báo `carries 2 vuln attestations, not exactly one`. Rescan chạy lại
    (lệnh ở mục Giảm thiểu) attest bản mới và gỡ mọi bản khác nên đưa digest về đúng một; log job `rescan` nêu bundle nào còn lại. Chưa
    gặp ở lượt phát hành thật nào (định dạng bundle còn **kiểm sau push**).
+6. **Job `rescan` không đăng nhập được AWS của một env**: bước `configure-aws-credentials` của env đó đỏ với `Could not
+   assume role with OIDC: The web identity token provided could not be validated` (`InvalidIdentityToken`), trước khi
+   quét gì, nên cả bản trên GHCR cũng không được attest lại. STS không nhận token GitHub với account mà secret
+   `SVP_AWS_<ENV>_ACCOUNT_ID` trỏ tới. Trust sai `sub` thì báo `Not authorized to perform sts:AssumeRoleWithWebIdentity`,
+   không phải lỗi này. Người học kiểm theo thứ tự:
+   - `AWS_PROFILE=anhnv-<env> aws sts get-caller-identity --region ap-southeast-1`: account trùng account của secret.
+   - `AWS_PROFILE=anhnv-<env> aws iam list-open-id-connect-providers --region ap-southeast-1`: có ARN kết thúc bằng
+     `oidc-provider/token.actions.githubusercontent.com`; thiếu thì áp root `aws/accounts/<env>` của `svp-infra` (module
+     `registry` tạo provider và role `svp-ci-ecr-rescan-backend`).
+   - Provider có mà vẫn lỗi: `aws iam get-open-id-connect-provider` với ARN đó phải có client ID `sts.amazonaws.com`.
 
 ## Giảm thiểu
 

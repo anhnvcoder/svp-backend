@@ -110,6 +110,7 @@ tools=(TRIVY_IMAGE=fake.invalid/trivy@sha256:1 SYFT_IMAGE=fake.invalid/syft@sha2
 # The fakes. docker: the host's architecture, login, tag, push and imagetools create succeed; imagetools inspect --raw
 # answers FAKE_RAW; grype on the SBOM writes FAKE_GRYPE_JSON and exits FAKE_GRYPE; every call goes to docker.log, one
 # with DOCKER_DEFAULT_PLATFORM set also to platform.log, and is refused. cosign: logs each call, adds a referrer.
+# ORAS manifest push writes its stdin to FAKE_RAW: the tag serves that manifest from then on.
 
 # ORAS lists the referrers of a fake registry under bundles/ (a folder per subject digest, one file per bundle, holding
 # its predicate type; <hex>.sig for cosign's older format), with the annotation of the type only on the types in
@@ -215,6 +216,7 @@ case "$1 $2" in
         layers: [{mediaType: $m, digest: $l, size: $s}]}'
   fi
   ;;
+"manifest push") cat >"$FAKE_RAW" ;;
 "blob fetch")
   [ -z "${FAKE_BLOB_DOWN:-}" ] || {
     echo "Error: failed to fetch $ref: unexpected status 500" >&2
@@ -603,28 +605,66 @@ push() {
     bash --noprofile --norc -eo pipefail -c "$(cat "$push_script")" >"$work/step.out" 2>"$work/step.err" || rc=$?
   same "push: $name (exit $want)" "$want" "$rc"
 }
+# manifest CONFIG [LAYER_TYPE]: what docker of the classic image store pushes, a Docker schema 2 manifest of config
+# CONFIG with one gzip layer (or LAYER_TYPE), as the registry serves it under the leg's tag.
 manifest() {
-  jq -nc --arg c "$1" '{schemaVersion: 2, mediaType: "application/vnd.oci.image.manifest.v1+json",
-    config: {mediaType: "application/vnd.oci.image.config.v1+json", digest: $c}, layers: []}' >"$work/raw.json"
+  jq -nc --arg c "$1" --arg l "${2:-application/vnd.docker.image.rootfs.diff.tar.gzip}" --arg d "$amd64" '{schemaVersion: 2,
+    mediaType: "application/vnd.docker.distribution.manifest.v2+json",
+    config: {mediaType: "application/vnd.docker.container.image.v1+json", size: 1234, digest: $c},
+    layers: [{mediaType: $l, size: 5678, digest: $d}]}' >"$work/raw.json"
 }
+# shape FILE: media types and digests of the manifest FILE, one line.
+shape() { jq -c '[.mediaType, .config.mediaType, .config.digest, (.layers[] | .mediaType, .digest)]' "$1"; }
 remote=${backend}gateway:${base:0:12}-amd64
+oci_push="manifest push --media-type application/vnd.oci.image.manifest.v1+json $remote - --registry-config /auth/config.json"
 leg_dir "$work/pleg" amd64
 manifest "$config"
+cp "$work/raw.json" "$work/docker-pushed.json"
 push "the scanned image" 0
-same "push: tagged and pushed as the commit's tag of its source, read back" \
-  "tag svp-ci/gateway:${base:0:12}-amd64 $remote|push --quiet $remote|buildx imagetools inspect --raw $remote" \
+same "push: tagged and pushed as the commit's tag of its source, read back twice" \
+  "tag svp-ci/gateway:${base:0:12}-amd64 $remote|push --quiet $remote|buildx imagetools inspect --raw $remote|buildx imagetools inspect --raw $remote" \
   "$(grep -E '^(tag|push|buildx)' "$work/docker.log" | paste -sd'|' -)"
+same "push: the Docker manifest relabelled OCI under the same tag by the pinned ORAS, from stdin" \
+  "run --rm -i --user $(id -u):$(id -g) -e HOME=/tmp -v $work/home/.docker/config.json:/auth/config.json:ro $oras_image $oci_push" \
+  "$(grep -F "$oci_push" "$work/docker.log")"
+same "push: the manifest read back is OCI, with the config and layer docker pushed" \
+  "[\"application/vnd.oci.image.manifest.v1+json\",\"application/vnd.oci.image.config.v1+json\",\"$config\",\"application/vnd.oci.image.layer.v1.tar+gzip\",\"$amd64\"]" \
+  "$(shape "$work/pleg/manifest.json")"
+same "push: the relabelled manifest keeps every other field of docker's" \
+  "$(jq -c 'del(.mediaType, .config.mediaType, .layers[].mediaType)' "$work/docker-pushed.json")" \
+  "$(jq -c 'del(.mediaType, .config.mediaType, .layers[].mediaType)' "$work/pleg/manifest.json")"
 same "push: repository and the digest of the manifest read back" "${backend}gateway $(digest_of "$work/raw.json")" \
   "$(cat "$work/pleg/repository") $(cat "$work/pleg/digest")"
 check "push: the token reaches docker login on stdin only" lacks "$work/docker.log" fake-token
 leg_dir "$work/pleg" amd64
 manifest "$other"
 push "a manifest read back with another config" 1
-check "push: another config says so" has "$work/step.err" "the scan had $config: not the scanned image"
+check "push: another config says so" has "$work/step.err" \
+  "is application/vnd.docker.distribution.manifest.v2+json of config $other, not a Docker schema 2 manifest of config $config"
+check "push: another config: nothing relabelled" lacks "$work/docker.log" "manifest push"
 check "push: another config: no digest handed on" test ! -e "$work/pleg/digest"
+leg_dir "$work/pleg" amd64
+manifest "$config" application/vnd.docker.image.rootfs.foreign.diff.tar.gzip
+push "a layer of another media type" 1
+check "push: a layer of another media type: nothing relabelled" lacks "$work/docker.log" "manifest push"
+check "push: a layer of another media type: no OCI manifest written" test ! -e "$work/pleg/oci.json"
 jq -n '{mediaType: "application/vnd.oci.image.index.v1+json", manifests: []}' >"$work/raw.json"
 push "an index read back" 1
-check "push: an index read back is no single manifest" has "$work/step.err" "<not a single manifest>"
+check "push: an index read back is no Docker manifest" has "$work/step.err" "not a Docker schema 2 manifest"
+# pushed alone: a Docker manifest read back (what the registry served before the relabel) is no leg.
+leg_dir "$work/pleg" amd64
+manifest "$config"
+cp "$work/raw.json" "$work/pleg/manifest.json"
+guard github "pushed: a Docker manifest" 1 "${backend_run[@]}" -- pushed gateway amd64 "$work/pleg"
+check "pushed: a Docker manifest is no single OCI manifest" has "$work/run.err" "<not a single OCI manifest>"
+check "pushed: a Docker manifest: no digest handed on" test ! -e "$work/pleg/digest"
+# pushed alone: an OCI manifest whose config is not the scanned one is another image.
+leg_dir "$work/pleg" amd64
+jq -n --arg c "$other" '{mediaType: "application/vnd.oci.image.manifest.v1+json", config: {digest: $c}}' \
+  >"$work/pleg/manifest.json"
+guard github "pushed: an OCI manifest of another config" 1 "${backend_run[@]}" -- pushed gateway amd64 "$work/pleg"
+check "pushed: another config says so" has "$work/run.err" "has config $other, the scan had $config"
+check "pushed: another config: no digest handed on" test ! -e "$work/pleg/digest"
 manifest "$config"
 push "a local image tagged anew since the scan" 1 FAKE_IMAGE_ID="$other"
 check "push: a local image tagged anew says so" has "$work/step.err" "is no longer the image that was scanned"
@@ -660,11 +700,16 @@ legs() {
     echo '{"spdxVersion": "SPDX-2.3"}' >"$d/sbom.spdx.json"
   done
 }
-# index_of A B: the index of the two manifest digests the registry answers, in raw.json.
+# index_of A B [JQ]: the OCI index of the two OCI manifests A and B with the annotations of the backend's commit, as
+# buildx imagetools create writes it, changed by the jq filter JQ; the registry answers it, in raw.json.
+created=$(TZ=UTC g log -1 --format=%cd --date=format-local:%Y-%m-%dT%H:%M:%SZ "$base")
 index_of() {
-  jq -nc --arg a "$1" --arg b "$2" '{schemaVersion: 2, mediaType: "application/vnd.oci.image.index.v1+json", manifests: [
-    {digest: $a, platform: {os: "linux", architecture: "amd64"}},
-    {digest: $b, platform: {os: "linux", architecture: "arm64"}}]}' >"$work/raw.json"
+  jq -nc --arg a "$1" --arg b "$2" --arg r "$base" --arg t "$created" '{schemaVersion: 2,
+    mediaType: "application/vnd.oci.image.index.v1+json", manifests: [
+    {mediaType: "application/vnd.oci.image.manifest.v1+json", digest: $a, platform: {os: "linux", architecture: "amd64"}},
+    {mediaType: "application/vnd.oci.image.manifest.v1+json", digest: $b, platform: {os: "linux", architecture: "arm64"}}],
+    annotations: {"org.opencontainers.image.source": "https://github.com/anhnvcoder/svp-backend",
+      "org.opencontainers.image.revision": $r, "org.opencontainers.image.created": $t}}' | jq -c "${3:-.}" >"$work/raw.json"
 }
 join_name="Join the two manifests into one index, check it"
 yq_ image-index ".runs.steps[] | select(.name == \"$join_name\") | .run" >"$work/steps/image-index-join.run"
@@ -698,6 +743,19 @@ index_of "$amd64" "$other"
 join "an index read back with another manifest" 1
 check "index: another manifest says so" has "$work/step.err" "is not an index of exactly the two scanned manifests"
 check "index: another manifest: no digest handed on" test ! -e "$idx/index/digest"
+# What buildx makes of two Docker manifests: a Docker manifest list, whose annotations buildx before 0.39 dropped.
+not_oci="is not an OCI index of OCI manifests with the annotations org.opencontainers.image.created"
+for change in '.mediaType = "application/vnd.docker.distribution.manifest.list.v2+json" | del(.annotations)
+    | .manifests[].mediaType = "application/vnd.docker.distribution.manifest.v2+json"' \
+  'del(.annotations)' '.annotations["org.opencontainers.image.revision"] = "0000000000000000000000000000000000000000"' \
+  '.manifests[1].mediaType = "application/vnd.docker.distribution.manifest.v2+json"'; do
+  rm -rf "$idx/index"
+  guard github "index gateway, before: ${change%%|*}" 0 "${backend_run[@]}" -- index gateway "$idx/legs"
+  index_of "$amd64" "$arm64" "$change"
+  join "an index read back: ${change%%|*}" 1
+  check "index: ${change%%|*}: says so" has "$work/step.err" "$not_oci"
+  check "index: ${change%%|*}: no digest handed on" test ! -e "$idx/index/digest"
+done
 rm -rf "$idx/legs/leg-gateway-arm64"
 refused "index, a leg missing" "gateway: a leg did not pass (see the build job); no index, no signature, no release" \
   "${backend_run[@]}" -- index gateway "$idx/legs"

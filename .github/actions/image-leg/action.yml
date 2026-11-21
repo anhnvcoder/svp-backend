@@ -282,8 +282,9 @@ runs:
         [ "$blocked" -ne 0 ] || echo "ok    $LABEL (trivy) passes the scan gate"
         exit "$blocked"
 
-    # main only: push exactly the scanned image, read back what the registry serves under its tag and compare its config
-    # digest with the scanned one; any difference fails the leg, and that digest is never merged, signed or promoted.
+    # main only: push exactly the scanned image, relabel the Docker manifest docker pushed as OCI under the same tag
+    # (same blobs), read back what the registry serves under its tag and compare its config digest with the scanned one;
+    # any difference fails the leg, and that digest is never merged, signed or promoted.
     - name: Push the scanned image, compare its config digest
       if: ${{ inputs.push == 'true' }}
       shell: bash
@@ -300,6 +301,8 @@ runs:
         printf '%s' "$GH_TOKEN" | docker login ghcr.io --username "$GITHUB_ACTOR" --password-stdin
         docker tag "$(cat "$OUT/local-tag")" "$remote"
         docker push --quiet "$remote" >/dev/null
+        docker buildx imagetools inspect --raw "$remote" >"$OUT/pushed.json"
+        "$GUARD" oci "$IMAGE" "$ARCH" "$OUT"
         docker buildx imagetools inspect --raw "$remote" >"$OUT/manifest.json"
         "$GUARD" pushed "$IMAGE" "$ARCH" "$OUT"
 
