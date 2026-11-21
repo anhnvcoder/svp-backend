@@ -1,5 +1,17 @@
 # Changelog
 
+## [1.3.0](https://github.com/anhnvcoder/svp-backend/compare/gitops-check-v1.2.0...gitops-check-v1.3.0) (2026-11-21)
+
+
+### Features
+
+* copy releases to ECR in CI and document the managed platform ([#131](https://github.com/anhnvcoder/svp-backend/issues/131)) ([60bedd4](https://github.com/anhnvcoder/svp-backend/commit/60bedd4761a11e7a3149797d10008455a1c1f5e3))
+
+
+### Bug Fixes
+
+* **ci:** push release legs as OCI manifests so the index keeps its annotations ([#160](https://github.com/anhnvcoder/svp-backend/issues/160)) ([d92617a](https://github.com/anhnvcoder/svp-backend/commit/d92617abe1373b2cb0703e7aef4b3d27315e5283))
+
 ## [1.2.0](https://github.com/anhnvcoder/svp-backend/compare/gitops-check-v1.1.1...gitops-check-v1.2.0) (2026-11-16)
 
 
