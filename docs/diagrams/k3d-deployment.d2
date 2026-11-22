@@ -195,7 +195,7 @@ all.k3d.app.gw -> all.k3d.data.vk: "6379" {class: sync-call}
 all.k3d.app.svc -> all.k3d.data.pg: "5432" {class: sync-call}
 all.k3d.app.svc -> all.k3d.data.kafka: "9096" {class: event-flow}
 all.k3d.app.mw -> all.k3d.data.s3: {class: sync-call}
-all.k3d.app.mw -> all.k3d.data.kafka: "lag cho KEDA" {class: event-flow}
+all.k3d.data.kafka -> all.k3d.app.mw: {class: event-flow}
 all.k3d.app -> all.k3d.W.obs: "OTLP" {class: data-flow}
 all.k3d.W.obs.col -> all.k3d.W.obs.store: {class: data-flow}
 all.k3d.W.obs.ui -> all.k3d.W.obs.store: {class: data-flow}
