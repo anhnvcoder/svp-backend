@@ -19,8 +19,8 @@ all: "" {
   grid-rows: 4
   grid-columns: 5
   grid-gap: 0
-  horizontal-gap: 60
-  vertical-gap: 60
+  horizontal-gap: 68
+  vertical-gap: 80
   style: {stroke: transparent; fill: transparent}
 
   dev: "Người học,\nRenovate" {
@@ -133,7 +133,7 @@ all: "" {
 }
 
 all.dev -> all.pr: {class: control-flow}
-all.pr -> all.main: "xanh, merge" {class: control-flow}
+all.pr -> all.main: "xanh,\nmerge" {class: control-flow}
 all.main -> all.build: {class: control-flow}
 all.build -> all.promote: {class: control-flow}
 all.build -> all.ghcr: "push, bundle" {class: data-flow}
