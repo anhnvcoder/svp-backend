@@ -1,0 +1,148 @@
+# Containers (C4 level 2). Dashed double arrows to Kafka carry no label: containers-detail names the events of each
+# service. The CDN sits in the object storage node because it only fronts that bucket on the cloud.
+vars: {
+  d2-config: {
+    layout-engine: elk
+    pad: 20
+  }
+}
+...@tokens
+
+title: "Mỗi service làm gì, giữ dữ liệu nào, phát và nhận event nào?" {
+  shape: text
+  near: top-center
+  style: {font-size: 18; bold: true}
+}
+
+all: "" {
+  grid-rows: 4
+  grid-columns: 4
+  grid-gap: 0
+  horizontal-gap: 90
+  vertical-gap: 50
+  style: {stroke: transparent; fill: transparent}
+
+  vk: "Valkey" {
+    class: data
+    grid-rows: 2
+    grid-gap: 24
+    vertical-gap: 6
+    s: "TLS, 6379, user ACL theo db" {class: sub}
+    r: "ElastiCache trên cloud" {class: root}
+  }
+  fs: "feed-service" {
+    class: workload
+    grid-rows: 2
+    grid-gap: 24
+    vertical-gap: 6
+    s: "Read model feed" {class: sub}
+    r: "Postgres svp_feed" {class: root}
+  }
+  us: "user-service" {
+    class: workload
+    grid-rows: 2
+    grid-gap: 24
+    vertical-gap: 6
+    s: "Tài khoản, follow, hồ sơ" {class: sub}
+    r: "Postgres svp_user" {class: root}
+  }
+  dr: "dlq-replay" {
+    class: workload
+    grid-rows: 2
+    grid-gap: 24
+    vertical-gap: 6
+    s: "Chờ lệnh, phát lại DLQ" {class: sub}
+    r: "Go" {class: root}
+  }
+  web: "web" {
+    class: workload
+    grid-rows: 2
+    grid-gap: 24
+    vertical-gap: 6
+    s: "Next.js, BFF: session, CSRF,\nCSP, proxy /api/*" {class: sub}
+    r: "svp-frontend" {class: root}
+  }
+  gw: "gateway" {
+    class: workload
+    grid-rows: 2
+    grid-gap: 24
+    vertical-gap: 6
+    s: "JWT, rate limit, ghép dữ liệu;\ngRPC tới 4 service" {class: sub}
+    r: "Go, net/http" {class: root}
+  }
+  bus: "Kafka" {
+    class: data
+    grid-rows: 2
+    grid-gap: 24
+    vertical-gap: 6
+    s: "SCRAM-SHA-512 trên TLS, 9096" {class: sub}
+    r: "MSK trên cloud" {class: root}
+  }
+  sp1: "" {width: 10; height: 10; style: {stroke: transparent; fill: transparent}}
+  sp2: "" {width: 10; height: 10; style: {stroke: transparent; fill: transparent}}
+  es: "engagement-service" {
+    class: workload
+    grid-rows: 2
+    grid-gap: 24
+    vertical-gap: 6
+    s: "Like, view, bộ đếm" {class: sub}
+    r: "Postgres svp_engagement" {class: root}
+  }
+  vs: "video-service" {
+    class: workload
+    grid-rows: 2
+    grid-gap: 24
+    vertical-gap: 6
+    s: "Metadata, vòng đời video" {class: sub}
+    r: "Postgres svp_video" {class: root}
+  }
+  mw: "media-worker" {
+    class: workload
+    grid-rows: 2
+    grid-gap: 24
+    vertical-gap: 6
+    s: "Transcode HLS" {class: sub}
+    r: "Go + ffmpeg" {class: root}
+  }
+  browser: "" {
+    grid-rows: 1
+    grid-columns: 1
+    grid-gap: 0
+    style: {stroke: transparent; fill: transparent}
+    p: "Trình duyệt, k6, curl" {
+      class: person
+      width: 90
+      height: 90
+    }
+  }
+  sp3: "" {width: 10; height: 10; style: {stroke: transparent; fill: transparent}}
+  sp4: "" {width: 10; height: 10; style: {stroke: transparent; fill: transparent}}
+  obj: "Object storage · CDN" {
+    class: data
+    grid-rows: 2
+    grid-gap: 24
+    vertical-gap: 6
+    s: "uploads, media (media/, preview/,\npremium/); trên cloud CloudFront\nđứng trước, premium/ cần URL đã ký" {class: sub}
+    r: "RustFS / S3 · CloudFront" {class: root}
+  }
+}
+
+all.browser.p -> all.web: {class: sync-call}
+all.browser.p -> all.gw: {class: sync-call}
+all.browser.p -> all.obj: "presigned POST;\nGET HLS" {class: sync-call}
+all.web -> all.gw: {class: sync-call}
+all.web -> all.vk: "session, khoá refresh (db 9)" {class: sync-call}
+all.gw -> all.vk: "rate limit (db 10)" {class: sync-call}
+all.gw -> all.us: {class: sync-call}
+all.gw -> all.vs: {class: sync-call}
+all.gw -> all.es: {class: sync-call}
+all.gw -> all.fs: {class: sync-call}
+all.vs -> all.obj: {class: sync-call}
+all.mw -> all.obj: {class: sync-call}
+all.fs -> all.vk: {class: sync-call}
+all.us -> all.bus: {class: event-flow}
+all.vs <-> all.bus: {class: event-flow}
+all.mw <-> all.bus: {class: event-flow}
+all.es <-> all.bus: {class: event-flow}
+all.fs <- all.bus: {class: event-flow}
+all.dr <-> all.bus: {class: event-flow}

@@ -468,7 +468,8 @@ jobs:
           path: ${{ runner.temp }}/zizmor.sarif
           if-no-files-found: ignore
 
-  # Checks Markdown style, internal links and heading anchors (make docs-check): pinned images, offline, no network.
+  # Checks Markdown style, internal links and heading anchors (make docs-check) and that each diagram SVG matches its
+  # .d2 source (make diagrams-check): pinned images, offline, no network.
   docs:
     runs-on: ubuntu-24.04
     timeout-minutes: 10
@@ -479,6 +480,7 @@ jobs:
         with:
           persist-credentials: false
       - run: make docs-check
+      - run: make diagrams-check
 
   # Fails on added/changed dependencies with high or critical vulnerabilities before trivy and grype see them in an
   # image.

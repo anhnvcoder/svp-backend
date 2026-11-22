@@ -1,5 +1,15 @@
 # dnssec-ksk-action-needed
 
+> **Tóm tắt**
+>
+> - **Làm gì:** đưa KSK `svp_prd_ksk` của zone prd về `ACTIVE` khi Route 53 mất quyền dùng key KMS `alias/svp-dnssec`: tìm key bị tắt,
+>   chờ xoá hay policy đổi, sửa key rồi bật lại KSK; zone đã `SERVFAIL` thì đi đường lui (gỡ `DS` ở DNS cha, rồi tắt ký). Chỉ AWS,
+>   account prd, `us-east-1`.
+> - **Khi nào và bao lâu:** khi alarm `svp-prd-dnssec-ksk-action-needed` kêu. Kiểm 5 phút; chữ ký đang phục vụ còn hạn vài ngày, nên sửa
+>   trong ngày; đường lui chờ thêm TTL của `DS` ở DNS cha.
+> - **Phí trong lúc chạy:** không phát sinh phí: lệnh đọc và đổi trạng thái key, KSK có sẵn. Riêng khi key đã xoá hẳn (Leo thang), key KMS
+>   mới tính tiền như key cũ ([phụ lục ADR-0061 §13](../adr/appendix/0061-edge-cloudfront-waf-acm.md#13-chi-phí-edge)).
+
 - Severity: `page`. Alarm CloudWatch `svp-prd-dnssec-ksk-action-needed` của module `account-baseline` (`aws/modules/account-baseline/dnssec.tf`
   của `svp-infra`), chỉ zone prd `aws.<miền>`, ở `us-east-1`; email tới từ topic `svp-prd-dns-alarms`. Thiết kế: [ADR-0061](../adr/0061-edge-cloudfront-waf-acm.md) §11.
 - Mọi lệnh AWS do người học chạy. Lệnh đọc dùng permission set chỉ đọc `anhnv-prd-ro`; lệnh ghi (Giảm thiểu, Khôi phục) dùng `anhnv-prd`, chỉ
@@ -8,14 +18,16 @@
 Dán một lần cho mỗi terminal (Route 53 và key DNSSEC chỉ ở `us-east-1`; id zone đọc từ dimension của alarm nên không cần state Terraform):
 
 ```sh
-ro() { AWS_PROFILE=anhnv-prd-ro aws --region us-east-1 "$@"; }
+ro() { AWS_PROFILE=anhnv-prd-ro aws --no-cli-pager --region us-east-1 "$@"; }
 D='aws.<miền>'   # tên zone prd
-ZONE=$(ro cloudwatch describe-alarms --alarm-names svp-prd-dnssec-ksk-action-needed --query 'MetricAlarms[0].Dimensions[?Name==`HostedZoneId`].Value' --output text)
+ZONE=$(ro cloudwatch describe-alarms --alarm-names svp-prd-dnssec-ksk-action-needed \
+  --query 'MetricAlarms[0].Dimensions[?Name==`HostedZoneId`].Value' --output text)
 KEY=$(ro kms describe-key --key-id alias/svp-dnssec --query KeyMetadata.KeyId --output text)
 echo "zone=$ZONE key=$KEY"   # <zone-id>, id key; KEY rỗng là key đã bị xoá hẳn (Leo thang)
 ```
 
-Trước mỗi khối lệnh ghi, ở bản clone `svp-infra` (biến `SVP_AWS_PRD_ACCOUNT_ID` đã export, không ghi vào file nào):
+Lệnh ghi chạy ở bản clone `svp-infra` (biến `SVP_AWS_PRD_ACCOUNT_ID` đã export, không ghi vào file nào). Dán khối này một lần trước lệnh
+ghi đầu tiên; mỗi lệnh ghi bên dưới nối sau `aws/scripts/check-account.sh prd` bằng `&&`, nên account khác thì lệnh ghi không chạy:
 
 ```sh
 export SVP_SESSION_DIR="$PWD/.session/$(date -u +%Y%m%dT%H%M%SZ)"
@@ -50,13 +62,18 @@ AWS và DNS (người học chạy):
 
 ```sh
 # 1. Trạng thái ký của zone và của KSK, kèm lý do Route 53 ghi
-ro route53 get-dnssec --hosted-zone-id "$ZONE" --query '{Zone:Status,KSK:KeySigningKeys[].{Name:Name,Status:Status,Message:StatusMessage,Kms:KmsArn}}' --output json
+ro route53 get-dnssec --hosted-zone-id "$ZONE" \
+  --query '{Zone:Status,KSK:KeySigningKeys[].{Name:Name,Status:Status,Message:StatusMessage,Kms:KmsArn}}' --output json
 # 2. Trạng thái key KMS: Enabled, Disabled, PendingDeletion (kèm ngày xoá)
 ro kms describe-key --key-id "$KEY" --query 'KeyMetadata.[KeyState,Enabled,DeletionDate]' --output text
 # 3. Key policy còn hai statement cho dnssec-route53.amazonaws.com và statement quản trị của account
-ro kms get-key-policy --key-id "$KEY" --policy-name default --query Policy --output text | jq -c '.Statement[] | [.Sid, .Principal, .Action]'
+ro kms get-key-policy --key-id "$KEY" --policy-name default --query Policy --output text \
+  | jq -c '.Statement[] | [.Sid, .Principal, .Action]'
 # 4. Ai đổi key trong 2 ngày qua (CloudTrail của account, us-east-1)
-ro cloudtrail lookup-events --lookup-attributes AttributeKey=EventSource,AttributeValue=kms.amazonaws.com --start-time "$(date -u -v-2d +%FT%TZ)" --query "Events[?contains(['DisableKey','ScheduleKeyDeletion','PutKeyPolicy','RevokeGrant','RetireGrant','EnableKey','CancelKeyDeletion'], EventName)].[EventTime,EventName,Username]" --output text
+ro cloudtrail lookup-events --lookup-attributes AttributeKey=EventSource,AttributeValue=kms.amazonaws.com \
+  --start-time "$(date -u -v-2d +%FT%TZ)" \
+  --query "Events[?contains(['DisableKey','ScheduleKeyDeletion','PutKeyPolicy','RevokeGrant','RetireGrant','EnableKey','CancelKeyDeletion'], EventName)].[EventTime,EventName,Username]" \
+  --output text
 # 5. Cha có DS của aws chưa, và resolver kiểm DNSSEC có phân giải được zone không
 dig +short DS "$D" @1.1.1.1
 dig +dnssec +noall +comments SOA "$D" @1.1.1.1 | grep -E 'status|flags'
@@ -118,13 +135,9 @@ của module: gỡ `DS` trước, chờ, rồi mới tắt ký.
    ```
 
    Từ đây người dùng đã có lại zone, kể cả khi key còn hỏng.
-3. Tắt ký ở root `aws/accounts/prd` của `svp-infra` (kiểm account trước, khối ở đầu trang):
-
-   ```sh
-   cd aws/accounts/prd
-   AWS_PROFILE=anhnv-prd TF_VAR_account_id="$SVP_AWS_PRD_ACCOUNT_ID" terraform plan -var dnssec_signing=false -out=prd.tfplan
-   AWS_PROFILE=anhnv-prd TF_VAR_account_id="$SVP_AWS_PRD_ACCOUNT_ID" terraform apply prd.tfplan && rm prd.tfplan
-   ```
+3. Tắt ký ở root `aws/accounts/prd` của `svp-infra`: làm bước 3 của mục
+   [Đường lui](https://github.com/anhnvcoder/svp-infra/blob/main/docs/runbooks/edge-setup.md#đường-lui) trong runbook `edge-setup.md` (kiểm
+   account, plan với `-var dnssec_signing=false` lưu ra file, đọc plan, apply đúng file đó).
 
    Đọc plan trước khi apply: `module.baseline.aws_route53_hosted_zone_dnssec.this[0]` đổi tại chỗ `SIGNING` → `NOT_SIGNING`, và
    `module.baseline.aws_route53_key_signing_key.this[0]` đổi `status` về `ACTIVE` khi KSK chưa `ACTIVE`; không tạo, thay thế hay xoá gì. Plan có
@@ -141,19 +154,37 @@ cũng theo `edge-setup.md`, chỉ khi bước 1 của Kiểm tra nhanh đã sạ
 Sửa key theo nguyên nhân (lệnh ghi, kiểm account trước), rồi bật lại KSK. Thứ tự quan trọng: key dùng được trước, KSK sau.
 
 - **Nguyên nhân 1, key tắt:**
-  `AWS_PROFILE=anhnv-prd aws kms enable-key --key-id "$KEY" --region us-east-1`.
-- **Nguyên nhân 2, key chờ xoá:** huỷ xoá trước mọi `terraform plan`, rồi bật (huỷ xoá để key ở `Disabled`):
-  `AWS_PROFILE=anhnv-prd aws kms cancel-key-deletion --key-id "$KEY" --region us-east-1`, rồi lệnh `enable-key` ở trên. Provider Terraform coi
-  key `PendingDeletion` là không còn, nên plan trước khi huỷ đề nghị tạo key mới và thay KSK: không apply plan đó.
-- **Nguyên nhân 3, key policy:** Terraform giữ policy đúng; apply lại ở `aws/accounts/prd` (`plan -out=prd.tfplan` rồi `apply prd.tfplan` như bước
-  3 của đường lui, không `-var`). Plan chỉ được đổi tại chỗ `module.baseline.aws_kms_key.dnssec[0]` (`policy`) và
+
+  ```sh
+  aws/scripts/check-account.sh prd &&
+    AWS_PROFILE=anhnv-prd aws --no-cli-pager kms enable-key --key-id "$KEY" --region us-east-1
+  ```
+
+- **Nguyên nhân 2, key chờ xoá:** huỷ xoá (khối dưới) trước mọi `terraform plan`, rồi bật bằng lệnh `enable-key` ở trên: huỷ xoá để key
+  ở `Disabled`. Provider Terraform coi key `PendingDeletion` là không còn, nên plan trước khi huỷ đề nghị tạo key mới và thay KSK: không
+  apply plan đó.
+
+  ```sh
+  aws/scripts/check-account.sh prd &&
+    AWS_PROFILE=anhnv-prd aws --no-cli-pager kms cancel-key-deletion --key-id "$KEY" --region us-east-1
+  ```
+
+- **Nguyên nhân 3, key policy:** Terraform giữ policy đúng; apply lại ở `aws/accounts/prd` (plan lưu ra file rồi apply đúng file đó như
+  bước 3 của đường lui, không `-var`). Plan chỉ được đổi tại chỗ `module.baseline.aws_kms_key.dnssec[0]` (`policy`) và
   `module.baseline.aws_route53_key_signing_key.this[0]` (`status` về `ACTIVE`, apply làm việc của lệnh `activate` dưới đây).
 - **Nguyên nhân 4, RCP:** sửa ở root `aws/org` (management, `anhnv-sso`) theo README của root đó, giữ luồng của `dnssec-route53.amazonaws.com`.
 
 Bật lại KSK khi key đã `Enabled` và policy đúng (bỏ qua nếu apply của nguyên nhân 3 đã làm):
 
 ```sh
-AWS_PROFILE=anhnv-prd aws route53 activate-key-signing-key --hosted-zone-id "$ZONE" --name svp_prd_ksk --region us-east-1
+aws/scripts/check-account.sh prd &&
+  AWS_PROFILE=anhnv-prd aws --no-cli-pager route53 activate-key-signing-key --hosted-zone-id "$ZONE" --name svp_prd_ksk \
+    --region us-east-1
+```
+
+Đọc tới khi thay đổi đã áp:
+
+```sh
 ro route53 get-change --id <ChangeInfo.Id của lệnh trên>   # Status: INSYNC
 ```
 

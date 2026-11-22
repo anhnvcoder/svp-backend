@@ -1,12 +1,20 @@
 # Cluster EKS
 
-Loại tài liệu (Diátaxis): **reference**, tra cứu khi cần một lệnh hay một quy tắc cụ thể; luật làm việc ở [`AGENTS.md`](../../AGENTS.md).
+> **Tóm tắt**
+>
+> - **Trả lời:** mỗi target `eks-*` làm gì và nhận biến nào, cluster EKS của env khác k3d ở đâu, trình tự một buổi, cách đổi secret của
+>   env đang chạy. Trang tra cứu (Diátaxis reference); luật làm việc ở [`AGENTS.md`](../../AGENTS.md).
+> - **Vì sao:** stg, prd chạy trên account AWS thật, chỉ người học chạy lệnh chạm chúng; mỗi target nhận `CONTEXT=svp-<env>` và dừng
+>   với tên khác, `eks-secrets`, `eks-glitchtip-init` thêm `AWS_PROFILE=anhnv-<env>` của account env.
+> - **Đọc tiếp:** [`deployment.md`](../explanation/deployment.md) (vì sao triển khai như vậy), runbook buổi `session-<env>.md` của
+>   [`svp-infra`](https://github.com/anhnvcoder/svp-infra/tree/main/docs/runbooks) (lệnh từng bước).
 
 ## Target `eks-*`
 
 - Cluster EKS ([ADR-0034](../adr/0034-aws-stage7.md)), target `eks-*` ở `deploy/k8s/k8s.mk`: người học chạy (AI chỉ
   chạy test giả `deploy/k8s/eks-context-test.sh`, `deploy/k8s/aws-secrets-test.sh`), `CONTEXT=svp-stg|svp-prd` là alias của cluster
-  trong kubeconfig (`aws eks update-kubeconfig --alias`, trong lệnh của output `kubeconfig_command`, mục API dưới), script nhận qua `SVP_KUBE_CONTEXT` (`kc`/`hc` của `deploy/k8s/lib.sh`: không
+  trong kubeconfig (cờ `--alias` của `update-kubeconfig` trong lệnh của output `kubeconfig_command`, mục API dưới), script nhận
+  qua `SVP_KUBE_CONTEXT` (`kc`/`hc` của `deploy/k8s/lib.sh`: không
   đặt là `k3d-svp`, tên khác thì dừng trước mọi lệnh; chỉ `aws-secrets.sh`, `glitchtip-init.sh` được vào cluster cloud; `gitops.sh`,
   `secrets.sh` và hàm chỉ của k3d như registry, tạo cluster, CA, diễn tập từ chối `svp-*`); không qua `k8s-exclusive`. Argo CD và root
   của cluster EKS do root Terraform `aws/gitops/<env>` của `svp-infra` dựng (mẫu GitOps Bridge,
@@ -199,7 +207,8 @@ mọi buổi; buổi không áp lại nó.
    `deploy/ci/image-list.sh ../gitops <env> > <file>` (không chạm AWS), rồi `aws/scripts/ecr-warm.sh <env> <file>` của
    `svp-infra`. Chạy lại khi một PR đổi digest bên thứ ba merge giữa buổi.
 3. `aws/scripts/bootstrap.sh <env> secrets` của `svp-infra`: nguồn có trước Argo CD. Script gọi
-   `make eks-secrets CONTEXT=svp-<env>` của repo này với mật khẩu master RDS, rồi, khi env có workspace Grafana, tạo token mới
+   `AWS_PROFILE=anhnv-<env> make eks-secrets CONTEXT=svp-<env>` của repo này với mật khẩu master RDS, rồi, khi env có
+   workspace Grafana, tạo token mới
    của service account `svp-grafana-operator` vào entry `svp/<env>/grafana-operator`; chạy riêng `make eks-secrets` thì thiếu token này.
 4. Mở tunnel tới API (output `api_tunnel_command`, terminal riêng) và thêm context (output `kubeconfig_command`); chỉ
    prd: PR promote prd đã merge trước bước này.

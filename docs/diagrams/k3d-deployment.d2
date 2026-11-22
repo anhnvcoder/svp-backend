@@ -1,0 +1,201 @@
+# The k3d cluster svp: which namespace holds which component and how traffic enters. Names match deploy/k8s/k3d.yaml,
+# deploy/k8s/helmfile.yaml.gotmpl and the charts svp-service, svp-data, svp-observability. Tooling namespaces
+# (cert-manager, keda, kyverno, argo-rollouts, istio-system) are not drawn: deployment.md lists them.
+vars: {
+  d2-config: {
+    layout-engine: elk
+    pad: 20
+  }
+}
+...@tokens
+
+title: "Cluster k3d gồm namespace và thành phần nào, traffic vào bằng đường nào?" {
+  shape: text
+  near: top-center
+  style: {font-size: 18; bold: true}
+}
+
+all: "" {
+  grid-rows: 1
+  grid-columns: 2
+  grid-gap: 0
+  horizontal-gap: 50
+  style: {stroke: transparent; fill: transparent}
+
+  c: "" {
+    grid-rows: 1
+    grid-columns: 1
+    grid-gap: 0
+    style: {stroke: transparent; fill: transparent}
+    client: "Trình duyệt, curl,\nsmoke, k6" {
+      class: person
+      width: 110
+      height: 110
+    }
+  }
+
+  k3d: "Cluster k3d svp · 1 server + 1 agent · 127.0.0.1:8443" {
+    class: region
+    label.near: top-left
+    style: {font-size: 15; bold: true}
+    grid-rows: 1
+    grid-columns: 3
+    grid-gap: 0
+    horizontal-gap: 60
+
+    W: "" {
+      grid-rows: 2
+      grid-columns: 1
+      grid-gap: 0
+      vertical-gap: 50
+      style: {stroke: transparent; fill: transparent}
+      edge: "svp-edge, envoy-gateway-system" {
+        class: group
+        label.near: top-left
+        grid-rows: 1
+        grid-columns: 1
+        grid-gap: 24
+      envoy: "Envoy proxy" {
+        class: prevention
+        grid-rows: 2
+        grid-gap: 24
+        vertical-gap: 6
+        s: "Gateway svp, TLS *.svp.localhost;\nHTTPRoute web, api, s3" {class: sub}
+        r: "CA local của make k8s-ca" {class: root}
+      }
+      }
+      obs: "svp-obs" {
+        class: group
+        label.near: top-left
+        grid-rows: 3
+        grid-columns: 1
+        grid-gap: 24
+      col: "Collector" {
+        class: detection
+        grid-rows: 2
+        grid-gap: 24
+        vertical-gap: 6
+        s: "nhận OTLP từ pod svp" {class: sub}
+        r: "chart svp-observability" {class: root}
+      }
+      store: "Kho telemetry" {
+        class: detection
+        grid-rows: 2
+        grid-gap: 24
+        vertical-gap: 6
+        s: "Prometheus · Loki ·\nTempo · Pyroscope" {class: sub}
+        r: "metric, log, trace, profile" {class: root}
+      }
+      ui: "Giao diện" {
+        class: detection
+        grid-rows: 2
+        grid-gap: 24
+        vertical-gap: 6
+        s: "Grafana · Alertmanager ·\nGlitchTip" {class: sub}
+        r: "port-forward loopback" {class: root}
+      }
+      }
+    }
+
+    app: "svp" {
+      class: group
+      label.near: top-left
+      grid-rows: 4
+      grid-columns: 1
+      grid-gap: 24
+      web: "web" {
+        class: workload
+        grid-rows: 2
+        grid-gap: 24
+        vertical-gap: 6
+        s: "Argo Rollout, 2 replica" {class: sub}
+        r: "Next.js, BFF" {class: root}
+      }
+      gw: "gateway" {
+        class: workload
+        grid-rows: 2
+        grid-gap: 24
+        vertical-gap: 6
+        s: "Argo Rollout, 2 replica,\ncanary theo HTTPRoute api" {class: sub}
+        r: "REST ở biên" {class: root}
+      }
+      svc: "4 service gRPC" {
+        class: workload
+        grid-rows: 2
+        grid-gap: 24
+        vertical-gap: 6
+        s: "user · video · engagement ·\nfeed-service" {class: sub}
+        r: "chart svp-service" {class: root}
+      }
+      mw: "media-worker" {
+        class: workload
+        grid-rows: 2
+        grid-gap: 24
+        vertical-gap: 6
+        s: "KEDA 1–2 replica theo lag" {class: sub}
+        r: "ffmpeg trong pod" {class: root}
+      }
+    }
+    data: "svp-data" {
+      class: group
+      label.near: top-left
+      grid-rows: 5
+      grid-columns: 1
+      grid-gap: 24
+      vk: "Valkey" {
+        class: data
+        grid-rows: 2
+        grid-gap: 24
+        vertical-gap: 6
+        s: "TLS, user ACL theo db" {class: sub}
+        r: "valkey:6379" {class: root}
+      }
+      pg: "Postgres svp-pg" {
+        class: data
+        grid-rows: 2
+        grid-gap: 24
+        vertical-gap: 6
+        s: "CloudNativePG, TLS verify-full" {class: sub}
+        r: "svp-pg-rw:5432" {class: root}
+      }
+      kafka: "Kafka" {
+        class: data
+        grid-rows: 2
+        grid-gap: 24
+        vertical-gap: 6
+        s: "một broker, SCRAM-SHA-512 + ACL" {class: sub}
+        r: "kafka:9096" {class: root}
+      }
+      s3: "Object store s3" {
+        class: data
+        grid-rows: 2
+        grid-gap: 24
+        vertical-gap: 6
+        s: "RustFS, bucket uploads, media;\nHTTPRoute s3 từ Envoy" {class: sub}
+        r: "s3:9000" {class: root}
+      }
+      ops: "svp-ops" {
+        class: workload
+        grid-rows: 2
+        grid-gap: 24
+        vertical-gap: 6
+        s: "CLI vận hành Valkey, Kafka,\nPostgres" {class: sub}
+        r: "/opt/svp/bin/svp-*" {class: root}
+      }
+    }
+  }
+}
+
+all.c.client -> all.k3d.W.edge.envoy: "svp.localhost, api.,\ns3. (8443)" {class: sync-call}
+all.k3d.W.edge.envoy -> all.k3d.app.web: "HTTPRoute web" {class: sync-call}
+all.k3d.W.edge.envoy -> all.k3d.app.gw: "HTTPRoute api" {class: sync-call}
+all.k3d.app.web -> all.k3d.app.gw: {class: sync-call}
+all.k3d.app.gw -> all.k3d.app.svc: "gRPC" {class: sync-call}
+all.k3d.app.gw -> all.k3d.data.vk: "6379" {class: sync-call}
+all.k3d.app.svc -> all.k3d.data.pg: "5432" {class: sync-call}
+all.k3d.app.svc -> all.k3d.data.kafka: "9096" {class: event-flow}
+all.k3d.app.mw -> all.k3d.data.s3: {class: sync-call}
+all.k3d.app.mw -> all.k3d.data.kafka: "lag cho KEDA" {class: event-flow}
+all.k3d.app -> all.k3d.W.obs: "OTLP" {class: data-flow}
+all.k3d.W.obs.col -> all.k3d.W.obs.store: {class: data-flow}
+all.k3d.W.obs.ui -> all.k3d.W.obs.store: {class: data-flow}

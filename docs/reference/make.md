@@ -56,6 +56,13 @@ liệt kê target):
   `lychee.toml`; link nội bộ và anchor heading, link ra site khác không kiểm, vì mạng không ổn định và một kiểm tra phụ thuộc mạng đỏ vì lý do nằm ngoài thay đổi). Hai image chính thức ghim `tag@sha256`, chạy
   `--network none`, repo gắn chỉ đọc; link tương đối ra ngoài repo (tới `plans/`) báo lỗi. Cả hai công cụ luôn chạy; lệnh thoát khác 0 khi
   một trong hai báo lỗi. Mặc định là mọi `.md` git theo dõi và file mới chưa theo dõi; `DOCS` thu hẹp (đường dẫn tương đối gốc repo).
+- `make diagrams [NAMES='<tên …>'] [LAYOUT=<engine>] [OUT=<thư mục>] [SUFFIX=<chữ>] [PNG=1]`: sinh mỗi `docs/diagrams/<tên>.d2`
+  (trừ `tokens.d2`) thành `<tên>.svg` (theme sáng) và `<tên>-dark.svg` (theme tối) bằng D2 trong container (`D2_IMAGE`,
+  ghim `tag@sha256`, `--network none`). `PNG=1` sinh thêm PNG để xem, không commit. Không có `.d2` nào thì in
+  `diagrams: no .d2 file` và thoát 0.
+- `make diagrams-check [NAMES='<tên …>']`: sinh vào thư mục tạm rồi so từng byte với SVG đã commit; thoát khác 0 và nêu tên file
+  khi một SVG lệch nguồn, thiếu, hay không còn `.d2` cùng tên. Không thuộc `make check`; CI chạy nó ở job `docs` của `ci.yml`.
+  Cách viết sơ đồ: [`diagrams/README.md`](../diagrams/README.md).
 - `make helm-docs`, `make helm-docs-check`: `deploy/helm/svp-service/README.md` (bảng values của chart dùng chung bởi mọi release dịch vụ) sinh bởi
   helm-docs `HELM_DOCS_IMAGE` (image chính thức ghim `tag@sha256`, không mạng, chạy bằng uid của người gọi) từ `Chart.yaml`, comment `# --` của
   `values.yaml` và `README.md.gotmpl`. `make helm-docs` ghi file; `make helm-docs-check` gắn repo chỉ đọc, in thứ helm-docs sẽ ghi và đỏ khi

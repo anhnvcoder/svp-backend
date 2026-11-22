@@ -1,5 +1,13 @@
 # TLSCertExpiryImminent
 
+> **Tóm tắt**
+>
+> - **Làm gì:** tìm vì sao gia hạn tự động của cert TLS hỏng (ACM ở eks, cert-manager ở k3d) và cấp lại cert trước khi hết hạn, để trình
+>   duyệt và client API không chặn web, `api`, `media`.
+> - **Khi nào và bao lâu:** khi `TLSCertExpiryImminent` (page, còn dưới 7 ngày) hay `TLSCertExpiringSoon` (ticket, còn dưới 21 ngày)
+>   cháy. Kiểm 5 phút; cert-manager cấp lại trong vài giây, ACM gia hạn sau khi xác thực DNS lại được.
+> - **Phí trong lúc chạy:** không phát sinh phí: lệnh đọc, và cert cấp lại thay cert cũ, không thêm tài nguyên.
+
 - Severity: `page` (runbook này) và `ticket` (`TLSCertExpiringSoon`, ngưỡng 21 ngày, dùng chung runbook). Rule viết tay, nhóm
   `svp-uptime` của `deploy/observability/prometheus/rules/svp-alerts.yaml`.
 - Chuẩn bị biến `PROM`, `AM`: [README](README.md#chuẩn-bị-trong-terminal). Trên eks, Prometheus là AMP: truy vấn qua Grafana của env.
@@ -39,8 +47,11 @@ eks (người học chạy; cert của CloudFront ở `us-east-1`, cert của AL
 [README](README.md#alarm-của-dịch-vụ-managed-rds-msk-elasticache), đổi `--region` của lệnh theo cert):
 
 ```sh
-AWS_PROFILE=anhnv-<env> aws acm list-certificates --region us-east-1 --query 'CertificateSummaryList[].[DomainName,CertificateArn,Status,NotAfter]' --output text
-AWS_PROFILE=anhnv-<env> aws acm describe-certificate --region us-east-1 --certificate-arn <arn> --query 'Certificate.[Status,NotAfter,RenewalEligibility,RenewalSummary.RenewalStatus,RenewalSummary.RenewalStatusReason,DomainValidationOptions[].ValidationStatus]' --output text
+AWS_PROFILE=anhnv-<env> aws --no-cli-pager acm list-certificates --region us-east-1 \
+  --query 'CertificateSummaryList[].[DomainName,CertificateArn,Status,NotAfter]' --output text
+AWS_PROFILE=anhnv-<env> aws --no-cli-pager acm describe-certificate --region us-east-1 --certificate-arn <arn> \
+  --query 'Certificate.[Status,NotAfter,RenewalEligibility,RenewalSummary.RenewalStatus,RenewalSummary.RenewalStatusReason,DomainValidationOptions[].ValidationStatus]' \
+  --output text
 dig +short CNAME _<token>.<domain>   # is the ACM DNS validation record still there
 ```
 

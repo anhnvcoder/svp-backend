@@ -1,0 +1,198 @@
+# Detail of one env on AWS: what sits in which subnet tier of the VPC and how the cluster reaches the managed services
+# that outlive a destroy. Subnet tier is written in the lines of each block; stg and prd differ in AZ count and size
+# only.
+vars: {
+  d2-config: {
+    layout-engine: elk
+    pad: 20
+  }
+}
+...@tokens
+
+title: "Thành phần nào của một env nằm ở subnet nào, và ra ngoài bằng đường nào?" {
+  shape: text
+  near: top-center
+  style: {font-size: 18; bold: true}
+}
+
+env: "account svp-<env> · ap-southeast-1" {
+  class: account
+  label.near: top-left
+  grid-rows: 1
+  grid-columns: 3
+  grid-gap: 20
+
+  L: "" {
+    grid-rows: 3
+    grid-columns: 1
+    grid-gap: 0
+    vertical-gap: 60
+    style: {stroke: transparent; fill: transparent}
+    cf: "CloudFront" {
+      class: prevention
+      grid-rows: 2
+      grid-columns: 1
+      grid-gap: 24
+      vertical-gap: 6
+      i: "svp-<env>-web, -api, -media" {shape: image; icon: ./icons/cloudfront.svg; width: 48; height: 48; style: {font-color: "#1A1A1A"; font-size: 13; bold: false}}
+      s0: "web, api, media; probe từ\nblackbox exporter qua NAT" {class: sub}
+    }
+    q: "SQS + EventBridge" {
+      class: alerting
+      grid-rows: 2
+      grid-columns: 1
+      grid-gap: 24
+      vertical-gap: 6
+      i: "queue của Karpenter" {shape: image; icon: ./icons/sqs.svg; width: 48; height: 48; style: {font-color: "#1A1A1A"; font-size: 13; bold: false}}
+      s0: "interruption của Spot\n→ Karpenter" {class: sub}
+    }
+    sp: "" {width: 10; height: 10; style: {stroke: transparent; fill: transparent}}
+  }
+
+  vpc: "VPC svp-<env> · subnet public, private,\ndatabase, edge trên mỗi AZ" {
+    class: region
+    label.near: top-left
+    grid-rows: 3
+    grid-columns: 1
+    grid-gap: 40
+
+    T: "" {
+      grid-rows: 1
+      grid-columns: 3
+      grid-gap: 40
+      style: {stroke: transparent; fill: transparent}
+      alb: "ALB internal\nsvp-<env>-edge" {
+        class: prevention
+        grid-rows: 1
+        grid-columns: 1
+        grid-gap: 24
+        vertical-gap: 6
+        s0: "subnet edge, không node,\nkhông pod; target group\nsvp-<env>-envoy" {class: sub}
+      }
+      nat: "NAT gateway" {
+        class: workload
+        grid-rows: 1
+        grid-columns: 1
+        grid-gap: 24
+        vertical-gap: 6
+        s0: "subnet public;\negress ra Internet" {class: sub}
+      }
+      vpce: "Endpoint interface" {
+        class: prevention
+        grid-rows: 1
+        grid-columns: 1
+        grid-gap: 24
+        vertical-gap: 6
+        s0: "subnet private; private DNS,\npolicy theo account" {class: sub}
+      }
+    }
+
+    eks: "EKS svp-<env> · API chỉ endpoint private\nsubnet private" {
+      class: region
+      label.near: bottom-left
+      grid-rows: 1
+      grid-columns: 3
+      grid-gap: 40
+
+      sys: "Node group system" {
+        class: workload
+        grid-rows: 2
+        grid-columns: 1
+        grid-gap: 24
+        vertical-gap: 6
+        s0: "on-demand, mỗi AZ một node" {class: sub}
+        s1: "Argo CD · Karpenter ·\nadd-on EKS" {class: sub}
+      }
+      kn: "Node Karpenter" {
+        class: workload
+        grid-rows: 5
+        grid-columns: 1
+        grid-gap: 24
+        vertical-gap: 6
+        s0: "NodePool default: Graviton;\nstg Spot, prd on-demand" {class: sub}
+        s1: "Envoy Gateway (HPA từ 2,\nPDB, trải zone)" {class: sub}
+        s2: "web · gateway · 4 service\ngRPC · media-worker ·\ndlq-replay" {class: sub}
+        s3: "Collector · Prometheus agent ·\nPyroscope · GlitchTip · OpenCost ·\nblackbox exporter" {class: sub}
+        s4: "istiod · istio-cni ·\nztunnel; waypoint" {class: sub}
+      }
+      kyv: "Kyverno" {
+        class: workload
+        grid-rows: 2
+        grid-columns: 1
+        grid-gap: 24
+        vertical-gap: 6
+        s0: "3 replica, PDB, trải zone" {class: sub}
+        s1: "xếp ở node nào còn chỗ" {class: sub}
+      }
+    }
+
+    B: "" {
+      grid-rows: 1
+      grid-columns: 3
+      grid-gap: 40
+      style: {stroke: transparent; fill: transparent}
+      bastion: "Bastion SSM" {
+        class: workload
+        grid-rows: 1
+        grid-columns: 1
+        grid-gap: 24
+        vertical-gap: 6
+        s0: "subnet private" {class: sub}
+      }
+      data: "RDS · MSK · ElastiCache" {
+        class: data
+        grid-rows: 2
+        grid-columns: 1
+        grid-gap: 24
+        vertical-gap: 6
+        s0: "subnet database, không route\nra Internet" {class: sub}
+        s1: "RDS stg một AZ, prd Multi-AZ;\nMSK một broker mỗi AZ;\nValkey stg 1 node,\nprd primary + replica" {class: sub}
+      }
+      sp: "" {width: 10; height: 10; style: {stroke: transparent; fill: transparent}}
+    }
+  }
+
+  R: "" {
+    grid-rows: 3
+    grid-columns: 1
+    grid-gap: 0
+    vertical-gap: 60
+    style: {stroke: transparent; fill: transparent}
+    ecr: "ECR" {
+      class: investigation
+      grid-rows: 2
+      grid-columns: 1
+      grid-gap: 24
+      vertical-gap: 6
+      i: "sống qua destroy" {shape: image; icon: ./icons/ecr.svg; width: 48; height: 48; style: {font-color: "#1A1A1A"; font-size: 13; bold: false}}
+      s0: "repo phát hành,\npull-through cache" {class: sub}
+    }
+    amp: "AMP · CloudWatch Logs · X-Ray" {
+      class: investigation
+      grid-rows: 2
+      grid-columns: 1
+      grid-gap: 24
+      vertical-gap: 6
+      i: "sống qua destroy" {shape: image; icon: ./icons/amp.svg; width: 48; height: 48; style: {font-color: "#1A1A1A"; font-size: 13; bold: false}}
+      s0: "telemetry ra dịch vụ managed" {class: sub}
+    }
+    amg: "Amazon Managed Grafana" {
+      class: investigation
+      grid-rows: 1
+      grid-columns: 1
+      grid-gap: 24
+      vertical-gap: 6
+      s0: "đăng nhập qua Identity Center" {class: sub}
+    }
+  }
+}
+
+env.L.cf -> env.vpc.T.alb: "VPC origin" {class: sync-call}
+env.vpc.T.alb -> env.vpc.eks.kn: "Envoy" {class: sync-call}
+env.vpc.eks.kn -> env.vpc.T.nat: "probe web, api, media" {class: sync-call}
+env.vpc.eks.kn -> env.vpc.T.vpce: {class: sync-call}
+env.vpc.T.vpce -> env.R.ecr: "kéo image" {class: sync-call}
+env.vpc.T.vpce -> env.R.amp: "SigV4" {class: sync-call}
+env.R.amg -> env.R.amp: {class: sync-call}
+env.vpc.eks.kn -> env.vpc.B.data: "TLS" {class: sync-call}
+env.L.q -> env.vpc.eks.sys: "interruption" {class: cloud-event}

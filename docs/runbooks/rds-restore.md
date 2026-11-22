@@ -1,8 +1,17 @@
 # Khôi phục RDS `svp-<env>` về một thời điểm (stg, prd)
 
-- Quy trình làm tay, không có cảnh báo riêng; chỉ AWS. Postgres của k3d theo [postgres-restore.md](postgres-restore.md);
-  compose không có backup. Thiết kế, mục tiêu RTO/RPO và nguồn: [ADR-0067](../adr/0067-backup-dr.md); giải thích:
-  [`backup-dr.md`](../explanation/backup-dr.md).
+> **Tóm tắt**
+>
+> - **Làm gì:** lấy lại dữ liệu RDS `svp-$ENV` trước một thời điểm: PITR ra instance mới, kiểm, đưa nó thay chỗ nguồn; mất account
+>   env thì khôi phục từ vault copy. Quy trình làm tay, không có cảnh báo riêng; chỉ AWS. Postgres của k3d theo
+>   [postgres-restore.md](postgres-restore.md); compose không có backup.
+> - **Khi nào và bao lâu:** khi dữ liệu RDS sai hay mất account env (mục Ý nghĩa). Mục tiêu RTO ≤ 60 phút tới instance `available`
+>   và dữ liệu đạt, mất account env tính bằng giờ ([ADR-0067](../adr/0067-backup-dr.md#2-mục-tiêu-rtorpo) §2, thiết kế và nguồn);
+>   giải thích: [`backup-dr.md`](../explanation/backup-dr.md).
+> - **Phí trong lúc chạy:** instance `svp-$ENV-pitr` (bước 1), `svp-$ENV-old` (bước 3) và snapshot `svp-$ENV-restore` (bước 5) tính
+>   tiền tới khi bước 4 xoá chúng; recovery point copy về vault `svp-$ENV` (bước 5) xoá ở cuối bước 5. Phí một buổi diễn tập PITR:
+>   [ADR-0067 §13](../adr/0067-backup-dr.md#13-chi-phí).
+
 - **Người học chạy mọi lệnh.** Lệnh AWS chạy ở bản clone `svp-infra` (cho `aws/scripts/check-account.sh`), với biến
   account của `$ENV` (`SVP_AWS_STG_ACCOUNT_ID` hay `SVP_AWS_PRD_ACCOUNT_ID`) đã export, không ghi vào file nào. Mỗi lệnh
   ghi nối sau `aws/scripts/check-account.sh "$ENV"` bằng `&&`: account của profile khác biến thì script thoát khác 0 và
@@ -14,6 +23,7 @@
 ```sh
 ENV=stg
 N=svp-$ENV
+export SVP_SESSION_DIR="$PWD/.session/$(date -u +%Y%m%dT%H%M%SZ)"   # check-account.sh stops without it
 ```
 
 ## Ý nghĩa và tác động tới người dùng
@@ -35,15 +45,24 @@ AWS:
 
 ```sh
 # 1. Source state and the end of the PITR window (LatestRestorableTime lags real time by up to five minutes)
-AWS_PROFILE=anhnv-$ENV aws rds describe-db-instances --db-instance-identifier "$N" --query 'DBInstances[0].[DBInstanceStatus,LatestRestorableTime,BackupRetentionPeriod]' --output text --region ap-southeast-1
+AWS_PROFILE=anhnv-$ENV aws --no-cli-pager rds describe-db-instances --db-instance-identifier "$N" \
+  --query 'DBInstances[0].[DBInstanceStatus,LatestRestorableTime,BackupRetentionPeriod]' --output text --region ap-southeast-1
 # 2. The whole PITR window, still readable when the instance is gone and its automated backups were kept
-AWS_PROFILE=anhnv-$ENV aws rds describe-db-instance-automated-backups --db-instance-identifier "$N" --query 'DBInstanceAutomatedBackups[].[Status,DbiResourceId,RestoreWindow.EarliestTime,RestoreWindow.LatestTime]' --output text --region ap-southeast-1
+AWS_PROFILE=anhnv-$ENV aws --no-cli-pager rds describe-db-instance-automated-backups --db-instance-identifier "$N" \
+  --query 'DBInstanceAutomatedBackups[].[Status,DbiResourceId,RestoreWindow.EarliestTime,RestoreWindow.LatestTime]' \
+  --output text --region ap-southeast-1
 # 3. Snapshots of AWS Backup in the env vault, and their copies in account svp-backup (read-only profile)
-AWS_PROFILE=anhnv-$ENV aws backup list-recovery-points-by-backup-vault --backup-vault-name "$N" --by-resource-type RDS --query 'RecoveryPoints[].[CreationDate,Status,RecoveryPointArn]' --output text --region ap-southeast-1
-AWS_PROFILE=anhnv-backup-ro aws backup list-recovery-points-by-backup-vault --backup-vault-name "$N-copy" --by-resource-type RDS --query 'RecoveryPoints[].[CreationDate,Status,RecoveryPointArn]' --output text --region ap-southeast-1
+AWS_PROFILE=anhnv-$ENV aws --no-cli-pager backup list-recovery-points-by-backup-vault --backup-vault-name "$N" \
+  --by-resource-type RDS --query 'RecoveryPoints[].[CreationDate,Status,RecoveryPointArn]' --output text --region ap-southeast-1
+AWS_PROFILE=anhnv-backup-ro aws --no-cli-pager backup list-recovery-points-by-backup-vault --backup-vault-name "$N-copy" \
+  --by-resource-type RDS --query 'RecoveryPoints[].[CreationDate,Status,RecoveryPointArn]' --output text --region ap-southeast-1
 # 4. Backup and copy jobs that failed in the last day (alarms svp-<env>-backup-job-failed, -backup-copy-failed)
-AWS_PROFILE=anhnv-$ENV aws backup list-backup-jobs --by-state FAILED --by-created-after "$(date -u -v-24H +%FT%TZ)" --query 'BackupJobs[].[CreationDate,ResourceArn,StatusMessage]' --output text --region ap-southeast-1
-AWS_PROFILE=anhnv-$ENV aws backup list-copy-jobs --by-state FAILED --by-created-after "$(date -u -v-24H +%FT%TZ)" --query 'CopyJobs[].[CreationDate,ResourceArn,StatusMessage]' --output text --region ap-southeast-1
+AWS_PROFILE=anhnv-$ENV aws --no-cli-pager backup list-backup-jobs --by-state FAILED \
+  --by-created-after "$(date -u -v-24H +%FT%TZ)" --query 'BackupJobs[].[CreationDate,ResourceArn,StatusMessage]' \
+  --output text --region ap-southeast-1
+AWS_PROFILE=anhnv-$ENV aws --no-cli-pager backup list-copy-jobs --by-state FAILED \
+  --by-created-after "$(date -u -v-24H +%FT%TZ)" --query 'CopyJobs[].[CreationDate,ResourceArn,StatusMessage]' \
+  --output text --region ap-southeast-1
 ```
 
 Đọc: thời điểm cần quay về phải nằm giữa `EarliestTime` và `LatestTime` của bước 2; ngoài cửa sổ đó chỉ còn snapshot
@@ -51,7 +70,8 @@ hằng ngày (bước 3). Thời điểm của thao tác sai lấy từ log ứn
 qua `svp-pg`, ví dụ:
 
 ```sh
-AWS_PROFILE=anhnv-$ENV kubectl --context "svp-$ENV" -n svp-data exec deploy/svp-ops -c postgres -- /opt/svp/bin/svp-pg video -c 'SELECT status, count(*), max(created_at) FROM videos GROUP BY status'
+AWS_PROFILE=anhnv-$ENV kubectl --context "svp-$ENV" -n svp-data exec deploy/svp-ops -c postgres -- \
+  /opt/svp/bin/svp-pg video -c 'SELECT status, count(*), max(created_at) FROM videos GROUP BY status'
 ```
 
 `svp-pg` nhận `video`, `engagement` hay `feed`, đăng nhập role app của service đó, phiên chỉ đọc. `svp_user` và
@@ -85,12 +105,23 @@ nguồn. Tên `svp-$ENV-pitr` là tên mà `restore-drill.sh <env> cleanup` và 
 
 ```sh
 T=2026-01-01T00:00:00Z
-read -r SUBNETS PARAMS CLASS SGS < <(AWS_PROFILE=anhnv-$ENV aws rds describe-db-instances --db-instance-identifier "$N" --query 'DBInstances[0].[DBSubnetGroup.DBSubnetGroupName,DBParameterGroups[0].DBParameterGroupName,DBInstanceClass,join(` `,VpcSecurityGroups[].VpcSecurityGroupId)]' --output text --region ap-southeast-1)
+read -r SUBNETS PARAMS CLASS SGS < <(AWS_PROFILE=anhnv-$ENV aws --no-cli-pager rds describe-db-instances \
+  --db-instance-identifier "$N" \
+  --query 'DBInstances[0].[DBSubnetGroup.DBSubnetGroupName,DBParameterGroups[0].DBParameterGroupName,DBInstanceClass,join(` `,VpcSecurityGroups[].VpcSecurityGroupId)]' \
+  --output text --region ap-southeast-1)
 echo "$SUBNETS $PARAMS $CLASS $SGS"
+```
+
+Dòng `echo` in subnet group, parameter group, lớp và security group của nguồn; đúng thì dựng bản khôi phục:
+
+```sh
 # SGS is one word per security group.
 aws/scripts/check-account.sh "$ENV" &&
-  AWS_PROFILE=anhnv-$ENV aws rds restore-db-instance-to-point-in-time --source-db-instance-identifier "$N" --target-db-instance-identifier "$N-pitr" --restore-time "$T" --db-subnet-group-name "$SUBNETS" --vpc-security-group-ids $SGS --db-parameter-group-name "$PARAMS" --db-instance-class "$CLASS" --no-multi-az --no-publicly-accessible --no-deletion-protection --tags Key=Project,Value=svp "Key=Stack,Value=$ENV" --region ap-southeast-1
-AWS_PROFILE=anhnv-$ENV aws rds wait db-instance-available --db-instance-identifier "$N-pitr" --region ap-southeast-1
+  AWS_PROFILE=anhnv-$ENV aws --no-cli-pager rds restore-db-instance-to-point-in-time --source-db-instance-identifier "$N" \
+    --target-db-instance-identifier "$N-pitr" --restore-time "$T" --db-subnet-group-name "$SUBNETS" --vpc-security-group-ids $SGS \
+    --db-parameter-group-name "$PARAMS" --db-instance-class "$CLASS" --no-multi-az --no-publicly-accessible --no-deletion-protection \
+    --tags Key=Project,Value=svp "Key=Stack,Value=$ENV" --region ap-southeast-1
+AWS_PROFILE=anhnv-$ENV aws --no-cli-pager rds wait db-instance-available --db-instance-identifier "$N-pitr" --region ap-southeast-1
 ```
 
 Instance nguồn đã mất nhưng còn backup tự động (bước 2 trả `retained`; prd giữ, stg xoá cùng instance): thay
@@ -99,16 +130,21 @@ module `rds` đặt bằng tiền tố (`svp-$ENV-`, `svp-$ENV-pg<major>-`, `svp
 instance là `rds_instance_class` của `<env>.tfvars`:
 
 ```sh
-AWS_PROFILE=anhnv-$ENV aws rds describe-db-subnet-groups --query "DBSubnetGroups[?starts_with(DBSubnetGroupName, '$N-')].DBSubnetGroupName" --output text --region ap-southeast-1
-AWS_PROFILE=anhnv-$ENV aws rds describe-db-parameter-groups --query "DBParameterGroups[?starts_with(DBParameterGroupName, '$N-pg')].DBParameterGroupName" --output text --region ap-southeast-1
-AWS_PROFILE=anhnv-$ENV aws ec2 describe-security-groups --filters "Name=group-name,Values=$N-db-*" --query 'SecurityGroups[].GroupId' --output text --region ap-southeast-1
+AWS_PROFILE=anhnv-$ENV aws --no-cli-pager rds describe-db-subnet-groups \
+  --query "DBSubnetGroups[?starts_with(DBSubnetGroupName, '$N-')].DBSubnetGroupName" --output text --region ap-southeast-1
+AWS_PROFILE=anhnv-$ENV aws --no-cli-pager rds describe-db-parameter-groups \
+  --query "DBParameterGroups[?starts_with(DBParameterGroupName, '$N-pg')].DBParameterGroupName" --output text --region ap-southeast-1
+AWS_PROFILE=anhnv-$ENV aws --no-cli-pager ec2 describe-security-groups --filters "Name=group-name,Values=$N-db-*" \
+  --query 'SecurityGroups[].GroupId' --output text --region ap-southeast-1
 ```
 
 ### 2. Kiểm bản khôi phục
 
 ```sh
-H=$(AWS_PROFILE=anhnv-$ENV aws rds describe-db-instances --db-instance-identifier "$N-pitr" --query 'DBInstances[0].Endpoint.Address' --output text --region ap-southeast-1)
-AWS_PROFILE=anhnv-$ENV kubectl --context "svp-$ENV" -n svp-data exec deploy/svp-ops -c postgres -- /opt/svp/bin/svp-pg video --host "$H" -c 'SELECT status, count(*), max(created_at) FROM videos GROUP BY status'
+H=$(AWS_PROFILE=anhnv-$ENV aws --no-cli-pager rds describe-db-instances --db-instance-identifier "$N-pitr" \
+  --query 'DBInstances[0].Endpoint.Address' --output text --region ap-southeast-1)
+AWS_PROFILE=anhnv-$ENV kubectl --context "svp-$ENV" -n svp-data exec deploy/svp-ops -c postgres -- \
+  /opt/svp/bin/svp-pg video --host "$H" -c 'SELECT status, count(*), max(created_at) FROM videos GROUP BY status'
 ```
 
 Cùng câu SQL không có `--host` đọc nguồn. Bản khôi phục đúng khi dữ liệu bị sai có ở đó với giá trị trước thao tác sai,
@@ -132,27 +168,43 @@ của nguồn, như module `rds` (`manage_master_user_password`). Secret đó l�
 `rds_master_user_secret_arn` đổi.
 
 ```sh
-read -r KEY MULTIAZ < <(AWS_PROFILE=anhnv-$ENV aws rds describe-db-instances --db-instance-identifier "$N" --query 'DBInstances[0].[KmsKeyId,MultiAZ]' --output text --region ap-southeast-1)
+read -r KEY MULTIAZ < <(AWS_PROFILE=anhnv-$ENV aws --no-cli-pager rds describe-db-instances --db-instance-identifier "$N" \
+  --query 'DBInstances[0].[KmsKeyId,MultiAZ]' --output text --region ap-southeast-1)
 MAZ=--no-multi-az; [ "$MULTIAZ" = True ] && MAZ=--multi-az
 echo "$KEY $MAZ"
+```
+
+Dòng `echo` in khoá KMS của nguồn và cờ Multi-AZ mà bản mới mang; đúng thì đổi chỗ:
+
+```sh
 # Free the name: the source keeps its automated backups under the new name.
 aws/scripts/check-account.sh "$ENV" &&
-  AWS_PROFILE=anhnv-$ENV aws rds modify-db-instance --db-instance-identifier "$N" --new-db-instance-identifier "$N-old" --apply-immediately --region ap-southeast-1
-until AWS_PROFILE=anhnv-$ENV aws rds wait db-instance-available --db-instance-identifier "$N-old" --region ap-southeast-1; do sleep 30; done
+  AWS_PROFILE=anhnv-$ENV aws --no-cli-pager rds modify-db-instance --db-instance-identifier "$N" --new-db-instance-identifier "$N-old" \
+    --apply-immediately --region ap-southeast-1
+until AWS_PROFILE=anhnv-$ENV aws --no-cli-pager rds wait db-instance-available --db-instance-identifier "$N-old" \
+  --region ap-southeast-1; do sleep 30; done
 # The daily plan selects by this tag: the old instance must not be backed up and copied into the locked vault.
-OLD_ARN=$(AWS_PROFILE=anhnv-$ENV aws rds describe-db-instances --db-instance-identifier "$N-old" --query 'DBInstances[0].DBInstanceArn' --output text --region ap-southeast-1)
+OLD_ARN=$(AWS_PROFILE=anhnv-$ENV aws --no-cli-pager rds describe-db-instances --db-instance-identifier "$N-old" \
+  --query 'DBInstances[0].DBInstanceArn' --output text --region ap-southeast-1)
 aws/scripts/check-account.sh "$ENV" &&
-  AWS_PROFILE=anhnv-$ENV aws rds remove-tags-from-resource --resource-name "$OLD_ARN" --tag-keys Backup --region ap-southeast-1
+  AWS_PROFILE=anhnv-$ENV aws --no-cli-pager rds remove-tags-from-resource --resource-name "$OLD_ARN" --tag-keys Backup \
+    --region ap-southeast-1
 aws/scripts/check-account.sh "$ENV" &&
-  AWS_PROFILE=anhnv-$ENV aws rds restore-db-instance-to-point-in-time --source-db-instance-identifier "$N-old" --target-db-instance-identifier "$N" --restore-time "$T" --db-subnet-group-name "$SUBNETS" --vpc-security-group-ids $SGS --db-parameter-group-name "$PARAMS" --db-instance-class "$CLASS" $MAZ --no-publicly-accessible --manage-master-user-password --master-user-secret-kms-key-id "$KEY" --region ap-southeast-1
-AWS_PROFILE=anhnv-$ENV aws rds wait db-instance-available --db-instance-identifier "$N" --region ap-southeast-1
+  AWS_PROFILE=anhnv-$ENV aws --no-cli-pager rds restore-db-instance-to-point-in-time --source-db-instance-identifier "$N-old" \
+    --target-db-instance-identifier "$N" --restore-time "$T" --db-subnet-group-name "$SUBNETS" --vpc-security-group-ids $SGS \
+    --db-parameter-group-name "$PARAMS" --db-instance-class "$CLASS" $MAZ --no-publicly-accessible --manage-master-user-password \
+    --master-user-secret-kms-key-id "$KEY" --region ap-southeast-1
+AWS_PROFILE=anhnv-$ENV aws --no-cli-pager rds wait db-instance-available --db-instance-identifier "$N" --region ap-southeast-1
 ```
 
 Khôi phục từ snapshot (bước 5) thay lệnh `restore-db-instance-to-point-in-time` bằng:
 
 ```sh
 aws/scripts/check-account.sh "$ENV" &&
-  AWS_PROFILE=anhnv-$ENV aws rds restore-db-instance-from-db-snapshot --db-snapshot-identifier "$N-restore" --db-instance-identifier "$N" --db-subnet-group-name "$SUBNETS" --vpc-security-group-ids $SGS --db-parameter-group-name "$PARAMS" --db-instance-class "$CLASS" $MAZ --no-publicly-accessible --manage-master-user-password --master-user-secret-kms-key-id "$KEY" --region ap-southeast-1
+  AWS_PROFILE=anhnv-$ENV aws --no-cli-pager rds restore-db-instance-from-db-snapshot --db-snapshot-identifier "$N-restore" \
+    --db-instance-identifier "$N" --db-subnet-group-name "$SUBNETS" --vpc-security-group-ids $SGS \
+    --db-parameter-group-name "$PARAMS" --db-instance-class "$CLASS" $MAZ --no-publicly-accessible --manage-master-user-password \
+    --master-user-secret-kms-key-id "$KEY" --region ap-southeast-1
 ```
 
 State của root env vẫn giữ instance cũ (provider giữ `aws_db_instance` theo resource id, đi theo `svp-$ENV-old`). Gỡ địa
@@ -175,7 +227,8 @@ của env đang chạy"):
 ```sh
 aws/scripts/tf.sh "$ENV" env apply
 aws/scripts/bootstrap.sh "$ENV" secrets
-AWS_PROFILE=anhnv-$ENV kubectl --context "svp-$ENV" -n svp-data exec deploy/svp-ops -c postgres -- /opt/svp/bin/svp-pg video -c 'SELECT status, count(*), max(created_at) FROM videos GROUP BY status'
+AWS_PROFILE=anhnv-$ENV kubectl --context "svp-$ENV" -n svp-data exec deploy/svp-ops -c postgres -- \
+  /opt/svp/bin/svp-pg video -c 'SELECT status, count(*), max(created_at) FROM videos GROUP BY status'
 ```
 
 Câu SQL cuối (không `--host`) giờ đọc instance mới: đường PITR phải ra như bước 2 trên `svp-$ENV-pitr`.
@@ -188,14 +241,17 @@ trước.
 
 ```sh
 aws/scripts/check-account.sh "$ENV" &&
-  AWS_PROFILE=anhnv-$ENV aws rds delete-db-instance --db-instance-identifier "$N-pitr" --skip-final-snapshot --delete-automated-backups --region ap-southeast-1
-AWS_PROFILE=anhnv-$ENV aws rds wait db-instance-deleted --db-instance-identifier "$N-pitr" --region ap-southeast-1
+  AWS_PROFILE=anhnv-$ENV aws --no-cli-pager rds delete-db-instance --db-instance-identifier "$N-pitr" --skip-final-snapshot \
+    --delete-automated-backups --region ap-southeast-1
+AWS_PROFILE=anhnv-$ENV aws --no-cli-pager rds wait db-instance-deleted --db-instance-identifier "$N-pitr" --region ap-southeast-1
 aws/scripts/check-account.sh "$ENV" &&
-  AWS_PROFILE=anhnv-$ENV aws rds modify-db-instance --db-instance-identifier "$N-old" --no-deletion-protection --apply-immediately --region ap-southeast-1
+  AWS_PROFILE=anhnv-$ENV aws --no-cli-pager rds modify-db-instance --db-instance-identifier "$N-old" --no-deletion-protection \
+    --apply-immediately --region ap-southeast-1
 aws/scripts/check-account.sh "$ENV" &&
-  AWS_PROFILE=anhnv-$ENV aws rds delete-db-instance --db-instance-identifier "$N-old" --skip-final-snapshot --delete-automated-backups --region ap-southeast-1
+  AWS_PROFILE=anhnv-$ENV aws --no-cli-pager rds delete-db-instance --db-instance-identifier "$N-old" --skip-final-snapshot \
+    --delete-automated-backups --region ap-southeast-1
 aws/scripts/check-account.sh "$ENV" &&
-  AWS_PROFILE=anhnv-$ENV aws rds delete-db-snapshot --db-snapshot-identifier "$N-restore" --region ap-southeast-1
+  AWS_PROFILE=anhnv-$ENV aws --no-cli-pager rds delete-db-snapshot --db-snapshot-identifier "$N-restore" --region ap-southeast-1
 ```
 
 ### 5. Khôi phục từ vault copy
@@ -213,14 +269,17 @@ credential tạm đó trong subshell riêng (không ghi file, không profile m�
 phải `SVP_AWS_BACKUP_ACCOUNT_ID`; lệnh ghi qua nó nối sau `aws/scripts/check-account.sh mgmt`. IAM ở `us-east-1`.
 
 ```sh
-ACCOUNT=$(AWS_PROFILE=anhnv-$ENV aws sts get-caller-identity --query Account --output text --region ap-southeast-1)
+ACCOUNT=$(AWS_PROFILE=anhnv-$ENV aws --no-cli-pager sts get-caller-identity --query Account --output text --region ap-southeast-1)
 COPY_ROLE=svp-backup-restore-copy
 D=$(mktemp -d)
 in_backup() (
-  read -r AK SK ST < <(AWS_PROFILE=anhnv-sso aws sts assume-role --role-arn "arn:aws:iam::$SVP_AWS_BACKUP_ACCOUNT_ID:role/OrganizationAccountAccessRole" --role-session-name svp-restore-copy --query 'Credentials.[AccessKeyId,SecretAccessKey,SessionToken]' --output text --region ap-southeast-1)
+  read -r AK SK ST < <(AWS_PROFILE=anhnv-sso aws --no-cli-pager sts assume-role \
+    --role-arn "arn:aws:iam::$SVP_AWS_BACKUP_ACCOUNT_ID:role/OrganizationAccountAccessRole" --role-session-name svp-restore-copy \
+    --query 'Credentials.[AccessKeyId,SecretAccessKey,SessionToken]' --output text --region ap-southeast-1)
   export AWS_ACCESS_KEY_ID=$AK AWS_SECRET_ACCESS_KEY=$SK AWS_SESSION_TOKEN=$ST
   unset AWS_PROFILE
-  [ "$(aws sts get-caller-identity --query Account --output text --region ap-southeast-1)" = "$SVP_AWS_BACKUP_ACCOUNT_ID" ] || { echo "not account svp-backup" >&2; exit 1; }
+  [ "$(aws --no-cli-pager sts get-caller-identity --query Account --output text --region ap-southeast-1)" \
+    = "$SVP_AWS_BACKUP_ACCOUNT_ID" ] || { echo "not account svp-backup" >&2; exit 1; }
   "$@"
 )
 ```
@@ -236,18 +295,25 @@ RDS phủ cả bản copy S3. Thứ ba là role `svp-backup-restore-copy` cho co
 ```sh
 jq -n --arg p "arn:aws:iam::$SVP_AWS_BACKUP_ACCOUNT_ID:root" '{Version: "2012-10-17", Statement: [{Sid: "CopyFromBackupAccount", Effect: "Allow", Principal: {AWS: $p}, Action: "backup:CopyIntoBackupVault", Resource: "*"}]}' >"$D/vault-policy.json"
 aws/scripts/check-account.sh "$ENV" &&
-  AWS_PROFILE=anhnv-$ENV aws backup put-backup-vault-access-policy --backup-vault-name "$N" --policy "file://$D/vault-policy.json" --region ap-southeast-1
-KEYID=$(in_backup aws kms describe-key --key-id alias/svp-backup-copy --query KeyMetadata.KeyId --output text --region ap-southeast-1)
-in_backup aws kms get-key-policy --key-id "$KEYID" --policy-name default --query Policy --output text --region ap-southeast-1 >"$D/key-policy.json"
+  AWS_PROFILE=anhnv-$ENV aws --no-cli-pager backup put-backup-vault-access-policy --backup-vault-name "$N" \
+    --policy "file://$D/vault-policy.json" --region ap-southeast-1
+KEYID=$(in_backup aws --no-cli-pager kms describe-key --key-id alias/svp-backup-copy --query KeyMetadata.KeyId --output text \
+  --region ap-southeast-1)
+in_backup aws --no-cli-pager kms get-key-policy --key-id "$KEYID" --policy-name default --query Policy --output text \
+  --region ap-southeast-1 >"$D/key-policy.json"
 jq --arg p "arn:aws:iam::$ACCOUNT:root" '.Statement += [{Sid: "EnvAccountUseForRestoreCopy", Effect: "Allow", Principal: {AWS: $p}, Action: ["kms:Decrypt", "kms:DescribeKey", "kms:GenerateDataKey"], Resource: "*"}, {Sid: "EnvAccountGrantForRestoreCopy", Effect: "Allow", Principal: {AWS: $p}, Action: "kms:CreateGrant", Resource: "*", Condition: {Bool: {"kms:GrantIsForAWSResource": "true"}}}]' "$D/key-policy.json" >"$D/key-policy-restore.json"
 aws/scripts/check-account.sh mgmt &&
-  in_backup aws kms put-key-policy --key-id "$KEYID" --policy-name default --policy "file://$D/key-policy-restore.json" --region ap-southeast-1
+  in_backup aws --no-cli-pager kms put-key-policy --key-id "$KEYID" --policy-name default \
+    --policy "file://$D/key-policy-restore.json" --region ap-southeast-1
 jq -n --arg a "$SVP_AWS_BACKUP_ACCOUNT_ID" '{Version: "2012-10-17", Statement: [{Effect: "Allow", Principal: {Service: "backup.amazonaws.com"}, Action: "sts:AssumeRole", Condition: {StringEquals: {"aws:SourceAccount": $a}}}]}' >"$D/copy-trust.json"
 aws/scripts/check-account.sh mgmt &&
-  in_backup aws iam create-role --role-name "$COPY_ROLE" --assume-role-policy-document "file://$D/copy-trust.json" --region us-east-1
+  in_backup aws --no-cli-pager iam create-role --role-name "$COPY_ROLE" --assume-role-policy-document "file://$D/copy-trust.json" \
+    --region us-east-1
 for p in AWSBackupServiceRolePolicyForBackup AWSBackupServiceRolePolicyForS3Backup; do
-  arn=$(in_backup aws iam list-policies --scope AWS --query "Policies[?PolicyName=='$p'].Arn" --output text --region us-east-1)
-  aws/scripts/check-account.sh mgmt && in_backup aws iam attach-role-policy --role-name "$COPY_ROLE" --policy-arn "$arn" --region us-east-1
+  arn=$(in_backup aws --no-cli-pager iam list-policies --scope AWS --query "Policies[?PolicyName=='$p'].Arn" --output text \
+    --region us-east-1)
+  aws/scripts/check-account.sh mgmt &&
+    in_backup aws --no-cli-pager iam attach-role-policy --role-name "$COPY_ROLE" --policy-arn "$arn" --region us-east-1
 done
 ```
 
@@ -257,9 +323,13 @@ hay `S3`), mới nhất trước thời điểm sự cố. Bản copy về vault
 ```sh
 RP='<RecoveryPointArn in svp-$ENV-copy>'
 aws/scripts/check-account.sh mgmt &&
-  JOB=$(in_backup aws backup start-copy-job --recovery-point-arn "$RP" --source-backup-vault-name "$N-copy" --destination-backup-vault-arn "arn:aws:backup:ap-southeast-1:$ACCOUNT:backup-vault:$N" --iam-role-arn "arn:aws:iam::$SVP_AWS_BACKUP_ACCOUNT_ID:role/$COPY_ROLE" --query CopyJobId --output text --region ap-southeast-1)
-until S=$(AWS_PROFILE=anhnv-backup-ro aws backup describe-copy-job --copy-job-id "$JOB" --query CopyJob.State --output text --region ap-southeast-1) && [ "$S" != CREATED ] && [ "$S" != RUNNING ]; do sleep 60; done; echo "$S"
-AWS_PROFILE=anhnv-backup-ro aws backup describe-copy-job --copy-job-id "$JOB" --query 'CopyJob.[State,StatusMessage,DestinationRecoveryPointArn]' --output text --region ap-southeast-1
+  JOB=$(in_backup aws --no-cli-pager backup start-copy-job --recovery-point-arn "$RP" --source-backup-vault-name "$N-copy" \
+    --destination-backup-vault-arn "arn:aws:backup:ap-southeast-1:$ACCOUNT:backup-vault:$N" \
+    --iam-role-arn "arn:aws:iam::$SVP_AWS_BACKUP_ACCOUNT_ID:role/$COPY_ROLE" --query CopyJobId --output text --region ap-southeast-1)
+until S=$(AWS_PROFILE=anhnv-backup-ro aws --no-cli-pager backup describe-copy-job --copy-job-id "$JOB" \
+  --query CopyJob.State --output text --region ap-southeast-1) && [ "$S" != CREATED ] && [ "$S" != RUNNING ]; do sleep 60; done; echo "$S"
+AWS_PROFILE=anhnv-backup-ro aws --no-cli-pager backup describe-copy-job --copy-job-id "$JOB" \
+  --query 'CopyJob.[State,StatusMessage,DestinationRecoveryPointArn]' --output text --region ap-southeast-1
 ```
 
 `S` phải là `COMPLETED`; `DestinationRecoveryPointArn` là recovery point mới trong `svp-$ENV`. Lỗi `AccessDenied` của
@@ -272,12 +342,14 @@ README đó (mục "Apply lần đầu", bước 2 và 3), plan phải là `0 to
 
 ```sh
 aws/scripts/check-account.sh "$ENV" &&
-  AWS_PROFILE=anhnv-$ENV aws backup delete-backup-vault-access-policy --backup-vault-name "$N" --region ap-southeast-1
+  AWS_PROFILE=anhnv-$ENV aws --no-cli-pager backup delete-backup-vault-access-policy --backup-vault-name "$N" --region ap-southeast-1
 for p in AWSBackupServiceRolePolicyForBackup AWSBackupServiceRolePolicyForS3Backup; do
-  arn=$(in_backup aws iam list-policies --scope AWS --query "Policies[?PolicyName=='$p'].Arn" --output text --region us-east-1)
-  aws/scripts/check-account.sh mgmt && in_backup aws iam detach-role-policy --role-name "$COPY_ROLE" --policy-arn "$arn" --region us-east-1
+  arn=$(in_backup aws --no-cli-pager iam list-policies --scope AWS --query "Policies[?PolicyName=='$p'].Arn" --output text \
+    --region us-east-1)
+  aws/scripts/check-account.sh mgmt &&
+    in_backup aws --no-cli-pager iam detach-role-policy --role-name "$COPY_ROLE" --policy-arn "$arn" --region us-east-1
 done
-aws/scripts/check-account.sh mgmt && in_backup aws iam delete-role --role-name "$COPY_ROLE" --region us-east-1
+aws/scripts/check-account.sh mgmt && in_backup aws --no-cli-pager iam delete-role --role-name "$COPY_ROLE" --region us-east-1
 rm -r "$D"
 ```
 
@@ -290,8 +362,9 @@ recovery point mới.
 ```sh
 RP_ENV='<DestinationRecoveryPointArn from 5b>'
 aws/scripts/check-account.sh "$ENV" &&
-  AWS_PROFILE=anhnv-$ENV aws rds copy-db-snapshot --source-db-snapshot-identifier "$RP_ENV" --target-db-snapshot-identifier "$N-restore" --kms-key-id "alias/$N-rds" --region ap-southeast-1
-AWS_PROFILE=anhnv-$ENV aws rds wait db-snapshot-available --db-snapshot-identifier "$N-restore" --region ap-southeast-1
+  AWS_PROFILE=anhnv-$ENV aws --no-cli-pager rds copy-db-snapshot --source-db-snapshot-identifier "$RP_ENV" \
+    --target-db-snapshot-identifier "$N-restore" --kms-key-id "alias/$N-rds" --region ap-southeast-1
+AWS_PROFILE=anhnv-$ENV aws --no-cli-pager rds wait db-snapshot-available --db-snapshot-identifier "$N-restore" --region ap-southeast-1
 ```
 
 Recovery point vừa copy về `svp-$ENV` (RDS hay S3) không có bản copy nào trong `svp-$ENV-copy`, nên
@@ -301,7 +374,8 @@ mục Xác nhận của [s3-restore.md](s3-restore.md) với S3):
 
 ```sh
 aws/scripts/check-account.sh "$ENV" &&
-  AWS_PROFILE=anhnv-$ENV aws backup delete-recovery-point --backup-vault-name "$N" --recovery-point-arn '<DestinationRecoveryPointArn from 5b>' --region ap-southeast-1
+  AWS_PROFILE=anhnv-$ENV aws --no-cli-pager backup delete-recovery-point --backup-vault-name "$N" \
+    --recovery-point-arn '<DestinationRecoveryPointArn from 5b>' --region ap-southeast-1
 ```
 
 ## Leo thang
@@ -317,7 +391,8 @@ aws/scripts/check-account.sh "$ENV" &&
   hai giờ qua, hai lần lỗi thì mở case với AWS Support.
 
   ```sh
-  AWS_PROFILE=anhnv-$ENV aws rds describe-events --source-identifier "$N-pitr" --source-type db-instance --duration 120 --region ap-southeast-1
+  AWS_PROFILE=anhnv-$ENV aws --no-cli-pager rds describe-events --source-identifier "$N-pitr" --source-type db-instance \
+    --duration 120 --region ap-southeast-1
   ```
 
 ## Liên kết

@@ -126,7 +126,7 @@ SVP_TEST_REDIS_URL ?= redis://127.0.0.1:6379/15
 
 .PHONY: help tools ci-tools generate generate-go generate-check slo otelcol-validate fmt-check vet lint actionlint buf-lint vulncheck test fuzz \
 	cover check check-go helm-check helm-docs helm-docs-check kyverno-test conftest-verify regal-lint regal-fix migration-lint migration-drill chainsaw-lint trivy-config grype renovate-check zizmor api-contract-check jwt-rotate hooks web-e2e measure-web measure-upload \
-	web-lighthouse web-sourcemaps docs-check
+	web-lighthouse web-sourcemaps docs-check diagrams diagrams-check
 
 help: ## List the targets
 	@grep -hE '^[a-zA-Z0-9_-]+:.*## ' $(MAKEFILE_LIST) | awk -F':.*## ' '{printf "  %-12s %s\n", $$1, $$2}'
@@ -455,6 +455,65 @@ docs-check: ## markdownlint-cli2 + lychee --offline on the Markdown (DOCS='<file
 	env -u DOCKER_DEFAULT_PLATFORM docker run --rm --network none -v "$(CURDIR):/repo:ro" --workdir /repo \
 		$(LYCHEE_IMAGE) --offline --include-fragments "$$@" || rc=1; \
 	exit $$rc
+
+# docs/diagrams/<name>.d2 is the source; <name>.svg (light) and <name>-dark.svg (dark) are generated and the page picks
+# one by the GitHub theme (docs/diagrams/README.md); tokens.d2 holds shared classes. Themes come from here, not the
+# file; --scale 1 gives the SVG its own size. NAMES='<name ...>' limits both targets, LAYOUT overrides the engine,
+# OUT=<dir in repo> writes elsewhere, SUFFIX renames, PNG=1 adds a PNG per theme. Same recipe as svp-infra's Makefile.
+# renovate: datasource=docker depName=d2lang/d2
+D2_IMAGE         := d2lang/d2:v0.9.0@sha256:0f9237e0213338415de5ef7436c92450ddd04e0e6e7df2db3f41387322df97b9
+DIAGRAMS_DIR := docs/diagrams
+NAMES ?=
+OUT ?=
+SUFFIX ?=
+LAYOUT ?=
+PNG ?=
+
+# Renders every diagram twice into $$out with $$layout, $$suffix and $$png set by the caller: <name>$$suffix.<ext> in
+# theme 0 and <name>$$suffix-dark.<ext> in theme 200. The container has no network.
+D2_RENDER = \
+	for f in $$srcs; do \
+	  n=$$(basename "$$f" .d2); echo "d2 $$n"; \
+	  for variant in light dark; do \
+	    theme=0; tail=; [ $$variant = light ] || { theme=200; tail=-dark; }; \
+	    for ext in svg $$png; do \
+	      msg=$$(env -u DOCKER_DEFAULT_PLATFORM docker run --rm --network none --user "$$(id -u):$$(id -g)" --entrypoint d2 \
+	        -v "$(CURDIR)/$(DIAGRAMS_DIR):/work:ro" -v "$$out:/out" -w /work \
+	        $(D2_IMAGE) --theme $$theme --scale 1 $$layout "$$n.d2" "/out/$$n$$suffix$$tail.$$ext" 2>&1) || { echo "$$msg" >&2; echo "FAIL: d2 $$f" >&2; exit 1; }; \
+	    done; \
+	  done; \
+	done
+
+diagrams: ## D2 to SVG (light and -dark) of docs/diagrams/*.d2 (NAMES=, LAYOUT=, OUT=<dir>, SUFFIX=, PNG=1)
+	@srcs=$$(if [ -n "$(NAMES)" ]; then for n in $(NAMES); do echo "$(DIAGRAMS_DIR)/$$n.d2"; done; \
+	  else ls $(DIAGRAMS_DIR)/*.d2 2>/dev/null | grep -v '/tokens\.d2$$'; fi); [ -n "$$srcs" ] || { echo "diagrams: no .d2 file"; exit 0; }; \
+	dir=$${OUT:-$(DIAGRAMS_DIR)}; \
+	case "$$dir" in (/*|..|../*|*/..|*/../*) echo "OUT: $$dir is outside this repository; give a path relative to it" >&2; exit 1;; esac; \
+	case "$$SUFFIX" in (*/*) echo "SUFFIX: no slash in a file name" >&2; exit 1;; esac; \
+	mkdir -p "$$dir" && out=$$(cd "$$dir" && pwd) || exit 1; \
+	layout=; [ -z "$$LAYOUT" ] || layout="--layout=$$LAYOUT"; suffix=$$SUFFIX; png=; [ -z "$$PNG" ] || png=png; \
+	$(D2_RENDER)
+
+# Without NAMES the orphan scan runs even when no .d2 is left, so an SVG whose source was deleted still fails; the scan
+# is flat, so icons/ is never read.
+diagrams-check: ## Fails, naming the file, when a committed SVG (light or -dark) differs from its .d2's render or has no .d2
+	@srcs=$$(if [ -n "$(NAMES)" ]; then for n in $(NAMES); do echo "$(DIAGRAMS_DIR)/$$n.d2"; done; \
+	  else ls $(DIAGRAMS_DIR)/*.d2 2>/dev/null | grep -v '/tokens\.d2$$'; fi); rc=0; \
+	if [ -z "$$srcs" ]; then echo "diagrams-check: no .d2 file"; \
+	else \
+	  out=$$(mktemp -d) || exit 1; trap 'rm -rf "$$out"' EXIT; layout=; suffix=; png=; \
+	  $(D2_RENDER); \
+	  for f in $$srcs; do \
+	    for tail in "" -dark; do \
+	      svg="$(DIAGRAMS_DIR)/$$(basename "$$f" .d2)$$tail.svg"; \
+	      cmp -s "$$out/$$(basename "$$svg")" "$$svg" || { echo "FAIL: $$svg is out of date or missing (run make diagrams)" >&2; rc=1; }; \
+	    done; \
+	  done; \
+	fi; \
+	[ -n "$(NAMES)" ] || for svg in $(DIAGRAMS_DIR)/*.svg; do \
+	  src="$${svg%.svg}"; src="$${src%-dark}.d2"; \
+	  [ ! -f "$$svg" ] || [ -f "$$src" ] || { echo "FAIL: $$svg has no .d2 source (restore it, or drop the SVG)" >&2; rc=1; }; \
+	done; exit $$rc
 
 # The version rule of services/gateway/openapi.yaml (written at the top of that file) against the spec at commit BASE:
 # the file changed means info.version went up, a breaking change from 1.0.0 on means the major did, any entry in

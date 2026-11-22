@@ -1,9 +1,14 @@
 # Phát hành: CI/CD, chuỗi cung ứng, ba repo và hợp đồng API
 
-Trang này trả lời: một thay đổi đi từ pull request tới pod đang chạy qua những bước nào, ai được làm bước nào, cái gì chứng minh
-image đang chạy là image đã build và quét, và ba repo `svp-backend`, `svp-frontend`, `svp-gitops` chia việc với nhau ra sao. Lệnh ở
-[`reference/ci.md`](../reference/ci.md), [`reference/k8s.md`](../reference/k8s.md); đọc một lượt chạy CI ở [`ci-cd.md`](../ci-cd.md);
-nơi image chạy ở [`deployment.md`](deployment.md).
+> **Tóm tắt**
+>
+> - **Trả lời:** một thay đổi đi từ pull request tới pod đang chạy qua những bước nào, ai được làm bước nào, cái gì chứng minh image
+>   đang chạy là image đã build và quét, và ba repo `svp-backend`, `svp-frontend`, `svp-gitops` chia việc ra sao.
+> - **Vì sao:** image phát hành build, quét, ký ở CI, không trên máy; admission chỉ cho pod chạy image đã ký và sạch.
+> - **Đọc tiếp:** [`observability.md`](observability.md): telemetry của pod đang chạy đi từ đâu tới đâu.
+
+Lệnh ở [`reference/ci.md`](../reference/ci.md), [`reference/k8s.md`](../reference/k8s.md); đọc một lượt chạy CI ở
+[`ci-cd.md`](../ci-cd.md); nơi image chạy ở [`deployment.md`](deployment.md).
 
 ## CI/CD và chuỗi cung ứng
 
@@ -16,44 +21,10 @@ pod của `svp` chạy image đã ký và sạch. Cluster k3d kéo bản phát h
 của account env, nơi CI đã chép image cùng chữ ký và attestation ([phát hành sang ECR](#phát-hành-sang-ecr)). Đường dev
 `make k8s-up` giữ image `dev-*` chưa ký trong registry k3d, policy chạy Audit.
 
-```mermaid
-flowchart LR
-    dev["Người học<br/>nhánh, PR"]
-    renovate["App Renovate<br/>PR dependency"]
-    subgraph gh["GitHub: repo public"]
-        pr["Pull request"]
-        checks["ci.yml: make check, generate-check,<br/>buf, config, gitleaks<br/>images.yml: build-nopush"]
-        main["main<br/>ruleset: ci-ok, images-ok"]
-        build["images.yml trên main<br/>build amd64 + arm64 → trivy<br/>→ push → index → ký, attest"]
-        promote["job promote<br/>(token App)"]
-        rescan["rescan hằng ngày"]
-    end
-    gitops["repo svp-gitops<br/>PR bot/promote-stg,<br/>gitops-ok, auto-merge"]
-    ghcr[("GHCR<br/>image theo digest,<br/>Sigstore bundle")]
-    sigstore["Sigstore công khai<br/>Fulcio, Rekor, TUF"]
-    subgraph cluster["cluster GitOps svp"]
-        argo["Argo CD<br/>poll git"]
-        kyv["Kyverno svp-images<br/>Enforce, chỉ ns svp"]
-        app["Pod của svp<br/>canary gateway"]
-    end
-    dev --> pr
-    renovate --> pr
-    pr --> checks
-    checks -->|"xanh, merge"| main
-    main --> build
-    build -->|"push, Sigstore bundle"| ghcr
-    build -->|"OIDC → chứng chỉ, log ký"| sigstore
-    build --> promote
-    promote -->|"envs/stg/images/, charts.yaml"| gitops
-    rescan -->|"attestation vuln mới"| ghcr
-    gitops -->|"image.digest"| argo
-    main -->|"chart ở SHA của charts.yaml"| argo
-    argo -->|"tạo pod"| kyv
-    kyv -->|"chữ ký, attestation"| ghcr
-    kyv -->|"khoá tin cậy TUF"| sigstore
-    kyv -->|"nhận"| app
-    app -->|"kéo theo digest"| ghcr
-```
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="../diagrams/supply-chain-dark.svg">
+  <img src="../diagrams/supply-chain.svg" alt="Một thay đổi đi từ PR tới cluster qua những cổng nào?">
+</picture>
 
 - **Workflow** (ADR-0015 §1, §2): `ci.yml` chạy đủ mục Kiểm tra (Go test trên Postgres và Redis là service container, lệch code
   sinh, `buf breaking`, cấu hình, chart, digest bên thứ ba, gitleaks toàn lịch sử); `images.yml` build image. Mỗi file một check

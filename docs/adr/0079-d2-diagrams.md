@@ -56,8 +56,15 @@ bằng hai bản image theo kiến trúc); mọi `.d2` có `layout-engine: elk`.
 
 - `svp-infra`: `Makefile` (`D2_IMAGE`, `diagrams`, `diagrams-check`, target `check`), `.github/workflows/check.yml` (job `docs`),
   `docs/diagrams/` (`tokens.d2`, `README.md`, các cặp `.d2` và `.svg`), `AGENTS.md` (luật cập nhật sơ đồ).
+- `svp-backend`: `Makefile`, `.github/workflows/ci.yml` (job `docs`), `docs/diagrams/` (cùng khuôn, [0082](0082-d2-diagrams-all-repos.md)).
 
 ## Nguồn
 
 - D2: <https://d2lang.com>
 - Image chính thức: <https://hub.docker.com/r/d2lang/d2>
+
+## Thông tin thêm
+
+### Chỉnh bởi
+
+- Kết quả quyết định: [0082](0082-d2-diagrams-all-repos.md): khuôn D2 áp thêm cho `svp-backend` và `svp-labs`, không đổi quyết định chọn D2.

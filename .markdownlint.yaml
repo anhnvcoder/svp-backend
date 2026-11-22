@@ -7,3 +7,6 @@ MD010:
 # GitHub anchor gets a numeric suffix there; only siblings under one parent must differ.
 MD024:
   siblings_only: true
+# Diagrams are embedded with <picture> so every viewer shows one image (docs/diagrams/README.md); no other HTML.
+MD033:
+  allowed_elements: [picture, source, img]

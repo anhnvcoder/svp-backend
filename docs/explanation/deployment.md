@@ -1,10 +1,15 @@
 # Triển khai: compose, k3d và AWS
 
-Trang này trả lời: cùng một hệ thống chạy ở đâu (stack compose trên máy, cluster k3d, cluster EKS trên AWS), mỗi nơi gồm những
-thành phần nào, nối với nhau ra sao và vì sao khác nhau. Lệnh chạy ở [`reference/compose.md`](../reference/compose.md),
-[`reference/k8s.md`](../reference/k8s.md), [`reference/eks.md`](../reference/eks.md); sơ đồ container chung ở
-[`architecture.md`](../architecture.md#5-khối). Quan sát (Collector, Grafana, GlitchTip) ở
-[`observability.md`](observability.md); cách image đi tới cluster ở [`delivery.md`](delivery.md).
+> **Tóm tắt**
+>
+> - **Trả lời:** cùng một hệ thống chạy ở đâu (stack compose trên máy, cluster k3d, cluster EKS trên AWS), mỗi nơi gồm những thành
+>   phần nào, nối với nhau ra sao và vì sao khác nhau.
+> - **Vì sao:** cùng release ứng dụng chạy ở cả ba nơi, chỉ lớp nền tảng khác, nên khác biệt gom ở một chỗ.
+> - **Đọc tiếp:** [`environments.md`](environments.md): stg và prd khác nhau ở đâu, thành phần nào phải giống.
+
+Lệnh chạy ở [`reference/compose.md`](../reference/compose.md), [`reference/k8s.md`](../reference/k8s.md),
+[`reference/eks.md`](../reference/eks.md); sơ đồ container chung ở [`architecture.md`](../architecture.md#5-khối). Quan sát (Collector,
+Grafana, GlitchTip) ở [`observability.md`](observability.md); cách image đi tới cluster ở [`delivery.md`](delivery.md).
 
 ## Compose
 
@@ -75,52 +80,10 @@ Cùng các release ứng dụng, cùng image và cùng biến môi trường nh�
 arm64, image k3s theo `K3S_IMAGE_TAG` của [`Makefile`](../../Makefile)). Compose vẫn là đường dev chính; hai đường không chạy cùng
 lúc (máy 16 GB). Cổng chỉ trên `127.0.0.1`: API 6550, HTTPS 8443, registry 5111. Lệnh ở [`reference/k8s.md`](../reference/k8s.md).
 
-```mermaid
-flowchart LR
-    client["Client trên máy<br/>curl, smoke, k6"]
-    subgraph k3d["cluster k3d svp"]
-        subgraph edge["envoy-gateway-system, svp-edge"]
-            envoy["Envoy proxy<br/>Gateway svp, TLS *.svp.localhost"]
-        end
-        subgraph app["svp"]
-            web["web<br/>Argo Rollout, 2 replica"]
-            gw["gateway<br/>Argo Rollout, 2 replica"]
-            svc["user-, video-,<br/>engagement-, feed-service"]
-            mw["media-worker<br/>KEDA 1–2"]
-        end
-        subgraph data["svp-data"]
-            pg[("Postgres svp-pg<br/>CloudNativePG")]
-            vk[("Valkey<br/>TLS, user ACL")]
-            rp[["Kafka<br/>SCRAM-SHA-512 TLS + ACL"]]
-            ops["svp-ops<br/>CLI vận hành"]
-            s3[("Object store s3<br/>RustFS")]
-        end
-        subgraph obs["svp-obs"]
-            col["Collector"]
-            prom["Prometheus, Loki,<br/>Tempo, Pyroscope"]
-            ui["Grafana, Alertmanager,<br/>GlitchTip"]
-        end
-    end
-    browser["Trình duyệt"] -->|"127.0.0.1:8443<br/>svp.localhost"| envoy
-    client -->|"127.0.0.1:8443<br/>api.svp.localhost"| envoy
-    client -->|"s3.svp.localhost<br/>presigned POST, HLS"| envoy
-    envoy -->|"HTTPRoute web<br/>stable / canary"| web
-    envoy -->|"HTTPRoute api<br/>stable / canary"| gw
-    web --> gw
-    web -->|"session db 9"| vk
-    envoy -->|"HTTPRoute s3"| s3
-    gw -->|gRPC| svc
-    gw --> vk
-    svc --> pg
-    svc --> rp
-    mw --> rp
-    mw --> s3
-    ops --> rp
-    ops --> vk
-    app -.->|OTLP| col
-    col --> prom
-    ui --> prom
-```
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="../diagrams/k3d-deployment-dark.svg">
+  <img src="../diagrams/k3d-deployment.svg" alt="Cluster k3d gồm namespace và thành phần nào, traffic vào bằng đường nào?">
+</picture>
 
 - **Namespace:** `svp` (release ứng dụng), `svp-data` (Postgres, Valkey, Kafka, object store `s3`, `svp-ops`), `svp-obs` (observability,
   GlitchTip), `svp-edge` (`Gateway`, chứng chỉ wildcard); công cụ ở `cert-manager`, `envoy-gateway-system`, `cnpg-system`, `keda`,
@@ -734,104 +697,20 @@ Sơ đồ triển khai stg với icon AWS (đúng subnet của module Terraform;
 
 ![Sơ đồ AWS stg](https://raw.githubusercontent.com/anhnvcoder/svp-infra/main/docs/diagrams/svp-aws-stg.png)
 
-Sơ đồ khối bên dưới là cùng hệ thống ở mức thành phần, cho một env `svp-<env>`:
+Hai sơ đồ dưới là cùng hệ thống ở mức thành phần, cho một env `svp-<env>`: sơ đồ đầu cho thấy ai và cái gì từ ngoài tới env qua đường nào,
+sơ đồ sau các luồng nền qua dịch vụ AWS. Mỗi thứ chạy ở đâu và ở subnet nào: [`architecture.md`](../architecture.md#71-triển-khai-trên-eks).
 
-```mermaid
-flowchart LR
-    browser["Trình duyệt"]
-    client["Client ngoài<br/>curl, smoke"]
-    learner["Máy người học<br/>kubectl, Terraform"]
-    gh["GitHub<br/>svp-gitops, chart"]
-    up["Registry upstream<br/>GHCR, Docker Hub, Quay..."]
-    ci["CI GitHub Actions<br/>role OIDC"]
-    mail["Email vận hành"]
-    subgraph aws["AWS ap-southeast-1, account của env"]
-        r53["Route 53<br/>zone của env, bản ghi do Terraform"]
-        cfe["CloudFront svp-env-web, svp-env-api<br/>web ACL, cert ACM"]
-        cf["CloudFront svp-env-media<br/>media.domain, web ACL, OAC"]
-        subgraph s3["S3"]
-            up[("uploads<br/>riêng tư, CORS POST")]
-            media[("media<br/>riêng tư, chỉ CloudFront đọc")]
-        end
-        evb["EventBridge<br/>sự kiện Spot, rebalance"]
-        sqs[["SQS svp-env-karpenter"]]
-        cw["CloudWatch alarm<br/>RDS, MSK, ElastiCache, DLQ transcode"]
-        mc["MediaConvert queue svp-env"]
-        mcq[["EventBridge, SQS<br/>svp-env-transcode-events"]]
-        sns[["SNS svp-env-alarms<br/>mã hoá CMK"]]
-        subgraph keep["sống qua destroy, root aws/accounts/env"]
-            ecr[("ECR: repo phát hành,<br/>pull-through cache")]
-            amp[("AMP svp-env, ruler,<br/>Alertmanager")]
-            cwl[("CloudWatch Logs /svp/env/otel,<br/>X-Ray aws/spans")]
-            amg["Managed Grafana svp-env<br/>Identity Center"]
-        end
-        subgraph vpc["VPC, stg 2 AZ, prd 3 AZ"]
-            alb["ALB internal svp-env-edge<br/>subnet edge, VPC origin"]
-            nat["NAT gateway"]
-            vpce["Endpoint interface<br/>private DNS, policy"]
-            bastion["Bastion SSM<br/>subnet private"]
-            api["API EKS<br/>endpoint private"]
-            subgraph dbnet["subnet database, không route ra Internet"]
-                rds[("RDS PostgreSQL 17<br/>TLS, CMK")]
-                msk[["Amazon MSK<br/>SCRAM-SHA-512 TLS 9096"]]
-                ec[("ElastiCache for Valkey<br/>TLS 6379, user RBAC")]
-            end
-            subgraph eks["EKS svp-env"]
-                subgraph sys["nhóm node system, on-demand, mỗi AZ một node"]
-                    karpc["Argo CD, Karpenter,<br/>add-on EKS"]
-                end
-                ctl["LBC, cert-manager, ESO, KEDA:<br/>node nào còn chỗ"]
-                subgraph karp["node của Karpenter, NodePool default<br/>stg Spot, prd on-demand"]
-                    envoy["Envoy Gateway<br/>HPA, PDB, trải zone"]
-                    app["svp: web, gateway,<br/>4 service gRPC, media-worker, dlq-replay"]
-                    data["svp-data: Job kafka-init, svp-ops"]
-                    obs["svp-obs: Collector, Prometheus agent,<br/>ACK, Grafana Operator,<br/>Pyroscope, GlitchTip"]
-                end
-            end
-        end
-    end
-    browser -->|"HTTPS web, api"| cfe
-    client -->|"HTTPS api"| cfe
-    cfe -->|"VPC origin"| alb
-    alb --> envoy
-    envoy --> app
-    app -->|"9096, SCRAM TLS"| msk
-    app -->|"6379, TLS"| ec
-    data -->|"9096"| msk
-    data -->|"6379"| ec
-    app -->|"5432, TLS verify-full"| rds
-    obs -->|"svp_glitchtip"| rds
-    obs -->|"lag: kafkametrics"| msk
-    app -->|"Pod Identity,<br/>S3 gateway endpoint"| up
-    app -->|"master, header HLS"| media
-    app -->|"Probe, CreateJob, GetJob"| mc
-    mc -->|"đọc gốc, ghi HLS"| s3
-    mc -.->|"trạng thái job"| mcq -.-> app
-    browser -->|"POST presigned"| up
-    browser -->|"GET HLS"| cf
-    cf -->|"OAC"| media
-    ctl -->|"đăng ký pod Envoy vào target group"| alb
-    ctl -->|"git qua NAT"| nat
-    nat --> gh
-    karp -->|"kéo image"| vpce
-    vpce --> ecr
-    ecr -.->|"chưa cache: qua NAT"| up
-    ci -->|"chép bản phát hành"| ecr
-    obs -->|"metric, log, span SigV4"| vpce
-    vpce --> amp
-    vpce --> cwl
-    amp -->|"cảnh báo"| sns
-    obs -->|"dashboard qua NAT"| amg
-    amg --> amp
-    evb --> sqs
-    sqs -->|"interruption"| karpc
-    karpc -->|"tạo, xoá node"| karp
-    rds -.->|"metric"| cw
-    msk -.->|"metric"| cw
-    ec -.->|"metric"| cw
-    cw --> sns --> mail
-    learner -->|"tunnel SSM"| bastion --> api
-```
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="../diagrams/aws-env-dark.svg">
+  <img src="../diagrams/aws-env.svg" alt="Ai và cái gì từ ngoài tới một env, qua đường nào?">
+</picture>
+
+Chi tiết đường upload, transcode, telemetry và cảnh báo của cùng env:
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="../diagrams/aws-env-detail-dark.svg">
+  <img src="../diagrams/aws-env-detail.svg" alt="Upload, transcode, telemetry và cảnh báo của một env đi qua dịch vụ AWS nào?">
+</picture>
 
 Alarm nằm ngoài cluster: khi cluster chết, alarm của RDS, MSK, ElastiCache vẫn tới email (ADR-0058; mỗi alarm `page` có
 runbook cùng tên ở [`runbooks/`](../runbooks/README.md)); luật của service và SLO được ruler của AMP đánh giá, cũng

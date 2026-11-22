@@ -171,6 +171,7 @@ Phụ lục: [`appendix/NNNN-<slug>.md`](appendix/NNNN-<slug>.md) (chỉ khi có
 | [0079](0079-d2-diagrams.md) | Sơ đồ chính của tài liệu `svp-infra` viết bằng D2 và sinh thành SVG (nguồn text, token dùng chung, kiểm lệch trong CI); draw.io giữ cho sơ đồ icon AWS, Mermaid cho luồng nhỏ | Chấp nhận |
 | [0080](0080-amp-rule-interval-stg.md) | Luật trên AMP của stg đánh giá mỗi 30 s, prd giữ 15 s, khi quota 15 s của stg chưa duyệt; chu kỳ là value `rules.amp.interval` của chart `svp-observability`, overlay stg của `svp-gitops` đặt `30s` | Chấp nhận |
 | [0081](0081-terraform-inventory.md) | Số tài nguyên mỗi root Terraform của `svp-infra` sinh từ plan giả của `terraform test` (provider giả, container không mạng, không credential), ghi thành trang và sơ đồ, `inventory-check` đỏ khi lệch; không bảng viết tay | Chấp nhận |
+| [0082](0082-d2-diagrams-all-repos.md) | Sơ đồ chính của tài liệu `svp-backend` và `svp-labs` cũng viết bằng D2 theo khuôn của ADR-0079 (cùng image, token, `<picture>`, kiểm trong CI); Mermaid giữ cho luồng nhỏ và sequence | Chấp nhận |
 
 ## Chuẩn áp dụng
 

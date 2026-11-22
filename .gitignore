@@ -30,3 +30,6 @@
 
 # DAST reports of make dast (deploy/dast/run.sh); the log, JUnit and HAR hold response bodies with test tokens
 .dast/
+
+# Preview PNGs of make diagrams PNG=1
+docs/diagrams/*.png

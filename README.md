@@ -1,24 +1,15 @@
 # svp-backend
 
-Backend của nền tảng video ngắn mini: sáu service Go (upload, transcode HLS, feed, like, lượt xem), chart Helm, stack compose, cluster k3d và CI.
+> **Tóm tắt**
+>
+> - **Trả lời:** `svp-backend` là gì: sáu service Go (upload, transcode HLS, feed, like, lượt xem), chart Helm, stack compose, k3d và CI.
+> - **Vì sao:** lab học DevOps và Solution Architect, làm xuyên suốt từ thiết kế tới vận hành; mỗi bước lớn kết thúc ở hệ thống chạy được.
+> - **Đọc tiếp:** [chạy thử](docs/tutorials/first-run.md) từng bước; [kiến trúc](docs/architecture.md) để hiểu thiết kế.
 
-```mermaid
-flowchart LR
-    client["Trình duyệt, k6, curl"]
-    web["web (repo svp-frontend)"]
-    gw["gateway"]
-    svc["user, video, engagement, feed-service"]
-    bus[["Kafka"]]
-    mw["media-worker"]
-    obj[("Object storage")]
-    client --> web --> gw
-    client --> gw
-    client -->|"presigned POST, HLS"| obj
-    gw -->|gRPC| svc
-    svc -.->|event| bus
-    bus -.-> mw
-    mw --> obj
-```
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/diagrams/overview-dark.svg">
+  <img src="docs/diagrams/overview.svg" alt="Hệ thống gồm những phần nào, gọi nhau đồng bộ hay qua event?">
+</picture>
 
 Nét liền là gọi đồng bộ, nét đứt là event. Sơ đồ đủ container, luồng upload, feed, like ở [`docs/architecture.md`](docs/architecture.md).
 

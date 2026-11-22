@@ -1,0 +1,175 @@
+# Who and what reaches one env from outside, and by which path: the browser through CloudFront and the internal ALB,
+# the learner through an SSM tunnel, CI through an OIDC role, the cluster out through NAT and endpoints. Where each
+# workload runs is eks-deployment; the flows of upload, transcode, telemetry and alarms are aws-env-detail.
+# Names match svp-infra (aws/modules/edge, eks, rds, msk, elasticache, aws/accounts/<env>).
+vars: {
+  d2-config: {
+    layout-engine: elk
+    pad: 20
+  }
+}
+...@tokens
+
+title: "Ai và cái gì từ ngoài tới một env, qua đường nào?" {
+  shape: text
+  near: top-center
+  style: {font-size: 18; bold: true}
+}
+
+all: "" {
+  grid-rows: 1
+  grid-columns: 3
+  grid-gap: 0
+  horizontal-gap: 60
+  style: {stroke: transparent; fill: transparent}
+
+  L: "" {
+    grid-rows: 1
+    grid-columns: 1
+    grid-gap: 0
+    vertical-gap: 50
+    style: {stroke: transparent; fill: transparent}
+    browser: "Trình duyệt,\ncurl, smoke" {
+      class: person
+      width: 100
+      height: 100
+    }
+  }
+  env: "account svp-<env> · ap-southeast-1" {
+    class: account
+    label.near: top-left
+    grid-rows: 1
+    grid-columns: 3
+    grid-gap: 25
+    A: "" {
+      grid-rows: 2
+      grid-columns: 1
+      grid-gap: 0
+      vertical-gap: 60
+      style: {stroke: transparent; fill: transparent}
+      cf: "CloudFront" {
+        class: prevention
+        grid-rows: 2
+        grid-columns: 1
+        grid-gap: 24
+        vertical-gap: 6
+        i: "svp-<env>-web, -api, -media" {shape: image; icon: ./icons/cloudfront.svg; width: 48; height: 48; style: {font-color: "#1A1A1A"; font-size: 13; bold: false}}
+        s0: "web ACL, cert ACM;\nbản ghi Route 53" {class: sub}
+      }
+      s3: "S3" {
+        class: data
+        grid-rows: 2
+        grid-columns: 1
+        grid-gap: 24
+        vertical-gap: 6
+        i: "uploads, media" {shape: image; icon: ./icons/s3.svg; width: 48; height: 48; style: {font-color: "#1A1A1A"; font-size: 13; bold: false}}
+        s0: "uploads: POST presigned;\nmedia: chỉ CloudFront đọc" {class: sub}
+      }
+    }
+    vpc: "VPC svp-<env> · 2–3 AZ" {
+      class: region
+      label.near: top-left
+      grid-rows: 3
+      grid-columns: 1
+      grid-gap: 40
+      alb: "ALB internal" {
+        class: prevention
+        grid-rows: 2
+        grid-columns: 1
+        grid-gap: 24
+        vertical-gap: 6
+        i: "svp-<env>-edge" {shape: image; icon: ./icons/elb.svg; width: 48; height: 48; style: {font-color: "#1A1A1A"; font-size: 13; bold: false}}
+        s0: "subnet edge, không node;\ntarget group → Envoy" {class: sub}
+      }
+      eks: "Cluster EKS" {
+        class: workload
+        grid-rows: 2
+        grid-columns: 1
+        grid-gap: 24
+        vertical-gap: 6
+        i: "svp-<env>" {shape: image; icon: ./icons/eks.svg; width: 48; height: 48; style: {font-color: "#1A1A1A"; font-size: 13; bold: false}}
+        s0: "API chỉ endpoint private;\nEnvoy → web, gateway…" {class: sub}
+      }
+      data: "Subnet database,\nkhông route ra Internet" {
+        class: data
+        grid-rows: 2
+        grid-columns: 1
+        grid-gap: 24
+        vertical-gap: 6
+        ic: "" {
+          grid-rows: 1
+          grid-columns: 3
+          grid-gap: 20
+          style: {stroke: transparent; fill: transparent}
+          rds: "RDS" {shape: image; icon: ./icons/rds.svg; width: 48; height: 48; style: {font-color: "#1A1A1A"; font-size: 13; bold: false}}
+          msk: "MSK" {shape: image; icon: ./icons/msk.svg; width: 48; height: 48; style: {font-color: "#1A1A1A"; font-size: 13; bold: false}}
+          vk: "Valkey" {shape: image; icon: ./icons/elasticache.svg; width: 48; height: 48; style: {font-color: "#1A1A1A"; font-size: 13; bold: false}}
+        }
+        s0: "PostgreSQL 17 · Kafka · Valkey;\nTLS 5432, 9096, 6379" {class: sub}
+      }
+    }
+    C: "" {
+      grid-rows: 3
+      grid-columns: 1
+      grid-gap: 0
+      vertical-gap: 50
+      style: {stroke: transparent; fill: transparent}
+      bastion: "Bastion SSM" {
+        class: workload
+        grid-rows: 1
+        grid-columns: 1
+        grid-gap: 24
+        vertical-gap: 6
+        s0: "subnet private; SSM tunnel\ntới API private của EKS" {class: sub}
+      }
+      egress: "Đường ra khỏi VPC" {
+        class: prevention
+        grid-rows: 1
+        grid-columns: 1
+        grid-gap: 24
+        vertical-gap: 6
+        s0: "NAT: GitHub, upstream,\nSigstore; endpoint interface\n(policy theo account):\nECR, AMP, Logs" {class: sub}
+      }
+      ecr: "ECR" {
+        class: investigation
+        grid-rows: 2
+        grid-columns: 1
+        grid-gap: 24
+        vertical-gap: 6
+        i: "private của account env" {shape: image; icon: ./icons/ecr.svg; width: 48; height: 48; style: {font-color: "#1A1A1A"; font-size: 13; bold: false}}
+        s0: "repo phát hành, pull-through\ncache; sống qua destroy" {class: sub}
+      }
+    }
+  }
+  R: "" {
+    grid-rows: 3
+    grid-columns: 1
+    grid-gap: 0
+    vertical-gap: 60
+    style: {stroke: transparent; fill: transparent}
+    learner: "Người học:\nkubectl, Terraform" {
+      class: person
+      width: 100
+      height: 100
+    }
+    ext: "GitHub, registry upstream,\nSigstore" {
+      class: external
+    }
+    ci: "GitHub Actions\n(role OIDC chép\nbản phát hành vào ECR)" {
+      class: external
+    }
+  }
+}
+
+all.L.browser -> all.env.A.cf: "HTTPS" {class: sync-call}
+all.L.browser -> all.env.A.s3: {class: sync-call}
+all.env.A.cf -> all.env.vpc.alb: "VPC origin" {class: sync-call}
+all.env.A.cf -> all.env.A.s3: "OAC (media)" {class: sync-call}
+all.env.vpc.alb -> all.env.vpc.eks: "Envoy" {class: sync-call}
+all.env.vpc.eks -> all.env.vpc.data: "TLS" {class: sync-call}
+all.env.vpc.eks -> all.env.C.egress: {class: sync-call}
+all.env.C.egress -> all.env.C.ecr: "kéo image" {class: sync-call}
+all.env.C.egress -> all.R.ext: {class: sync-call}
+all.R.ci -> all.env.C.ecr: {class: data-flow}
+all.R.learner -> all.env.C.bastion: "SSM" {class: control-flow}
+all.env.C.bastion -> all.env.vpc.eks: {class: control-flow}

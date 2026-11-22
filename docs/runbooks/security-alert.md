@@ -1,5 +1,13 @@
 # security-alert
 
+> **Tóm tắt**
+>
+> - **Làm gì:** phân loại một email bảo mật của org (sự kiện CloudTrail hay finding GuardDuty, Access Analyzer mức HIGH, CRITICAL): việc
+>   của chính người học hay sự cố; đọc finding, bản ghi trail, baseline của account; sự cố thì khoá phiên, gỡ env, giữ bằng chứng. Chỉ AWS.
+> - **Khi nào và bao lâu:** khi email từ topic `svp-security-alarms` tới; kiểm 5 phút, sự cố thật thì làm Giảm thiểu ngay. Mỗi tuần, và
+>   cuối buổi prd, đọc thêm control FAILED ở mục [Đọc bảng Security Hub định kỳ](#đọc-bảng-security-hub-định-kỳ).
+> - **Phí trong lúc chạy:** không phát sinh phí: lệnh đọc, và lệnh ghi chỉ đổi trạng thái finding, không tạo tài nguyên.
+
 - Nguồn: email từ topic SNS `svp-security-alarms` của account `svp-security` (`ap-southeast-1`), dòng đầu `svp-security:` (sự kiện) hay
   `svp-security finding` (finding). Rule ở root `aws/security` và module `aws/modules/security-baseline` của `svp-infra`
   ([ADR-0060](../adr/0060-org-detection-logging.md) §10); đường đi của email: [`aws-security.md`](../explanation/aws-security.md#luồng-phát-hiện-tới-cảnh-báo).
@@ -11,11 +19,15 @@ Dán một lần cho mỗi terminal. Biến account (`SVP_AWS_LOG_ACCOUNT_ID`, `
 `SVP_AWS_PRD_ACCOUNT_ID`) export trong terminal, không ghi vào file nào ([`aws-security.md`](../explanation/aws-security.md#cấu-trúc-org-theo-aws-sra)):
 
 ```sh
-sec()  { AWS_PROFILE=anhnv-security-ro aws --region ap-southeast-1 "$@"; }   # Security Hub, aggregator ở region nhà
-logs() { AWS_PROFILE=anhnv-log-ro aws --region ap-southeast-1 "$@"; }        # bucket log ở region nhà
+# Security Hub, aggregator ở region nhà
+sec() { AWS_PROFILE=anhnv-security-ro aws --no-cli-pager --region ap-southeast-1 "$@"; }
+# bucket log ở region nhà
+logs() { AWS_PROFILE=anhnv-log-ro aws --no-cli-pager --region ap-southeast-1 "$@"; }
 LOG=$SVP_AWS_LOG_ACCOUNT_ID
-ORG=$(AWS_PROFILE=anhnv-security-ro aws organizations describe-organization --region us-east-1 --query Organization.Id --output text)
-AWS_PROFILE=anhnv-security-ro aws sts get-caller-identity --region ap-southeast-1   # account là svp-security
+ORG=$(AWS_PROFILE=anhnv-security-ro aws --no-cli-pager organizations describe-organization --region us-east-1 \
+  --query Organization.Id --output text)
+# account là svp-security
+AWS_PROFILE=anhnv-security-ro aws --no-cli-pager sts get-caller-identity --region ap-southeast-1
 ```
 
 ## Ý nghĩa và tác động tới người dùng
@@ -49,17 +61,24 @@ AWS (người học chạy), theo thứ tự:
 # 1. Có apply nào của người học đang chạy hay vừa chạy không? Có thì so tên lệnh trong email với plan đã đọc.
 # 2. Finding mới, còn mở, HIGH và CRITICAL của mọi account có Security Hub (gom us-east-1 về region nhà);
 #    account `security_hub` = `off` (giữa các buổi mọi account trừ svp-security) không có finding ở đây: xem bước 3
-sec securityhub get-findings --filters '{"SeverityLabel":[{"Value":"HIGH","Comparison":"EQUALS"},{"Value":"CRITICAL","Comparison":"EQUALS"}],"RecordState":[{"Value":"ACTIVE","Comparison":"EQUALS"}],"WorkflowStatus":[{"Value":"NEW","Comparison":"EQUALS"}]}' --sort-criteria Field=UpdatedAt,SortOrder=desc --query 'Findings[].[UpdatedAt,Severity.Label,ProductName,AwsAccountId,Region,Title,Id,ProductArn]' --output text --max-items 20
+sec securityhub get-findings \
+  --filters '{"SeverityLabel":[{"Value":"HIGH","Comparison":"EQUALS"},{"Value":"CRITICAL","Comparison":"EQUALS"}],"RecordState":[{"Value":"ACTIVE","Comparison":"EQUALS"}],"WorkflowStatus":[{"Value":"NEW","Comparison":"EQUALS"}]}' \
+  --sort-criteria Field=UpdatedAt,SortOrder=desc \
+  --query 'Findings[].[UpdatedAt,Severity.Label,ProductName,AwsAccountId,Region,Title,Id,ProductArn]' --output text --max-items 20
 # Bước 3, 4 chạy ở region của finding (cột Region ở bước 2; account `off`: region trong email)
 FR=ap-southeast-1   # hay us-east-1
-fr() { AWS_PROFILE=anhnv-security-ro aws --region "$FR" "$@"; }
+fr() { AWS_PROFILE=anhnv-security-ro aws --no-cli-pager --region "$FR" "$@"; }
 # 3. Chi tiết finding GuardDuty
 DET=$(fr guardduty list-detectors --query 'DetectorIds[0]' --output text)
-fr guardduty list-findings --detector-id "$DET" --finding-criteria '{"Criterion":{"service.archived":{"Eq":["false"]},"severity":{"Gte":7}}}' --max-results 20
-fr guardduty get-findings --detector-id "$DET" --finding-ids <id> --query 'Findings[].[Type,Severity,AccountId,Resource.ResourceType,Service.Action.ActionType,Service.Count,Service.EventFirstSeen,Service.EventLastSeen]' --output text
+fr guardduty list-findings --detector-id "$DET" \
+  --finding-criteria '{"Criterion":{"service.archived":{"Eq":["false"]},"severity":{"Gte":7}}}' --max-results 20
+fr guardduty get-findings --detector-id "$DET" --finding-ids <id> \
+  --query 'Findings[].[Type,Severity,AccountId,Resource.ResourceType,Service.Action.ActionType,Service.Count,Service.EventFirstSeen,Service.EventLastSeen]' \
+  --output text
 # 4. Finding Access Analyzer còn mở (tài nguyên chia sẻ ra ngoài org)
 AA=$(fr accessanalyzer list-analyzers --type ORGANIZATION --query 'analyzers[0].arn' --output text)
-fr accessanalyzer list-findings-v2 --analyzer-arn "$AA" --filter '{"status":{"eq":["ACTIVE"]}}' --query 'findings[].[updatedAt,resourceOwnerAccount,resourceType,resource,findingType]' --output text
+fr accessanalyzer list-findings-v2 --analyzer-arn "$AA" --filter '{"status":{"eq":["ACTIVE"]}}' \
+  --query 'findings[].[updatedAt,resourceOwnerAccount,resourceType,resource,findingType]' --output text
 ```
 
 Sự kiện CloudTrail của email (nhóm khác Finding): đọc bản ghi đủ trong bucket trail của Log Archive, ở thư mục của region trong email (nơi
@@ -72,14 +91,17 @@ P="s3://svp-cloudtrail-$LOG-ap-southeast-1/AWSLogs/$ORG/$ACC/CloudTrail/$REG/$(d
 logs s3 ls "$P" | tail -n 20
 # 6. Bản ghi của lệnh trong email: ai, từ IP nào, qua phiên nào, kết quả
 EV=<tên lệnh trong email>
-for f in $(logs s3 ls "$P" | awk '{print $4}' | tail -n 12); do logs s3 cp "$P$f" - | gunzip | jq -c --arg ev "$EV" '.Records[] | select(.eventName==$ev) | {eventTime, eventName, arn: .userIdentity.arn, src: .sourceIPAddress, ua: .userAgent, errorCode, errorMessage}'; done
+for f in $(logs s3 ls "$P" | awk '{print $4}' | tail -n 12); do
+  logs s3 cp "$P$f" - | gunzip | jq -c --arg ev "$EV" '.Records[] | select(.eventName==$ev)
+    | {eventTime, eventName, arn: .userIdentity.arn, src: .sourceIPAddress, ua: .userAgent, errorCode, errorMessage}'
+done
 ```
 
 Trail giao log vài phút sau sự kiện: bước 6 chưa thấy gì thì chờ rồi chạy lại. Cấu hình hiện tại của account stg, prd (biến `ENV`):
 
 ```sh
 ENV=stg; ID=$([ "$ENV" = stg ] && echo "$SVP_AWS_STG_ACCOUNT_ID" || echo "$SVP_AWS_PRD_ACCOUNT_ID")
-ro() { AWS_PROFILE=anhnv-$ENV-ro aws --region ap-southeast-1 "$@"; }
+ro() { AWS_PROFILE=anhnv-$ENV-ro aws --no-cli-pager --region ap-southeast-1 "$@"; }
 ro sts get-caller-identity   # account là $ID
 # 7. Baseline còn nguyên: bốn cờ true, EBS mã hoá mặc định true;
 #    recorder đang ghi khi config_recording của account là always, rỗng khi off (aws/paid-features.json)
@@ -87,7 +109,7 @@ ro s3control get-public-access-block --account-id "$ID" --query 'PublicAccessBlo
 ro ec2 get-ebs-encryption-by-default
 ro configservice describe-configuration-recorder-status --query 'ConfigurationRecordersStatus[].[name,recording,lastStatus]' --output text
 # 8. IAM user của account (phải rỗng: svp-deny-iam-users chặn tạo)
-AWS_PROFILE=anhnv-$ENV-ro aws iam list-users --region us-east-1 --query 'Users[].[UserName,CreateDate]' --output text
+AWS_PROFILE=anhnv-$ENV-ro aws --no-cli-pager iam list-users --region us-east-1 --query 'Users[].[UserName,CreateDate]' --output text
 ```
 
 Management không có permission set chỉ đọc: cấu hình của nó đọc bằng `anhnv-sso`, chỉ lệnh `get`, `describe`, `list`.
@@ -105,7 +127,8 @@ Management không có permission set chỉ đọc: cấu hình của nó đọc 
 
 ## Giảm thiểu
 
-Ghi, người học quyết; mỗi lệnh ghi chạy sau `aws sts get-caller-identity` với cùng profile.
+Ghi, người học quyết; mỗi lệnh ghi chạy sau `AWS_PROFILE=<profile> aws --no-cli-pager sts get-caller-identity --region <region>`
+cùng profile, region.
 
 - **Nghi credential, phiên bị lộ**: Identity Center (console của management, region của Identity Center) → Users → người học → tắt
   user hay xoá active session; phiên role đã cấp còn sống tới hết hạn của permission set (ADR-0059 §8). Không đăng nhập được nữa, hay root
@@ -118,9 +141,14 @@ Ghi, người học quyết; mỗi lệnh ghi chạy sau `aws sts get-caller-ide
 
 ```sh
 (
-  eval "$(AWS_PROFILE=anhnv-sso aws sts assume-role --region ap-southeast-1 --role-arn "arn:aws:iam::$SVP_AWS_SECURITY_ACCOUNT_ID:role/OrganizationAccountAccessRole" --role-session-name svp-triage --query 'Credentials.[AccessKeyId,SecretAccessKey,SessionToken]' --output text | awk '{print "export AWS_ACCESS_KEY_ID="$1" AWS_SECRET_ACCESS_KEY="$2" AWS_SESSION_TOKEN="$3}')"
-  aws sts get-caller-identity --region ap-southeast-1   # account là svp-security
-  aws securityhub batch-update-findings --region ap-southeast-1 --finding-identifiers Id=<Id của bước 2>,ProductArn=<ProductArn của bước 2> --workflow Status=SUPPRESSED --note Text='<lý do>',UpdatedBy=<tên>
+  eval "$(AWS_PROFILE=anhnv-sso aws --no-cli-pager sts assume-role --region ap-southeast-1 \
+    --role-arn "arn:aws:iam::$SVP_AWS_SECURITY_ACCOUNT_ID:role/OrganizationAccountAccessRole" --role-session-name svp-triage \
+    --query 'Credentials.[AccessKeyId,SecretAccessKey,SessionToken]' --output text \
+    | awk '{print "export AWS_ACCESS_KEY_ID="$1" AWS_SECRET_ACCESS_KEY="$2" AWS_SESSION_TOKEN="$3}')"
+  aws --no-cli-pager sts get-caller-identity --region ap-southeast-1   # account là svp-security
+  aws --no-cli-pager securityhub batch-update-findings --region ap-southeast-1 \
+    --finding-identifiers Id=<Id của bước 2>,ProductArn=<ProductArn của bước 2> --workflow Status=SUPPRESSED \
+    --note Text='<lý do>',UpdatedBy=<tên>
 )
 ```
 
@@ -157,10 +185,14 @@ chỉ là `svp-security`. Lệnh không đặt `--max-items`: CLI đọc hết m
 
 ```sh
 # Số finding FAILED theo control và mức
-sec securityhub get-findings --filters '{"ComplianceStatus":[{"Value":"FAILED","Comparison":"EQUALS"}],"RecordState":[{"Value":"ACTIVE","Comparison":"EQUALS"}],"WorkflowStatus":[{"Value":"NEW","Comparison":"EQUALS"}]}' --query 'Findings[].[Compliance.SecurityControlId,Severity.Label]' --output text | sort | uniq -c | sort -rn
+sec securityhub get-findings \
+  --filters '{"ComplianceStatus":[{"Value":"FAILED","Comparison":"EQUALS"}],"RecordState":[{"Value":"ACTIVE","Comparison":"EQUALS"}],"WorkflowStatus":[{"Value":"NEW","Comparison":"EQUALS"}]}' \
+  --query 'Findings[].[Compliance.SecurityControlId,Severity.Label]' --output text | sort | uniq -c | sort -rn
 # Tài nguyên FAILED của một control trong danh sách trên
 C=<SecurityControlId, ví dụ S3.9>
-sec securityhub get-findings --filters '{"ComplianceSecurityControlId":[{"Value":"'"$C"'","Comparison":"EQUALS"}],"ComplianceStatus":[{"Value":"FAILED","Comparison":"EQUALS"}],"RecordState":[{"Value":"ACTIVE","Comparison":"EQUALS"}],"WorkflowStatus":[{"Value":"NEW","Comparison":"EQUALS"}]}' --query 'Findings[].[AwsAccountId,Region,Resources[0].Id]' --output text
+sec securityhub get-findings \
+  --filters '{"ComplianceSecurityControlId":[{"Value":"'"$C"'","Comparison":"EQUALS"}],"ComplianceStatus":[{"Value":"FAILED","Comparison":"EQUALS"}],"RecordState":[{"Value":"ACTIVE","Comparison":"EQUALS"}],"WorkflowStatus":[{"Value":"NEW","Comparison":"EQUALS"}]}' \
+  --query 'Findings[].[AwsAccountId,Region,Resources[0].Id]' --output text
 ```
 
 Console: Security Hub CSPM của `svp-security` (region nhà) → Controls, lọc `Failed`. Mỗi control FAILED: sửa trong Terraform; không áp dụng cho

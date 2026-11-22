@@ -1,5 +1,14 @@
 # dnssec-internal-failure
 
+> **Tóm tắt**
+>
+> - **Làm gì:** đưa trạng thái ký hay KSK `svp_prd_ksk` của zone prd ra khỏi `INTERNAL_FAILURE` bằng cách chạy lại thao tác DNSSEC hỏng
+>   giữa chừng; zone đã `SERVFAIL` thì đi đường lui (gỡ `DS` ở DNS cha, rồi tắt ký). Chỉ AWS, account prd, `us-east-1`.
+> - **Khi nào và bao lâu:** khi alarm `svp-prd-dnssec-internal-failure` kêu. Kiểm 5 phút; chữ ký đang phục vụ còn hạn vài ngày, và lúc
+>   lỗi chưa sửa thì `apply`, `destroy` chạm bản ghi của zone prd lỗi; đường lui chờ thêm TTL của `DS` ở DNS cha.
+> - **Phí trong lúc chạy:** không phát sinh phí: lệnh đọc và chạy lại thao tác trên zone, KSK có sẵn. Buổi prd không `destroy` được vì
+>   lỗi này thì tài nguyên của buổi vẫn tính tiền theo giờ tới khi `destroy` lại (Leo thang).
+
 - Severity: `page`. Alarm CloudWatch `svp-prd-dnssec-internal-failure` của module `account-baseline` (`aws/modules/account-baseline/dnssec.tf`
   của `svp-infra`), chỉ zone prd `aws.<miền>`, ở `us-east-1`; email tới từ topic `svp-prd-dns-alarms`. Thiết kế: [ADR-0061](../adr/0061-edge-cloudfront-waf-acm.md) §11.
 - Mọi lệnh AWS do người học chạy. Lệnh đọc dùng permission set chỉ đọc `anhnv-prd-ro`; lệnh ghi (Giảm thiểu, Khôi phục) dùng `anhnv-prd`, chỉ
@@ -8,14 +17,16 @@
 Dán một lần cho mỗi terminal (Route 53 và key DNSSEC chỉ ở `us-east-1`; id zone đọc từ dimension của alarm nên không cần state Terraform):
 
 ```sh
-ro() { AWS_PROFILE=anhnv-prd-ro aws --region us-east-1 "$@"; }
+ro() { AWS_PROFILE=anhnv-prd-ro aws --no-cli-pager --region us-east-1 "$@"; }
 D='aws.<miền>'   # tên zone prd
-ZONE=$(ro cloudwatch describe-alarms --alarm-names svp-prd-dnssec-internal-failure --query 'MetricAlarms[0].Dimensions[?Name==`HostedZoneId`].Value' --output text)
+ZONE=$(ro cloudwatch describe-alarms --alarm-names svp-prd-dnssec-internal-failure \
+  --query 'MetricAlarms[0].Dimensions[?Name==`HostedZoneId`].Value' --output text)
 KEY=$(ro kms describe-key --key-id alias/svp-dnssec --query KeyMetadata.KeyId --output text)
 echo "zone=$ZONE key=$KEY"   # <zone-id>, id key; KEY rỗng là key đã bị xoá hẳn (dnssec-ksk-action-needed.md, Leo thang)
 ```
 
-Trước mỗi khối lệnh ghi, ở bản clone `svp-infra` (biến `SVP_AWS_PRD_ACCOUNT_ID` đã export, không ghi vào file nào):
+Lệnh ghi chạy ở bản clone `svp-infra` (biến `SVP_AWS_PRD_ACCOUNT_ID` đã export, không ghi vào file nào). Dán khối này một lần trước lệnh
+ghi đầu tiên; mỗi lệnh ghi bên dưới nối sau `aws/scripts/check-account.sh prd` bằng `&&`, nên account khác thì lệnh ghi không chạy:
 
 ```sh
 export SVP_SESSION_DIR="$PWD/.session/$(date -u +%Y%m%dT%H%M%SZ)"
@@ -48,9 +59,13 @@ AWS và DNS (người học chạy):
 
 ```sh
 # 1. Đối tượng nào INTERNAL_FAILURE: trạng thái ký của zone hay KSK, kèm lý do Route 53 ghi
-ro route53 get-dnssec --hosted-zone-id "$ZONE" --query '{Zone:Status,KSK:KeySigningKeys[].{Name:Name,Status:Status,Message:StatusMessage}}' --output json
+ro route53 get-dnssec --hosted-zone-id "$ZONE" \
+  --query '{Zone:Status,KSK:KeySigningKeys[].{Name:Name,Status:Status,Message:StatusMessage}}' --output json
 # 2. Thao tác DNSSEC gần nhất trên zone, có lỗi hay không (CloudTrail của account, us-east-1)
-ro cloudtrail lookup-events --lookup-attributes AttributeKey=EventSource,AttributeValue=route53.amazonaws.com --start-time "$(date -u -v-2d +%FT%TZ)" --query 'Events[].CloudTrailEvent' --output json | jq -r '.[] | fromjson | select(.eventName | test("DNSSEC|KeySigningKey")) | [.eventTime, .eventName, (.errorCode // "-"), .userIdentity.arn] | @tsv'
+ro cloudtrail lookup-events --lookup-attributes AttributeKey=EventSource,AttributeValue=route53.amazonaws.com \
+  --start-time "$(date -u -v-2d +%FT%TZ)" --query 'Events[].CloudTrailEvent' --output json \
+  | jq -r '.[] | fromjson | select(.eventName | test("DNSSEC|KeySigningKey"))
+      | [.eventTime, .eventName, (.errorCode // "-"), .userIdentity.arn] | @tsv'
 # 3. Key KMS còn dùng được: Enabled, không PendingDeletion
 ro kms describe-key --key-id "$KEY" --query 'KeyMetadata.[KeyState,Enabled,DeletionDate]' --output text
 # 4. Cha có DS của aws chưa, và resolver kiểm DNSSEC có phân giải được zone không
@@ -118,13 +133,9 @@ của module: gỡ `DS` trước, chờ, rồi mới tắt ký.
    ```
 
    Từ đây người dùng đã có lại zone, kể cả khi Route 53 chưa sửa xong.
-3. Tắt ký ở root `aws/accounts/prd` của `svp-infra` (kiểm account trước, khối ở đầu trang):
-
-   ```sh
-   cd aws/accounts/prd
-   AWS_PROFILE=anhnv-prd TF_VAR_account_id="$SVP_AWS_PRD_ACCOUNT_ID" terraform plan -var dnssec_signing=false -out=prd.tfplan
-   AWS_PROFILE=anhnv-prd TF_VAR_account_id="$SVP_AWS_PRD_ACCOUNT_ID" terraform apply prd.tfplan && rm prd.tfplan
-   ```
+3. Tắt ký ở root `aws/accounts/prd` của `svp-infra`: làm bước 3 của mục
+   [Đường lui](https://github.com/anhnvcoder/svp-infra/blob/main/docs/runbooks/edge-setup.md#đường-lui) trong runbook `edge-setup.md` (kiểm
+   account, plan với `-var dnssec_signing=false` lưu ra file, đọc plan, apply đúng file đó).
 
    Đọc plan trước khi apply: `module.baseline.aws_route53_hosted_zone_dnssec.this[0]` đổi tại chỗ sang `NOT_SIGNING`, và
    `module.baseline.aws_route53_key_signing_key.this[0]` đổi `status` về `ACTIVE` khi KSK chưa `ACTIVE`; không tạo, thay thế hay xoá gì. Apply lỗi
@@ -139,15 +150,36 @@ cũng theo `edge-setup.md`, chỉ khi bước 1 của Kiểm tra nhanh đã sạ
 ## Khôi phục và xác nhận
 
 Theo tài liệu, sửa `INTERNAL_FAILURE` bằng cách chạy lại thao tác. Key KMS phải `Enabled` trước (nguyên nhân 2). Chạy lại thao tác ứng với trạng
-thái mong muốn của zone (lệnh ghi, kiểm account trước), rồi đọc `get-change` tới `INSYNC`:
+thái mong muốn của zone (lệnh ghi, kiểm account trước), rồi đọc `get-change` tới `INSYNC`.
+
+Mỗi lệnh dưới đây chạy riêng, khi điều kiện ngay trên nó đúng; không chép nhiều khối một lượt.
+
+KSK `INTERNAL_FAILURE`: bật lại KSK.
 
 ```sh
-# Zone ký (bình thường): KSK INTERNAL_FAILURE thì bật lại KSK; trạng thái ký INTERNAL_FAILURE thì bật lại ký
-AWS_PROFILE=anhnv-prd aws route53 activate-key-signing-key --hosted-zone-id "$ZONE" --name svp_prd_ksk --region us-east-1
-AWS_PROFILE=anhnv-prd aws route53 enable-hosted-zone-dnssec --hosted-zone-id "$ZONE" --region us-east-1
-# Chỉ khi đang đi đường lui và cha đã không còn DS của aws (bước 2 của đường lui sạch): tắt ký lại
-AWS_PROFILE=anhnv-prd aws route53 disable-hosted-zone-dnssec --hosted-zone-id "$ZONE" --region us-east-1
-# Mỗi lệnh trên in ChangeInfo.Id
+aws/scripts/check-account.sh prd &&
+  AWS_PROFILE=anhnv-prd aws --no-cli-pager route53 activate-key-signing-key --hosted-zone-id "$ZONE" --name svp_prd_ksk \
+    --region us-east-1
+```
+
+Trạng thái ký `INTERNAL_FAILURE`: bật lại ký.
+
+```sh
+aws/scripts/check-account.sh prd &&
+  AWS_PROFILE=anhnv-prd aws --no-cli-pager route53 enable-hosted-zone-dnssec --hosted-zone-id "$ZONE" --region us-east-1
+```
+
+Chỉ khi đang đi đường lui và cha đã không còn `DS` của `aws` (bước 2 của đường lui sạch): tắt ký lại. Không chạy lệnh này sau
+`enable-hosted-zone-dnssec` ở zone còn `DS` ở cha: resolver kiểm DNSSEC trả `SERVFAIL`.
+
+```sh
+aws/scripts/check-account.sh prd &&
+  AWS_PROFILE=anhnv-prd aws --no-cli-pager route53 disable-hosted-zone-dnssec --hosted-zone-id "$ZONE" --region us-east-1
+```
+
+Mỗi lệnh trên in `ChangeInfo.Id`; đọc tới khi thay đổi đã áp:
+
+```sh
 ro route53 get-change --id <ChangeInfo.Id>   # Status: INSYNC
 ```
 

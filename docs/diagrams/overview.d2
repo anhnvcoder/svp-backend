@@ -1,0 +1,97 @@
+# Overview of the services and how they talk: solid arrows are synchronous calls, dashed arrows are events through
+# Kafka. Nodes map to services/ (gateway, user-service, video-service, engagement-service, feed-service, media-worker).
+vars: {
+  d2-config: {
+    layout-engine: elk
+    pad: 20
+  }
+}
+...@tokens
+
+title: "Hệ thống gồm những phần nào, gọi nhau đồng bộ hay qua event?" {
+  shape: text
+  near: top-center
+  style: {font-size: 18; bold: true}
+}
+
+all: "" {
+  grid-rows: 3
+  grid-columns: 3
+  grid-gap: 0
+  horizontal-gap: 110
+  vertical-gap: 60
+  style: {stroke: transparent; fill: transparent}
+
+  web: "web" {
+    class: workload
+    grid-rows: 2
+    grid-gap: 24
+    vertical-gap: 6
+    s: "Next.js, BFF, session" {class: sub}
+    r: "repo svp-frontend" {class: root}
+  }
+  gw: "gateway" {
+    class: workload
+    grid-rows: 2
+    grid-gap: 24
+    vertical-gap: 6
+    s: "REST/JSON ở biên, JWT,\nrate limit" {class: sub}
+    r: "services/gateway" {class: root}
+  }
+  svc: "4 service gRPC" {
+    class: workload
+    grid-rows: 2
+    grid-gap: 24
+    vertical-gap: 6
+    s: "user · video · engagement ·\nfeed-service" {class: sub}
+    r: "services/*-service" {class: root}
+  }
+
+  client: "" {
+    grid-rows: 1
+    grid-columns: 1
+    grid-gap: 0
+    style: {stroke: transparent; fill: transparent}
+    p: "Trình duyệt, k6, curl" {
+      class: person
+      width: 90
+      height: 90
+    }
+  }
+  mw: "media-worker" {
+    class: workload
+    grid-rows: 2
+    grid-gap: 24
+    vertical-gap: 6
+    s: "Transcode HLS" {class: sub}
+    r: "services/media-worker" {class: root}
+  }
+  bus: "Kafka" {
+    class: data
+    grid-rows: 2
+    grid-gap: 24
+    vertical-gap: 6
+    s: "event giữa các service" {class: sub}
+    r: "SCRAM-SHA-512 trên TLS" {class: root}
+  }
+
+  gap1: "" {width: 10; height: 10; style: {stroke: transparent; fill: transparent}}
+  obj: "Object storage" {
+    class: data
+    grid-rows: 2
+    grid-gap: 24
+    vertical-gap: 6
+    s: "file upload, HLS" {class: sub}
+    r: "RustFS / S3" {class: root}
+  }
+  gap2: "" {width: 10; height: 10; style: {stroke: transparent; fill: transparent}}
+}
+
+all.client.p -> all.web: "trang" {class: sync-call}
+all.client.p -> all.gw: "k6, curl" {class: sync-call}
+all.web -> all.gw: "REST" {class: sync-call}
+all.gw -> all.svc: "gRPC" {class: sync-call}
+all.svc -> all.bus: "event" {class: event-flow}
+all.bus -> all.mw: "video.uploaded" {class: event-flow}
+all.mw -> all.obj: "đọc, ghi HLS" {class: sync-call}
+all.client.p -> all.obj: "presigned POST,\nHLS" {class: sync-call}

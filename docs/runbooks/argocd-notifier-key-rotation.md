@@ -1,7 +1,13 @@
 # Xoay khoá GitHub App `svp-argocd-notifier`
 
-- Quy trình do người học chạy, không có cảnh báo. Làm định kỳ, hay **ngay** khi nghi khoá riêng của App bị lộ (SEC-8 của
-  [threat model](../threat-model.md)).
+> **Tóm tắt**
+>
+> - **Làm gì:** tạo khoá riêng mới cho GitHub App `svp-argocd-notifier`, đưa nó từ `.env` qua Secrets Manager tới Secret của Argo CD
+>   Notifications ở cluster EKS, kiểm commit status `argocd/<env>` vẫn được ghi, rồi xoá khoá cũ trên GitHub.
+> - **Khi nào và bao lâu:** quy trình do người học chạy, không có cảnh báo; làm định kỳ, hay **ngay** khi nghi khoá bị lộ (SEC-8 của
+>   [threat model](../threat-model.md)). Chạy trong buổi EKS (cluster phải tới được); vài phút, cộng lượt sync kế tiếp để xác nhận.
+> - **Phí trong lúc chạy:** không phát sinh phí riêng: `make eks-secrets` ghi version mới vào entry đã có, không tạo tài nguyên.
+
 - Trạng thái: viết theo mã, chưa chạy thử; chạy lần đầu ở buổi EKS cùng phép kiểm của
   [ADR-0032](../adr/0032-argocd-deploy-status.md) (mục Kiểm chứng sau).
 - **Không ghi giá trị nào** (khoá `.pem`, base64 của nó, token) vào repo, issue, PR hay chat. App ID và installation ID là định
@@ -29,7 +35,7 @@ Không in `.env`, không in khoá. `<env>` là `stg` hay `prd`, `<ctx>` là alia
 # ba biến có trong .env (đếm, không in)
 grep -c '^SVP_ARGOCD_NOTIFY_[A-Z_]*=.' .env                                     # 3
 # entry có version hiện tại (chỉ metadata, không giá trị)
-AWS_PROFILE=anhnv-<env> aws secretsmanager describe-secret --secret-id svp/<env>/argocd-notifications \
+AWS_PROFILE=anhnv-<env> aws --no-cli-pager secretsmanager describe-secret --secret-id svp/<env>/argocd-notifications \
   --region ap-southeast-1 --query '{changed: LastChangedDate, versions: VersionIdsToStages}'
 # run at the root of svp-infra; the App's installation line must list only anhnvcoder/svp-gitops
 make github-check WITH_APP_KEYS=1
