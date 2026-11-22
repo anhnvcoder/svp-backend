@@ -1,7 +1,14 @@
 # Đổi khoá ký JWT theo `kid`
 
-- Quy trình theo lệnh `make jwt-rotate`, không có cảnh báo. Làm định kỳ, hay **ngay** khi nghi khoá ký bị lộ (SEC-4, JWT-10 của
-  [threat model](../threat-model.md)).
+> **Tóm tắt**
+>
+> - **Làm gì:** đổi khoá Ed25519 mà user-service ký access token, theo ba bước `make jwt-rotate STEP=add|sign|drop`: gateway và bốn
+>   service gRPC nhận khoá mới, user-service ký bằng nó, rồi bỏ khoá cũ; áp dụng ở compose, k3d hay EKS, người dùng không bị đăng xuất.
+> - **Khi nào và bao lâu:** quy trình theo lệnh, không có cảnh báo; làm định kỳ, hay **ngay** khi nghi khoá ký bị lộ (SEC-4, JWT-10 của
+>   [threat model](../threat-model.md)). Bước 3 chờ ít nhất 15 phút 30 giây sau khi pod user-service cuối cùng còn khoá cũ dừng; nghi lộ
+>   thì không chờ, đổi lại người dùng web phải đăng nhập lại.
+> - **Phí trong lúc chạy:** không phát sinh phí: lệnh sửa `.env` và ghi version mới vào Secret, entry đã có; không tạo tài nguyên.
+
 - Trạng thái: viết theo mã, chưa chạy thử; diễn tập đổi khoá khi có Secrets Manager
   ([ADR-0020](../adr/0020-reliability-stage6.md) §12). Bước 1 trên k3d (thêm một khoá verify, token của khoá đang ký vẫn hợp lệ) là
   một phần của `make drill-k8s-reloader` ([`k8s.md`](../reference/k8s.md)).

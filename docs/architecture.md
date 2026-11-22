@@ -1,7 +1,11 @@
 # Kiến trúc short-video platform
 
-Tổng quan hiện trạng của hệ thống theo [arc42](https://arc42.org/overview) rút gọn, sơ đồ theo [C4 model](https://c4model.com)
-viết bằng Mermaid. Mỗi mục tóm tắt và trỏ tới trang chi tiết; lý do của từng quyết định nằm ở ADR trong [`adr/`](adr/).
+> **Tóm tắt**
+>
+> - **Trả lời:** hệ thống gồm những khối nào, chạy ở đâu và vì sao thiết kế như vậy: tổng quan hiện trạng theo
+>   [arc42](https://arc42.org/overview) rút gọn, sơ đồ theo [C4 model](https://c4model.com) (sơ đồ chính bằng D2, sequence bằng Mermaid).
+> - **Vì sao:** mỗi mục tóm tắt và trỏ tới trang chi tiết; lý do của từng quyết định nằm ở ADR trong [`adr/`](adr/).
+> - **Đọc tiếp:** [`explanation/deployment.md`](explanation/deployment.md): ba nơi chạy và khác biệt giữa chúng.
 
 ## 1. Mục tiêu và phạm vi
 
@@ -56,23 +60,10 @@ nặng và dồn cục. Giả định và bảng tính: [`explanation/capacity.m
 
 ## 3. Ngữ cảnh
 
-```mermaid
-flowchart TB
-    user["<b>Người dùng</b><br/>[Người]<br/>Xem feed, upload, like"]
-    ops["<b>Người vận hành</b><br/>[Người]<br/>Dev, on-call"]
-    svp["<b>Short-video platform</b><br/>[Hệ thống]<br/>Upload, transcode HLS, feed, like/view"]
-    gh["<b>GitHub</b><br/>[SaaS]<br/>Code, CI, GHCR, repo svp-gitops"]
-    sigstore["<b>Sigstore</b><br/>[SaaS]<br/>Chữ ký keyless, bằng chứng image"]
-    chat["<b>Telegram</b><br/>[SaaS, tuỳ chọn]<br/>Kênh cảnh báo page"]
-
-    user -->|"trình duyệt: web; tải HLS qua HTTPS"| svp
-    ops -->|"Grafana, GlitchTip, Argo CD"| svp
-    ops -->|"pull request"| gh
-    svp -->|"Argo CD đọc cấu hình; kéo image đã ký"| gh
-    svp -->|"Kyverno kiểm chữ ký"| sigstore
-    svp -->|"gửi cảnh báo"| chat
-    chat -->|"báo"| ops
-```
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="diagrams/context-dark.svg">
+  <img src="diagrams/context.svg" alt="Ai và hệ thống ngoài nào chạm platform?">
+</picture>
 
 Bộ quan sát (Grafana LGTM, GlitchTip) tự host bên trong hệ thống; trên AWS có thêm RDS, MSK, ElastiCache, S3, CloudFront, và CloudWatch
 alarm của dịch vụ dữ liệu báo người vận hành qua email, độc lập với cluster ([mục 7](#7-triển-khai)).
@@ -103,57 +94,21 @@ alarm của dịch vụ dữ liệu báo người vận hành qua email, độc 
 
 Mức container của C4. Nét liền là gọi đồng bộ, nét đứt là event qua Kafka.
 
-```mermaid
-flowchart LR
-    browser["<b>Trình duyệt, k6, curl</b>"]
-    subgraph svp["Short-video platform"]
-        web["<b>web</b><br/>[Next.js, Node]<br/>Trang, BFF: session, CSRF, CSP, proxy /api/*"]
-        gw["<b>gateway</b><br/>[Go, net/http]<br/>JWT, rate limit, ghép dữ liệu"]
-        us["<b>user-service</b><br/>[Go, gRPC; Postgres svp_user]<br/>Tài khoản, follow, hồ sơ"]
-        vs["<b>video-service</b><br/>[Go, gRPC; Postgres svp_video]<br/>Metadata, vòng đời video"]
-        mw["<b>media-worker</b><br/>[Go + ffmpeg]<br/>Transcode HLS"]
-        dr["<b>dlq-replay</b><br/>[Go]<br/>Chờ lệnh; phát lại record DLQ"]
-        es["<b>engagement-service</b><br/>[Go, gRPC; Postgres svp_engagement]<br/>Like, view, bộ đếm"]
-        fs["<b>feed-service</b><br/>[Go, gRPC; Postgres svp_feed]<br/>Read model feed"]
-        bus[["<b>Kafka</b><br/>[Apache Kafka; MSK trên cloud]<br/>SCRAM-SHA-512 trên TLS, 9096"]]
-        obj[("<b>Object storage</b><br/>[RustFS / S3]<br/>bucket uploads, media (media/, preview/, premium/)")]
-        cdn["<b>CDN</b><br/>[CloudFront]<br/>chỉ có trên cloud; premium/ cần URL đã ký"]
-        redis[("<b>Valkey</b><br/>[ElastiCache trên cloud]<br/>TLS, 6379, user ACL theo db")]
-    end
-
-    browser -->|"HTML, /api/*, cookie svp_sid;<br/>POST /monitoring, /rum"| web
-    browser -->|"POST file bằng presigned URL;<br/>GET HLS (local: thẳng object store)"| obj
-    browser -->|"GET HLS, thumbnail"| cdn
-    browser -->|"k6, curl: REST/JSON"| gw
-    web -->|"REST/JSON + Bearer"| gw
-    web -->|"session, khoá refresh (db 9)"| redis
-    cdn --> obj
-
-    gw -->|"rate limit"| redis
-    gw -->|gRPC| us
-    gw -->|gRPC| vs
-    gw -->|gRPC| es
-    gw -->|gRPC| fs
-
-    vs -->|"ký URL, HEAD, đọc playlist premium"| obj
-    mw -->|"đọc file gốc, ghi HLS"| obj
-    fs -->|"cache feed khám phá"| redis
-
-    us -.->|"user.followed, user.unfollowed"| bus
-    vs -.->|"video.uploaded, video.ready"| bus
-    bus -.->|"video.uploaded"| mw
-    mw -.->|"transcode.completed, transcode.failed"| bus
-    bus -.->|"transcode.*"| vs
-    es -.->|"view.recorded"| bus
-    bus -.->|"view.recorded"| es
-    bus -.->|"user.*, video.ready"| fs
-    bus -.->|"record trong *.dlq"| dr
-    dr -.->|"cùng record về topic gốc"| bus
-```
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="diagrams/containers-dark.svg">
+  <img src="diagrams/containers.svg" alt="Mỗi service làm gì, giữ dữ liệu nào, phát và nhận event nào?">
+</picture>
 
 Mỗi service chỉ đọc ghi database của mình; event về một thực thể chỉ do service sở hữu thực thể đó phát
 ([ADR-0001](adr/0001-service-boundaries-and-data-ownership.md)). gateway và media-worker không có database; feed-service giữ bản
 sao follow và video `READY` dựng từ event; hồ sơ công khai không phát event, gateway ghép lúc đọc.
+
+Event của từng service qua Kafka:
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="diagrams/containers-detail-dark.svg">
+  <img src="diagrams/containers-detail.svg" alt="Service nào phát và nhận event nào qua Kafka?">
+</picture>
 
 | Event | Phát | Key (partition) | Nhận | Để làm gì |
 | --- | --- | --- | --- | --- |
@@ -362,69 +317,17 @@ nhánh `if` theo môi trường.
 Mức triển khai của C4 cho một env `svp-<env>` (stg và prd cùng hình, khác số AZ, cỡ và số lượng). Hộp lồng nhau là nơi chạy (deployment
 node); tên khớp tài nguyên của `svp-infra` và chart.
 
-```mermaid
-flowchart TB
-    subgraph region["AWS ap-southeast-1, account của env"]
-        subgraph vpc["VPC svp-env: subnet public, private, database, edge trên mỗi AZ"]
-            subgraph pub["Subnet public"]
-                nat["NAT gateway"]
-            end
-            vpce["Endpoint interface<br/>[private DNS, policy theo account]"]
-            subgraph edgenet["Subnet edge, không node, không pod"]
-                alb["ALB internal svp-env-edge<br/>[Terraform; target group svp-env-envoy]"]
-            end
-            subgraph priv["Subnet private"]
-                subgraph eks["EKS svp-env, API chỉ endpoint private"]
-                    subgraph sysng["Managed node group system<br/>[on-demand, mỗi AZ một node]"]
-                        plat["Argo CD, Karpenter, add-on EKS"]
-                    end
-                    subgraph kn["Node của Karpenter, NodePool default<br/>[Graviton; stg Spot, prd on-demand]"]
-                        envoy["Envoy Gateway<br/>[HPA từ 2, PDB, trải zone]"]
-                        svc["web, gateway, 4 service gRPC,<br/>media-worker, dlq-replay [svp-service]"]
-                        obsn["Collector, Prometheus agent,<br/>Pyroscope, GlitchTip, OpenCost,<br/>blackbox exporter [svp-obs]"]
-                        mesh["istiod, istio-cni, ztunnel [istio-system];<br/>waypoint [svp-mesh]"]
-                    end
-                    kyv["Kyverno<br/>[3 replica, PDB, trải zone]"]
-                end
-                bastion["Bastion SSM"]
-            end
-            subgraph dbs["Subnet database, không route ra Internet"]
-                rds[("RDS for PostgreSQL 17<br/>[stg một AZ, prd Multi-AZ; TLS verify-full]")]
-                msk[["Amazon MSK<br/>[một broker mỗi AZ, SCRAM TLS]"]]
-                vk[("ElastiCache for Valkey<br/>[stg 1 node, prd primary + replica]")]
-            end
-        end
-        s3[("S3 uploads, media")]
-        cfe["CloudFront svp-env-web, svp-env-api<br/>[web ACL, cert ACM; VPC origin]"]
-        cf["CloudFront svp-env-media<br/>[web ACL, OAC; key group cho premium/]"]
-        q[["SQS + EventBridge<br/>interruption của Karpenter"]]
-        mc["MediaConvert queue svp-env<br/>[trạng thái job: EventBridge → SQS svp-env-transcode-events]"]
-        alarm["CloudWatch alarm, ruler của AMP<br/>→ SNS svp-env-alarms → email"]
-        subgraph keep["Sống qua destroy [root aws/accounts/env]"]
-            ecr[("ECR<br/>[repo phát hành, pull-through cache]")]
-            amp[("AMP, CloudWatch Logs, X-Ray")]
-            amg["Amazon Managed Grafana<br/>[Identity Center]"]
-        end
-    end
-    cfe --> alb --> envoy --> svc
-    svc --> rds
-    svc --> msk
-    svc --> vk
-    svc --> s3
-    svc -->|"media-worker mediaconvert"| mc
-    mc --> s3
-    cf --> s3
-    q --> plat
-    obsn -->|"probe web, api qua NAT, tên công khai"| cfe
-    obsn -->|"probe media"| cf
-    rds -.-> alarm
-    msk -.-> alarm
-    vk -.-> alarm
-    kn -->|"kéo image"| vpce --> ecr
-    obsn -->|"SigV4"| vpce --> amp
-    amp -.-> alarm
-    amg --> amp
-```
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="diagrams/eks-deployment-dark.svg">
+  <img src="diagrams/eks-deployment.svg" alt="Mỗi thứ của một env chạy ở đâu trên AWS?">
+</picture>
+
+Chi tiết subnet, node và dịch vụ sống qua destroy:
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="diagrams/eks-deployment-detail-dark.svg">
+  <img src="diagrams/eks-deployment-detail.svg" alt="Thành phần nào của một env nằm ở subnet nào, và ra ngoài bằng đường nào?">
+</picture>
 
 Request công khai vào qua CloudFront (mỗi tên một distribution có web ACL), VPC origin, ALB internal, rồi Envoy; vì sao và ai đặt được IP
 client mà gateway tin: [`explanation/edge.md`](explanation/edge.md). Kyverno và controller nền tảng khác xếp ở node nào còn chỗ; chỉ những gì phải chạy trước khi Karpenter có node mới cần nhóm hệ thống. Luồng

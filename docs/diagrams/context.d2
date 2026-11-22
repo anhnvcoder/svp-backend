@@ -1,0 +1,88 @@
+# System context (C4 level 1): who and which outside system touches the platform.
+# Concept of boundaries only, no API flow.
+vars: {
+  d2-config: {
+    layout-engine: elk
+    pad: 20
+  }
+}
+...@tokens
+
+title: "Ai và hệ thống ngoài nào chạm platform?" {
+  shape: text
+  near: top-center
+  style: {font-size: 18; bold: true}
+}
+
+all: "" {
+  grid-rows: 2
+  grid-columns: 3
+  grid-gap: 0
+  horizontal-gap: 110
+  vertical-gap: 90
+  style: {stroke: transparent; fill: transparent}
+
+  ops: "" {
+    grid-rows: 1
+    grid-columns: 1
+    grid-gap: 0
+    style: {stroke: transparent; fill: transparent}
+    p: "Người vận hành" {
+      class: person
+      width: 90
+      height: 90
+    }
+  }
+  gh: "GitHub" {
+    class: external
+    grid-rows: 2
+    grid-gap: 24
+    vertical-gap: 6
+    s: "Code, CI, GHCR, repo\nsvp-gitops" {class: sub}
+    r: "SaaS" {class: root}
+  }
+  sigstore: "Sigstore" {
+    class: external
+    grid-rows: 2
+    grid-gap: 24
+    vertical-gap: 6
+    s: "Chữ ký keyless, bằng chứng\nimage" {class: sub}
+    r: "SaaS" {class: root}
+  }
+
+  chat: "Telegram" {
+    class: external
+    grid-rows: 2
+    grid-gap: 24
+    vertical-gap: 6
+    s: "Kênh cảnh báo page" {class: sub}
+    r: "SaaS, tuỳ chọn" {class: root}
+  }
+  svp: "Short-video platform" {
+    class: workload
+    grid-rows: 2
+    grid-gap: 24
+    vertical-gap: 6
+    s: "Upload, transcode HLS,\nfeed, like và lượt xem" {class: sub}
+    r: "hệ thống đang mô tả" {class: root}
+  }
+  user: "" {
+    grid-rows: 1
+    grid-columns: 1
+    grid-gap: 0
+    style: {stroke: transparent; fill: transparent}
+    p: "Người dùng" {
+      class: person
+      width: 90
+      height: 90
+    }
+  }
+}
+
+all.user.p -> all.svp: "trình duyệt: web;\ntải HLS qua HTTPS" {class: sync-call}
+all.ops.p -> all.svp: "Grafana, GlitchTip,\nArgo CD" {class: sync-call}
+all.ops.p -> all.gh: "pull request" {class: sync-call}
+all.svp -> all.gh: "Argo CD đọc cấu hình;\nkéo image đã ký" {class: sync-call}
+all.svp -> all.sigstore: "Kyverno kiểm\nchữ ký" {class: sync-call}
+all.svp -> all.chat: "gửi cảnh báo" {class: sync-call}
+all.chat -> all.ops: "báo" {class: sync-call}

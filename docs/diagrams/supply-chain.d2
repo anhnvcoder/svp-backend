@@ -1,0 +1,149 @@
+# One change from pull request to a running pod, and the gates on the way: PR checks, the signed build on main,
+# the promote PR in svp-gitops, and Kyverno admission. Names match .github/workflows/ci.yml, images.yml,
+# deploy/ci/ and svp-gitops; the ECR leg is the EKS path, GHCR alone is the k3d path.
+vars: {
+  d2-config: {
+    layout-engine: elk
+    pad: 20
+  }
+}
+...@tokens
+
+title: "Một thay đổi đi từ PR tới cluster qua những cổng nào?" {
+  shape: text
+  near: top-center
+  style: {font-size: 18; bold: true}
+}
+
+all: "" {
+  grid-rows: 4
+  grid-columns: 5
+  grid-gap: 0
+  horizontal-gap: 60
+  vertical-gap: 60
+  style: {stroke: transparent; fill: transparent}
+
+  dev: "Người học,\nRenovate" {
+    class: person
+    width: 100
+    height: 100
+  }
+  pr: "Pull request" {
+    class: prevention
+    grid-rows: 2
+    grid-columns: 1
+    grid-gap: 24
+    vertical-gap: 6
+    s0: "ci.yml: make check, buf, gitleaks;\nimages.yml: build-nopush" {class: sub}
+    r: "ci-ok · images-ok" {class: root}
+  }
+  main: "main" {
+    class: governance
+    grid-rows: 2
+    grid-columns: 1
+    grid-gap: 24
+    vertical-gap: 6
+    s0: "ruleset: hai check bắt buộc;\nchỉ squash merge" {class: sub}
+    r: "PR của chính repo" {class: root}
+  }
+  build: "images.yml trên main" {
+    class: prevention
+    grid-rows: 2
+    grid-columns: 1
+    grid-gap: 24
+    vertical-gap: 6
+    s0: "build amd64 + arm64 → trivy\n→ push → index → ký, attest" {class: sub}
+    r: "chặn CRITICAL, HIGH có bản vá" {class: root}
+  }
+  promote: "Job promote" {
+    class: governance
+    grid-rows: 2
+    grid-columns: 1
+    grid-gap: 24
+    vertical-gap: 6
+    s0: "token GitHub App: ghi digest\nvào envs/stg/images/" {class: sub}
+    r: "không bao giờ ghi lùi" {class: root}
+  }
+  sp1: "" {width: 10; height: 10; style: {stroke: transparent; fill: transparent}}
+  sp2: "" {width: 10; height: 10; style: {stroke: transparent; fill: transparent}}
+  ghcr: "GHCR" {
+    class: investigation
+    grid-rows: 2
+    grid-columns: 1
+    grid-gap: 24
+    vertical-gap: 6
+    s0: "image theo digest, Sigstore bundle;\nrescan hằng ngày làm mới vuln" {class: sub}
+    r: "k3d kéo thẳng từ đây" {class: root}
+  }
+  sig: "Sigstore công khai" {
+    class: external
+    grid-rows: 1
+    grid-columns: 1
+    grid-gap: 24
+    vertical-gap: 6
+    s0: "Fulcio, Rekor, TUF" {class: sub}
+  }
+  gitops: "Repo svp-gitops" {
+    class: governance
+    grid-rows: 1
+    grid-columns: 1
+    grid-gap: 24
+    vertical-gap: 6
+    s0: "PR bot/promote-stg, gitops-ok,\nauto-merge" {class: sub}
+  }
+  sp3: "" {width: 10; height: 10; style: {stroke: transparent; fill: transparent}}
+  sp4: "" {width: 10; height: 10; style: {stroke: transparent; fill: transparent}}
+  ecr: "ECR của env" {
+    class: investigation
+    grid-rows: 2
+    grid-columns: 1
+    grid-gap: 24
+    vertical-gap: 6
+    i: "đường EKS" {shape: image; icon: ./icons/ecr.svg; width: 48; height: 48; style: {font-color: "#1A1A1A"; font-size: 13; bold: false}}
+    s0: "CI chép từ GHCR (ecr-copy);\nverify ở ECR" {class: sub}
+  }
+  kyv: "Kyverno svp-images" {
+    class: prevention
+    grid-rows: 1
+    grid-columns: 1
+    grid-gap: 24
+    vertical-gap: 6
+    s0: "Enforce, ns svp: chữ ký,\nattestation vuln, provenance" {class: sub}
+  }
+  argo: "Argo CD" {
+    class: workload
+    grid-rows: 1
+    grid-columns: 1
+    grid-gap: 24
+    vertical-gap: 6
+    s0: "poll git; chart ở SHA\ncủa charts.yaml" {class: sub}
+  }
+  sp5: "" {width: 10; height: 10; style: {stroke: transparent; fill: transparent}}
+  sp6: "" {width: 10; height: 10; style: {stroke: transparent; fill: transparent}}
+  sp7: "" {width: 10; height: 10; style: {stroke: transparent; fill: transparent}}
+  app: "Pod của svp" {
+    class: workload
+    grid-rows: 1
+    grid-columns: 1
+    grid-gap: 24
+    vertical-gap: 6
+    s0: "canary gateway;\nkéo theo digest" {class: sub}
+  }
+  sp8: "" {width: 10; height: 10; style: {stroke: transparent; fill: transparent}}
+}
+
+all.dev -> all.pr: {class: control-flow}
+all.pr -> all.main: "xanh, merge" {class: control-flow}
+all.main -> all.build: {class: control-flow}
+all.build -> all.promote: {class: control-flow}
+all.build -> all.ghcr: "push, bundle" {class: data-flow}
+all.ghcr -> all.ecr: "ecr-copy\n(CI)" {class: data-flow}
+all.build -> all.sig: "OIDC → chứng chỉ" {class: control-flow}
+all.promote -> all.gitops: "PR digest" {class: control-flow}
+all.gitops -> all.argo: "image.digest" {class: control-flow}
+all.argo -> all.kyv: "tạo pod" {class: control-flow}
+all.kyv -> all.app: "nhận" {class: control-flow}
+all.kyv -> all.ghcr: "chữ ký,\nattestation" {class: data-flow}
+all.kyv -> all.ecr: "chữ ký" {class: data-flow}
+all.kyv -> all.sig: "khoá TUF" {class: control-flow}
+all.app -> all.ecr: "kéo theo digest" {class: data-flow}

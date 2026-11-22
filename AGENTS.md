@@ -152,6 +152,9 @@ Mọi lệnh chạy từ gốc repo (hay worktree của nó) qua `Makefile`; `ma
   sửa tự động (`opa fmt`…) vào đó. Chạy cùng `make conftest-verify` khi sửa file `*.rego`.
 - `make zizmor`: lint bảo mật workflow (zizmor ghim; audit online khi có `GH_TOKEN`); ngoại lệ ở `.github/zizmor.yml`
   ([ADR-0041](docs/adr/0041-github-hardening.md) (g)).
+- `make diagrams-check`: SVG của `docs/diagrams/` khớp `.d2` (CI chạy ở job `docs`); `make diagrams` sinh lại. PR đổi kiến trúc mà một
+  `.d2` tả (service, workload, luồng) thì sửa `.d2` đó và chạy `make diagrams` trong cùng PR; không sửa SVG bằng tay. Cách viết:
+  [`docs/diagrams/README.md`](docs/diagrams/README.md).
 - `make helm-check`: lint, render mọi chart với `base/`, overlay của bản clone `svp-gitops` và policy Kyverno CLI.
 - `make migration-lint`: squawk trên file migration (`.squawk.toml`); `make migration-drill`: diễn tập đổi tên cột của `internal/dbmigrate` trên
   1 000 000 dòng, in bảng số đo; chạy khi sửa `services/*/migrations/` ([ADR-0068](docs/adr/0068-zero-downtime-migrations.md), [`schema-change.md`](docs/runbooks/schema-change.md)).

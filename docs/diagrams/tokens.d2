@@ -1,0 +1,88 @@
+# Shared design tokens of the D2 diagrams: a diagram pulls them in with `...@tokens` at its root and tags nodes and
+# edges with `class`. Pastel fills with dark text stay readable in the light and the dark theme of the same SVG.
+classes: {
+  # One class per function of a security layer or a workload: a rounded block whose bold label is the title. Give it
+  # grid-rows and children of class sub and root for the lines under the title.
+  governance: {
+    style: {fill: "#F1F3FB"; stroke: "#3949AB"; font-color: "#1A1A1A"; border-radius: 10; stroke-width: 1; bold: true; font-size: 16}
+  }
+  prevention: {
+    style: {fill: "#EEF7FC"; stroke: "#0277BD"; font-color: "#1A1A1A"; border-radius: 10; stroke-width: 1; bold: true; font-size: 16}
+  }
+  detection: {
+    style: {fill: "#F0F7F1"; stroke: "#2E7D32"; font-color: "#1A1A1A"; border-radius: 10; stroke-width: 1; bold: true; font-size: 16}
+  }
+  alerting: {
+    style: {fill: "#FFF4EE"; stroke: "#E8590C"; font-color: "#1A1A1A"; border-radius: 10; stroke-width: 1; bold: true; font-size: 16}
+  }
+  investigation: {
+    style: {fill: "#F7F1FA"; stroke: "#7B1FA2"; font-color: "#1A1A1A"; border-radius: 10; stroke-width: 1; bold: true; font-size: 16}
+  }
+  recovery: {
+    style: {fill: "#EEF7F6"; stroke: "#00796B"; font-color: "#1A1A1A"; border-radius: 10; stroke-width: 1; bold: true; font-size: 16}
+  }
+  workload: {
+    style: {fill: "#F7F8FA"; stroke: "#78909C"; font-color: "#1A1A1A"; border-radius: 10; stroke-width: 1; bold: true; font-size: 16}
+  }
+  data: {
+    style: {fill: "#FDF1EE"; stroke: "#D84315"; font-color: "#1A1A1A"; border-radius: 10; stroke-width: 1; bold: true; font-size: 16}
+  }
+
+  # The lines under a block's title: the services joined by " · ", then secondary details in a fixed-width font.
+  sub: {
+    shape: text
+    style: {font-size: 13; font-color: "#4A4A4A"}
+  }
+  root: {
+    shape: text
+    style: {font-size: 12; font-color: "#5F6B7A"; font: mono}
+  }
+
+  # An AWS account: a solid rounded container with no fill, so the theme colours its label and the page shows through.
+  account: {
+    style: {fill: transparent; stroke: "#607D8B"; stroke-width: 2; border-radius: 12; bold: true; font-size: 15}
+  }
+  # Where something runs, a region: thin and dashed, only a location, never a trust boundary.
+  region: {
+    style: {fill: transparent; stroke: "#90A4AE"; stroke-width: 1; stroke-dash: 4; border-radius: 8; font-size: 13}
+  }
+  # A real trust boundary (organization, another party's network): thick and dashed, so it never reads as an account.
+  trust: {
+    style: {fill: transparent; stroke: "#90A4AE"; stroke-width: 2; stroke-dash: 6; border-radius: 12}
+  }
+  # A grouping of several accounts by lifetime or purpose: thin and dotted, so it reads as neither an account nor a
+  # boundary.
+  group: {
+    style: {fill: transparent; stroke: "#B0BEC5"; stroke-width: 1; stroke-dash: 2; border-radius: 12; bold: true; font-size: 15}
+  }
+
+  # Thin grey arrows: one carries data (solid), the other control: an API call, a policy, a trigger (dashed).
+  data-flow: {
+    style: {stroke: "#8A94A6"; stroke-width: 1; font-size: 12}
+  }
+  control-flow: {
+    style: {stroke: "#8A94A6"; stroke-width: 1; stroke-dash: 4; font-size: 12}
+  }
+
+  # A person: a user or an operator, outside every system boundary. The label sits on the page, so the theme colours it.
+  person: {
+    shape: person
+    style: {fill: "#FFFDF5"; stroke: "#B28704"; stroke-width: 1; bold: true}
+  }
+  # A system outside this platform: GitHub, Sigstore, Telegram, an upstream registry.
+  external: {
+    style: {fill: "#F5F5F5"; stroke: "#757575"; font-color: "#1A1A1A"; border-radius: 10; stroke-width: 1; stroke-dash: 3; bold: true; font-size: 16}
+  }
+
+  # A synchronous call (REST, gRPC): solid arrow. An event through Kafka: dashed orange arrow. An event of an AWS
+  # service (EventBridge, SQS): dashed purple arrow.
+  sync-call: {
+    style: {stroke: "#3949AB"; stroke-width: 1; font-size: 12}
+  }
+  event-flow: {
+    style: {stroke: "#E8590C"; stroke-width: 1; stroke-dash: 4; font-size: 12}
+  }
+  cloud-event: {
+    style: {stroke: "#9C27B0"; stroke-width: 1; stroke-dash: 4; font-size: 12}
+  }
+}

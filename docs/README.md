@@ -17,6 +17,7 @@ Mục lục theo [Diátaxis](https://diataxis.fr): mỗi tài liệu thuộc m�
 
 - [`reference/`](reference/): lệnh `make`, `.env` và biến, stack compose, cluster k3d và EKS, workflow CI, quy ước test.
 - [`reference/contracts.md`](reference/contracts.md): topic event, phân trang feed, mã lỗi gRPC sang HTTP, route REST ở gateway.
+- [`diagrams/README.md`](diagrams/README.md): cách dựng và cập nhật sơ đồ D2: lệnh, bố cục, nhúng `<picture>`, token, icon.
 - [`ci-cd.md`](ci-cd.md): đọc một lượt chạy GitHub Actions: job nào chạy khi nào, vì sao skip, kết quả ở đâu.
 - Hợp đồng REST: [`services/gateway/openapi.yaml`](../services/gateway/openapi.yaml); contract gRPC và event: [`proto/`](../proto/).
 
@@ -78,5 +79,5 @@ Mỗi tài liệu và mỗi khuôn mẫu theo một chuẩn ngành có nguồn c
 | Helm | [Helm chart best practices](https://helm.sh/docs/chart_best_practices/) | `deploy/helm/` |
 | CI | [GitHub Actions security hardening](https://docs.github.com/en/actions/security-guides/security-hardening-for-github-actions), [OpenSSF Scorecard](https://scorecard.dev) làm thước đo | `.github/workflows/` |
 | Văn phong | [Google developer documentation style guide](https://developers.google.com/style): câu ngắn, chủ động, thuật ngữ nhất quán | Mọi `.md` |
-| Kiểm tài liệu tự động | [docs-as-code](https://www.writethedocs.org/guide/docs-as-code/): [markdownlint-cli2](https://github.com/DavidAnson/markdownlint-cli2) (`.markdownlint.yaml`), [lychee](https://lychee.cli.rs) (link và anchor nội bộ), image ghim digest | `make docs-check` |
+| Kiểm tài liệu tự động | [docs-as-code](https://www.writethedocs.org/guide/docs-as-code/): [markdownlint-cli2](https://github.com/DavidAnson/markdownlint-cli2) (`.markdownlint.yaml`), [lychee](https://lychee.cli.rs) (link và anchor nội bộ), image ghim digest | `make docs-check`, `make diagrams-check` |
 | Nhãn tiến độ | Lịch sử ở git log, CHANGELOG, ADR; code và tài liệu hiện trạng không mang nhãn tiến độ của dự án | Mọi file ngoài ADR, postmortem |

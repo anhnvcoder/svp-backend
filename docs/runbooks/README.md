@@ -87,7 +87,7 @@ terminal (`ENV` là `stg` hay `prd`):
 ```sh
 ENV=stg
 N=svp-$ENV
-awsx() { AWS_PROFILE=anhnv-$ENV aws --region ap-southeast-1 "$@"; }
+awsx() { AWS_PROFILE=anhnv-$ENV aws --no-cli-pager --region ap-southeast-1 "$@"; }
 awsx sts get-caller-identity   # đúng account của $ENV trước mọi lệnh ghi
 ```
 
@@ -119,6 +119,16 @@ có khối chuẩn bị riêng.
   thì sửa `.env` bằng trình soạn thảo rồi chạy target của Makefile.
 - Lệnh chạm GitHub để ghi (dispatch workflow, mở PR, merge) và mọi lệnh chạm AWS/GCP do người học chạy; runbook ghi rõ
   "người học chạy".
+- Lệnh AWS trao người học theo một khuôn, để chép từng khối và đọc được từng cờ. Profile và region ghi trong lệnh, mỗi lệnh
+  `aws` có `--no-cli-pager` (thiếu nó, AWS CLI v2 mở `less` và output nằm trong pager):
+  `AWS_PROFILE=anhnv-$ENV aws --no-cli-pager <dịch vụ> <thao tác> … --region ap-southeast-1` (IAM và zone prd ở `us-east-1`). Một
+  biến môi trường đứng cùng dòng lệnh; từ hai biến, mỗi biến một dòng kết thúc bằng `\`, lệnh thụt hai cách. Lệnh dài hơn 140
+  cột xuống dòng giữa hai cờ bằng `\`, dòng tiếp thụt hai cách; không cắt giữa một chuỗi `--query`. Lệnh gọi qua hàm định nghĩa
+  trong trang (`awsx` ở trên, có sẵn profile, region và `--no-cli-pager`) hay chạy dưới credential tạm của `assume-role` không cần
+  `AWS_PROFILE=`, vẫn cần `--region` và `--no-cli-pager` (ở lệnh hay trong thân hàm). Khối đọc và khối ghi tách riêng; trước lệnh
+  ghi là `awsx sts get-caller-identity`, hay chuỗi `aws/scripts/check-account.sh "$ENV" &&` của `svp-infra` (so account của
+  profile với biến `SVP_AWS_<ENV>_ACCOUNT_ID`, dừng khi thiếu `SVP_SESSION_DIR`, nên khối chuẩn bị của trang export biến đó).
+  Lệnh Terraform của root `svp-infra` không chép vào đây: runbook link mục runbook của `svp-infra` làm việc đó.
 - Diễn tập và `make smoke` xoá khoá rate limit đăng ký `svp:gw:rl:register:*`: **LOCAL LAB ONLY**, không trỏ vào stack dùng
   chung.
 - Lệnh của runbook viết theo mã và tài liệu tại lúc viết; lệnh nào đã thử thật trong một buổi (game day, diễn tập) thì

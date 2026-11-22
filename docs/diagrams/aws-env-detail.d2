@@ -1,0 +1,141 @@
+# The flows an env keeps going through AWS services besides the web path of aws-env: upload and transcode, telemetry,
+# alarms. Names match svp-infra (aws/modules/edge, eks, alarms, aws/accounts/<env>). Where each thing runs is
+# eks-deployment; what outlives a destroy is marked there.
+vars: {
+  d2-config: {
+    layout-engine: elk
+    pad: 20
+  }
+}
+...@tokens
+
+title: "Upload, transcode, telemetry và cảnh báo của một env đi qua dịch vụ AWS nào?" {
+  shape: text
+  near: top-center
+  style: {font-size: 18; bold: true}
+}
+
+all: "" {
+  grid-rows: 4
+  grid-columns: 4
+  grid-gap: 0
+  horizontal-gap: 70
+  vertical-gap: 55
+  style: {stroke: transparent; fill: transparent}
+
+  browser: "Trình duyệt" {
+    class: person
+    width: 100
+    height: 100
+  }
+  s3: "S3" {
+    class: data
+    grid-rows: 2
+    grid-columns: 1
+    grid-gap: 24
+    vertical-gap: 6
+    i: "uploads, media" {shape: image; icon: ./icons/s3.svg; width: 48; height: 48; style: {font-color: "#1A1A1A"; font-size: 13; bold: false}}
+    s0: "uploads: riêng tư, CORS POST;\nmedia: chỉ CloudFront đọc" {class: sub}
+  }
+  mc: "MediaConvert" {
+    class: workload
+    grid-rows: 2
+    grid-columns: 1
+    grid-gap: 24
+    vertical-gap: 6
+    i: "queue svp-<env>" {shape: image; icon: ./icons/mediaconvert.svg; width: 48; height: 48; style: {font-color: "#1A1A1A"; font-size: 13; bold: false}}
+    s0: "đọc gốc từ uploads,\nghi HLS vào media" {class: sub}
+  }
+  sp1: "" {width: 10; height: 10; style: {stroke: transparent; fill: transparent}}
+  sp2: "" {width: 10; height: 10; style: {stroke: transparent; fill: transparent}}
+  eks: "Cluster EKS" {
+    class: workload
+    grid-rows: 2
+    grid-columns: 1
+    grid-gap: 24
+    vertical-gap: 6
+    i: "svp-<env>" {shape: image; icon: ./icons/eks.svg; width: 48; height: 48; style: {font-color: "#1A1A1A"; font-size: 13; bold: false}}
+    s0: "video-service ký POST, media-worker\ntạo job; Pod Identity" {class: sub}
+  }
+  evq: "Trạng thái job" {
+    class: detection
+    grid-rows: 2
+    grid-columns: 1
+    grid-gap: 24
+    vertical-gap: 6
+    i: "svp-<env>-transcode-events" {shape: image; icon: ./icons/sqs.svg; width: 48; height: 48; style: {font-color: "#1A1A1A"; font-size: 13; bold: false}}
+    s0: "EventBridge → SQS; bridge đặt\nheader, tạo master một lần" {class: sub}
+  }
+  sp3: "" {width: 10; height: 10; style: {stroke: transparent; fill: transparent}}
+  sp4: "" {width: 10; height: 10; style: {stroke: transparent; fill: transparent}}
+  ep: "Endpoint interface" {
+    class: prevention
+    grid-rows: 1
+    grid-columns: 1
+    grid-gap: 24
+    vertical-gap: 6
+    s0: "private DNS, policy theo account;\nS3 đi qua gateway endpoint" {class: sub}
+  }
+  tel: "Telemetry managed" {
+    class: investigation
+    grid-rows: 2
+    grid-columns: 1
+    grid-gap: 24
+    vertical-gap: 6
+    i: "AMP · CloudWatch Logs · X-Ray" {shape: image; icon: ./icons/amp.svg; width: 48; height: 48; style: {font-color: "#1A1A1A"; font-size: 13; bold: false}}
+    s0: "Collector, Prometheus agent ghi\nbằng SigV4; sống qua destroy" {class: sub}
+  }
+  amg: "Managed Grafana" {
+    class: investigation
+    grid-rows: 2
+    grid-columns: 1
+    grid-gap: 24
+    vertical-gap: 6
+    i: "svp-<env>" {shape: image; icon: ./icons/amg.svg; width: 48; height: 48; style: {font-color: "#1A1A1A"; font-size: 13; bold: false}}
+    s0: "đăng nhập qua Identity Center" {class: sub}
+  }
+  data: "RDS · MSK · ElastiCache" {
+    class: data
+    grid-rows: 2
+    grid-columns: 1
+    grid-gap: 24
+    vertical-gap: 6
+    i: "subnet database" {shape: image; icon: ./icons/rds.svg; width: 48; height: 48; style: {font-color: "#1A1A1A"; font-size: 13; bold: false}}
+    s0: "dịch vụ dữ liệu managed" {class: sub}
+  }
+  alarm: "CloudWatch alarm" {
+    class: alerting
+    grid-rows: 2
+    grid-columns: 1
+    grid-gap: 24
+    vertical-gap: 6
+    i: "metric của dịch vụ" {shape: image; icon: ./icons/cloudwatch.svg; width: 48; height: 48; style: {font-color: "#1A1A1A"; font-size: 13; bold: false}}
+    s0: "RDS, MSK, ElastiCache, DLQ transcode;\nsống ngoài cluster" {class: sub}
+  }
+  sns: "SNS" {
+    class: alerting
+    grid-rows: 2
+    grid-columns: 1
+    grid-gap: 24
+    vertical-gap: 6
+    i: "svp-<env>-alarms" {shape: image; icon: ./icons/sns.svg; width: 48; height: 48; style: {font-color: "#1A1A1A"; font-size: 13; bold: false}}
+    s0: "alarm, ruler và Alertmanager\ncủa AMP; mã hoá CMK" {class: sub}
+  }
+  mail: "Email vận hành" {
+    class: external
+  }
+}
+
+all.browser -> all.s3: "POST presigned" {class: sync-call}
+all.mc -> all.s3: "đọc, ghi" {class: sync-call}
+all.eks -> all.s3: "ký POST, HEAD" {class: sync-call}
+all.eks -> all.mc: "Probe, CreateJob" {class: sync-call}
+all.mc -> all.evq: "trạng thái job" {class: cloud-event}
+all.evq -> all.eks: "nhận" {class: cloud-event}
+all.eks -> all.ep: "metric, log, span" {class: sync-call}
+all.ep -> all.tel: "SigV4" {class: sync-call}
+all.amg -> all.tel: "dashboard" {class: data-flow}
+all.tel -> all.sns: "cảnh báo (ruler)" {class: control-flow}
+all.data -> all.alarm: "metric" {class: data-flow}
+all.alarm -> all.sns: {class: control-flow}
+all.sns -> all.mail: {class: control-flow}

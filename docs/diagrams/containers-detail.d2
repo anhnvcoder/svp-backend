@@ -1,0 +1,90 @@
+# Events of each container through Kafka (C4 level 2, event view): the name of an arrow is the topic. Same services as
+# containers.d2; the table under the diagram in architecture.md gives key and purpose of each event.
+vars: {
+  d2-config: {
+    layout-engine: elk
+    pad: 20
+  }
+}
+...@tokens
+
+title: "Service nào phát và nhận event nào qua Kafka?" {
+  shape: text
+  near: top-center
+  style: {font-size: 18; bold: true}
+}
+
+all: "" {
+  grid-rows: 3
+  grid-columns: 3
+  grid-gap: 0
+  horizontal-gap: 190
+  vertical-gap: 100
+  style: {stroke: transparent; fill: transparent}
+
+  us: "user-service" {
+    class: workload
+    grid-rows: 2
+    grid-gap: 24
+    vertical-gap: 6
+    s: "phát qua outbox" {class: sub}
+    r: "services/user-service" {class: root}
+  }
+  vs: "video-service" {
+    class: workload
+    grid-rows: 2
+    grid-gap: 24
+    vertical-gap: 6
+    s: "phát qua outbox, nhận kết quả\ntranscode" {class: sub}
+    r: "services/video-service" {class: root}
+  }
+  fs: "feed-service" {
+    class: workload
+    grid-rows: 2
+    grid-gap: 24
+    vertical-gap: 6
+    s: "nhận, dựng read model feed" {class: sub}
+    r: "services/feed-service" {class: root}
+  }
+  mw: "media-worker" {
+    class: workload
+    grid-rows: 2
+    grid-gap: 24
+    vertical-gap: 6
+    s: "nhận job, phát kết quả" {class: sub}
+    r: "services/media-worker" {class: root}
+  }
+  bus: "Kafka" {
+    class: data
+    grid-rows: 2
+    grid-gap: 24
+    vertical-gap: 6
+    s: "topic, key theo thực thể" {class: sub}
+    r: "SCRAM-SHA-512 trên TLS, 9096" {class: root}
+  }
+  es: "engagement-service" {
+    class: workload
+    grid-rows: 2
+    grid-gap: 24
+    vertical-gap: 6
+    s: "phát và nhận view.recorded" {class: sub}
+    r: "services/engagement-service" {class: root}
+  }
+  sp1: "" {width: 10; height: 10; style: {stroke: transparent; fill: transparent}}
+  dr: "dlq-replay" {
+    class: workload
+    grid-rows: 2
+    grid-gap: 24
+    vertical-gap: 6
+    s: "phát lại record DLQ" {class: sub}
+    r: "services/dlq-replay" {class: root}
+  }
+  sp2: "" {width: 10; height: 10; style: {stroke: transparent; fill: transparent}}
+}
+
+all.us -> all.bus: "user.followed,\nuser.unfollowed" {class: event-flow}
+all.vs <-> all.bus: "phát video.uploaded, video.ready;\nnhận transcode.completed, .failed" {class: event-flow}
+all.bus -> all.fs: "user.*, video.ready" {class: event-flow}
+all.mw <-> all.bus: "nhận video.uploaded;\nphát transcode.completed,\ntranscode.failed" {class: event-flow}
+all.es <-> all.bus: "view.recorded" {class: event-flow}
+all.dr <-> all.bus: "nhận record trong *.dlq;\nphát lại về topic gốc" {class: event-flow}

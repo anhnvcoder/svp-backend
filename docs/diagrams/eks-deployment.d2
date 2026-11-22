@@ -1,0 +1,165 @@
+# Where each thing of one env runs on AWS (C4 deployment, overview): the account of the env, its VPC with the ALB, the
+# EKS cluster and the data subnet, and the managed services outside the VPC. Names match svp-infra (aws/modules/edge,
+# eks, rds, msk, elasticache, alarms, aws/accounts/<env>); eks-deployment-detail has subnets and the tools kept
+# through a destroy.
+vars: {
+  d2-config: {
+    layout-engine: elk
+    pad: 20
+  }
+}
+...@tokens
+
+title: "Mỗi thứ của một env chạy ở đâu trên AWS?" {
+  shape: text
+  near: top-center
+  style: {font-size: 18; bold: true}
+}
+
+env: "account svp-<env> · ap-southeast-1" {
+  class: account
+  label.near: top-left
+  grid-rows: 1
+  grid-columns: 3
+  grid-gap: 50
+
+  L: "" {
+    grid-rows: 4
+    grid-columns: 1
+    grid-gap: 0
+    vertical-gap: 50
+    style: {stroke: transparent; fill: transparent}
+    cf: "CloudFront" {
+      class: prevention
+      grid-rows: 2
+      grid-columns: 1
+      grid-gap: 24
+      vertical-gap: 6
+      i: "web, api, media" {shape: image; icon: ./icons/cloudfront.svg; width: 48; height: 48; style: {font-color: "#1A1A1A"; font-size: 13; bold: false}}
+      s0: "web ACL, cert ACM;\nVPC origin tới ALB" {class: sub}
+    }
+    s3: "S3" {
+      class: data
+      grid-rows: 2
+      grid-columns: 1
+      grid-gap: 24
+      vertical-gap: 6
+      i: "uploads, media" {shape: image; icon: ./icons/s3.svg; width: 48; height: 48; style: {font-color: "#1A1A1A"; font-size: 13; bold: false}}
+      s0: "media/, preview/, premium/" {class: sub}
+    }
+    mc: "MediaConvert" {
+      class: workload
+      grid-rows: 2
+      grid-columns: 1
+      grid-gap: 24
+      vertical-gap: 6
+      i: "queue svp-<env>" {shape: image; icon: ./icons/mediaconvert.svg; width: 48; height: 48; style: {font-color: "#1A1A1A"; font-size: 13; bold: false}}
+      s0: "transcode ra HLS" {class: sub}
+    }
+    ev: "EventBridge → SQS" {
+      class: alerting
+      grid-rows: 2
+      grid-columns: 1
+      grid-gap: 24
+      vertical-gap: 6
+      i: "svp-<env>-transcode-events" {shape: image; icon: ./icons/sqs.svg; width: 48; height: 48; style: {font-color: "#1A1A1A"; font-size: 13; bold: false}}
+      s0: "trạng thái job MediaConvert;\nmedia-worker đọc queue" {class: sub}
+    }
+  }
+
+  vpc: "VPC svp-<env> · 2–3 AZ" {
+    class: region
+    label.near: top-left
+    grid-rows: 3
+    grid-columns: 1
+    grid-gap: 40
+
+  alb: "ALB internal" {
+    class: prevention
+    grid-rows: 2
+    grid-columns: 1
+    grid-gap: 24
+    vertical-gap: 6
+    i: "svp-<env>-edge" {shape: image; icon: ./icons/elb.svg; width: 48; height: 48; style: {font-color: "#1A1A1A"; font-size: 13; bold: false}}
+    s0: "subnet edge, không node;\ntarget group → Envoy" {class: sub}
+  }
+  kn: "Cluster EKS svp-<env>" {
+    class: workload
+    grid-rows: 2
+    grid-columns: 1
+    grid-gap: 24
+    vertical-gap: 6
+    i: "API chỉ endpoint private" {shape: image; icon: ./icons/eks.svg; width: 48; height: 48; style: {font-color: "#1A1A1A"; font-size: 13; bold: false}}
+    s0: "node system on-demand: Argo CD, Karpenter;\nnode Karpenter: Envoy, web, gateway, 4 service,\nmedia-worker, dlq-replay, observability, mesh;\nKyverno: node nào còn chỗ" {class: sub}
+  }
+    db: "Subnet database, không route ra Internet" {
+      class: region
+      label.near: top-left
+      grid-rows: 1
+      grid-columns: 3
+      grid-gap: 20
+      rds: "RDS for PostgreSQL 17" {
+        class: data
+        grid-rows: 1
+        grid-columns: 1
+        grid-gap: 24
+        vertical-gap: 6
+        i: "stg một AZ, prd Multi-AZ" {shape: image; icon: ./icons/rds.svg; width: 48; height: 48; style: {font-color: "#1A1A1A"; font-size: 13; bold: false}}
+      }
+      msk: "Amazon MSK" {
+        class: data
+        grid-rows: 1
+        grid-columns: 1
+        grid-gap: 24
+        vertical-gap: 6
+        i: "một broker mỗi AZ" {shape: image; icon: ./icons/msk.svg; width: 48; height: 48; style: {font-color: "#1A1A1A"; font-size: 13; bold: false}}
+      }
+      vk: "ElastiCache Valkey" {
+        class: data
+        grid-rows: 1
+        grid-columns: 1
+        grid-gap: 24
+        vertical-gap: 6
+        i: "stg 1 node, prd + replica" {shape: image; icon: ./icons/elasticache.svg; width: 48; height: 48; style: {font-color: "#1A1A1A"; font-size: 13; bold: false}}
+      }
+    }
+  }
+
+  R: "" {
+    grid-rows: 2
+    grid-columns: 1
+    grid-gap: 0
+    vertical-gap: 50
+    style: {stroke: transparent; fill: transparent}
+    keep: "ECR và telemetry" {
+      class: investigation
+      grid-rows: 2
+      grid-columns: 1
+      grid-gap: 24
+      vertical-gap: 6
+      i: "sống qua destroy" {shape: image; icon: ./icons/ecr.svg; width: 48; height: 48; style: {font-color: "#1A1A1A"; font-size: 13; bold: false}}
+      s0: "kéo image, đẩy telemetry:\nECR · AMP · Managed Grafana" {class: sub}
+    }
+    alarm: "CloudWatch alarm" {
+      class: alerting
+      grid-rows: 2
+      grid-columns: 1
+      grid-gap: 24
+      vertical-gap: 6
+      i: "RDS, MSK, ElastiCache" {shape: image; icon: ./icons/cloudwatch.svg; width: 48; height: 48; style: {font-color: "#1A1A1A"; font-size: 13; bold: false}}
+      s0: "→ SNS svp-<env>-alarms → email;\nsống ngoài cluster" {class: sub}
+    }
+  }
+}
+
+env.L.cf -> env.vpc.alb: "VPC origin" {class: sync-call}
+env.L.cf -> env.L.s3: "media (OAC)" {class: sync-call}
+env.vpc.alb -> env.vpc.kn: "Envoy" {class: sync-call}
+env.vpc.kn -> env.vpc.db: "5432, 9096, 6379 · TLS" {class: sync-call}
+env.vpc.kn -> env.L.s3: {class: sync-call}
+env.vpc.kn -> env.L.mc: "job" {class: sync-call}
+env.L.mc -> env.L.s3: {class: sync-call}
+env.vpc.db -> env.R.alarm: {class: control-flow}
+env.R.keep -> env.R.alarm: "ruler của AMP" {class: control-flow}
+env.L.mc -> env.L.ev: "trạng thái job" {class: cloud-event}
+env.vpc.kn -> env.R.keep: {class: sync-call}

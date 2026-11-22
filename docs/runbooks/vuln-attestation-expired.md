@@ -1,5 +1,13 @@
 # Attestation `vuln` quá 72 giờ
 
+> **Tóm tắt**
+>
+> - **Làm gì:** làm mới attestation `vuln` của các digest đang phát hành khi rescan hằng ngày không chạy: tìm vì sao lịch dừng, dispatch
+>   lại rescan, cho pod `svp` bị Kyverno từ chối lên lại. Cluster GitOps và GitHub Actions.
+> - **Khi nào và bao lâu:** khi Kyverno từ chối pod với message tuổi attestation, `make k8s-gitops-up` dừng hay `gitops-ok` đỏ vì quá 48
+>   giờ. Kiểm 5 phút; một lượt rescan rồi pod tự thử lại.
+> - **Phí trong lúc chạy:** không phát sinh phí: lệnh đọc, cùng lượt chạy lại workflow `images.yml` có sẵn.
+
 - Không có cảnh báo riêng. Dấu hiệu: pod `svp` mới trên cluster GitOps bị Kyverno từ chối với message `vuln attestation older
   than 72h (scanFinishedOn)`; `make k8s-gitops-up` dừng trước khi tạo gì; check `gitops-ok` của PR trong `svp-gitops` đỏ.
 - Mọi lệnh ghi lên GitHub (dispatch workflow, bật workflow) do **người học chạy**.
@@ -63,11 +71,12 @@ done
    quét gì, nên cả bản trên GHCR cũng không được attest lại. STS không nhận token GitHub với account mà secret
    `SVP_AWS_<ENV>_ACCOUNT_ID` trỏ tới. Trust sai `sub` thì báo `Not authorized to perform sts:AssumeRoleWithWebIdentity`,
    không phải lỗi này. Người học kiểm theo thứ tự:
-   - `AWS_PROFILE=anhnv-<env> aws sts get-caller-identity --region ap-southeast-1`: account trùng account của secret.
-   - `AWS_PROFILE=anhnv-<env> aws iam list-open-id-connect-providers --region ap-southeast-1`: có ARN kết thúc bằng
+   - `AWS_PROFILE=anhnv-<env> aws --no-cli-pager sts get-caller-identity --region ap-southeast-1`: account trùng account của secret.
+   - `AWS_PROFILE=anhnv-<env> aws --no-cli-pager iam list-open-id-connect-providers --region us-east-1`: có ARN kết thúc bằng
      `oidc-provider/token.actions.githubusercontent.com`; thiếu thì áp root `aws/accounts/<env>` của `svp-infra` (module
      `registry` tạo provider và role `svp-ci-ecr-rescan-backend`).
-   - Provider có mà vẫn lỗi: `aws iam get-open-id-connect-provider` với ARN đó phải có client ID `sts.amazonaws.com`.
+   - Provider có mà vẫn lỗi: ARN đó phải có client ID `sts.amazonaws.com` trong output của
+     `AWS_PROFILE=anhnv-<env> aws --no-cli-pager iam get-open-id-connect-provider --open-id-connect-provider-arn <arn> --region us-east-1`.
 
 ## Giảm thiểu
 

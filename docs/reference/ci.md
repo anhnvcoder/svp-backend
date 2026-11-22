@@ -40,8 +40,9 @@ Loại tài liệu (Diátaxis): **reference**, tra cứu khi cần một lệnh 
     `gitleaks` (toàn lịch sử, `--redact`), `trivy-config` (chỉ báo), `zizmor` (lint bảo mật workflow, mục dưới),
     `dependency-review` (chỉ lượt `pull_request`: `actions/dependency-review-action` ghim SHA, `contents: read`,
     `fail-on-severity: high`, không `allow-licenses`; chặn dependency có lỗ hổng ngay lúc PR thêm vào,
-    [ADR-0041](../adr/0041-github-hardening.md) (k)), `docs` (`make docs-check`: markdownlint-cli2 và lychee offline, image ghim digest,
-    không mạng), `sarif` (chỉ `main`), check tổng `ci-ok` (cần đủ 11 job,
+    [ADR-0041](../adr/0041-github-hardening.md) (k)), `docs` (`make docs-check`: markdownlint-cli2 và lychee offline;
+    `make diagrams-check`: SVG của sơ đồ khớp `.d2`; image ghim digest, không mạng), `sarif` (chỉ `main`),
+    check tổng `ci-ok` (cần đủ 11 job,
     trừ `sarif` và `stack`; `dependency-review` `skipped` ngoài lượt `pull_request` vẫn xanh; job `changes` chia PR theo vùng
     (tài liệu, `proto/`, hợp đồng REST, `.github/`, thứ stack compose chạy; `Makefile`, `*.mk`, `ci.yml` đổi thì chạy hết) và job
     nào PR không đụng vùng của nó thì skip, `ci-ok` nhận các skip đó; job khác `skipped` thì đỏ; job `web` cũ ở CI của

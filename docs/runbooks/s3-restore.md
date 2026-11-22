@@ -1,8 +1,17 @@
 # Khôi phục object hay bucket S3 của `media` (stg, prd)
 
-- Quy trình làm tay, không có cảnh báo riêng; chỉ AWS, cho hai bucket của module `media`: `uploads` (bản gốc người dùng
-  tải lên) và `media` (HLS). Thiết kế, mục tiêu RTO/RPO và nguồn: [ADR-0067](../adr/0067-backup-dr.md) §2, §10; giải
-  thích: [`backup-dr.md`](../explanation/backup-dr.md).
+> **Tóm tắt**
+>
+> - **Làm gì:** lấy lại object bị xoá hay ghi đè, hay cả bucket, của hai bucket của module `media`: `uploads` (bản gốc người dùng
+>   tải lên) và `media` (HLS); từ version cũ, từ recovery point của AWS Backup hay từ vault copy. Quy trình làm tay, không có cảnh
+>   báo riêng; chỉ AWS.
+> - **Khi nào và bao lâu:** khi object hay bucket mất (mục Ý nghĩa). Mục tiêu RTO ≤ 30 phút cho một object, cả bucket theo số
+>   object ([ADR-0067](../adr/0067-backup-dr.md#2-mục-tiêu-rtorpo) §2, §10, thiết kế và nguồn); giải thích:
+>   [`backup-dr.md`](../explanation/backup-dr.md).
+> - **Phí trong lúc chạy:** version mới mà `copy-object` hay job restore ghi tính như object thường; job restore của AWS Backup tính
+>   theo GB khôi phục ([phụ lục ADR-0067, Chi phí](../adr/appendix/0067-backup-dr.md#chi-phí)). Recovery point copy về vault
+>   `svp-$ENV` (mục Từ vault copy) tính tới khi xoá, sau khi object đã xác nhận.
+
 - **Người học chạy mọi lệnh**, ở bản clone `svp-infra` với biến account của `$ENV` (`SVP_AWS_STG_ACCOUNT_ID` hay
   `SVP_AWS_PRD_ACCOUNT_ID`) đã export, không ghi vào file nào. Mỗi lệnh ghi nối sau
   `aws/scripts/check-account.sh "$ENV"` bằng `&&`: account của profile khác biến thì script thoát khác 0 và lệnh ghi
@@ -11,7 +20,8 @@
 ```sh
 ENV=stg
 N=svp-$ENV
-ACCOUNT=$(AWS_PROFILE=anhnv-$ENV aws sts get-caller-identity --query Account --output text --region ap-southeast-1)
+export SVP_SESSION_DIR="$PWD/.session/$(date -u +%Y%m%dT%H%M%SZ)"   # check-account.sh stops without it
+ACCOUNT=$(AWS_PROFILE=anhnv-$ENV aws --no-cli-pager sts get-caller-identity --query Account --output text --region ap-southeast-1)
 MEDIA=$N-media-$ACCOUNT-ap-southeast-1
 UPLOADS=$N-uploads-$ACCOUNT-ap-southeast-1
 B=$MEDIA          # the bucket of the incident: $MEDIA or $UPLOADS
@@ -36,12 +46,17 @@ AWS:
 
 ```sh
 # 1. The bucket still exists, with versioning on
-AWS_PROFILE=anhnv-$ENV aws s3api get-bucket-versioning --bucket "$B" --region ap-southeast-1
+AWS_PROFILE=anhnv-$ENV aws --no-cli-pager s3api get-bucket-versioning --bucket "$B" --region ap-southeast-1
 # 2. Versions and delete markers of the key: the newest first
-AWS_PROFILE=anhnv-$ENV aws s3api list-object-versions --bucket "$B" --prefix "$K" --query '{versions: Versions[?Key==`'"$K"'`].[VersionId,IsLatest,LastModified,Size], markers: DeleteMarkers[?Key==`'"$K"'`].[VersionId,IsLatest,LastModified]}' --output json --region ap-southeast-1
+AWS_PROFILE=anhnv-$ENV aws --no-cli-pager s3api list-object-versions --bucket "$B" --prefix "$K" \
+  --query '{versions: Versions[?Key==`'"$K"'`].[VersionId,IsLatest,LastModified,Size], markers: DeleteMarkers[?Key==`'"$K"'`].[VersionId,IsLatest,LastModified]}' \
+  --output json --region ap-southeast-1
 # 3. Recovery points of the bucket in the env vault, and their copies in account svp-backup (read-only profile)
-AWS_PROFILE=anhnv-$ENV aws backup list-recovery-points-by-backup-vault --backup-vault-name "$N" --by-resource-arn "arn:aws:s3:::$B" --query 'RecoveryPoints[].[CreationDate,Status,RecoveryPointArn]' --output text --region ap-southeast-1
-AWS_PROFILE=anhnv-backup-ro aws backup list-recovery-points-by-backup-vault --backup-vault-name "$N-copy" --by-resource-type S3 --query 'RecoveryPoints[].[CreationDate,Status,RecoveryPointArn]' --output text --region ap-southeast-1
+AWS_PROFILE=anhnv-$ENV aws --no-cli-pager backup list-recovery-points-by-backup-vault --backup-vault-name "$N" \
+  --by-resource-arn "arn:aws:s3:::$B" --query 'RecoveryPoints[].[CreationDate,Status,RecoveryPointArn]' --output text \
+  --region ap-southeast-1
+AWS_PROFILE=anhnv-backup-ro aws --no-cli-pager backup list-recovery-points-by-backup-vault --backup-vault-name "$N-copy" \
+  --by-resource-type S3 --query 'RecoveryPoints[].[CreationDate,Status,RecoveryPointArn]' --output text --region ap-southeast-1
 ```
 
 Đọc: bước 1 lỗi `NoSuchBucket` là mất bucket. Bước 2 có delete marker `IsLatest` true là object bị xoá; version mới nhất
@@ -69,10 +84,12 @@ key đó (thành version mới nhất; bucket `uploads` mã hoá lại bằng ke
 ```sh
 # Deleted: the version id of the delete marker that IsLatest from step 2
 aws/scripts/check-account.sh "$ENV" &&
-  AWS_PROFILE=anhnv-$ENV aws s3api delete-object --bucket "$B" --key "$K" --version-id '<version id of the delete marker>' --region ap-southeast-1
+  AWS_PROFILE=anhnv-$ENV aws --no-cli-pager s3api delete-object --bucket "$B" --key "$K" \
+    --version-id '<version id of the delete marker>' --region ap-southeast-1
 # Overwritten: the version id of the right content from step 2
 aws/scripts/check-account.sh "$ENV" &&
-  AWS_PROFILE=anhnv-$ENV aws s3api copy-object --bucket "$B" --key "$K" --copy-source "$B/$K?versionId=<version id>" --region ap-southeast-1
+  AWS_PROFILE=anhnv-$ENV aws --no-cli-pager s3api copy-object --bucket "$B" --key "$K" --copy-source "$B/$K?versionId=<version id>" \
+    --region ap-southeast-1
 ```
 
 ### Object hay bucket từ recovery point của AWS Backup
@@ -92,8 +109,11 @@ RP='<RecoveryPointArn from step 3>'
 # One object: the key of the incident; drop ItemsToRestore to restore the whole bucket.
 META=$(jq -nc --arg b "$B" --arg k "s3://$B/$K" '{DestinationBucketName: $b, ItemsToRestore: ([$k] | tojson), EncryptionType: "original", RestoreACLs: "false"}')
 aws/scripts/check-account.sh "$ENV" &&
-  JOB=$(AWS_PROFILE=anhnv-$ENV aws backup start-restore-job --recovery-point-arn "$RP" --iam-role-arn "arn:aws:iam::$ACCOUNT:role/$N-backup" --resource-type S3 --metadata "$META" --query RestoreJobId --output text --region ap-southeast-1)
-until S=$(AWS_PROFILE=anhnv-$ENV aws backup describe-restore-job --restore-job-id "$JOB" --query Status --output text --region ap-southeast-1) && [ "$S" != PENDING ] && [ "$S" != RUNNING ]; do sleep 30; done; echo "$S"
+  JOB=$(AWS_PROFILE=anhnv-$ENV aws --no-cli-pager backup start-restore-job --recovery-point-arn "$RP" \
+    --iam-role-arn "arn:aws:iam::$ACCOUNT:role/$N-backup" --resource-type S3 --metadata "$META" --query RestoreJobId --output text \
+    --region ap-southeast-1)
+until S=$(AWS_PROFILE=anhnv-$ENV aws --no-cli-pager backup describe-restore-job --restore-job-id "$JOB" --query Status --output text \
+  --region ap-southeast-1) && [ "$S" != PENDING ] && [ "$S" != RUNNING ]; do sleep 30; done; echo "$S"
 ```
 
 `S` phải là `COMPLETED`; khác thì đọc `StatusMessage` của cùng lệnh `describe-restore-job` (bỏ `--query`).
@@ -115,7 +135,8 @@ Object đúng khi độ dài và SHA-256 bằng bản đúng đã biết (ví d�
 không dùng để so: AWS Backup không giữ ETag, object khôi phục có ETag mới cùng nội dung.
 
 ```sh
-AWS_PROFILE=anhnv-$ENV aws s3api get-object --bucket "$B" --key "$K" restored.bin --query ContentLength --region ap-southeast-1
+AWS_PROFILE=anhnv-$ENV aws --no-cli-pager s3api get-object --bucket "$B" --key "$K" restored.bin --query ContentLength \
+  --region ap-southeast-1
 shasum -a 256 restored.bin
 ```
 
