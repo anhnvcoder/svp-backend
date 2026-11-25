@@ -205,3 +205,24 @@ test_a_pin_of_the_platform_file_is_named_without_an_env if {
 test_an_overlay_that_does_not_pin_is_left_alone if count(deny(overlaid(with_mesh(old), "stg", "replicas: 3\n"))) == 0
 
 test_an_overlay_of_an_env_the_platform_does_not_run_is_not_read if count(deny(overlaid(with_mesh(old), "dev", pin))) == 0
+
+# istiod_overlay(env, enabled): mesh_input with envs/<env>/istiod.yaml setting taint.enabled.
+istiod_overlay(env, enabled) := fx.with_file(mesh_input, $"envs/{env}/istiod.yaml", $"taint:\n  enabled: {enabled}\n")
+
+test_an_env_overlay_that_turns_taint_removal_off_is_named_with_the_env if {
+	msgs := deny(istiod_overlay("prd", "false"))
+	fx.says(msgs, "istiod is no component that runs on eks with taint.enabled: true in its values (env prd)")
+	not fx.says(msgs, "(env stg)")
+}
+
+test_an_env_overlay_that_turns_taint_removal_back_on_lifts if count(deny(fx.with_file(
+	fx.with_file(istiod_overlay("prd", "true"), "envs/stg/istiod.yaml", "taint:\n  enabled: true\n"),
+	"platforms/eks/istiod.yaml", "taint:\n  enabled: false\n",
+))) == 0
+
+test_no_env_overlay_for_istiod_leaves_every_env_lifted if count(deny(mesh_input)) == 0
+
+test_an_env_that_still_lifts_keeps_the_wave_rule if fx.says(
+	deny(fx.with_file(with_mesh(old), "envs/stg/istiod.yaml", "taint:\n  enabled: false\n")),
+	"svp-cluster (wave 1) is pinned to Karpenter's nodes, whose startup taint cni.istio.io/not-ready istiod (wave 3) lifts",
+)

@@ -70,32 +70,40 @@ pin_sites contains {"name": c.name, "env": env} if {
 	pins_karpenter(gitops.yaml_map(path))
 }
 
-pinned := sort({site.name | some site in pin_sites})
+# pinned_in(env): the components pinned in env, by a file of base or platform (every env) or by the overlay of env.
+pinned_in(env) := sort({site.name | some site in pin_sites; site.env in {"", env}})
 
 # site_label(wave, env): the wave of a pinned component, with the env when only that env's overlay pins it.
 site_label(wave, "") := $"wave {wave}"
 
 site_label(wave, env) := $"wave {wave}, env {env}" if env != ""
 
-# lifts(name): component name runs on eks and, for istiod, enables taint removal in its values (the overlay of the
-# platform over the base).
-lifts(name) if {
+# lifts(name, env): component name runs on eks and, for istiod, enables taint removal in its values in env: the last of
+# base, the overlay of the platform and envs/<env>/ that sets taint.enabled wins.
+lifts(name, _) if {
 	name != "istiod"
 	gitops.runs_on(name, taint_platform)
 }
 
-lifts("istiod") if {
+lifts("istiod", env) if {
 	gitops.runs_on("istiod", taint_platform)
-	docs := values_docs("istiod")
-	enabled := [doc.taint.enabled | some doc in docs]
+	enabled := [doc.taint.enabled | some doc in istiod_docs(env)]
 	enabled[count(enabled) - 1] == true
 }
+
+istiod_docs(env) := array.concat(values_docs("istiod"), [doc |
+	path := $"envs/{env}/istiod.yaml"
+	gitops.is_file(path)
+	doc := gitops.yaml_map(path)
+])
 
 deny contains msg if {
 	some site in pin_sites
 	name := site.name
+	some env in eks_envs
+	site.env in {"", env}
 	some remover in taint_removers
-	lifts(remover)
+	lifts(remover, env)
 	name_wave := wave_of(name)
 	remover_wave := wave_of(remover)
 	name_wave < remover_wave
@@ -110,18 +118,20 @@ deny contains msg if {
 
 # A taint that nothing lifts leaves every pinned pod Pending for good.
 deny contains msg if {
+	some env in eks_envs
+	pinned := pinned_in(env)
 	count(pinned) > 0
 	some remover in taint_removers
-	not lifts(remover)
+	not lifts(remover, env)
 	msg := sprintf(
 		concat("", [
 			"%s: %s is pinned to Karpenter's nodes, whose startup taint cni.istio.io/not-ready is never lifted: ",
 			"%s is no component that runs on %s%s",
 		]),
-		[gitops.components_file, concat(" ", pinned), remover, taint_platform, lift_missing(remover)],
+		[gitops.components_file, concat(" ", pinned), remover, taint_platform, lift_missing(remover, env)],
 	)
 }
 
-lift_missing("istiod") := " with taint.enabled: true in its values"
+lift_missing("istiod", env) := $" with taint.enabled: true in its values (env {env})"
 
-lift_missing(name) := "" if name != "istiod"
+lift_missing(name, _) := "" if name != "istiod"
