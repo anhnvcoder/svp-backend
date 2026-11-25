@@ -86,7 +86,9 @@ canaryPrometheus:
 # lab changes one to run a canary of the code already running.
 podAnnotations: {}
 
-# -- A service with a database runs `migrate` with its migrator role in a Job before each install and upgrade.
+# -- A service with a database runs `migrate` with its migrator role in a Job before each install and upgrade. The Job
+# gets the OTEL_* entries of `env` and the pod's resource attributes, and reaches the Collector when `egressTo` names
+# it, so its log goes where the service's does; the other entries of `env` are for serve alone.
 migrate: false
 
 # -- Every container of the project has requests and limits; the values file sets them per service.
@@ -222,8 +224,8 @@ peers:
 # -- Peers that are not pods of the cluster where the cluster uses a managed service instead (EKS: Postgres on Amazon RDS,
 # Kafka on Amazon MSK, Valkey on Amazon ElastiCache, objects on Amazon S3), by address: name of a peer above -> list of
 # {cidr, ports}, each one rule of the egress of every release whose egressTo names that peer, and of the migrate Job
-# for postgres. Such an entry takes the place of the peer's pods. Empty: every peer is the pods above. On EKS, postgres,
-# kafka and valkey are the database subnets' CIDRs on 5432, 9096 and 6379; s3 is
+# for postgres and collector. Such an entry takes the place of the peer's pods. Empty: every peer is the pods above. On
+# EKS, postgres, kafka and valkey are the database subnets' CIDRs on 5432, 9096 and 6379; s3 is
 # TCP 443 to each IPv4 range AWS publishes for S3 in the cluster's region (they change over time, so the list is read
 # when the cluster's Terraform is applied), never 0.0.0.0/0:
 # media-worker runs ffmpeg on uploaded files, and a worker taken over by a crafted file must not reach any other host.

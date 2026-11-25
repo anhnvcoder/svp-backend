@@ -2,7 +2,8 @@
 // migrations (migrate) or checks a running instance's health (healthcheck). Configuration comes
 // from environment variables; serve also needs KAFKA_BROKERS for the outbox relay, exports
 // telemetry when OTEL_EXPORTER_OTLP_ENDPOINT is set, profiles when PYROSCOPE_SERVER_ADDRESS is,
-// and reports errors when SENTRY_DSN is.
+// and reports errors when SENTRY_DSN is. migrate exports telemetry as serve does, without error
+// reporting.
 package main
 
 import (
@@ -59,7 +60,7 @@ func main() {
 	case "serve":
 		err = serve(ctx, logger)
 	case "migrate":
-		err = migrate(ctx)
+		err = migrate(ctx, logger)
 	case "healthcheck":
 		err = healthcheck(ctx)
 	default:
@@ -83,7 +84,7 @@ func logFailure(logger *slog.Logger, err error) {
 	logger.Error("user-service failed", slog.Any("error", err))
 }
 
-// loggedError is a serve failure that serve has already logged, while the error tracker and the
+// loggedError is a failure that serve or migrate has already logged, while the error tracker and the
 // telemetry providers were still running, so that it reaches both.
 type loggedError struct{ error }
 
@@ -182,11 +183,26 @@ func serve(ctx context.Context, logger *slog.Logger) (err error) {
 	)
 }
 
-func migrate(ctx context.Context) error {
+// migrate applies the migrations under the telemetry providers of serve, so its records reach the
+// Collector as well as stdout. A failure is logged before the providers flush and shut down.
+func migrate(ctx context.Context, logger *slog.Logger) (err error) {
 	databaseURL, err := envcfg.Required("DATABASE_URL")
 	if err != nil {
 		return err
 	}
+	shutdownTelemetry, err := telemetry.Setup(ctx, serviceName)
+	if err != nil {
+		return fmt.Errorf("set up telemetry: %w", err)
+	}
+	defer func() {
+		if err != nil {
+			logFailure(logger, err)
+			err = loggedError{err}
+		}
+		if err := shutdownTelemetry(context.WithoutCancel(ctx)); err != nil {
+			logger.WarnContext(ctx, "telemetry shutdown failed", slog.Any("error", err))
+		}
+	}()
 	return dbmigrate.Up(ctx, databaseURL, migrations.FS)
 }
 

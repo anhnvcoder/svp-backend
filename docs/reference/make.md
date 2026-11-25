@@ -56,6 +56,10 @@ liệt kê target):
   `lychee.toml`; link nội bộ và anchor heading, link ra site khác không kiểm, vì mạng không ổn định và một kiểm tra phụ thuộc mạng đỏ vì lý do nằm ngoài thay đổi). Hai image chính thức ghim `tag@sha256`, chạy
   `--network none`, repo gắn chỉ đọc; link tương đối ra ngoài repo (tới `plans/`) báo lỗi. Cả hai công cụ luôn chạy; lệnh thoát khác 0 khi
   một trong hai báo lỗi. Mặc định là mọi `.md` git theo dõi và file mới chưa theo dõi; `DOCS` thu hẹp (đường dẫn tương đối gốc repo).
+  Sau hai công cụ là bước kiểm biến zsh (awk, không mạng): trong khối code rào ` ``` ` hay `~~~`, biến shell đứng ngay trước `:` phải viết
+  `${VAR}:`, vì zsh đọc `:<chữ>` sau `$VAR` là modifier và bỏ mất phần sau mà không báo lỗi. Mẫu bị bắt là ERE
+  `\$[A-Za-z_0-9]+:([^:]|$)` (cả `$1:`; `::` và `${VAR}:` không khớp); lỗi in `<file>:<dòng>` và làm lệnh thoát khác 0. Khối `json` được
+  bỏ qua: đó là dữ liệu, không shell nào đọc, và policy backup của AWS Organizations tự dùng biến `$account`.
 - `make diagrams [NAMES='<tên …>'] [LAYOUT=<engine>] [OUT=<thư mục>] [SUFFIX=<chữ>] [PNG=1]`: sinh mỗi `docs/diagrams/<tên>.d2`
   (trừ `tokens.d2`) thành `<tên>.svg` (theme sáng) và `<tên>-dark.svg` (theme tối) bằng D2 trong container (`D2_IMAGE`,
   ghim `tag@sha256`, `--network none`). `PNG=1` sinh thêm PNG để xem, không commit. Không có `.d2` nào thì in

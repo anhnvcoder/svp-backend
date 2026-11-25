@@ -121,3 +121,8 @@ prd chạy mặc định `15s`: quota 15 s của account prd phải được duy
 ## Thông tin thêm
 
 Phụ lục: [`appendix/0080-amp-rule-interval-stg.md`](appendix/0080-amp-rule-interval-stg.md) (câu bị thay, quota, phép đo, bảng từng luật).
+
+### Chỉnh bởi
+
+- §2, §4, §5, Phương án (30 s mọi env): [0086](0086-amp-rule-interval-prd.md): prd cũng chạy 30 s với overlay
+  `envs/prd/svp-observability.yaml`; quota 15 s của account prd không còn cần.

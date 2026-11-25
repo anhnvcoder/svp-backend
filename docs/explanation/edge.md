@@ -145,12 +145,13 @@ flowchart LR
     b["Trình duyệt, hls.js"] -->|"GET HLS, thumbnail<br/>media.domain"| cf["CloudFront svp-env-media<br/>web ACL svp-env-media"]
     cf -->|"OAC"| s3[("S3 media")]
     kg["Key group svp-env-media<br/>khoá công khai ô a, b"] -.->|"behavior mặc định: kiểm chữ ký<br/>trừ media/*, preview/*"| cf
-    cf -.->|"prd: log chuẩn v2"| log[("Bucket log CloudFront<br/>Log Archive")]
+    cf -.->|"log chuẩn v2"| log[("Bucket log CloudFront<br/>Log Archive")]
 ```
 
-Media giữ origin S3 qua OAC; bucket chỉ cho distribution của chính nó đọc. stg giữ gói CloudFront flat-rate Free: không log chuẩn, header CORS
-là policy managed `Managed-SimpleCORS`. prd trả theo dùng (pay-as-you-go): log chuẩn v2 và response headers policy `svp-prd-media` (CORS chỉ
-origin của web, HSTS, nosniff). Biến `media_flat_rate_free` của `<env>.tfvars` chọn giữa hai cách.
+Media giữ origin S3 qua OAC; bucket chỉ cho distribution của chính nó đọc. Cả hai env trả theo dùng (pay-as-you-go): log chuẩn v2 và
+response headers policy `svp-<env>-media` (CORS chỉ origin của web, HSTS, nosniff). Gói CloudFront flat-rate Free từ chối web ACL của
+media ([ADR-0084](../adr/0084-stg-msk-media-sizing.md) §4); biến `media_flat_rate_free` của `<env>.tfvars` giữ đường gói đó, cả hai env
+đặt `false`.
 
 Distribution có ba behavior, cùng GET, HEAD, `https-only`, nén và response headers policy. Behavior mặc định cần chữ ký: `trusted_key_groups`
 là key group `svp-<env>-media`, gồm khoá công khai của một hay hai ô (`a`, `b`, để xoay). Hai `ordered_cache_behavior` `media/*` và
@@ -205,7 +206,7 @@ bucket. Danh sách trường là tường minh và không có cookie (cookie phi
 
 ## stg và prd
 
-Edge của stg giống prd trừ: media trên gói Free không log chuẩn, zone không DNSSEC và query log, ALB không deletion protection. Nhóm và lý do
+Edge của stg giống prd trừ: zone không DNSSEC và query log, ALB không deletion protection. Nhóm và lý do
 từng khác biệt ở [`environments.md`](environments.md#edge-cloudfront-waf-dns).
 
 ## Kiểm ở đâu

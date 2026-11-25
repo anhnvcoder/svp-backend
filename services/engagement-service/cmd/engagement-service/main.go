@@ -18,7 +18,8 @@
 // the views consumer. A GetStats canceled by its caller can leave a connection dialing; in a pool
 // of its own that never takes a connection a like needs. serve exports
 // telemetry when OTEL_EXPORTER_OTLP_ENDPOINT is set, profiles when PYROSCOPE_SERVER_ADDRESS is,
-// and reports errors when SENTRY_DSN is.
+// and reports errors when SENTRY_DSN is. migrate exports telemetry as serve does, without error
+// reporting.
 package main
 
 import (
@@ -73,7 +74,7 @@ func main() {
 	}
 }
 
-// loggedError is a serve failure that serve has already logged, while the error tracker and the
+// loggedError is a failure that serve or migrate has already logged, while the error tracker and the
 // telemetry providers were still running, so that it reaches both.
 type loggedError struct{ error }
 
@@ -88,7 +89,7 @@ func run(ctx context.Context, logger *slog.Logger, args []string) error {
 	case "serve":
 		return serve(ctx, logger)
 	case "migrate":
-		return migrate(ctx)
+		return migrate(ctx, logger)
 	case "healthcheck":
 		return healthcheck(ctx)
 	}
@@ -226,11 +227,26 @@ func runConsumer(ctx context.Context, logger *slog.Logger, delay time.Duration, 
 	}
 }
 
-func migrate(ctx context.Context) error {
+// migrate applies the migrations under the telemetry providers of serve, so its records reach the
+// Collector as well as stdout. A failure is logged before the providers flush and shut down.
+func migrate(ctx context.Context, logger *slog.Logger) (err error) {
 	databaseURL, err := envcfg.Required("DATABASE_URL")
 	if err != nil {
 		return err
 	}
+	shutdownTelemetry, err := telemetry.Setup(ctx, serviceName)
+	if err != nil {
+		return fmt.Errorf("set up telemetry: %w", err)
+	}
+	defer func() {
+		if err != nil {
+			logger.ErrorContext(ctx, "engagement-service failed", slog.Any("error", err))
+			err = loggedError{err}
+		}
+		if err := shutdownTelemetry(context.WithoutCancel(ctx)); err != nil {
+			logger.WarnContext(ctx, "telemetry shutdown failed", slog.Any("error", err))
+		}
+	}()
 	return dbmigrate.Up(ctx, databaseURL, migrations.FS)
 }
 

@@ -1,7 +1,7 @@
 {{- /* The waypoint of the mesh in svp-mesh: the L7 proxy of the gRPC Services of svp that opt in with label
 istio.io/use-waypoint, where requests are balanced one by one and the L7 AuthorizationPolicies of their charts apply.
 istiod (class istio-waypoint) makes its Deployment, Service and ServiceAccount waypoint from this Gateway and the
-ConfigMap below; no Istio CRD here, so this chart installs before Istio's. */}}
+ConfigMap below; no Istio CRD here, so this chart needs none of Istio's installed first. */}}
 {{- $w := .Values.waypoint }}
 {{- $replicas := $w.replicas | int }}
 apiVersion: gateway.networking.k8s.io/v1
@@ -12,8 +12,8 @@ metadata:
   labels:
     istio.io/waypoint-for: service
   annotations:
-    # Argo CD's health of a Gateway waits for Programmed=True, which only istiod sets, and istiod installs in a later
-    # wave: without this the Application of this chart would never be Healthy and the waves after it would never start.
+    # Argo CD's health of a Gateway waits for Programmed=True, which only istiod sets, and istiod syncs in this chart's
+    # own wave, which Argo CD does not order: without this the Application of this chart would wait on a sibling.
     # The waypoint's health is its Deployment's.
     argocd.argoproj.io/ignore-healthcheck: "true"
 spec:

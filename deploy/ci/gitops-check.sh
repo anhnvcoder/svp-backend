@@ -249,6 +249,24 @@ image_refs() {
   ' "$2"
 }
 
+# running_docs FILE: the rendered FILE without the documents of a Helm test hook (helm.sh/hook of test, test-success or
+# test-failure, alone or in a comma list): `helm test` runs them, Argo CD and the cluster never do.
+running_docs() {
+  awk '
+    function flush() { if (nl && !test) printf "%s", doc; doc = ""; nl = 0; test = 0 }
+    /^---/ { flush(); print; next }
+    {
+      doc = doc $0 "\n"; nl++
+      if (match($0, /^[ \t]*["'\'']?helm\.sh\/hook["'\'']?:[ \t]*/)) {
+        v = substr($0, RLENGTH + 1); gsub(/["'\'' \t]/, "", v)
+        n = split(v, events, ",")
+        for (i = 1; i <= n; i++) if (events[i] ~ /^test(-success|-failure)?$/) test = 1
+      }
+    }
+    END { flush() }
+  ' "$1"
+}
+
 if [ -n "$policy_only" ]; then
   # The rule of step 3 or 4 alone, on rendered files given as they are (the test of the policies' messages).
   if [ "$policy_only" = images-pinned ]; then
@@ -1104,13 +1122,15 @@ render_tree() {
     done
 
     # The images ENV runs on eks: per component the render of the environment's overlay, else of the platform, else
-    # the base's (what Argo CD would install there; a component that does not run on eks has none).
+    # the base's (what Argo CD would install there; a component that does not run on eks has none), without its test
+    # pods: the pin check above reads them, the cluster never pulls them.
     if [ -n "$images_only" ]; then
       while IFS=$sep read -r name _; do
         { [ "$name" = argocd ] || runs_on "$name" eks; } || continue
         for f in "$out/env/$images_env-eks/$name.yaml" "$out/platform/eks/$name.yaml" "$out/base/$name.yaml"; do
           [ -f "$f" ] || continue
-          image_refs "$name" "$f" | cut -f2 >>"$images_out"
+          running_docs "$f" >"$tmp/running.yaml"
+          image_refs "$name" "$tmp/running.yaml" | cut -f2 >>"$images_out"
           break
         done
       done <<<"$list"

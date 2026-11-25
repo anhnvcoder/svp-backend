@@ -18,7 +18,7 @@
 // cloudfront signer, MEDIA_SIGNED_BASE_URL, MEDIA_SIGNING_KEY_ID and MEDIA_SIGNING_KEY, read and
 // checked by mediasign.ReadEnv; the s3 signer presigns through the S3_* store. serve also reads
 // the OTEL_*, PYROSCOPE_SERVER_ADDRESS and SENTRY_* variables; telemetry and error reporting stay
-// off without them.
+// off without them. migrate reads the same variables for telemetry, never SENTRY_*.
 package main
 
 import (
@@ -79,7 +79,7 @@ func main() {
 	}
 }
 
-// loggedError is an error serve has logged already, while the error tracker and the telemetry
+// loggedError is an error serve or migrate has logged already, while the error tracker and the telemetry
 // providers still took records, so main does not log it again.
 type loggedError struct{ error }
 
@@ -94,7 +94,7 @@ func run(ctx context.Context, logger *slog.Logger, args []string) error {
 	case "serve":
 		return serve(ctx, logger)
 	case "migrate":
-		return migrate(ctx)
+		return migrate(ctx, logger)
 	case "healthcheck":
 		return healthcheck(ctx)
 	}
@@ -310,11 +310,26 @@ func checkEndpoint(name, value string) error {
 	return nil
 }
 
-func migrate(ctx context.Context) error {
+// migrate applies the migrations under the telemetry providers of serve, so its records reach the
+// Collector as well as stdout. A failure is logged before the providers flush and shut down.
+func migrate(ctx context.Context, logger *slog.Logger) (err error) {
 	databaseURL, err := envcfg.Required("DATABASE_URL")
 	if err != nil {
 		return err
 	}
+	shutdownTelemetry, err := telemetry.Setup(ctx, serviceName)
+	if err != nil {
+		return fmt.Errorf("set up telemetry: %w", err)
+	}
+	defer func() {
+		if err != nil {
+			logger.ErrorContext(ctx, "video-service failed", slog.Any("error", err))
+			err = loggedError{err}
+		}
+		if err := shutdownTelemetry(context.WithoutCancel(ctx)); err != nil {
+			logger.WarnContext(ctx, "telemetry shutdown failed", slog.Any("error", err))
+		}
+	}()
 	return dbmigrate.Up(ctx, databaseURL, migrations.FS)
 }
 

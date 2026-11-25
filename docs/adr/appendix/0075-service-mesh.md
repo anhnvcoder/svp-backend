@@ -304,6 +304,13 @@ Ngày 2026-11-15. Request, limit là giá trị cấu hình (`base/`, `platforms
   EKS ở buổi stg.
 - Độ trễ mesh: **chưa đo**. Đo ở buổi stg dưới k6, theo định nghĩa ở mục Hệ quả của ADR.
 
+## Xác nhận
+
+Nguyên văn bullet đầu mục "Xác nhận" của ADR trước khi rút gọn: "Kiểm tĩnh: `make helm-check`, `deploy/ci/gitops-check.sh` trên
+`svp-gitops`, `make kyverno-test` (ca `images-pinned` của ConfigMap injector), `gitops-check-test.sh`, `rotate-test.sh`,
+`make chainsaw-lint`, `drills/run-test.sh`, `steps-test.sh`, `verify-collect-test.sh`, `make actionlint`, `make zizmor`, `make docs-check`;
+`svp-infra`: `make test DIRS=aws/modules/eks` (rule 15017)."
+
 ## Nguồn phương án
 
 Đọc ngày 2026-11-15.

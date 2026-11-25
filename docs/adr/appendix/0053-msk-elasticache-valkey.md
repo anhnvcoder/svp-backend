@@ -148,8 +148,8 @@ Valkey [N21]: lệnh không cần xác thực (AUTH, HELLO, RESET) không gỡ �
 `alldbs`; kết nối mới ở db 0 dù user không được vào db 0, để AUTH rồi SELECT; selector có `db=` riêng. ElastiCache [N15]: không đặt mật khẩu trong access
 string; phải có `on` hay `off` (thiếu là `off`); không dùng `reset`; lệnh bị cấm hay đổi tên làm lỗi; selector, `%R~`, `%W~`, `|` cho lệnh con từ 7.0;
 `db=` từ Valkey 9.1; user group engine VALKEY không cần user `default` và tắt nó khi gắn; RBAC chỉ gắn cho cache có TLS in-transit; tối đa 100 user mỗi
-group, 1000 user. Chưa kiểm trên AWS: ElastiCache nhận `client|setinfo`, `resetchannels`, selector chứa `db=` và trả lại chuỗi không viết lại (ADR,
-"Xác nhận" (a)).
+group, 1000 user. Chưa kiểm trên AWS: ElastiCache nhận `client|setinfo`, `resetchannels`, selector chứa `db=`; ElastiCache
+trả `db=` ở cuối user và selector, nên `access_string` ghi sẵn dạng đó (ADR, "Xác nhận" (a)).
 
 ### 11. CA local và cách client tin nó
 
@@ -282,6 +282,13 @@ secret xoá với `recovery_window_in_days = 0`; log group của prd xoá cùng 
 Chưa có buổi nào. Phép kiểm (a)–(h) ở mục "Xác nhận" của ADR; lệnh, output và số đo có ngày ghi ở đây.
 
 Nguyên văn dòng cuối mục "Xác nhận" của ADR trước khi rút gọn: "Kết quả có ngày vào phụ lục; mục này đổi bullet trên thành một dòng kết luận mỗi env."
+
+Nguyên văn bullet đầu mục "Xác nhận" của ADR trước khi rút gọn: "Lúc quyết: năm access string chạy trên image Valkey 9.1.3 đang ghim,
+container không mạng: `ACL LIST` trả nguyên chuỗi, lệnh của client được nhận, lệnh, db, khoá ngoài quyền bị NOPERM (phụ lục §9). Chưa
+kiểm trên AWS; khi hiện thực: `make check` của `svp-infra` và repo này, `make helm-check`."
+
+Buổi stg 2026-11-24: `CreateCluster` từ chối `kafka.t3.small` với `4.1.x.kraft`; stg chạy 2 × `kafka.m7g.large`
+([ADR-0084](../0084-stg-msk-media-sizing.md)), MSK dựng 24m54s. Lỗi nguyên văn và số đo của buổi: phụ lục ADR-0084.
 
 ## Nguồn
 

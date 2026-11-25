@@ -444,6 +444,9 @@ zizmor: ## Security lint of the workflows with the pinned zizmor (online audits 
 MARKDOWNLINT_IMAGE := davidanson/markdownlint-cli2:v0.24.0@sha256:70ead7c0352d22d04bbe612cd96b54ec591538d8f4626cafe391bb2ecf3639ca
 # renovate: datasource=docker depName=lycheeverse/lychee
 LYCHEE_IMAGE := lycheeverse/lychee:0.24.2@sha256:e2d19e57cf6ab037026f20b8e449a1f30d9d7f81eef4194763aab2eab20bd28d
+# zsh reads :<letter> after $VAR as a history modifier and drops it without an error, so a command copied from a code
+# block must write ${VAR}: instead. The awk pass flags $VAR: (and $1:, not ::) inside fenced blocks, as file:line.
+# json blocks are data, no shell reads them: AWS Organizations backup policies spell their own variable $account.
 # set -f keeps the globs of DOCS whole: the tools expand them (with **), sh does not and would drop the files at the top.
 DOCS ?=
 docs-check: ## markdownlint-cli2 + lychee --offline on the Markdown (DOCS='<files or globs>' narrows; pinned images, no network)
@@ -454,6 +457,17 @@ docs-check: ## markdownlint-cli2 + lychee --offline on the Markdown (DOCS='<file
 		$(MARKDOWNLINT_IMAGE) "$$@" || rc=1; \
 	env -u DOCKER_DEFAULT_PLATFORM docker run --rm --network none -v "$(CURDIR):/repo:ro" --workdir /repo \
 		$(LYCHEE_IMAGE) --offline --include-fragments "$$@" || rc=1; \
+	echo "zsh variable check: no \$$VAR: in fenced code blocks"; \
+	files=$$(git ls-files --cached --others --exclude-standard -- "$$@"); set --; \
+	for f in $$files; do [ -f "$$f" ] && set -- "$$@" "$$f"; done; \
+	[ $$# -eq 0 ] || awk 'FNR == 1 { fence = "" } \
+	{ if (match($$0, /^[ \t]*(```+|~~~+)/)) { n = RLENGTH; m = substr($$0, 1, n); sub(/^[ \t]*/, "", m); \
+	    if (fence == "") { fence = m; data = substr($$0, n + 1) ~ /^[ \t]*json/; next } \
+	    if (substr(m, 1, 1) == substr(fence, 1, 1) && length(m) >= length(fence) \
+	        && substr($$0, n + 1) ~ /^[ \t]*$$/) { fence = ""; next } } \
+	  if (fence != "" && !data && $$0 ~ /\$$[A-Za-z_0-9]+:([^:]|$$)/) { \
+	    print FILENAME ":" FNR ": write $${VAR}: instead of $$VAR: (zsh modifier): " $$0; bad = 1 } } \
+	END { exit bad }' "$$@" || rc=1; \
 	exit $$rc
 
 # docs/diagrams/<name>.d2 is the source; <name>.svg (light) and <name>-dark.svg (dark) are generated and the page picks

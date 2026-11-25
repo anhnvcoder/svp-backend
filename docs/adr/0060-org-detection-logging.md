@@ -184,8 +184,7 @@ Log, flow log; prd thêm data event). Giữ tối thiểu mà vẫn đúng chu�
 
 ## Nguồn
 
-Đọc 2026-11-12; đủ [N1]–[N29] ở phụ lục. [N4] <https://docs.aws.amazon.com/guardduty/latest/ug/guardduty_exportfindings.html>,
-[N5] <https://docs.aws.amazon.com/securityhub/latest/userguide/central-configuration-intro.html>.
+Đọc 2026-11-12; đủ [N1]–[N29] ở phụ lục. [N4] <https://docs.aws.amazon.com/guardduty/latest/ug/guardduty_exportfindings.html>.
 
 ## Thông tin thêm
 
@@ -198,3 +197,4 @@ Phụ lục: [`appendix/0060-org-detection-logging.md`](appendix/0060-org-detect
 - §3, §4, §10, §12: [0071](0071-paid-features.md): Security Hub CSPM (configuration policy `svp-security-off`) và Config của từng account theo cờ `security_hub`, `config_recording` của `aws/paid-features.json` (stg tắt, account khác bật; `svp-security` không tắt được Security Hub); rule `svp-security-guardduty-findings` ở hai region của `svp-security` gửi email finding GuardDuty mức ≥ 7 của account có `security_hub` = `off`; chi phí liên tục bớt ~$2,1 mỗi tháng (stg).
 - §3, §4, §10, §12: [0078](0078-paid-features-lean-defaults.md): management, `svp-log-archive`, prd cũng `off`; giữa các
   buổi chỉ `svp-security` có Security Hub, Config; chi phí liên tục bớt ~$6,3 mỗi tháng.
+- §2, §12, Hệ quả: [0087](0087-kms-key-consolidation.md): volume stg, prd dùng `aws/ebs` (GuardDuty quét tuỳ region); bỏ CMK EBS, bớt $2.

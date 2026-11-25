@@ -180,8 +180,7 @@ cluster** khớp dạng host của tài liệu ECR [N27]. ADR cũ chỉnh: 0034 
 
 ## Nguồn
 
-Đọc 2026-11-13; tên đủ, trích dẫn và mọi nguồn khác ở phụ lục.
-
+- Đọc 2026-11-13; tên đủ, trích dẫn và mọi nguồn khác ở phụ lục.
 - ECR: [N1] <https://aws.amazon.com/about-aws/whats-new/2024/06/amazon-ecr-oci-image-distribution-version-1-1>, [N2] <https://docs.aws.amazon.com/AmazonECR/latest/APIReference/API_ListImageReferrers.html>,
   [N3] <https://docs.aws.amazon.com/AmazonECR/latest/userguide/LifecyclePolicies.html>, [N5] <https://docs.aws.amazon.com/AmazonECR/latest/userguide/encryption-at-rest.html>,
   [N6] <https://docs.aws.amazon.com/AmazonECR/latest/userguide/pull-through-cache.html>, [N27] <https://docs.aws.amazon.com/AmazonECR/latest/userguide/Registries.html>,
@@ -198,3 +197,4 @@ Phụ lục: [`appendix/0062-ecr-registry-ci-oidc.md`](appendix/0062-ecr-registr
 - §5: [0076](0076-terraform-plan-infracost-pr.md): `svp-infra` cũng có role OIDC: `plan.yml` nhận `svp-ci-terraform-plan` (`ReadOnlyAccess`, Deny đọc dữ liệu workload và ghi state, phiên 1 giờ) qua OIDC provider của module `registry` (output `github_oidc_provider_arn`), `sub` `...:environment:terraform-plan`; câu "`svp-infra` vẫn không" không còn đúng.
 - §10, §11: [0078](0078-paid-features-lean-defaults.md): prd cũng `off` (registry `BASIC`, một rule `SCAN_ON_PUSH`);
   Inspector ECR chỉ chạy trong buổi prd; tháng không buổi không còn Inspector quét lại.
+- §2, §6, §11: [0087](0087-kms-key-consolidation.md): repo phát hành, template repo cache mã hoá `AES256`; bỏ quyền KMS (phụ lục).

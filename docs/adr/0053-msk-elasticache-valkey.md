@@ -170,8 +170,7 @@ không TLS, không user.
 
 ## Xác nhận
 
-- Lúc quyết: năm access string chạy trên image Valkey 9.1.3 đang ghim, container không mạng: `ACL LIST` trả nguyên chuỗi, lệnh của client được nhận,
-  lệnh, db, khoá ngoài quyền bị NOPERM (phụ lục §9). Chưa kiểm trên AWS; khi hiện thực: `make check` của `svp-infra` và repo này, `make helm-check`.
+- Lúc quyết và khi hiện thực: [phụ lục](appendix/0053-msk-elasticache-valkey.md#kiểm-chứng).
 - Buổi stg: (a) apply nhận `kafka.t3.small` với `4.1.x.kraft` và SCRAM, Valkey 9.1 với năm access string; MSK `ACTIVE`, ghi phút dựng, gỡ; `plan` lần hai `No changes`;
   (b) service sản xuất, tiêu thụ qua SCRAM-SHA-512 TLS, smoke xanh; (c) `svp-kafka` với `SVP_AS_USER` một service bị từ chối trên topic mới không ACL;
   (d) `svp-valkey` với `SVP_AS_USER=svp-feed-service` không `SELECT 10`, với `svp-gateway` không đọc `svp:feed:*`; (e) lag hiện trên dashboard; (f) sweep sạch.
@@ -198,3 +197,4 @@ Phụ lục: [`appendix/0053-msk-elasticache-valkey.md`](appendix/0053-msk-elast
 
 - §2, §7: [0054](0054-data-subnet-tier.md): broker MSK và ElastiCache ở subnet database của VPC (cùng RDS, route table không `0.0.0.0/0`) thay private subnet của node.
 - §5, §13: [0072](0072-pod-operations.md): thêm user `svp-dlq-replay` (SCRAM; MSK secret `AmazonMSK_*` của module `msk`): `Read` bốn topic `*.dlq`, `Write` bốn topic gốc, không group, không quyền cluster (§5); phát lại record DLQ đi qua release `dlq-replay` (`make dlq-replay`, `kubectl exec deploy/dlq-replay`), không qua `svp-kafka` (§13).
+- §2, §16, Hệ quả, Xác nhận (a): [0084](0084-stg-msk-media-sizing.md): stg 2 × `kafka.m7g.large`; H_k của stg ~$0,538 mỗi giờ.

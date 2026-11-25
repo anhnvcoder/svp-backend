@@ -522,6 +522,10 @@ Runbook buổi kiểm:
 - `dig +dnssec` có cờ `ad`; `dig CAA`.
 - Plan lần hai `No changes`; sau destroy `sweep.sh <env>` sạch.
 
+Nguyên văn mục "Xác nhận" của ADR trước khi rút gọn: "Lúc quyết chưa hiện thực. Kiểm tĩnh: `make check` của `svp-infra` (test mocked
+`edge`, `media`, `waf`, `network`, `account-baseline`, `log-archive`), `make check`, `make helm-check` của repo này, `make docs-check`.
+Phép kiểm edge: [phụ lục](0061-edge-cloudfront-waf-acm.md#phép-kiểm-edge)."
+
 ## Bảng control FSBP
 
 Control của Security Hub CSPM áp lên tài nguyên mới. "FSBP" là có trong chuẩn AWS Foundational Security Best Practices v1.0.0 [N22].

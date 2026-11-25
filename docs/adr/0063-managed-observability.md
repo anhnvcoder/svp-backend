@@ -175,8 +175,7 @@ agent `aps:RemoteWrite`; ACK bốn hành động rule groups namespace, bốn al
 
 ## Nguồn
 
-Đọc 2026-11-13; tên đủ, trích dẫn và mọi nguồn khác ở phụ lục.
-
+- Đọc 2026-11-13; tên đủ, trích dẫn và mọi nguồn khác ở phụ lục.
 - Hướng dẫn, AMP: [N1] <https://docs.aws.amazon.com/prescriptive-guidance/latest/amazon-eks-observability-best-practices/introduction.html>,
   [N2] <https://docs.aws.amazon.com/prometheus/latest/userguide/AMP-workspace-configuration.html>, [N3] <https://docs.aws.amazon.com/prometheus/latest/userguide/encryption-at-rest-Amazon-Service-Prometheus.html>,
   [N4] <https://docs.aws.amazon.com/prometheus/latest/userguide/AMP-ingest-dedupe.html>, [N5] <https://docs.aws.amazon.com/prometheus/latest/userguide/AMP-alertmanager-receiver.html>,
@@ -198,3 +197,4 @@ Phụ lục: [`appendix/0063-managed-observability.md`](appendix/0063-managed-ob
 - §4, §12: [0078](0078-paid-features-lean-defaults.md): prd cũng `session`: không AMG nào giữa các buổi, tháng không
   buổi bớt thêm $9; thêm `off` không có AMG (`grafanaUrl` rỗng), mặc định của stg, prd khi hiện thực.
 - §5, §10: [0080](0080-amp-rule-interval-stg.md): luật trên AMP của stg mỗi 30 s, prd 15 s; chu kỳ là value `rules.amp.interval`.
+- §1, §2, §11, §12: [0087](0087-kms-key-consolidation.md): AMP, log group `otel` dùng key AWS sở hữu; Pod Identity bỏ `kms:` (phụ lục).

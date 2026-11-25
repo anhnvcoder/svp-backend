@@ -163,9 +163,7 @@ chung, không cờ), 0056 (`startupTaints`, `nodeAffinity` thêm vào NodePool v
 
 ## Xác nhận
 
-- Kiểm tĩnh: `make helm-check`, `deploy/ci/gitops-check.sh` trên `svp-gitops`, `make kyverno-test` (ca `images-pinned` của ConfigMap
-  injector), `gitops-check-test.sh`, `rotate-test.sh`, `make chainsaw-lint`, `drills/run-test.sh`, `steps-test.sh`, `verify-collect-test.sh`,
-  `make actionlint`, `make zizmor`, `make docs-check`; `svp-infra`: `make test DIRS=aws/modules/eks` (rule 15017).
+- Kiểm tĩnh khi hiện thực: [phụ lục](appendix/0075-service-mesh.md#xác-nhận).
 - Runner: `drill-k8s-mesh` ở `dev-k3d`, `gitops` chưa chạy; RAM (`RESULT mesh-memory`) chưa đo, đo ở lượt `dev-k3d` đầu tiên, số vào phụ lục.
 - Buổi stg: Độ trễ mesh, tải chia đều giữa pod, canary gRPC theo request, probe qua network policy của VPC CNI, RAM trên node; rồi prd.
 
@@ -192,9 +190,10 @@ chung, không cờ), 0056 (`startupTaints`, `nodeAffinity` thêm vào NodePool v
 
 Đọc 2026-11-15; sự thật [S1]–[S35], phương án [S36]–[S43], tên đủ và trích dẫn ở [phụ lục](appendix/0075-service-mesh.md#nguồn-phương-án).
 
-- [S13] <https://istio.io/latest/docs/ambient/usage/waypoint/>, [S36] <https://istio.io/latest/docs/overview/dataplane-modes/>,
-  [S37] <https://linkerd.io/releases/>, [S43] <https://github.com/grpc/grpc/blob/master/doc/load-balancing.md>
-
 ## Thông tin thêm
 
 Phụ lục: [`appendix/0075-service-mesh.md`](appendix/0075-service-mesh.md) (sự thật đã kiểm ở Istio 1.32.0, phương án, số đo, nguồn).
+
+### Chỉnh bởi
+
+- §1, §3: [0083](0083-istio-wave-eks.md): `istio-base`, `istiod`, `istio-cni`, `ztunnel` ở wave 1, cùng `svp-cluster`.

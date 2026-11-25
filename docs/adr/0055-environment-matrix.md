@@ -139,3 +139,9 @@ Phụ lục: [`appendix/0055-environment-matrix.md`](appendix/0055-environment-m
   rẻ của khối cờ như stg; prd về giá trị production chỉ trong buổi prd duy nhất.
 - §1, §4: [0080](0080-amp-rule-interval-stg.md): nhóm giảm có điều kiện nhận cả khác biệt tạm vì quota của account chưa duyệt, có
   điều kiện kết thúc: chu kỳ luật trên AMP stg 30 s, prd 15 s; mất: cảnh báo stg chậm hơn, đợt ngắn có thể lọt; kiểm bù ở buổi prd.
+- §2, §3: [0084](0084-stg-msk-media-sizing.md): loại broker MSK của stg bằng prd (`kafka.m7g.large`: MSK từ chối T3 cho KRaft);
+  media của stg pay-as-you-go như prd: gói Free và thiếu access log của media ra khỏi nhóm được giảm.
+- §2: [0087](0087-kms-key-consolidation.md): nhóm Mã hoá: EBS, ECR, workspace AMP, log group ứng dụng dùng key của AWS ở cả
+  hai env (EBS `aws/ebs`, ECR `AES256`, AMP và CloudWatch Logs key AWS sở hữu); CMK giữ cho Secret EKS, RDS, MSK, SNS của
+  alarm, state, vault backup.
+- §1, §4: [0086](0086-amp-rule-interval-prd.md): prd cũng 30 s như stg; chu kỳ luật trên AMP là nhóm phải giống, không còn khác biệt tạm.

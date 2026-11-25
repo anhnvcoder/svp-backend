@@ -274,7 +274,7 @@ COPY_ROLE=svp-backup-restore-copy
 D=$(mktemp -d)
 in_backup() (
   read -r AK SK ST < <(AWS_PROFILE=anhnv-sso aws --no-cli-pager sts assume-role \
-    --role-arn "arn:aws:iam::$SVP_AWS_BACKUP_ACCOUNT_ID:role/OrganizationAccountAccessRole" --role-session-name svp-restore-copy \
+    --role-arn "arn:aws:iam::${SVP_AWS_BACKUP_ACCOUNT_ID}:role/OrganizationAccountAccessRole" --role-session-name svp-restore-copy \
     --query 'Credentials.[AccessKeyId,SecretAccessKey,SessionToken]' --output text --region ap-southeast-1)
   export AWS_ACCESS_KEY_ID=$AK AWS_SECRET_ACCESS_KEY=$SK AWS_SESSION_TOKEN=$ST
   unset AWS_PROFILE
@@ -293,7 +293,7 @@ RDS phủ cả bản copy S3. Thứ ba là role `svp-backup-restore-copy` cho co
 `backup.amazonaws.com` của chính account đó, gắn hai managed policy backup của role `svp-<env>-backup` (ADR-0067 §7).
 
 ```sh
-jq -n --arg p "arn:aws:iam::$SVP_AWS_BACKUP_ACCOUNT_ID:root" '{Version: "2012-10-17", Statement: [{Sid: "CopyFromBackupAccount", Effect: "Allow", Principal: {AWS: $p}, Action: "backup:CopyIntoBackupVault", Resource: "*"}]}' >"$D/vault-policy.json"
+jq -n --arg p "arn:aws:iam::${SVP_AWS_BACKUP_ACCOUNT_ID}:root" '{Version: "2012-10-17", Statement: [{Sid: "CopyFromBackupAccount", Effect: "Allow", Principal: {AWS: $p}, Action: "backup:CopyIntoBackupVault", Resource: "*"}]}' >"$D/vault-policy.json"
 aws/scripts/check-account.sh "$ENV" &&
   AWS_PROFILE=anhnv-$ENV aws --no-cli-pager backup put-backup-vault-access-policy --backup-vault-name "$N" \
     --policy "file://$D/vault-policy.json" --region ap-southeast-1
@@ -301,7 +301,7 @@ KEYID=$(in_backup aws --no-cli-pager kms describe-key --key-id alias/svp-backup-
   --region ap-southeast-1)
 in_backup aws --no-cli-pager kms get-key-policy --key-id "$KEYID" --policy-name default --query Policy --output text \
   --region ap-southeast-1 >"$D/key-policy.json"
-jq --arg p "arn:aws:iam::$ACCOUNT:root" '.Statement += [{Sid: "EnvAccountUseForRestoreCopy", Effect: "Allow", Principal: {AWS: $p}, Action: ["kms:Decrypt", "kms:DescribeKey", "kms:GenerateDataKey"], Resource: "*"}, {Sid: "EnvAccountGrantForRestoreCopy", Effect: "Allow", Principal: {AWS: $p}, Action: "kms:CreateGrant", Resource: "*", Condition: {Bool: {"kms:GrantIsForAWSResource": "true"}}}]' "$D/key-policy.json" >"$D/key-policy-restore.json"
+jq --arg p "arn:aws:iam::${ACCOUNT}:root" '.Statement += [{Sid: "EnvAccountUseForRestoreCopy", Effect: "Allow", Principal: {AWS: $p}, Action: ["kms:Decrypt", "kms:DescribeKey", "kms:GenerateDataKey"], Resource: "*"}, {Sid: "EnvAccountGrantForRestoreCopy", Effect: "Allow", Principal: {AWS: $p}, Action: "kms:CreateGrant", Resource: "*", Condition: {Bool: {"kms:GrantIsForAWSResource": "true"}}}]' "$D/key-policy.json" >"$D/key-policy-restore.json"
 aws/scripts/check-account.sh mgmt &&
   in_backup aws --no-cli-pager kms put-key-policy --key-id "$KEYID" --policy-name default \
     --policy "file://$D/key-policy-restore.json" --region ap-southeast-1
@@ -324,8 +324,8 @@ hay `S3`), mới nhất trước thời điểm sự cố. Bản copy về vault
 RP='<RecoveryPointArn in svp-$ENV-copy>'
 aws/scripts/check-account.sh mgmt &&
   JOB=$(in_backup aws --no-cli-pager backup start-copy-job --recovery-point-arn "$RP" --source-backup-vault-name "$N-copy" \
-    --destination-backup-vault-arn "arn:aws:backup:ap-southeast-1:$ACCOUNT:backup-vault:$N" \
-    --iam-role-arn "arn:aws:iam::$SVP_AWS_BACKUP_ACCOUNT_ID:role/$COPY_ROLE" --query CopyJobId --output text --region ap-southeast-1)
+    --destination-backup-vault-arn "arn:aws:backup:ap-southeast-1:${ACCOUNT}:backup-vault:$N" \
+    --iam-role-arn "arn:aws:iam::${SVP_AWS_BACKUP_ACCOUNT_ID}:role/$COPY_ROLE" --query CopyJobId --output text --region ap-southeast-1)
 until S=$(AWS_PROFILE=anhnv-backup-ro aws --no-cli-pager backup describe-copy-job --copy-job-id "$JOB" \
   --query CopyJob.State --output text --region ap-southeast-1) && [ "$S" != CREATED ] && [ "$S" != RUNNING ]; do sleep 60; done; echo "$S"
 AWS_PROFILE=anhnv-backup-ro aws --no-cli-pager backup describe-copy-job --copy-job-id "$JOB" \

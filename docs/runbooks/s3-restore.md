@@ -110,7 +110,7 @@ RP='<RecoveryPointArn from step 3>'
 META=$(jq -nc --arg b "$B" --arg k "s3://$B/$K" '{DestinationBucketName: $b, ItemsToRestore: ([$k] | tojson), EncryptionType: "original", RestoreACLs: "false"}')
 aws/scripts/check-account.sh "$ENV" &&
   JOB=$(AWS_PROFILE=anhnv-$ENV aws --no-cli-pager backup start-restore-job --recovery-point-arn "$RP" \
-    --iam-role-arn "arn:aws:iam::$ACCOUNT:role/$N-backup" --resource-type S3 --metadata "$META" --query RestoreJobId --output text \
+    --iam-role-arn "arn:aws:iam::${ACCOUNT}:role/$N-backup" --resource-type S3 --metadata "$META" --query RestoreJobId --output text \
     --region ap-southeast-1)
 until S=$(AWS_PROFILE=anhnv-$ENV aws --no-cli-pager backup describe-restore-job --restore-job-id "$JOB" --query Status --output text \
   --region ap-southeast-1) && [ "$S" != PENDING ] && [ "$S" != RUNNING ]; do sleep 30; done; echo "$S"

@@ -231,6 +231,11 @@ Key policy:
 Rotation bật, chờ xoá 30 ngày, alias `alias/svp-ebs`, `ebs_kms_key_arn` của module là ARN key này; đổi key hay xoá bị `ProtectEbsKey`,
 `ProtectEbsAlias` chặn trừ `OrganizationAccountAccessRole`.
 
+### Chỉnh bởi
+
+- [ADR-0087](../0087-kms-key-consolidation.md): `ebs_kms_key_arn` của stg, prd là `null`: EBS dùng `aws/ebs`; key và key policy trên giữ
+  tới khi không volume, snapshot nào dùng, `ProtectEbsKey`, `ProtectEbsAlias` vẫn bảo vệ nó tới đó.
+
 ## §10. NACL
 
 Rule Config `nacl-no-unrestricted-ssh-rdp` của EC2.21 NON_COMPLIANT khi entry inbound allow nguồn CIDR cho TCP hay UDP cổng 22, 3389 (mô

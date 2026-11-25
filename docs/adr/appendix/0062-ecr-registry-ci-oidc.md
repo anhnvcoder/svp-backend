@@ -64,6 +64,11 @@ automatically expire or archive those artifacts within 24 hours of the deletion 
 manifest list, it cannot be expired or archived without the manifest list being deleted or archived first". GC theo tập đang dùng sau này chỉ cần
 xoá index; referrer và manifest con đi theo.
 
+### Chỉnh bởi
+
+- [ADR-0087](../0087-kms-key-consolidation.md): repo phát hành mã hoá `AES256` thay `KMS` với key `alias/svp-<env>-ecr`; người tạo repo
+  không cần quyền KMS.
+
 ## §3. Sao chép phát hành
 
 ### OCI 1.1 ở ECR và GHCR
@@ -275,6 +280,11 @@ this will hide account IDs from output anyway" [N14]). Job cần `id-token: writ
 repository storing the cached images doesn't already exist") trên `arn:aws:ecr:ap-southeast-1:<account>:repository/<tiền tố>/*` [N6], thêm vào
 role của MNG `system` và node Karpenter; kéo dùng `AmazonEC2ContainerRegistryReadOnly` có sẵn (`aws/modules/eks/README.md`).
 
+#### Chỉnh bởi
+
+- [ADR-0087](../0087-kms-key-consolidation.md): template mã hoá `AES256`; role `svp-<env>-ecr-template` giữ, chỉ `ecr:CreateRepository`,
+  `ecr:TagResource`; role node không còn `kms:Decrypt` qua ECR.
+
 ## §7. Làm nóng cache
 
 - Roadmap ECR #2837 [N9] (mở 2026-07-18, nhãn "Proposed"): "Allow a pull-through cache rule to populate the cache when an image is referenced by
@@ -412,6 +422,10 @@ Khoản lớn nhất về lâu dài là lưu trữ bản phát hành stg; GC the
 Inspector tính mỗi image nền tảng nó quét (giả định: kiến trúc khác amd64, arm64 không được quét nên không tính). Số digest mới mỗi buổi phụ thuộc
 nhịp Renovate giữa hai buổi; phí truyền qua NAT hay endpoint interface của ECR thuộc ADR về endpoint interface (0064).
 
+#### Chỉnh bởi
+
+- [ADR-0087](../0087-kms-key-consolidation.md): dòng hai key KMS `alias/svp-<env>-ecr` ($2) về 0 khi PR gỡ key cũ áp xong.
+
 ## §12. Khác biệt stg/prd và ADR cũ
 
 | Thành phần | stg | prd | Nhóm ([0055](../0055-environment-matrix.md)) | Lý do |
@@ -445,6 +459,11 @@ phép, environment `ecr-rescan`, secret repo); 0055 §2, §3.
 | KMS.4 | Bật xoay key | không | Đạt | Xoay hằng năm |
 | KMS.5 | Key không công khai | có | Đạt | Key policy chỉ account |
 | IAM.21 | Policy không có action `<dịch vụ>:*` | có | Đạt | §5, §6, §9 liệt kê từng action |
+
+### Chỉnh bởi
+
+- [ADR-0087](../0087-kms-key-consolidation.md): ECR.5 không còn đạt (repo `AES256`; control ngoài FSBP, chấp nhận); KMS.3, .4, .5 không
+  còn key nào của registry.
 
 ## Bảng luồng SCP, RCP
 

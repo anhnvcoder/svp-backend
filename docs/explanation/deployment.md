@@ -165,21 +165,25 @@ Vì sao chọn Istio ambient, phương án đã loại và sự thật đã ki�
 [ADR-0075](../adr/0075-service-mesh.md) và phụ lục của nó. Đường một request qua mesh:
 [`architecture.md`](../architecture.md#65-request-grpc-qua-mesh).
 
-Mesh là bốn component của `argocd/apps/components.json` (`svp-gitops`), cùng một version Istio, cùng namespace `istio-system`.
-Đường dev (`make k8s-up`, helmfile) và đường GitOps cài cùng danh sách, nên không có cờ bật tắt mesh trong chart. Thứ tự theo wave:
+Mesh là bốn component của `argocd/apps/components.json` (`svp-gitops`), cùng một version Istio, cùng namespace `istio-system`. Đường dev
+(`make k8s-up`, helmfile) và đường GitOps cài cùng danh sách, nên không có cờ bật tắt mesh trong chart. Thứ tự theo wave:
 
 | Wave | Component | Việc |
 | --- | --- | --- |
 | 1 | `svp-cluster` (có sẵn) | Namespace `istio-system`, `svp-mesh`, nhãn ambient của `svp`, Gateway `waypoint` |
-| 2 | `istio-base` | CRD của Istio |
-| 3 | `istiod` | Control plane: cấp chứng chỉ, đẩy cấu hình xuống ztunnel và waypoint |
-| 4 | `istio-cni`, `ztunnel` | DaemonSet: luật chuyển hướng lưu lượng của pod, mã hoá L4 |
+| 1 | `istio-base` | CRD của Istio |
+| 1 | `istiod` | Control plane: cấp chứng chỉ, đẩy cấu hình xuống ztunnel và waypoint, gỡ startup taint của node Karpenter |
+| 1 | `istio-cni`, `ztunnel` | DaemonSet: luật chuyển hướng lưu lượng của pod, mã hoá L4 |
 | 7 | release ứng dụng | `PeerAuthentication`, `AuthorizationPolicy`, nhãn waypoint của Service gRPC |
 
-Wave của `svp-cluster` đứng trước Istio nên chart đó không có object nào của CRD Istio: Gateway `waypoint` là Gateway API, còn
-istiod mới tạo Deployment của nó. Gateway mang annotation `argocd.argoproj.io/ignore-healthcheck`: health của Gateway ở Argo CD
-chờ `Programmed=True` mà chỉ istiod đặt (wave sau), nên thiếu annotation thì `svp-cluster` không bao giờ Healthy và các wave sau
-không bắt đầu. Sức khoẻ waypoint đọc ở Deployment của nó và ở drill `drill-k8s-mesh`.
+Istio cùng wave 1 với `svp-cluster`, vì trên EKS pod Envoy của Gateway `svp` chỉ lên node Karpenter, node đó chỉ mất startup taint khi
+istiod, `istio-cni` và `ztunnel` chạy; Istio ở wave sau thì `svp-cluster` không bao giờ Healthy và vòng chờ không hết. Lý do và phương án
+đã loại: [ADR-0083](../adr/0083-istio-wave-eks.md); luật `waves.rego` của `make helm-check` bắt thứ tự sai trở lại
+([`ci.md`](../reference/ci.md)). Trong một wave Argo CD không xếp thứ tự, nên chart `svp-cluster` không có object nào của CRD Istio:
+Gateway `waypoint` là Gateway API, còn istiod mới tạo Deployment của nó. Gateway mang annotation `argocd.argoproj.io/ignore-healthcheck`:
+health của Gateway ở Argo CD chờ `Programmed=True` mà chỉ istiod đặt, nên thiếu annotation thì `svp-cluster` phải chờ một component cùng
+wave mà nó không xếp thứ tự. Sức khoẻ waypoint đọc ở Deployment của nó và ở drill `drill-k8s-mesh`. Đường helmfile giữ thứ tự bằng `needs`:
+bốn release Istio cần `svp-cluster`, để namespace `istio-system` (nhãn `privileged`) có trước.
 
 - **`istio-system` là namespace nền tảng duy nhất ngoài `kube-system` không chạy `restricted`.** Pod `ztunnel` và `istio-cni` cần
   `NET_ADMIN`, chạy root và gắn `hostPath` của node để đặt luật mạng cho pod khác, nên chỉ Pod Security `privileged` nhận chúng.
@@ -498,6 +502,14 @@ chart cấu hình như vậy.
   container restart lần thứ ba, khoảng 40 giây sau khi khởi động (đã đo); ba lần restart chừa chỗ cho Postgres ngừng ngắn, và migration
   còn lỗi sau đó là lỗi thật làm release lỗi. Mọi kết nối của Job mang `lock_timeout` của runner ([ADR-0068](../adr/0068-zero-downtime-migrations.md) §4),
   nên một DDL chờ khoá quá hạn lỗi `55P03` thay vì xếp hàng truy vấn của pod cũ sau nó; xử lý ở [`schema-change.md`](../runbooks/schema-change.md).
+  Log của Job sống lâu hơn pod của nó: lệnh `migrate` dựng telemetry như `serve`, ghi stdout và gửi qua OTLP tới Collector (resource
+  `service.name` của service, `k8s.pod.name` của pod Job), flush trước khi thoát, cả khi migration lỗi. Job nhận các biến `OTEL_*` của
+  `env` (biến khác của `env` chỉ dành cho `serve`) cùng `OTEL_RESOURCE_ATTRIBUTES` từ tên pod như Deployment, và policy egress của hook
+  mở tới Collector (`peers.collector`, cổng 4317) khi `egressTo` của release có nó. Collector không trả lời thì migration vẫn chạy:
+  shutdown telemetry dừng sau tối đa 5 giây, Job thoát đúng mã. Đọc log sau khi pod đã mất: k3d ở Loki qua Grafana
+  (`make k8s-ui-grafana`, Explore, `{service_name="video-service"} |= "migration"`); EKS ở CloudWatch Logs, log group `/svp/<env>/otel`,
+  Logs Insights lọc `migration` và tên service ([`observability.md`](observability.md#eks)). Compose không đặt biến OTEL cho
+  `*-migrate`: log chỉ ở `docker compose logs`.
 - **HPA, PDB, KEDA.** `hpa`: HorizontalPodAutoscaler theo CPU, đọc từ metrics-server mà k3s kèm. Utilization là phần trăm CPU request
   của container, mà mọi release đặt, nên gateway xin 100m scale ra khi pod trung bình 70m. `pdb`: PodDisruptionBudget, chỉ ở nơi luôn có ít
   nhất hai replica chạy: HPA có minimum từ hai trở lên, hay số replica cố định từ hai trở lên không có autoscaler (web; ở overlay prd
