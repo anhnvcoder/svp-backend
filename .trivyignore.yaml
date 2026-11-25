@@ -7,7 +7,31 @@
 # links harfbuzz, which links libglib-2.0, so apk cannot install ffmpeg without glib.
 vulnerabilities:
   - id: CVE-2026-58016
-    statement: No fixed glib exists in Alpine 3.24 or edge (the upstream fix is in 2.89.0). The flaw is in g_dbus_node_info_new_for_xml() of libgio, the parser of D-Bus introspection XML. The media-worker image carries glib only because harfbuzz links libglib-2.0, and nothing ffmpeg or ffprobe loads links libgio; the worker runs only those two, and its container has no D-Bus.
-    expired_at: 2026-11-29
+    statement: No fixed glib exists in Alpine 3.24 (2.88.4-r0, no secfix); the upstream fix is in 2.89.0, which only edge carries, and the image follows the 3.24 branch. The flaw is in g_dbus_node_info_new_for_xml() of libgio, the parser of D-Bus introspection XML. The media-worker image carries glib only because harfbuzz links libglib-2.0, and nothing ffmpeg or ffprobe loads links libgio; the worker runs only those two, and its container has no D-Bus. Checked 2026-11-25.
+    expired_at: 2026-12-24
     purls:
-      - pkg:apk/alpine/glib@2.88.1-r1
+      - pkg:apk/alpine/glib@2.88.4-r0
+  - id: CVE-2026-135736
+    statement: Heap out-of-bounds read and write in libavfilter's deband filter (vf_deband.c) when a runtime command turns coupling on (sent by the sendcmd or zmq filter, or from ffmpeg's interactive stdin). Fixed upstream in 9.1 (commit 24ad423d); Alpine 3.24 has 8.1.3-r0 with no secfix, only edge has 9.1. The worker cannot reach it, since it builds every ffmpeg filter graph itself from split and scale only, runs ffmpeg with -nostdin (no interactive command reaches a filter), and nothing in an uploaded file adds a filter or sends a command (TestArgsTakeNoRuntimeCommands in services/media-worker/internal/transcode pins those arguments); ffprobe runs no filter, and its format whitelist keeps lavfi out. Every package built from the ffmpeg source is listed, since the scanners report the CVE on each. Checked 2026-11-25.
+    expired_at: 2026-12-24
+    purls:
+      - pkg:apk/alpine/ffmpeg@8.1.3-r0
+      - pkg:apk/alpine/ffmpeg-libavcodec@8.1.3-r0
+      - pkg:apk/alpine/ffmpeg-libavdevice@8.1.3-r0
+      - pkg:apk/alpine/ffmpeg-libavfilter@8.1.3-r0
+      - pkg:apk/alpine/ffmpeg-libavformat@8.1.3-r0
+      - pkg:apk/alpine/ffmpeg-libavutil@8.1.3-r0
+      - pkg:apk/alpine/ffmpeg-libswresample@8.1.3-r0
+      - pkg:apk/alpine/ffmpeg-libswscale@8.1.3-r0
+  - id: CVE-2026-135743
+    statement: Heap out-of-bounds read and write in libavfilter's dynaudnorm audio filter (af_dynaudnorm.c) when a runtime command changes gausssize (sent by the asendcmd or azmq filter, or from ffmpeg's interactive stdin). Fixed upstream in 9.1 (commit 3dd257f9); Alpine 3.24 has 8.1.3-r0 with no secfix, only edge has 9.1. The worker cannot reach it, since it builds every ffmpeg filter graph itself from split and scale only, runs ffmpeg with -nostdin (no interactive command reaches a filter), and nothing in an uploaded file adds a filter or sends a command (TestArgsTakeNoRuntimeCommands in services/media-worker/internal/transcode pins those arguments); ffprobe runs no filter, and its format whitelist keeps lavfi out. Every package built from the ffmpeg source is listed, since the scanners report the CVE on each. Checked 2026-11-25.
+    expired_at: 2026-12-24
+    purls:
+      - pkg:apk/alpine/ffmpeg@8.1.3-r0
+      - pkg:apk/alpine/ffmpeg-libavcodec@8.1.3-r0
+      - pkg:apk/alpine/ffmpeg-libavdevice@8.1.3-r0
+      - pkg:apk/alpine/ffmpeg-libavfilter@8.1.3-r0
+      - pkg:apk/alpine/ffmpeg-libavformat@8.1.3-r0
+      - pkg:apk/alpine/ffmpeg-libavutil@8.1.3-r0
+      - pkg:apk/alpine/ffmpeg-libswresample@8.1.3-r0
+      - pkg:apk/alpine/ffmpeg-libswscale@8.1.3-r0
