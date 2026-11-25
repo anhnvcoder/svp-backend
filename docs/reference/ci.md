@@ -893,7 +893,9 @@ khác như `kubernetes.io/arch` không tính). Values đọc theo chuỗi `base/
 `envs/<env>/<tên>.yaml` của mỗi env chạy trên `eks` (`<tên>.values.tpl` đọc khi là YAML hợp lệ, không thì bỏ); một file trong chuỗi pin
 là pin (luật thận trọng: không suy luận file sau gỡ pin). Thông báo nêu component, wave của nó (kèm env khi chỉ overlay của env đó pin)
 và wave của component gỡ taint. Component gỡ taint vắng khỏi `components.json`, không chạy trên `eks` hay (`istiod`) không bật
-`taint.enabled` thì taint không bao giờ gỡ: luật nêu điều đó khi có component bị gắn node Karpenter. Component không chạy
+`taint.enabled` thì taint không bao giờ gỡ: luật nêu điều đó khi có component bị gắn node Karpenter. `taint.enabled` của `istiod` xét
+theo từng env của `eks`, đọc chuỗi `base`, `platforms/eks`, `envs/<env>/istiod.yaml` và file sau thắng (một giá trị vô hướng, khác pin),
+nên overlay một env tắt taint thì lỗi nêu env đó. Component không chạy
 trên `eks` không bị xét.
 
 **`author.rego`**: tác giả của một PR (`input.pull_request`). PR của một bot merge không qua duyệt ở nơi không Code Owner nào sở hữu file (`envs/stg/`), nên một token của bot, bị lộ hay bị dùng sai, chỉ được đổi cái mà bot đó promote. Mỗi file mà PR của một bot (login kết thúc bằng `[bot]`) đổi được xét theo bảng nguồn phát hành của revision mà môi trường của nó ghim (`input.sources`): bot `<promoter>[bot]` của nguồn N đổi `envs/stg/images/<svc>.yaml` và `envs/prd/images/<svc>.yaml` với `<svc>` trong `services` của N;

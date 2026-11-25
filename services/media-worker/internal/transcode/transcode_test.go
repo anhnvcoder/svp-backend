@@ -632,24 +632,83 @@ func TestArgsTakeNoRuntimeCommands(t *testing.T) {
 		"thumbnail":      thumbnailArgs("file:in.mp4", "out", ladder[2], 10*time.Second),
 		"thumbnail tiny": thumbnailArgs("file:in.mp4", "out", sourceRung, time.Second),
 	}
-	allowed := map[string]bool{"split": true, "scale": true}
 	for name, args := range runs {
 		if !slices.Contains(args, "-nostdin") {
 			t.Errorf("%s: no -nostdin in %q", name, args)
 		}
-		for i, a := range args {
-			switch a {
-			case "-filter_complex", "-vf", "-filter:v", "-af", "-filter:a", "-filter_script", "-filter_complex_script":
-				if a == "-filter_script" || a == "-filter_complex_script" || i+1 == len(args) {
-					t.Errorf("%s: %s takes its graph from a file or has none", name, a)
-					continue
-				}
-				for _, f := range filterNames(args[i+1]) {
-					if !allowed[f] {
-						t.Errorf("%s: filter %q in %s %q, want only split and scale", name, f, a, args[i+1])
-					}
+		for _, problem := range filterOptionProblems(args) {
+			t.Errorf("%s: %s", name, problem)
+		}
+	}
+}
+
+// filterOptionProblems lists what in args lets a filter graph escape the split and scale only
+// rule. Options are matched by name, as ffmpeg does: the ":<stream spec>" suffix is dropped
+// (-filter:v:0), and -lavfi is an alias of -filter_complex.
+func filterOptionProblems(args []string) []string {
+	allowed := map[string]bool{"split": true, "scale": true}
+	var problems []string
+	for i, a := range args {
+		if !strings.HasPrefix(a, "-") {
+			continue
+		}
+		name, _, _ := strings.Cut(strings.TrimPrefix(a, "-"), ":")
+		switch {
+		case strings.HasPrefix(name, "/"):
+			problems = append(problems, fmt.Sprintf("%s loads an option value from a file", a))
+		case name == "filter_script" || name == "filter_complex_script":
+			problems = append(problems, fmt.Sprintf("%s takes its graph from a file", a))
+		case name == "f" && i+1 < len(args) && args[i+1] == "lavfi":
+			problems = append(problems, fmt.Sprintf("%s lavfi builds an input from a filter graph", a))
+		case slices.Contains([]string{"lavfi", "filter_complex", "filter", "vf", "af"}, name):
+			if i+1 == len(args) {
+				problems = append(problems, fmt.Sprintf("%s has no graph", a))
+				continue
+			}
+			for _, f := range filterNames(args[i+1]) {
+				if !allowed[f] {
+					problems = append(problems, fmt.Sprintf("filter %q in %s %q, want only split and scale", f, a, args[i+1]))
 				}
 			}
+		}
+	}
+	return problems
+}
+
+// TestFilterOptionProblems pins that every spelling of a filter option is checked.
+func TestFilterOptionProblems(t *testing.T) {
+	t.Parallel()
+	bad := [][]string{
+		{"-lavfi", "sendcmd=f=x"},
+		{"-filter_complex", "[0:v]deband"},
+		{"-filter", "zmq"},
+		{"-filter:v:0", "deband"},
+		{"-filter:a", "sendcmd=c=x"},
+		{"-vf", "scale=1:1,deband"},
+		{"-af", "volume=2"},
+		{"-filter_script", "graph.txt"},
+		{"-filter_script:v:0", "graph.txt"},
+		{"-filter_complex_script", "graph.txt"},
+		{"-/filter_complex", "graph.txt"},
+		{"-/lavfi", "graph.txt"},
+		{"-/vf:0", "graph.txt"},
+		{"-vf"},
+		{"-f", "lavfi", "-i", "sendcmd=f=x"},
+	}
+	for _, args := range bad {
+		if len(filterOptionProblems(args)) == 0 {
+			t.Errorf("%q: no problem found", args)
+		}
+	}
+	good := [][]string{
+		{"-lavfi", "[0:v]split=2[a][b];[a]scale=1:1[x]"},
+		{"-filter:v:0", "scale=2:2"},
+		{"-c:v", "libx264", "-b:v:1", "800k", "-map", "[x]"},
+		{"-f", "hls", "-i", "src"},
+	}
+	for _, args := range good {
+		if p := filterOptionProblems(args); len(p) != 0 {
+			t.Errorf("%q: unexpected problems %q", args, p)
 		}
 	}
 }
