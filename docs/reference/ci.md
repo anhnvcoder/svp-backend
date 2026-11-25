@@ -453,8 +453,8 @@ Loại tài liệu (Diátaxis): **reference**, tra cứu khi cần một lệnh 
     trên PATH trước nếu có (job `contract`, `rescan` cài bằng `sigstore/cosign-installer`), không có thì `COSIGN_IMAGE`; action
     `image-sign` ký bằng `COSIGN_IMAGE`.
   - `.trivyignore.yaml` và `.grype.yaml` ở gốc repo ([ADR-0039](../adr/0039-mainpath-drills-scan-gate-sourcemaps.md) §2; cổng của image và `make grype` đọc; mỗi
-    repo nguồn có hai tệp riêng ở gốc cây của nó, mục `@lhci/cli` của web ở `svp-frontend`; hiện có một mục: `CVE-2026-58016` của `glib` trong
-    image `media-worker`, chưa có bản vá, ffmpeg không nạp `libgio` nơi có lỗi, [ADR-0030](../adr/0030-devsecops-supplement.md) §6).
+    repo nguồn có hai tệp riêng ở gốc cây của nó, mục `@lhci/cli` của web ở `svp-frontend`; mục hiện có và lý do của từng mục nằm ở
+    `statement` của `.trivyignore.yaml`, [ADR-0030](../adr/0030-devsecops-supplement.md) §6).
     `.trivyignore.yaml`: chỉ phần `vulnerabilities`; mỗi mục có `id`, `statement` (lý do), `expired_at` không quá 30 ngày sau ngày chạy và `purls`
     mà purl nào cũng có `@version` (trivy đọc purl không version là mọi version của gói); không `paths`; thêm qua PR; bí mật không bỏ qua được.
     trivy tự bỏ mục hết hạn. `.grype.yaml`: grype đọc cả file (`-c`) và không đọc hạn, nên file chỉ cho một dạng: khoá `ignore` ở gốc, mỗi rule có

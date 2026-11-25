@@ -7,4 +7,84 @@ ignore:
     include-aliases: true
     package:
       name: glib
-      version: 2.88.1-r1
+      version: 2.88.4-r0
+  - vulnerability: CVE-2026-135736
+    include-aliases: true
+    package:
+      name: ffmpeg
+      version: 8.1.3-r0
+  - vulnerability: CVE-2026-135736
+    include-aliases: true
+    package:
+      name: ffmpeg-libavcodec
+      version: 8.1.3-r0
+  - vulnerability: CVE-2026-135736
+    include-aliases: true
+    package:
+      name: ffmpeg-libavdevice
+      version: 8.1.3-r0
+  - vulnerability: CVE-2026-135736
+    include-aliases: true
+    package:
+      name: ffmpeg-libavfilter
+      version: 8.1.3-r0
+  - vulnerability: CVE-2026-135736
+    include-aliases: true
+    package:
+      name: ffmpeg-libavformat
+      version: 8.1.3-r0
+  - vulnerability: CVE-2026-135736
+    include-aliases: true
+    package:
+      name: ffmpeg-libavutil
+      version: 8.1.3-r0
+  - vulnerability: CVE-2026-135736
+    include-aliases: true
+    package:
+      name: ffmpeg-libswresample
+      version: 8.1.3-r0
+  - vulnerability: CVE-2026-135736
+    include-aliases: true
+    package:
+      name: ffmpeg-libswscale
+      version: 8.1.3-r0
+  - vulnerability: CVE-2026-135743
+    include-aliases: true
+    package:
+      name: ffmpeg
+      version: 8.1.3-r0
+  - vulnerability: CVE-2026-135743
+    include-aliases: true
+    package:
+      name: ffmpeg-libavcodec
+      version: 8.1.3-r0
+  - vulnerability: CVE-2026-135743
+    include-aliases: true
+    package:
+      name: ffmpeg-libavdevice
+      version: 8.1.3-r0
+  - vulnerability: CVE-2026-135743
+    include-aliases: true
+    package:
+      name: ffmpeg-libavfilter
+      version: 8.1.3-r0
+  - vulnerability: CVE-2026-135743
+    include-aliases: true
+    package:
+      name: ffmpeg-libavformat
+      version: 8.1.3-r0
+  - vulnerability: CVE-2026-135743
+    include-aliases: true
+    package:
+      name: ffmpeg-libavutil
+      version: 8.1.3-r0
+  - vulnerability: CVE-2026-135743
+    include-aliases: true
+    package:
+      name: ffmpeg-libswresample
+      version: 8.1.3-r0
+  - vulnerability: CVE-2026-135743
+    include-aliases: true
+    package:
+      name: ffmpeg-libswscale
+      version: 8.1.3-r0
