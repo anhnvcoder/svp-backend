@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.3.1](https://github.com/anhnvcoder/svp-backend/compare/gitops-check-v1.3.0...gitops-check-v1.3.1) (2026-11-25)
+
+
+### Bug Fixes
+
+* apply the lessons of the first stg session ([#165](https://github.com/anhnvcoder/svp-backend/issues/165)) ([2b29ed0](https://github.com/anhnvcoder/svp-backend/commit/2b29ed044a9291fa78cfdf47d63d2441a16273a5))
+* **ci:** read env overlays for the taint remover and widen the ffmpeg filter check ([#168](https://github.com/anhnvcoder/svp-backend/issues/168)) ([5691c9b](https://github.com/anhnvcoder/svp-backend/commit/5691c9bd1148ae94ba21b68ea402a976fc0dcfa0))
+
 ## [1.3.0](https://github.com/anhnvcoder/svp-backend/compare/gitops-check-v1.2.0...gitops-check-v1.3.0) (2026-11-21)
 
 
