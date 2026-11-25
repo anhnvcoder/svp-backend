@@ -9,6 +9,8 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
+	"slices"
 	"strings"
 	"syscall"
 	"testing"
@@ -617,4 +619,53 @@ func TestPlaylistDuration(t *testing.T) {
 	if _, err := PlaylistDuration([]byte("#EXTINF:x,\nseg_000.ts\n")); err == nil {
 		t.Error("bad #EXTINF: no error")
 	}
+}
+
+// TestArgsTakeNoRuntimeCommands pins what keeps filter commands out of reach: ffmpeg reads no
+// stdin (where 'c' sends a command to a filter) and its graphs hold only split and scale, never
+// a filter that sends commands (sendcmd, zmq) or one whose runtime command corrupts memory.
+func TestArgsTakeNoRuntimeCommands(t *testing.T) {
+	t.Parallel()
+	runs := map[string][]string{
+		"hls":            hlsArgs("file:in.mp4", "out", ladder, true),
+		"hls source":     hlsArgs("file:in.mp4", "out", []rung{sourceRung}, false),
+		"thumbnail":      thumbnailArgs("file:in.mp4", "out", ladder[2], 10*time.Second),
+		"thumbnail tiny": thumbnailArgs("file:in.mp4", "out", sourceRung, time.Second),
+	}
+	allowed := map[string]bool{"split": true, "scale": true}
+	for name, args := range runs {
+		if !slices.Contains(args, "-nostdin") {
+			t.Errorf("%s: no -nostdin in %q", name, args)
+		}
+		for i, a := range args {
+			switch a {
+			case "-filter_complex", "-vf", "-filter:v", "-af", "-filter:a", "-filter_script", "-filter_complex_script":
+				if a == "-filter_script" || a == "-filter_complex_script" || i+1 == len(args) {
+					t.Errorf("%s: %s takes its graph from a file or has none", name, a)
+					continue
+				}
+				for _, f := range filterNames(args[i+1]) {
+					if !allowed[f] {
+						t.Errorf("%s: filter %q in %s %q, want only split and scale", name, f, a, args[i+1])
+					}
+				}
+			}
+		}
+	}
+}
+
+var (
+	quotedPart = regexp.MustCompile(`'[^']*'`)
+	padLabel   = regexp.MustCompile(`\[[^\]]*\]`)
+)
+
+// filterNames returns the name of each filter of an ffmpeg filter graph.
+func filterNames(graph string) []string {
+	graph = padLabel.ReplaceAllString(quotedPart.ReplaceAllString(graph, ""), "")
+	var names []string
+	for f := range strings.FieldsFuncSeq(graph, func(r rune) bool { return r == ';' || r == ',' }) {
+		name, _, _ := strings.Cut(f, "=")
+		names = append(names, strings.TrimSpace(name))
+	}
+	return names
 }
