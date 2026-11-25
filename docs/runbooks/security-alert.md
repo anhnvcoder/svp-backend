@@ -142,7 +142,7 @@ cùng profile, region.
 ```sh
 (
   eval "$(AWS_PROFILE=anhnv-sso aws --no-cli-pager sts assume-role --region ap-southeast-1 \
-    --role-arn "arn:aws:iam::$SVP_AWS_SECURITY_ACCOUNT_ID:role/OrganizationAccountAccessRole" --role-session-name svp-triage \
+    --role-arn "arn:aws:iam::${SVP_AWS_SECURITY_ACCOUNT_ID}:role/OrganizationAccountAccessRole" --role-session-name svp-triage \
     --query 'Credentials.[AccessKeyId,SecretAccessKey,SessionToken]' --output text \
     | awk '{print "export AWS_ACCESS_KEY_ID="$1" AWS_SECRET_ACCESS_KEY="$2" AWS_SESSION_TOKEN="$3}')"
   aws --no-cli-pager sts get-caller-identity --region ap-southeast-1   # account là svp-security

@@ -1,5 +1,5 @@
 // Package telemetry configures the process-wide OpenTelemetry providers and optional profiler.
-// Services call Setup once, only from their serve command, before starting work.
+// Services call Setup once, only from their serve and migrate commands, before starting work.
 package telemetry
 
 import (

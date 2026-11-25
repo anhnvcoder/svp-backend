@@ -174,8 +174,7 @@ giống (0055). ADR cũ chỉnh (dòng `### Chỉnh bởi`): 0020 §2, 0034 §5,
 
 ## Xác nhận
 
-- Lúc quyết chưa hiện thực. Kiểm tĩnh: `make check` của `svp-infra` (test mocked `edge`, `media`, `waf`, `network`, `account-baseline`, `log-archive`),
-  `make check`, `make helm-check` của repo này, `make docs-check`. Phép kiểm edge: [phụ lục](appendix/0061-edge-cloudfront-waf-acm.md#phép-kiểm-edge).
+- Lúc quyết chưa hiện thực; kiểm tĩnh và phép kiểm edge: [phụ lục](appendix/0061-edge-cloudfront-waf-acm.md#phép-kiểm-edge).
 
 ## Hiện thực ở
 
@@ -198,3 +197,4 @@ Phụ lục: [`appendix/0061-edge-cloudfront-waf-acm.md`](appendix/0061-edge-clo
 
 - §6: [0069](0069-auth-hardening.md): gateway đặt nosniff, CSP, Cache-Control; policy api override = true ghi đè cùng giá trị.
 - §2, §8: [0073](0073-premium-playback.md): distribution media thêm `ordered_cache_behavior` `premium/*` có `trusted_key_groups` (key group `svp-<env>-media`), cùng cache policy và response headers policy với behavior mặc định; `cs-uri-query` của media mang `Policy`, `Signature`, `Key-Pair-Id`, `Hash-Algorithm` của URL đã ký, dùng được tới hạn chữ ký (≤ độ dài video + 20 phút).
+- §1, §14: [0084](0084-stg-msk-media-sizing.md): media của stg pay-as-you-go như prd (log chuẩn, policy `svp-stg-media`), không gói Free.

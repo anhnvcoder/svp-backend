@@ -56,6 +56,11 @@ Thuật ngữ in đậm là thuật ngữ của plan R4 mà các ADR, module, ch
 - Vì sao metric OTLP không đi qua agent: agent nhận OTLP (code v3.15 không chặn route OTLP ở agent mode [N29]), nhưng Service chia tải OTLP
   giữa hai replica, mỗi replica nhận một nửa, trong khi dedup giữ mẫu của leader và bỏ của replica kia [N4]: mất nửa dữ liệu.
 
+### Chỉnh bởi
+
+- [ADR-0087](../0087-kms-key-consolidation.md): workspace dùng key AWS sở hữu, mặc định của AMP; workspace CMK cũ được
+  thay (mất lịch sử metric).
+
 ## §2. Log: Log group ứng dụng
 
 | Thiết lập | Giá trị | Nguồn |
@@ -74,6 +79,11 @@ sau khi tạo. Chọn Standard: Live Tail dùng trong buổi; chênh ~$0,2 mỗi
 Region: không trang nào liệt kê region của riêng endpoint OTLP log; bảng giá `ap-southeast-1` có usage type `APS1-DataProcessingOtel-Bytes` và
 thông báo 2025-04 nói thay đổi áp cho "the CloudWatch Logs PutLogEvents API and OpenTelemetry Protocol (OTLP) endpoint" ở mọi region có CloudWatch
 Logs [N12], [N16]. Kiểm ở buổi stg đầu.
+
+### Chỉnh bởi
+
+- [ADR-0087](../0087-kms-key-consolidation.md): log group không `kms_key_id` (key của CloudWatch Logs); người ghi chỉ
+  cần `logs:PutLogEvents`.
 
 ## §3. Trace: Trace X-Ray
 
@@ -356,6 +366,11 @@ log group của RDS, MSK, ElastiCache; statement riêng resource `*` cho `logs:S
 `kms:ViaService` logs; `cloudwatch:GetMetricData`, `ListMetrics` (`*`, không resource type) cho metric của dịch vụ managed. Theo policy AWS cho data
 source (`AmazonGrafanaCloudWatchAccess`, policy Prometheus của `SERVICE_MANAGED` [N21]), thu hẹp về tài nguyên của env.
 
+### Chỉnh bởi
+
+- [ADR-0087](../0087-kms-key-consolidation.md): Collector không còn dòng `kms:`; role AMG giữ `kms:Decrypt` qua `logs`
+  cho log ghi trước, tới hết retention.
+
 ## §12. Chi phí
 
 ### Bảng giá (`ap-southeast-1`)
@@ -427,6 +442,10 @@ ingest khi stg, prd chia bậc miễn phí (2,52 mỗi env). Khối lượng là
 nếu repo phát hành stg không được dọn (lưu trữ tăng ~1,6 mỗi tháng, phụ lục 0062 §11); "Xem lại khi" của 0062 (repo vượt 30 GB, khoảng tháng 3)
 gọi GC trước mốc đó.
 
+### Chỉnh bởi
+
+- [ADR-0087](../0087-kms-key-consolidation.md): dòng hai key KMS `alias/svp-<env>-observability` ($2) về 0 khi PR gỡ key cũ áp xong.
+
 ## Hợp đồng cluster
 
 | Khoá | Dạng trong **Hợp đồng cluster** | Tài liệu AWS | Kết quả |
@@ -452,6 +471,11 @@ Logs; CloudWatch.16 (retention log group, mặc định 365 ngày) chỉ thuộc
 | SecretsManager.1 | Bật xoay tự động | có | Chấp nhận FAILED | Entry `svp/<env>/grafana-operator`: token AMG do script buổi tạo, không có Lambda xoay |
 | SecretsManager.3 | Không có secret không dùng 90 ngày | có | Chấp nhận FAILED khi 90 ngày không buổi | External Secrets đọc nó mỗi buổi |
 | SecretsManager.4 | Xoay trong 90 ngày | có | Chấp nhận FAILED | Như SecretsManager.1; token sống ≤ 30 ngày |
+
+### Chỉnh bởi
+
+- [ADR-0087](../0087-kms-key-consolidation.md): KMS.3, .4, .5 không còn áp cho workspace, log group mới (key AWS sở
+  hữu); key cũ giữ đạt tới khi gỡ.
 
 ## Bảng luồng SCP, RCP
 

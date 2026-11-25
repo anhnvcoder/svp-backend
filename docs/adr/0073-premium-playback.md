@@ -190,11 +190,11 @@ Dòng `### Chỉnh bởi` ở 0008 §4, §6, §9, [0009](0009-engagement-feed-st
 ## Nguồn
 
 Đọc 2026-11-15; đủ [N1]–[N21] kèm câu trích ở [phụ lục](appendix/0073-premium-playback.md#nguồn).
-[N3] <https://docs.aws.amazon.com/AmazonCloudFront/latest/DeveloperGuide/private-content-creating-signed-url-custom-policy.html>,
-[N4] <https://docs.aws.amazon.com/AmazonCloudFront/latest/DeveloperGuide/private-content-trusted-signers.html>,
-[N6] <https://aws.amazon.com/about-aws/whats-new/2026/04/amazon-cloudfront-sha-256-signed-urls/>,
-[N7] <https://docs.aws.amazon.com/AmazonCloudFront/latest/DeveloperGuide/flat-rate-pricing-plan.html>.
 
 ## Thông tin thêm
 
 Phụ lục: [`appendix/0073-premium-playback.md`](appendix/0073-premium-playback.md) (phương án, sự thật AWS kèm câu trích, chi phí, kết quả buổi, nguồn).
+
+### Chỉnh bởi
+
+- Bối cảnh, Yếu tố quyết định: [0084](0084-stg-msk-media-sizing.md): media của stg pay-as-you-go như prd, không còn gói Free.

@@ -118,6 +118,11 @@ cluster would get a Reloader that cannot restart the gateway or the web client. 
 {{- if and (eq $c.name "reloader") (eq $d.name "argo-rollouts") (le (int $d.wave) (int $c.wave)) }}
 {{- $needs = append $needs (printf "%s/%s" $d.namespace $d.name) }}
 {{- end }}
+{{- /* The Istio releases share wave 1 with svp-cluster, which makes their namespace istio-system with the privileged
+Pod Security label that ztunnel and istio-cni need, so svp-cluster installs first. */}}
+{{- if and (has $c.name (list "istio-base" "istiod" "istio-cni" "ztunnel")) (eq $d.name "svp-cluster") (le (int $d.wave) (int $c.wave)) }}
+{{- $needs = append $needs (printf "%s/%s" $d.namespace $d.name) }}
+{{- end }}
 {{- end }}
 {{- with $needs | uniq }}
     needs:

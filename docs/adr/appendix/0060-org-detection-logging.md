@@ -415,6 +415,12 @@ flow log Parquet; không conformance pack, không analyzer truy cập không dù
 Nếu đo sau 7 ngày vượt $30 mỗi tháng: so phí CSPM với gói Essentials theo tài nguyên; ghi `AWS::EC2::NetworkInterface` theo ngày
 (`recordingModeOverrides`); viết ADR mới trước khi tắt control hay region.
 
+### Chỉnh bởi
+
+- [ADR-0087](../0087-kms-key-consolidation.md): dòng KMS còn bốn key mới khi PR gỡ CMK EBS stg, prd áp xong (bớt $2);
+  volume dùng `aws/ebs`. GuardDuty quét volume `aws/ebs` ở region hỗ trợ key AWS quản lý (trang GuardDuty không nêu
+  region nào), nên "volume CMK EBS không quét malware" (§2, Hệ quả) thành "quét tuỳ region".
+
 ## Nguồn
 
 - [N1] AWS SRA: <https://docs.aws.amazon.com/prescriptive-guidance/latest/security-reference-architecture/security-tooling.html>,

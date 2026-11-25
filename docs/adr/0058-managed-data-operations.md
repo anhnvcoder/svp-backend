@@ -129,3 +129,8 @@ Phụ lục: [`appendix/0058-managed-data-operations.md`](appendix/0058-managed-
 
 - §1: [0063](0063-managed-observability.md): topic `svp-<env>-alarms` thêm publisher AMP (`aps.amazonaws.com`, `sns:Publish`): luật và Alertmanager của AMP gửi cảnh báo qua topic này.
 - §1: [0067](0067-backup-dr.md): alarm `backup-job-failed`, `backup-copy-failed` (`ticket`) là query Metrics Insights trên namespace `AWS/Backup`, chu kỳ 300 s, `treat_missing_data = notBreaching` thay chu kỳ 60 s, `missing`: AWS Backup đẩy metric mỗi 5 phút, chỉ khi có job.
+- §4, Xác nhận: [0084](0084-stg-msk-media-sizing.md): stg chạy `kafka.m7g.large` (API từ chối `kafka.t3.small` cho KRaft); target
+  autoscaling `min_capacity = 1` thay `broker_volume_size` (Application Auto Scaling không nhận sàn khác), volume không thu nhỏ.
+- §1: [0087](0087-kms-key-consolidation.md): key của topic `svp-<env>-alarms` giữ CMK theo luật "CMK chỉ ở chỗ cần khả
+  năng mà key của AWS không có": CloudWatch publish vào topic mã hoá chỉ khi key policy cho nó, mà key `aws/sns` không sửa
+  được policy.

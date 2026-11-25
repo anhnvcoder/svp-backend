@@ -20,6 +20,19 @@ Nothing opens a UI to any pod: port-forward comes in from the node, which no Net
         operator: In
         values: [server]
 {{- end }}
+{{- /* The migrate Jobs of every release of chart svp-service, which alone labels a pod component migrate: they send
+their logs over OTLP only, so the Collector is the one pod of svp-obs that admits them. No release is named here, so
+a new service with a database needs no change. */}}
+{{- define "svp-observability.migrateJobs" -}}
+- namespaceSelector:
+    matchLabels:
+      kubernetes.io/metadata.name: svp
+  podSelector:
+    matchExpressions:
+      - key: app.kubernetes.io/component
+        operator: In
+        values: [migrate]
+{{- end }}
 {{- define "svp-observability.selector" -}}
 podSelector:
   matchLabels:
@@ -64,8 +77,8 @@ podSelector:
 {{- end }}
 {{- /* The three backends are collector.backends; a platform whose Collector sends to AWS's services lists none, and
 policy allow-aws-apis-collector opens their endpoints instead. */}}
-# The Collector: OTLP from the releases of svp (services.otlp), out to the three backends, and the Kafka brokers,
-# where its kafka_metrics receiver reads consumer group lag as user svp-otelcol.
+# The Collector: OTLP from the releases of svp (services.otlp) and their migrate Jobs, out to the three backends, and
+# the Kafka brokers, where its kafka_metrics receiver reads consumer group lag as user svp-otelcol.
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
@@ -77,6 +90,7 @@ spec:
   ingress:
     - from:
         {{- include "svp-observability.services" .Values.services.otlp | nindent 8 }}
+        {{- include "svp-observability.migrateJobs" . | nindent 8 }}
       ports:
         - {protocol: TCP, port: 4317}
     {{- if .Values.collector.podMonitor }}

@@ -326,9 +326,10 @@ Loại tài liệu (Diátaxis): **reference**, tra cứu khi cần một lệnh 
     một dòng `skip`. Lý do: `/envs/stg/` không Code Owner nên PR bot tự merge, bỏ hẳn luật thì khoá App lộ đổi được `charts.yaml` hay
     overlay stg mà không ai duyệt (GIT-6). **Policy conftest của cây** (`deploy/ci/gitops-tree-policies/`, Rego, một package mỗi
     file: `layout.rego` file của root chart và bootstrap, `argocd/apps/values.yaml` không đặt `cluster`; `envs.rego` thư mục env,
-    `charts.yaml`, `images/`; `platforms.rego` lớp nền tảng và luật overlay của file nền tảng; `author.rego` luật tác giả hẹp; input và
-    helper ở `lib.rego`; ca âm ở `*_test.rego`): luật của bước 1 viết một lần ở đây. Bước 1 của `gitops-check.sh` chỉ dựng input, một tài
-    liệu JSON: mục và nội dung file của cây; với mỗi env, `revision` có là commit trên `main` repo này không (không thì một dòng `FAIL`),
+    `charts.yaml`, `images/`; `platforms.rego` lớp nền tảng và luật overlay của file nền tảng; `waves.rego` luật wave của startup taint
+    (cùng package); `author.rego` luật tác giả hẹp; input và helper ở `lib.rego`; ca âm ở `*_test.rego`): luật của bước 1 viết một
+    lần ở đây. Bước 1 của `gitops-check.sh` chỉ dựng input, một tài liệu JSON: mục và nội dung file của cây; với mỗi env, `revision`
+    có là commit trên `main` repo này không (không thì một dòng `FAIL`),
     hai giá trị commit đó dẫn xuất và bảng nguồn ở commit đó (git đọc); tác giả, người gửi và file đổi từ base của PR. Rồi nó chạy
     `conftest test` bằng `CONFTEST_IMAGE` ghim (`--network none`, `--read-only`, uid của người gọi, policy và input mount chỉ đọc);
     conftest không trả lời, hay một package không có kết quả nào (policy không biên dịch, package đổi tên), là đỏ. `gitops-check.sh
@@ -808,8 +809,13 @@ npm ở `svp-frontend` (`make lockfile-scan`) không thuộc luật này.
   - Bước 5: `deploy/ci/values-check.sh --gitops` trên các file image đổi từ commit BASE tới HEAD của GITOPS_DIR (mọi file khi không có BASE): bản phát hành đã ký, attestation `vuln`, và build provenance mà policy của môi trường đòi. Với bản phát hành đã kiểm provenance, `image.tag` phải là 12 hex của commit mà provenance nêu (`tag_provenance_mismatch` của `common.sh`); ở môi trường đòi provenance, một lần kiểm bản phát hành không nêu commit provenance cũng fail.
   - `gitops-check.sh --images GITOPS_DIR ENV OUT`: chạy bước 1–4 như thường (cùng render, `pin_check` vẫn kiểm), rồi ghi
     vào OUT, sắp và bỏ trùng, mọi tham chiếu image (`image_refs`) của bản render nền tảng `eks` của ENV (overlay của
-    env, không thì của nền tảng, không thì `base`; component không chạy trên `eks` bị bỏ; gồm Argo CD) và dừng. Chỉ
-    `image-list.sh` gọi nó.
+    env, không thì của nền tảng, không thì `base`; component không chạy trên `eks` bị bỏ; gồm Argo CD) và dừng. Các
+    object có hook test của Helm (`helm.sh/hook` là `test`, `test-success` hay `test-failure`, đứng riêng hay trong
+    danh sách) bị bỏ khỏi danh sách này: `helm test` chạy chúng, Argo CD và cluster không bao giờ, nên không ai kéo image
+    của chúng (pod test của chart Kyverno dùng `readiness-checker:latest`, tag dời theo upstream). Hook khác
+    (`pre-install`, `post-install`, PreSync) vẫn ở lại vì chúng chạy trên cluster. Bước 4 vẫn kiểm digest của cả image
+    test, nên lọc chỉ áp ở chỗ ghi OUT, không đổi render (`helm template --skip-tests` sẽ đổi cả render của check).
+    Chỉ `image-list.sh` gọi nó.
   - GITOPS_DIR chỉ được đọc, không bao giờ ghi: mọi thứ khác xảy ra trong một thư mục tạm. Cần bash, git, `jq`, helm, docker và mạng (kho chart, GHCR) và, không có `--worktree`, lịch sử của repo này tới mọi revision (clone đầy đủ, đã fetch `origin/main`). Có BASE thì GITOPS_DIR phải là đỉnh của repo git riêng của nó.
 - **`image-list.sh GITOPS_DIR ENV`** in danh sách image bên thứ ba mà cluster EKS của ENV kéo, cho bước làm nóng
   pull-through cache của ECR ([image bên thứ ba](../explanation/delivery.md#image-bên-thứ-ba-trên-eks)): gọi
@@ -818,7 +824,7 @@ npm ở `svp-frontend` (`make lockfile-scan`) không thuộc luật này.
   đoạn thêm `library/`), in mỗi dòng `<ref upstream>:<tag>@sha256:<digest>` ra stdout, sắp và bỏ trùng; tiến trình ra
   stderr. Một image chỉ có digest, không tag (kéo theo tag là cách duy nhất nạp cache): stderr nêu tên, thoát 1, stdout
   rỗng. `aws/scripts/ecr-warm.sh` của `svp-infra` nhận đường file chứa output này. `image-list-test.sh` chạy với
-  `gitops-check.sh` giả, không mạng.
+  `gitops-check.sh` giả, không mạng; phép lọc hook test (`running_docs`) do `gitops-check-test.sh` thử.
 - **`values-check.sh --gitops DIR BASE`** là check bản phát hành của một cây `svp-gitops`, nơi các image phát hành là `envs/<env>/images/<service>.yaml` (`gitops-check.sh` chạy nó trong check của repo đó; bootstrap của đường GitOps cũng chạy). Với mỗi file như vậy của repo git của DIR đã đổi từ commit BASE tới HEAD, một `image.digest` không rỗng phải nêu một bản phát hành được vào môi trường đó:
   repository của service của một nguồn phát hành mà policy của môi trường đó nhận (`release_source_in` của `common.sh`: bảng của chart `svp-policy` ở commit mà `envs/<env>/charts.yaml` ghim), ký bởi `images.yml` của nguồn đó trên `main`, một attestation `vuln` phủ cả hai nền tảng, không CRITICAL, không quá 48 giờ tuổi, và một attestation build provenance khi chart `svp-policy` kiểm provenance ở môi trường đó (`verify-release.sh --gitops DIR --env <env>`: `values.yaml` của chart ở commit mà `envs/<env>/charts.yaml` ghim, rồi
   `envs/<env>/svp-policy.yaml` của DIR, như Argo CD trao chúng cho chart). Mọi file image của một môi trường mà policy của nó đã đổi từ BASE (`envs/<env>/svp-policy.yaml` hay `envs/<env>/charts.yaml`: `policy_values_paths` của `common.sh`) cũng được kiểm, vì cái mà mọi bản phát hành ở đó phải mang có thể đã đổi: PR bật provenance fail khi một bản phát hành của môi trường đó không có nó. Mọi file image của mọi môi trường khi BASE rỗng (DIR khi đó không cần là repo git).
@@ -842,7 +848,9 @@ npm ở `svp-frontend` (`make lockfile-scan`) không thuộc luật này.
 
 #### Policy của cây `svp-gitops` (`deploy/ci/gitops-tree-policies/`)
 
-Một package mỗi file (`gitops.layout`, `gitops.envs`, `gitops.platforms`, `gitops.author`), ca âm ở `*_test.rego` (`make conftest-verify`). `deploy/ci/gitops-check.sh` chạy chúng bằng `conftest test` trên một tài liệu JSON mà nó dựng từ cây, từ repo code và từ PR (bước 1 của check). Input và helper ở `lib.rego`:
+Một package mỗi file (`gitops.layout`, `gitops.envs`, `gitops.platforms`, `gitops.author`), trừ `waves.rego` nằm trong
+`gitops.platforms`, ca âm ở `*_test.rego` (`make conftest-verify`). `deploy/ci/gitops-check.sh` chạy chúng bằng `conftest test` trên
+một tài liệu JSON mà nó dựng từ cây, từ repo code và từ PR (bước 1 của check). Input và helper ở `lib.rego`:
 
 - `worktree`: `true` cho `gitops-check.sh --worktree`, nơi working tree của repo code đứng thay `revision` của mọi môi trường, nên `revision` và các giá trị mà `charts.yaml` dẫn xuất từ nó không được kiểm (check của chính `svp-gitops` kiểm);
 - `tree`: mọi mục của cây trừ `.git`, theo đường từ đỉnh: `type`, đường đó phân giải ra gì (file, dir hay other, như `test -f` và `test -d` của shell thấy), `link` (đích của một symlink) và `text` (nội dung file);
@@ -875,6 +883,18 @@ Một package mỗi file (`gitops.layout`, `gitops.envs`, `gitops.platforms`, `g
 **`platforms.rego`**: lớp nền tảng. Khoá `platforms` của `argocd/apps/components.json` ánh xạ mỗi nền tảng tới các môi trường chạy trên nó (`envs`, mỗi môi trường `prd` và `stg` trên ít nhất một nền tảng) và liệu render của nó có được nêu `*.svp.localhost` của lab không (`localHosts`, `false` khi bỏ); `platforms` của một component, khi đặt, liệt kê các nền tảng của map đó, mỗi cái một lần (không có `platforms`: mọi nền tảng). `platforms/` có đúng một thư mục mỗi nền tảng của map (và `README.md`),
 và `argocd/apps/files/platforms` là symlink tới nó. Mỗi file của `platforms/<platform>/` là `README.md`, `argo-cd.yaml` (values của Argo CD của nền tảng, sau `argocd/bootstrap.json`), hay `<tên>.yaml` hoặc `<tên>.values.tpl` với `<tên>` là một component chạy trên nền tảng đó. Một file `platforms/<platform>/*.yaml` bị giữ theo luật của một overlay: một map YAML không đặt khoá `cluster` (cái phụ thuộc cluster tới một component qua template `<tên>.values.tpl`, từ value `cluster` của root), và với một release của chart `svp-service` không `image`, `canary` hay `httpRoute.name`
 (image của một release là `envs/<env>/images/<tên>.yaml`, và mọi nền tảng chạy `canary` của `base`). Cái mà các template render được kiểm trên render của root (bước 2 của check).
+
+**`waves.rego`** (package `gitops.platforms`): luật wave của startup taint trên nền tảng `eks`. NodePool `default` của
+Karpenter đăng ký node với startup taint `cni.istio.io/not-ready`; `istiod` (values `taint.enabled: true`), `istio-cni` và
+`ztunnel` gỡ taint khi chạy trên node. Một component có pod chỉ lên node Karpenter (pin, ở mọi độ sâu của values) phải có
+wave ≥ wave của từng component gỡ taint: cùng wave hợp lệ, nhỏ hơn là lỗi. Pin có hai dạng: node affinity term bắt buộc với key
+`karpenter.sh/nodepool` và `operator` `Exists` hay `In` (`DoesNotExist` và term `preferred` không tính), hay `nodeSelector` có key đó (key
+khác như `kubernetes.io/arch` không tính). Values đọc theo chuỗi `base/<tên>.yaml`, `platforms/eks/<tên>.yaml` rồi overlay
+`envs/<env>/<tên>.yaml` của mỗi env chạy trên `eks` (`<tên>.values.tpl` đọc khi là YAML hợp lệ, không thì bỏ); một file trong chuỗi pin
+là pin (luật thận trọng: không suy luận file sau gỡ pin). Thông báo nêu component, wave của nó (kèm env khi chỉ overlay của env đó pin)
+và wave của component gỡ taint. Component gỡ taint vắng khỏi `components.json`, không chạy trên `eks` hay (`istiod`) không bật
+`taint.enabled` thì taint không bao giờ gỡ: luật nêu điều đó khi có component bị gắn node Karpenter. Component không chạy
+trên `eks` không bị xét.
 
 **`author.rego`**: tác giả của một PR (`input.pull_request`). PR của một bot merge không qua duyệt ở nơi không Code Owner nào sở hữu file (`envs/stg/`), nên một token của bot, bị lộ hay bị dùng sai, chỉ được đổi cái mà bot đó promote. Mỗi file mà PR của một bot (login kết thúc bằng `[bot]`) đổi được xét theo bảng nguồn phát hành của revision mà môi trường của nó ghim (`input.sources`): bot `<promoter>[bot]` của nguồn N đổi `envs/stg/images/<svc>.yaml` và `envs/prd/images/<svc>.yaml` với `<svc>` trong `services` của N;
 bot của `backend`, nơi repo của nó giữ các chart, đổi thêm `envs/stg/charts.yaml`, `envs/prd/charts.yaml` và mọi file image của `envs/prd/images/` (promote prd chép cả bộ của stg, gồm cả web); không gì khác, và không bot nào như vậy xoá file. Một bot không promote nguồn nào (Renovate) không đổi gì dưới `envs/`. PR của một người không bị giới hạn ở đây. Một bot gây ra sự kiện (người gửi: ai mở PR hay push commit đang kiểm) mà khác tác giả thì fail, vì các file được phép là của tác giả.

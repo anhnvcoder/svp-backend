@@ -79,4 +79,5 @@ awsx cloudwatch describe-alarms --alarm-names "$N-msk-disk-high" --query 'Metric
 
 - Dashboard: CloudWatch → Alarms `svp-<env>-msk-disk-high`; MSK → cluster → Monitoring; `svp-pipeline` (lag consumer).
 - ADR: [ADR-0058](../adr/0058-managed-data-operations.md) §2, §4; [ADR-0053](../adr/0053-msk-elasticache-valkey.md).
-- Diễn tập: không có (buổi stg kiểm autoscaling nhận policy trên `kafka.t3.small`, ADR-0058 phần Xác nhận).
+- Diễn tập: không có (buổi stg kiểm autoscaling nhận policy trên `kafka.m7g.large`, ADR-0058 phần Xác nhận,
+  [ADR-0084](../adr/0084-stg-msk-media-sizing.md)).

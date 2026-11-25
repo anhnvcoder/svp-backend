@@ -86,7 +86,8 @@ func TestServeReportsAFailureBeforeTheErrorTrackerStops(t *testing.T) {
 
 func TestMigrateRequiresDatabaseURL(t *testing.T) {
 	t.Setenv("DATABASE_URL", "")
-	if err := migrate(t.Context()); err == nil || !strings.Contains(err.Error(), "DATABASE_URL") {
+	err := migrate(t.Context(), slog.New(slog.DiscardHandler))
+	if err == nil || !strings.Contains(err.Error(), "DATABASE_URL") {
 		t.Errorf("migrate() = %v, want an error naming DATABASE_URL", err)
 	}
 }

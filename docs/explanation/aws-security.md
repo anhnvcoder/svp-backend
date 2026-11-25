@@ -94,14 +94,14 @@ Module `security-baseline` áp một lần mỗi account trong năm account (man
 root `aws/baseline`:
 
 - S3 Block Public Access cấp account, bốn cờ bật.
-- EBS mã hoá mặc định ở region nhà và `us-east-1`. Ở `svp-stg`, `svp-prd` region nhà key mặc định là CMK `alias/svp-ebs` (root `aws/baseline`
-  tạo), nơi khác là `aws/ebs`.
+- EBS mã hoá mặc định ở region nhà và `us-east-1` bằng key AWS quản lý `aws/ebs`, ở mọi account
+  ([ADR-0087](../adr/0087-kms-key-consolidation.md) §5).
 - AWS Config ghi liên tục mọi loại tài nguyên, giao snapshot và lịch sử về bucket Config của Log Archive; account có cờ
   `config_recording` = `off` (giữa các buổi mọi account trừ `svp-security`) không có recorder
   ([`paid-features.md`](paid-features.md)).
 - Rule EventBridge `svp-security-*` chuyển sự kiện bảo mật sang account `svp-security`.
 
-Khác biệt giữa account (key EBS, có chuyển sự kiện đổi IAM, KMS, S3 hay không, region của rule đăng nhập root) là dữ liệu trong bảng
+Khác biệt giữa account (có chuyển sự kiện đổi IAM, KMS, S3 hay không, region của rule đăng nhập root) là dữ liệu trong bảng
 `local.accounts` của `aws/baseline`, không nhánh `if` theo account. Ở stg, prd không chuyển sự kiện đổi IAM, KMS, S3 thành công: mỗi buổi tạo
 và xoá hàng chục role, key, bucket, và email cho từng cái sẽ che mất email đáng đọc.
 
@@ -131,7 +131,7 @@ Root `aws/security` cấu hình các dịch vụ từ account `svp-security`, de
   (lab không có). Finding vào Security Hub. GuardDuty, CloudTrail, Access Analyzer không có cờ: account nào tắt gì và bù
   bằng gì ở [`paid-features.md`](paid-features.md).
 
-Phần không được giám sát và lý do (bastion không có agent runtime, volume mã hoá bằng `alias/svp-ebs` không được quét malware, management ngoài
+Phần không được giám sát và lý do (bastion không có agent runtime, quét malware volume `aws/ebs` tuỳ region AWS hỗ trợ, management ngoài
 hai region, kể cả phiên `AssumeRoot` mở ở đó) ở phần Hệ quả của ADR-0060.
 
 ## Lớp edge
@@ -157,8 +157,8 @@ ADR-0061. Mối đe doạ của lớp này ở [threat model](../threat-model.md
 Image chạy trên EKS nằm trong ECR private của chính account env ([ADR-0062](../adr/0062-ecr-registry-ci-oidc.md)):
 module `registry` ở root `aws/accounts/<env>`, sống qua mọi buổi. Phần bảo mật:
 
-- **Repo phát hành** (`svp-backend/<service>`, `svp-frontend/web`): mã hoá bằng CMK `alias/svp-<env>-ecr` (ECR dùng key
-  qua grant, người đẩy, kéo không cần quyền KMS), tag `IMMUTABLE`, không lifecycle xoá image (một bản phát hành đang
+- **Repo phát hành** (`svp-backend/<service>`, `svp-frontend/web`): mã hoá `AES256` (người đẩy, kéo không cần quyền KMS;
+  [ADR-0087](../adr/0087-kms-key-consolidation.md) §3), tag `IMMUTABLE`, không lifecycle xoá image (một bản phát hành đang
   chạy hay là đích rollback không bị xoá tự động). Chữ ký và attestation đi theo image dưới dạng referrer, nên Kyverno
   xác minh ngay ở ECR, cùng identity keyless như ở GHCR.
 - **Pull-through cache** cho năm tiền tố (`ghcr`, `docker-hub`, `quay`, `k8s`, `ecr-public`): credential của GHCR,
@@ -303,7 +303,7 @@ flowchart LR
   `media` chỉ ghi (đọc là lưu lượng người xem qua CloudFront). stg không có dữ liệu người dùng thật, nên không trả phí data event ở đó.
 - Bucket trail cũ ở management còn giữ log trước khi trail đổi đích, chỉ đọc tới khi Object Lock của nó hết hạn; README của `aws/org` ghi bước gỡ.
 - Log chuẩn v2 của CloudFront đi chéo account: account env giữ delivery source và delivery, `svp-log-archive` giữ delivery destination mỗi env
-  và bucket ([ADR-0061](../adr/0061-edge-cloudfront-waf-acm.md) §8). Media của stg (gói CloudFront Free) không có log này.
+  và bucket ([ADR-0061](../adr/0061-edge-cloudfront-waf-acm.md) §8), cả media của stg ([ADR-0084](../adr/0084-stg-msk-media-sizing.md)).
 - Flow log, log WAF và log CloudFront chỉ có khi env sống, nhưng bucket sống giữa các buổi: log của buổi đã gỡ vẫn đọc được. Root env nhận id account log qua
   `TF_VAR_log_archive_account_id` (từ `SVP_AWS_LOG_ACCOUNT_ID`), nên buổi chỉ chạy được sau khi `aws/log-archive` đã áp.
 - Đọc log: profile `anhnv-log-ro`; lệnh mẫu ở runbook [`security-alert.md`](../runbooks/security-alert.md).

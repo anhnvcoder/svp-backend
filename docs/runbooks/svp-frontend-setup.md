@@ -75,7 +75,7 @@ gh api $W/environments/promote/secrets -q '{total_count, names: [.secrets[].name
 # Khoá đặt nhầm ở mức repo (không qua environment) đi tới workflow của mọi nhánh
 gh api $W/actions/secrets -q .total_count
 # A6, C1. Package kéo ẩn danh (không cần đăng nhập)
-anon() { t=$(curl -s "https://ghcr.io/token?scope=repository:anhnvcoder/$1:pull" | jq -r '.token // empty')
+anon() { t=$(curl -s "https://ghcr.io/token?scope=repository:anhnvcoder/${1}:pull" | jq -r '.token // empty')
   [ -n "$t" ] || { echo "$1 DENIED"; return; }
   echo "$1 $(curl -s -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $t" "https://ghcr.io/v2/anhnvcoder/$1/tags/list")"; }
 anon svp-backend/api/gateway; anon svp-frontend/web
@@ -555,7 +555,7 @@ giữ nguyên, không xoá: lịch sử `envs/` của `svp-gitops` trỏ tới c
 **Kiểm** (chỉ đọc; `anon` như "Kiểm tra nhanh"; vòng thứ hai cần `read:packages`):
 
 ```sh
-anon() { t=$(curl -s "https://ghcr.io/token?scope=repository:anhnvcoder/$1:pull" | jq -r '.token // empty')
+anon() { t=$(curl -s "https://ghcr.io/token?scope=repository:anhnvcoder/${1}:pull" | jq -r '.token // empty')
   [ -n "$t" ] || { echo "$1 DENIED"; return; }
   echo "$1 $(curl -s -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $t" "https://ghcr.io/v2/anhnvcoder/$1/tags/list")"; }
 pkgs="svp-backend/gateway svp-backend/user-service svp-backend/video-service svp-backend/engagement-service svp-backend/feed-service

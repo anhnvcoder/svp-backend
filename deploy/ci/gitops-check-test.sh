@@ -729,6 +729,70 @@ else
   fail "policies: images-pinned.yaml no longer holds the validation the case of a broken policy changes"
 fi
 
+# --- running_docs, through which --images reads the images of a render: the documents of a Helm test hook are left out
+# and the other hooks stay. The function is cut out of gitops-check.sh, which runs whole when started.
+rd=$work/running
+mkdir -p "$rd"
+cat >"$rd/render.yaml" <<'RENDER'
+---
+# Source: chart/templates/deployment.yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: app
+spec:
+  template:
+    spec:
+      containers:
+        - name: c
+          image: quay.io/example/app:v1@sha256:1111
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: app-test
+  annotations:
+    "helm.sh/hook": test
+    "helm.sh/hook-weight": "1"
+spec:
+  containers:
+    - name: t
+      image: ghcr.io/example/checker:latest@sha256:2222
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: app-test-legacy
+  annotations:
+    helm.sh/hook: pre-install, test-success
+spec:
+  containers:
+    - name: t
+      image: ghcr.io/example/legacy:v1@sha256:3333
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: app-migrate
+  annotations:
+    helm.sh/hook: pre-install,post-upgrade
+    helm.sh/hook-delete-policy: hook-succeeded
+spec:
+  template:
+    spec:
+      containers:
+        - name: m
+          image: quay.io/example/migrate:v1@sha256:4444
+RENDER
+sed -n '/^running_docs() {/,/^}/p' "$here/gitops-check.sh" >"$rd/fn.sh"
+running=$(bash -c '. "$1" && running_docs "$2"' _ "$rd/fn.sh" "$rd/render.yaml")
+if [ "$(grep -c 'image:' <<<"$running")" = 2 ] && grep -q example/app:v1 <<<"$running" &&
+  grep -q example/migrate:v1 <<<"$running" && ! grep -Eq 'checker|legacy' <<<"$running"; then
+  ok "running_docs: the documents of a test hook are left out, the other hooks and the workloads stay"
+else
+  fail "running_docs: the documents of a test hook are left out, the other hooks and the workloads stay; got:"$'\n'"$(sed 's/^/      /' <<<"$running")"
+fi
+
 # --- the release sources of the image files (step 1 alone: gitops-check.sh --tree). A throwaway copy of this
 # repository on its branch main: k0 holds the policy's values as they were before the table of release sources, k2
 # the table of the rename (backend and web under their new names, the retired oldbackend and oldweb under the old

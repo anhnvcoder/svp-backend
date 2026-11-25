@@ -142,3 +142,5 @@ Phụ lục: [`appendix/0057-postgres17-verify-full.md`](appendix/0057-postgres1
 ### Chỉnh bởi
 
 - §7, Hệ quả: [0072](0072-pod-operations.md): pool mỗi pod đặt bằng `DATABASE_MAX_CONNS` theo ngân sách kết nối của env (tổng ≤ 80 % `max_connections` của mọi Postgres env chạy trên; stg đúng trần trên CloudNativePG của cụm GitOps k3d) thay mặc định theo CPU và mốc xem lại "tổng `max_conns` vượt nửa `max_connections`"; proxy xét lại khi ngân sách không còn chỗ cho pod thêm.
+- §5: [0087](0087-kms-key-consolidation.md): CMK của RDS giữ theo luật "CMK chỉ ở chỗ cần khả năng mà key của AWS không
+  có": Backup policy copy snapshot sang `svp-backup`, mà snapshot mã hoá `aws/rds` không copy chéo account được.

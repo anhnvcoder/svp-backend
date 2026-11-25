@@ -256,8 +256,8 @@ MediaConvert không đặt được `Cache-Control` trên output S3. Khi `settle
 và `CopyObject` tại chỗ từng object (`MetadataDirective` `REPLACE`, `Cache-Control` và `Content-Type` như `serve` ghi),
 chép frame capture thành `thumbnail.jpg`, rồi mới tạo master. Player chỉ tới object qua master, nên không object nào
 được phát thiếu header; một lần thử bị cắt giữa chừng chép lại cho cùng kết quả. Object lạ trong thư mục lần thử (tên
-không có `Content-Type`, thư mục con) làm `settle` lỗi trước khi có master. CloudFront và module `media` không đổi giữa
-stg (gói Free, chỉ policy managed) và prd.
+không có `Content-Type`, thư mục con) làm `settle` lỗi trước khi có master. CloudFront và module `media` không đổi giữa stg
+và prd.
 
 ## Kết quả của version
 
